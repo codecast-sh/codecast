@@ -5,7 +5,7 @@ import { paginationOptsValidator } from "convex/server";
 import type { PaginationOptions, PaginationResult, RegisteredQuery } from "convex/server";
 import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
-import { enqueueStartSession, getOnlineLocalRoots } from "./devices";
+import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots } from "./devices";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -2724,6 +2724,9 @@ export const getSuggestedTeamProjects = query({
 export const getRecentProjectPaths = query({
   args: {
     limit: v.optional(v.number()),
+    // Scope to one machine's checkouts (the new-session machine picker) instead
+    // of the union across online devices.
+    device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -2745,8 +2748,17 @@ export const getRecentProjectPaths = query({
     // on each heartbeat — that made the list flip-flop between machines). Empty
     // union (no device online/reporting) → don't filter: showing too much beats
     // showing nothing.
-    const onlineRoots = await getOnlineLocalRoots(ctx, userId);
-    const localRootSet = onlineRoots.length > 0 ? new Set(onlineRoots) : null;
+    //
+    // Scoped to one device, its roots are the whole truth: an empty root list
+    // means that machine reports no checkouts, so filter to nothing rather than
+    // falling back to unfiltered (which would offer dirs it can't open).
+    const deviceRoots = args.device_id
+      ? await getDeviceLocalRoots(ctx, userId, args.device_id)
+      : null;
+    if (args.device_id && !deviceRoots) return [];
+    const onlineRoots = deviceRoots ?? (await getOnlineLocalRoots(ctx, userId));
+    const localRootSet =
+      deviceRoots || onlineRoots.length > 0 ? new Set(onlineRoots) : null;
 
     const pathCounts = new Map<string, { count: number; lastActive: number }>();
     for (const conv of conversations) {
@@ -2769,7 +2781,7 @@ export const getRecentProjectPaths = query({
     const now = Date.now();
     const ageRange = now - windowStart;
 
-    return entries
+    const recents: { path: string; count: number; lastActive: number; suggested?: true }[] = entries
       .map(([path, stats]) => ({
         path,
         count: stats.count,
@@ -2785,6 +2797,20 @@ export const getRecentProjectPaths = query({
         count,
         lastActive,
       }));
+
+    // A freshly-picked machine may have almost no history here, so pad with its
+    // remaining roots: every directory on it stays reachable, recents first.
+    if (deviceRoots) {
+      const seen = new Set(recents.map((r) => r.path));
+      for (const root of deviceRoots) {
+        if (recents.length >= limit) break;
+        if (seen.has(root)) continue;
+        seen.add(root);
+        recents.push({ path: root, count: 0, lastActive: 0, suggested: true });
+      }
+    }
+
+    return recents;
   },
 });
 

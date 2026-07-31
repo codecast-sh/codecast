@@ -8962,6 +8962,10 @@ export const reconfigureSession = mutation({
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
     isolated: v.optional(v.boolean()),
+    // The machine picked on the new-session page. Routing honours it while it's
+    // online and otherwise falls back, so ownership follows the resolved route
+    // (stamped by enqueueStartSession) rather than the request.
+    target_device_id: v.optional(v.string()),
     // Launch model/effort for the (blank) session — option keys from the
     // shared contract. "default" clears the stamp and omits the flag. Launch
     // flags leave no transcript echo, so the stamp here is the only record
@@ -9055,6 +9059,7 @@ export const reconfigureSession = mutation({
       gitRoot: updated.git_root,
       sessionId: updated.session_id,
       isolated: args.isolated,
+      targetDeviceId: args.target_device_id ?? null,
       ...(stampedModelKey ? { model: stampedModelKey } : {}),
       ...(updated.effort && launchCfg?.efforts.includes(updated.effort) ? { effort: updated.effort } : {}),
       ...(args.stable_mode ? { stableMode: args.stable_mode } : {}),
