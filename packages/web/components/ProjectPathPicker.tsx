@@ -37,7 +37,7 @@ export function ProjectPathPicker({
   placeholder?: string;
   className?: string;
 }) {
-  const fresh = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
+  const fresh = useQuery(api.users.getRecentProjectPaths, { limit: 50 });
   const cached = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
   useConvexSync(fresh, setRecentProjects);
