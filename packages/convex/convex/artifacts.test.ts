@@ -381,4 +381,57 @@ describe("brandArtifactHtml", () => {
     expect(out).toContain(">v2 (old) ▾<");
     expect(out).toContain('id="__cc_latest"');
   });
+
+  test("comment chip shows the open count and embeds it in the config", () => {
+    const out = brandArtifactHtml("<body></body>", {
+      ...opts,
+      metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
+      commentCount: 3,
+    });
+    expect(out).toContain('id="__cc_ccount"');
+    expect(out).toContain(">3</span>");
+    expect(out).toContain('"comments":3');
+  });
+
+  test("zero comments renders an empty chip and a zero config count", () => {
+    const out = brandArtifactHtml("<body></body>", {
+      ...opts,
+      metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
+      commentCount: 0,
+    });
+    expect(out).toContain('id="__cc_ccount"></span>');
+    expect(out).toContain('"comments":0');
+  });
+
+  test("interactive bar ships the comments, manage, and history panels", () => {
+    const out = brandArtifactHtml("<body></body>", {
+      ...opts,
+      metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
+    });
+    expect(out).toContain('id="__cc_cpanel"');
+    expect(out).toContain('id="__cc_mgr"');
+    expect(out).toContain('id="__cc_hist"');
+    expect(out).toContain("/cli/artifacts/comment");
+    expect(out).toContain("/cli/artifacts/manage");
+  });
+
+  test("mobile styles: safe-area padding and bottom-sheet panels", () => {
+    const out = brandArtifactHtml("<body></body>", opts);
+    expect(out).toContain("env(safe-area-inset-bottom)");
+    expect(out).toContain("env(safe-area-inset-left)");
+    expect(out).toContain("border-radius: 16px 16px 0 0");
+  });
+
+  test("bar inline script parses as valid JavaScript", () => {
+    const out = brandArtifactHtml("<body></body>", {
+      ...opts,
+      version: 2,
+      currentVersion: 3,
+      metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
+      commentCount: 2,
+    });
+    const scripts = [...out.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const src of scripts) expect(() => new Function(src)).not.toThrow();
+  });
 });
