@@ -58,6 +58,35 @@ describe("mobile result-dependent create callers", () => {
   });
 });
 
+describe("mobile machine picker", () => {
+  // The picker's safety property: until the user picks a machine by hand, the
+  // sheet must behave exactly as it did before the row existed — folder query
+  // unscoped, create untargeted, so routing keeps choosing.
+  test("only an explicit pick scopes the folder query and targets the create", () => {
+    expect(inboxSource).toContain("deviceId ? { device_id: deviceId } : {}");
+    expect(inboxSource).toContain("devices.length > 1 &&");
+
+    const apply = sourceBetween("const applyMachinePick", "const finishSessionCreate");
+    // Stamping the default would short-circuit routing past the rung that
+    // prefers the machine holding the checkout, so it must stay unsent.
+    expect(apply).toContain("if (!deviceId || deviceId === defaultDeviceId) return;");
+    expect(apply).toContain("target_device_id: deviceId");
+  });
+
+  // A just-created row can still carry a local stub id, so the pick must follow
+  // it to its real one (the web ProjectSwitcher's chain) instead of dropping.
+  test("an explicit pick resolves a stub id before commanding the session", () => {
+    const apply = sourceBetween("const applyMachinePick", "const finishSessionCreate");
+    const cached = apply.indexOf("store.getConvexId(id)");
+    const inFlight = apply.indexOf("store.awaitSessionCreate(id)");
+    const command = apply.indexOf('"reconfigureSession"');
+
+    expect(cached).toBeGreaterThanOrEqual(0);
+    expect(inFlight).toBeGreaterThan(cached);
+    expect(command).toBeGreaterThan(inFlight);
+  });
+});
+
 describe("mobile principal outbox binding", () => {
   test("binds verified-principal storage and immediately replays it", () => {
     expect(authSource).toContain("openPrincipalDispatchOutbox(currentUserId)");

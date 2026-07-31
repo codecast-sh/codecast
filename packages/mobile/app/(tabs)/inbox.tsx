@@ -11,7 +11,7 @@ import {
   formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
 import {
-  useInboxStore, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
+  useInboxStore, isConvexId, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
   sessionsWakeSig, pendingSendWakeSig,
@@ -19,6 +19,7 @@ import {
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
 import { labelHexColor } from '@/lib/labelColors';
+import { type Device, deviceColor, deviceDisplayName } from '@/components/DevicesSection';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { TriggerDock } from '@/components/TriggerDock';
 import { useQuery } from 'convex/react';
@@ -117,7 +118,25 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   const [submitError, setSubmitError] = useState<string | null>(null);
   const retryStubId = useRef<string | null>(null);
   const submitAttempt = useRef(0);
-  const recentProjects = useQuery(api.users.getRecentProjectPaths, visible ? { limit: 6 } : "skip");
+  // Machine picker. `deviceId` holds an EXPLICIT pick only: left null, routing
+  // picks the machine (deviceRouting) and the folder list stays the union across
+  // online devices — the behaviour before this row existed.
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const devices = (useQuery(api.devices.listDevices, visible ? {} : "skip") ?? []) as Device[];
+  // What auto-routing would choose, so the highlighted chip matches where the
+  // session actually lands: the most-recently-active online local machine, or —
+  // when no local is up — the most-recently-seen one, which routing queues for
+  // rather than handing the session to an always-awake remote (deviceRouting
+  // rungs 4 and 6). listDevices is last_seen-sorted, so first match wins.
+  const defaultDeviceId = useMemo(() => {
+    const locals = devices.filter((d) => !d.is_remote);
+    return (locals.find((d) => d.online) ?? locals[0])?.device_id;
+  }, [devices]);
+  const selectedDeviceId = deviceId ?? defaultDeviceId;
+  const recentProjects = useQuery(
+    api.users.getRecentProjectPaths,
+    visible ? { limit: 6, ...(deviceId ? { device_id: deviceId } : {}) } : "skip",
+  );
 
   useEffect(() => {
     if (visible && !projectPath && recentProjects?.length) {
@@ -125,10 +144,36 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
     }
   }, [visible, recentProjects]);
 
+  // Deliver an explicit machine pick to the session the sheet just created.
+  // createSession takes no target, so the pick rides the same reconfigure the
+  // web ProjectSwitcher uses for a folder change — including its stub->real
+  // handling: a just-created row may still carry a local stub id, so resolve
+  // the Convex id (cache, then the in-flight create) before commanding it.
+  // Routing falls back on its own when a pick is offline, so losing this costs
+  // the choice, never the session.
+  const applyMachinePick = async (id: string) => {
+    // Never stamp the machine routing would have chosen anyway. An explicit
+    // target short-circuits at rung 1, skipping the rung that prefers whichever
+    // online machine actually holds the checkout — so stamping the default can
+    // pin a session to a machine that lacks the folder. Re-checked here because
+    // heartbeats can reorder the devices between the pick and the submit.
+    if (!deviceId || deviceId === defaultDeviceId) return;
+    const store = useInboxStore.getState();
+    let convexId = isConvexId(id) ? id : store.getConvexId(id);
+    if (!convexId) {
+      const pending = store.awaitSessionCreate(id);
+      if (pending) convexId = await pending.catch(() => undefined);
+    }
+    if (!convexId || !isConvexId(convexId)) return;
+    await store.convCommand(convexId, "reconfigureSession", { target_device_id: deviceId })
+      .catch(() => {});
+  };
+
   const finishSessionCreate = (conversationId: string) => {
     retryStubId.current = null;
     setSubmitError(null);
     setProjectPath("");
+    setDeviceId(null);
     onClose();
     onSessionCreated(conversationId);
   };
@@ -200,10 +245,15 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
 
       const conversationId = await ready;
       if (submitAttempt.current !== attempt) return;
-      finishSessionCreate(conversationId || store.getConvexId(stubId) || stubId);
+      const resolvedId = conversationId || store.getConvexId(stubId) || stubId;
+      void applyMachinePick(resolvedId);
+      finishSessionCreate(resolvedId);
     } catch (error) {
       if (submitAttempt.current !== attempt) return;
       if (mobileCreateFailureDisposition(error) === "accepted-pending") {
+        // The create is durably queued, not lost: the pick waits on the same
+        // in-flight promise and commands the session once it has a real id.
+        void applyMachinePick(stubId);
         finishSessionCreate(stubId);
       } else {
         setSubmitError(mobileCreateErrorMessage("session", error));
@@ -254,6 +304,50 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             ))}
           </RNView>
 
+          {/* Machine row. One machine is no choice at all, so it only appears
+              once there are two — a single-device account sees the old sheet. */}
+          {devices.length > 1 && (
+            <>
+              <RNText style={modalStyles.label}>Machine</RNText>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={modalStyles.machineRow}
+                keyboardShouldPersistTaps="handled"
+              >
+                {devices.map((d) => {
+                  const active = selectedDeviceId === d.device_id;
+                  const color = deviceColor(d);
+                  return (
+                    <TouchableOpacity
+                      key={d.device_id}
+                      style={[
+                        modalStyles.machineChip,
+                        !d.online && modalStyles.machineChipOffline,
+                        active && { borderColor: color, backgroundColor: color + "20" },
+                      ]}
+                      onPress={() => {
+                        // Scoping the folder list to another machine can drop the
+                        // current path (it may have no such checkout), so clear it
+                        // and let the seeding effect refill from the new list.
+                        setDeviceId(d.device_id === defaultDeviceId ? null : d.device_id);
+                        setProjectPath("");
+                        setSubmitError(null);
+                      }}
+                      disabled={submitting}
+                      activeOpacity={0.7}
+                    >
+                      <RNView style={[modalStyles.machineDot, { backgroundColor: d.online ? Theme.green : Theme.textMuted0 }]} />
+                      <RNText style={[modalStyles.machineChipText, active && { color }]} numberOfLines={1}>
+                        {deviceDisplayName(d)}
+                      </RNText>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </>
+          )}
+
           <RNText style={modalStyles.label}>Project directory</RNText>
           <TextInput
             style={modalStyles.input}
@@ -273,7 +367,14 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               {recentProjects.slice(0, 4).map((p) => (
                 <TouchableOpacity
                   key={p.path}
-                  style={[modalStyles.recentChip, projectPath === p.path && { borderColor: Theme.accent, backgroundColor: Theme.accent + "20" }]}
+                  // `suggested` entries are padding — roots the picked machine
+                  // has but this account has no recent session in. Still pickable,
+                  // just visibly weaker than real recents.
+                  style={[
+                    modalStyles.recentChip,
+                    p.suggested && modalStyles.recentChipSuggested,
+                    projectPath === p.path && { borderColor: Theme.accent, backgroundColor: Theme.accent + "20" },
+                  ]}
                   onPress={() => {
                     setProjectPath(p.path);
                     setSubmitError(null);
@@ -358,6 +459,22 @@ const modalStyles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
+  machineRow: { flexDirection: "row", gap: 8, paddingRight: Spacing.lg },
+  machineChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+    maxWidth: 180,
+  },
+  machineChipOffline: { opacity: 0.5 },
+  machineChipText: { fontSize: 12, color: Theme.textMuted, fontWeight: "500", flexShrink: 1 },
+  machineDot: { width: 6, height: 6, borderRadius: 3 },
   recentRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
   recentChip: {
     paddingHorizontal: 10,
@@ -368,6 +485,7 @@ const modalStyles = StyleSheet.create({
     borderColor: Theme.borderLight,
     maxWidth: 140,
   },
+  recentChipSuggested: { opacity: 0.55 },
   recentChipText: { fontSize: 12, color: Theme.textMuted, fontWeight: "500" },
   errorText: {
     color: Theme.red,
