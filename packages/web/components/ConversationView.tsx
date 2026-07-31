@@ -17,7 +17,8 @@ import { compressImage } from "../lib/compressImage";
 import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner, agentSupportsFork, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec } from "@codecast/shared/contracts";
+import { useCoarseNow } from "../hooks/useCoarseNow";
 import { formatToolName, isPlanWriteToolCall, truncateStr, shortenUrl, getRelativePath, stripLineNumbers, structuredPayloadSummary } from "@codecast/shared/render";
 import { getBuiltinCommands } from "../lib/builtinCommands";
 import { resolveSessionSkills } from "../lib/sessionSkills";
@@ -49,7 +50,7 @@ import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
 import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
-import { monitorRowsFor, effectiveMonitorStatus, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
+import { monitorRowsFor, effectiveMonitorStatus, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
   const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -85,6 +86,7 @@ import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { AssignmentBadge } from "./AssignmentBadge";
+import { AssignedToYouBanner } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
@@ -133,7 +135,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, KeyRound, ExternalLink, Loader2 } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2 } from "lucide-react";
 import { useDevices } from "./DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
@@ -381,6 +383,16 @@ const renderAssistantBody = (content: string) => {
 // the post-deferral switch trace). FIFO-capped so a long-lived tab stays bounded.
 const VIRT_HEIGHT_CACHE = new Map<string, number>();
 const VIRT_HEIGHT_CACHE_MAX = 8000;
+
+// The in-app zoom (DashboardLayout's zoom.in/out shortcuts) sets CSS zoom on
+// <html>. Under CSS zoom, getBoundingClientRect() returns screen px (layout px
+// × zoom) while everything the virtualizer and scroll math work in — scrollTop,
+// scrollHeight, offsetHeight, translateY row offsets — stays layout px. Any
+// rect-derived length must be divided by this factor before mixing with layout
+// px. Feeding raw rect heights into resizeItem at 50% zoom halved every
+// believed row height, overlapping all rows into settled garble.
+const cssZoomOf = (el: Element): number =>
+  (el as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1;
 function virtHeightKey(itemKey: string | number, densityKey: string): string {
   return `${itemKey}|${densityKey}`;
 }
@@ -393,6 +405,11 @@ type MessageFeedDensity = "full" | "condensed" | "compact";
 const FEED_DENSITY_CYCLE: MessageFeedDensity[] = ["full", "condensed", "compact"];
 // Last-chosen density per conversation, app-session scoped.
 const DENSITY_BY_CONVERSATION = new Map<string, ConversationDensity>();
+// Simple view reads calmer by default: tool activity as one-line receipts.
+// An explicit per-conversation choice (the map above) still wins.
+function defaultDensity(): ConversationDensity {
+  return useInboxStore.getState().clientState.ui?.simple_view ? "condensed" : "full";
+}
 const DENSITY_OPTIONS: Array<{ value: ConversationDensity; label: string; description: string; icon: React.ComponentType<{ className?: string }>; ai?: boolean }> = [
   { value: "full", label: "Full", description: "Everything as it happened", icon: AlignJustify },
   { value: "condensed", label: "Condensed", description: "Tool activity as one-line receipts", icon: ListCollapse },
@@ -2983,10 +3000,10 @@ function getFileExtension(filePath: string): string | undefined {
 }
 
 function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
-  // Monitor and ScheduleWakeup stay visible in condensed feeds: both are
-  // standing state the reader needs to know is armed (a watch, a loop's next
-  // fire), not a transient tool step.
-  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor" || tc.name === "ScheduleWakeup";
+  // Monitor, background Bash, and ScheduleWakeup stay visible in condensed
+  // feeds: all are standing state the reader needs to know is armed (a watch,
+  // a detached command, a loop's next fire), not a transient tool step.
+  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
 }
 
 interface ToolChangeRange {
@@ -4531,39 +4548,61 @@ function SkillBlock({ tool }: { tool: ToolCall }) {
   );
 }
 
-// Live status badge + latest event for a Monitor block, derived from the
-// conversation's message window (monitorRowsFor — one memoized scan shared by
-// all blocks). Same anatomy as the trigger block above: identity accent +
-// uppercase eyebrow + one-line gist, so standing machinery reads as one family.
+// Live status badge + latest event for a Monitor or background-Bash block,
+// derived from the conversation's message window (monitorRowsFor — one
+// memoized scan shared by all blocks). Same anatomy as the trigger block
+// above: identity accent + uppercase eyebrow + one-line gist, so standing
+// machinery reads as one family.
 const MONITOR_BADGE: Record<MonitorStatus, { label: string; cls: string }> = {
   watching: { label: "watching", cls: "bg-sol-green/10 text-sol-green border-sol-green/30" },
   ended: { label: "ended", cls: "bg-sol-bg-alt text-sol-text-dim border-sol-border/50" },
   timed_out: { label: "timed out", cls: "bg-sol-orange/10 text-sol-orange border-sol-orange/30" },
   stopped: { label: "stopped", cls: "bg-sol-bg-alt text-sol-text-dim border-sol-border/50" },
 };
+// A detached command "runs" rather than "watches", and finishing is its
+// purpose ("done"), not a stream folding ("ended").
+const BACKGROUND_BADGE_LABEL: Record<MonitorStatus, string> = {
+  watching: "running", ended: "done", timed_out: "timed out", stopped: "stopped",
+};
 
 function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId?: string }) {
+  const isBackground = tool.name !== "Monitor";
   let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean } = {};
   try { input = JSON.parse(tool.input); } catch {}
   const [showCommand, setShowCommand] = useState(false);
   const messages = useInboxStore((s) => (conversationId ? s.messages[conversationId] : undefined));
   const row = useMemo(() => monitorRowsFor(messages).find((r) => r.toolUseId === tool.id), [messages, tool.id]);
-  const status: MonitorStatus = row ? effectiveMonitorStatus(row, Date.now()) : "watching";
-  const badge = MONITOR_BADGE[status];
+  const now = useCoarseNow(30_000);
+  // Background rows carry no timeout, so the scanner's defensive expiry never
+  // fires for them — without this gate a dead session's block would claim
+  // "running" forever. Narrow boolean subscription: re-renders only when the
+  // verdict flips, never on heartbeat churn (see store/wakeSig.ts rules).
+  const sessionDead = useInboxStore((s) => {
+    if (!conversationId) return false;
+    const sess = s.sessions[conversationId];
+    return !!sess && (sess.agent_status === "stopped" || isLivenessStale(sess, now));
+  });
+  const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now) : "watching";
+  const status: MonitorStatus = rawStatus === "watching" && sessionDead ? "stopped" : rawStatus;
+  const failed = isBackground && status === "ended" && (row?.exitCode ?? 0) > 0;
+  const badge = failed
+    ? { label: `exit ${row!.exitCode}`, cls: "bg-sol-red/10 text-sol-red border-sol-red/30" }
+    : { cls: MONITOR_BADGE[status].cls, label: isBackground ? BACKGROUND_BADGE_LABEL[status] : MONITOR_BADGE[status].label };
   const watching = status === "watching";
   const commandFirstLine = (input.command || "").split("\n").find((l) => l.trim()) || "";
+  const Icon = isBackground ? Terminal : Radar;
 
   return (
     <div className={`my-1 rounded border-l-2 ${watching ? "border-sol-blue/60 bg-sol-blue/5" : "border-sol-border/60 bg-sol-bg-alt/30"}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 min-w-0">
-        <Radar className={`w-3.5 h-3.5 shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`} />
-        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>Monitor</span>
+        <Icon className={`w-3.5 h-3.5 shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`} />
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isBackground ? "Background" : "Monitor"}</span>
         {input.persistent && (
           <ShortcutTooltip label="Runs until TaskStop or session end — not a one-shot watch">
             <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-blue/40 text-sol-blue/90 bg-sol-blue/10">persistent</span>
           </ShortcutTooltip>
         )}
-        <span className="text-xs text-sol-text truncate min-w-0">{input.description || "background watch"}</span>
+        <span className="text-xs text-sol-text truncate min-w-0">{input.description || (isBackground ? "background command" : "background watch")}</span>
         {(row?.eventCount ?? 0) > 0 && (
           <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">
             {row!.eventCount} event{row!.eventCount === 1 ? "" : "s"}
@@ -7114,7 +7153,7 @@ function AssistantBlockImpl({
             <WorkflowToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : tc.name === "Skill" ? (
             <SkillBlock key={tc.id} tool={tc} />
-          ) : tc.name === "Monitor" ? (
+          ) : tc.name === "Monitor" || isBackgroundBashToolCall(tc) ? (
             <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
           ) : tc.name === "ScheduleWakeup" ? (
             <ScheduleWakeupBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} timestamp={timestamp} />
@@ -9555,7 +9594,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       }`;
 
   return (
-    <div className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
+    <div data-sv-composer className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
       {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />}
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
@@ -10151,7 +10190,8 @@ function settleTimelineItemAtOffset(
   const scrollElToOffset = (el: Element) => {
     const elRect = el.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
-    container.scrollTop += elRect.top - containerRect.top - offsetPx;
+    // Rect deltas are screen px; scrollTop is layout px — divide by CSS zoom.
+    container.scrollTop += (elRect.top - containerRect.top) / cssZoomOf(container) - offsetPx;
   };
   const watchMs = opts?.watchMs ?? 2500;
   let findAttempts = 0;
@@ -10173,7 +10213,7 @@ function settleTimelineItemAtOffset(
         if (!el.isConnected) { cancel(); return; }
         const rect = el.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
-        const off = rect.top - containerRect.top - offsetPx;
+        const off = (rect.top - containerRect.top) / cssZoomOf(container) - offsetPx;
         if (Math.abs(off) > 2) scrollElToOffset(el);
         if (!settledFired && (Math.abs(off) <= 2 || settleCount >= 15)) {
           settledFired = true;
@@ -10207,11 +10247,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // showed the down arrow on a 2px nudge while still parked at the bottom.
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isScrollable, setIsScrollable] = useState(false);
-  const [density, setDensityState] = useState<ConversationDensity>("full");
+  const [density, setDensityState] = useState<ConversationDensity>(defaultDensity);
   const setDensity = useCallback((d: ConversationDensity) => {
     setDensityState(d);
     if (conversation?._id) DENSITY_BY_CONVERSATION.set(conversation._id, d);
   }, [conversation?._id]);
+  // Toggling Simple view retunes the open conversation immediately — but only
+  // when the user hasn't explicitly picked a density for it (that choice wins).
+  const simpleViewPref = useInboxStore((st) => st.clientState.ui?.simple_view === true);
+  useWatchEffect(() => {
+    if (conversation?._id && DENSITY_BY_CONVERSATION.has(conversation._id)) return;
+    setDensityState(defaultDensity());
+  }, [simpleViewPref]);
   // Feed-rendering density: story/summary swap the feed out entirely, so the
   // virtualizer (and its height cache keys) only ever sees the first three.
   const feedDensity: MessageFeedDensity = density === "condensed" || density === "compact" ? density : "full";
@@ -10366,7 +10413,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     userScrolledRef.current = false;
     setIsNearTop(true);
     setIsNearBottom(true);
-    setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || "full");
+    setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || defaultDensity());
     setExpandedTurns(new Set());
     setDiffExpanded(false);
     setShowThinking(false);
@@ -12011,7 +12058,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       for (const el of container.querySelectorAll<HTMLElement>("[data-index]")) {
         const v = byIndex.get(Number(el.dataset.index));
         if (!v || el.dataset.vkey !== String(v.key)) continue; // mid-commit row — skip
-        const real = Math.round(el.getBoundingClientRect().height);
+        // offsetHeight, NOT getBoundingClientRect: rect heights are screen px,
+        // scaled by the in-app CSS zoom. Feeding scaled heights into resizeItem
+        // shrank every row's believed size at zoom-out (rows overlapped into
+        // garble) and the tick re-poisoned them every second. offsetHeight is
+        // the same layout-px border box the virtualizer's own measurements use.
+        const real = el.offsetHeight;
         if (Math.abs(real - v.size) > 1) {
           if ((window as any).__RECON_DEBUG) (((window as any).__RECON_LOG) ??= []).push({ i: v.index, from: v.size, to: real });
           virtualizer.resizeItem(v.index, real);
@@ -12127,13 +12179,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         const el = container.querySelector(`[data-index="${anchorIdx}"]`);
         if (el) {
           const rect = el.getBoundingClientRect();
-          const raw = rect.top - container.getBoundingClientRect().top;
+          const raw = (rect.top - container.getBoundingClientRect().top) / cssZoomOf(container);
           // Negative offsets are normal — a tall fork-point message often has
           // its top above the fold while its chips sit in view; restoring the
           // raw value is what keeps the visible part stable. Only clamp so the
           // anchor row keeps a sliver in the viewport (a navigator-driven
           // switch can anchor on a fully off-screen message).
-          offset = Math.min(Math.max(raw, Math.min(80 - rect.height, 0)), Math.max(container.clientHeight - 160, 0));
+          offset = Math.min(Math.max(raw, Math.min(80 - (el as HTMLElement).offsetHeight, 0)), Math.max(container.clientHeight - 160, 0));
         }
       }
       branchAnchorRef.current = {
@@ -12509,7 +12561,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (m.getBoundingClientRect().bottom > scTop + 1) { anchorEl = m; break; }
     }
     pageAnchorRef.current = anchorEl
-      ? { id: anchorEl.id, relTop: anchorEl.getBoundingClientRect().top - scTop, scrollHeight: sc.scrollHeight, scrollTop: sc.scrollTop, dir }
+      ? { id: anchorEl.id, relTop: (anchorEl.getBoundingClientRect().top - scTop) / cssZoomOf(sc), scrollHeight: sc.scrollHeight, scrollTop: sc.scrollTop, dir }
       : null;
     // If the page never arrives (empty result), drop the anchor so it can't be
     // misapplied to a later streaming append.
@@ -12613,7 +12665,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const pinExact = () => {
       const el = sc.querySelector(`#${CSS.escape(a.id)}`);
       if (!el) return false;
-      const correction = (el.getBoundingClientRect().top - sc.getBoundingClientRect().top) - a.relTop;
+      const correction = (el.getBoundingClientRect().top - sc.getBoundingClientRect().top) / cssZoomOf(sc) - a.relTop;
       if (correction !== 0) sc.scrollTop += correction;
       lastScrollTopRef.current = sc.scrollTop;
       return true;
@@ -13216,8 +13268,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} spawnedByConversationId={(conversation as any)?.spawned_by_conversation_id} />;
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
-          const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandler} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          // A cross-user send carries the SENDER's identity (sender_name /
+          // sender_avatar_url, attached server-side) — render the turn as
+          // them, not the conversation owner.
+          const userName = (msg as any).sender_name || conversation?.user?.name || conversation?.user?.email?.split("@")[0];
+          const userAvatarUrl = (msg as any).sender_name ? ((msg as any).sender_avatar_url ?? null) : conversation?.user?.avatar_url;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={userAvatarUrl} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandler} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -13383,7 +13439,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <header ref={headerRef} className={`border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
+      <header ref={headerRef} data-sv-convhead className={`border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         <div className="px-2 py-0.5 sm:py-1">
           <div className="flex items-center gap-2 min-w-0 select-none">
             <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
@@ -13473,23 +13529,32 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
 
             {conversation && (
-              <ConversationMetadata
-                agentType={conversation.agent_type}
-                model={conversation.model}
-                effort={(conversation as any).effort}
-                startedAt={conversation.started_at}
-                messageCount={conversation.message_count}
-                shortId={conversation.short_id}
-                conversationId={conversation._id}
-                canEditModel={effectiveIsOwner}
-              />
+              // Simple view keeps the metadata cluster functional (it owns the
+              // model picker) but pulls it back visually; the plan/task badges
+              // drop away entirely.
+              <span data-simple-dim className="contents [.simple-view_&]:flex [.simple-view_&]:items-center [.simple-view_&]:gap-1">
+                <ConversationMetadata
+                  agentType={conversation.agent_type}
+                  model={conversation.model}
+                  effort={(conversation as any).effort}
+                  startedAt={conversation.started_at}
+                  messageCount={conversation.message_count}
+                  shortId={conversation.short_id}
+                  conversationId={conversation._id}
+                  canEditModel={effectiveIsOwner}
+                />
+              </span>
             )}
 
             {(conversation as any)?.active_plan && (
-              <PlanBadge plan={(conversation as any).active_plan} />
+              <span data-simple-hide className="contents">
+                <PlanBadge plan={(conversation as any).active_plan} />
+              </span>
             )}
             {(conversation as any)?.active_task && (
-              <TaskBadge task={(conversation as any).active_task} />
+              <span data-simple-hide className="contents">
+                <TaskBadge task={(conversation as any).active_task} />
+              </span>
             )}
 
             {conversation && (
@@ -13554,6 +13619,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
                 {conversation.git_branch && (
                   <span
+                    data-simple-hide
                     className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
                     title={conversation.git_branch}
                     onClick={() => {
@@ -13574,10 +13640,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 )}
 
                 {isOwner && (
-                  <AssignmentBadge
-                    conversationId={conversation._id}
-                    ownerDeviceId={(conversation as any).owner_device_id}
-                  />
+                  <span data-simple-hide className="contents">
+                    <AssignmentBadge
+                      conversationId={conversation._id}
+                      ownerDeviceId={(conversation as any).owner_device_id}
+                    />
+                  </span>
                 )}
 
                 {!isOwner && conversation.user && (
@@ -13720,7 +13788,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </button>
                 </ShortcutTooltip>
 
-                <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} />
+                <span data-simple-hide className="contents">
+                  <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} />
+                </span>
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -14033,6 +14103,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         )}
         {subHeaderContent}
+        {/* Unacked handoff strip. Lives INSIDE the header so headerHeight's
+            ResizeObserver counts it and the sticky-message overlay (anchored at
+            top: headerHeight) lands below instead of covering it. */}
+        {conversation && <AssignedToYouBanner conversationId={conversation._id.toString()} />}
       </header>
 
       {stickyMsgVisible && activeStickyMsg && (
@@ -14123,7 +14197,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
+      <div ref={containerRef} data-sv-feed className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
         <div className="flex flex-col min-h-full">
         {(!conversation || timeline.length === 0) ? (
           <div className={`flex-1 flex flex-col items-center gap-3 ${hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
