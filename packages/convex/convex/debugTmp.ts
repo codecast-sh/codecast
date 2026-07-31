@@ -136,6 +136,64 @@ export const inspectConversation = internalQuery({
   },
 });
 
+// TEMPORARY diagnostics for attachment persistence. Returns only attachment
+// metadata and short text previews, never file contents.
+export const inspectConversationImages = internalQuery({
+  args: { id: v.string() },
+  handler: async (ctx, args) => {
+    let conversation = null;
+    const convId = ctx.db.normalizeId("conversations", args.id);
+    if (convId) conversation = await ctx.db.get(convId);
+    if (!conversation) {
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.id))
+        .first();
+    }
+    if (!conversation) {
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.id))
+        .first();
+    }
+    if (!conversation) return { error: "not found" };
+
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversation._id))
+      .collect();
+    const pending = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversation._id))
+      .collect();
+
+    return {
+      conversation_id: conversation._id,
+      messages: messages
+        .filter((message) => message.role === "user")
+        .map((message) => ({
+          _id: message._id,
+          timestamp: message.timestamp,
+          client_id: message.client_id,
+          preview: (message.content ?? "").slice(0, 120),
+          images: message.images?.map((image) => ({
+            storage_id: image.storage_id,
+            media_type: image.media_type,
+          })),
+        })),
+      pending: pending.map((message) => ({
+        _id: message._id,
+        created_at: message.created_at,
+        status: message.status,
+        client_id: message.client_id,
+        preview: (message.content ?? "").slice(0, 120),
+        image_storage_id: message.image_storage_id,
+        image_storage_ids: message.image_storage_ids,
+      })),
+    };
+  },
+});
+
 // TEMPORARY one-shot repair for the 2026-07-30 Codex app-server image-path
 // corruption. The buggy mapper uploaded a base64-decoded local path on every
 // streaming rebuild, producing image-only duplicate rows. This detaches those
@@ -416,5 +474,37 @@ export const clearNeedsInputKey = internalMutation({
   handler: async (ctx, args) => {
     await ctx.db.patch(args.conversation_id, { needs_input_notified_key: undefined });
     return { cleared: true };
+  },
+});
+
+// TEMPORARY one-shot repair for jx7byyk (2026-07-31): the user's composer
+// pastes uploaded to storage but the send carried no image ids, so the
+// transcript row has none. Re-attaches the verified orphaned uploads.
+// Fail-closed: the target must be a user row, currently image-less, and its
+// content must start with the expected prefix.
+export const attachImagesToUserMessage = internalMutation({
+  args: {
+    message_id: v.id("messages"),
+    expected_content_prefix: v.string(),
+    images: v.array(v.object({ storage_id: v.id("_storage"), media_type: v.string() })),
+    apply: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.message_id);
+    if (!message) throw new Error("Message not found");
+    if (message.role !== "user") throw new Error(`Target is role=${message.role}, expected user`);
+    if (message.images && message.images.length > 0) throw new Error("Target already has images");
+    if (!(message.content ?? "").startsWith(args.expected_content_prefix)) {
+      throw new Error("Content prefix mismatch");
+    }
+    for (const image of args.images) {
+      const url = await ctx.storage.getUrl(image.storage_id);
+      if (!url) throw new Error(`Storage id ${image.storage_id} does not resolve`);
+    }
+    if (!args.apply) {
+      return { wouldAttach: args.images.length, content: (message.content ?? "").slice(0, 80), applied: false };
+    }
+    await ctx.db.patch(args.message_id, { images: args.images });
+    return { attached: args.images.length, applied: true };
   },
 });

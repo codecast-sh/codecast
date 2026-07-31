@@ -9132,7 +9132,17 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // Snapshot the composer's images. Ready ones already carry a storageId;
     // still-uploading ones are handed to the pending bubble (preview + spinner)
     // and finished in the background — either way the input unblocks instantly.
-    const submitImages = pastedImagesRef.current.filter(img => img.storageId || img.uploading);
+    // The store draft is the durable record of pasted images (sacred from the
+    // moment of paste) — in-memory state can lose rows across a remount, rekey,
+    // or cross-tab handoff while the draft keeps them, and a send that trusts
+    // only memory then silently drops the user's images (jx7byyk, 2026-07-31).
+    // Reconcile: any settled draft row missing from memory rides along.
+    const draftRows = restoreDraftImages(useInboxStore.getState().drafts[conversationId] ?? undefined);
+    const memoryImages = pastedImagesRef.current.filter(img => img.storageId || img.uploading);
+    const draftOnlyImages = draftRows.filter(
+      row => row.storageId && !memoryImages.some(img => img.storageId === row.storageId)
+    ) as typeof memoryImages;
+    const submitImages = [...memoryImages, ...draftOnlyImages];
     const hasUploadingImages = submitImages.some(img => img.uploading);
     const canSend = message.trim() || submitImages.length > 0;
     if (!canSend) return;
