@@ -587,6 +587,107 @@ describe("receipt-backed create side effects", () => {
   });
 });
 
+// Client stub ids reach the bucket receipt dispatches by design: fork label
+// inheritance files the local fork stub (the server files the real row itself
+// via inheritLabelAssignment), and a label can be edited before its create
+// acknowledges. Regression for the final-mode cutover routing these into
+// webAssignV2/webUpdateV2, whose v.id validators threw ArgumentValidationError
+// — a permanent error on a must-deliver receipt entry, so the outbox re-fired
+// the refusal (and its error toast) on every boot forever.
+describe("bucket receipt dispatches tolerate client stub ids", () => {
+  const USER = "users_owner";
+  const CONV = "conversations_real";
+  const BUCKET = "inbox_buckets_real";
+
+  function makeCtx() {
+    const db = makeFakeDb({
+      conversations: [{ _id: CONV, user_id: USER }],
+      inbox_buckets: [{ _id: BUCKET, user_id: USER, name: "api" }],
+      local_command_receipts: [],
+      local_view_heads: [],
+    });
+    const mutationCalls: any[] = [];
+    const ctx = {
+      auth: {
+        getUserIdentity: async () => ({ subject: `${USER}|session` }),
+      },
+      db,
+      runMutation: async (_fn: unknown, args: any) => {
+        mutationCalls.push(args);
+        return { commandId: args.command_id, status: "acknowledged" };
+      },
+    };
+    return { ctx, db, mutationCalls };
+  }
+
+  test("assign with a stub conversation id (fork inheritance) acknowledges as a durable no-op", async () => {
+    const { ctx, db, mutationCalls } = makeCtx();
+    const input = {
+      action: "assignSessionToBucket",
+      args: ["p2juk3l0abcm9xylocalforkstub", BUCKET],
+      result: { receiptActionVersion: 1, commandId: "assign-stub-conv" },
+    };
+
+    const first = await (dispatch as any)._handler(ctx, input);
+    const replay = await (dispatch as any)._handler(ctx, input);
+
+    expect(first).toMatchObject({
+      commandId: "assign-stub-conv",
+      status: "acknowledged",
+      result: { gate: "conv_not_found" },
+    });
+    expect(replay).toEqual(first);
+    expect(mutationCalls).toHaveLength(0);
+    expect(db._tables.local_command_receipts).toHaveLength(1);
+  });
+
+  test("assign to a still-optimistic label stub acknowledges as a no-op", async () => {
+    const { ctx, mutationCalls } = makeCtx();
+    const receipt = await (dispatch as any)._handler(ctx, {
+      action: "assignSessionToBucket",
+      args: [CONV, "localbucketstub123"],
+      result: { receiptActionVersion: 1, commandId: "assign-stub-bucket" },
+    });
+
+    expect(receipt).toMatchObject({
+      status: "acknowledged",
+      result: { gate: "bucket_not_owned" },
+    });
+    expect(mutationCalls).toHaveLength(0);
+  });
+
+  test("assign with real ids still delegates to webAssignV2", async () => {
+    const { ctx, mutationCalls } = makeCtx();
+    await (dispatch as any)._handler(ctx, {
+      action: "assignSessionToBucket",
+      args: [CONV, BUCKET],
+      result: { receiptActionVersion: 1, commandId: "assign-real" },
+    });
+
+    expect(mutationCalls).toEqual([{
+      command_id: "assign-real",
+      conversation_id: CONV,
+      bucket_id: BUCKET,
+    }]);
+  });
+
+  test("updateBucket against a label stub returns a rejected receipt instead of throwing", async () => {
+    const { ctx, mutationCalls } = makeCtx();
+    const receipt = await (dispatch as any)._handler(ctx, {
+      action: "updateBucket",
+      args: ["localbucketstub123", { name: "renamed" }],
+      result: { receiptActionVersion: 1, commandId: "update-stub-bucket" },
+    });
+
+    expect(receipt).toMatchObject({
+      commandId: "update-stub-bucket",
+      status: "rejected",
+      rejection: { code: "NOT_FOUND" },
+    });
+    expect(mutationCalls).toHaveLength(0);
+  });
+});
+
 describe("reconfigureSession stable-context forwarding", () => {
   test("relaunches a parked-create correction with the latest stable context", async () => {
     const userId = "users_owner";
