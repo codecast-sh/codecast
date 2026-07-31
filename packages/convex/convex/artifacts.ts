@@ -51,24 +51,19 @@ function barHtml(o: BrandOpts): string {
   return `
 <style id="__cc_style">
   #__cc_bar { position: sticky; top: 0; z-index: 2147483647; display: flex; align-items: center; gap: 10px;
-    box-sizing: border-box; width: 100%; padding: 8px 14px;
+    box-sizing: border-box; width: 100%; padding: 7px 14px;
     font: 500 12px/1 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-    background: rgba(255,255,255,.95); color: #52524e; border-bottom: 1px solid rgba(0,0,0,.08);
-    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); text-align: left; }
-  #__cc_bar .__cc_brand { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
+    background: #ffffff; color: #52524e; box-shadow: 0 1px 6px rgba(0,0,0,.08);
+    text-align: left; }
+  #__cc_bar .__cc_brand { color: #444444; text-decoration: none; display: inline-flex; align-items: center; }
   #__cc_bar .__cc_brand:hover { color: #1a1a18; }
   #__cc_bar .__cc_title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; opacity: .7; }
   #__cc_bar .__cc_when { opacity: .5; font-weight: 400; white-space: nowrap; }
   #__cc_bar button { all: unset; cursor: pointer; padding: 4px 8px; border-radius: 6px; font: inherit; white-space: nowrap; }
   #__cc_bar button:hover { background: rgba(0,0,0,.06); }
-  @media (prefers-color-scheme: dark) {
-    #__cc_bar { background: rgba(0,33,43,.95); color: #93a1a1; border-bottom-color: rgba(255,255,255,.09); }
-    #__cc_bar .__cc_brand:hover { color: #eee8d5; }
-    #__cc_bar button:hover { background: rgba(255,255,255,.08); }
-  }
 </style>
 <div id="__cc_bar">
-  <a class="__cc_brand" href="https://codecast.sh" target="_blank" rel="noopener noreferrer"><svg width="14" height="14" viewBox="290 340 440 340" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="${LOGO_C}"/><path fill="#e86c5d" d="${LOGO_ARROW}"/></svg><span>codecast</span></a>
+  <a class="__cc_brand" href="https://codecast.sh" target="_blank" rel="noopener noreferrer" title="Published with codecast"><svg width="22" height="22" viewBox="290 340 440 340" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="${LOGO_C}"/><path fill="#e86c5d" d="${LOGO_ARROW}"/></svg></a>
   <span class="__cc_title">${escAttr(o.title)}</span>
   <span class="__cc_when" id="__cc_when" data-ts="${o.updatedAt}">updated ${escAttr(when)}</span>
   <button id="__cc_copy" type="button" data-url="${escAttr(o.shareUrl)}">Copy link</button>
