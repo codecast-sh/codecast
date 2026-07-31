@@ -1,6 +1,7 @@
 import { internalMutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { redactSecrets } from "./redact";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
@@ -121,16 +122,56 @@ export const backfillMessageSenders = internalMutation({
     let revision = conversation.transcript_revision ?? 0;
     let matched = 0;
     let patched = 0;
+    const details: Array<Record<string, unknown>> = [];
     for (const pm of pending) {
-      if (!pm.client_id || !pm.from_user_id) continue;
-      const clientId = pm.client_id;
-      const msg = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_client_id", (q) =>
-          q.eq("conversation_id", args.conversation_id).eq("client_id", clientId))
-        .first();
+      const detail: Record<string, unknown> = {
+        status: pm.status,
+        hasClientId: !!pm.client_id,
+        from: pm.from_user_id,
+        preview: (pm.content || "").slice(0, 60),
+      };
+      details.push(detail);
+      if (!pm.from_user_id) continue;
+      // Primary join: the echo stamped the pending row's client_id onto the
+      // stored message. Fallback for rows consumed by the content-dedup path
+      // (which historically dropped client_id): exact-content match among the
+      // conversation's user messages near the delivery time.
+      let msg = null;
+      if (pm.client_id) {
+        const clientId = pm.client_id;
+        msg = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_client_id", (q) =>
+            q.eq("conversation_id", args.conversation_id).eq("client_id", clientId))
+          .first();
+      }
+      if (!msg) {
+        const around = pm.delivered_at ?? pm.created_at;
+        const candidates = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_role_timestamp", (q) =>
+            q.eq("conversation_id", args.conversation_id).eq("role", "user")
+              .gte("timestamp", around - 15 * 60 * 1000))
+          .take(200);
+        // Same fuzz as findEchoedPendingMessage: image refs stripped, secrets
+        // redacted, whitespace flattened.
+        const norm = (s: string) =>
+          s.replace(/\[Image[:\s][^\]]*\]/gi, "").replace(/\[image\]/gi, "").replace(/\s+/g, " ").trim();
+        const want = norm(redactSecrets(pm.content || ""));
+        if (!want) continue;
+        let textMatches = candidates.filter((m) => norm(m.content || "") === want);
+        // Queued sends can be injected as one combined turn — fall back to
+        // containment when exact match finds nothing.
+        if (textMatches.length === 0 && want.length >= 20) {
+          textMatches = candidates.filter((m) => norm(m.content || "").includes(want));
+        }
+        // Ambiguity guard: identical content sent twice can't be attributed safely.
+        if (textMatches.length === 1) msg = textMatches[0];
+        else detail.ambiguous = textMatches.length;
+      }
       if (!msg) continue;
       matched++;
+      detail.matched = true;
       if (msg.from_user_id) continue;
       if (!dryRun) {
         await ctx.db.patch(msg._id, { from_user_id: pm.from_user_id, transcript_revision: ++revision });
@@ -140,7 +181,7 @@ export const backfillMessageSenders = internalMutation({
     if (!dryRun && revision !== (conversation.transcript_revision ?? 0)) {
       await ctx.db.patch(args.conversation_id, { transcript_revision: revision });
     }
-    return { dryRun, pendingRows: pending.length, matched, patched };
+    return { dryRun, pendingRows: pending.length, matched, patched, details: dryRun ? details : undefined };
   },
 });
 
