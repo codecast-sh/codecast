@@ -89,7 +89,7 @@ export function DetailSplitLayout({
           <div className="h-full cq-container">{list}</div>
         </Panel>
         {showSplitDetail && (
-          <Separator className={separatorClass}>
+          <Separator className={`${separatorClass} group/sep`}>
             {isCollapsed && (
               <button
                 onClick={(e) => { e.stopPropagation(); listPanelRef.current?.expand(); }}
@@ -99,9 +99,12 @@ export function DetailSplitLayout({
                 <PanelLeftOpen className="w-3.5 h-3.5" />
               </button>
             )}
+            {/* Hover-only: an always-visible control floating over the detail's
+                content read as clutter. It appears when the pointer is at the
+                divider — where a layout gesture starts anyway. */}
             <button
               onClick={(e) => { e.stopPropagation(); setMode(surface, "focus"); }}
-              className="absolute top-12 -right-px z-20 p-1.5 bg-sol-bg-alt border border-sol-border/40 border-l-0 rounded-r-md text-sol-text-dim hover:text-sol-cyan transition-colors shadow-sm"
+              className="absolute top-12 -right-px z-20 p-1.5 bg-sol-bg-alt border border-sol-border/40 border-l-0 rounded-r-md text-sol-text-dim hover:text-sol-cyan opacity-0 group-hover/sep:opacity-100 focus-visible:opacity-100 transition-opacity shadow-sm"
               title="Unpin — full-width list with the item as a peek"
             >
               <PinOff className="w-3.5 h-3.5" />
