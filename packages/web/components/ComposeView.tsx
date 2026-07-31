@@ -3,7 +3,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useInboxStore, isConvexId, resolveComposeProjectPath } from "../store/inboxStore";
 import { NewSessionView, MessageInput, ConversationData } from "./ConversationView";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { formatShortcutParts } from "../shortcuts";
@@ -63,11 +63,16 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
   useMountEffect(() => {
     const store = useInboxStore.getState();
     const ctx = store.currentConversation;
-    // A caller-supplied project (doc review passes the doc's own project) wins —
-    // it's the explicit target. Otherwise inherit the current conversation, then
-    // the most recent project. All can be empty, in which case the daemon starts
-    // in $HOME and the null-state ProjectSwitcher lets the user pick before send.
-    const path = context?.projectPath || context?.gitRoot || ctx.projectPath || ctx.gitRoot || store.recentProjects?.[0]?.path;
+    // Caller context > current conversation (unless a project-filter chip is
+    // active and the conversation lives elsewhere) > filter chip > recent — see
+    // resolveComposeProjectPath for the full rationale.
+    const path = resolveComposeProjectPath({
+      context,
+      conversation: ctx,
+      activeProjectFilter: store.activeProjectFilter,
+      activeProjectPath: store.activeProjectPath,
+      recentProjects: store.recentProjects,
+    });
     const agentType = (ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
 
     // Shared optimistic-create path — see store.beginOptimisticSession.
