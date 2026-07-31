@@ -44,7 +44,9 @@ export function useGlobalShortcutActions() {
       const ordered = store.visualOrder();
       if (ordered.length === 0) return;
       const idx = ordered.findIndex(s => s._id === store.sidePanelSessionId);
-      store.selectPanelSession(ordered[(idx + 1) % ordered.length]._id);
+      const newIdx = Math.min(idx + 1, ordered.length - 1);
+      if (newIdx === idx) return;
+      store.selectPanelSession(ordered[newIdx]._id);
     }
   }, [isOnInboxPage]));
 
@@ -56,7 +58,9 @@ export function useGlobalShortcutActions() {
       const ordered = store.visualOrder();
       if (ordered.length === 0) return;
       const idx = ordered.findIndex(s => s._id === store.sidePanelSessionId);
-      store.selectPanelSession(ordered[(idx - 1 + ordered.length) % ordered.length]._id);
+      const newIdx = Math.max(idx - 1, 0);
+      if (newIdx === idx) return;
+      store.selectPanelSession(ordered[newIdx]._id);
     }
   }, [isOnInboxPage]));
 

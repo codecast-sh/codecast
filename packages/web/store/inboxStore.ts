@@ -4941,7 +4941,8 @@ export const useInboxStore = create<InboxStoreState>(
     if (ordered.length === 0) return;
     const currentId = get().currentSessionId;
     const idx = ordered.findIndex((s: InboxSession) => s._id === currentId);
-    const newIdx = (idx - 1 + ordered.length) % ordered.length;
+    const newIdx = Math.max(idx - 1, 0);
+    if (newIdx === idx) return;
     get().navigateToSession(ordered[newIdx]._id);
   },
 
@@ -4951,7 +4952,8 @@ export const useInboxStore = create<InboxStoreState>(
     if (ordered.length === 0) return;
     const currentId = get().currentSessionId;
     const idx = ordered.findIndex((s: InboxSession) => s._id === currentId);
-    const newIdx = (idx + 1) % ordered.length;
+    const newIdx = Math.min(idx + 1, ordered.length - 1);
+    if (newIdx === idx) return;
     get().navigateToSession(ordered[newIdx]._id);
   },
 
