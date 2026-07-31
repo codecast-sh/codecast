@@ -6,13 +6,14 @@ import pkg from "../package.json";
 
 const VERSION = pkg.version;
 const MEMORY_VERSION = "11"; // bumped: cast label set/clear/ls/rename/rm (manage session labels)
-const TASK_VERSION = "3"; // bumped: multi-line markdown prompts via stdin heredoc (cast trigger add -)
+const TASK_VERSION = "4"; // bumped: --spawn (fresh session per run, linked to the trigger) + inject-vs-spawn binding model
 const WORK_VERSION = "6"; // bumped: messaging docs split out into MESSAGING_SNIPPET
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "5"; // bumped: multi-line bodies via stdin heredoc (cast send <id> -)
 const VISUAL_VERSION = "3"; // cast-canvas: broader Plot marks + declarative transforms
 const FORKS_VERSION = "2"; // bumped: --label flag on cast fork / cast spawn + default label inheritance on fork
+const PUBLISH_VERSION = "1"; // cast publish: shareable HTML artifacts
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_RETRY_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
@@ -126,6 +127,10 @@ export function getVisualVersion(): string {
 
 export function getForksVersion(): string {
   return FORKS_VERSION;
+}
+
+export function getPublishVersion(): string {
+  return PUBLISH_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {

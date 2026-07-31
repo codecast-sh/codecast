@@ -342,6 +342,11 @@ export type InboxSession = {
   // conversation fields, so acting on a teammate's card would hide it from them.
   owner_user_id?: string | null;
   owned_by_me?: boolean;
+  // Unacknowledged handoff: a teammate assigned this session to the current user
+  // and they haven't acked it yet (session_owners.seen_at unset). Stamped by
+  // computeInboxSessions; cleared by ackSessionAssignment (server) and
+  // clearAssignedPing (local-first).
+  assigned_ping?: { by_name: string; note?: string | null; at: number } | null;
   // An Anchor's session renders under its bot identity (acting_user_id), shown
   // even on the host's own row; is_anchor marks it a standing member.
   acting_user_id?: string | null;
@@ -627,6 +632,30 @@ export type SavedView = {
 // stable chronology that doesn't move; "bucket" = sections per manual label.
 export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan";
 
+// Discrete layout arrangements for a list+detail surface (docs/tasks/plans) and
+// the shell around it. "focus" = the list owns the full width and a selected
+// item opens as a peek overlay; "split" = classic pinned list+detail; "triage" =
+// split plus the right session rail. One state, cycled by a single shortcut,
+// replaces the independent collapse/resize juggling — every arrangement is a
+// designed state, never a hand-built one. Each surface remembers its own mode.
+export type LayoutMode = "focus" | "split" | "triage";
+export const LAYOUT_MODES: LayoutMode[] = ["focus", "split", "triage"];
+
+export function resolveLayoutMode(
+  ui: { layout_modes?: Record<string, LayoutMode> } | undefined,
+  surface: string,
+): LayoutMode {
+  return ui?.layout_modes?.[surface] ?? "split";
+}
+
+// Which surface a path's layout mode belongs to. The list+detail pages each get
+// their own memory; everything else shares one "global" slot so the cycle key
+// still moves the rail there.
+export function layoutSurfaceFromPath(pathname: string): string {
+  const seg = pathname.split("/")[1] ?? "";
+  return seg === "docs" || seg === "tasks" || seg === "plans" ? seg : "global";
+}
+
 export type ClientUI = {
   theme?: "light" | "dark";
   sidebar_collapsed?: boolean;
@@ -686,6 +715,13 @@ export type ClientUI = {
   // than this count as "N new" on the collapsed header. Refreshed whenever the
   // user toggles the section (expanding IS reading the briefing).
   schedules_seen_at?: number;
+  // Per-surface layout mode memory (see LayoutMode). Layout pref → unstamped,
+  // per-device local_wins like sidebar_collapsed.
+  layout_modes?: Record<string, LayoutMode>;
+  // Simple view: calm, low-chrome rendering of conversations and inbox cards —
+  // secondary badges, counts and meta rows drop away. A per-user preference
+  // ("my reading style follows me") → stamped LWW.
+  simple_view?: boolean;
 };
 
 export type ClientLayouts = {
@@ -1038,6 +1074,25 @@ export function pendingSendConsumed(
 // fast path on the very next sync tick, before the server ever rejected it.
 export const PENDING_SEND_PRUNE_GRACE_MS = 15_000;
 
+// Echo hard cap. The session claiming a send consumed does NOT mean the local
+// message window holds the echoed server row yet — the window back-fills via an
+// async fetch (bgSyncMessages) that the same sync tick merely kicks off. Pruning
+// on the claim alone makes the message vanish from a stale cached window until
+// that fetch lands (~a second) when the user returns to the thread. So a consumed
+// send with a warm local window is kept until its echo is visible there — but only
+// up to this cap, because some sends never echo as a user-message row at all
+// (control commands like /model) and a phantom pending pill would otherwise pin
+// an idle session in Working forever.
+export const PENDING_SEND_ECHO_CAP_MS = 60_000;
+
+// True when the pending send's server row is already visible in the local
+// message window (matched by client_id echo or direct _id).
+function pendingSendEchoed(msg: Message, localMessages: Message[]): boolean {
+  return localMessages.some(
+    (m) => m._id === msg._id || (!!msg._clientId && m.client_id === msg._clientId),
+  );
+}
+
 // Prune consumed/stale optimistic sends for a synced session. The conversation
 // currently being viewed is left to setMessages (echo-based prune) so a just-sent
 // message stays visible in the open thread until its real row syncs in. Failed
@@ -1047,6 +1102,9 @@ export function reconcilePendingSendForSession(
   convId: string,
   session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
   focusedConvId: string | null,
+  // The conversation's locally cached message window, when one exists. Gates the
+  // prune on the echoed server row being visible there (see PENDING_SEND_ECHO_CAP_MS).
+  localMessages?: Message[],
 ): boolean {
   if (convId === focusedConvId) return false;
   const pending = pendingMessages[convId];
@@ -1063,7 +1121,17 @@ export function reconcilePendingSendForSession(
   }
   if (newestSentAt && Date.now() - newestSentAt < PENDING_SEND_PRUNE_GRACE_MS) return false;
   if (!pendingSendConsumed(session, baseline)) return false;
-  const kept = pending.filter((m) => m._isFailed);
+  const kept = pending.filter((m) => {
+    if (m._isFailed) return true;
+    // Echo gate: with a warm local window, hold the send until its server row
+    // is visible there (or the cap passes) so a return to the thread never
+    // renders a stale window with the message missing.
+    return (
+      !!localMessages?.length &&
+      Date.now() - m.timestamp < PENDING_SEND_ECHO_CAP_MS &&
+      !pendingSendEchoed(m, localMessages)
+    );
+  });
   if (kept.length === pending.length) return false;
   if (kept.length === 0) delete pendingMessages[convId];
   else pendingMessages[convId] = kept;
@@ -1251,6 +1319,14 @@ export function sessionStructuralSig(s: InboxSession): string {
     nestParentIdOf(s) || "",
     s.forked_from || "",
     orchestrationGroupLabelOf(s) || "",
+    // Presence of an unacked assignment flips the row's prominent treatment.
+    // Changes only on assign/ack, never on heartbeats.
+    s.assigned_ping ? 1 : 0,
+    // Harness loop state decides trigger-set membership and absorption
+    // (partitionTriggerInbox reads it off this same subscription). Distilled to
+    // the fields that change rows; stamps once per turn end/wakeup, never on
+    // heartbeats.
+    s.loop_state ? `${s.loop_state.status}:${s.loop_state.wakeup_at}` : "",
   ].join("\x1f");
 }
 
@@ -2371,6 +2447,9 @@ interface InboxStoreState {
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
   syncRecord: (field: string, id: string, record: any) => void;
+  // Local-first clear of a row's "assigned to you" ping (paired with the
+  // ackSessionAssignment mutation, which the caller fires separately).
+  clearAssignedPing: (conversationId: string) => void;
   syncOverlay: (field: string, overlayById: Record<string, Record<string, any>>) => void;
   syncMentionIndex: (kind: "tasks" | "docs" | "plans", items: any[]) => void;
   // -- Incremental-sync watermark (IDB-persisted, keyed by "<namespace>:<wsKey>") --
@@ -2645,6 +2724,11 @@ interface InboxStoreState {
   clearSidePanelSession: () => void;
   toggleSidePanel: () => void;
   selectPanelSession: (sessionId: string | null) => void;
+
+  // -- Layout modes (see LayoutMode) --
+  setLayoutMode: (surface: string, mode: LayoutMode) => void;
+  cycleLayoutMode: (surface: string) => void;
+  setRailOpen: (open: boolean) => void;
 
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string) => Promise<any>;
@@ -2934,6 +3018,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // silently globalizing them would yank screens out from under people.
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "inbox_show_old",
+  "simple_view",
 ]);
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
@@ -2998,6 +3083,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
           s._id,
           (table[s._id] as InboxSession | undefined) ?? s,
           draft.currentSessionId,
+          draft.messages[s._id],
         );
       }
       if (!draft.currentSessionId && !draft.showMySessions &&
@@ -4846,6 +4932,14 @@ export const useInboxStore = create<InboxStoreState>(
     }
   }),
 
+  // Local-first retire of the "assigned to you" ping: the UI clears it the
+  // moment the user acks, while the ackSessionAssignment mutation round-trips;
+  // the next inbox sync reflects the server's cleared state and agrees.
+  clearAssignedPing: sync(function (this: Draft, conversationId: string) {
+    const row = this.sessions[conversationId];
+    if (row?.assigned_ping) row.assigned_ping = null;
+  }),
+
   // Merge a small high-churn map (e.g. heartbeat liveness keyed by id) onto a
   // base collection's existing rows, touching only changed fields so unchanged
   // rows keep object identity (React.memo holds). The base list owns the stable
@@ -6293,6 +6387,42 @@ export const useInboxStore = create<InboxStoreState>(
       this.sidePanelSessionId = this.sidePanelSessionId ?? this.currentSessionId ?? null;
     }
   }),
+
+  // The rail is part of the arrangement: triage opens it, focus/split retract
+  // it (including a peeked conversation, which also holds the rail open).
+  // Opening for triage must NOT manufacture a conversation selection the way
+  // toggleSidePanel does — triage promises the session LIST, not a peek of
+  // whatever conversation happened to be current. Mode memory itself goes
+  // through updateClientUI so it persists per-device like the other layout prefs.
+  setLayoutMode: (surface: string, mode: LayoutMode) => {
+    const s = get();
+    s.updateClientUI({ layout_modes: { ...(s.clientState.ui?.layout_modes ?? {}), [surface]: mode } });
+    if (mode === "triage") {
+      if (!s.sidePanelOpen) s.setRailOpen(true);
+    } else {
+      if (s.sidePanelOpen) s.setRailOpen(false);
+      if (s.sidePanelSessionId) s.clearSidePanelSession();
+    }
+  },
+
+  // Open/close the rail WITHOUT toggleSidePanel's currentSessionId seeding —
+  // the rail slot itself, not a conversation peek.
+  setRailOpen: action(function (this: Draft, open: boolean) {
+    this.sidePanelOpen = open;
+    this.sidePanelUserClosed = !open;
+  }),
+
+  // Cycle from the arrangement the user is LOOKING AT, not the stored mode:
+  // the rail has other writers (route auto-open, drag-to-collapse, the header
+  // toggle) that don't update layout_modes, and cycling from a stale stored
+  // mode makes the first keypress a silent no-op.
+  cycleLayoutMode: (surface: string) => {
+    const s = get();
+    const stored = resolveLayoutMode(s.clientState.ui, surface);
+    const railOut = s.sidePanelOpen || !!s.sidePanelSessionId;
+    const effective: LayoutMode = railOut ? "triage" : stored === "triage" ? "split" : stored;
+    s.setLayoutMode(surface, LAYOUT_MODES[(LAYOUT_MODES.indexOf(effective) + 1) % LAYOUT_MODES.length]);
+  },
 
   selectPanelSession: action(function (this: Draft, sessionId: string | null) {
     // Clicking the session that's already open in the right panel exits it — the
