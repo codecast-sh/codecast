@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { newSlug, upsertFromPublish, deleteFromCLI, brandArtifactHtml } from "./artifacts";
+import { newSlug, newSecret, upsertFromPublish, deleteFromCLI, lineDiff } from "./artifacts";
+import { brandArtifactHtml } from "./artifactPages";
+import { normalizeAssetPath } from "./artifactsHttp";
 
 // Minimal hand-rolled ctx in the style of docs.test.ts: enough db surface for
 // the handlers under test, recording writes so assertions can inspect them.
@@ -11,7 +13,7 @@ function makeCtx(rows: Array<Record<string, any>>, opts: { tokenUser?: string } 
   const storageDeletes: string[] = [];
 
   const query = (_table: string) => {
-    let filtered = rows.filter((r) => !deletes.includes(r._id));
+    let filtered = rows.filter((r) => !deletes.includes(r._id) && (!r._table || r._table === _table));
     return {
       withIndex(_name: string, cb: (q: any) => any) {
         const eqs: Record<string, any> = {};
@@ -35,15 +37,16 @@ function makeCtx(rows: Array<Record<string, any>>, opts: { tokenUser?: string } 
     ctx: {
       db: {
         query,
-        get: async (id: string) => byId.get(id) ?? null,
+        get: async (id: string) => byId.get(id) ?? rows.find((r) => r._id === id) ?? null,
         patch: async (id: string, patch: Record<string, any>) => {
           patches.push({ id, patch });
-          Object.assign(byId.get(id)!, patch);
+          const row = byId.get(id) ?? rows.find((r) => r._id === id);
+          Object.assign(row!, patch);
         },
         insert: async (_table: string, doc: Record<string, any>) => {
           const _id = `art_${inserts.length}`;
-          inserts.push({ _id, ...doc });
-          rows.push({ _id, ...doc });
+          inserts.push({ _id, table: _table, ...doc });
+          rows.push({ _id, _table, ...doc });
           return _id;
         },
         delete: async (id: string) => {
@@ -64,6 +67,7 @@ function makeCtx(rows: Array<Record<string, any>>, opts: { tokenUser?: string } 
 }
 
 const existingRow = {
+  _table: "artifacts",
   _id: "a1",
   slug: "abcdefghijkl",
   user_id: "u1",
@@ -81,6 +85,53 @@ describe("newSlug", () => {
     for (let i = 0; i < 20; i++) {
       expect(newSlug()).toMatch(/^[A-Za-z0-9]{12}$/);
     }
+  });
+
+  test("newSecret is longer than a slug", () => {
+    expect(newSecret()).toMatch(/^[A-Za-z0-9]{20}$/);
+  });
+});
+
+describe("lineDiff", () => {
+  test("equal texts produce only eq ops", () => {
+    const { ops, truncated } = lineDiff("a\nb\nc", "a\nb\nc");
+    expect(truncated).toBe(false);
+    expect(ops.every((o) => o.t === "eq")).toBe(true);
+    expect(ops.length).toBe(3);
+  });
+
+  test("a changed middle line yields del+add with stable context", () => {
+    const { ops } = lineDiff("a\nb\nc", "a\nX\nc");
+    expect(ops.map((o) => o.t)).toEqual(["eq", "del", "add", "eq"]);
+    expect(ops[1].line).toBe("b");
+    expect(ops[2].line).toBe("X");
+  });
+
+  test("pure insertion is adds only", () => {
+    const { ops } = lineDiff("a\nc", "a\nb\nc");
+    expect(ops.filter((o) => o.t === "add").map((o) => o.line)).toEqual(["b"]);
+    expect(ops.filter((o) => o.t === "del").length).toBe(0);
+  });
+
+  test("caps pathological inputs", () => {
+    const big = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join("\n");
+    const { truncated } = lineDiff(big, "other");
+    expect(truncated).toBe(true);
+  });
+});
+
+describe("normalizeAssetPath", () => {
+  test("accepts clean relative paths", () => {
+    expect(normalizeAssetPath("img/chart.png")).toBe("img/chart.png");
+    expect(normalizeAssetPath("./css/app.css")).toBe("css/app.css");
+    expect(normalizeAssetPath("a\\b\\c.js")).toBe("a/b/c.js");
+  });
+
+  test("rejects traversal, absolute, and reserved paths", () => {
+    expect(normalizeAssetPath("../etc/passwd")).toBeNull();
+    expect(normalizeAssetPath("/abs.js")).toBeNull();
+    expect(normalizeAssetPath("_v/3/x.png")).toBeNull();
+    expect(normalizeAssetPath("a/../b.js")).toBeNull();
   });
 });
 
@@ -140,6 +191,7 @@ describe("upsertFromPublish", () => {
 
   test("history beyond the cap prunes the oldest snapshots", async () => {
     const versionRows = Array.from({ length: 21 }, (_, i) => ({
+      _table: "artifact_versions",
       _id: `v${i + 1}`,
       artifact_id: "a1",
       version: i + 1,
@@ -238,7 +290,7 @@ describe("deleteFromCLI", () => {
   });
 
   test("delete also removes history rows and their blobs", async () => {
-    const past = { _id: "v1", artifact_id: "a1", version: 2, title: "Old", storage_id: "st_v2", size: 10, published_at: 1500 };
+    const past = { _table: "artifact_versions", _id: "v1", artifact_id: "a1", version: 2, title: "Old", storage_id: "st_v2", size: 10, published_at: 1500 };
     const { ctx, deletes, storageDeletes } = ctxWithAuth([{ ...existingRow }, past]);
     await (deleteFromCLI as any)._handler(ctx, { api_token: "t", target: "abcdefghijkl" });
     expect(deletes.sort()).toEqual(["a1", "v1"]);
@@ -328,5 +380,58 @@ describe("brandArtifactHtml", () => {
     });
     expect(out).toContain(">v2 (old) ▾<");
     expect(out).toContain('id="__cc_latest"');
+  });
+
+  test("comment chip shows the open count and embeds it in the config", () => {
+    const out = brandArtifactHtml("<body></body>", {
+      ...opts,
+      metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
+      commentCount: 3,
+    });
+    expect(out).toContain('id="__cc_ccount"');
+    expect(out).toContain(">3</span>");
+    expect(out).toContain('"comments":3');
+  });
+
+  test("zero comments renders an empty chip and a zero config count", () => {
+    const out = brandArtifactHtml("<body></body>", {
+      ...opts,
+      metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
+      commentCount: 0,
+    });
+    expect(out).toContain('id="__cc_ccount"></span>');
+    expect(out).toContain('"comments":0');
+  });
+
+  test("interactive bar ships the comments, manage, and history panels", () => {
+    const out = brandArtifactHtml("<body></body>", {
+      ...opts,
+      metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
+    });
+    expect(out).toContain('id="__cc_cpanel"');
+    expect(out).toContain('id="__cc_mgr"');
+    expect(out).toContain('id="__cc_hist"');
+    expect(out).toContain("/cli/artifacts/comment");
+    expect(out).toContain("/cli/artifacts/manage");
+  });
+
+  test("mobile styles: safe-area padding and bottom-sheet panels", () => {
+    const out = brandArtifactHtml("<body></body>", opts);
+    expect(out).toContain("env(safe-area-inset-bottom)");
+    expect(out).toContain("env(safe-area-inset-left)");
+    expect(out).toContain("border-radius: 16px 16px 0 0");
+  });
+
+  test("bar inline script parses as valid JavaScript", () => {
+    const out = brandArtifactHtml("<body></body>", {
+      ...opts,
+      version: 2,
+      currentVersion: 3,
+      metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
+      commentCount: 2,
+    });
+    const scripts = [...out.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const src of scripts) expect(() => new Function(src)).not.toThrow();
   });
 });

@@ -12,6 +12,8 @@ export function pathLabel(path: string): string {
   const segments: Record<string, string> = {
     "/tasks": "Tasks",
     "/docs": "Docs",
+    "/vault": "Vault",
+    "/artifacts": "Artifacts",
     "/plans": "Plans",
     "/projects": "Projects",
     "/inbox": "Inbox",
