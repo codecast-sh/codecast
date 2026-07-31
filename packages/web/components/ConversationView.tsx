@@ -11624,7 +11624,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [serverUserMessages, timeline, hasMoreAbove, processedServerMsgIds]);
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
-  const setActiveStickyMsg = useCallback((val: { index: number; content: string; id: string } | null) => {
+  const setActiveStickyMsg = useCallback((val: { index: number; content: string; id: string; fromUserId?: string } | null) => {
     setActiveStickyMsgRaw(prev => {
       if (prev === val) return prev;
       if (prev === null || val === null) return val;
