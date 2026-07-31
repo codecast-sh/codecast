@@ -17,7 +17,8 @@ export default defineConfig({
           const m = req.url?.match(/^\/a\/([A-Za-z0-9]{6,32})(?:[/?#]|$)/);
           if (!m) return next();
           const edge = process.env.ARTIFACT_EDGE_URL || "https://a.codecast.sh";
-          res.writeHead(302, { Location: `${edge}/${m[1]}` });
+          const qs = req.url?.split("?")[1];
+          res.writeHead(302, { Location: `${edge}/${m[1]}${qs ? `?${qs}` : ""}` });
           res.end();
         });
       },

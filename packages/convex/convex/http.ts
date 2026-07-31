@@ -3675,6 +3675,13 @@ http.route({
       const who = await ctx.runQuery(internal.artifacts.verify, { api_token });
       if (!who) return json({ error: "Unauthorized" }, 401);
 
+      // Content hash lets the mutation turn a byte-identical republish into a
+      // no-op instead of a junk history version.
+      const hashBytes = new Uint8Array(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content)),
+      );
+      const contentHash = Array.from(hashBytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
       const storageId = await ctx.storage.store(
         new Blob([content], { type: "text/html; charset=utf-8" }),
       );
@@ -3685,6 +3692,7 @@ http.route({
         size,
         source_path: source_path || undefined,
         force_new: !!force_new,
+        content_hash: contentHash,
       });
       return json(result);
     } catch (error) {
@@ -3721,30 +3729,80 @@ http.route({
   pathPrefix: "/cli/a/",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
-    const slug = new URL(request.url).pathname.replace(/^\/cli\/a\//, "").replace(/\/+$/, "");
-    const artifact = slug ? await ctx.runQuery(internal.artifacts.bySlug, { slug }) : null;
-    if (!artifact) {
-      return new Response("Artifact not found", {
-        status: 404,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-      });
+    const url = new URL(request.url);
+    const slug = url.pathname.replace(/^\/cli\/a\//, "").replace(/\/+$/, "");
+    const notFound = (msg: string) =>
+      new Response(msg, { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    if (!slug) return notFound("Artifact not found");
+
+    // ?meta=1 — version metadata for the in-page bar (new-version badge poll +
+    // history panel). Never cached: staleness here is exactly what the badge
+    // exists to detect. The document itself stays on the lean bySlug path.
+    if (url.searchParams.get("meta") === "1") {
+      const art = await ctx.runQuery(internal.artifacts.historyBySlug, { slug });
+      if (!art) return notFound("Artifact not found");
+      return new Response(
+        JSON.stringify({
+          version: art.version,
+          updated_at: art.updated_at,
+          versions: art.versions.map((v) => ({ version: v.version, title: v.title, size: v.size, published_at: v.published_at })),
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+            "Access-Control-Allow-Origin": "*",
+          },
+        },
+      );
     }
-    const blob = await ctx.storage.get(artifact.storage_id);
-    if (!blob) {
-      return new Response("Artifact content missing", {
-        status: 404,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-      });
+
+    // ?v=N — a superseded version out of artifact_versions; anything else (or
+    // N = current) serves the live row.
+    const vParam = url.searchParams.get("v");
+    const wanted = vParam && /^\d+$/.test(vParam) ? parseInt(vParam, 10) : null;
+
+    const withHistory =
+      wanted === null ? null : await ctx.runQuery(internal.artifacts.historyBySlug, { slug });
+    const artifact =
+      wanted === null ? await ctx.runQuery(internal.artifacts.bySlug, { slug }) : withHistory;
+    if (!artifact) return notFound("Artifact not found");
+
+    let storageId = artifact.storage_id;
+    let title = artifact.title;
+    let updatedAt = artifact.updated_at;
+    let version = artifact.version;
+    if (wanted !== null && wanted !== artifact.version) {
+      const past = withHistory?.versions.find((v) => v.version === wanted);
+      if (!past) return notFound(`Version ${wanted} of this artifact is no longer available`);
+      storageId = past.storage_id;
+      title = past.title;
+      updatedAt = past.published_at;
+      version = past.version;
     }
+
+    const blob = await ctx.storage.get(storageId);
+    if (!blob) return notFound("Artifact content missing");
+
     // This IS the shared document (codecast.sh/a/<slug> 302s here): inject the
     // codecast chrome — a sticky in-flow top bar + og meta — straight into the
     // artifact's HTML. No wrapper page, no iframe, one response.
     const { brandArtifactHtml } = await import("./artifacts");
     const html = brandArtifactHtml(await blob.text(), {
-      title: artifact.title,
+      title,
       author: artifact.author_name,
-      updatedAt: artifact.updated_at,
+      updatedAt,
       shareUrl: `${process.env.SITE_URL || "https://codecast.sh"}/a/${artifact.slug}`,
+      version,
+      currentVersion: artifact.version,
+      // Polling goes straight at this origin, not the edge cache — url.origin
+      // is convex.codecast.sh even when the document reached the viewer via
+      // a.codecast.sh, because the edge worker fetches this origin directly.
+      // TLS terminates at the proxy in front of us, so request.url says http;
+      // force https for any non-local host or the page's fetch is blocked as
+      // mixed content.
+      metaUrl: `${/^(localhost|127\.)/.test(url.hostname) ? url.origin : `https://${url.host}`}/cli/a/${artifact.slug}?meta=1`,
     });
     return new Response(html, {
       status: 200,
@@ -3753,9 +3811,12 @@ http.route({
         "Content-Security-Policy":
           "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock",
         "X-Robots-Tag": "noindex",
-        // Cacheable by browsers (and any CDN put in front later); republish
-        // staleness is bounded at a minute.
-        "Cache-Control": "public, max-age=60, stale-while-revalidate=300",
+        // Current doc: cacheable, republish staleness bounded at a minute.
+        // Past versions are immutable — cache them harder.
+        "Cache-Control":
+          version < artifact.version
+            ? "public, max-age=3600, stale-while-revalidate=86400"
+            : "public, max-age=60, stale-while-revalidate=300",
         "Access-Control-Allow-Origin": "*",
       },
     });
