@@ -141,7 +141,9 @@ app.get("/a/:slug", (c) => {
   const slug = c.req.param("slug");
   if (!/^[A-Za-z0-9]{6,32}$/.test(slug)) return c.text("Invalid artifact link", 404);
   c.header("Cache-Control", "public, max-age=300");
-  return c.redirect(`${ARTIFACT_EDGE}/${slug}`, 302);
+  // Forward the query so shared past-version links (?v=N) survive the hop.
+  const search = new URL(c.req.url).search;
+  return c.redirect(`${ARTIFACT_EDGE}/${slug}${search}`, 302);
 });
 
 app.use("*", botMetaMiddleware);
