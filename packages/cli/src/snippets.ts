@@ -44,7 +44,7 @@ export const MESSAGING_SNIPPET_END = "<!-- /codecast-messaging -->";
 export const MESSAGING_SNIPPET = `
 ## Messaging
 
-\`cast send <session_id> "<text>"\` reaches any session — old or active — by its short ID. Each is a teammate: be the boss (hand a dormant one a task; it resumes with full context and runs it) or a peer (trade updates on a shared problem). Ask one to ping you when it's done or blocked, then act on the reply yourself.
+\`cast send <session_id> "<text>"\` reaches any session — old or active — by its short ID. Each is a teammate: be the boss (hand a dormant one a task; it resumes with full context and runs it) or a peer (trade updates on a shared problem). Ask one to ping you when it's done or blocked, then act on the reply yourself. Collaboration is the default, but interruptions aren't free — use judgment.
 
 It lands as a new turn attributed to you; inbound arrives wrapped as \`<session-message from="jx7c6zk">…</session-message>\` — reply to its ID.
 

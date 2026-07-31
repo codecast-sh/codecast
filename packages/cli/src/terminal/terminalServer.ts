@@ -51,15 +51,20 @@ export interface TerminalSessionInfo {
 
 /** List the panel's own tmux sessions (cast-term-*). */
 export function listTerminalSessions(): TerminalSessionInfo[] {
+  // NB: separators must be printable — tmux sanitizes control chars (tabs
+  // included) to "_" in format output. Fixed-width fields come first; the
+  // path goes LAST and is re-joined, since it's the one field that may itself
+  // contain the separator.
   const r = tmuxRun([
     "list-sessions",
     "-F",
-    "#{session_name}\t#{session_path}\t#{session_created}\t#{session_attached}",
+    "#{session_name}|#{session_created}|#{session_attached}|#{session_path}",
   ]);
   if (r.status !== 0) return [];
   const out: TerminalSessionInfo[] = [];
   for (const line of r.stdout.split("\n")) {
-    const [name, path, created, attached] = line.split("\t");
+    const [name, created, attached, ...pathParts] = line.split("|");
+    const path = pathParts.join("|");
     if (!name || !name.startsWith(TERM_SESSION_PREFIX)) continue;
     // Pane command comes from a second query to keep the first one cheap.
     const cmd = tmuxRun(["display-message", "-p", "-t", name, "-F", "#{pane_current_command}"]);

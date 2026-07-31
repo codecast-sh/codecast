@@ -1064,13 +1064,23 @@ pre[class*="language-"] {
    theme-aware via a warm tint over the page background. [id^="msg-"] scopes
    to the message BLOCKS and leaves small inline chips that share the
    bg-sol-blue/10 tint alone. */
-.simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"] {
-  background: color-mix(in srgb, var(--sol-yellow) 7%, var(--sol-bg)) !important;
+.simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"],
+.simple-view [data-sv-sticky] {
+  background: color-mix(in srgb, var(--sol-yellow) 12%, var(--sol-bg)) !important;
   border: 1px solid color-mix(in srgb, var(--sol-text) 11%, transparent) !important;
   border-radius: 9px;
+  box-shadow: none;
+}
+.simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"] {
   padding: 9px 12px;
   margin-bottom: 16px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+/* The sticky pinned copy keeps its own paddings but flattens to the same
+   card: square top (it hangs from the header), no blur halo. */
+.simple-view [data-sv-sticky] {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  backdrop-filter: none;
 }
 /* The message body indent under the avatar row flattens — the card itself
    is the container now. */
@@ -1137,9 +1147,13 @@ pre[class*="language-"] {
 .simple-view [data-sv-rail] [data-session-id][class*="border-l-"] {
   border-left-width: 1px;
 }
-.simple-view [data-sv-rail] [data-session-id][class*="bg-sol-cyan/15"] {
-  box-shadow: 0 0 0 1px var(--sol-cyan) inset;
-  background: var(--sol-bg);
+/* Selected card: on the tile ground, selection = a solid cyan outline plus a
+   faint wash — unmistakable next to hairline-bordered neighbors without
+   turning the card into a color block. */
+.simple-view [data-sv-rail] [data-session-id][class*="ring-sol-cyan"] {
+  box-shadow: 0 0 0 1.5px var(--sol-cyan) inset;
+  background: color-mix(in srgb, var(--sol-cyan) 6%, var(--sol-bg));
+  border-color: transparent;
 }
 
 /* Window manager: hide input area on unfocused windows */
