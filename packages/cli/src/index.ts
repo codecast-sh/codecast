@@ -46,7 +46,12 @@ import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from 
 import { getAllSyncRecords, findUnsyncedFiles, readOldestUnsyncedTimestamp } from "./syncLedger.js";
 import { isTestScratchPath } from "./syncScope.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
-import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
+import {
+  getLastReconciliation,
+  isTranscriptFileInSyncScope,
+  performReconciliation,
+  repairDiscrepancies,
+} from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
@@ -2940,6 +2945,9 @@ async function runSync(): Promise<void> {
 
   for (const filePath of sessionFiles) {
     try {
+      // Manual sync is not an escape hatch around selected-project privacy.
+      // Keep its candidate set identical to the daemon and reconciliation.
+      if (!isTranscriptFileInSyncScope(filePath, config)) continue;
       const stats = fs.statSync(filePath);
       const position = getPosition(filePath);
 
@@ -4257,7 +4265,8 @@ program
             }
           },
           conversationCache,
-          100
+          100,
+          config,
         );
 
         console.log("");
@@ -4316,7 +4325,12 @@ program
 
     // Pending files (files modified since last sync)
     const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-    const unsyncedFiles = findUnsyncedFiles(claudeProjectsDir);
+    const config = readConfig() ?? {};
+    const unsyncedFiles = findUnsyncedFiles(
+      claudeProjectsDir,
+      undefined,
+      (filePath) => isTranscriptFileInSyncScope(filePath, config),
+    );
 
     console.log(`  ${fmt.muted("Pending Sync")}`);
     if (unsyncedFiles.length === 0) {

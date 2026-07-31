@@ -166,7 +166,8 @@ export function getStaleFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): strin
 
 export function findUnsyncedFiles(
   baseDir: string,
-  maxAgeMs: number = 7 * 24 * 60 * 60 * 1000
+  maxAgeMs: number = 7 * 24 * 60 * 60 * 1000,
+  includeFile?: (filePath: string) => boolean,
 ): string[] {
   const ledger = store.getAll();
   const positions = loadPositions(); // Fallback to legacy positions.json
@@ -183,6 +184,7 @@ export function findUnsyncedFiles(
         if (entry.isDirectory()) {
           scanDir(fullPath);
         } else if (entry.name.endsWith(".jsonl")) {
+          if (includeFile && !includeFile(fullPath)) continue;
           try {
             const stats = fs.statSync(fullPath);
             const fileAge = now - stats.mtimeMs;
