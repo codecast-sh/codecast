@@ -54,6 +54,7 @@ export type ShortcutAction =
   | 'sidebar.toggleLeft'
   | 'sidebar.toggleRight'
   | 'sidebar.toggleComments'
+  | 'terminal.toggle'
   | 'diff.prevChange'
   | 'diff.nextChange'
   | 'diff.toggleFileTree'
@@ -207,6 +208,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+;', action: 'layout.cycle', skipInputCheck: true, description: 'Cycle layout (Focus / Split / Triage)' },
   { key: 'ctrl+[', action: 'sidebar.toggleLeft', skipInputCheck: true, description: 'Toggle left sidebar' },
   { key: 'ctrl+]', action: 'sidebar.toggleRight', skipInputCheck: true, description: 'Toggle sessions panel' },
+  { key: 'ctrl+`', action: 'terminal.toggle', skipInputCheck: true, description: 'Toggle terminal' },
   { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
 
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },

@@ -1,8 +1,7 @@
 import { Component, ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
-import { toast } from "sonner";
 import { captureError } from "@/lib/analytics";
-import { copyToClipboard } from "@/lib/utils";
+import { showErrorToast } from "@/lib/errorToast";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -82,15 +81,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       setTimeout(() => _recentErrors.delete(dedupKey), 30_000);
 
       const fullTrace = `${error.message}\n\n${error.stack || ""}\n\nComponent: ${label}${info.componentStack || ""}`;
-      toast.error(`${label}: ${error.message}`, {
-        duration: 15_000,
-        action: {
-          label: "Copy stack",
-          onClick: () => {
-            copyToClipboard(fullTrace).then(() => toast.success("Stack trace copied to clipboard"));
-          },
-        },
-      });
+      showErrorToast(`${label}: ${error.message}`, fullTrace);
     }
 
     if (error.message && isChunkLoadError(error.message)) {

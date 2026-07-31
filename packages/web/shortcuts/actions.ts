@@ -200,6 +200,11 @@ export function useGlobalShortcutActions() {
     store.setCommentRailOpen(store.commentRailOpen !== true);
   }, []));
 
+  useShortcutAction('terminal.toggle', useCallback(() => {
+    const store = useInboxStore.getState();
+    store.updateClientUI({ terminal_open: !(store.clientState.ui?.terminal_open ?? false) });
+  }, []));
+
   useShortcutAction('ui.undo', useCallback(() => {
     return performUndo() || false;
   }, []));
