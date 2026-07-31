@@ -8706,6 +8706,25 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   }, [onPopulateInput]);
 
+  // A `?prefill=` deep link (phone notification → back into this session) seeds
+  // the composer with the draft it asked about, already quoted, cursor on the
+  // line beneath it. Only into a genuinely empty composer: text the user typed,
+  // a persisted draft, or an attached image all outrank the link, which is then
+  // dropped rather than queued behind them. Consumed once either way.
+  const prefillReq = useInboxStore((s) => s.composerPrefill);
+  useWatchEffect(() => {
+    if (!prefillReq || prefillReq.convId !== conversationId) return;
+    const store = useInboxStore.getState();
+    store.setComposerPrefill(null);
+    const row = store.getDraft(conversationId);
+    if (messageRef.current.trim() || row?.draft_message?.trim() || row?.draft_image_storage_ids?.length) return;
+    setMessage(prefillReq.text);
+    setTimeout(() => {
+      const el = textareaRef.current;
+      if (el) { el.focus(); const end = el.value.length; el.setSelectionRange(end, end); }
+    }, 0);
+  }, [prefillReq, conversationId, setMessage]);
+
   // Set when a dispatch/restart learned the server row no longer exists: the
   // cached copy renders fine but every conversation-scoped mutation will fail.
   const serverDeleted = useInboxStore((s) =>

@@ -10,6 +10,7 @@ import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useInboxStore } from "../../../store/inboxStore";
 import { usePrincipalLocalState } from "../../../components/PrincipalLocalStateProvider";
+import { PREFILL_PARAM, buildPrefillText } from "../../../lib/composerPrefill";
 
 /**
  * Every accessible conversation renders through the inbox — single codepath —
@@ -26,17 +27,25 @@ function RedirectToInbox({
   isOwn,
   targetMessageId,
   highlightQuery,
+  prefill,
 }: {
   id: string;
   isOwn: boolean;
   targetMessageId?: string;
   highlightQuery?: string;
+  prefill?: string;
 }) {
   const router = useRouter();
   useMountEffect(() => {
     const store = useInboxStore.getState();
     // Seed is_own so the inbox picks the right UI before getConversationWithMeta resolves.
     store.syncRecord("conversations", id, { _id: id, is_own: isOwn });
+    // `?prefill=` rides the store, not the URL: the redirect below drops the
+    // query and the inbox rewrites the address again once the session resolves.
+    // That redirect is also what keeps a refresh from re-seeding the composer —
+    // the param never reaches the address bar the user ends up on.
+    const prefillText = buildPrefillText(prefill);
+    if (prefillText) store.setComposerPrefill({ convId: id, text: prefillText });
     // Deep-link state travels through requestNavigate — target session, scroll
     // target, and highlight in ONE action. Setting pendingScrollToMessageId as
     // a bare field first (the old shape) raced: with another inbox pane
@@ -235,6 +244,7 @@ export default function ConversationPage() {
     principalState.phase === "server-verified";
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
+  const prefill = searchParams.get(PREFILL_PARAM) || undefined;
   const [targetMessageId] = useState<string | undefined>(() => {
     if (typeof window === "undefined") return undefined;
     const hash = window.location.hash;
@@ -286,6 +296,7 @@ export default function ConversationPage() {
       isOwn={effective.access_level === "owner"}
       targetMessageId={targetMessageId}
       highlightQuery={highlightQuery}
+      prefill={prefill}
     />
   );
 }
