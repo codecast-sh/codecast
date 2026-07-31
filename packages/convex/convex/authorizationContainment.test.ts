@@ -329,19 +329,39 @@ describe("Phase 0 task boundary", () => {
       short_id: "ct-personal",
       blocks: "ct-team",
     })).rejects.toThrow("Forbidden");
-    await expect((addTaskComment as any)._handler(testCtx, {
+    // A cross-workspace comment still lands (an agent in workspace A reporting
+    // on a task in workspace B) — only the conversation back-link is dropped.
+    await (addTaskComment as any)._handler(testCtx, {
       api_token: token,
       short_id: "ct-personal",
-      text: "poison",
+      text: "report from another workspace",
       conversation_id: "team-session",
-    })).resolves.toBeDefined();
-    expect((testCtx.db as any)._patched).toHaveLength(0);
-    expect(tables.task_comments).toHaveLength(1);
-    expect(tables.task_comments[0]).toMatchObject({
-      task_id: "task_personal",
-      text: "poison",
-      conversation_id: undefined,
     });
+    expect(tables.task_comments).toHaveLength(1);
+    expect(tables.task_comments[0].conversation_id).toBeUndefined();
+  });
+
+  test("cross-workspace task start succeeds without binding the conversation", async () => {
+    const token = "cross-start-token";
+    const tables = baseTables({
+      api_tokens: [{ _id: "token_cross_start", user_id: MEMBER, token_hash: await hashToken(token) }],
+      tasks: [{ _id: "task_personal", short_id: "ct-personal", user_id: MEMBER, status: "open" }],
+      conversations: [{ _id: "conv_team", session_id: "team-session", user_id: OWNER, team_id: TEAM, is_private: false }],
+      task_history: [],
+    });
+    const testCtx = ctx(null, tables);
+    await (updateTaskForCLI as any)._handler(testCtx, {
+      api_token: token,
+      short_id: "ct-personal",
+      status: "in_progress",
+      conversation_id: "team-session",
+    });
+    const task = tables.tasks[0];
+    expect(task.status).toBe("in_progress");
+    // No relationship joined across workspaces: the task gained no conversation
+    // link and the conversation was not bound to the task.
+    expect(task.conversation_ids ?? []).toHaveLength(0);
+    expect(tables.conversations[0].active_task_id).toBeUndefined();
   });
 
   test("plan progress ignores a one-way poisoned task relation", async () => {

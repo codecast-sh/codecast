@@ -2131,14 +2131,18 @@ ${TRIGGER_SNIPPET_HEADING}
 
 You can set triggers — follow-up work that runs autonomously after this session ends. Use them for anything that should happen later: checking CI, reviewing PRs, continuing long-running refactors, or responding to events.
 
-The prompt is the spawned agent's entire briefing, and humans read it in the dashboard (rendered as markdown). A one-line prompt is fine for a one-line job; for anything bigger, write it as structured markdown — goal, numbered steps, constraints — never as one long run-on line. Pass \`-\` as the prompt to read it from stdin:
+The prompt is the agent's entire briefing, and humans read it in the dashboard (rendered as markdown). A one-line prompt is fine for a one-line job; for anything bigger, write it as structured markdown — goal, numbered steps, constraints — never as one long run-on line. Pass \`-\` as the prompt to read it from stdin.
+
+**Where a run happens.** A trigger created inside a session binds to that session by default: each run injects the prompt into it as a new turn, with the session's full history. Pass \`--spawn\` to start a FRESH session per run instead — no history, briefed only by your prompt, but still associated: the run's conversation links back to the trigger at the top in the UI. Use \`--spawn\` when the follow-up stands alone (a periodic audit, an independent check); write everything the agent needs into the prompt, since it arrives with none of your context. \`--for <session>\` binds a specific session from any shell.
 
 \`\`\`bash
-# Set triggers
+# Set triggers (created in a session, these inject into it when they fire)
 cast trigger add "Check if CI is green on main" --in 30m
-cast trigger add "Review open PRs and summarize findings" --every 4h
 cast trigger add "Respond to new PR review comments" --on pr_comment
-cast trigger add "Watch the funnel and report anything off" --every 4h --safe
+
+# Fresh session per run — no history, linked back to the trigger
+cast trigger add "Review open PRs and summarize findings" --every 4h --spawn
+cast trigger add "Watch the funnel and report anything off" --every 4h --spawn --safe
 
 # Multi-line prompts: heredoc via stdin
 cast trigger add - --every 4h --title "Growth audit" <<'EOF'
@@ -2166,12 +2170,13 @@ Options:
 - \`--in <duration>\`: delay before run (30m, 2h, 1d)
 - \`--every <duration>\`: recurring interval
 - \`--on <event>\`: fire on webhook (pr_comment, pr_opened, pr_merged, push)
-- \`--context current\`: capture current session context for the follow-up
-- \`--safe\`: read-only spawned run — write tools removed, state-changing commands blocked. Default is permissive: the run can act. A run that continues an existing session inherits that session's rules.
+- \`--spawn\`: fresh session per run, no history — linked back to the trigger in the UI
+- \`--for <session>\`: bind runs to a specific session (defaults to the one you're in)
+- \`--safe\`: read-only spawned run — write tools removed, state-changing commands blocked. Default is permissive: the run can act. A run injecting into an existing session inherits that session's rules.
 - \`--project <path>\`: set working directory (defaults to current)
 - \`--max-runtime <duration>\`: override max runtime (default: 10m)
 
-When a trigger fires, a new agent session spawns with your prompt and the trigger ID. The agent should call \`cast trigger complete <trigger_id> --summary "..."\` when done to report results back.
+When a trigger fires, the run receives your prompt and the trigger ID. The agent should call \`cast trigger complete <trigger_id> --summary "..."\` when done to report results back.
 ${TASK_SNIPPET_END}
 `;
 
@@ -10813,6 +10818,7 @@ trigger
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
+  .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Runs stay associated: each one links back to this trigger at the top of its conversation.")
   .option("--thread", "Post results back to the current conversation thread")
   .action(async (prompt, options) => {
     if (prompt === "-") {
@@ -10875,11 +10881,22 @@ trigger
     let originating_conversation_id: string | undefined;
     let target_conversation_id: string | undefined;
 
-    // Always try to capture the originating session so triggered runs inject
+    // --spawn: fresh session per run. Binding a session is what makes runs
+    // inject, so the two are mutually exclusive; --thread needs the current
+    // conversation resolved, which spawn mode deliberately skips.
+    if (options.spawn && (options.for || options.thread)) {
+      console.error(`--spawn conflicts with ${options.for ? "--for" : "--thread"}: spawn runs don't bind to a session`);
+      process.exit(1);
+    }
+
+    // By default, capture the originating session so triggered runs inject
     // back into the live conversation instead of spawning fresh agents.
     // --for overrides detection: the ref is resolved server-side (own sessions
     // only), so a trigger can be bound to a session from any shell.
-    const sessionId = options.for ? null : findCurrentSessionFromProcess(getRealCwd());
+    // --spawn skips capture entirely: no bound session = each run spawns a
+    // fresh agent, and the run's conversation is linked back to the trigger
+    // via agent_task_id (the strip at the top of the session in the UI).
+    const sessionId = options.for || options.spawn ? null : findCurrentSessionFromProcess(getRealCwd());
     if (sessionId) {
       try {
         const resp = await cliFetchRead(`${siteUrl}/cli/sessions`, {
@@ -10904,13 +10921,20 @@ trigger
     }
     // A trigger without an originating conversation is a SPAWN trigger: each
     // run launches a fresh headless agent instead of injecting into a live
-    // session. That's a silent behavior fork, so say it out loud — an agent
-    // creating a loop for its own session must see when the link didn't take.
-    if (!originating_conversation_id && !options.for) {
+    // session. Requested via --spawn that's the point — confirm it. Otherwise
+    // it's a silent behavior fork, so say it out loud — an agent creating a
+    // loop for its own session must see when the link didn't take.
+    if (options.spawn) {
+      console.error(
+        "runs will spawn fresh sessions (no history) in " +
+          (options.project || getRealCwd()) +
+          ", each linked back to this trigger"
+      );
+    } else if (!originating_conversation_id && !options.for) {
       console.error(
         "note: could not link this trigger to a session — runs will spawn fresh agents in " +
           (options.project || getRealCwd()) +
-          " (use --for <session> to bind one)"
+          " (use --for <session> to bind one, or pass --spawn to make this explicit)"
       );
     }
 
