@@ -26,6 +26,7 @@ import {
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
+import { getCodexUsageHeartbeatPayload, refreshCodexUsageSnapshot } from "./codexUsage.js";
 import { TranscriptDirWatcher, transcriptDirWatcherConfig, decodePiCwdSlug, type TranscriptDirEvent, type DirEventWatcher } from "./transcriptDirWatcher.js";
 import {
   OpencodeStorageWatcher,
@@ -1844,6 +1845,23 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
 const CC_USAGE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 let ccUsageRefreshInFlight = false;
 
+// Codex usage: authoritative limit windows via a one-shot `codex app-server`
+// RPC (account/rateLimits/read), model mix from local rollout logs. Shares the
+// cc-usage cadence; the heartbeat reads the refreshed module-level snapshot.
+let codexUsageRefreshInFlight = false;
+
+async function maintainCodexUsageSnapshot(reason: string): Promise<void> {
+  if (codexUsageRefreshInFlight) return;
+  codexUsageRefreshInFlight = true;
+  try {
+    await refreshCodexUsageSnapshot();
+  } catch (err) {
+    log(`[ACCOUNTS] Codex usage refresh failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    codexUsageRefreshInFlight = false;
+  }
+}
+
 async function maintainCcUsageSnapshots(reason: string): Promise<void> {
   if (isRemoteDevice() || ccUsageRefreshInFlight) return;
   ccUsageRefreshInFlight = true;
@@ -1949,6 +1967,10 @@ async function sendHeartbeat(): Promise<void> {
         // backing files change (mtime-keyed cache), so CLI-side saves and
         // fresh /logins surface on the next beat.
         cc_accounts: getAccountsHeartbeatPayload() ?? undefined,
+        // Codex (ChatGPT) usage snapshot from local rollout logs — limit-window
+        // percentages, credits balance, and last-week per-model token shares.
+        // Throttled internally to a 5-minute recompute.
+        codex_usage: getCodexUsageHeartbeatPayload() ?? undefined,
         // Managed-provider-key metadata (pl-207): the device's ECDH public key
         // (not a secret — the web encrypts a key to it) + which providers have a
         // key here (ids only, never the keys). Lets the web show managed status
@@ -15574,6 +15596,8 @@ async function main(): Promise<void> {
   // Per-account usage snapshots for the web's meters + auto-switch decisions.
   setTimeout(() => { maintainCcUsageSnapshots("daemon start").catch(() => {}); }, 75_000);
   setInterval(() => { maintainCcUsageSnapshots("periodic").catch(() => {}); }, CC_USAGE_REFRESH_INTERVAL_MS);
+  setTimeout(() => { maintainCodexUsageSnapshot("daemon start").catch(() => {}); }, 75_000);
+  setInterval(() => { maintainCodexUsageSnapshot("periodic").catch(() => {}); }, CC_USAGE_REFRESH_INTERVAL_MS);
 
   // Auto-dispatch: detect active plans with bound workflows that haven't started
   const notifiedPlanWorkflows = new Set<string>();

@@ -5,10 +5,15 @@
 // usage credits). Shared by the header chip's popover and the Claude Accounts
 // settings page so both always tell the same story.
 
-import { worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import {
+  worstUsagePercent,
+  worstCodexPercent,
+  type CcUsage,
+  type CodexUsage,
+} from "@codecast/convex/convex/ccAccountsShared";
 
-export { worstUsagePercent };
-export type { CcUsage };
+export { worstUsagePercent, worstCodexPercent };
+export type { CcUsage, CodexUsage };
 
 // Status tone for a utilization percent: quiet while there's headroom, loud as
 // the window pegs. Values are shown alongside — color never carries alone.
@@ -119,6 +124,92 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
           now={now}
           title={`Extra usage credits: ${Math.round(usage.extra.percent)}% of the monthly budget spent`}
         />
+      )}
+      {stale && <div className="pt-0.5 text-[10px] text-sol-text-dim">as of {formatAgo(now - usage.fetched_at)}</div>}
+    </div>
+  );
+}
+
+/** One model's share of the week's Codex tokens. Share ≠ limit utilization, so
+ * this renders in a fixed accent instead of the danger ramp — a high share of
+ * your own usage is a fact, not a warning. The top model (the user's frontier
+ * daily driver, e.g. Sol) gets the emphasized treatment. */
+function ModelShareRow({
+  label,
+  share,
+  emphasized,
+}: {
+  label: string;
+  share: number;
+  emphasized: boolean;
+}) {
+  const tone = emphasized ? "var(--sol-violet)" : "var(--sol-text-dim)";
+  return (
+    <div
+      className="flex items-center gap-2"
+      title={`${label}: ${share}% of this week's Codex tokens`}
+    >
+      <span
+        className={`w-12 shrink-0 text-[10px] uppercase tracking-wider ${emphasized ? "font-bold" : ""}`}
+        style={{ color: emphasized ? "var(--sol-violet)" : "var(--sol-text-dim)" }}
+      >
+        {label}
+      </span>
+      <div className="h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-sol-bg-inset">
+        <div
+          className="h-full rounded-full transition-[width] duration-500"
+          style={{ width: `${Math.min(100, share)}%`, background: tone, minWidth: share > 0 ? 3 : 0 }}
+        />
+      </div>
+      <span
+        className="w-9 shrink-0 text-right font-mono text-[11px] tabular-nums"
+        style={{ color: emphasized ? "var(--sol-violet)" : "var(--sol-text-muted)" }}
+      >
+        {share}%
+      </span>
+    </div>
+  );
+}
+
+/** The meter block for the machine's Codex (ChatGPT) login: official limit
+ * windows first, then the week's model mix with the frontier model on top. */
+export function CodexUsageBars({ usage, now }: { usage?: CodexUsage | null; now: number }) {
+  if (!usage) {
+    return (
+      <div className="text-[11px] italic text-sol-text-dim">
+        No Codex usage data yet — reported by the daemon within a few minutes.
+      </div>
+    );
+  }
+  const stale = now - usage.fetched_at > 20 * 60 * 1000;
+  const models = (usage.models ?? []).filter((m) => m.share >= 1).slice(0, 3);
+  return (
+    <div className="space-y-1">
+      {usage.session && (
+        <UsageMeterRow label="Session" percent={usage.session.percent} resetsAt={usage.session.resets_at} now={now} />
+      )}
+      {usage.weekly && (
+        <UsageMeterRow label="Week" percent={usage.weekly.percent} resetsAt={usage.weekly.resets_at} now={now} />
+      )}
+      {usage.scoped?.map((s) => (
+        <UsageMeterRow key={s.label} label={s.label} percent={s.percent} resetsAt={s.resets_at} now={now} />
+      ))}
+      {models.map((m, i) => (
+        <ModelShareRow key={m.model} label={m.label} share={m.share} emphasized={i === 0} />
+      ))}
+      {usage.credits && (usage.credits.has_credits || usage.credits.unlimited) && (
+        <div className="pt-0.5 text-[10px] text-sol-text-dim">
+          Credits: {usage.credits.unlimited ? "unlimited" : usage.credits.balance ?? "available"}
+        </div>
+      )}
+      {usage.reset_credits && usage.reset_credits.available > 0 && (
+        <div
+          className="pt-0.5 text-[10px] text-sol-cyan"
+          title="Codex has granted a free rate-limit reset — redeemable from the Codex CLI when a window pegs"
+        >
+          {usage.reset_credits.available} rate-limit reset credit
+          {usage.reset_credits.available > 1 ? "s" : ""} available
+        </div>
       )}
       {stale && <div className="pt-0.5 text-[10px] text-sol-text-dim">as of {formatAgo(now - usage.fetched_at)}</div>}
     </div>

@@ -12,7 +12,7 @@ import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { resolveTeamForPath, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
 import { resetConversationPendingMessages } from "./pendingMessages";
-import { ccAccountsValidator } from "./ccAccountsShared";
+import { ccAccountsValidator, codexUsageValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath } from "./projectPaths";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
@@ -198,6 +198,9 @@ export const daemonHeartbeat = mutation({
     is_remote_device: v.optional(v.boolean()),
     // CC account inventory (names/emails/tiers, never tokens) for the switcher.
     cc_accounts: v.optional(ccAccountsValidator),
+    // Codex usage snapshot from local rollout logs (percentages/credits/model
+    // shares — never tokens or content).
+    codex_usage: v.optional(codexUsageValidator),
     // Managed-provider-key metadata (pl-207): device ECDH public key (not secret)
     // + which providers have a key here (ids only, never the keys).
     provider_key_pubkey: v.optional(v.string()),
@@ -297,6 +300,7 @@ export const daemonHeartbeat = mutation({
           ? { local_project_roots: args.local_project_roots }
           : {}),
         ...(args.cc_accounts !== undefined ? { cc_accounts: args.cc_accounts } : {}),
+        ...(args.codex_usage !== undefined ? { codex_usage: args.codex_usage } : {}),
         ...(args.provider_key_pubkey !== undefined ? { provider_key_pubkey: args.provider_key_pubkey } : {}),
         ...(args.managed_provider_ids !== undefined ? { managed_provider_ids: args.managed_provider_ids } : {}),
         ...(args.settings !== undefined ? { settings: args.settings } : {}),

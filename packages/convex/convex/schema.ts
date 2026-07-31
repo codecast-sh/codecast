@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
-import { ccAccountsValidator, ccAutoSwitchStateValidator } from "./ccAccountsShared";
+import { ccAccountsValidator, ccAutoSwitchStateValidator, codexUsageValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
@@ -1335,6 +1335,10 @@ export default defineSchema({
     // Saved CC account profiles on this machine (names/emails/tiers only,
     // never tokens) — heartbeat-reported, drives the web account switcher.
     cc_accounts: v.optional(ccAccountsValidator),
+    // Codex (ChatGPT) usage snapshot on this machine (limit percentages,
+    // credits, last-week model shares — non-secret) — heartbeat-reported,
+    // drives the web's model-usage meter alongside cc_accounts.
+    codex_usage: v.optional(codexUsageValidator),
     // Managed-provider-key metadata (pl-207), heartbeat-reported. The public half
     // of the device's ECDH keypair — NOT a secret; the web encrypts a key to it so
     // Convex never sees plaintext. `managed_provider_ids` is which providers have a

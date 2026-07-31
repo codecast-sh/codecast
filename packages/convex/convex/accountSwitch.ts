@@ -744,13 +744,14 @@ export const listAccountProfiles = query({
       .collect();
     return {
       devices: devices
-        .filter((d) => isDeviceOnline(d, now) && d.cc_accounts)
+        .filter((d) => isDeviceOnline(d, now) && (d.cc_accounts || d.codex_usage))
         .map((d) => ({
           device_id: d.device_id,
           label: d.label,
           is_remote: d.is_remote === true,
-          active_email: d.cc_accounts!.active_email,
-          profiles: d.cc_accounts!.profiles,
+          active_email: d.cc_accounts?.active_email,
+          profiles: d.cc_accounts?.profiles ?? [],
+          codex_usage: d.codex_usage,
           auto_switch: d.cc_auto_switch === true,
           auto_switch_state: d.cc_auto_switch_state
             ? {
