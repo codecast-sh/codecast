@@ -28,6 +28,59 @@ export type CcUsage = {
   extra?: { percent: number; enabled: boolean };
 };
 
+// Codex (ChatGPT) usage snapshot the daemon extracts from local rollout logs
+// (percentages, credits balance, last-week per-model token shares — non-secret).
+// Mirrors CodexUsageSnapshot in cli/src/codexUsage.ts.
+export const codexUsageValidator = v.object({
+  fetched_at: v.number(),
+  plan_type: v.optional(v.string()),
+  session: v.optional(usageWindowValidator), // sub-24h window when the plan has one
+  weekly: v.optional(usageWindowValidator), // 7d window
+  scoped: v.optional(
+    v.array(v.object({ label: v.string(), percent: v.number(), resets_at: v.optional(v.number()) })),
+  ),
+  credits: v.optional(
+    v.object({
+      has_credits: v.boolean(),
+      unlimited: v.optional(v.boolean()),
+      balance: v.optional(v.string()),
+    }),
+  ),
+  reset_credits: v.optional(v.object({ available: v.number() })),
+  models: v.optional(
+    v.array(
+      v.object({
+        model: v.string(),
+        label: v.string(),
+        tokens: v.number(),
+        share: v.number(),
+      }),
+    ),
+  ),
+});
+
+export type CodexUsage = {
+  fetched_at: number;
+  plan_type?: string;
+  session?: { percent: number; resets_at?: number; label?: string };
+  weekly?: { percent: number; resets_at?: number; label?: string };
+  scoped?: { label: string; percent: number; resets_at?: number }[];
+  credits?: { has_credits: boolean; unlimited?: boolean; balance?: string };
+  reset_credits?: { available: number };
+  models?: { model: string; label: string; tokens: number; share: number }[];
+};
+
+/** Worst (highest) utilization across a Codex snapshot's limit windows. */
+export function worstCodexPercent(usage?: CodexUsage | null): number | null {
+  if (!usage) return null;
+  const values = [
+    usage.session?.percent,
+    usage.weekly?.percent,
+    ...(usage.scoped ?? []).map((s) => s.percent),
+  ].filter((p): p is number => typeof p === "number");
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
 // Validator for the daemon-reported account inventory (names/emails/tiers
 // only — never tokens). Stored per device row; consumed by the web switcher.
 export const ccAccountsValidator = v.object({
