@@ -112,6 +112,9 @@ export function TerminalPanel() {
         const existing = (await probeEndpoint(endpoint)) ?? [];
         const openNames = new Set(listTabs().map((t) => t.sessionName));
         for (const sess of existing) {
+          // Belt-and-braces: never try to restore a name the daemon would
+          // reject (guards against list-format skew between versions).
+          if (!/^cast-term-[A-Za-z0-9_-]+$/.test(sess.name)) continue;
           if (!openNames.has(sess.name)) {
             openShellTab(endpoint, { name: sess.name, cwd: sess.path || undefined });
           }

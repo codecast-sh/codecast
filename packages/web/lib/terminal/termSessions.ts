@@ -199,19 +199,19 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
   const encoder = new TextEncoder();
 
   ws.onopen = () => {
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        token: opts.endpoint.token,
-        mode: opts.kind === "attach" ? "attach" : "create",
-        name: opts.kind === "shell" ? inst.state.sessionName : undefined,
-        cwd: opts.cwd,
-        target: opts.target,
-        interactive: opts.interactive,
-        cols: inst.term.cols,
-        rows: inst.term.rows,
-      }),
-    );
+    const hello = {
+      type: "hello",
+      token: opts.endpoint.token,
+      mode: opts.kind === "attach" ? "attach" : "create",
+      name: opts.kind === "shell" ? inst.state.sessionName : undefined,
+      cwd: opts.cwd,
+      target: opts.target,
+      interactive: opts.interactive,
+      cols: inst.term.cols,
+      rows: inst.term.rows,
+    };
+    logHello({ tabId: inst.state.id, ...hello });
+    ws.send(JSON.stringify(hello));
   };
 
   ws.onmessage = (ev) => {
@@ -353,4 +353,19 @@ export function findTabBySession(sessionName: string): string | null {
     if (inst.state.sessionName === sessionName) return id;
   }
   return null;
+}
+
+// Dev console access, mirroring window.__inboxStore: inspect tab states and
+// the hello each socket sent when debugging connect issues.
+if (typeof window !== "undefined" && import.meta.env?.DEV) {
+  (window as any).__termDebug = {
+    tabs: () => listTabs().map((t) => ({ ...t })),
+    active: () => activeId,
+    hellos: () => helloLog.slice(),
+  };
+}
+const helloLog: Array<Record<string, unknown>> = [];
+export function logHello(entry: Record<string, unknown>): void {
+  helloLog.push({ ...entry, token: "<redacted>", at: Date.now() });
+  if (helloLog.length > 20) helloLog.shift();
 }

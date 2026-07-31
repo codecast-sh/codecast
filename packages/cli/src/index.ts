@@ -2192,6 +2192,8 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run \`cast plan create "Title" -g "goal"\` and add tasks with \`cast task create "Title" --plan <plan_id>\`. Don't create plans for single-task work.
 
+**Bind before you build.** For any larger piece of work, default to working under a task or plan with your session bound to it — \`cast task start <id>\` claims a task, \`cast plan bind <plan_id>\` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; sizable work done unbound is invisible to the human tracking it.
+
 **Check existing work first.** Your context includes an overview of active tasks and plans. Before creating new ones, check if your work already has a task or fits under an existing plan. When the user names a topic, search by it directly — \`cast task ls -q "<topic>"\` and \`cast plan ls -q "<topic>"\` filter by title/description so you don't have to scan a wall of IDs. Use \`cast task ready\` (optionally \`-q\`) for unclaimed work. Claim existing tasks with \`cast task start <id>\` rather than creating duplicates.
 
 ### Working on tasks
