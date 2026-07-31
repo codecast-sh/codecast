@@ -12,6 +12,7 @@
 export type FilterableMessage = {
   _id: string;
   message_uuid?: string;
+  from_user_id?: string;
   role: "user" | "assistant" | "system" | "tool";
   content?: string;
   tool_calls?: Array<unknown> | null;
@@ -23,6 +24,7 @@ export type FilterableMessage = {
 export type FilteredUserMessage = {
   _id: string;
   message_uuid?: string;
+  from_user_id?: string;
   role: "user";
   content: string;
   timestamp: number;
@@ -81,6 +83,7 @@ export function filterUserMessages(
     .map((m) => ({
       _id: m._id,
       message_uuid: m.message_uuid,
+      from_user_id: m.from_user_id,
       role: "user" as const,
       content: (stripContextTags(m.content!) || m.content!).slice(0, 500),
       timestamp: m.timestamp,
