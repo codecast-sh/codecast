@@ -6438,7 +6438,12 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       // (messageId IS the optimistic clientId), so it creates the missing
       // pending row or no-ops against an existing one.
       if (isPending && isConvexId(conversationId) && content.trim()) {
-        useInboxStore.getState().sendMessage(conversationId, content, undefined, messageId);
+        // Replay the exact bytes the original send dispatched (if it fired):
+        // the server fingerprints this client id's args, and a rebuilt payload
+        // is refused as COMMAND_ID_REUSED instead of deduping.
+        const pendingRow = (useInboxStore.getState().pendingMessages[conversationId] || [])
+          .find((m) => m._clientId === messageId || m._id === messageId);
+        useInboxStore.getState().sendMessage(conversationId, pendingRow?._dispatchContent || content, undefined, messageId);
       }
       // If the session is alive (any heartbeating agent_status — idle, working,
       // blocked, booting), the re-sent message delivers through the normal
@@ -9442,6 +9447,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       try {
         const expandedContent = await expandMentionsInMessage(trimmed);
         const resolvedId = targetCanQuery ? targetConvId : await useInboxStore.getState().awaitConvexId(targetConvId);
+        // Record the exact dispatched bytes on the pending row BEFORE sending:
+        // the server fingerprints this client id's args, so any later redrive
+        // must replay them verbatim or be refused as COMMAND_ID_REUSED. The row
+        // may sit under the stub key or the rekeyed real id — stamp both.
+        if (expandedContent !== trimmed) {
+          useInboxStore.getState().stampPendingDispatchContent(targetConvId, clientId, expandedContent);
+          if (resolvedId !== targetConvId) {
+            useInboxStore.getState().stampPendingDispatchContent(resolvedId, clientId, expandedContent);
+          }
+        }
         sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId);
         // Hand the resolved id + the send's clientId to the popup so it can paint
         // this same message optimistically in the MAIN window (send & open) without
@@ -9523,6 +9538,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       try {
         const expanded = await expandMentionsInMessage(next);
         const resolvedId = queueCanQuery ? queueTargetConvId : await waitForConvexId(queueTargetConvId);
+        // Same dispatch-bytes stamp as finishSend: redrives must replay exactly.
+        if (expanded !== next) {
+          useInboxStore.getState().stampPendingDispatchContent(queueTargetConvId, clientId, expanded);
+          if (resolvedId !== queueTargetConvId) {
+            useInboxStore.getState().stampPendingDispatchContent(resolvedId, clientId, expanded);
+          }
+        }
         sendMessage(resolvedId, expanded, undefined, clientId);
         setSentAt(Date.now());
         sentContentRef.current = next;

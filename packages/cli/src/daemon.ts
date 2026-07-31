@@ -100,6 +100,12 @@ import {
   prepareInjectedContent,
 } from "./tmuxPaste.js";
 import { formatFeedResults } from "./formatter.js";
+import {
+  attachTerminalServer,
+  generateTerminalToken,
+  handleTerminalHttp,
+  type TerminalServerOptions,
+} from "./terminal/terminalServer.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
@@ -1255,6 +1261,16 @@ function logHeartbeatStatus(sessionId: string, status: AgentStatus | undefined):
 
 let hookServer: http.Server | null = null;
 let hookServerPort = 0;
+// Per-boot secret for the integrated terminal. The web fetches it through the
+// authenticated get_terminal_endpoint daemon command, then presents it on the
+// loopback WebSocket — an unauthenticated socket that spawns shells would be
+// remote code execution for any page the user visits.
+const terminalToken = generateTerminalToken();
+let terminalServerHandle: { close(): void } | null = null;
+
+function terminalServerOptions(): TerminalServerOptions {
+  return { token: terminalToken, log };
+}
 
 function startHookServer(
   handleStatus: (sessionId: string, data: HookStatusData) => void,
@@ -1296,9 +1312,13 @@ function startHookServer(
       return;
     }
 
+    if (handleTerminalHttp(req, res, terminalServerOptions())) return;
+
     res.writeHead(404);
     res.end();
   });
+
+  terminalServerHandle = attachTerminalServer(server, terminalServerOptions());
 
   server.listen(0, "127.0.0.1", () => {
     const addr = server.address();
@@ -1319,6 +1339,10 @@ function startHookServer(
 }
 
 function stopHookServer(): void {
+  if (terminalServerHandle) {
+    terminalServerHandle.close();
+    terminalServerHandle = null;
+  }
   if (hookServer) {
     hookServer.close();
     hookServer = null;
@@ -2331,6 +2355,20 @@ async function executeRemoteCommand(
       case "version": {
         result = daemonVersion || "unknown";
         log(`[REMOTE] Version requested: ${result}`);
+        break;
+      }
+      case "get_terminal_endpoint": {
+        // The web's integrated terminal asks every live daemon for its
+        // loopback endpoint, then connects to whichever answers on 127.0.0.1
+        // — only the machine the browser is physically on is reachable, so
+        // multi-device resolution falls out for free.
+        result = JSON.stringify({
+          port: hookServerPort,
+          token: terminalToken,
+          device_id: deviceId(),
+          tmux: hasTmux(),
+        });
+        log(`[REMOTE] Terminal endpoint requested (port ${hookServerPort})`);
         break;
       }
       case "restart": {

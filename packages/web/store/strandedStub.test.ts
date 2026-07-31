@@ -219,6 +219,41 @@ describe("healStrandedStub", () => {
       .toEqual([REAL_ID, "survived the crash", null, "client-hydrated"]);
   });
 
+  // Regression: the server dedupes a send's client id by argument fingerprint.
+  // The original dispatch sends mention-EXPANDED content while the pending row
+  // keeps the raw text the user typed — so a boot redrive that rebuilt the send
+  // from `content` was refused as COMMAND_ID_REUSED and the delivered message
+  // toasted "Send message didn't go through". The dispatched bytes are stamped
+  // on the row (_dispatchContent) and every redrive must replay them verbatim.
+  it("redrives the stamped dispatch bytes, not the row's raw content", () => {
+    const { calls } = installFakeDispatch();
+    const raw = "look at @[My Doc doc:abc123]";
+    const expanded = raw + "\n\n<doc-context>…expanded…</doc-context>";
+    useInboxStore.setState({
+      sessions: { [REAL_ID]: { _id: REAL_ID, updated_at: Date.now() } as any },
+      conversations: { [REAL_ID]: { _id: REAL_ID } as any },
+      pendingMessages: {
+        [REAL_ID]: [{
+          _id: "opt-mention",
+          _clientId: "client-mention",
+          _isOptimistic: true,
+          role: "user",
+          content: raw,
+          timestamp: Date.now(),
+        } as any],
+      },
+      pendingSessionCreates: {},
+    } as any);
+
+    useInboxStore.getState().stampPendingDispatchContent(REAL_ID, "client-mention", expanded);
+    expect(useInboxStore.getState().pendingMessages[REAL_ID][0]._dispatchContent).toBe(expanded);
+
+    useInboxStore.getState().redrivePendingMessages();
+
+    expect(calls.find((c) => c.action === "sendMessage")?.args)
+      .toEqual([REAL_ID, expanded, null, "client-mention"]);
+  });
+
   it("reconfigures a rekeyed parked create with the latest stub launch preferences", async () => {
     const stubId = "parkedlaunchprefsaaaaaa";
     const { calls } = installFakeDispatch();
