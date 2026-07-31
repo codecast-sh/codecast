@@ -12,6 +12,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
+import { useConvexSync } from "../hooks/useConvexSync";
 import {
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -53,7 +54,7 @@ export function deviceKindLabel(d: Device): string {
 }
 
 /** Per-kind accent classes. Literal strings so Tailwind's JIT keeps them. */
-function accentClasses(d: Device): string {
+export function deviceAccentClasses(d: Device): string {
   if (d.is_remote) return "bg-sol-violet/10 text-sol-violet border-sol-violet/30";
   if (/linux/i.test(d.platform)) return "bg-sol-orange/10 text-sol-orange border-sol-orange/30";
   return "bg-sol-blue/10 text-sol-blue border-sol-blue/30";
@@ -107,7 +108,13 @@ export function DeviceDot({ online, className = "" }: { online: boolean; classNa
 
 /** Load the user's devices, with helpers for routing-aware decisions. */
 export function useDevices() {
-  const devices = (useQuery(api.devices.listDevices, {}) ?? []) as Device[];
+  const fresh = useQuery(api.devices.listDevices, {}) as Device[] | undefined;
+  const devices = fresh ?? [];
+  // Mirror the roster into the store so the create path can re-check a picked
+  // machine against live routing at the moment it fires (createSessionFromStub).
+  // Every surface that shows a device chip keeps this warm; nothing persists it.
+  const setMachineRoster = useInboxStore((s) => s.setMachineRoster);
+  useConvexSync(fresh, setMachineRoster);
   return useMemo(() => {
     const byId = new Map(devices.map((d) => [d.device_id, d]));
     const locals = devices.filter((d) => !d.is_remote);
@@ -159,7 +166,7 @@ export function DeviceBadge({
 
   return (
     <span
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border ${accentClasses(d)} max-w-[160px] ${className}`}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border ${deviceAccentClasses(d)} max-w-[160px] ${className}`}
       title={`Runs on ${deviceDisplayName(d)} (${deviceKindLabel(d)}) — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`}
     >
       <DeviceIcon d={d} />

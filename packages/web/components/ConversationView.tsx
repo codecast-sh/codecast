@@ -145,7 +145,8 @@ import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, KeyRound, ExternalLink, Loader2 } from "lucide-react";
-import { useDevices } from "./DeviceBadge";
+import { useDevices, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
+import { defaultMachineId } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
@@ -809,30 +810,80 @@ function restorePickerFocus(prev: HTMLElement | null) {
   document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
 }
 
+// A recent-project row. `suggested` marks a padding entry — a root the picked
+// machine has but has no session history in, so it reads dimmer than a real recent.
+type RecentProject = { path: string; count: number; lastActive: number; suggested?: boolean };
+
 function ProjectSwitcher({ conversation, handleRef }: { conversation: ConversationData; handleRef?: React.MutableRefObject<PickerHandle | null> }) {
   const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 50 });
   const cachedProjects = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
-  // Narrowed: only _id/project_path/git_root are read here, none of which change on
-  // a heartbeat — so the always-rendered ProjectSwitcher no longer re-renders ~1×/s.
+  // Narrowed: only _id/project_path/git_root/owner_device_id are read here, none of
+  // which change on a heartbeat — so the always-rendered ProjectSwitcher no longer
+  // re-renders ~1×/s.
   // resolveLiveSessionId follows the row across the compose popup's stub→real rekey
   // (which deletes sessions[stub]); without it a folder click after the create lands
   // updates the backend but never moves the highlight, since storeSession goes stale.
   const storeSession = useInboxStore(useShallow((s) => {
     const sess = s.sessions[s.resolveLiveSessionId(conversation._id)];
     if (!sess) return undefined;
-    return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root };
+    return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root, owner_device_id: sess.owner_device_id };
   }));
   const isolated = useInboxStore((s) => s.isolatedWorktreeMode);
   const convCommand = useInboxStore((s) => s.convCommand);
 
-  const recentProjects = freshProjects ?? cachedProjects;
-
-  useConvexSync(freshProjects, setRecentProjects);
-
+  // --- machine row --------------------------------------------------------
+  // Devices heartbeat every ~30s, so this subscription re-renders the switcher a
+  // couple of times a minute — cheap next to the per-second churn the narrowed
+  // store selector above avoids, and the row can't be drawn without it.
+  const { devices } = useDevices();
+  // listDevices comes back sorted by last_seen, so the row would reshuffle every
+  // time a machine heartbeats. Chips hold still instead: locals first, then name.
+  const machineChips = useMemo(
+    () => [...devices].sort((a, b) =>
+      Number(a.is_remote) - Number(b.is_remote) || deviceDisplayName(a).localeCompare(deviceDisplayName(b))),
+    [devices],
+  );
+  const [pickedDeviceId, setPickedDeviceId] = useState<string | null>(null);
   const currentConvContext = useInboxStore((s) => s.currentConversation);
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || currentConvContext?.projectPath || currentConvContext?.gitRoot;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
+
+  // Feeding the previous answer back in pins the highlight against heartbeat
+  // ordering (see defaultMachineId); writing the ref during render is safe
+  // because it's a pure cache of the value we just computed.
+  const stickyDefaultRef = useRef<string | null>(null);
+  const defaultDeviceId = defaultMachineId(devices, {
+    ownerDeviceId: storeSession?.owner_device_id ?? (conversation as any).owner_device_id ?? null,
+    projectPath: currentPath,
+    sticky: stickyDefaultRef.current,
+  });
+  stickyDefaultRef.current = defaultDeviceId;
+
+  // Only an explicit move OFF the machine this session would route to anyway
+  // scopes the folder list and rides along as target_device_id.
+  const scopedDeviceId = pickedDeviceId && pickedDeviceId !== defaultDeviceId ? pickedDeviceId : null;
+  // The unscoped query above stays mounted even while scoped — it's the shared
+  // subscription that keeps the store's recentProjects cache (which the other
+  // pickers read) warm. The scoped one only exists while a non-default machine
+  // is selected, and deliberately never feeds that cache.
+  const scopedProjects = useQuery(
+    api.users.getRecentProjectPaths,
+    scopedDeviceId ? { limit: 50, device_id: scopedDeviceId } : "skip",
+  );
+
+  // Memoized because five downstream useMemos take it as a dep — an identity
+  // that churned every render would defeat all of them.
+  const recentProjects = useMemo<RecentProject[]>(
+    () => (scopedDeviceId ? (scopedProjects ?? []) : (freshProjects ?? cachedProjects)),
+    [scopedDeviceId, scopedProjects, freshProjects, cachedProjects],
+  );
+  const suggestedPaths = useMemo(
+    () => new Set(recentProjects.filter((p) => p.suggested).map((p) => p.path)),
+    [recentProjects],
+  );
+
+  useConvexSync(freshProjects, setRecentProjects);
 
   const otherProjects = useMemo(() => {
     return recentProjects.filter((p: { path: string }) => p.path !== currentPath);
@@ -916,10 +967,14 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     if (picking) pickerRef.current?.focus();
   }, [picking]);
 
-  const handleSwitch = useCallback(async (projectPath: string, forceIsolated?: boolean) => {
+  // `forceDeviceId` is how a machine chip re-routes a session whose folder isn't
+  // changing (undefined = "whatever the machine row has selected"; null = clear
+  // back to auto-routing), so passing it also defeats the same-path no-op guard.
+  const handleSwitch = useCallback(async (projectPath: string, forceIsolated?: boolean, forceDeviceId?: string | null) => {
     const trimmed = projectPath.trim();
     if (!trimmed) return;
-    if (trimmed === currentPath && !forceIsolated) return;
+    const targetDeviceId = forceDeviceId !== undefined ? forceDeviceId : scopedDeviceId;
+    if (trimmed === currentPath && !forceIsolated && forceDeviceId === undefined) return;
     const store = useInboxStore.getState();
     const id = storeSession?._id || conversation._id;
     const prevPath = currentPath;
@@ -938,12 +993,34 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
       project_path: trimmed,
       git_root: trimmed,
       isolated: (forceIsolated ?? isolated) || undefined,
+      ...(targetDeviceId ? { target_device_id: targetDeviceId } : {}),
     }).catch((err) => {
       if (isParkedDispatchError(err)) return;
       if (prevPath) useInboxStore.getState().updateSessionProject(convexId!, prevPath);
       toast.error(err instanceof Error ? err.message : "Failed to switch project");
     });
-  }, [storeSession, conversation._id, convCommand, currentPath, isolated]);
+  }, [storeSession, conversation._id, convCommand, currentPath, isolated, scopedDeviceId]);
+
+  // Picking a machine moves the (still blank) session there right away rather
+  // than waiting on a folder pick the user may never make. That reconfigure only
+  // bites when the conversation already exists server-side; every new-session
+  // surface defers its create, so the stamp below is what usually carries the
+  // choice — see createSessionFromStub.
+  const handleMachinePick = useCallback((d: Device) => {
+    const next = d.device_id === defaultDeviceId ? null : d.device_id;
+    setPickedDeviceId(next);
+    if (currentPath) handleSwitch(currentPath, undefined, next);
+  }, [defaultDeviceId, currentPath, handleSwitch]);
+
+  // Stamp the pick on the stub row so it rides the deferred create. Tracks
+  // scopedDeviceId rather than the raw click: if the default shifts under the
+  // user (a machine drops off, or a folder switch moves the route) the stamp
+  // clears itself, so we never pin what routing would pick anyway. The create
+  // path re-checks this too — a stub can outlive this component.
+  const setSessionTargetDevice = useInboxStore((s) => s.setSessionTargetDevice);
+  useWatchEffect(() => {
+    setSessionTargetDevice(storeSession?._id || conversation._id, scopedDeviceId);
+  }, [storeSession?._id, conversation._id, scopedDeviceId, setSessionTargetDevice]);
 
   // Hand the imperative surface up to NewSessionView's ⌥-chord router.
   // Re-assigned every render so isOpen/commitAndClose read fresh state.
@@ -995,6 +1072,35 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
 
   return (
     <div className="flex flex-col items-center gap-3">
+      {/* Mouse-first, and hidden entirely for the single-machine case so that
+          experience is untouched. Offline machines stay pickable: routing falls
+          back server-side to an online machine that has the repo. */}
+      {machineChips.length > 1 && (
+        <div className="flex flex-wrap justify-center gap-1.5">
+          {machineChips.map((d) => {
+            const selected = d.device_id === (pickedDeviceId ?? defaultDeviceId);
+            return (
+              <button
+                key={d.device_id}
+                onClick={() => handleMachinePick(d)}
+                title={d.online
+                  ? `Run this session on ${deviceDisplayName(d)}`
+                  : `${deviceDisplayName(d)} is offline — will fall back to an online machine with this repo`}
+                className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border transition-all ${
+                  selected
+                    ? `${deviceAccentClasses(d)} font-medium`
+                    : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70"
+                } ${d.online ? "" : "opacity-50"}`}
+              >
+                <DeviceIcon d={d} className="w-3 h-3 shrink-0" />
+                <span className="truncate max-w-[10rem]">{deviceDisplayName(d)}</span>
+                <DeviceDot online={d.online} />
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {!currentPath && recentProjects.length > 0 && (
         <div className="text-sol-text-dim text-xs">select a project</div>
       )}
@@ -1026,7 +1132,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
                         : isCurrent
                           ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
                           : "border-sol-border/40 text-sol-text-dim"
-                  }`}
+                  } ${!isHi && suggestedPaths.has(p.path) ? "opacity-60" : ""}`}
                   title={p.path}
                 >
                   {p.custom ? <FolderPlusGlyph className="w-3 h-3 shrink-0" /> : <FolderGlyph />}
@@ -1060,7 +1166,9 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
                 <button
                   key={p.path}
                   onClick={() => handleSwitch(p.path)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all ${
+                    suggestedPaths.has(p.path) ? "opacity-60" : ""
+                  }`}
                   title={p.path}
                 >
                   <FolderGlyph />
