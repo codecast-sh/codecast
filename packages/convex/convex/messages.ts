@@ -738,25 +738,6 @@ export const addMessage = mutation({
       throw new Error("Unauthorized: can only add messages to your own conversations");
     }
 
-    const messages = args.messages.filter((msg) =>
-      !(
-        conversation.owner_device_id &&
-        typeof msg.source_device_id === "string" &&
-        typeof msg.source_revision === "number" &&
-        msg.source_device_id !== conversation.owner_device_id
-      )
-    );
-    if (messages.length === 0) {
-      // The session moved to another device. Acknowledge the old daemon's
-      // durable retry without letting any transcript-derived side effects
-      // (status, loop state, title/doc extraction) leak through.
-      return {
-        inserted: 0,
-        ids: [],
-        transcript_revision: conversation.transcript_revision ?? 0,
-      };
-    }
-
     const msgTimestamp = args.timestamp || Date.now();
 
     const safeContent = args.content ? redactSecrets(args.content) : args.content;
@@ -1116,6 +1097,25 @@ export const addMessages = mutation({
         `[addMessages] cross-user write blocked: auth=${authUserId} conv=${args.conversation_id} owner=${conversation.user_id} session=${conversation.session_id ?? "?"} batch=${args.messages.length}`,
       );
       throw new Error("Unauthorized: can only add messages to your own conversations");
+    }
+
+    const messages = args.messages.filter((msg) =>
+      !(
+        conversation.owner_device_id &&
+        typeof msg.source_device_id === "string" &&
+        typeof msg.source_revision === "number" &&
+        msg.source_device_id !== conversation.owner_device_id
+      )
+    );
+    if (messages.length === 0) {
+      // The session moved to another device. Acknowledge the old daemon's
+      // durable retry without letting any transcript-derived side effects
+      // (status, loop state, title/doc extraction) leak through.
+      return {
+        inserted: 0,
+        ids: [],
+        transcript_revision: conversation.transcript_revision ?? 0,
+      };
     }
 
     const ids: Id<"messages">[] = [];
