@@ -847,6 +847,11 @@ export async function clearHasPendingIfQuiet(
     )
     .first();
   if (!remainingInjected) {
+    // Legacy cleanup can encounter a pending row whose conversation was
+    // already removed. The terminal message transition is still valid; there
+    // is simply no denormalized conversation flag left to clear.
+    const conversation = await ctx.db.get(conversationId);
+    if (!conversation) return;
     await ctx.db.patch(conversationId, { has_pending_messages: false });
   }
 }
