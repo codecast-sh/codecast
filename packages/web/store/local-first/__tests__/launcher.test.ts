@@ -42,4 +42,40 @@ describe("principal launcher key generation", () => {
       launcher.close();
     }
   });
+
+  test("quarantine metadata writes do not publish principal lifecycle changes", async () => {
+    const deployment = `launcher-quarantine-${randomUUID()}`;
+    databases.push(launcherDatabaseName(deployment));
+    const launcher = new DexieLauncherStore(deployment);
+    let lifecycleNotifications = 0;
+    const unsubscribe = launcher.subscribe(() => { lifecycleNotifications++; });
+    try {
+      await launcher.markLegacyQuarantined();
+      await launcher.setLegacyQuarantineStatus("exported");
+
+      expect(lifecycleNotifications).toBe(0);
+      expect((await launcher.read()).legacyQuarantine?.status).toBe("exported");
+    } finally {
+      unsubscribe();
+      launcher.close();
+    }
+  });
+
+  test("idempotent verification does not publish an unchanged lifecycle", async () => {
+    const deployment = `launcher-idempotent-${randomUUID()}`;
+    databases.push(launcherDatabaseName(deployment));
+    const launcher = new DexieLauncherStore(deployment);
+    const binding = "binding-a" as CredentialBinding;
+    try {
+      await launcher.activateVerified(binding);
+      let lifecycleNotifications = 0;
+      const unsubscribe = launcher.subscribe(() => { lifecycleNotifications++; });
+      await launcher.activateVerified(binding);
+      unsubscribe();
+
+      expect(lifecycleNotifications).toBe(0);
+    } finally {
+      launcher.close();
+    }
+  });
 });

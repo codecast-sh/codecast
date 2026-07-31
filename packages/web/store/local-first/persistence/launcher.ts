@@ -110,16 +110,22 @@ export class DexieLauncherStore implements LauncherStore {
 
   private async inWriteTransaction(
     update: (current: LauncherState) => LauncherState,
+    notify: boolean | ((previous: LauncherState, next: LauncherState) => boolean) = true,
   ): Promise<LauncherState> {
-    const next = await this.db.transaction("rw", this.db.state, async () => {
+    const result = await this.db.transaction("rw", this.db.state, async () => {
       const current = (await this.db.state.get("launcher")) ?? this.initialState();
       const value = update(current);
       await this.db.state.put(value);
-      return value;
+      return { previous: current, next: value };
     });
-    this.emit();
-    this.channel?.postMessage({ generation: next.generation });
-    return next;
+    const shouldNotify = typeof notify === "function"
+      ? notify(result.previous, result.next)
+      : notify;
+    if (shouldNotify) {
+      this.emit();
+      this.channel?.postMessage({ generation: result.next.generation });
+    }
+    return result.next;
   }
 
   async read(): Promise<LauncherState> {
@@ -160,7 +166,12 @@ export class DexieLauncherStore implements LauncherStore {
         },
         updatedAt: Date.now(),
       };
-    });
+    }, (previous, next) =>
+      previous.generation !== next.generation ||
+      previous.locked !== next.locked ||
+      previous.activeBinding !== next.activeBinding ||
+      previous.activePrincipalKey !== next.activePrincipalKey,
+    );
     return { generation: state.generation, principalKey: state.activePrincipalKey! };
   }
 
@@ -182,6 +193,9 @@ export class DexieLauncherStore implements LauncherStore {
   }
 
   async markLegacyQuarantined(): Promise<void> {
+    // Quarantine metadata does not change the active principal generation.
+    // Publishing it through the auth-state channel can race a fresh tab's
+    // offline resolve and incorrectly supersede that cache open.
     await this.inWriteTransaction((current) => current.legacyQuarantine
       ? current
       : {
@@ -192,10 +206,12 @@ export class DexieLauncherStore implements LauncherStore {
             updatedAt: Date.now(),
           },
           updatedAt: Date.now(),
-        });
+        }, false);
   }
 
   async setLegacyQuarantineStatus(status: "exported" | "abandoned" | "purged"): Promise<void> {
+    // See markLegacyQuarantined: lifecycle subscribers only observe changes
+    // that can invalidate or replace an active principal binding.
     await this.inWriteTransaction((current) => ({
       ...current,
       legacyQuarantine: {
@@ -204,7 +220,7 @@ export class DexieLauncherStore implements LauncherStore {
         updatedAt: Date.now(),
       },
       updatedAt: Date.now(),
-    }));
+    }), false);
   }
 
   subscribe(listener: () => void): () => void {

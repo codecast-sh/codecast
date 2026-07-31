@@ -22,7 +22,10 @@ import { inspectLegacyQuarantine } from "@/store/local-first/legacyQuarantine";
 import { DexiePrincipalStoreFactory } from "@/store/local-first/persistence/dexieAdapter";
 import { DexieLauncherStore } from "@/store/local-first/persistence/launcher";
 import { PrincipalRuntime } from "@/store/local-first/principalRuntime";
-import { verifyPostCapturePrincipal } from "@/store/local-first/principalVerification";
+import {
+  PrincipalOfflineResolutionCoordinator,
+  resolvePrincipalBoot,
+} from "@/store/local-first/principalVerification";
 import {
   registerPrincipalDispatchRuntime,
   updatePrincipalDispatchCorrelation,
@@ -32,6 +35,7 @@ import { asPrincipalId, type PrincipalLifecycle } from "@/store/local-first/type
 
 let runtimeSingleton: PrincipalRuntime | null = null;
 let launcherSingleton: DexieLauncherStore | null = null;
+let offlineResolutionSingleton: PrincipalOfflineResolutionCoordinator | null = null;
 let principalVerificationProbe = 0;
 
 function getRuntime(): PrincipalRuntime {
@@ -90,6 +94,14 @@ function getRuntime(): PrincipalRuntime {
   return runtime;
 }
 
+function getOfflineResolution(runtime: PrincipalRuntime): PrincipalOfflineResolutionCoordinator {
+  if (offlineResolutionSingleton) return offlineResolutionSingleton;
+  offlineResolutionSingleton = new PrincipalOfflineResolutionCoordinator(
+    async (binding) => await runtime.resolveOffline(binding),
+  );
+  return offlineResolutionSingleton;
+}
+
 const PrincipalLocalStateContext = createContext<{
   runtime: PrincipalRuntime;
   state: PrincipalLifecycle;
@@ -138,6 +150,7 @@ function PrincipalLocalStateFailure() {
 
 export function PrincipalLocalStateProvider({ children }: { children: React.ReactNode }) {
   const runtime = useMemo(getRuntime, []);
+  const offlineResolution = useMemo(() => getOfflineResolution(runtime), [runtime]);
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
   const token = useAuthToken();
   const convex = useConvex();
@@ -185,53 +198,57 @@ export function PrincipalLocalStateProvider({ children }: { children: React.Reac
         return;
       }
 
-      if (capture.isAuthenticated) {
+      // Cached rendering and server verification are two phases, not competing
+      // auth branches. Open the exact previously verified credential namespace
+      // first; the unique server probe upgrades it in place for apply/dispatch.
+      const outcome = await resolvePrincipalBoot({
+        token: capture.token,
+        evidence,
+        serverAuthenticated: capture.isAuthenticated,
+        isCurrent: isCurrentCapture,
+        resolveOffline: async (credentialBinding) =>
+          await offlineResolution.resolve(credentialBinding),
+        onOfflineReady: () => {
+          if (!isCurrentCapture()) return;
+          setAuthorizedToken(capture.token);
+          setCredentialResolution({ token: capture.token, status: "ready" });
+        },
         // A reactive useQuery value may briefly belong to the previous access
-        // token. Establish identity with a unique one-shot query initiated only
-        // after this exact token/generation was captured; late A responses are
-        // discarded before they can fail or open anything for B.
-        if (!capture.token) return;
-        const outcome = await verifyPostCapturePrincipal({
-          token: capture.token,
-          evidence,
-          queryCurrentPrincipal: async () => await convex.query(
-            api.users.getCurrentUserProbe,
-            { _probe: ++principalVerificationProbe },
-          ),
-          isCurrent: isCurrentCapture,
-          verify: async (credentialBinding, principalId) => {
-            const verified = await runtime.verify({
-              credentialBinding,
-              principalId: asPrincipalId(principalId),
-            });
-            // Persistence capability is important for offline writes, but it
-            // must not extend the auth/boot dispatch window. Until this settles,
-            // offline writes fail closed while reads and online dispatch remain
-            // available.
-            if (verified) void requestPersistentStorage();
-            return verified;
-          },
-          failClosed: async (reason) => await runtime.failClosed(reason),
-        });
-        if (isCurrentCapture() && outcome.kind !== "stale") {
-          const ready = outcome.kind === "ready";
-          setAuthorizedToken(ready ? capture.token : null);
-          setCredentialResolution({
-            token: capture.token,
-            status: ready ? "ready" : "unverified",
+        // token. This unique one-shot query always round-trips, while the local
+        // store opens in parallel. Late A responses remain observation-only.
+        queryCurrentPrincipal: async () => await convex.query(
+          api.users.getCurrentUserProbe,
+          { _probe: ++principalVerificationProbe },
+        ),
+        verify: async (credentialBinding, principalId) => {
+          const verified = await runtime.verify({
+            credentialBinding,
+            principalId: asPrincipalId(principalId),
           });
-        }
+          // Persistence capability is important for offline writes, but it
+          // must not extend the auth/boot dispatch window. Until this settles,
+          // offline writes fail closed while reads and online dispatch remain
+          // available.
+          if (verified) void requestPersistentStorage();
+          return verified;
+        },
+        failClosed: async (reason) => await runtime.failClosed(reason),
+        // A transport failure is not an identity failure. Keep the verified
+        // cached namespace readable; Convex auth/reconnect will retry later,
+        // while dispatch stays disabled in offline-ready.
+        onVerificationUnavailable: (error) => {
+          console.warn("[local-first] principal verification unavailable; using cached state", error);
+        },
+      });
+      if (!isCurrentCapture() || outcome.kind === "stale" || outcome.kind === "offline-ready") {
         return;
       }
-
-      const opened = await runtime.resolveOffline(evidence.binding);
-      if (isCurrentCapture()) {
-        setAuthorizedToken(opened ? capture.token : null);
-        setCredentialResolution({
-          token: capture.token,
-          status: opened ? "ready" : "unverified",
-        });
-      }
+      const ready = outcome.kind === "ready";
+      setAuthorizedToken(ready ? capture.token : null);
+      setCredentialResolution({
+        token: capture.token,
+        status: ready ? "ready" : "unverified",
+      });
     })().catch(async (error) => {
       if (!isCurrentCapture()) return;
       try { await runtime.failClosed("principal-runtime-failed"); } catch {}
@@ -242,7 +259,7 @@ export function PrincipalLocalStateProvider({ children }: { children: React.Reac
       console.error("[local-first] principal runtime failed", error);
     });
     return () => { cancelled = true; };
-  }, [runtime, convex, token, isAuthenticated]);
+  }, [runtime, offlineResolution, convex, token, isAuthenticated]);
 
   useEffect(() => {
     const reconcile = () => {
@@ -301,5 +318,6 @@ export function closePrincipalRuntimeForTests(): void {
   launcherSingleton?.close();
   runtimeSingleton = null;
   launcherSingleton = null;
+  offlineResolutionSingleton = null;
   registerPrincipalDispatchRuntime(null);
 }

@@ -71,6 +71,10 @@ export class PrincipalRuntime {
   private engine: LocalFirstEngine | null = null;
   private unsubscribeLauncher: (() => void) | null = null;
   private launcherMutationDepth = 0;
+  private offlineResolutionTarget: {
+    operation: number;
+    binding: CredentialBinding;
+  } | null = null;
   private lastFailure: PrincipalRuntimeInspection["lastFailure"] = null;
   private storageRecoveries = 0;
 
@@ -315,84 +319,91 @@ export class PrincipalRuntime {
       this.emit({ phase: "locked", generation: this.state.generation, reason: "missing-credential-binding" });
       return false;
     }
-    let resolved;
+    this.offlineResolutionTarget = { operation, binding: credentialBinding };
     try {
-      resolved = await this.mutateLauncher(() => this.launcher.resolveOffline(credentialBinding));
-    } catch (error) {
-      await this.failClosed("launcher-read-failed");
-      throw error;
-    }
-    if (!this.isCurrent(operation)) return false;
-    if (!resolved) {
-      this.emit({
-        phase: "locked",
-        generation: this.state.generation,
-        reason: "credential-not-previously-verified",
-      });
-      return false;
-    }
-    let exists: boolean;
-    try {
-      exists = await this.stores.exists(resolved.principalKey);
-    } catch (error) {
-      await this.failClosed("principal-store-existence-check-failed");
-      throw error;
-    }
-    if (!exists) {
-      this.emit({
-        phase: "locked",
-        generation: resolved.generation,
-        reason: "credential-not-previously-verified",
-      });
-      return false;
-    }
-    this.emit({ phase: "opening", generation: resolved.generation, principalKey: resolved.principalKey });
-    let adapter: PrincipalStoreAdapter | null = null;
-    try {
-      adapter = await this.stores.open(resolved.principalKey);
-      const metadata = await adapter.openOffline({
-        principalKey: resolved.principalKey,
-        generation: resolved.generation,
-      });
-      return await this.installStore({
-        operation,
-        binding: credentialBinding,
-        resolved,
-        metadata,
-        adapter,
-        verified: false,
-      });
-    } catch (error) {
-      if (!this.isCurrent(operation)) {
-        // Superseded mid-open: the successor owns the shared bindings and
-        // engine. Release only what this operation itself opened and step
-        // aside without escalating — the successor's outcome is the truth.
+      let resolved;
+      try {
+        resolved = await this.mutateLauncher(() => this.launcher.resolveOffline(credentialBinding));
+      } catch (error) {
+        await this.failClosed("launcher-read-failed");
+        throw error;
+      }
+      if (!this.isCurrent(operation)) return false;
+      if (!resolved) {
+        this.emit({
+          phase: "locked",
+          generation: this.state.generation,
+          reason: "credential-not-previously-verified",
+        });
+        return false;
+      }
+      let exists: boolean;
+      try {
+        exists = await this.stores.exists(resolved.principalKey);
+      } catch (error) {
+        await this.failClosed("principal-store-existence-check-failed");
+        throw error;
+      }
+      if (!exists) {
+        this.emit({
+          phase: "locked",
+          generation: resolved.generation,
+          reason: "credential-not-previously-verified",
+        });
+        return false;
+      }
+      this.emit({ phase: "opening", generation: resolved.generation, principalKey: resolved.principalKey });
+      let adapter: PrincipalStoreAdapter | null = null;
+      try {
+        adapter = await this.stores.open(resolved.principalKey);
+        const metadata = await adapter.openOffline({
+          principalKey: resolved.principalKey,
+          generation: resolved.generation,
+        });
+        return await this.installStore({
+          operation,
+          binding: credentialBinding,
+          resolved,
+          metadata,
+          adapter,
+          verified: false,
+        });
+      } catch (error) {
+        if (!this.isCurrent(operation)) {
+          // Superseded mid-open: the successor owns the shared bindings and
+          // engine. Release only what this operation itself opened and step
+          // aside without escalating — the successor's outcome is the truth.
+          if (this.adapter === adapter) {
+            this.adapter = null;
+            this.adapterGeneration = null;
+            this.adapterPrincipalEpoch = undefined;
+          }
+          adapter?.close();
+          return false;
+        }
+        this.engine?.close();
+        this.engine = null;
+        this.hooks.unbindPersistence();
+        this.hooks.clearProtectedMemory();
         if (this.adapter === adapter) {
           this.adapter = null;
           this.adapterGeneration = null;
           this.adapterPrincipalEpoch = undefined;
         }
         adapter?.close();
-        return false;
+        if (error instanceof PrincipalStoreFenceError) {
+          this.emit({ phase: "locked", generation: resolved.generation, reason: "offline-store-fenced" });
+          return false;
+        }
+        await this.failClosed(error instanceof PrincipalStoreIdentityError
+          ? "offline-store-identity-mismatch"
+          : "offline-store-read-failed");
+        throw error;
       }
-      this.engine?.close();
-      this.engine = null;
-      this.hooks.unbindPersistence();
-      this.hooks.clearProtectedMemory();
-      if (this.adapter === adapter) {
-        this.adapter = null;
-        this.adapterGeneration = null;
-        this.adapterPrincipalEpoch = undefined;
+    } finally {
+      if (this.offlineResolutionTarget?.operation === operation) {
+        this.offlineResolutionTarget = null;
       }
-      adapter?.close();
-      if (error instanceof PrincipalStoreFenceError) {
-        this.emit({ phase: "locked", generation: resolved.generation, reason: "offline-store-fenced" });
-        return false;
-      }
-      await this.failClosed(error instanceof PrincipalStoreIdentityError
-        ? "offline-store-identity-mismatch"
-        : "offline-store-read-failed");
-      throw error;
     }
   }
 
@@ -547,6 +558,13 @@ export class PrincipalRuntime {
       }
       return;
     }
+    // A fresh runtime begins at generation 0 and adopts the durable generation
+    // only after resolveOffline reads the launcher. A same-binding notification
+    // in that window (another tab's idempotent verification, for example) is an
+    // echo, not an account switch. Locked or different-binding state still
+    // supersedes immediately.
+    if (current.phase === "resolving" && this.offlineResolutionTarget &&
+      !durable.locked && durable.activeBinding === this.offlineResolutionTarget.binding) return;
     // An in-flight transition on the SAME durable generation is not a
     // divergence: resolve/install is mid-flight and tearing it down here would
     // destroy the bindings it just installed (the launcher's own subscription
