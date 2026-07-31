@@ -280,9 +280,15 @@ function barHtml(o: BrandOpts): string {
   try{api("/cli/artifacts/view",{slug:CC.slug,email:gateEmail||undefined});}catch(e){}
   // Version links stay on whatever host serves this document. r is a
   // cache-buster (new URL → new cache key past the 60s edge/browser cache).
+  // EVERY navigation must carry the gate tokens (k/e) and live flag forward,
+  // or a reload on a gated page lands back on the password wall.
   var keepHash=location.hash||"";
-  var verUrl=function(n,current){return location.pathname+(current?"?r=":"?v=")+n+keepHash;};
-  var reloadFresh=function(){location.href=location.pathname+"?r="+Date.now()+keepHash;};
+  var withQ=function(extra){var q=new URLSearchParams(location.search);var out=new URLSearchParams();
+    ["k","e","live"].forEach(function(p){var val=q.get(p);if(val)out.set(p,val);});
+    Object.keys(extra).forEach(function(p){out.set(p,String(extra[p]));});
+    return location.pathname+"?"+out.toString()+keepHash;};
+  var verUrl=function(n,current){return withQ(current?{r:n}:{v:n});};
+  var reloadFresh=function(){location.href=withQ({r:Date.now()});};
   var latest=document.getElementById("__cc_latest");
   if(latest)latest.setAttribute("href",verUrl(CC.currentVersion,true));
   // --- panel machinery: dropdowns on desktop, bottom sheets on mobile ---
@@ -320,7 +326,7 @@ function barHtml(o: BrandOpts): string {
         if(v.edited_by){var eb=document.createElement("span");eb.style.opacity=".6";eb.style.fontWeight="400";eb.textContent=" by "+v.edited_by;l.appendChild(eb);}
         if(v.version!==m.version){
           var d=document.createElement("a");d.className="__cc_dlink";d.textContent="diff";
-          d.href=location.pathname+"?diff="+v.version+".."+m.version+keepHash;
+          d.href=withQ({diff:v.version+".."+m.version});
           d.title="What changed between v"+v.version+" and v"+m.version;
           d.addEventListener("click",function(e){e.stopPropagation();});
           l.appendChild(d);
@@ -625,9 +631,9 @@ function barHtml(o: BrandOpts): string {
       var add=function(label,fn){var a=document.createElement("a");a.className="__cc_row";a.href="#";
         var s=document.createElement("span");s.textContent=label;a.appendChild(s);
         a.addEventListener("click",function(ev){ev.preventDefault();fn();});menu.appendChild(a);return a;};
-      add("View source",function(){location.href=location.pathname+"?src=1"+(CC.version!==CC.currentVersion?"&v="+CC.version:"")+keepHash;});
+      add("View source",function(){var x={src:1};if(CC.version!==CC.currentVersion)x.v=CC.version;location.href=withQ(x);});
       if(ownerKey||editKey||CC.editMode==="link"){
-        add("Edit this page",function(){location.href=location.pathname+"?edit=1"+keepHash;});
+        add("Edit this page",function(){location.href=withQ({edit:1});});
       }
       if(ownerKey){
         add("Manage sharing…",openManage);
@@ -748,6 +754,15 @@ function pageShell(title: string, body: string, extra = ""): string {
 <div class="shell">
 ${body}
 </div>
+<script>(function(){
+  // Carry gate tokens (k/e) and the live flag onto the back-to-page link so
+  // returning from source/diff/editor doesn't land on the password wall.
+  var q=new URLSearchParams(location.search);var keep=[];
+  ["k","e","live"].forEach(function(p){var v=q.get(p);if(v)keep.push(p+"="+encodeURIComponent(v));});
+  if(keep.length){document.querySelectorAll("a.back").forEach(function(a){
+    var base=a.href.split("#")[0].split("?")[0];var hash=a.href.indexOf("#")>=0?a.href.slice(a.href.indexOf("#")):"";
+    a.href=base+"?"+keep.join("&")+hash;});}
+})();</script>
 </body>
 </html>`;
 }
