@@ -1568,6 +1568,30 @@ export function computeChipCounts(
   };
 }
 
+// Default project for a brand-new session seeded from the compose popup. A
+// caller-supplied context (doc review passes the doc's own project) wins — it's
+// the explicit target. Otherwise the current conversation's project — except
+// that an active project-filter chip is an explicit "I'm working in this
+// project" (same rule as Ctrl+N's resolveNewSessionContext in DashboardLayout):
+// the conversation only seeds the default when it lives inside the filtered
+// project; otherwise the filter's own path wins. Then the most recent project.
+// Can resolve to nothing — the daemon starts in $HOME and the null-state
+// ProjectSwitcher lets the user pick before send.
+export function resolveComposeProjectPath(opts: {
+  context?: { projectPath?: string; gitRoot?: string };
+  conversation: { projectPath?: string; gitRoot?: string };
+  activeProjectFilter?: string | null;
+  activeProjectPath?: string | null;
+  recentProjects?: Array<{ path: string }>;
+}): string | undefined {
+  const { context, conversation, activeProjectFilter, activeProjectPath, recentProjects } = opts;
+  const convPath =
+    !activeProjectFilter || getProjectName(conversation.gitRoot, conversation.projectPath) === activeProjectFilter
+      ? conversation.projectPath || conversation.gitRoot
+      : undefined;
+  return context?.projectPath || context?.gitRoot || convPath || activeProjectPath || recentProjects?.[0]?.path || undefined;
+}
+
 // Drag-reorder math. Express the drop as "move ordered[fromIndex] so it ends
 // up at finalIndex", and return the minimal sort_order writes that realize it.
 // Fractional midpoints keep a typical reorder to ONE write; the first-ever
