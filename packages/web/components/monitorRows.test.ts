@@ -39,6 +39,14 @@ describe("monitorRowsFor — lifecycle from messages", () => {
     expect(rows[0].description).toBe("deploy watch");
   });
 
+  test("row remembers the message that armed it, when messages carry ids", () => {
+    const rows = monitorRowsFor([
+      { ...monitorCall("tu1", "deploy watch"), _id: "msg_arm" },
+      startedResult("tu1", "b7ry"),
+    ]);
+    expect(rows[0].startMessageId).toBe("msg_arm");
+  });
+
   test("events accumulate; latest event text is decoded", () => {
     const rows = monitorRowsFor([
       monitorCall("tu1", "deploy watch"),
