@@ -11618,7 +11618,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (msg.role !== 'user') continue;
       if (localIds.has(msg._id) || !processedServerMsgIds.has(msg._id)) continue;
       if (msg.timestamp >= earliestLoadedTs) continue;
-      return { id: msg._id, content: msg.content };
+      return { id: msg._id, content: msg.content, fromUserId: (msg as any).from_user_id as string | undefined };
     }
     return null;
   }, [serverUserMessages, timeline, hasMoreAbove, processedServerMsgIds]);
@@ -12529,7 +12529,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         prevStickyMsgIdRef.current = serverStickyFallback.id;
         prevStickyIdxRef.current = null;
         stickyGapRef.current = null;
-        setActiveStickyMsg({ index: -1, content: serverStickyFallback.content, id: serverStickyFallback.id });
+        setActiveStickyMsg({ index: -1, content: serverStickyFallback.content, id: serverStickyFallback.id, fromUserId: serverStickyFallback.fromUserId });
         setStickyMsgVisible(true);
       } else if (fallbackStickyContent && scrollTop > el.clientHeight) {
         prevStickyMsgIdRef.current = '__fallback__';
