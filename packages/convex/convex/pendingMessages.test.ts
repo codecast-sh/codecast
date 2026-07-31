@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   canDaemonSeePendingMessage,
   claimPendingMessageForDaemon,
+  collectOldLegacyPendingMessages,
   collectDeliverableForOwner,
   isControlMessage,
   markPendingDelivered,
@@ -9,6 +10,75 @@ import {
   resetConversationPendingMessages,
   updatePendingMessageStatusForDaemon,
 } from "./pendingMessages";
+
+describe("collectOldLegacyPendingMessages", () => {
+  test("reads only by_status and excludes recent and fenced rows", async () => {
+    const cutoff = 1_000;
+    const rowsByStatus: Record<string, any[]> = {
+      pending: [
+        { _id: "old-pending", status: "pending", created_at: 100 },
+        { _id: "recent-pending", status: "pending", created_at: cutoff },
+      ],
+      injected: [
+        { _id: "old-injected", status: "injected", created_at: 200 },
+      ],
+      failed: [
+        {
+          _id: "fenced-failed",
+          status: "failed",
+          created_at: 300,
+          delivery_protocol_version: 2,
+        },
+      ],
+      undeliverable: [],
+    };
+    const indexReads: Array<{ index: string; status: string }> = [];
+    const ctx = {
+      db: {
+        query(table: string) {
+          expect(table).toBe("pending_messages");
+          return {
+            withIndex(index: string, builder: (q: any) => unknown) {
+              let status = "";
+              const q = {
+                eq(field: string, value: string) {
+                  expect(field).toBe("status");
+                  status = value;
+                  return q;
+                },
+              };
+              builder(q);
+              indexReads.push({ index, status });
+              return {
+                order(direction: string) {
+                  expect(direction).toBe("asc");
+                  return this;
+                },
+                async take(limit: number) {
+                  expect(limit).toBe(500);
+                  return rowsByStatus[status] ?? [];
+                },
+              };
+            },
+          };
+        },
+      },
+    };
+
+    const matches = await collectOldLegacyPendingMessages(ctx as any, cutoff);
+
+    expect(matches.map((row) => row._id)).toEqual([
+      "old-pending",
+      "old-injected",
+    ]);
+    expect(indexReads).toEqual([
+      { index: "by_status", status: "pending" },
+      { index: "by_status", status: "injected" },
+      { index: "by_status", status: "failed" },
+      { index: "by_status", status: "undeliverable" },
+    ]);
+  });
+});
 
 // Fake ctx.db that records patches and answers by_conversation_status lookups from a
 // configurable set of "other" rows still in flight for the conversation.
