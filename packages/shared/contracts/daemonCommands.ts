@@ -64,6 +64,13 @@ export const DAEMON_COMMANDS = [
   // sees plaintext; the daemon decrypts, updates its 0600 store, and fans out to
   // remotes. Old daemons: "Unknown command" (the key just doesn't take there).
   "set_provider_key",
+  // Integrated terminal discovery: reply with this daemon's loopback terminal
+  // endpoint ({port, token, device_id, tmux}). The web sends one per live
+  // device and connects to whichever endpoint answers on 127.0.0.1 — only the
+  // machine the browser is on is reachable. Old daemons: "Unknown command"
+  // (the web treats no-answer as "no local daemon"). See
+  // packages/cli/src/terminal/.
+  "get_terminal_endpoint",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];
