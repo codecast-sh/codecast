@@ -56,6 +56,7 @@ import { TabBar } from "./TabBar";
 import { pathLabel } from "../lib/pathLabel";
 import { TabContent } from "./TabContent";
 import { TerminalDock } from "./terminal/TerminalDock";
+import { VaultQuickSwitcherDock } from "./vault/VaultQuickSwitcherDock";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { useTipActions } from "../tips";
 
@@ -294,6 +295,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isOnSchedulesPage = pathname === "/schedules" || (pathname?.startsWith("/schedules/") ?? false);
   const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
+  const isOnVaultPage = pathname === "/vault" || (pathname?.startsWith("/vault/") ?? false);
   const isOnProjectsPage = pathname === "/projects" || (pathname?.startsWith("/projects/") ?? false);
   const isOnWindowsPage = pathname === "/windows";
   const isOnCrosstalkPage = pathname === "/crosstalk";
@@ -304,7 +306,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
@@ -749,7 +751,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 <UnifiedRightRail
                   onSessionSelect={sessionListOnSelect}
                   activeSessionId={sessionListActiveId}
-                  onCollapse={s.toggleSidePanel}
+                  onCollapse={() => s.toggleSidePanel()}
                   conversationTabAvailable={showConversationColumn}
                 />
               </ErrorBoundary>
@@ -984,6 +986,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           <TerminalDock />
         </ErrorBoundary>
       )}
+      {!isMobile && (
+        <ErrorBoundary name="VaultQuickSwitcher" level="panel">
+          <VaultQuickSwitcherDock />
+        </ErrorBoundary>
+      )}
 
       <ErrorBoundary name="SettingsModal" level="panel">
         <SettingsModal />
@@ -1100,7 +1107,19 @@ const UnifiedRightRail = memo(function UnifiedRightRail({
       {convAvailable && (
         <div className="flex items-end gap-1 px-1.5 pt-1.5 border-b border-sol-border/20 bg-sol-bg-alt/40 flex-shrink-0">
           <button className={tabClass(!showConv)} onClick={() => setTab("sessions")}>Sessions</button>
-          <button className={tabClass(showConv)} onClick={() => setTab("conversation")} title={title}>{title}</button>
+          <span className={`${tabClass(showConv)} inline-flex items-center gap-1.5 cursor-pointer`} onClick={() => setTab("conversation")} title={title}>
+            <span className="truncate min-w-0">{title}</span>
+            {/* Standard close: X dismisses the conversation column entirely. */}
+            <button
+              onClick={(e) => { e.stopPropagation(); useInboxStore.getState().clearSidePanelSession(); }}
+              className="shrink-0 -mr-0.5 p-0.5 rounded text-sol-text-dim hover:text-sol-red transition-colors"
+              title="Close conversation"
+            >
+              <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </span>
         </div>
       )}
       <div className="relative flex-1 min-h-0">
