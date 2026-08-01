@@ -1,4 +1,5 @@
-import { useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
+import { bridgeUserId, useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
+import { broadcastGesture } from "./gestureBridge";
 import { pushUndo, showUndoToast } from "./undoStack";
 import { declareViewNav } from "./viewNav";
 
@@ -224,6 +225,17 @@ export function undoablePinSession(id: string) {
       store.applyUndoPatches({
         conversations: { [id]: { inbox_pinned_at: prevPinnedAt } },
       });
+      // pinSession broadcast the flip, so a sibling now holds the PINNED row;
+      // undoing without announcing leaves it there, and that stale row both
+      // re-puts the undone pin into shared IDB and inverts the sibling's next
+      // toggle (`!is_pinned` reads the value we just reverted). Carry the exact
+      // restored inbox_pinned_at — the receiver's pending lock retires only
+      // when the server echo matches it, and applyUndoPatches dispatches this
+      // same value. redo() calls pinSession, which broadcasts on its own.
+      broadcastGesture(
+        { kind: "pin", id, pinned: !!wasPinned, pinnedAt: prevPinnedAt, ts: Date.now() },
+        bridgeUserId(store),
+      );
     },
     redo: () => {
       useInboxStore.getState().pinSession(id);
