@@ -27,6 +27,7 @@ import {
 } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
+import { linkConversationToEntityBestEffort } from "./conversationLinks";
 export { canAccessPlan };
 
 async function canReadPlanTask(ctx: any, userId: Id<"users">, plan: any, task: any) {
@@ -590,6 +591,15 @@ export const bindSession = mutation({
     const sessionIds = plan.session_ids || [];
     if (!sessionIds.some(id => id === conv._id)) {
       sessionIds.push(conv._id);
+      // Compatibility dual-write: the steering association row alongside the
+      // legacy session_ids field (already workspace-matched above; best-effort
+      // so the legacy bind can never start failing on the new rail).
+      await linkConversationToEntityBestEffort(ctx, auth.userId, {
+        entityType: "plan",
+        entityId: String(plan._id),
+        conversationId: conv._id,
+        relationship: "work",
+      });
     }
 
     await ctx.db.patch(plan._id, {
