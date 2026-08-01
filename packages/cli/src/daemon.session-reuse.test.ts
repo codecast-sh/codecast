@@ -87,7 +87,7 @@ describe("double-start fix invariants", () => {
   test("startFreshSessionForDelivery consults tmux before spawning fresh", () => {
     const start = daemonSource.indexOf("async function startFreshSessionForDelivery");
     expect(start).toBeGreaterThan(-1);
-    const body = daemonSource.slice(start, start + 3500);
+    const body = daemonSource.slice(start, start + 6000);
     const reuseIdx = body.indexOf("findLiveTmuxForConversation");
     const spawnIdx = body.indexOf("new-session");
     expect(reuseIdx).toBeGreaterThan(-1);
@@ -102,5 +102,25 @@ describe("double-start fix invariants", () => {
     expect(anchor).toBeGreaterThan(-1);
     const region = daemonSource.slice(anchor - 1200, anchor);
     expect(region).toContain('setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId)');
+  });
+
+  test("first-message startup rechecks app-server registration while waiting", () => {
+    const start = daemonSource.indexOf("Waiting up to 12s for start_session");
+    expect(start).toBeGreaterThan(-1);
+    const waitLoop = daemonSource.slice(start, start + 2500);
+    expect(waitLoop).toContain("if (await tryAppServerDelivery()) return true");
+    expect(waitLoop.indexOf("tryAppServerDelivery")).toBeLessThan(
+      waitLoop.indexOf("startFreshSessionForDelivery"),
+    );
+  });
+
+  test("the Claude-only delivery fallback refuses a different declared agent", () => {
+    const start = daemonSource.indexOf("async function startFreshSessionForDelivery");
+    expect(start).toBeGreaterThan(-1);
+    const body = daemonSource.slice(start, start + 5000);
+    expect(body).toContain('if (declaredAgentType !== "claude")');
+    expect(body.indexOf('if (declaredAgentType !== "claude")')).toBeLessThan(
+      body.indexOf('const tmuxSession = `cc-claude-${shortId}`'),
+    );
   });
 });
