@@ -462,3 +462,17 @@ describe("WS /vault/ws", () => {
     ws.close();
   });
 });
+
+// Case-only rename on a case-insensitive filesystem: existsSync(dest) is true
+// because dest IS the source — the same-inode allowance must let it through,
+// while a rename onto a genuinely different existing file still 409s.
+test("rename: case-only rename succeeds; real collision still rejected", async () => {
+  fs.writeFileSync(path.join(root, "casenote.md"), "# n\n");
+
+  const caseOnly = await postOp({ op: "rename", path: "casenote.md", to: "CaseNote.md" });
+  expect(caseOnly.status).toBe(200);
+  expect(fs.readdirSync(root)).toContain("CaseNote.md");
+
+  const collision = await postOp({ op: "rename", path: "CaseNote.md", to: "index.md" });
+  expect(collision.status).toBe(409);
+});

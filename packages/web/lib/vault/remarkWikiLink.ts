@@ -12,6 +12,7 @@
 
 import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
 
 // Inner text: no brackets or pipes in target; alias may contain anything but
@@ -97,6 +98,16 @@ function hoistWikiEmbeds(node: any) {
   });
 }
 
+export const TAG_SCHEME = "vaulttag://";
+
+// Mirrors the index engine's TAG_RE (parseNote.ts) including the
+// pure-numeric exclusion — the pill set and the tag pane must agree.
+const INLINE_TAG_RE = /(^|[\s([{<"'])#([\p{L}\p{N}_\-/]+)/gu;
+
+// Invisible block anchors: ` ^block-id` at end of line. Obsidian hides them in
+// reading view; the id still works as a link target (the index parsed it).
+const BLOCK_ID_RE = /\s\^[A-Za-z0-9-]+(?=\n|$)/g;
+
 export function remarkWikiLink() {
   return (tree: any) => {
     findAndReplace(
@@ -114,6 +125,22 @@ export function remarkWikiLink() {
             };
           },
         ],
+        [
+          INLINE_TAG_RE,
+          (match: string, lead: string, tag: string) => {
+            if (/^\d+$/.test(tag)) return false;
+            // The leading delimiter is part of the match; keep it as text.
+            return [
+              { type: "text", value: lead },
+              {
+                type: "link",
+                url: `${TAG_SCHEME}${encodeURIComponent(tag)}`,
+                children: [{ type: "text", value: `#${tag}` }],
+              },
+            ];
+          },
+        ],
+        [BLOCK_ID_RE, () => ({ type: "text", value: "" })],
       ],
       { ignore: ["link"] },
     );
@@ -124,5 +151,8 @@ export function remarkWikiLink() {
 /** Remark chain for vault note bodies: GFM (house tilde setting) + wiki links. */
 export const vaultRemarkPlugins: NonNullable<ReactMarkdownOptions["remarkPlugins"]> = [
   [remarkGfm, { singleTilde: false }],
+  // Math BEFORE wiki links: $...$ spans become math nodes so their contents
+  // never get scanned for tags/links.
+  remarkMath,
   remarkWikiLink,
 ];

@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseNote, parseWikiTarget, slugifyHeading, stripKnownExtension } from "../parseNote";
+import { parseNote, parseWikiTarget, slugifyHeading, stripKnownExtension, headingSlugs } from "../parseNote";
 import { CORPUS, type CorpusExpectation } from "./corpus";
 
 /** Assert only the keys the corpus case declares — a case pins the rule it is
@@ -156,4 +156,14 @@ describe("helpers", () => {
     expect(slugifyHeading("What's next?")).toBe("whats-next");
     expect(slugifyHeading("日本語 見出し")).toBe("日本語-見出し");
   });
+});
+
+test("headingSlugs dedupes repeated heading text in document order", () => {
+  const slugs = headingSlugs([
+    { text: "Details" },
+    { text: "Overview" },
+    { text: "Details" },
+    { text: "details" },
+  ]);
+  expect(slugs).toEqual(["details", "overview", "details-2", "details-3"]);
 });

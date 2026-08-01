@@ -3,82 +3,57 @@
 // unresolved-into-nothing empty folders still render, active note highlighted.
 // Keyboard nav (arrows/j/k/enter) owns its keys via data-owns-keys so single
 // letters don't leak to global shortcuts.
+//
+// File operations (new note/folder, rename, delete) run from a right-click
+// menu on a row — or on empty space, which targets the vault root. Renaming is
+// inline: the label becomes an input and the store does the move. The tree's
+// pure model (shape, order, naming rules) lives in lib/vault/explorerModel.
 
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronRight, FileText, Folder, FolderOpen, Image as ImageIcon, File } from "lucide-react";
-import { isVaultMarkdownPath, isVaultAssetPath, type VaultFileEntry } from "@codecast/shared/contracts";
+import {
+  ChevronRight,
+  FilePlus2,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Image as ImageIcon,
+  File,
+  Pencil,
+  SquareArrowOutUpRight,
+  Trash2,
+} from "lucide-react";
+import { isVaultMarkdownPath, isVaultAssetPath } from "@codecast/shared/contracts";
+import {
+  ancestorDirs,
+  baseName,
+  buildVaultTree,
+  flattenTree,
+  joinVaultPath,
+  noteDisplayName,
+  parentDir,
+  renameError,
+  siblingNames,
+  splitEntryName,
+  type FlatRow,
+  type TreeNode,
+} from "../../lib/vault/explorerModel";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
 import { useVaultStore } from "../../store/vaultStore";
 
-export interface TreeNode {
-  name: string;
-  path: string;
-  dir: boolean;
-  children: TreeNode[];
-  noteCount: number;
-}
+export { noteDisplayName };
+export type { TreeNode };
 
-export function buildVaultTree(files: Record<string, VaultFileEntry>): TreeNode {
-  const root: TreeNode = { name: "", path: "", dir: true, children: [], noteCount: 0 };
-  const dirNodes = new Map<string, TreeNode>([["", root]]);
-
-  const ensureDir = (path: string): TreeNode => {
-    const existing = dirNodes.get(path);
-    if (existing) return existing;
-    const idx = path.lastIndexOf("/");
-    const parent = ensureDir(idx === -1 ? "" : path.slice(0, idx));
-    const node: TreeNode = { name: path.slice(idx + 1), path, dir: true, children: [], noteCount: 0 };
-    parent.children.push(node);
-    dirNodes.set(path, node);
-    return node;
-  };
-
-  for (const f of Object.values(files)) {
-    if (f.dir) {
-      ensureDir(f.path);
-      continue;
-    }
-    const idx = f.path.lastIndexOf("/");
-    const parent = ensureDir(idx === -1 ? "" : f.path.slice(0, idx));
-    parent.children.push({ name: f.path.slice(idx + 1), path: f.path, dir: false, children: [], noteCount: 0 });
-  }
-
-  const finalize = (node: TreeNode): number => {
-    node.children.sort((a, b) =>
-      a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }),
-    );
-    node.noteCount = node.children.reduce(
-      (acc, c) => acc + (c.dir ? finalize(c) : isVaultMarkdownPath(c.path) ? 1 : 0),
-      0,
-    );
-    return node.noteCount;
-  };
-  finalize(root);
-  return root;
-}
-
-interface FlatRow {
-  node: TreeNode;
-  depth: number;
-}
-
-function flattenTree(root: TreeNode, expanded: Record<string, boolean>): FlatRow[] {
-  const rows: FlatRow[] = [];
-  const walk = (node: TreeNode, depth: number) => {
-    for (const child of node.children) {
-      rows.push({ node: child, depth });
-      if (child.dir && expanded[child.path]) walk(child, depth + 1);
-    }
-  };
-  walk(root, 0);
-  return rows;
-}
-
-/** Display name: `.md` never shown. */
-export function noteDisplayName(name: string): string {
-  return name.replace(/\.(md|markdown)$/i, "");
-}
+/** How long a primed "Really delete?" stays primed. */
+const CONFIRM_DELETE_MS = 3000;
 
 function rowIcon(node: TreeNode, isExpanded: boolean) {
   if (node.dir) return isExpanded ? <FolderOpen className="w-3.5 h-3.5" /> : <Folder className="w-3.5 h-3.5" />;
@@ -87,23 +62,103 @@ function rowIcon(node: TreeNode, isExpanded: boolean) {
   return <File className="w-3.5 h-3.5" />;
 }
 
+/** The row label while renaming. Mounted fresh per path (keyed by the caller),
+ *  so its draft always starts from the name on screen. Markdown extensions are
+ *  hidden here exactly as they are in the label, and re-attached on commit. */
+function RenameInput({
+  stem,
+  suffix,
+  siblings,
+  currentName,
+  onCommit,
+  onCancel,
+}: {
+  stem: string;
+  suffix: string;
+  siblings: string[];
+  currentName: string;
+  onCommit: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(stem);
+  const [error, setError] = useState<string | null>(null);
+
+  const commit = () => {
+    const err = renameError(value, suffix, siblings, currentName);
+    if (err) {
+      setError(err);
+      return;
+    }
+    onCommit(`${value.trim()}${suffix}`);
+  };
+
+  return (
+    <input
+      autoFocus
+      spellCheck={false}
+      value={value}
+      title={error ?? undefined}
+      aria-label="New name"
+      aria-invalid={!!error}
+      onFocus={(e) => e.currentTarget.select()}
+      onChange={(e) => {
+        setValue(e.target.value);
+        setError(null);
+      }}
+      // The tree's j/k/arrow handler sits on the scroll container this input
+      // lives in — without this every keystroke would also move the selection.
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commit();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+      // Clicking away accepts a valid name and abandons an invalid one, so a
+      // rejected name can never leave the row stuck in edit mode.
+      onBlur={() => (renameError(value, suffix, siblings, currentName) ? onCancel() : commit())}
+      className={`flex-1 min-w-0 bg-sol-bg text-sol-text text-[13px] px-1 py-0 rounded-sm border outline-none ${
+        error ? "border-sol-red" : "border-sol-cyan"
+      }`}
+    />
+  );
+}
+
 export const VaultExplorer = memo(function VaultExplorer({
   activePath,
   onOpen,
 }: {
   activePath: string | null;
-  onOpen: (path: string) => void;
+  onOpen: (path: string | null) => void;
 }) {
   const files = useVaultStore((s) => s.files);
   const expandedDirs = useVaultStore((s) => s.expandedDirs);
+  const sortMode = useVaultStore((s) => s.sortMode);
+  const renameTarget = useVaultStore((s) => s.renameTarget);
   const toggleDir = useVaultStore((s) => s.toggleDir);
   const setDirsExpanded = useVaultStore((s) => s.setDirsExpanded);
+  const setRenameTarget = useVaultStore((s) => s.setRenameTarget);
+  const renamePath = useVaultStore((s) => s.renamePath);
+  const deletePath = useVaultStore((s) => s.deletePath);
+  const newNote = useVaultStore((s) => s.newNote);
+  const newFolder = useVaultStore((s) => s.newFolder);
 
-  const tree = useMemo(() => buildVaultTree(files), [files]);
+  const tree = useMemo(() => buildVaultTree(files, sortMode), [files, sortMode]);
   const rows = useMemo(() => flattenTree(tree, expandedDirs), [tree, expandedDirs]);
 
   const [focusIndex, setFocusIndex] = useState(-1);
+  // `node: null` is the vault root — the menu you get right-clicking empty space.
+  const [menu, setMenu] = useState<{ x: number; y: number; node: TreeNode | null } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useWatchEffect(() => () => {
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
+  }, []);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -117,14 +172,7 @@ export const VaultExplorer = memo(function VaultExplorer({
   // it changes from outside (quick switcher, wiki link click).
   useWatchEffect(() => {
     if (!activePath) return;
-    const segments = activePath.split("/").slice(0, -1);
-    const ancestors: string[] = [];
-    let acc = "";
-    for (const seg of segments) {
-      acc = acc ? `${acc}/${seg}` : seg;
-      ancestors.push(acc);
-    }
-    const collapsed = ancestors.filter((a) => !useVaultStore.getState().expandedDirs[a]);
+    const collapsed = ancestorDirs(activePath).filter((a) => !useVaultStore.getState().expandedDirs[a]);
     if (collapsed.length) setDirsExpanded(collapsed, true);
   }, [activePath, setDirsExpanded]);
 
@@ -134,12 +182,70 @@ export const VaultExplorer = memo(function VaultExplorer({
     if (idx >= 0) virtualizer.scrollToIndex(idx, { align: "auto" });
   }, [activePath, rows, virtualizer]);
 
+  // A row being renamed has to be mounted for its input to exist, and the
+  // virtualizer only mounts what's in view — a note created inside a long
+  // folder would otherwise get an invisible rename box.
+  useWatchEffect(() => {
+    if (!renameTarget) return;
+    const idx = rows.findIndex((r) => r.node.path === renameTarget);
+    if (idx >= 0) virtualizer.scrollToIndex(idx, { align: "auto" });
+  }, [renameTarget, rows, virtualizer]);
+
+  const closeMenu = useCallback(() => {
+    setMenu(null);
+    setConfirmDelete(null);
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    scrollRef.current?.focus();
+  }, []);
+
   const activate = useCallback(
     (row: FlatRow) => {
       if (row.node.dir) toggleDir(row.node.path);
       else onOpen(row.node.path);
     },
     [toggleDir, onOpen],
+  );
+
+  const commitRename = useCallback(
+    async (path: string, name: string) => {
+      const to = joinVaultPath(parentDir(path), name);
+      setRenameTarget(null);
+      if (to === path) return;
+      try {
+        await renamePath(path, to);
+      } catch {
+        return; // opError carries the reason; the tree already rolled back.
+      }
+      // The open note moved out from under the URL — follow it, whether it was
+      // renamed itself or carried along inside a renamed folder.
+      if (activePath === path) onOpen(to);
+      else if (activePath?.startsWith(`${path}/`)) onOpen(to + activePath.slice(path.length));
+    },
+    [renamePath, setRenameTarget, activePath, onOpen],
+  );
+
+  const remove = useCallback(
+    async (node: TreeNode) => {
+      closeMenu();
+      try {
+        await deletePath(node.path);
+      } catch {
+        return;
+      }
+      if (activePath === node.path || activePath?.startsWith(`${node.path}/`)) onOpen(null);
+    },
+    [deletePath, closeMenu, activePath, onOpen],
+  );
+
+  const create = useCallback(
+    async (dir: string, kind: "note" | "folder") => {
+      closeMenu();
+      const path = kind === "note" ? await newNote(dir) : await newFolder(dir);
+      // A new note opens straight away (Obsidian's behaviour); the rename the
+      // store armed then renames the note the reader is already looking at.
+      if (path && kind === "note") onOpen(path);
+    },
+    [newNote, newFolder, closeMenu, onOpen],
   );
 
   const onKeyDown = useCallback(
@@ -157,6 +263,12 @@ export const VaultExplorer = memo(function VaultExplorer({
       else if (e.key === "Enter") {
         const row = rows[focusIndex];
         if (row) activate(row);
+      } else if (e.key === "F2") {
+        const row = rows[focusIndex];
+        if (row) {
+          e.preventDefault();
+          setRenameTarget(row.node.path);
+        }
       } else if (e.key === "ArrowRight") {
         const row = rows[focusIndex];
         if (row?.node.dir && !expandedDirs[row.node.path]) {
@@ -170,8 +282,7 @@ export const VaultExplorer = memo(function VaultExplorer({
         if (row.node.dir && expandedDirs[row.node.path]) toggleDir(row.node.path);
         else {
           // Jump to parent folder.
-          const parent = row.node.path.slice(0, row.node.path.lastIndexOf("/"));
-          const idx = rows.findIndex((r) => r.node.path === parent);
+          const idx = rows.findIndex((r) => r.node.path === parentDir(row.node.path));
           if (idx >= 0) {
             setFocusIndex(idx);
             virtualizer.scrollToIndex(idx, { align: "auto" });
@@ -179,16 +290,13 @@ export const VaultExplorer = memo(function VaultExplorer({
         }
       }
     },
-    [rows, focusIndex, activate, expandedDirs, toggleDir, virtualizer],
+    [rows, focusIndex, activate, expandedDirs, toggleDir, virtualizer, setRenameTarget],
   );
 
-  if (rows.length === 0) {
-    return (
-      <div className="px-3 py-6 text-xs text-sol-text-muted text-center">
-        No files in this vault yet.
-      </div>
-    );
-  }
+  const menuNode = menu?.node ?? null;
+  // Creates land inside the folder that was right-clicked, or in the vault root
+  // when the click was on empty space. Files offer no creates.
+  const menuDir = menuNode?.dir ? menuNode.path : "";
 
   return (
     <div
@@ -198,56 +306,151 @@ export const VaultExplorer = memo(function VaultExplorer({
       role="tree"
       aria-label="Vault files"
       onKeyDown={onKeyDown}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenu({ x: e.clientX, y: e.clientY, node: null });
+      }}
       className="h-full overflow-y-auto overflow-x-hidden outline-none text-[13px] select-none"
     >
-      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-        {virtualizer.getVirtualItems().map((vi) => {
-          const row = rows[vi.index];
-          if (!row) return null;
-          const { node, depth } = row;
-          const isActive = node.path === activePath;
-          const isFocused = vi.index === focusIndex;
-          const isExpanded = node.dir && !!expandedDirs[node.path];
-          return (
-            <div
-              key={vi.key}
-              data-index={vi.index}
-              ref={virtualizer.measureElement}
-              style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
-            >
-              <button
-                type="button"
-                title={node.path}
-                onClick={() => {
+      {rows.length === 0 ? (
+        <div className="px-3 py-6 text-xs text-sol-text-muted text-center">No files in this vault yet.</div>
+      ) : (
+        <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+          {virtualizer.getVirtualItems().map((vi) => {
+            const row = rows[vi.index];
+            if (!row) return null;
+            const { node, depth } = row;
+            const isActive = node.path === activePath;
+            const isFocused = vi.index === focusIndex;
+            const isExpanded = node.dir && !!expandedDirs[node.path];
+            const isRenaming = node.path === renameTarget;
+            const rowClass = `w-full flex items-center gap-1.5 px-2 py-[3px] text-left truncate rounded-sm transition-colors ${
+              isActive
+                ? "bg-sol-bg-highlight text-sol-text"
+                : isFocused
+                  ? "bg-sol-bg-alt text-sol-text"
+                  : "text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text"
+            }`;
+            const chevron = node.dir ? (
+              <ChevronRight className={`w-3 h-3 flex-shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+            ) : (
+              <span className="w-3 flex-shrink-0" />
+            );
+            return (
+              <div
+                key={vi.key}
+                data-index={vi.index}
+                ref={virtualizer.measureElement}
+                style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   setFocusIndex(vi.index);
-                  activate(row);
+                  setMenu({ x: e.clientX, y: e.clientY, node });
                 }}
-                className={`w-full flex items-center gap-1.5 px-2 py-[3px] text-left truncate rounded-sm transition-colors ${
-                  isActive
-                    ? "bg-sol-bg-highlight text-sol-text"
-                    : isFocused
-                      ? "bg-sol-bg-alt text-sol-text"
-                      : "text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text"
-                }`}
-                style={{ paddingLeft: 8 + depth * 14 }}
               >
-                {node.dir ? (
-                  <ChevronRight
-                    className={`w-3 h-3 flex-shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`}
-                  />
+                {isRenaming ? (
+                  <div className={rowClass} style={{ paddingLeft: 8 + depth * 14 }} title={node.path}>
+                    {chevron}
+                    <span className="flex-shrink-0 opacity-70">{rowIcon(node, isExpanded)}</span>
+                    <RenameInput
+                      {...splitEntryName(node.path, node.dir)}
+                      siblings={siblingNames(Object.keys(files), parentDir(node.path))}
+                      currentName={baseName(node.path)}
+                      onCommit={(name) => void commitRename(node.path, name)}
+                      onCancel={() => setRenameTarget(null)}
+                    />
+                  </div>
                 ) : (
-                  <span className="w-3 flex-shrink-0" />
+                  <button
+                    type="button"
+                    title={node.path}
+                    onClick={() => {
+                      setFocusIndex(vi.index);
+                      activate(row);
+                    }}
+                    className={rowClass}
+                    style={{ paddingLeft: 8 + depth * 14 }}
+                  >
+                    {chevron}
+                    <span className="flex-shrink-0 opacity-70">{rowIcon(node, isExpanded)}</span>
+                    <span className="truncate">{node.dir ? node.name : noteDisplayName(node.name)}</span>
+                    {node.dir && node.noteCount > 0 && (
+                      <span className="ml-auto pr-1 text-[10px] text-sol-text-dim tabular-nums">{node.noteCount}</span>
+                    )}
+                  </button>
                 )}
-                <span className="flex-shrink-0 opacity-70">{rowIcon(node, isExpanded)}</span>
-                <span className="truncate">{node.dir ? node.name : noteDisplayName(node.name)}</span>
-                {node.dir && node.noteCount > 0 && (
-                  <span className="ml-auto pr-1 text-[10px] text-sol-text-dim tabular-nums">{node.noteCount}</span>
-                )}
-              </button>
-            </div>
-          );
-        })}
-      </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {menu && (
+        <DropdownMenu open onOpenChange={(open) => !open && closeMenu()}>
+          {/* Anchored to the cursor: a zero-size trigger parked where the
+              right-click landed, so Radix owns placement, click-away and Esc. */}
+          <DropdownMenuTrigger asChild>
+            <span style={{ position: "fixed", left: menu.x, top: menu.y, width: 1, height: 1 }} />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" sideOffset={2} className="min-w-[170px]">
+            {menuNode && !menuNode.dir && (
+              <>
+                <DropdownMenuItem
+                  onSelect={() => {
+                    closeMenu();
+                    onOpen(menuNode.path);
+                  }}
+                >
+                  <SquareArrowOutUpRight className="w-3.5 h-3.5 mr-2" /> Open
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            {(!menuNode || menuNode.dir) && (
+              <>
+                <DropdownMenuItem onSelect={() => void create(menuDir, "note")}>
+                  <FilePlus2 className="w-3.5 h-3.5 mr-2" /> New note
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void create(menuDir, "folder")}>
+                  <FolderPlus className="w-3.5 h-3.5 mr-2" /> New folder
+                </DropdownMenuItem>
+              </>
+            )}
+            {menuNode && (
+              <>
+                {menuNode.dir && <DropdownMenuSeparator />}
+                <DropdownMenuItem
+                  onSelect={() => {
+                    closeMenu();
+                    setRenameTarget(menuNode.path);
+                  }}
+                >
+                  <Pencil className="w-3.5 h-3.5 mr-2" /> Rename
+                </DropdownMenuItem>
+                {/* Two-step in place of a browser confirm(): the item itself
+                    becomes the confirmation, and disarms after a moment. */}
+                <DropdownMenuItem
+                  className="text-sol-red focus:text-sol-red"
+                  onSelect={(e) => {
+                    if (confirmDelete !== menuNode.path) {
+                      e.preventDefault();
+                      setConfirmDelete(menuNode.path);
+                      if (confirmTimer.current) clearTimeout(confirmTimer.current);
+                      confirmTimer.current = setTimeout(() => setConfirmDelete(null), CONFIRM_DELETE_MS);
+                      return;
+                    }
+                    void remove(menuNode);
+                  }}
+                >
+                  <Trash2 className="w-3.5 h-3.5 mr-2" />
+                  {confirmDelete === menuNode.path ? "Really delete?" : "Delete"}
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </div>
   );
 });
