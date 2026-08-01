@@ -66,4 +66,31 @@ describe("resolveComposeProjectPath", () => {
     ).toBe("/Users/j/code/recent");
     expect(resolveComposeProjectPath({ conversation: {} })).toBeUndefined();
   });
+
+  it("never seeds from a teammate's conversation whose checkout no machine of mine has", () => {
+    const machineRoster = [{ local_project_roots: ["/Users/j/code/recent", "/Users/j/code/conv"] }];
+    expect(
+      resolveComposeProjectPath({
+        conversation: { projectPath: "/Users/samvit/dev/codecast" },
+        machineRoster,
+        recentProjects,
+      }),
+    ).toBe("/Users/j/code/recent");
+    // My own conversation still seeds through the same roster.
+    expect(
+      resolveComposeProjectPath({
+        conversation: { projectPath: "/Users/j/code/conv" },
+        machineRoster,
+        recentProjects,
+      }),
+    ).toBe("/Users/j/code/conv");
+    // Roster not loaded yet — don't filter.
+    expect(
+      resolveComposeProjectPath({
+        conversation: { projectPath: "/Users/samvit/dev/codecast" },
+        machineRoster: [],
+        recentProjects,
+      }),
+    ).toBe("/Users/samvit/dev/codecast");
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { defaultMachineId, type MachineCandidate } from "./machinePicker";
+import { defaultMachineId, pathOnMyMachines, type MachineCandidate } from "./machinePicker";
 
 const dev = (id: string, over: Partial<MachineCandidate> = {}): MachineCandidate => ({
   device_id: id,
@@ -79,5 +79,31 @@ describe("defaultMachineId", () => {
 
   it("is null with no devices at all", () => {
     expect(defaultMachineId([])).toBeNull();
+  });
+});
+
+describe("pathOnMyMachines", () => {
+  const mine = [
+    dev("laptop", { local_project_roots: ["/Users/me/src/codecast", "/Users/me/src/app"] }),
+    dev("nose", { is_remote: true, local_project_roots: [] }),
+  ];
+
+  it("accepts a path one of my machines has, including repo subdirs", () => {
+    expect(pathOnMyMachines(mine, "/Users/me/src/codecast")).toBe(true);
+    expect(pathOnMyMachines(mine, "/Users/me/src/codecast/packages/web")).toBe(true);
+  });
+
+  it("rejects a teammate's checkout no machine of mine has", () => {
+    expect(pathOnMyMachines(mine, "/Users/samvit/dev/codecast")).toBe(false);
+  });
+
+  it("does not filter before the roster loads or before any device reports roots", () => {
+    expect(pathOnMyMachines([], "/Users/samvit/dev/codecast")).toBe(true);
+    expect(pathOnMyMachines([dev("laptop", { local_project_roots: [] })], "/Users/samvit/dev/codecast")).toBe(true);
+  });
+
+  it("is false for an empty path", () => {
+    expect(pathOnMyMachines(mine, undefined)).toBe(false);
+    expect(pathOnMyMachines(mine, "")).toBe(false);
   });
 });

@@ -36,6 +36,7 @@ function spawnFixSession(errorText: string) {
     activeProjectFilter: store.activeProjectFilter,
     activeProjectPath: store.activeProjectPath,
     recentProjects: store.recentProjects,
+    machineRoster: store.machineRoster,
   });
   const agentType = conv.agentType || "claude_code";
   const { stubId } = store.beginOptimisticSession({
