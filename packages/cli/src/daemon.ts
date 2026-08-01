@@ -13122,15 +13122,32 @@ async function startFreshSessionForDelivery(
 
   const config = readConfig();
   let projectPath: string | null = null;
+  let declaredAgentType: AgentClientId | null = null;
 
   if (config?.convex_url && config?.auth_token) {
     try {
       const siteUrl = config.convex_url.replace(".cloud", ".site");
       const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
+      declaredAgentType = fromConvexAgentType(exportData.conversation?.agent_type);
       if (exportData.conversation?.project_path && fs.existsSync(exportData.conversation.project_path)) {
         projectPath = exportData.conversation.project_path;
       }
-    } catch {}
+    } catch (err) {
+      // Delivery must never invent a backend when it cannot resolve the durable
+      // conversation identity. Leaving the message pending is recoverable;
+      // silently attaching a Claude runtime to (for example) a Codex
+      // conversation is not.
+      logDelivery(`Refusing fresh delivery fallback for conv=${conversationId.slice(0, 12)} — could not resolve declared agent: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
+  // This legacy escape hatch predates multiple agent clients and can only
+  // construct Claude sessions. It must not cross the conversation's durable
+  // agent boundary when another runtime is merely late to register.
+  if (declaredAgentType !== "claude") {
+    logDelivery(`Refusing cross-agent delivery fallback for conv=${conversationId.slice(0, 12)} — requested ${declaredAgentType ?? "unknown"}, fallback is claude`);
+    return null;
   }
 
   if (!projectPath) {
@@ -13342,7 +13359,8 @@ async function deliverMessage(
     }
   }
 
-  if (codexAppServerInstance?.running) {
+  const tryAppServerDelivery = async (): Promise<boolean> => {
+    if (!codexAppServerInstance?.running) return false;
     const appServerThreadId = appServerConversations.get(conversationId);
     if (appServerThreadId) {
       try {
@@ -13371,7 +13389,10 @@ async function deliverMessage(
         logDelivery(`[codex-app-server] delivery failed, falling back to tmux: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-  }
+    return false;
+  };
+
+  if (await tryAppServerDelivery()) return true;
 
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
@@ -13524,6 +13545,10 @@ async function deliverMessage(
       logDelivery(`Waiting up to 12s for start_session to populate startedSessionTmux for conv=${conversationId.slice(0, 12)}`);
       for (let i = 0; i < 24; i++) {
         await new Promise(r => setTimeout(r, 500));
+        // Codex app-server startup registers asynchronously and has no tmux or
+        // transcript-cache entry. Recheck its binding during the same readiness
+        // wait so a pending first message cannot race ahead and create Claude.
+        if (await tryAppServerDelivery()) return true;
         const justStarted = startedSessionTmux.get(conversationId);
         if (justStarted) {
           log(`Found startedSessionTmux for ${conversationId.slice(0, 12)} after ${(i + 1) * 500}ms wait`);
