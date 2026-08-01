@@ -9,6 +9,8 @@
 import { createContext, memo, useContext } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { ExternalLink } from "lucide-react";
 import { MD_COMPONENTS, CollapsibleImage } from "../tools/MarkdownRenderer";
 import {
@@ -17,8 +19,13 @@ import {
   wikiRawFromHref,
   WIKI_EMBED_SCHEME,
   WIKI_SCHEME,
+  TAG_SCHEME,
   type WikiLinkParts,
 } from "../../lib/vault/remarkWikiLink";
+import { slugifyHeading } from "../../lib/vault/parseNote";
+// Render-time-only cycle with VaultHoverPreview (it renders VaultMarkdown
+// inside the card); safe because neither module touches the other at eval.
+import { useHoverPreview } from "./VaultHoverPreview";
 
 export interface VaultLinkResolution {
   path: string | null;
@@ -31,6 +38,8 @@ export interface VaultLinkContextValue {
   createNote?: (target: string) => void;
   /** Absolute URL for a vault-relative asset path (img src), null offline. */
   assetUrl: (path: string) => string | null;
+  /** Open the tag pane focused on a tag (inline #tag pill click). */
+  openTag?: (tag: string) => void;
   /** Render an embedded note body (depth-limited by the provider). */
   renderEmbed?: (parts: WikiLinkParts, resolvedPath: string | null) => React.ReactNode;
 }
@@ -39,6 +48,7 @@ export const VaultLinkContext = createContext<VaultLinkContextValue | null>(null
 
 function WikiLinkAnchor({ href, children }: { href: string; children: React.ReactNode }) {
   const ctx = useContext(VaultLinkContext);
+  const hover = useHoverPreview();
   const raw = wikiRawFromHref(href);
   const parts = raw ? parseWikiInner(raw) : null;
   if (!ctx || !parts) return <span>{children}</span>;
@@ -62,8 +72,11 @@ function WikiLinkAnchor({ href, children }: { href: string; children: React.Reac
         onClick={(e) => {
           if (e.metaKey || e.ctrlKey || e.button === 1) return; // browser/tab handling
           e.preventDefault();
+          hover?.onLinkLeave();
           ctx.navigate(res.path!, parts.subpath, parts.subpathType);
         }}
+        onMouseEnter={(e) => hover?.onLinkEnter(e.currentTarget, res.path!)}
+        onMouseLeave={() => hover?.onLinkLeave()}
       >
         {children}
       </a>
@@ -89,6 +102,21 @@ function WikiLinkAnchor({ href, children }: { href: string; children: React.Reac
 function VaultLink({ href, children, node: _node, ...props }: any) {
   const ctx = useContext(VaultLinkContext);
   const url: string = href ?? "";
+  if (url.startsWith(TAG_SCHEME)) {
+    const tag = decodeURIComponent(url.slice(TAG_SCHEME.length));
+    return (
+      <a
+        href="#"
+        className="vault-tag"
+        onClick={(e) => {
+          e.preventDefault();
+          ctx?.openTag?.(tag);
+        }}
+      >
+        {children}
+      </a>
+    );
+  }
   if (url.startsWith(WIKI_SCHEME) || url.startsWith(WIKI_EMBED_SCHEME)) {
     return <WikiLinkAnchor href={url}>{children}</WikiLinkAnchor>;
   }
@@ -248,16 +276,69 @@ function VaultBlockquote({ children }: { children?: React.ReactNode }) {
 // Preserve wiki:// and wikiembed:// hrefs (the payload carriers); everything
 // else goes through react-markdown's standard sanitizer.
 function vaultUrlTransform(url: string): string {
-  if (url.startsWith(WIKI_SCHEME) || url.startsWith(WIKI_EMBED_SCHEME)) return url;
+  if (url.startsWith(WIKI_SCHEME) || url.startsWith(WIKI_EMBED_SCHEME) || url.startsWith(TAG_SCHEME)) return url;
   return defaultUrlTransform(url);
 }
 
-const VAULT_REHYPE_PLUGINS = [rehypeHighlight];
+function hastText(node: any): string {
+  if (!node) return "";
+  if (node.type === "text") return node.value ?? "";
+  if (Array.isArray(node.children)) return node.children.map(hastText).join("");
+  return "";
+}
+
+/** Rehype pass stamping `id="vh-<slug>"` on headings, DEDUPED in document
+ *  order with the same rule as the index engine's headingSlugs (first
+ *  occurrence bare, repeats -2/-3…). Duplicate heading texts previously
+ *  collided into duplicate DOM ids, breaking the outline and heading links
+ *  for every occurrence past the first (review finding, R5). */
+function rehypeVaultHeadingIds() {
+  const HEADING = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
+  return (tree: any) => {
+    const seen = new Map<string, number>();
+    const walk = (node: any) => {
+      if (node?.type === "element" && HEADING.has(node.tagName)) {
+        const base = slugifyHeading(hastText(node));
+        const n = (seen.get(base) ?? 0) + 1;
+        seen.set(base, n);
+        node.properties = { ...node.properties, id: `vh-${n === 1 ? base : `${base}-${n}`}` };
+      }
+      if (Array.isArray(node?.children)) node.children.forEach(walk);
+    };
+    walk(tree);
+  };
+}
+
+/** Heading components render the id the rehype pass computed (never their own
+ *  — per-component slugs can't see document order, which dedupe requires). */
+function anchoredHeading(Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6", className: string) {
+  return function VaultHeading({ id, children }: { id?: string; children?: React.ReactNode }) {
+    return (
+      <Tag id={id} className={className}>
+        {children}
+      </Tag>
+    );
+  };
+}
+
+const VAULT_REHYPE_PLUGINS = [rehypeHighlight, rehypeKatex, rehypeVaultHeadingIds];
 const VAULT_COMPONENTS: Components = {
   ...MD_COMPONENTS,
   a: VaultLink,
   img: VaultImage,
   blockquote: VaultBlockquote,
+  h1: anchoredHeading("h1", "text-lg font-bold mt-0 mb-3 text-sol-text"),
+  h2: anchoredHeading("h2", "text-base font-semibold mt-4 mb-2 text-sol-text"),
+  h3: anchoredHeading("h3", "text-sm font-semibold mt-3 mb-1 text-sol-text-muted"),
+  h4: anchoredHeading("h4", "text-sm font-semibold mt-3 mb-1 text-sol-text-muted"),
+  h5: anchoredHeading("h5", "text-[13px] font-semibold mt-2 mb-1 text-sol-text-muted"),
+  h6: anchoredHeading("h6", "text-[13px] font-semibold mt-2 mb-1 text-sol-text-dim"),
+  // Obsidian tables size to their content, not the container.
+  table: ({ children }: { children?: React.ReactNode }) => (
+    <div className="overflow-x-auto my-3">
+      <table className="w-auto text-xs border-collapse border border-sol-border/50">{children}</table>
+    </div>
+  ),
 };
 
 export const VaultMarkdown = memo(function VaultMarkdown({ content }: { content: string }) {

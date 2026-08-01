@@ -76,8 +76,10 @@ const dirOf = (path: string): string => {
   return slash >= 0 ? path.slice(0, slash) : "";
 };
 
-/** Normalize a link target as written: `./A/B`, `A\B`, ` A/B ` all mean `A/B`. */
-function normalizeTarget(target: string): string {
+/** Normalize a link target as written: `./A/B`, `A\B`, ` A/B ` all mean `A/B`.
+ *  Exported because the graph builder groups unresolved targets by the same
+ *  key this index does — two spellings of one missing note must be one ghost. */
+export function normalizeTarget(target: string): string {
   return target.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
 }
 
