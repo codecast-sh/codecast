@@ -1,3 +1,4 @@
+import { frontmatterLineOffset, splitFrontmatter } from "../frontmatter";
 import { test, expect, describe } from "bun:test";
 import { parseNote, parseWikiTarget, slugifyHeading, stripKnownExtension, headingSlugs } from "../parseNote";
 import { CORPUS, type CorpusExpectation } from "./corpus";
@@ -166,4 +167,14 @@ test("headingSlugs dedupes repeated heading text in document order", () => {
     { text: "details" },
   ]);
   expect(slugs).toEqual(["details", "overview", "details-2", "details-3"]);
+});
+
+test("frontmatterLineOffset and splitFrontmatter handle CRLF-authored notes", () => {
+  const crlf = "---\r\ntitle: Test\r\ntags: [a]\r\n---\r\n- [ ] task one\r\nBody.\r\n";
+  expect(frontmatterLineOffset(crlf)).toBe(4);
+  const [fm, body] = splitFrontmatter(crlf);
+  expect(fm).toBe("title: Test\r\ntags: [a]\r");
+  expect(body.startsWith("- [ ] task one")).toBe(true);
+  // The body's own bytes are untouched — every \r survives in place.
+  expect(body).toBe("- [ ] task one\r\nBody.\r\n");
 });

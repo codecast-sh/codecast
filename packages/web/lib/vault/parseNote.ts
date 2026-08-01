@@ -53,6 +53,13 @@ export interface NoteBlock {
   text: string;
 }
 
+/** A GFM task line: `- [ ] text`, `* [x] text`, `1. [/] text`. Groups: the
+ *  prefix up to and including the opening bracket, the state character, and the
+ *  task's own text. Exported because the reading view writes checkbox clicks
+ *  back to source (taskToggle.ts) and must agree, character for character, with
+ *  what the index parsed as a task. */
+export const TASK_LINE_RE = /^(\s*(?:[-*+]|\d+[.)])\s+\[)(.)\]\s*(.*)$/;
+
 export interface NoteTask {
   done: boolean;
   text: string;
@@ -499,7 +506,7 @@ export function parseNote(content: string): ParsedNote {
 
     scanInline(line, lineNo, links, inlineTags);
 
-    const task = /^(\s*)(?:[-*+])\s+\[(.)\]\s*(.*)$/.exec(line);
+    const task = TASK_LINE_RE.exec(line);
     if (task) {
       tasks.push({ done: /[xX]/.test(task[2]), text: toPlainText(task[3]), line: lineNo });
     }
