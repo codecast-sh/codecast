@@ -4,6 +4,7 @@
 // in a later phase; until then it shows as a subtle collapsed strip).
 
 import { createContext, memo, useContext, useMemo, useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { ChevronRight, FileText } from "lucide-react";
 import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { noteDisplayName } from "./VaultExplorer";
@@ -11,6 +12,9 @@ import { VaultLinkContext, VaultMarkdown, type VaultLinkContextValue } from "./V
 import type { WikiLinkParts } from "../../lib/vault/remarkWikiLink";
 import { vaultAssetUrl } from "../../lib/vault/client";
 import { useVaultStore } from "../../store/vaultStore";
+import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
+import { slugifyHeading } from "../../lib/vault/parseNote";
+import { VaultProperties } from "./VaultProperties";
 
 /** Split YAML frontmatter off a markdown body. Returns [frontmatter|null, rest].
  *  The closing fence must be a FULL line of `---` (or `...`), matching the
@@ -27,27 +31,18 @@ export function splitFrontmatter(content: string): [string | null, string] {
   return [null, content];
 }
 
-/** Interim link resolution over the raw file table: exact path first, then
- *  case-insensitive unique-basename, preferring the source note's folder.
- *  Swapped for VaultIndex.resolveLink when the index engine lands. */
-function resolveAgainstFiles(
+/** Asset resolution over the raw file table (markdown goes through the real
+ *  VaultIndex): exact path first, then unique basename. */
+function resolveAssetPath(
   files: Record<string, { path: string; dir?: boolean }>,
   target: string,
-  fromPath: string,
-): { path: string | null; ambiguous?: boolean } {
-  if (!target) return { path: fromPath };
-  const withMd = target.endsWith(".md") ? target : `${target}.md`;
-  if (files[target] && !files[target].dir) return { path: target };
-  if (files[withMd]) return { path: withMd };
-  const lowerBase = withMd.toLowerCase().split("/").pop()!;
+): string | null {
+  if (files[target] && !files[target].dir) return target;
+  const lowerBase = target.toLowerCase().split("/").pop()!;
   const matches = Object.keys(files).filter(
     (p) => !files[p].dir && p.toLowerCase().split("/").pop() === lowerBase,
   );
-  if (matches.length === 0) return { path: null };
-  if (matches.length === 1) return { path: matches[0] };
-  const fromDir = fromPath.includes("/") ? fromPath.slice(0, fromPath.lastIndexOf("/")) : "";
-  const sibling = matches.find((p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "") === fromDir);
-  return { path: sibling ?? matches.sort()[0], ambiguous: true };
+  return matches.length ? matches.sort()[0] : null;
 }
 
 const EmbedDepthContext = createContext(0);
@@ -105,9 +100,14 @@ function EmbedCard({ parts, resolvedPath, onOpen }: { parts: WikiLinkParts; reso
 
 export const VaultNoteView = memo(function VaultNoteView({
   path,
+  targetLine,
   onNavigate,
 }: {
   path: string;
+  /** Source line to bring into view (search hits carry it via ?l=). Rendered
+   *  markdown has no per-line anchors, so we scroll to the nearest heading at
+   *  or above the line — the same section the hit lives in. */
+  targetLine?: number;
   onNavigate: (path: string | null) => void;
 }) {
   const body = useVaultStore((s) => s.bodies[path]);
@@ -117,7 +117,6 @@ export const VaultNoteView = memo(function VaultNoteView({
   const endpoint = useVaultStore((s) => s.endpoint);
   const activeVaultId = useVaultStore((s) => s.activeVaultId);
   const createFile = useVaultStore((s) => s.createFile);
-  const [showProps, setShowProps] = useState(false);
 
   const segments = path.split("/");
   const fileName = segments[segments.length - 1];
@@ -128,25 +127,60 @@ export const VaultNoteView = memo(function VaultNoteView({
     [body?.content],
   );
 
+  // Re-render (and re-resolve every wiki link) whenever the index changes — a
+  // new note can turn a dangling link live without this note re-parsing.
+  const indexVersion = useVaultIndexVersion();
+
+  // Scroll a search hit's section into view once the body has rendered.
+  useWatchEffect(() => {
+    if (!targetLine || !body) return;
+    const headings = vaultIndex.note(path)?.parsed?.headings ?? [];
+    const section = [...headings].reverse().find((h) => h.line <= targetLine);
+    const raf = requestAnimationFrame(() => {
+      if (!section) return;
+      const el = document.getElementById(`vh-${slugifyHeading(section.text)}`);
+      el?.scrollIntoView({ block: "start" });
+      el?.classList.add("vault-flash");
+      setTimeout(() => el?.classList.remove("vault-flash"), 1400);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [targetLine, path, !!body]);
+
   const linkCtx = useMemo<VaultLinkContextValue>(
     () => ({
-      resolve: (target) => resolveAgainstFiles(files, target, path),
-      navigate: (p, _subpath) => onNavigate(p),
+      resolve: (target) => {
+        const info = vaultIndex.resolveLinkInfo(target, path);
+        return { path: info.path, ambiguous: info.isAmbiguous };
+      },
+      navigate: (p, subpath, subpathType) => {
+        onNavigate(p);
+        if (subpath && subpathType === "heading") {
+          // Scroll after the target note renders.
+          const slug = slugifyHeading(subpath);
+          setTimeout(() => {
+            document.getElementById(`vh-${slug}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+          }, 350);
+        }
+      },
       createNote: (target) => {
         const newPath = isVaultMarkdownPath(target) ? target : `${target}.md`;
-        void createFile(newPath, `# ${target}\n\n`).then(() => onNavigate(newPath));
+        createFile(newPath, `# ${target}\n\n`)
+          .then(() => onNavigate(newPath))
+          .catch(() => {});
       },
       assetUrl: (p) => {
         if (!endpoint || !activeVaultId) return null;
-        const res = resolveAgainstFiles(files, p.replace(/\.md$/i, ""), path);
-        const assetPath = files[p] ? p : res.path;
+        const assetPath = resolveAssetPath(files, p);
         return assetPath ? vaultAssetUrl(endpoint, activeVaultId, assetPath) : null;
       },
+      openTag: (tag) => useVaultStore.getState().openTagPane(tag),
       renderEmbed: (parts, resolvedPath) => (
         <EmbedCard parts={parts} resolvedPath={resolvedPath} onOpen={(p) => onNavigate(p)} />
       ),
     }),
-    [files, path, onNavigate, createFile, endpoint, activeVaultId],
+    // indexVersion is deliberately a dep: resolution results change with it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [files, path, onNavigate, createFile, endpoint, activeVaultId, indexVersion],
   );
 
   if (!exists && !body) {
@@ -172,24 +206,14 @@ export const VaultNoteView = memo(function VaultNoteView({
         </nav>
         <h1 className="text-2xl font-semibold text-sol-text mb-3 break-words">{title}</h1>
 
-        {frontmatter && (
-          <div className="mb-4 border border-sol-border/30 rounded">
-            <button
-              type="button"
-              onClick={() => setShowProps((v) => !v)}
-              className="w-full text-left px-3 py-1.5 text-[11px] text-sol-text-dim hover:text-sol-text-muted"
-            >
-              Properties
-            </button>
-            {showProps && (
-              <pre className="px-3 pb-2 text-[11px] text-sol-text-muted whitespace-pre-wrap font-mono">
-                {frontmatter}
-              </pre>
-            )}
-          </div>
-        )}
-
         <VaultLinkContext.Provider value={linkCtx}>
+          {frontmatter && (
+            <VaultProperties
+              frontmatter={vaultIndex.note(path)?.parsed?.frontmatter ?? null}
+              raw={frontmatter}
+              onTagClick={(t) => useVaultStore.getState().openTagPane(t.replace(/^#/, ""))}
+            />
+          )}
           {body ? (
             <div className="vault-prose prose prose-sm max-w-none">
               <VaultMarkdown content={markdown} />

@@ -9,6 +9,17 @@ export function pathLabel(path: string): string {
   if (path.startsWith("/tasks/")) return "Task";
   if (path.startsWith("/docs/")) return "Doc";
   if (path.startsWith("/plans/")) return "Plan";
+  // A vault note tab is titled by the note, not the encoded query string.
+  if (path.startsWith("/vault?") || path.startsWith("/vault/")) {
+    try {
+      const f = new URLSearchParams(path.split("?")[1] ?? "").get("f");
+      if (f) {
+        const base = decodeURIComponent(f).split("/").pop() ?? "";
+        return base.replace(/\.(md|markdown)$/i, "") || "Vault";
+      }
+    } catch {}
+    return "Vault";
+  }
   const segments: Record<string, string> = {
     "/tasks": "Tasks",
     "/docs": "Docs",

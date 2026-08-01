@@ -31,6 +31,14 @@ import {
   saveVaultMeta,
   type VaultBodyRow,
 } from "../lib/vault/db";
+import {
+  ancestorDirs,
+  joinVaultPath,
+  nextUntitledName,
+  renameMoves,
+  siblingNames,
+  type VaultSortMode,
+} from "../lib/vault/explorerModel";
 
 export type VaultConnection =
   | "idle"          // not yet asked
@@ -67,10 +75,24 @@ interface VaultState {
   expandedDirs: Record<string, boolean>;
   /** Recently opened note paths, most recent first (feeds switcher ranking). */
   recentPaths: string[];
+  /** Explorer row order — ephemeral, like the panel tabs below. */
+  sortMode: VaultSortMode;
+  setSortMode: (mode: VaultSortMode) => void;
+  /** Path whose explorer row should be in inline-rename mode. Set by the store
+   *  so a freshly created note lands in rename regardless of which surface
+   *  (header button, row context menu) created it. */
+  renameTarget: string | null;
+  setRenameTarget: (path: string | null) => void;
 
   /** Quick switcher (Cmd+O) visibility — ephemeral UI state. */
   quickSwitchOpen: boolean;
   setQuickSwitchOpen: (open: boolean) => void;
+  /** Right panel state — lifted so a #tag pill click can open the tag pane. */
+  rightPanelTab: "backlinks" | "outline" | "tags";
+  setRightPanelTab: (tab: "backlinks" | "outline" | "tags") => void;
+  selectedTag: string | null;
+  setSelectedTag: (tag: string | null) => void;
+  openTagPane: (tag: string) => void;
   toggleDir: (path: string) => void;
   setDirsExpanded: (paths: string[], expanded: boolean) => void;
   noteOpened: (path: string) => void;
@@ -79,9 +101,15 @@ interface VaultState {
   refresh: () => Promise<void>;
   writeFile: (path: string, content: string) => Promise<void>;
   createFile: (path: string, content?: string) => Promise<void>;
+  /** Moves an entry; a folder carries its whole subtree with it. */
   renamePath: (path: string, to: string) => Promise<void>;
   deletePath: (path: string) => Promise<void>;
   createFolder: (path: string) => Promise<void>;
+  /** Create an "Untitled" note / "New folder" inside `dir` ("" = vault root),
+   *  reveal it, and put it in inline rename. Resolves to the created path, or
+   *  null when the daemon refused (opError carries the reason). */
+  newNote: (dir: string) => Promise<string | null>;
+  newFolder: (dir: string) => Promise<string | null>;
   resolveConflictWithDisk: (path: string) => void;
   resolveConflictKeepMine: (path: string) => Promise<void>;
 }
@@ -162,6 +190,24 @@ function stageDelete(vaultId: string, path: string) {
   schedulePersist();
 }
 
+// Last-opened vault id, so the IDB cache can paint on a boot where the daemon
+// is unreachable (discovery failing must not blank a vault we've already seen).
+const LAST_VAULT_KEY = "cast_vault_last";
+
+function readLastVaultId(): string | null {
+  try {
+    return localStorage.getItem(LAST_VAULT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeLastVaultId(id: string): void {
+  try {
+    localStorage.setItem(LAST_VAULT_KEY, id);
+  } catch {}
+}
+
 /** Fetch a set of markdown bodies with bounded concurrency, patching the store
  *  as each lands so the UI streams in rather than waiting for the batch. */
 async function fetchBodies(ep: VaultEndpoint, vaultId: string, paths: string[]): Promise<void> {
@@ -197,6 +243,101 @@ function omit<T extends Record<string, unknown>>(rec: T, key: string): T {
   const next = { ...rec };
   delete next[key];
   return next;
+}
+
+interface PathSnapshot {
+  path: string;
+  file: VaultFileEntry | undefined;
+  body: VaultBody | undefined;
+  expanded: boolean | undefined;
+}
+
+type PathTables = Pick<VaultState, "files" | "bodies" | "expandedDirs">;
+
+/** Every path-keyed value a rename could disturb, for a precise rollback. */
+function snapshotPaths(s: PathTables, paths: string[]): PathSnapshot[] {
+  return paths.map((path) => ({
+    path,
+    file: s.files[path],
+    body: s.bodies[path],
+    expanded: s.expandedDirs[path],
+  }));
+}
+
+/** Put the snapshotted keys back exactly as they were, and undo the path
+ *  rewrite in the recents list. */
+function restorePaths(snapshot: PathSnapshot[], moves: [string, string][]): void {
+  useVaultStore.setState((st) => {
+    const files = { ...st.files };
+    const bodies = { ...st.bodies };
+    const expandedDirs = { ...st.expandedDirs };
+    for (const { path, file, body, expanded } of snapshot) {
+      if (file) files[path] = file;
+      else delete files[path];
+      if (body) bodies[path] = body;
+      else delete bodies[path];
+      if (expanded === undefined) delete expandedDirs[path];
+      else expandedDirs[path] = expanded;
+    }
+    const undo = new Map(moves.map(([from, to]) => [to, from]));
+    return { files, bodies, expandedDirs, recentPaths: st.recentPaths.map((p) => undo.get(p) ?? p) };
+  });
+}
+
+/** Rewrite every path-keyed table for a list of path→path moves. Sources are
+ *  read before anything is deleted, so a move whose destination is another
+ *  move's source still lands intact. */
+function applyMoves(moves: [string, string][]): void {
+  useVaultStore.setState((st) => {
+    const sources = snapshotPaths(st, moves.map(([from]) => from));
+    const files = { ...st.files };
+    const bodies = { ...st.bodies };
+    const expandedDirs = { ...st.expandedDirs };
+    for (const { path } of sources) {
+      delete files[path];
+      delete bodies[path];
+      delete expandedDirs[path];
+    }
+    moves.forEach(([, to], i) => {
+      const src = sources[i];
+      if (!src) return;
+      if (src.file) files[to] = { ...src.file, path: to };
+      if (src.body) bodies[to] = src.body;
+      if (src.expanded !== undefined) expandedDirs[to] = src.expanded;
+    });
+    const remap = new Map(moves);
+    return { files, bodies, expandedDirs, recentPaths: st.recentPaths.map((p) => remap.get(p) ?? p) };
+  });
+}
+
+/** Shared body of newNote/newFolder: take the first free name, let the create's
+ *  optimistic write paint the row, reveal it, and hand it to inline rename —
+ *  all before the daemon answers. */
+async function createThenRename(
+  dir: string,
+  base: string,
+  ext: string,
+  create: (path: string) => Promise<void>,
+): Promise<string | null> {
+  const store = useVaultStore.getState();
+  const path = joinVaultPath(dir, nextUntitledName(siblingNames(Object.keys(store.files), dir), base, ext));
+  const ancestors = ancestorDirs(path);
+  if (ancestors.length) store.setDirsExpanded(ancestors, true);
+  const pending = create(path); // the optimistic row lands before the first await
+  useVaultStore.setState({ renameTarget: path });
+  try {
+    await pending;
+  } catch (e) {
+    // Stated here rather than left to createFile/createFolder: the refusal
+    // they don't cover — no daemon at all — throws before they set opError,
+    // and a create button that does nothing at all is the worst outcome.
+    useVaultStore.setState((s) => ({
+      renameTarget: s.renameTarget === path ? null : s.renameTarget,
+      opError: `Couldn't create ${path}: ${e instanceof Error ? e.message : String(e)}`,
+    }));
+    return null;
+  }
+  return path;
 }
 
 function applyWsEvent(ev: VaultWsEvent) {
@@ -284,12 +425,23 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   conflicts: {},
   expandedDirs: {},
   recentPaths: [],
+  sortMode: "name-asc" as const,
+  renameTarget: null,
   quickSwitchOpen: false,
+  rightPanelTab: "backlinks" as const,
+  selectedTag: null,
   opError: null,
 
   clearOpError: () => set({ opError: null }),
 
   setQuickSwitchOpen: (open) => set({ quickSwitchOpen: open }),
+
+  setSortMode: (mode) => set({ sortMode: mode }),
+  setRenameTarget: (path) => set({ renameTarget: path }),
+
+  setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
+  setSelectedTag: (tag) => set({ selectedTag: tag }),
+  openTagPane: (tag) => set({ rightPanelTab: "tags", selectedTag: tag }),
 
   toggleDir: (path) =>
     set((s) => ({ expandedDirs: { ...s.expandedDirs, [path]: !s.expandedDirs[path] } })),
@@ -312,9 +464,42 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     if (st.connection === "discovering") return;
     set({ connection: st.scannedAt ? st.connection : "discovering" });
 
+    // Local-first boot: paint the last vault's IDB cache NOW, in parallel with
+    // endpoint discovery — the explorer must never sit blank behind a relay
+    // round-trip when we've seen this vault before.
+    const remembered = st.activeVaultId ?? readLastVaultId();
+    if (remembered && !st.scannedAt) {
+      void (async () => {
+        const [meta, bodyRows] = await Promise.all([loadVaultMeta(remembered), loadVaultBodies(remembered)]);
+        const cur = get();
+        // Only if nothing fresher landed while we read.
+        if (!meta || cur.scannedAt !== null || (cur.activeVaultId && cur.activeVaultId !== remembered)) return;
+        const files: Record<string, VaultFileEntry> = {};
+        for (const f of meta.files) files[f.path] = f;
+        const bodies: Record<string, VaultBody> = {};
+        for (const r of bodyRows) bodies[r.path] = { content: r.content, mtime: r.mtime, etag: r.etag };
+        set((s) => ({
+          activeVaultId: s.activeVaultId ?? remembered,
+          vaults: s.vaults.length ? s.vaults : [meta.info],
+          files,
+          bodies,
+          scannedAt: meta.scannedAt,
+          connection: s.connection === "connected" ? s.connection : "cached",
+        }));
+      })();
+    }
+
     const ep = await getVaultEndpoint(convex, opts);
     if (!ep) {
-      set((s) => ({ connection: s.scannedAt ? "cached" : "no-daemon", endpoint: null }));
+      // No endpoint — but the last-used vault's IDB cache is still readable.
+      // selectVault paints it and leaves connection as "cached"; only a truly
+      // never-seen vault lands on the no-daemon teaching state.
+      const remembered = get().activeVaultId ?? readLastVaultId();
+      set({ endpoint: null });
+      if (remembered && !get().scannedAt) {
+        await get().selectVault(remembered);
+      }
+      set((s) => ({ connection: s.scannedAt ? "cached" : "no-daemon" }));
       return;
     }
     let vaults: VaultInfo[] = [];
@@ -327,19 +512,28 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     }
     set({ endpoint: ep, vaults });
 
-    const active = get().activeVaultId ?? vaults[0]?.id ?? null;
+    const active = get().activeVaultId ?? readLastVaultId() ?? vaults[0]?.id ?? null;
     if (active) await get().selectVault(active);
     else set({ connection: "connected" });
   },
 
   selectVault: async (vaultId) => {
     const prev = get().activeVaultId;
+    writeLastVaultId(vaultId);
     // Dispose the old subscription up front — never after the awaits below,
     // where a concurrent select could already have subscribed the new vault.
     wsDispose?.();
     wsDispose = null;
     if (prev !== vaultId) {
-      set({ activeVaultId: vaultId, files: {}, bodies: {}, scannedAt: null, conflicts: {}, loadingPaths: {} });
+      set({
+        activeVaultId: vaultId,
+        files: {},
+        bodies: {},
+        scannedAt: null,
+        conflicts: {},
+        loadingPaths: {},
+        renameTarget: null,
+      });
     } else {
       set({ activeVaultId: vaultId });
     }
@@ -470,39 +664,27 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   renamePath: async (path, to) => {
     const { endpoint, activeVaultId } = get();
     if (!endpoint || !activeVaultId) throw new Error("vault not connected");
-    const prevEntry = get().files[path];
-    const prevBody = get().bodies[path];
-    // Captured so a failed rename onto an existing target restores that
-    // target's row instead of wiping it (rename-over-existing is rejected
-    // server side).
-    const prevTargetEntry = get().files[to];
-    const prevTargetBody = get().bodies[to];
+    // A folder rename is one daemon op (fsp.rename moves the directory) but
+    // many store keys: every descendant path changes with it.
+    const moves = renameMoves(Object.keys(get().files), path, to);
+    // Snapshot exactly the keys the move touches — a rollback that restored
+    // whole tables would also revert a WS event that landed mid-op. Rows
+    // sitting on a destination are captured too, so a rejected
+    // rename-over-existing doesn't evict the real file from the tree.
+    const snapshot = snapshotPaths(get(), moves.flat());
     // Optimistic move; the watcher's reconcile confirms with removed+add.
-    set((s) => {
-      const files = { ...s.files };
-      const bodies = { ...s.bodies };
-      delete files[path];
-      if (prevEntry) files[to] = { ...prevEntry, path: to };
-      delete bodies[path];
-      if (prevBody) bodies[to] = prevBody;
-      return { files, bodies, opError: null };
-    });
+    applyMoves(moves);
+    set({ opError: null });
     try {
       await vaultOp(endpoint, activeVaultId, { op: "rename", path, to });
-      stageDelete(activeVaultId, path);
-      if (prevBody) stageBody(activeVaultId, to, prevBody);
+      for (const [from, dest] of moves) {
+        stageDelete(activeVaultId, from);
+        const body = get().bodies[dest];
+        if (body) stageBody(activeVaultId, dest, body);
+      }
     } catch (e) {
-      set((s) => {
-        const files = { ...s.files };
-        const bodies = { ...s.bodies };
-        if (prevTargetEntry) files[to] = prevTargetEntry;
-        else delete files[to];
-        if (prevEntry) files[path] = prevEntry;
-        if (prevTargetBody) bodies[to] = prevTargetBody;
-        else delete bodies[to];
-        if (prevBody) bodies[path] = prevBody;
-        return { files, bodies, opError: `Couldn't rename ${path}: ${e instanceof Error ? e.message : String(e)}` };
-      });
+      restorePaths(snapshot, moves);
+      set({ opError: `Couldn't rename ${path}: ${e instanceof Error ? e.message : String(e)}` });
       throw e;
     }
   },
@@ -540,6 +722,10 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       throw e;
     }
   },
+
+  newNote: (dir) => createThenRename(dir, "Untitled", ".md", (path) => get().createFile(path, "")),
+
+  newFolder: (dir) => createThenRename(dir, "New folder", "", (path) => get().createFolder(path)),
 
   resolveConflictWithDisk: (path) => {
     set((s) => {
