@@ -55,7 +55,7 @@ const TAIL_BYTES = 256 * 1024;
 // but a just-started session may not have emitted one yet).
 const RATE_LIMIT_FILE_CANDIDATES = 4;
 
-function codexHome(): string {
+export function codexHome(): string {
   return process.env.CODECAST_CODEX_HOME || path.join(os.homedir(), ".codex");
 }
 
@@ -134,7 +134,7 @@ export function parseRateLimitsReadResult(
  * initialize → account/rateLimits/read → kill. Resolves null on any failure
  * (missing binary, logged out, timeout) — callers fall back to rollout logs. */
 export function fetchRateLimitsViaAppServer(
-  opts: { codexBinary?: string; timeoutMs?: number } = {},
+  opts: { codexBinary?: string; timeoutMs?: number; codexHome?: string } = {},
 ): Promise<any | null> {
   const binary = opts.codexBinary ?? "codex";
   const timeoutMs = opts.timeoutMs ?? 20_000;
@@ -147,6 +147,14 @@ export function fetchRateLimitsViaAppServer(
         // codex binary lives in — mirror codexAppServer's PATH augmentation.
         env: {
           ...process.env,
+          // Point the probe at a saved profile's auth snapshot instead of the
+          // machine's active login (multi-account metering). Verified: the
+          // app-server honors CODEX_HOME, and its initialize response echoes
+          // the home it used. Probe the ACTIVE login without this override —
+          // a probe can refresh tokens, and refreshing from a copy can rotate
+          // the refresh token out from under the real login. For dormant
+          // snapshots, copy a rewritten auth.json back to the profile store.
+          ...(opts.codexHome ? { CODEX_HOME: opts.codexHome } : {}),
           PATH: [process.env.HOME + "/.bun/bin", process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
             .filter(Boolean)
             .join(":"),

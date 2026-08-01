@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
-import { ccAccountsValidator, ccAutoSwitchStateValidator, codexUsageValidator } from "./ccAccountsShared";
+import { ccAccountsValidator, ccAutoSwitchStateValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
@@ -1337,10 +1337,14 @@ export default defineSchema({
     // Saved CC account profiles on this machine (names/emails/tiers only,
     // never tokens) — heartbeat-reported, drives the web account switcher.
     cc_accounts: v.optional(ccAccountsValidator),
-    // Codex (ChatGPT) usage snapshot on this machine (limit percentages,
-    // credits, last-week model shares — non-secret) — heartbeat-reported,
-    // drives the web's model-usage meter alongside cc_accounts.
-    codex_usage: v.optional(codexUsageValidator),
+    // DEPRECATED (2026-08-01): superseded by codex_accounts. Kept as v.any()
+    // because prod rows still hold data and old daemons still send it; drop
+    // once the field is cleared everywhere.
+    codex_usage: v.optional(v.any()),
+    // Saved Codex (ChatGPT) account profiles on this machine (names/emails/
+    // plans/usage percentages, never tokens) — heartbeat-reported, same shape
+    // as cc_accounts so the web renders both with one component set.
+    codex_accounts: v.optional(ccAccountsValidator),
     // Managed-provider-key metadata (pl-207), heartbeat-reported. The public half
     // of the device's ECDH keypair — NOT a secret; the web encrypts a key to it so
     // Convex never sees plaintext. `managed_provider_ids` is which providers have a

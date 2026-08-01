@@ -12,7 +12,7 @@ import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { resolveTeamForPath, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
 import { resetConversationPendingMessages } from "./pendingMessages";
-import { ccAccountsValidator, codexUsageValidator } from "./ccAccountsShared";
+import { ccAccountsValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath } from "./projectPaths";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
@@ -198,9 +198,12 @@ export const daemonHeartbeat = mutation({
     is_remote_device: v.optional(v.boolean()),
     // CC account inventory (names/emails/tiers, never tokens) for the switcher.
     cc_accounts: v.optional(ccAccountsValidator),
-    // Codex usage snapshot from local rollout logs (percentages/credits/model
-    // shares — never tokens or content).
-    codex_usage: v.optional(codexUsageValidator),
+    // DEPRECATED: old daemons still send the machine-wide Codex snapshot;
+    // accepted (and stored as-is) until the fleet is on codex_accounts.
+    codex_usage: v.optional(v.any()),
+    // Codex account inventory (names/emails/plans + usage, never tokens) —
+    // same shape as cc_accounts.
+    codex_accounts: v.optional(ccAccountsValidator),
     // Managed-provider-key metadata (pl-207): device ECDH public key (not secret)
     // + which providers have a key here (ids only, never the keys).
     provider_key_pubkey: v.optional(v.string()),
@@ -301,6 +304,7 @@ export const daemonHeartbeat = mutation({
           : {}),
         ...(args.cc_accounts !== undefined ? { cc_accounts: args.cc_accounts } : {}),
         ...(args.codex_usage !== undefined ? { codex_usage: args.codex_usage } : {}),
+        ...(args.codex_accounts !== undefined ? { codex_accounts: args.codex_accounts } : {}),
         ...(args.provider_key_pubkey !== undefined ? { provider_key_pubkey: args.provider_key_pubkey } : {}),
         ...(args.managed_provider_ids !== undefined ? { managed_provider_ids: args.managed_provider_ids } : {}),
         ...(args.settings !== undefined ? { settings: args.settings } : {}),
