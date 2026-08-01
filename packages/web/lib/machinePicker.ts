@@ -20,6 +20,34 @@ export type MachineCandidate = {
 const mostRecent = (list: MachineCandidate[]): string | null =>
   [...list].sort((a, b) => b.last_seen - a.last_seen)[0]?.device_id ?? null;
 
+/**
+ * Prefix semantics, mirroring the server's pathUnderRoot: a session in a repo
+ * SUBDIR (~/code/app/packages/web) still belongs to the machine holding the
+ * repo root. Exact `includes` under-matched, so the prediction disagreed with
+ * routing and the picker stamped picks it didn't need to.
+ */
+export const deviceSeesPath = (
+  d: Pick<MachineCandidate, "local_project_roots">,
+  path: string,
+): boolean =>
+  !!d.local_project_roots?.some((r) => path === r || path.startsWith(r.endsWith("/") ? r : r + "/"));
+
+/**
+ * Can ANY of the user's machines open this path? The gate that keeps a
+ * teammate's checkout (visible via team sessions) from seeding a new session
+ * with a directory none of your devices has. An empty/unloaded roster doesn't
+ * filter (same convention as the server's recents filter): showing too much
+ * beats blocking on device data that hasn't arrived yet.
+ */
+export function pathOnMyMachines(
+  devices: Array<Pick<MachineCandidate, "local_project_roots">>,
+  path: string | null | undefined,
+): boolean {
+  if (!path) return false;
+  if (devices.length === 0 || devices.every((d) => !d.local_project_roots?.length)) return true;
+  return devices.some((d) => deviceSeesPath(d, path));
+}
+
 export function defaultMachineId(
   devices: MachineCandidate[],
   opts: {
@@ -41,13 +69,7 @@ export function defaultMachineId(
   const owner = ownerDeviceId ? devices.find((d) => d.device_id === ownerDeviceId) : undefined;
   if (owner?.online) return owner.device_id;
 
-  // Prefix semantics, mirroring the server's pathUnderRoot: a session in a repo
-  // SUBDIR (~/code/app/packages/web) still belongs to the machine holding the
-  // repo root. Exact `includes` under-matched, so the prediction disagreed with
-  // routing and the picker stamped picks it didn't need to.
-  const hasCheckout = (d: MachineCandidate) =>
-    !!projectPath &&
-    !!d.local_project_roots?.some((r) => projectPath === r || projectPath.startsWith(r.endsWith("/") ? r : r + "/"));
+  const hasCheckout = (d: MachineCandidate) => !!projectPath && deviceSeesPath(d, projectPath);
 
   const onlineLocals = devices.filter((d) => !d.is_remote && d.online);
   if (onlineLocals.length > 0) {

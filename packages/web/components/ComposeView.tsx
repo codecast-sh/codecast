@@ -72,6 +72,7 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
       activeProjectFilter: store.activeProjectFilter,
       activeProjectPath: store.activeProjectPath,
       recentProjects: store.recentProjects,
+      machineRoster: store.machineRoster,
     });
     const agentType = (ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
 

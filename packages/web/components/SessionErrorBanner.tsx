@@ -15,6 +15,7 @@
 import { useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { useDevices } from "./DeviceBadge";
+import { deviceSeesPath } from "../lib/machinePicker";
 
 export function SessionErrorBanner({
   error,
@@ -42,9 +43,7 @@ export function SessionErrorBanner({
       (d) =>
         d.online &&
         d.device_id !== ownerDeviceId &&
-        // Prefix, not exact: a repo-subdir session still moves to the machine
-        // holding the repo root (same rule as routing's pathUnderRoot).
-        d.local_project_roots?.some((r) => projectPath === r || projectPath.startsWith(r.endsWith("/") ? r : r + "/")),
+        deviceSeesPath(d, projectPath),
     );
 
   return (

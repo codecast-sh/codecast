@@ -148,7 +148,7 @@ import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2 } from "lucide-react";
 import { useDevices, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
-import { defaultMachineId } from "../lib/machinePicker";
+import { defaultMachineId, pathOnMyMachines } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
@@ -863,7 +863,10 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   );
   const [pickedDeviceId, setPickedDeviceId] = useState<string | null>(null);
   const currentConvContext = useInboxStore((s) => s.currentConversation);
-  const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || currentConvContext?.projectPath || currentConvContext?.gitRoot;
+  // The context fallback can point at a TEAMMATE's session (team inbox) whose
+  // checkout no machine of ours has — never present that as the current project.
+  const ctxPath = [currentConvContext?.projectPath, currentConvContext?.gitRoot].find((p) => pathOnMyMachines(devices, p));
+  const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || ctxPath;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
 
   // Feeding the previous answer back in pins the highlight against heartbeat
