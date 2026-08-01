@@ -652,8 +652,9 @@ export const insertExtractedDocs = internalMutation({
 
       await ctx.db.insert("docs", {
         user_id: args.user_id,
-        // Private source session → personal doc (canAccessDoc has no privacy gate).
-        team_id: teamVisibleConvTeam(conv),
+        // Inline assistant prose is implicit extraction, never an intentional
+        // team publish. File-backed Markdown inherits the conversation scope.
+        team_id: isInline ? undefined : teamVisibleConvTeam(conv),
         title,
         content: doc.content,
         doc_type: docType as any,
