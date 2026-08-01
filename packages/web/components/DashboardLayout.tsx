@@ -37,6 +37,7 @@ import { AppLoader } from "./AppLoader";
 import { SettingsModal } from "./settings/SettingsModal";
 import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName, resolveShowOld } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { pathOnMyMachines } from "../lib/machinePicker";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
@@ -456,12 +457,16 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     // But a project-filter chip is an explicit "I'm working in this project": when
     // one is active, the focused session only wins if it actually lives inside that
     // project, so a stale focus from elsewhere can't pull a new session out of it.
+    // And the focused/current session can be a TEAMMATE's (team inbox), whose
+    // checkout no machine of ours has — such a path never seeds a new session.
+    const seedable = (p: string | null | undefined) => pathOnMyMachines(store.machineRoster, p);
     const selected = sessionListActiveId
       ? (store.sessions[sessionListActiveId]
           ?? store.conversations[sessionListActiveId])
       : null;
     if (
       selected?.project_path &&
+      seedable(selected.project_path) &&
       (!activeProjectFilter || getProjectName(selected.git_root, selected.project_path) === activeProjectFilter)
     ) {
       return {
@@ -479,7 +484,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     if (directoryFilter) {
       return { path: directoryFilter, gitRoot: ctx.gitRoot || directoryFilter, agentType: ctx.agentType };
     }
-    return { path: ctx.gitRoot, gitRoot: ctx.gitRoot, agentType: ctx.agentType };
+    const ctxRoot = seedable(ctx.gitRoot) ? ctx.gitRoot : undefined;
+    return { path: ctxRoot, gitRoot: ctxRoot, agentType: ctx.agentType };
   }, [directoryFilter, sessionListActiveId]);
 
   // Every "New Session" affordance opens the floating compose popup (ComposeView
