@@ -12,7 +12,15 @@ import { join } from "path";
 // can't be detected statically by table name, but they live in the same core
 // files this catches, and they go through the same wrapped ctx.db regardless.)
 const DIR = import.meta.dir;
-const TRACKED = ["conversations", "tasks", "docs", "plans"];
+const TRACKED = [
+  "conversations",
+  "tasks",
+  "docs",
+  "plans",
+  "projects",
+  "strategies",
+  "steering_items",
+];
 
 function importsRawBuilder(src: string): boolean {
   const blocks = [...src.matchAll(/import\s*\{([^}]*)\}\s*from\s*["']\.\/_generated\/server["']/g)];
@@ -59,7 +67,16 @@ describe("authorization boundary coverage", () => {
     expect(data).not.toMatch(/\braw:\s*ctx\.db/);
     expect(data).not.toMatch(/get\s+unscoped\s*\(/);
 
-    for (const f of ["tasks.ts", "docs.ts", "plans.ts", "projects.ts"]) {
+    for (const f of [
+      "tasks.ts",
+      "docs.ts",
+      "plans.ts",
+      "projects.ts",
+      "strategies.ts",
+      "steeringItems.ts",
+      "objectLinks.ts",
+      "conversationLinks.ts",
+    ]) {
       const src = readFileSync(join(DIR, f), "utf8");
       expect(src).not.toMatch(/\.(raw|unscoped)\b/);
     }

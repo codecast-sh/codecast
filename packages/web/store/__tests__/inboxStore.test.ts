@@ -2936,6 +2936,36 @@ describe("inboxStore local-first state mutations", () => {
     expect(dispatches.find((d) => d.action === "updateProject")?.args).toEqual(["proj1", { status: "archived" }]);
   });
 
+  it("steering updates mutate the row by id and dispatch their side effects", () => {
+    useInboxStore.setState({
+      strategies: { s1: { _id: "s1", short_id: "st-1", title: "S", status: "draft" } as any },
+      steeringItems: { si1: { _id: "si1", short_id: "si-1", kind: "question", title: "Q", status: "active", priority: "high" } as any },
+    });
+    const store = useInboxStore.getState();
+    store.updateStrategy("s1", { status: "active" });
+    store.updateSteeringItem("si1", { status: "resolved", current_answer: "42" } as any);
+    const s = useInboxStore.getState();
+    expect(s.strategies.s1?.status).toBe("active");
+    expect(s.steeringItems.si1?.current_answer).toBe("42");
+    expect(dispatches.find((d) => d.action === "updateStrategy")?.args).toEqual(["s1", { status: "active" }]);
+    expect(dispatches.find((d) => d.action === "updateSteeringItem")?.args).toEqual(["si1", { status: "resolved", current_answer: "42" }]);
+  });
+
+  it("steering deletes are dispatch-first: the row survives locally until the server confirms", async () => {
+    // The server's delete guards refuse items with children or non-admin callers.
+    // An optimistic removal + persisted exclude would make
+    // a refused delete vanish on this client forever — so deleteSteeringItem must NOT
+    // touch the local row; the change-feed tombstone prunes after success.
+    useInboxStore.setState({
+      steeringItems: { si1: { _id: "si1", short_id: "si-1", kind: "objective", title: "O", status: "active", priority: "high" } as any },
+    });
+    await useInboxStore.getState().deleteSteeringItem("si1");
+    const s = useInboxStore.getState();
+    expect(s.steeringItems.si1).toBeTruthy();
+    expect((s.pending as any)["steeringItems:si1"]).toBeUndefined();
+    expect(dispatches.find((d) => d.action === "deleteSteeringItem")?.args).toEqual(["si1"]);
+  });
+
   it("convCommand applies the optimistic session patch and dispatches the command verbatim", async () => {
     useInboxStore.setState({ sessions: { [CID]: { ...baseSession, _id: CID } } });
     await useInboxStore.getState().convCommand(CID, "restartSession", undefined, { status: "starting" } as any);

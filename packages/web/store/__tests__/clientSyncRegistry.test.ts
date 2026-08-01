@@ -29,7 +29,10 @@ describe("client sync registry", () => {
   });
 
   it("drives collection and meta persistence metadata", () => {
-    for (const key of ["docs", "plans", "tasks", "sessions"]) {
+    for (const key of [
+      "docs", "plans", "tasks", "sessions",
+      "projects", "strategies", "steeringItems",
+    ]) {
       expect(COLLECTION_STORE_KEYS).toContain(key);
     }
     for (const key of ["conversations", "pendingMessages", "pending"]) {
@@ -85,7 +88,10 @@ describe("client sync registry", () => {
     });
 
     it("heavy list-view collections stay deferred; restore-special keys stay manual", () => {
-      for (const key of ["tasks", "docs", "plans", "projects"]) {
+      for (const key of [
+        "tasks", "docs", "plans", "projects",
+        "strategies", "steeringItems",
+      ]) {
         expect(HYDRATION_DEFERRED_KEYS).toContain(key);
       }
       expect(hydrated.has("lastFocusedConversationId")).toBe(false);
@@ -116,5 +122,11 @@ describe("client sync registry", () => {
     // Collections without an invariant accept anything (no validator).
     expect(collectionRowValidator("sessions")).toBeUndefined();
     expect(collectionRowValidator("docs")).toBeUndefined();
+  });
+
+  it("steering collections reject foreign persisted rows", () => {
+    expect(collectionRowValidator("strategies")!({ _id: "x", short_id: "st-1" })).toBe(true);
+    expect(collectionRowValidator("steeringItems")!({ _id: "x", short_id: "si-1", kind: "bet" })).toBe(true);
+    expect(collectionRowValidator("steeringItems")!({ _id: "x", short_id: "jx7", kind: "session" })).toBe(false);
   });
 });

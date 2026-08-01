@@ -21,7 +21,7 @@ import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
-import { Globe, Workflow, Zap } from "lucide-react";
+import { Compass, Globe, Workflow, Zap } from "lucide-react";
 
 const api = _api as any;
 
@@ -331,6 +331,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
+  const isSteering = pathname === "/steering" || pathname?.startsWith("/steering/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
   const isVault = pathname === "/vault" || pathname?.startsWith("/vault/");
@@ -578,6 +579,19 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               )}
             </Link>
           )}
+          <Link
+            href="/steering"
+            onClick={onMobileClose}
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isSteering
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Steering — objectives, bets, initiatives, and questions"
+          >
+            <Compass className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
+            {!isNarrow && <span>Steering</span>}
+          </Link>
           <NavSection
             label="Tasks"
             href="/tasks"

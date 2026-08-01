@@ -2435,6 +2435,16 @@ export const remove = mutation({
       .collect();
     for (const p of presence) await ctx.db.delete(p._id);
 
+    // A Strategy whose narrative doc dies must not keep a dangling doc_id —
+    // clear the reference so the row honestly reads "no narrative yet".
+    const referencingStrategies = await ctx.db
+      .query("strategies")
+      .withIndex("by_doc_id", (q: any) => q.eq("doc_id", args.id))
+      .collect();
+    for (const s of referencingStrategies) {
+      await ctx.db.patch(s._id, { doc_id: undefined, updated_at: Date.now() });
+    }
+
     await ctx.db.delete(args.id);
     return { success: true };
   },

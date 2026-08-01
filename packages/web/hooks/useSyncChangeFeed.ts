@@ -21,16 +21,35 @@ import { useInboxStore } from "../store/inboxStore";
 // Coexists with the dismiss/stash reconcile crawls in useSyncInboxSessions for
 // now (both idempotent); those become redundant once this is validated in prod.
 
-type Collection = "sessions" | "tasks" | "docs" | "plans";
+type Collection =
+  | "sessions"
+  | "tasks"
+  | "docs"
+  | "plans"
+  | "projects"
+  | "strategies"
+  | "steeringItems"
+  ;
 
 const ENTITY_COLLECTION: Record<string, Collection> = {
   conversations: "sessions",
   tasks: "tasks",
   docs: "docs",
   plans: "plans",
+  projects: "projects",
+  strategies: "strategies",
+  steering_items: "steeringItems",
 };
 
-const COLLECTIONS: Collection[] = ["sessions", "tasks", "docs", "plans"];
+const COLLECTIONS: Collection[] = [
+  "sessions",
+  "tasks",
+  "docs",
+  "plans",
+  "projects",
+  "strategies",
+  "steeringItems",
+];
 
 // The cursor lives under its own syncMeta key (the feed is per-user, not
 // per-workspace). v1 — bump to force every client to re-bootstrap its cursor.
@@ -54,6 +73,9 @@ export function planFeedApply(changes: FeedChange[]): Record<Collection, { upser
     tasks: { upsertIds: [], deleteIds: [] },
     docs: { upsertIds: [], deleteIds: [] },
     plans: { upsertIds: [], deleteIds: [] },
+    projects: { upsertIds: [], deleteIds: [] },
+    strategies: { upsertIds: [], deleteIds: [] },
+    steeringItems: { upsertIds: [], deleteIds: [] },
   };
   const latest = new Map<string, { coll: Collection; op: "upsert" | "delete" }>();
   for (const c of changes) {
@@ -68,10 +90,20 @@ export function planFeedApply(changes: FeedChange[]): Record<Collection, { upser
   return plan;
 }
 
-// Per-collection batch fetch of CURRENT state for a set of ids. Each returns rows
-// in the exact shape its live channel syncs, so syncTable merges them cleanly.
-async function batchGet(convex: any, coll: Collection, ids: string[]): Promise<any[]> {
-  if (!ids.length) return [];
+// Every server-side *byIds query hard-caps its input at 300 ids (they
+// `ids.slice(0, 300)`), while a feed page can carry up to FEED_LIMIT upserts
+// for one collection. Fetch in ≤300-id chunks so ids past the cap are never
+// silently un-fetched — applyPage treats an un-returned id as "gone or no
+// longer visible" and would PRUNE a live row (and plant a durable exclude).
+export const BYIDS_CHUNK = 300;
+
+export function chunkIds(ids: string[], size: number = BYIDS_CHUNK): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) chunks.push(ids.slice(i, i + size));
+  return chunks;
+}
+
+async function batchGetChunk(convex: any, coll: Collection, ids: string[]): Promise<any[]> {
   switch (coll) {
     case "sessions":
       return (await convex.query(api.conversations.getInboxSessionsByIds, { ids }))?.sessions ?? [];
@@ -81,7 +113,24 @@ async function batchGet(convex: any, coll: Collection, ids: string[]): Promise<a
       return (await convex.query(api.docs.webGetByIds, { ids }))?.docs ?? [];
     case "plans":
       return (await convex.query(api.plans.webGetByIds, { ids })) ?? [];
+    case "projects":
+      return (await convex.query(api.projects.webGetByIds, { ids })) ?? [];
+    case "strategies":
+      return (await convex.query(api.strategies.webGetByIds, { ids })) ?? [];
+    case "steeringItems":
+      return (await convex.query(api.steeringItems.webGetByIds, { ids })) ?? [];
   }
+}
+
+// Per-collection batch fetch of CURRENT state for a set of ids. Each returns rows
+// in the exact shape its live channel syncs, so syncTable merges them cleanly.
+async function batchGet(convex: any, coll: Collection, ids: string[]): Promise<any[]> {
+  if (!ids.length) return [];
+  const rows: any[] = [];
+  for (const chunk of chunkIds(ids)) {
+    rows.push(...(await batchGetChunk(convex, coll, chunk)));
+  }
+  return rows;
 }
 
 async function applyPage(convex: any, changes: FeedChange[]): Promise<void> {

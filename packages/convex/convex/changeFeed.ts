@@ -19,7 +19,15 @@ import { query } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
 export type FeedChange = {
-  entity_type: "conversations" | "tasks" | "docs" | "plans";
+  entity_type:
+    | "conversations"
+    | "tasks"
+    | "docs"
+    | "plans"
+    | "projects"
+    | "strategies"
+    | "steering_items"
+    ;
   entity_id: string;
   op: "upsert" | "delete";
 };

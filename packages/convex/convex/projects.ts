@@ -239,6 +239,25 @@ export const webGet = query({
   },
 });
 
+export const webGetByIds = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const rows = [];
+    for (const raw of args.ids.slice(0, 300)) {
+      const id = ctx.db.normalizeId("projects", raw);
+      if (!id) continue;
+      const project = await ctx.db.get(id);
+      if (!project) continue;
+      const isOwner = String(project.user_id) === String(userId);
+      if (!isOwner && (!project.team_id || !(await isTeamMember(ctx, userId, project.team_id)))) continue;
+      rows.push(await enrichProject(ctx, userId, project));
+    }
+    return rows;
+  },
+});
+
 export const webCreate = mutation({
   args: {
     title: v.string(),

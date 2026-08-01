@@ -185,6 +185,17 @@ export type PlanItem = {
   updated_at: number;
 };
 
+// The collections the cross-entity change feed can upsert/prune. Keep in sync
+// with hooks/useSyncChangeFeed's ENTITY_COLLECTION map.
+export type FeedCollection =
+  | "sessions"
+  | "tasks"
+  | "docs"
+  | "plans"
+  | "projects"
+  | "strategies"
+  | "steeringItems";
+
 export type ProjectItem = {
   _id: string;
   short_id?: string;
@@ -201,6 +212,32 @@ export type ProjectItem = {
   active_plan_count: number;
   created_at: number;
   updated_at: number;
+};
+
+export type StrategyItem = {
+  _id: string;
+  short_id: string;
+  title: string;
+  status: "draft" | "active" | "archived";
+  owner_id?: string;
+  doc_id?: string;
+  review_at?: number;
+  team_id?: string;
+  user_id?: string;
+  created_at: number;
+  updated_at: number;
+};
+
+export type SteeringItem = {
+  _id: string; short_id: string; kind: "objective" | "bet" | "initiative" | "question";
+  parent_item_id?: string;
+  title: string; description?: string; owner_id?: string; priority: "urgent" | "high" | "medium" | "low" | "none";
+  sort_order?: number; status: string;
+  target_date?: number; started_at?: number; review_at?: number; completed_at?: number;
+  success_criteria?: string[]; hypothesis?: string; resolution_summary?: string;
+  intent?: string; rationale?: string; result_summary?: string;
+  why_it_matters?: string; current_answer?: string; resolved_at?: number;
+  team_id?: string; user_id?: string; created_at: number; updated_at: number;
 };
 
 export type InboxSession = {
@@ -614,6 +651,7 @@ export type TaskViewPrefs = {
   label?: string;
   assignee?: string;
   session?: string;
+  project?: string;
   hide_agent?: boolean;
   source?: string;
 };
@@ -2486,8 +2524,8 @@ interface InboxStoreState {
   // deleted (the empty-conversation GC). Plants the exclude pending entries that
   // authorize the IDB row delete and block crawl re-adds.
   pruneGhostSessions: (ids: string[]) => void;
-  pruneFeedEntities: (collection: "sessions" | "tasks" | "docs" | "plans", ids: string[]) => void;
-  clearFeedExcludes: (collection: "sessions" | "tasks" | "docs" | "plans", ids: string[]) => void;
+  pruneFeedEntities: (collection: FeedCollection, ids: string[]) => void;
+  clearFeedExcludes: (collection: FeedCollection, ids: string[]) => void;
   markServerDeleted: (convId: string) => void;
 
   // -- Generic sync --
@@ -2741,6 +2779,9 @@ interface InboxStoreState {
   docs: Record<string, DocItem>;
   plans: Record<string, PlanItem>;
   projects: Record<string, ProjectItem>;
+  // -- Steering collections (Organizational Steering Phase 1) --
+  strategies: Record<string, StrategyItem>;
+  steeringItems: Record<string, SteeringItem>;
   notifications: Record<string, any>;
   docProjectPaths: string[];
   docDetails: Record<string, DocDetail>;
@@ -2802,6 +2843,21 @@ interface InboxStoreState {
   moveDoc: (id: string, parentId?: string, sortOrder?: number) => Promise<any>;
   updatePlan: (shortId: string, fields: { title?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }> }) => void;
   updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string }) => void;
+
+  // -- Steering mutations (action + dispatch side effect) --
+  createStrategy: (opts: { title: string; status?: string; owner_id?: string; doc_id?: string; review_at?: number; team_id?: string; workspace?: "personal" | "team" }) => Promise<any>;
+  createSteeringItem: (opts: Partial<SteeringItem> & { title: string; kind: SteeringItem["kind"] }) => Promise<any>;
+  updateSteeringItem: (id: string, fields: Partial<SteeringItem>) => void;
+  deleteSteeringItem: (id: string) => Promise<any>;
+  updateStrategy: (id: string, fields: Partial<Omit<StrategyItem, "_id" | "short_id" | "user_id" | "team_id" | "created_at" | "updated_at" | "doc_id" | "review_at">> & { doc_id?: string | null; review_at?: number | null }) => void;
+  deleteStrategy: (id: string) => Promise<any>;
+  // Cross-object links (entity_links). The server validates the (from, link,
+  // to) matrix, both endpoints' access, and workspace containment; the link
+  // list is a live per-entity query (objectLinks.webListForEntity), so there
+  // is no local collection to mutate optimistically.
+  linkEntities: (opts: { from_type: string; from_id: string; link_type: string; to_type: string; to_id: string }) => Promise<any>;
+  unlinkEntities: (id: string) => Promise<any>;
+
   addTaskComment: (shortId: string, text: string, commentType?: string, imageIds?: string[]) => Promise<any>;
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
   pinDoc: (id: string, pinned: boolean) => Promise<any>;
@@ -3217,6 +3273,10 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // opts, so without this projects synced as an authoritative snapshot — the one
   // remaining collection that still pruned the cache by absence.
   projects: { isDelta: true },
+  // Steering collections follow the same delta-overlay rule; the change feed
+  // (useSyncChangeFeed) is what carries hard deletions here.
+  strategies: { isDelta: true },
+  steeringItems: { isDelta: true },
   // altKey supersede for optimistic create-stubs: the incoming server row with
   // the same name rekeys the stub away (names are per-user and practically
   // unique; a rare duplicate-name create just retires the stub onto the older
@@ -4209,7 +4269,7 @@ export const useInboxStore = create<InboxStoreState>(
   // server-side deletion the feed reported; never re-dispatched. The matching
   // clearFeedExcludes lifts the exclude if the entity ever reappears. See
   // hooks/useSyncChangeFeed.
-  pruneFeedEntities: sync(function (this: Draft, collection: "sessions" | "tasks" | "docs" | "plans", ids: string[]) {
+  pruneFeedEntities: sync(function (this: Draft, collection: FeedCollection, ids: string[]) {
     const now = Date.now();
     for (const id of ids) {
       if (collection === "sessions") {
@@ -4235,7 +4295,7 @@ export const useInboxStore = create<InboxStoreState>(
   // sync SKIPS excluded ids, so without this a re-shared / restored entity that
   // reappears in a batch-get would be silently dropped forever. Called just
   // before the feed's syncTable upsert. sync() — local pending bookkeeping only.
-  clearFeedExcludes: sync(function (this: Draft, collection: "sessions" | "tasks" | "docs" | "plans", ids: string[]) {
+  clearFeedExcludes: sync(function (this: Draft, collection: FeedCollection, ids: string[]) {
     for (const id of ids) {
       if (this.pending[`${collection}:${id}`]?.type === "exclude") delete this.pending[`${collection}:${id}`];
       if (collection === "sessions" && this.pending[`conversations:${id}`]?.type === "exclude") {
@@ -5948,6 +6008,8 @@ export const useInboxStore = create<InboxStoreState>(
   docs: {},
   plans: {},
   projects: {},
+  strategies: {},
+  steeringItems: {},
   notifications: {},
   docDetails: {},
   taskFilter: { status: "" },
@@ -6006,6 +6068,31 @@ export const useInboxStore = create<InboxStoreState>(
     if (project) Object.assign(project, fields, { updated_at: Date.now() });
   }),
 
+  // -- Steering entity mutations --
+  // Updates use the same delegate pattern as plans/projects: optimistic local
+  // assign here; the dispatch side effect performs the authoritative write via
+  // the public web mutation (access checks, cross-ref validation, containment).
+  //
+  // Deletes are dispatch-FIRST, deliberately not optimistic: the server's
+  // delete guards refuse by design (an item with children or a non-admin
+  // member deleting another's entity), and an optimistic removal + persisted exclude would make a
+  // refused delete vanish on this client forever (delta sync skips excluded
+  // ids). The caller awaits the dispatch; on success it may prune immediately
+  // via pruneFeedEntities, and the change-feed delete tombstone prunes every
+  // client — including this one — regardless.
+  updateStrategy: action(function (this: Draft, id: string, fields: Record<string, any>) {
+    const row = (this.strategies as any)[id];
+    if (row) Object.assign(row, fields, { updated_at: Date.now() });
+  }),
+  updateSteeringItem: action(function (this: Draft, id: string, fields: Record<string, any>) {
+    const row = (this.steeringItems as any)[id];
+    if (row) Object.assign(row, fields, { updated_at: Date.now() });
+  }),
+  deleteSteeringItem: asyncAction(function (this: Draft, _id: string) {}),
+  deleteStrategy: asyncAction(function (this: Draft, _id: string) {}),
+  linkEntities: asyncAction(function (this: Draft, _opts: Record<string, any>) {}),
+  unlinkEntities: asyncAction(function (this: Draft, _id: string) {}),
+
   createTask: action(function (this: Draft, opts: any) {
     const tempId = `temp_${Date.now()}`;
     const tempShortId = `ct-new`;
@@ -6052,6 +6139,11 @@ export const useInboxStore = create<InboxStoreState>(
   ) {
     return continuation ? { continuation } : undefined;
   }),
+  // Steering creates take NO continuation (unlike createDoc/Plan/Project):
+  // the server rejects one until Phase 2 defines navigation routes, so the
+  // signature makes the misuse impossible at compile time.
+  createStrategy: receiptAsyncAction(function (this: Draft, _opts: Record<string, any>) {}),
+  createSteeringItem: receiptAsyncAction(function (this: Draft, _opts: Record<string, any>) {}),
 
   // Low-frequency doc/plan/conversation ops: route through dispatch and delegate
   // to the existing mutations. asyncAction surfaces the server result for the

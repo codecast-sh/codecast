@@ -12,6 +12,7 @@ import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { enqueuePendingMessage } from "./pendingMessages";
+import { linkConversationToEntityBestEffort } from "./conversationLinks";
 import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
@@ -870,6 +871,16 @@ export const update = mutation({
         const existing = task.conversation_ids || [];
         if (!existing.some((id) => id === conv._id)) {
           updates.conversation_ids = [...existing, conv._id];
+          // Compatibility dual-write: the steering association row alongside
+          // the legacy conversation_ids field. Best-effort — this update may
+          // simultaneously move the task's workspace, which the strict
+          // containment check reads from the pre-patch row.
+          await linkConversationToEntityBestEffort(ctx, auth.userId, {
+            entityType: "task",
+            entityId: String(task._id),
+            conversationId: conv._id,
+            relationship: "work",
+          });
         }
       }
       // Only bind conversation to task on explicit start (cast task start)
