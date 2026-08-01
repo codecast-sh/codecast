@@ -1,123 +1,38 @@
-// Vault note reading view: breadcrumbs, title, rendered markdown body with
-// live wiki links, embeds, callouts, and vault-served images.
-// Frontmatter is carved off before rendering (a typed properties table lands
-// in a later phase; until then it shows as a subtle collapsed strip).
+// Vault note reading view: breadcrumbs, title, typed properties, rendered
+// markdown body with live wiki links, embeds, callouts, and vault-served
+// images. Link behavior (resolution, navigation, embeds, tags) comes from the
+// shared useVaultLinkCtx hook so hover-preview cards behave identically.
 
-import { createContext, memo, useContext, useMemo, useState } from "react";
+import { memo, useMemo } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { ChevronRight, FileText } from "lucide-react";
-import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { noteDisplayName } from "./VaultExplorer";
-import { VaultLinkContext, VaultMarkdown, type VaultLinkContextValue } from "./VaultMarkdown";
-import type { WikiLinkParts } from "../../lib/vault/remarkWikiLink";
-import { vaultAssetUrl } from "../../lib/vault/client";
+import { VaultLinkContext, VaultMarkdown } from "./VaultMarkdown";
+import { useVaultLinkCtx } from "./useVaultLinkCtx";
+import { splitFrontmatter } from "../../lib/vault/frontmatter";
 import { useVaultStore } from "../../store/vaultStore";
+import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
+import { headingSlugs } from "../../lib/vault/parseNote";
+import { VaultProperties } from "./VaultProperties";
 
-/** Split YAML frontmatter off a markdown body. Returns [frontmatter|null, rest].
- *  The closing fence must be a FULL line of `---` (or `...`), matching the
- *  index engine's parser — a value line containing "--- draft" is not a fence,
- *  and the two parsers disagreeing would render frontmatter as body. */
-export function splitFrontmatter(content: string): [string | null, string] {
-  if (!content.startsWith("---\n") && content !== "---") return [null, content];
-  const lines = content.split("\n");
-  for (let i = 1; i < lines.length; i++) {
-    if (/^(?:---|\.\.\.)\s*$/.test(lines[i])) {
-      return [lines.slice(1, i).join("\n"), lines.slice(i + 1).join("\n")];
-    }
-  }
-  return [null, content];
-}
-
-/** Interim link resolution over the raw file table: exact path first, then
- *  case-insensitive unique-basename, preferring the source note's folder.
- *  Swapped for VaultIndex.resolveLink when the index engine lands. */
-function resolveAgainstFiles(
-  files: Record<string, { path: string; dir?: boolean }>,
-  target: string,
-  fromPath: string,
-): { path: string | null; ambiguous?: boolean } {
-  if (!target) return { path: fromPath };
-  const withMd = target.endsWith(".md") ? target : `${target}.md`;
-  if (files[target] && !files[target].dir) return { path: target };
-  if (files[withMd]) return { path: withMd };
-  const lowerBase = withMd.toLowerCase().split("/").pop()!;
-  const matches = Object.keys(files).filter(
-    (p) => !files[p].dir && p.toLowerCase().split("/").pop() === lowerBase,
-  );
-  if (matches.length === 0) return { path: null };
-  if (matches.length === 1) return { path: matches[0] };
-  const fromDir = fromPath.includes("/") ? fromPath.slice(0, fromPath.lastIndexOf("/")) : "";
-  const sibling = matches.find((p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "") === fromDir);
-  return { path: sibling ?? matches.sort()[0], ambiguous: true };
-}
-
-const EmbedDepthContext = createContext(0);
-const MAX_EMBED_DEPTH = 2;
-
-function EmbeddedNote({ path }: { path: string }) {
-  const body = useVaultStore((s) => s.bodies[path]);
-  const depth = useContext(EmbedDepthContext);
-  const [, markdown] = useMemo(() => splitFrontmatter(body?.content ?? ""), [body?.content]);
-  if (!body) {
-    return <span className="block text-xs text-sol-text-dim italic">Embedded note unavailable: {path}</span>;
-  }
-  return (
-    <EmbedDepthContext.Provider value={depth + 1}>
-      <span className="block vault-prose prose prose-sm max-w-none">
-        <VaultMarkdown content={markdown} />
-      </span>
-    </EmbedDepthContext.Provider>
-  );
-}
-
-function EmbedCard({ parts, resolvedPath, onOpen }: { parts: WikiLinkParts; resolvedPath: string | null; onOpen: (path: string) => void }) {
-  const depth = useContext(EmbedDepthContext);
-  if (!resolvedPath) {
-    return (
-      <span className="wiki-link wiki-link-unresolved" title={`"${parts.target}" does not exist`}>
-        {parts.target}
-      </span>
-    );
-  }
-  if (depth >= MAX_EMBED_DEPTH) {
-    return (
-      <span className="wiki-link" onClick={() => onOpen(resolvedPath)} role="link">
-        {parts.target}
-      </span>
-    );
-  }
-  return (
-    <span className="block my-3 rounded border border-sol-border/40 overflow-hidden" data-vault-embed>
-      <span
-        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-sol-text-muted bg-sol-bg-alt/60 cursor-pointer hover:text-sol-text"
-        onClick={() => onOpen(resolvedPath)}
-        role="link"
-      >
-        <FileText className="w-3 h-3" />
-        {noteDisplayName(resolvedPath.split("/").pop()!)}
-        {parts.subpath && <span className="text-sol-text-dim">› {parts.subpath}</span>}
-      </span>
-      <span className="block px-3 py-2">
-        <EmbeddedNote path={resolvedPath} />
-      </span>
-    </span>
-  );
-}
+// Compat re-export: several vault modules import this from here.
+export { splitFrontmatter };
 
 export const VaultNoteView = memo(function VaultNoteView({
   path,
+  targetLine,
   onNavigate,
 }: {
   path: string;
+  /** Source line to bring into view (search hits carry it via ?l=). Rendered
+   *  markdown has no per-line anchors, so we scroll to the nearest heading at
+   *  or above the line — the same section the hit lives in. */
+  targetLine?: number;
   onNavigate: (path: string | null) => void;
 }) {
   const body = useVaultStore((s) => s.bodies[path]);
   const loading = useVaultStore((s) => !!s.loadingPaths[path]);
   const exists = useVaultStore((s) => !!s.files[path]);
-  const files = useVaultStore((s) => s.files);
-  const endpoint = useVaultStore((s) => s.endpoint);
-  const activeVaultId = useVaultStore((s) => s.activeVaultId);
-  const createFile = useVaultStore((s) => s.createFile);
-  const [showProps, setShowProps] = useState(false);
 
   const segments = path.split("/");
   const fileName = segments[segments.length - 1];
@@ -128,26 +43,31 @@ export const VaultNoteView = memo(function VaultNoteView({
     [body?.content],
   );
 
-  const linkCtx = useMemo<VaultLinkContextValue>(
-    () => ({
-      resolve: (target) => resolveAgainstFiles(files, target, path),
-      navigate: (p, _subpath) => onNavigate(p),
-      createNote: (target) => {
-        const newPath = isVaultMarkdownPath(target) ? target : `${target}.md`;
-        void createFile(newPath, `# ${target}\n\n`).then(() => onNavigate(newPath));
-      },
-      assetUrl: (p) => {
-        if (!endpoint || !activeVaultId) return null;
-        const res = resolveAgainstFiles(files, p.replace(/\.md$/i, ""), path);
-        const assetPath = files[p] ? p : res.path;
-        return assetPath ? vaultAssetUrl(endpoint, activeVaultId, assetPath) : null;
-      },
-      renderEmbed: (parts, resolvedPath) => (
-        <EmbedCard parts={parts} resolvedPath={resolvedPath} onOpen={(p) => onNavigate(p)} />
-      ),
-    }),
-    [files, path, onNavigate, createFile, endpoint, activeVaultId],
-  );
+  // Re-render (and re-resolve every wiki link) whenever the index changes — a
+  // new note can turn a dangling link live without this note re-parsing.
+  useVaultIndexVersion();
+
+  const linkCtx = useVaultLinkCtx(path, (p) => onNavigate(p));
+
+  // Scroll a search hit's section into view once the body has rendered, using
+  // the DEDUPED slug for that occurrence (duplicate heading texts get -2/-3).
+  useWatchEffect(() => {
+    if (!targetLine || !body) return;
+    const headings = vaultIndex.note(path)?.parsed?.headings ?? [];
+    const slugs = headingSlugs(headings);
+    let idx = -1;
+    for (let i = 0; i < headings.length; i++) {
+      if (headings[i].line <= targetLine) idx = i;
+    }
+    if (idx === -1) return;
+    const raf = requestAnimationFrame(() => {
+      const el = document.getElementById(`vh-${slugs[idx]}`);
+      el?.scrollIntoView({ block: "start" });
+      el?.classList.add("vault-flash");
+      setTimeout(() => el?.classList.remove("vault-flash"), 1400);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [targetLine, path, !!body]);
 
   if (!exists && !body) {
     return (
@@ -172,24 +92,15 @@ export const VaultNoteView = memo(function VaultNoteView({
         </nav>
         <h1 className="text-2xl font-semibold text-sol-text mb-3 break-words">{title}</h1>
 
-        {frontmatter && (
-          <div className="mb-4 border border-sol-border/30 rounded">
-            <button
-              type="button"
-              onClick={() => setShowProps((v) => !v)}
-              className="w-full text-left px-3 py-1.5 text-[11px] text-sol-text-dim hover:text-sol-text-muted"
-            >
-              Properties
-            </button>
-            {showProps && (
-              <pre className="px-3 pb-2 text-[11px] text-sol-text-muted whitespace-pre-wrap font-mono">
-                {frontmatter}
-              </pre>
-            )}
-          </div>
-        )}
-
         <VaultLinkContext.Provider value={linkCtx}>
+          {frontmatter && (
+            <VaultProperties
+              frontmatter={vaultIndex.note(path)?.parsed?.frontmatter ?? null}
+              raw={frontmatter}
+              onTagClick={(t) => useVaultStore.getState().openTagPane(t.replace(/^#/, ""))}
+            />
+          )}
+
           {body ? (
             <div className="vault-prose prose prose-sm max-w-none">
               <VaultMarkdown content={markdown} />
