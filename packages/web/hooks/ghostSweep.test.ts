@@ -79,6 +79,34 @@ describe("collectGhostSweepCandidates", () => {
     expect(stubs).toEqual([]);
   });
 
+  // Regression coverage for ct-40670: a PINNED orphaned stub was exempt from
+  // the stub sweep — the only path that can delete it (the server never had
+  // the row, so unpin/kill patches are dropped) — making it an immortal ghost
+  // that resurrected from IDB on every launch. Pinned stubs must sweep; the
+  // pin exemption is only meaningful for real (Convex-id) rows.
+  it("sweeps a pinned orphaned stub (pin can't protect a row the server never had)", () => {
+    const pinnedStub = blank("local-stub-pinned", STUB_SWEEP_MIN_AGE_MS + 60_000, {
+      is_pinned: true,
+      inbox_pinned_at: NOW - STUB_SWEEP_MIN_AGE_MS,
+    });
+    const { stubs, candidates } = collectGhostSweepCandidates(storeWith([pinnedStub]), NOW);
+    expect(stubs).toEqual([pinnedStub._id]);
+    expect(candidates).toEqual([]);
+  });
+
+  it("still exempts a pinned stub whose create is in flight (a legitimate pin mid-create rekeys and flushes)", () => {
+    const pinnedInFlight = blank("local-stub-pinned-creating", STUB_SWEEP_MIN_AGE_MS + 60_000, {
+      is_pinned: true,
+    });
+    const { stubs } = collectGhostSweepCandidates(
+      storeWith([pinnedInFlight], {
+        pendingSessionCreates: { [pinnedInFlight._id]: Promise.resolve("x") },
+      }),
+      NOW,
+    );
+    expect(stubs).toEqual([]);
+  });
+
   it("prunes old local stubs directly but leaves young ones for the create handoff", () => {
     const oldStub = blank("local-stub-old", STUB_SWEEP_MIN_AGE_MS + 60_000);
     const youngStub = blank("local-stub-young", STUB_SWEEP_MIN_AGE_MS - 60_000);
