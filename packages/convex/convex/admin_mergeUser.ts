@@ -31,6 +31,9 @@ const USER_REFS: Array<{ table: string; field: string; index: string | null }> =
   { table: "notifications", field: "recipient_user_id", index: "by_recipient" },
   { table: "agent_tasks", field: "user_id", index: "by_user_run_at" },
   { table: "projects", field: "user_id", index: "by_user_id" },
+  // Steering entities and their relationship rows (Organizational Steering).
+  { table: "strategies", field: "user_id", index: "by_user_id" },
+  { table: "steering_items", field: "user_id", index: "by_user_id" },
   { table: "plans", field: "user_id", index: "by_user_id" },
   { table: "tasks", field: "user_id", index: "by_user_id" },
   { table: "orchestration_events", field: "user_id", index: "by_user_id" },
@@ -64,6 +67,12 @@ const USER_REFS: Array<{ table: string; field: string; index: string | null }> =
   { table: "message_shares", field: "user_id", index: null },
   { table: "system_config", field: "updated_by", index: null },
   { table: "plans", field: "owner_id", index: null },
+  // Steering responsibility + relationship provenance (small tables; scan).
+  { table: "projects", field: "owner_id", index: null },
+  { table: "strategies", field: "owner_id", index: null },
+  { table: "steering_items", field: "owner_id", index: null },
+  { table: "entity_links", field: "user_id", index: null },
+  { table: "entity_conversations", field: "user_id", index: null },
 ];
 
 // Tables we deliberately skip because they have no user-keyed index and are

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
+import {
+  classifyDocContent,
+  extractTitleFromContent,
+  inlineDocSnapshotRelation,
+  inlineDocSourceKey,
+  shouldUseInlineDocSnapshotFallback,
+} from "./docExtraction";
 
 describe("extractTitleFromContent", () => {
   test("uses frontmatter name: value, not the raw line", () => {
@@ -54,23 +60,48 @@ A first body line that is plenty long.`;
 
 describe("inlineDocSourceKey", () => {
   test("is stable for the same message (no wall-clock)", () => {
-    const a = inlineDocSourceKey("user1", 1780722790076);
-    const b = inlineDocSourceKey("user1", 1780722790076);
+    const a = inlineDocSourceKey("user1", 1780722790076, "msg-1");
+    const b = inlineDocSourceKey("user1", 1780722799999, "msg-1");
     expect(a).toBe(b);
-    expect(a).toBe("inline://user1/1780722790076");
+    expect(a).toBe("inline://user1/uuid/msg-1");
   });
 
   test("is user-scoped, not conversation-scoped — forks of the same transcript share keys", () => {
     // The same message re-synced into two forked conversations must produce
     // the same key; conversation identity must not appear in it.
-    const inForkA = inlineDocSourceKey("user1", 1780722790076);
-    const inForkB = inlineDocSourceKey("user1", 1780722790076);
+    const inForkA = inlineDocSourceKey("user1", 1780722790076, "msg-1");
+    const inForkB = inlineDocSourceKey("user1", 1780722799999, "msg-1");
     expect(inForkA).toBe(inForkB);
     expect(inForkA.includes("conv")).toBe(false);
   });
 
   test("missing timestamp degrades to a stable 0 key", () => {
     expect(inlineDocSourceKey("user1", undefined)).toBe("inline://user1/0");
+  });
+
+  test("escapes message ids used in source paths", () => {
+    expect(inlineDocSourceKey("user1", 1, "agent/message 1")).toBe(
+      "inline://user1/uuid/agent%2Fmessage%201",
+    );
+  });
+});
+
+describe("inlineDocSnapshotRelation", () => {
+  test("recognizes identical and progressively streamed content", () => {
+    expect(inlineDocSnapshotRelation("abc", "abc")).toBe("same");
+    expect(inlineDocSnapshotRelation("abc", "abcdef")).toBe("incoming_longer");
+    expect(inlineDocSnapshotRelation("abcdef", "abc")).toBe("existing_longer");
+  });
+
+  test("does not merge responses that merely share a title or opening", () => {
+    expect(inlineDocSnapshotRelation("abc-one", "abc-two")).toBe("different");
+  });
+});
+
+describe("shouldUseInlineDocSnapshotFallback", () => {
+  test("only permits fuzzy snapshot matching for timestamp-only senders", () => {
+    expect(shouldUseInlineDocSnapshotFallback(undefined)).toBe(true);
+    expect(shouldUseInlineDocSnapshotFallback("msg-1")).toBe(false);
   });
 });
 

@@ -1,21 +1,13 @@
 import { test, expect, describe } from "bun:test";
-import { isJumpReadyToScroll, nextStreamingScrollMode, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
 
-describe("nextStreamingScrollMode", () => {
-  test("a submitted turn starts in reading mode", () => {
-    expect(nextStreamingScrollMode("following", "turn-start")).toBe("reading");
+describe("shouldFollowStreaming", () => {
+  test("follows normally before the user scrolls away", () => {
+    expect(shouldFollowStreaming(false)).toBe(true);
   });
 
-  test("streaming only resumes follow mode at the explicit live edge", () => {
-    expect(nextStreamingScrollMode("reading", "reached-live-edge")).toBe("following");
-  });
-
-  test("any upward reading gesture stops following", () => {
-    expect(nextStreamingScrollMode("following", "scroll-up")).toBe("reading");
-  });
-
-  test("an upward gesture keeps an existing reader anchored", () => {
-    expect(nextStreamingScrollMode("reading", "scroll-up")).toBe("reading");
+  test("never follows new chunks after the user scrolls away", () => {
+    expect(shouldFollowStreaming(true)).toBe(false);
   });
 });
 
