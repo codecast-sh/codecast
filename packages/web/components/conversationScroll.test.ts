@@ -1,9 +1,23 @@
 import { test, expect, describe } from "bun:test";
-import { isJumpReadyToScroll, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
+import { isJumpReadyToScroll, nextStreamingScrollMode, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
 
-// Bottom-pinning is no longer gated here — the virtualizer owns it natively via
-// anchorTo:'end' (virtual-core 3.17+), so there is nothing pure to unit-test for
-// it. What remains testable is the pagination/jump gating below.
+describe("nextStreamingScrollMode", () => {
+  test("a submitted turn starts in reading mode", () => {
+    expect(nextStreamingScrollMode("following", "turn-start")).toBe("reading");
+  });
+
+  test("streaming only resumes follow mode at the explicit live edge", () => {
+    expect(nextStreamingScrollMode("reading", "reached-live-edge")).toBe("following");
+  });
+
+  test("any upward reading gesture stops following", () => {
+    expect(nextStreamingScrollMode("following", "scroll-up")).toBe("reading");
+  });
+
+  test("an upward gesture keeps an existing reader anchored", () => {
+    expect(nextStreamingScrollMode("reading", "scroll-up")).toBe("reading");
+  });
+});
 
 describe("isJumpReadyToScroll", () => {
   const ready = {
