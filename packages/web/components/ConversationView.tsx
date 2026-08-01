@@ -47,7 +47,7 @@ import { tryRenderCastDiff, MessageIdentityProvider } from "./InlineDiff";
 import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
 import { tryRenderCanvas, tryRenderHtmlMessage, looksLikeHtml } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
-import { isJumpReadyToScroll, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
+import { isJumpReadyToScroll, nextStreamingScrollMode, shouldLoadOlder, shouldLoadNewer, type StreamingScrollMode } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
 import { formatElapsedClock, shouldShowElapsed, deriveRunningTool } from "./workingStatus";
 import { appendToDraft, formatPlanFeedback } from "../lib/quoteFormat";
@@ -10448,6 +10448,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
   const setUserScrolled = useCallback((v: boolean) => { userScrolledRef.current = v; _setUserScrolled(v); }, []);
+  const [streamingScrollMode, _setStreamingScrollMode] = useState<StreamingScrollMode>("following");
+  const streamingScrollModeRef = useRef<StreamingScrollMode>("following");
+  const setStreamingScrollMode = useCallback((mode: StreamingScrollMode) => {
+    streamingScrollModeRef.current = mode;
+    _setStreamingScrollMode(mode);
+  }, []);
+  const [turnAnchorRequest, setTurnAnchorRequest] = useState(0);
+  const handledTurnAnchorRequestRef = useRef(0);
   const [isNearTop, setIsNearTop] = useState(true);
   // Position twin of isNearTop for the bottom edge (200px band). The jump
   // buttons hide inside these bands — the userScrolled gesture latch alone
@@ -10611,6 +10619,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     _setTrackedConvId(stableConvKey);
     _setUserScrolled(false);
     userScrolledRef.current = false;
+    _setStreamingScrollMode("following");
+    streamingScrollModeRef.current = "following";
+    setTurnAnchorRequest(0);
+    handledTurnAnchorRequestRef.current = 0;
     setIsNearTop(true);
     setIsNearBottom(true);
     setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || "full");
@@ -10726,10 +10738,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation || !effectiveConversationId) return;
     const clientId = addOptimisticMsg(effectiveConversationId, content);
-    setUserScrolled(false);
-    requestAnimationFrame(() => scrollToBottomFnRef.current());
+    setUserScrolled(true);
+    setStreamingScrollMode(nextStreamingScrollMode(streamingScrollModeRef.current, "turn-start"));
+    setTurnAnchorRequest(n => n + 1);
     sendInlineMessage(effectiveConversationId, content, undefined, clientId);
-  }, [conversation, effectiveConversationId, sendInlineMessage, addOptimisticMsg, setUserScrolled]);
+  }, [conversation, effectiveConversationId, sendInlineMessage, addOptimisticMsg, setUserScrolled, setStreamingScrollMode]);
   // Narrow subscription: this monolith only reads agent_status, permission_mode,
   // session_id, is_connected, tmux_session and team_id from the session row — but
   // the row's identity churns every ~1s heartbeat (updated_at / last_heartbeat /
@@ -11462,9 +11475,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation, effectiveIsOwner, convCommand, convexConvId]);
 
   const handleMessageSent = useCallback(() => {
-    setUserScrolled(false);
-    requestAnimationFrame(() => scrollToBottomFnRef.current());
-  }, [setUserScrolled]);
+    setUserScrolled(true);
+    setStreamingScrollMode(nextStreamingScrollMode(streamingScrollModeRef.current, "turn-start"));
+    setTurnAnchorRequest(n => n + 1);
+  }, [setUserScrolled, setStreamingScrollMode]);
 
   // Double-Esc opens the unified branch map drilled straight into the current
   // branch's messages (the old standalone navigator is retired into the map).
@@ -12232,7 +12246,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     measureElement,
     overscan: 10,
     paddingStart: 16,
-    paddingEnd: 100,
+    // Reserve a viewport of runway after Send so the new turn can sit at the
+    // top before its response is tall enough to provide its own scroll range.
+    paddingEnd: streamingScrollMode === "reading"
+      ? Math.max(containerRef.current?.clientHeight ?? 0, 100)
+      : 100,
     isScrollingResetDelay: 150,
     // Native chat anchoring (virtual-core 3.17+). The virtualizer itself owns
     // bottom-pinning because it's the only thing that knows whether *it* moved
@@ -12250,14 +12268,35 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     //   scrollEndThreshold  — the pin/follow tolerance; 8px matches the old
     //                         hand-tuned epsilon so a small real scroll-up unpins
     //                         instead of snapping back down.
-    anchorTo: "end",
-    followOnAppend: "auto",
+    anchorTo: streamingScrollMode === "following" ? "end" : undefined,
+    followOnAppend: streamingScrollMode === "following" ? "auto" : false,
     scrollEndThreshold: 8,
   });
 
   scrollToBottomFnRef.current = () => {
     virtualizer.scrollToEnd({ behavior: "auto" });
   };
+
+  // Submission navigates once to the beginning of the new turn. Streaming
+  // growth happens below this stable reading anchor until the reader explicitly
+  // returns to the live edge.
+  useLayoutEffect(() => {
+    if (turnAnchorRequest === 0 || handledTurnAnchorRequestRef.current === turnAnchorRequest || timeline.length === 0) return;
+    let itemIndex = -1;
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      if (timeline[i]?.type === "message" && (timeline[i].data as Message).role === "user") {
+        itemIndex = i;
+        break;
+      }
+    }
+    const container = containerRef.current;
+    if (itemIndex < 0 || !container) return;
+    handledTurnAnchorRequestRef.current = turnAnchorRequest;
+    settleTimelineItemAtOffset(container, virtualizer, itemIndex, headerHeight + 12, {
+      initialDelayMs: 0,
+      watchMs: 1600,
+    });
+  }, [turnAnchorRequest, timeline, virtualizer, headerHeight]);
 
   // Size-drift self-heal. If a measurement ever landed under the wrong key
   // (see the attribution guard in measureElement) — or a row changed height
@@ -12723,10 +12762,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       // already masks the prepend-driven offset adjustment.
       if (scrolledUp && Date.now() >= paginationCooldownRef.current) {
         setUserScrolled(true);
+        setStreamingScrollMode(nextStreamingScrollMode(streamingScrollModeRef.current, "scroll-up"));
       }
 
       if (isAtBottom && scrolledDown) {
         setUserScrolled(false);
+        setStreamingScrollMode(nextStreamingScrollMode(streamingScrollModeRef.current, "reached-live-edge"));
       }
 
       if (scrollProgressRef.current && !jumpPendingRef.current) {
@@ -12984,6 +13025,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY < 0) {
         setUserScrolled(true);
+        setStreamingScrollMode(nextStreamingScrollMode(streamingScrollModeRef.current, "scroll-up"));
         loadOlderArmedRef.current = true;
         maybeLoadOlderRef.current(); // load older if this scroll-up reached the top
       } else if (e.deltaY > 0) {
@@ -12993,7 +13035,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     };
     sc.addEventListener('wheel', onWheel, { passive: true });
     return () => sc.removeEventListener('wheel', onWheel);
-  }, [setUserScrolled]);
+  }, [setUserScrolled, setStreamingScrollMode]);
 
   // Bottom-pinning during streaming/new content is native now: anchorTo:'end'
   // re-pins on every item size change when within scrollEndThreshold of the
@@ -14731,6 +14773,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     onJumpToEnd();
                   } else {
                     setUserScrolled(false);
+                    setStreamingScrollMode(nextStreamingScrollMode(streamingScrollModeRef.current, "reached-live-edge"));
                     paginationCooldownRef.current = Date.now() + 1000;
                     scrollToEdgeRef.current('bottom');
                   }

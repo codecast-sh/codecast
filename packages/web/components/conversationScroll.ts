@@ -1,11 +1,21 @@
 // Pure scroll-decision logic for ConversationView, extracted so it can be
 // unit-tested without a DOM. See conversationScroll.test.ts.
 //
-// Bottom-pinning ("stay glued to the tail while streaming") is NOT here anymore:
-// it's owned natively by the virtualizer via anchorTo:'end' (virtual-core 3.17+),
-// which can re-pin correctly because it knows whether it or the user moved the
-// scroll. The old shouldPinToBottom heuristic guessed that from outside and got
-// it wrong. What remains here is pagination/jump gating, which is still ours.
+// Streaming follow intent is deliberately kept separate from scroll geometry.
+// A new response starts in reading mode even though its short initial content is
+// necessarily "at the bottom". Only an explicit trip to the live edge resumes
+// following; otherwise every new chunk would steal the viewport from the reader.
+
+export type StreamingScrollMode = "reading" | "following";
+
+export function nextStreamingScrollMode(
+  mode: StreamingScrollMode,
+  event: "turn-start" | "reached-live-edge" | "scroll-up",
+): StreamingScrollMode {
+  if (event === "turn-start" || event === "scroll-up") return "reading";
+  if (event === "reached-live-edge") return "following";
+  return mode;
+}
 
 export interface JumpReadyInput {
   /** The in-flight jump's direction, or null when no jump is pending. */
