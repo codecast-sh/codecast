@@ -8,6 +8,7 @@
 
 import Dexie, { type EntityTable } from "dexie";
 import type { VaultFileEntry, VaultInfo } from "@codecast/shared/contracts";
+import type { BookmarkItem } from "./bookmarks";
 
 export interface VaultMetaRow {
   /** Vault id. */
@@ -27,14 +28,27 @@ export interface VaultBodyRow {
   etag: string;
 }
 
+/** Per-vault UI state that must outlive a reload. Vault data is machine-local,
+ *  so this belongs next to it rather than in Convex — a bookmark points at a
+ *  path on THIS machine. */
+export interface VaultPrefsRow {
+  vaultId: string;
+  bookmarks: BookmarkItem[];
+}
+
 const db = new Dexie("codecast-vault") as Dexie & {
   vault_meta: EntityTable<VaultMetaRow, "id">;
   vault_bodies: EntityTable<VaultBodyRow, "key">;
+  vault_prefs: EntityTable<VaultPrefsRow, "vaultId">;
 };
 
 db.version(1).stores({
   vault_meta: "id",
   vault_bodies: "key, vaultId",
+});
+
+db.version(2).stores({
+  vault_prefs: "vaultId",
 });
 
 export const bodyKey = (vaultId: string, path: string) => `${vaultId}:${path}`;
@@ -75,10 +89,26 @@ export async function deleteVaultBodies(vaultId: string, paths: string[]): Promi
   } catch {}
 }
 
+export async function loadVaultBookmarks(vaultId: string): Promise<BookmarkItem[]> {
+  try {
+    const row = await db.vault_prefs.get(vaultId);
+    return Array.isArray(row?.bookmarks) ? row.bookmarks : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveVaultBookmarks(vaultId: string, bookmarks: BookmarkItem[]): Promise<void> {
+  try {
+    await db.vault_prefs.put({ vaultId, bookmarks });
+  } catch {}
+}
+
 /** Drop everything for a vault (unregistered or root moved). */
 export async function purgeVault(vaultId: string): Promise<void> {
   try {
     await db.vault_meta.delete(vaultId);
     await db.vault_bodies.where("vaultId").equals(vaultId).delete();
+    await db.vault_prefs.delete(vaultId);
   } catch {}
 }

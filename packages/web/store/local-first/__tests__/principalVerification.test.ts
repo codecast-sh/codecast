@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { CredentialEvidence } from "../credentialBinding";
 import {
+  canRenderPrincipalProviderSubtree,
   PrincipalOfflineResolutionCoordinator,
   resolvePrincipalBoot,
   verifyPostCapturePrincipal,
@@ -243,4 +244,81 @@ test("auth-state churn coalesces the same in-flight local-store open", async () 
     true,
     true,
   ]);
+});
+
+// --- canRenderPrincipalProviderSubtree: token rotation must not unmount ---
+
+const RENDER_PRINCIPAL = "aaaaaaaaaaaaaaaaaaaaaaaa";
+const RENDER_SESSION = "bbbbbbbbbbbbbbbbbbbbbbbb";
+const OTHER_SESSION = "dddddddddddddddddddddddd";
+
+function renderableState(phase: "offline-ready" | "server-verified") {
+  return { phase } as unknown as Parameters<typeof canRenderPrincipalProviderSubtree>[0]["state"];
+}
+
+test("a rotated JWT in the same auth session keeps the subtree rendered", () => {
+  // Convex auth exchanges the refresh token for a new JWT on boot/reconnect.
+  // Regression: the gate compared raw token strings, so every rotation
+  // collapsed the whole app to the loader until re-verification round-tripped.
+  const before = token(RENDER_PRINCIPAL, RENDER_SESSION);
+  const rotated = token(RENDER_PRINCIPAL, RENDER_SESSION) + "x"; // different string, same sub
+  expect(canRenderPrincipalProviderSubtree({
+    state: renderableState("server-verified"),
+    token: rotated,
+    authorizedToken: before,
+    credentialResolution: { token: before, status: "ready" },
+  })).toBe(true);
+});
+
+test("a token for a different principal collapses the gate synchronously", () => {
+  const before = token(RENDER_PRINCIPAL, RENDER_SESSION);
+  const otherPrincipal = token("cccccccccccccccccccccccc", RENDER_SESSION);
+  expect(canRenderPrincipalProviderSubtree({
+    state: renderableState("server-verified"),
+    token: otherPrincipal,
+    authorizedToken: before,
+    credentialResolution: { token: before, status: "ready" },
+  })).toBe(false);
+});
+
+test("a token for a different auth session (fresh sign-in) collapses the gate", () => {
+  const before = token(RENDER_PRINCIPAL, RENDER_SESSION);
+  const freshSignIn = token(RENDER_PRINCIPAL, OTHER_SESSION);
+  expect(canRenderPrincipalProviderSubtree({
+    state: renderableState("offline-ready"),
+    token: freshSignIn,
+    authorizedToken: before,
+    credentialResolution: { token: before, status: "ready" },
+  })).toBe(false);
+});
+
+test("sign-out (null token) collapses the gate", () => {
+  const before = token(RENDER_PRINCIPAL, RENDER_SESSION);
+  expect(canRenderPrincipalProviderSubtree({
+    state: renderableState("server-verified"),
+    token: null,
+    authorizedToken: before,
+    credentialResolution: { token: before, status: "ready" },
+  })).toBe(false);
+});
+
+test("exact-match authorization still renders (no identity parsing needed)", () => {
+  // Minted/dev tokens may not parse as convex-auth JWTs; string equality must
+  // keep working for them.
+  const opaque = "not-a-jwt";
+  expect(canRenderPrincipalProviderSubtree({
+    state: renderableState("offline-ready"),
+    token: opaque,
+    authorizedToken: opaque,
+    credentialResolution: { token: opaque, status: "ready" },
+  })).toBe(true);
+});
+
+test("an unauthorized capture still shows the loader", () => {
+  expect(canRenderPrincipalProviderSubtree({
+    state: renderableState("server-verified"),
+    token: token(RENDER_PRINCIPAL, RENDER_SESSION),
+    authorizedToken: null,
+    credentialResolution: null,
+  })).toBe(false);
 });

@@ -35,10 +35,34 @@ export function extractTitleFromContent(content: string): string {
 
 /** Stable dedup key for a doc extracted from inline assistant prose. Two rules:
  *  - No wall-clock values — re-syncing the same message must produce the same
- *    key or every daemon retry inserts another copy.
+ *    key or every daemon retry inserts another copy. The message uuid is the
+ *    only value that survives a re-parse: a transcript entry without its own
+ *    timestamp gets stamped with parse-time Date.now() by the CLI, so the
+ *    timestamp form is only a fallback for uuid-less legacy messages.
  *  - No conversation id — forking/resuming re-syncs the same transcript into a
  *    new conversation, and the same message must still map to ONE doc. Identity
  *    is (user, source message). */
-export function inlineDocSourceKey(userId: string, msgTimestamp: number | undefined): string {
-  return `inline://${userId}/${msgTimestamp ?? 0}`;
+export function inlineDocSourceKey(
+  userId: string,
+  msgTimestamp: number | undefined,
+  msgUuid?: string,
+): string {
+  return `inline://${userId}/${msgUuid ?? msgTimestamp ?? 0}`;
+}
+
+/** The one decision that stops inline re-inserts: an existing doc is the SAME
+ *  source message when it carries the stable key, has identical content
+ *  (legacy wall-clock keys), or — for inline docs only — one content is a
+ *  prefix of the other (the same message re-synced mid-stream at a different
+ *  length; the >5000-char floor makes an accidental shared prefix implausible). */
+export function findSameInlineDoc<
+  T extends { source_file?: string; source?: string; content: string },
+>(docs: T[], sourceKey: string, content: string): T | undefined {
+  return docs.find(
+    (d) =>
+      d.source_file === sourceKey ||
+      d.content === content ||
+      (d.source === "inline_extract" &&
+        (content.startsWith(d.content) || d.content.startsWith(content))),
+  );
 }

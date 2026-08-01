@@ -61,7 +61,7 @@ export async function awaitTrackedSessionCreateResult(
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
-import { defaultMachineId, type MachineCandidate } from "../lib/machinePicker";
+import { defaultMachineId, pathOnMyMachines, type MachineCandidate } from "../lib/machinePicker";
 export { isConvexId };
 
 // Canonical entity-derivation helpers live in lib/liveEntities. Re-exported here
@@ -1669,18 +1669,26 @@ export function computeChipCounts(
 // project; otherwise the filter's own path wins. Then the most recent project.
 // Can resolve to nothing — the daemon starts in $HOME and the null-state
 // ProjectSwitcher lets the user pick before send.
+//
+// The conversation being viewed can be a TEAMMATE's (team inbox/feed), whose
+// checkout lives on a machine none of the user's devices has — a new session
+// can't start there, so its path never seeds (pathOnMyMachines against the
+// device roster; unloaded roster doesn't filter).
 export function resolveComposeProjectPath(opts: {
   context?: { projectPath?: string; gitRoot?: string };
   conversation: { projectPath?: string; gitRoot?: string };
   activeProjectFilter?: string | null;
   activeProjectPath?: string | null;
   recentProjects?: Array<{ path: string }>;
+  machineRoster?: Array<Pick<MachineCandidate, "local_project_roots">>;
 }): string | undefined {
-  const { context, conversation, activeProjectFilter, activeProjectPath, recentProjects } = opts;
-  const convPath =
+  const { context, conversation, activeProjectFilter, activeProjectPath, recentProjects, machineRoster } = opts;
+  const rawConvPath =
     !activeProjectFilter || getProjectName(conversation.gitRoot, conversation.projectPath) === activeProjectFilter
       ? conversation.projectPath || conversation.gitRoot
       : undefined;
+  const convPath =
+    rawConvPath && (!machineRoster || pathOnMyMachines(machineRoster, rawConvPath)) ? rawConvPath : undefined;
   return context?.projectPath || context?.gitRoot || convPath || activeProjectPath || recentProjects?.[0]?.path || undefined;
 }
 

@@ -23,8 +23,10 @@ import { DexiePrincipalStoreFactory } from "@/store/local-first/persistence/dexi
 import { DexieLauncherStore } from "@/store/local-first/persistence/launcher";
 import { PrincipalRuntime } from "@/store/local-first/principalRuntime";
 import {
+  canRenderPrincipalProviderSubtree,
   PrincipalOfflineResolutionCoordinator,
   resolvePrincipalBoot,
+  type CredentialResolution,
 } from "@/store/local-first/principalVerification";
 import {
   registerPrincipalDispatchRuntime,
@@ -107,27 +109,7 @@ const PrincipalLocalStateContext = createContext<{
   state: PrincipalLifecycle;
 } | null>(null);
 
-export type CredentialResolution = {
-  token: string | null;
-  status: "none" | "ready" | "unverified" | "error";
-};
-
-export function canRenderPrincipalProviderSubtree(input: {
-  state: PrincipalLifecycle;
-  token: string | null;
-  authorizedToken: string | null;
-  credentialResolution: CredentialResolution | null;
-}): boolean {
-  const { state, token, authorizedToken, credentialResolution } = input;
-  if ((state.phase === "offline-ready" || state.phase === "server-verified") &&
-    token !== null && authorizedToken === token &&
-    credentialResolution?.token === token && credentialResolution.status === "ready") {
-    return true;
-  }
-  return state.phase === "locked" &&
-    credentialResolution?.token === token &&
-    credentialResolution.status !== "ready";
-}
+export type { CredentialResolution } from "@/store/local-first/principalVerification";
 
 function PrincipalLocalStateFailure() {
   return (

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
+import { classifyDocContent, extractTitleFromContent, findSameInlineDoc, inlineDocSourceKey } from "./docExtraction";
 
 describe("extractTitleFromContent", () => {
   test("uses frontmatter name: value, not the raw line", () => {
@@ -71,6 +71,47 @@ describe("inlineDocSourceKey", () => {
 
   test("missing timestamp degrades to a stable 0 key", () => {
     expect(inlineDocSourceKey("user1", undefined)).toBe("inline://user1/0");
+  });
+
+  test("message uuid wins over timestamp — a re-parse that restamps the clock keeps the key", () => {
+    // The CLI stamps Date.now() on transcript entries without their own
+    // timestamp, so the same message re-synced twice arrives with two
+    // different timestamps. The uuid is what survives the re-parse.
+    const first = inlineDocSourceKey("user1", 1785599268092, "uuid-abc");
+    const retry = inlineDocSourceKey("user1", 1785605328380, "uuid-abc");
+    expect(first).toBe(retry);
+    expect(first).toBe("inline://user1/uuid-abc");
+  });
+});
+
+describe("findSameInlineDoc", () => {
+  const base = "# Stage 1: Starting with an idea\n\n" + "x".repeat(6000);
+
+  test("matches by stable source key", () => {
+    const doc = { source_file: "inline://u/uuid-abc", source: "inline_extract", content: base };
+    expect(findSameInlineDoc([doc], "inline://u/uuid-abc", base + "more")).toBe(doc);
+  });
+
+  test("matches a streaming snapshot: existing content is a prefix of the longer re-sync", () => {
+    // Regression: a still-streaming message re-synced at growing lengths with
+    // restamped timestamps inserted one doc per snapshot (12 copies in prod).
+    const doc = { source_file: "inline://u/1785599268092", source: "inline_extract", content: base };
+    expect(findSameInlineDoc([doc], "inline://u/1785605328380", base + "\n\nnew tail")).toBe(doc);
+  });
+
+  test("matches a replayed shorter snapshot of an already-complete doc", () => {
+    const doc = { source_file: "inline://u/1785599268092", source: "inline_extract", content: base + "\n\ntail" };
+    expect(findSameInlineDoc([doc], "inline://u/1785605328380", base)).toBe(doc);
+  });
+
+  test("does not prefix-match docs that are not inline extracts", () => {
+    const fileDoc = { source_file: "/repo/notes.md", source: "file_sync", content: base };
+    expect(findSameInlineDoc([fileDoc], "inline://u/1", base + "extended")).toBeUndefined();
+  });
+
+  test("does not match unrelated content", () => {
+    const doc = { source_file: "inline://u/1", source: "inline_extract", content: base };
+    expect(findSameInlineDoc([doc], "inline://u/2", "# Different doc\n\n" + "y".repeat(6000))).toBeUndefined();
   });
 });
 

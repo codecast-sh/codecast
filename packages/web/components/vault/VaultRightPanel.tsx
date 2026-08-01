@@ -1,17 +1,19 @@
-// Vault right panel: Backlinks | Outline | Tags, the Obsidian sidebar trio.
+// Vault right panel: Backlinks | Outgoing | Outline | Tags | Bookmarks.
 // Everything here is a render-time query against the vault index singleton,
-// re-run when the index version bumps.
+// re-run when the index version bumps — except Bookmarks, which is a stored
+// list and lives in VaultBookmarksPane.
 
 import { memo, useMemo, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { ChevronRight, Hash, Link2, List } from "lucide-react";
+import { ArrowUpRight, Bookmark, ChevronRight, Hash, Link2, List } from "lucide-react";
 import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import type { TagTreeNode } from "../../lib/vault/vaultIndex";
 import { headingSlugs } from "../../lib/vault/parseNote";
-import { useVaultStore } from "../../store/vaultStore";
+import { useVaultStore, type VaultRightPanelTab } from "../../store/vaultStore";
 import { noteDisplayName } from "./VaultExplorer";
-
-type PaneTab = "backlinks" | "outline" | "tags";
+import { BookmarkToggle, VaultBookmarksPane } from "./VaultBookmarksPane";
+import { useVaultBookmarks } from "../../lib/vault/bookmarksHost";
+import { isBookmarked } from "../../lib/vault/bookmarks";
 
 /** The line a backlink sits on, trimmed for display, with the raw link text
  *  emphasized by the caller via simple splitting. */
@@ -146,6 +148,7 @@ const OutlinePane = memo(function OutlinePane({ path }: { path: string }) {
   const version = useVaultIndexVersion();
   const headings = vaultIndex.note(path)?.parsed?.headings ?? [];
   const [currentSlug, setCurrentSlug] = useState<string | null>(null);
+  const bookmarks = useVaultBookmarks();
 
   // Scroll-sync: the section whose heading is the last one above the fold is
   // "current". A rAF-throttled scroll listener beats IntersectionObserver here
@@ -179,8 +182,12 @@ const OutlinePane = memo(function OutlinePane({ path }: { path: string }) {
 
   if (headings.length === 0) {
     return (
-      <div className="px-3 py-6 text-xs text-sol-text-dim text-center">
+      <div className="px-3 py-6 text-xs leading-5 text-sol-text-dim text-center">
         No headings in this note.
+        <div className="mt-1">
+          Start a line with <code className="text-sol-text-muted">##</code> and its sections show up
+          here.
+        </div>
       </div>
     );
   }
@@ -191,23 +198,35 @@ const OutlinePane = memo(function OutlinePane({ path }: { path: string }) {
       {headings.map((h, i) => {
         const slug = `vh-${slugList[i]}`;
         const isCurrent = slug === currentSlug;
+        const target = { kind: "heading" as const, path, headingText: h.text, slug: slugList[i] };
+        const pinned = isBookmarked(bookmarks, target);
         return (
-          <button
+          <div
             key={i}
-            type="button"
-            onClick={() => {
-              document.getElementById(slug)?.scrollIntoView({ block: "start", behavior: "smooth" });
-            }}
-            className={`w-full text-left px-3 py-[3px] text-[12px] truncate border-l-2 transition-colors ${
+            className={`group flex items-center gap-1 pr-2 border-l-2 transition-colors ${
               isCurrent
                 ? "border-sol-cyan text-sol-text bg-sol-bg-alt/60"
                 : "border-transparent text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt"
             }`}
-            style={{ paddingLeft: 10 + (h.level - minLevel) * 14 }}
-            title={h.text}
           >
-            {h.text}
-          </button>
+            <button
+              type="button"
+              onClick={() => {
+                document.getElementById(slug)?.scrollIntoView({ block: "start", behavior: "smooth" });
+              }}
+              className="flex-1 min-w-0 text-left py-[3px] text-[12px] truncate"
+              style={{ paddingLeft: 10 + (h.level - minLevel) * 14 }}
+              title={h.text}
+            >
+              {h.text}
+            </button>
+            <BookmarkToggle
+              target={target}
+              label="Bookmark this heading"
+              size="w-3 h-3"
+              className={`flex-shrink-0 ${pinned ? "" : "opacity-0 group-hover:opacity-100"}`}
+            />
+          </div>
         );
       })}
     </div>
@@ -302,10 +321,72 @@ const TagsPane = memo(function TagsPane({ onNavigate }: { onNavigate: (path: str
   );
 });
 
-const TABS: { id: PaneTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+/** The mirror of backlinks: this note's own links, resolved and unresolved
+ *  split — Obsidian's outgoing links pane. */
+const OutgoingPane = memo(function OutgoingPane({
+  path,
+  onNavigate,
+}: {
+  path: string;
+  onNavigate: (path: string) => void;
+}) {
+  useVaultIndexVersion();
+  const outgoing = vaultIndex.outgoing(path);
+  const resolved = outgoing.filter((l) => l.resolved);
+  const unresolved = outgoing.filter((l) => !l.resolved);
+
+  if (outgoing.length === 0) {
+    return (
+      <div className="px-3 py-6 text-xs text-sol-text-dim text-center">
+        No links in this note yet. Write <code className="text-sol-text-muted">[[wiki links]]</code>{" "}
+        to connect it.
+      </div>
+    );
+  }
+  return (
+    <div className="py-1">
+      {resolved.length > 0 && (
+        <>
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-sol-text-dim">
+            {resolved.length} link{resolved.length === 1 ? "" : "s"}
+          </div>
+          {resolved.map((l, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onNavigate(l.resolved!)}
+              className="w-full text-left px-3 py-1 text-[12px] text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text truncate"
+              title={l.resolved!}
+            >
+              {noteDisplayName(l.resolved!.split("/").pop()!)}
+              {l.link.subpath && <span className="text-sol-text-dim"> › {l.link.subpath}</span>}
+              {l.isAmbiguous && <span className="ml-1 text-[10px] text-sol-yellow">ambiguous</span>}
+            </button>
+          ))}
+        </>
+      )}
+      {unresolved.length > 0 && (
+        <>
+          <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-wide text-sol-text-dim border-t border-sol-border/20">
+            {unresolved.length} unresolved
+          </div>
+          {unresolved.map((l, i) => (
+            <div key={i} className="px-3 py-1 text-[12px]">
+              <span className="wiki-link wiki-link-unresolved">{l.link.target || l.link.raw}</span>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+});
+
+const TABS: { id: VaultRightPanelTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "backlinks", label: "Backlinks", icon: Link2 },
+  { id: "outgoing", label: "Outgoing", icon: ArrowUpRight },
   { id: "outline", label: "Outline", icon: List },
   { id: "tags", label: "Tags", icon: Hash },
+  { id: "bookmarks", label: "Bookmarks", icon: Bookmark },
 ];
 
 export const VaultRightPanel = memo(function VaultRightPanel({
@@ -318,7 +399,7 @@ export const VaultRightPanel = memo(function VaultRightPanel({
   const tab = useVaultStore((s) => s.rightPanelTab);
   const setTab = useVaultStore((s) => s.setRightPanelTab);
   return (
-    <div className="h-full flex flex-col bg-sol-bg-alt/40">
+    <div className="h-full flex flex-col bg-sol-bg-alt/40 vault-panel-cq">
       <div className="flex items-center border-b border-sol-border/30">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
@@ -333,21 +414,30 @@ export const VaultRightPanel = memo(function VaultRightPanel({
             }`}
           >
             <Icon className="w-3.5 h-3.5" />
-            {label}
+            <span className="vault-tab-label">{label}</span>
           </button>
         ))}
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto">
         {tab === "tags" ? (
           <TagsPane onNavigate={onNavigate} />
+        ) : tab === "bookmarks" ? (
+          <VaultBookmarksPane activePath={activePath} onNavigate={onNavigate} />
         ) : activePath ? (
           tab === "backlinks" ? (
             <BacklinksPane path={activePath} onNavigate={onNavigate} />
+          ) : tab === "outgoing" ? (
+            <OutgoingPane path={activePath} onNavigate={onNavigate} />
           ) : (
             <OutlinePane path={activePath} />
           )
         ) : (
-          <div className="px-3 py-6 text-xs text-sol-text-dim text-center">Open a note first.</div>
+          <div className="px-3 py-6 text-xs leading-5 text-sol-text-dim text-center">
+            Open a note first.
+            <div className="mt-1">
+              Backlinks, outgoing links and the outline all describe the note you&apos;re reading.
+            </div>
+          </div>
         )}
       </div>
     </div>
