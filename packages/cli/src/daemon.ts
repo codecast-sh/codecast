@@ -26,7 +26,7 @@ import {
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
-import { getCodexUsageHeartbeatPayload, refreshCodexUsageSnapshot } from "./codexUsage.js";
+import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile } from "./codexAccounts.js";
 import { TranscriptDirWatcher, transcriptDirWatcherConfig, decodePiCwdSlug, type TranscriptDirEvent, type DirEventWatcher } from "./transcriptDirWatcher.js";
 import {
   OpencodeStorageWatcher,
@@ -1889,16 +1889,25 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
 const CC_USAGE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 let ccUsageRefreshInFlight = false;
 
-// Codex usage: authoritative limit windows via a one-shot `codex app-server`
-// RPC (account/rateLimits/read), model mix from local rollout logs. Shares the
-// cc-usage cadence; the heartbeat reads the refreshed module-level snapshot.
+// Codex per-account usage: enroll/refresh the active login's profile, probe
+// the active account via the real ~/.codex (RPC + rollout-log model mix), then
+// probe each dormant profile via its CODEX_HOME snapshot dir. Shares the
+// cc-usage cadence; the heartbeat reads the cache file via its mtime-keyed
+// payload. Codex logins are per-machine (never pushed to remotes), so every
+// device reports its own inventory.
 let codexUsageRefreshInFlight = false;
 
 async function maintainCodexUsageSnapshot(reason: string): Promise<void> {
   if (codexUsageRefreshInFlight) return;
   codexUsageRefreshInFlight = true;
   try {
-    await refreshCodexUsageSnapshot();
+    const res = await refreshCodexUsageSnapshots();
+    if (res.probed.length > 0 || res.failed.length > 0) {
+      const failNote = res.failed.length
+        ? ` failed=${res.failed.map((f) => `${f.name}(${f.reason})`).join(",")}`
+        : "";
+      log(`[ACCOUNTS] Codex usage refreshed for ${res.probed.length} account(s) (${reason})${failNote}`);
+    }
   } catch (err) {
     log(`[ACCOUNTS] Codex usage refresh failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
   } finally {
@@ -1972,15 +1981,36 @@ function maybeAutoSaveAccount(): void {
   }
 }
 
+// Same per-beat enrollment for the Codex login: a fresh `codex login` appears
+// in the inventory on the next heartbeat instead of waiting for the usage
+// cycle. One attempt per account per daemon lifetime, mirroring the CC path.
+const codexAutoSaveDecided = new Set<string>();
+function maybeAutoSaveCodexAccount(): void {
+  try {
+    const payload = getCodexAccountsHeartbeatPayload();
+    const key = payload?.active_uuid || payload?.active_email;
+    if (!key || codexAutoSaveDecided.has(key)) return;
+    codexAutoSaveDecided.add(key);
+    const saved = autoSaveActiveCodexProfile();
+    if (saved) {
+      log(`[ACCOUNTS] Auto-saved active Codex login as profile "${saved.name}"${saved.email ? ` (${saved.email})` : ""}`);
+    }
+  } catch (err) {
+    log(`[ACCOUNTS] Auto-save of active Codex login failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function sendHeartbeat(): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
   }
 
-  // Before publishing the account inventory, make sure the active login is in
-  // it — this is what makes a new `/login` show up in Settings by itself.
+  // Before publishing the account inventories, make sure the active logins are
+  // in them — this is what makes a new `/login` (or `codex login`) show up in
+  // Settings by itself.
   maybeAutoSaveAccount();
+  maybeAutoSaveCodexAccount();
 
   // Dynamic-client model inventory: recollect in the background when stale; a
   // fresh set rides a beat only until the server acks it (hash-gated).
@@ -2011,10 +2041,10 @@ async function sendHeartbeat(): Promise<void> {
         // backing files change (mtime-keyed cache), so CLI-side saves and
         // fresh /logins surface on the next beat.
         cc_accounts: getAccountsHeartbeatPayload() ?? undefined,
-        // Codex (ChatGPT) usage snapshot from local rollout logs — limit-window
-        // percentages, credits balance, and last-week per-model token shares.
-        // Throttled internally to a 5-minute recompute.
-        codex_usage: getCodexUsageHeartbeatPayload() ?? undefined,
+        // Codex (ChatGPT) account inventory — same shape as cc_accounts
+        // (names/emails/plans + per-account usage, never tokens). Recomputed
+        // when its backing files change (mtime-keyed cache).
+        codex_accounts: getCodexAccountsHeartbeatPayload() ?? undefined,
         // Managed-provider-key metadata (pl-207): the device's ECDH public key
         // (not a secret — the web encrypts a key to it) + which providers have a
         // key here (ids only, never the keys). Lets the web show managed status

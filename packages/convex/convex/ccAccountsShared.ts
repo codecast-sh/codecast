@@ -12,30 +12,18 @@ const usageWindowValidator = v.object({
   label: v.optional(v.string()),
 });
 
+// One usage shape serves both providers. The base windows are shared; the
+// trailing optionals only appear on Codex accounts today (scoped: n
+// model-scoped limit windows vs Claude's single worst weekly_scoped; models:
+// the week's per-model token shares from rollout logs; credits/reset_credits:
+// ChatGPT's balance and grantable full resets). All percentages and labels,
+// never tokens.
 export const ccUsageValidator = v.object({
   fetched_at: v.number(),
-  session: v.optional(usageWindowValidator), // rolling 5h window
+  session: v.optional(usageWindowValidator), // rolling short window (5h / sub-24h)
   weekly: v.optional(usageWindowValidator), // 7d, all models
   weekly_scoped: v.optional(usageWindowValidator), // 7d, model-scoped
   extra: v.optional(v.object({ percent: v.number(), enabled: v.boolean() })),
-});
-
-export type CcUsage = {
-  fetched_at: number;
-  session?: { percent: number; resets_at?: number; label?: string };
-  weekly?: { percent: number; resets_at?: number; label?: string };
-  weekly_scoped?: { percent: number; resets_at?: number; label?: string };
-  extra?: { percent: number; enabled: boolean };
-};
-
-// Codex (ChatGPT) usage snapshot the daemon extracts from local rollout logs
-// (percentages, credits balance, last-week per-model token shares — non-secret).
-// Mirrors CodexUsageSnapshot in cli/src/codexUsage.ts.
-export const codexUsageValidator = v.object({
-  fetched_at: v.number(),
-  plan_type: v.optional(v.string()),
-  session: v.optional(usageWindowValidator), // sub-24h window when the plan has one
-  weekly: v.optional(usageWindowValidator), // 7d window
   scoped: v.optional(
     v.array(v.object({ label: v.string(), percent: v.number(), resets_at: v.optional(v.number()) })),
   ),
@@ -59,27 +47,17 @@ export const codexUsageValidator = v.object({
   ),
 });
 
-export type CodexUsage = {
+export type CcUsage = {
   fetched_at: number;
-  plan_type?: string;
   session?: { percent: number; resets_at?: number; label?: string };
   weekly?: { percent: number; resets_at?: number; label?: string };
+  weekly_scoped?: { percent: number; resets_at?: number; label?: string };
+  extra?: { percent: number; enabled: boolean };
   scoped?: { label: string; percent: number; resets_at?: number }[];
   credits?: { has_credits: boolean; unlimited?: boolean; balance?: string };
   reset_credits?: { available: number };
   models?: { model: string; label: string; tokens: number; share: number }[];
 };
-
-/** Worst (highest) utilization across a Codex snapshot's limit windows. */
-export function worstCodexPercent(usage?: CodexUsage | null): number | null {
-  if (!usage) return null;
-  const values = [
-    usage.session?.percent,
-    usage.weekly?.percent,
-    ...(usage.scoped ?? []).map((s) => s.percent),
-  ].filter((p): p is number => typeof p === "number");
-  return values.length > 0 ? Math.max(...values) : null;
-}
 
 // Validator for the daemon-reported account inventory (names/emails/tiers
 // only — never tokens). Stored per device row; consumed by the web switcher.
@@ -113,7 +91,7 @@ export const ccAutoSwitchStateValidator = v.object({
  * single summary meter should show. Null when no usage data exists. */
 export function worstUsagePercent(usage: CcUsage | undefined | null): number | null {
   if (!usage) return null;
-  const pcts = [usage.session, usage.weekly, usage.weekly_scoped]
+  const pcts = [usage.session, usage.weekly, usage.weekly_scoped, ...(usage.scoped ?? [])]
     .filter((w): w is NonNullable<typeof w> => !!w)
     .map((w) => w.percent);
   return pcts.length ? Math.max(...pcts) : null;
@@ -124,7 +102,7 @@ export function worstUsagePercent(usage: CcUsage | undefined | null): number | n
  * — the snapshot is just stale, the window has rolled. */
 export function isUsageExhausted(usage: CcUsage | undefined | null, now: number): boolean {
   if (!usage) return false;
-  for (const w of [usage.session, usage.weekly, usage.weekly_scoped]) {
+  for (const w of [usage.session, usage.weekly, usage.weekly_scoped, ...(usage.scoped ?? [])]) {
     if (w && w.percent >= 100 && (w.resets_at ?? Number.POSITIVE_INFINITY) > now) return true;
   }
   return false;

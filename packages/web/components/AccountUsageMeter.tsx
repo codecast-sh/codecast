@@ -5,15 +5,10 @@
 // usage credits). Shared by the header chip's popover and the Claude Accounts
 // settings page so both always tell the same story.
 
-import {
-  worstUsagePercent,
-  worstCodexPercent,
-  type CcUsage,
-  type CodexUsage,
-} from "@codecast/convex/convex/ccAccountsShared";
+import { worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 
-export { worstUsagePercent, worstCodexPercent };
-export type { CcUsage, CodexUsage };
+export { worstUsagePercent };
+export type { CcUsage };
 
 // Status tone for a utilization percent: quiet while there's headroom, loud as
 // the window pegs. Values are shown alongside — color never carries alone.
@@ -89,9 +84,11 @@ export function UsageMeterRow({
   );
 }
 
-/** The full meter block for one account: one row per limit window, an extra
- * usage credits row when enabled, and a staleness note when the snapshot is a
- * memory rather than a live reading. */
+/** The full meter block for one account (either provider): one row per limit
+ * window, then the codex-only extras — model mix under an explicit divider so
+ * a share of your own tokens can never be misread as a pegged limit — and the
+ * credits notes. A staleness note marks a snapshot that is a memory rather
+ * than a live reading. */
 export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: number }) {
   if (!usage) {
     return (
@@ -101,6 +98,7 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
     );
   }
   const stale = now - usage.fetched_at > STALE_AFTER_MS;
+  const models = (usage.models ?? []).filter((m) => m.share >= 1).slice(0, 3);
   return (
     <div className="space-y-1">
       {usage.session && (
@@ -117,6 +115,9 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
           now={now}
         />
       )}
+      {usage.scoped?.map((s) => (
+        <UsageMeterRow key={s.label} label={s.label} percent={s.percent} resetsAt={s.resets_at} now={now} />
+      ))}
       {usage.extra?.enabled && (
         <UsageMeterRow
           label="Extra"
@@ -124,6 +125,30 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
           now={now}
           title={`Extra usage credits: ${Math.round(usage.extra.percent)}% of the monthly budget spent`}
         />
+      )}
+      {models.length > 0 && (
+        <>
+          <div className="pt-1 text-[9px] uppercase tracking-wider text-sol-text-dim/80">
+            model mix — share of the week&apos;s tokens, not a limit
+          </div>
+          {models.map((m, i) => (
+            <ModelShareRow key={m.model} label={m.label} share={m.share} emphasized={i === 0} />
+          ))}
+        </>
+      )}
+      {usage.credits && (usage.credits.has_credits || usage.credits.unlimited) && (
+        <div className="pt-0.5 text-[10px] text-sol-text-dim">
+          Credits: {usage.credits.unlimited ? "unlimited" : usage.credits.balance ?? "available"}
+        </div>
+      )}
+      {usage.reset_credits && usage.reset_credits.available > 0 && (
+        <div
+          className="pt-0.5 text-[10px] text-sol-cyan"
+          title="Codex has granted a free rate-limit reset — redeemable from the Codex CLI when a window pegs"
+        >
+          {usage.reset_credits.available} rate-limit reset credit
+          {usage.reset_credits.available > 1 ? "s" : ""} available
+        </div>
       )}
       {stale && <div className="pt-0.5 text-[10px] text-sol-text-dim">as of {formatAgo(now - usage.fetched_at)}</div>}
     </div>
@@ -171,47 +196,3 @@ function ModelShareRow({
   );
 }
 
-/** The meter block for the machine's Codex (ChatGPT) login: official limit
- * windows first, then the week's model mix with the frontier model on top. */
-export function CodexUsageBars({ usage, now }: { usage?: CodexUsage | null; now: number }) {
-  if (!usage) {
-    return (
-      <div className="text-[11px] italic text-sol-text-dim">
-        No Codex usage data yet — reported by the daemon within a few minutes.
-      </div>
-    );
-  }
-  const stale = now - usage.fetched_at > 20 * 60 * 1000;
-  const models = (usage.models ?? []).filter((m) => m.share >= 1).slice(0, 3);
-  return (
-    <div className="space-y-1">
-      {usage.session && (
-        <UsageMeterRow label="Session" percent={usage.session.percent} resetsAt={usage.session.resets_at} now={now} />
-      )}
-      {usage.weekly && (
-        <UsageMeterRow label="Week" percent={usage.weekly.percent} resetsAt={usage.weekly.resets_at} now={now} />
-      )}
-      {usage.scoped?.map((s) => (
-        <UsageMeterRow key={s.label} label={s.label} percent={s.percent} resetsAt={s.resets_at} now={now} />
-      ))}
-      {models.map((m, i) => (
-        <ModelShareRow key={m.model} label={m.label} share={m.share} emphasized={i === 0} />
-      ))}
-      {usage.credits && (usage.credits.has_credits || usage.credits.unlimited) && (
-        <div className="pt-0.5 text-[10px] text-sol-text-dim">
-          Credits: {usage.credits.unlimited ? "unlimited" : usage.credits.balance ?? "available"}
-        </div>
-      )}
-      {usage.reset_credits && usage.reset_credits.available > 0 && (
-        <div
-          className="pt-0.5 text-[10px] text-sol-cyan"
-          title="Codex has granted a free rate-limit reset — redeemable from the Codex CLI when a window pegs"
-        >
-          {usage.reset_credits.available} rate-limit reset credit
-          {usage.reset_credits.available > 1 ? "s" : ""} available
-        </div>
-      )}
-      {stale && <div className="pt-0.5 text-[10px] text-sol-text-dim">as of {formatAgo(now - usage.fetched_at)}</div>}
-    </div>
-  );
-}

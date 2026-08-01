@@ -742,16 +742,37 @@ export const listAccountProfiles = query({
       .query("devices")
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .collect();
+    // Old daemons report only the machine-wide codex_usage snapshot; shape it
+    // as a single-profile inventory so the web renders one code path. The
+    // legacy field names match the new usage shape except plan_type, which
+    // lives at the profile level (subscription) in the inventory.
+    const legacyCodexAccounts = (
+      cu: any,
+    ):
+      | { active_email?: string; profiles: Array<{ name: string; email?: string; subscription?: string; usage?: any }> }
+      | undefined => {
+      if (!cu || typeof cu !== "object") return undefined;
+      const { plan_type, ...usage } = cu;
+      return {
+        profiles: [
+          {
+            name: "codex",
+            ...(typeof plan_type === "string" ? { subscription: plan_type } : {}),
+            usage,
+          },
+        ],
+      };
+    };
     return {
       devices: devices
-        .filter((d) => isDeviceOnline(d, now) && (d.cc_accounts || d.codex_usage))
+        .filter((d) => isDeviceOnline(d, now) && (d.cc_accounts || d.codex_accounts || d.codex_usage))
         .map((d) => ({
           device_id: d.device_id,
           label: d.label,
           is_remote: d.is_remote === true,
           active_email: d.cc_accounts?.active_email,
           profiles: d.cc_accounts?.profiles ?? [],
-          codex_usage: d.codex_usage,
+          codex_accounts: d.codex_accounts ?? legacyCodexAccounts(d.codex_usage),
           auto_switch: d.cc_auto_switch === true,
           auto_switch_state: d.cc_auto_switch_state
             ? {

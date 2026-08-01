@@ -18,11 +18,9 @@ import { Switch } from "./ui/switch";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import {
   AccountUsageBars,
-  CodexUsageBars,
   formatAgo,
   usageTone,
   worstUsagePercent,
-  worstCodexPercent,
   type CcUsage,
 } from "./AccountUsageMeter";
 
@@ -112,25 +110,33 @@ export function AccountUsageChip() {
   const device = data?.devices.find((d) => !d.is_remote);
   const profiles: ProfileRow[] = device?.profiles ?? [];
   const active = profiles.find((p) => p.email && p.email === device?.active_email);
-  const codex = device?.codex_usage;
-  if (!device || (!active && !codex)) return null;
+  // Codex accounts arrive in the same inventory shape as Claude's; the active
+  // login is matched by email (uuid isn't exposed per profile), first profile
+  // as fallback for legacy single-snapshot devices.
+  const codexProfiles: ProfileRow[] = device?.codex_accounts?.profiles ?? [];
+  const activeCodex =
+    codexProfiles.find((p) => p.email && p.email === device?.codex_accounts?.active_email) ??
+    codexProfiles[0];
+  if (!device || (!active && !activeCodex)) return null;
 
   const worst = active ? worstUsagePercent(active.usage) : null;
-  const codexWorst = worstCodexPercent(codex);
+  const codexWorst = activeCodex ? worstUsagePercent(activeCodex.usage) : null;
   // The chip border speaks for the most-pressed provider.
   const overall = Math.max(worst ?? -1, codexWorst ?? -1);
   const tone = overall >= 0 ? usageTone(overall) : "var(--sol-text-dim)";
   const claudeTone = worst != null ? usageTone(worst) : "var(--sol-text-dim)";
   const codexTone = codexWorst != null ? usageTone(codexWorst) : "var(--sol-text-dim)";
-  // Codex segment label: the week's dominant model — the user's frontier
-  // daily driver (e.g. "sol") — rather than the generic client name.
-  const codexLabel = codex?.models?.[0]?.label?.toLowerCase() ?? "codex";
+  // Both segments read the same way: account name + worst LIMIT window. (The
+  // label used to be the week's dominant model, which made "sol 0%" in the
+  // chip contradict the popover's "SOL 100%" token-share row.)
+  const codexLabel = activeCodex?.name ?? "codex";
   // "Unused" is time-scoped: a provider with no activity in the trailing week
   // collapses to the stub icon even when it's connected. Claude's limit
   // windows are weekly, so all-zero utilization means an idle week; Codex has
   // the explicit trailing-7d model aggregation as its activity signal.
   const claudeUsed = !!active && worst != null && worst > 0;
-  const codexUsed = !!codex && ((codex.models?.length ?? 0) > 0 || (codexWorst ?? 0) > 0);
+  const codexUsed =
+    !!activeCodex && ((activeCodex.usage?.models?.length ?? 0) > 0 || (codexWorst ?? 0) > 0);
   const others = profiles.filter((p) => p !== active);
   const autoOn = pendingToggle ?? device.auto_switch;
   const state = device.auto_switch_state;
@@ -203,13 +209,13 @@ export function AccountUsageChip() {
               tone={codexTone}
               stub={!codexUsed}
               title={
-                !codex
+                !activeCodex
                   ? "Codex not detected on this machine"
                   : !codexUsed
-                    ? "Codex — no usage this week"
-                    : `Codex (${codexLabel}) — worst limit window at ${codexWorst != null ? Math.round(codexWorst) : "?"}%`
+                    ? `Codex "${codexLabel}" — no usage this week`
+                    : `Codex "${codexLabel}" — worst limit window at ${codexWorst != null ? Math.round(codexWorst) : "?"}%`
               }
-              onHover={codex ? () => setHovered("codex") : undefined}
+              onHover={activeCodex ? () => setHovered("codex") : undefined}
             />
             {autoOn && (
               <Zap
@@ -231,16 +237,17 @@ export function AccountUsageChip() {
                 </div>
                 <AccountUsageBars usage={active.usage} now={now} />
               </>
-            ) : hovered === "codex" && codex ? (
+            ) : hovered === "codex" && activeCodex ? (
               <>
                 <div className="mb-1.5 flex items-center gap-2">
                   <Hexagon className="h-3 w-3 text-sol-violet" />
-                  <span className="text-xs font-medium text-sol-text">Codex</span>
-                  {codex.plan_type && (
-                    <span className="min-w-0 flex-1 truncate text-[10px] text-sol-text-dim">{codex.plan_type}</span>
-                  )}
+                  <span className="text-xs font-medium text-sol-text">{activeCodex.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-[10px] text-sol-text-dim">
+                    {activeCodex.email ?? "Codex"}
+                    {activeCodex.subscription ? ` · ${activeCodex.subscription}` : ""}
+                  </span>
                 </div>
-                <CodexUsageBars usage={codex} now={now} />
+                <AccountUsageBars usage={activeCodex.usage} now={now} />
               </>
             ) : null}
           </div>
@@ -302,17 +309,34 @@ export function AccountUsageChip() {
             </button>
           ))}
 
-          {codex ? (
-            <div className="rounded-md border border-sol-violet/25 bg-sol-violet/[0.04] p-2.5">
-              <div className="mb-1.5 flex items-center gap-2">
-                <Hexagon className="h-3 w-3 text-sol-violet" />
-                <span className="text-xs font-medium text-sol-text">Codex</span>
-                {codex.plan_type && (
-                  <span className="min-w-0 flex-1 truncate text-[10px] text-sol-text-dim">{codex.plan_type}</span>
-                )}
-              </div>
-              <CodexUsageBars usage={codex} now={now} />
-            </div>
+          {codexProfiles.length > 0 ? (
+            // Same card set as the Claude accounts above, one per saved Codex
+            // login. Display-only for now — switching the machine's Codex
+            // account is the follow-up (auth.json swap).
+            codexProfiles.map((p) => {
+              const isActive = p === activeCodex;
+              return (
+                <div
+                  key={p.name}
+                  className={
+                    isActive
+                      ? "rounded-md border border-sol-violet/25 bg-sol-violet/[0.04] p-2.5"
+                      : "rounded-md border border-sol-border/50 p-2.5"
+                  }
+                >
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <Hexagon className={`h-3 w-3 ${isActive ? "text-sol-violet" : "text-sol-text-dim"}`} />
+                    <span className="text-xs font-medium text-sol-text">{p.name}</span>
+                    <span className="min-w-0 flex-1 truncate text-[10px] text-sol-text-dim">
+                      {p.email}
+                      {p.subscription ? ` · ${p.subscription}` : ""}
+                    </span>
+                    {isActive && <span className="text-[10px] font-medium text-sol-violet">active</span>}
+                  </div>
+                  <AccountUsageBars usage={p.usage} now={now} />
+                </div>
+              );
+            })
           ) : (
             <div className="rounded-md border border-dashed border-sol-border/60 p-2.5">
               <div className="flex items-center gap-2 text-xs text-sol-text-dim">
