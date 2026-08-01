@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
   AGENT_CLIENTS,
+  AGENT_LAUNCH_OPTIONS,
+  launchRailOptions,
   agentSupportsExecutionTransport,
   fromConvexAgentType,
   InvalidExecutionAgentTypeError,
@@ -87,5 +89,35 @@ describe("fenced execution transports", () => {
     for (const agent of Object.keys(AGENT_CLIENTS) as Array<keyof typeof AGENT_CLIENTS>) {
       expect(agentSupportsExecutionTransport(agent, "external")).toBe(false);
     }
+  });
+});
+
+// The new-session agent row (web AgentSwitcher + mobile sheet) renders from
+// AGENT_LAUNCH_OPTIONS; the launch model/effort rail from launchRailOptions.
+// Both are pure registry derivations — these tests pin the shape each surface
+// relies on (six clients, honest labels, launch rail hides picker-only models
+// and prepends the "default" effort stop).
+describe("new-session launch options", () => {
+  it("derives one launch option per registry client, in declaration order", () => {
+    expect(AGENT_LAUNCH_OPTIONS.map((a) => a.id)).toEqual(
+      Object.keys(AGENT_CLIENTS) as Array<keyof typeof AGENT_CLIENTS>,
+    );
+    for (const opt of AGENT_LAUNCH_OPTIONS) {
+      expect(opt.convexType).toBe(AGENT_CLIENTS[opt.id].convexId);
+      expect(opt.label).toBe(AGENT_CLIENTS[opt.id].displayName);
+      expect(opt.label.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("launch rail hides midSessionOnly models and prepends the default effort stop", () => {
+    const claude = launchRailOptions(AGENT_CLIENTS.claude.modelConfig!);
+    expect(claude.models.some((m) => m.midSessionOnly)).toBe(false);
+    expect(claude.models.some((m) => m.key === "sonnet-1m")).toBe(false);
+    expect(claude.models.some((m) => m.key === "opus")).toBe(true);
+    expect(claude.efforts).toEqual(["default", "low", "medium", "high", "max"]);
+
+    // No-effort clients still get the default stop (opencode's effort list is empty).
+    const opencode = launchRailOptions(AGENT_CLIENTS.opencode.modelConfig!);
+    expect(opencode.efforts).toEqual(["default"]);
   });
 });

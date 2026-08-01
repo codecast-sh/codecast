@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image, ActionSheetIOS } from 'react-native';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image, ActionSheetIOS, Switch } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -11,11 +11,17 @@ import {
   formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
 import {
-  useInboxStore, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
+  useInboxStore, isConvexId, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
   sessionsWakeSig, pendingSendWakeSig,
 } from '@codecast/web/store/inboxStore';
+import {
+  AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, featuredModelOptions, launchRailOptions, toConvexAgentType,
+  type AgentClientId, type DeviceModelInventory,
+} from '@codecast/shared/contracts';
+import { defaultMachineId } from '@codecast/web/lib/machinePicker';
+import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
 import { labelHexColor } from '@/lib/labelColors';
@@ -86,22 +92,59 @@ function HiddenSessionRow({ session, variant, onPress, onRestore, onKill }: {
   );
 }
 
-type AgentType = "claude" | "codex" | "gemini";
-
-const agentLogoSources = {
+// Logos are binary assets baked into the build, so an OTA update can never add
+// one — a client that ships later renders a letter avatar in its accent instead
+// of blocking the agent row on a native release.
+const agentLogoSources: Partial<Record<AgentClientId, number>> = {
   claude: require('@/assets/images/agents/claude.png'),
   codex: require('@/assets/images/agents/codex.png'),
   gemini: require('@/assets/images/agents/gemini.png'),
 };
 
-function AgentLogo({ type, size = 20, bgColor }: { type: AgentType; size?: number; bgColor: string }) {
+// Per-client accents, matching web's AGENT_COLORS (CommandPalette) where it has
+// one. `logoBg` is the tile behind the mark; `color` tints the selected button.
+const agentAccents: Record<AgentClientId, { color: string; logoBg: string }> = {
+  claude: { color: Theme.orange, logoBg: '#b58900' },
+  codex: { color: Theme.green, logoBg: '#0f0f0f' },
+  cursor: { color: Theme.violet, logoBg: '#6c71c4' },
+  gemini: { color: Theme.blue, logoBg: '#1a73e8' },
+  opencode: { color: Theme.accentAmber, logoBg: '#d97706' },
+  pi: { color: Theme.cyan, logoBg: '#2aa198' },
+};
+
+function AgentLogo({ id, label, size = 20, bgColor }: { id: AgentClientId; label: string; size?: number; bgColor: string }) {
+  const source = agentLogoSources[id];
   const iconSize = size * 0.85;
   return (
     <RNView style={{ width: size, height: size, borderRadius: size * 0.2, backgroundColor: bgColor, alignItems: 'center', justifyContent: 'center' }}>
-      <Image source={agentLogoSources[type]} style={{ width: iconSize, height: iconSize }} resizeMode="contain" />
+      {source ? (
+        <Image source={source} style={{ width: iconSize, height: iconSize }} resizeMode="contain" />
+      ) : (
+        <RNText style={{ fontSize: size * 0.55, fontWeight: '700', color: '#fff' }}>{label.charAt(0).toUpperCase()}</RNText>
+      )}
     </RNView>
   );
 }
+
+// Web's MODE_ITEMS (StableContextCards), verbatim: same four stops, same
+// wording, so the phone and desktop describe the injection identically. "auto"
+// stamps nothing — the machine's own `cast stable` setting decides.
+const STABLE_MODES = [
+  { key: "auto", label: "Auto", title: "Use this machine's default (cast stable)" },
+  { key: "team", label: "Team", title: "Team's recent sessions (14d)" },
+  { key: "solo", label: "Solo", title: "Your recent sessions (7d)" },
+  { key: "off", label: "Off", title: "Don't inject session history" },
+] as const;
+type StableModePick = (typeof STABLE_MODES)[number]["key"];
+
+// listDevices reports each machine's model inventory; the shared mobile Device
+// shape (DevicesSection) predates the field.
+type MachineDevice = Device & { model_inventory?: DeviceModelInventory };
+
+// Display-only "~" collapse for the folder browser. web/lib/utils' inferHomeDir
+// sits beside window/document helpers, so the one-line version lives here
+// rather than dragging that module into the Hermes bundle.
+const displayPath = (p: string) => p.replace(/^(\/Users\/[^/]+|\/home\/[^/]+|\/root)(?=\/|$)/, "~");
 
 function mobileCreateErrorMessage(subject: string, error: unknown): string {
   const message = String((error as { message?: unknown })?.message ?? error ?? "");
@@ -112,17 +155,32 @@ function mobileCreateErrorMessage(subject: string, error: unknown): string {
 }
 
 function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: boolean; onClose: () => void; onSessionCreated: (conversationId: string) => void }) {
-  const [agentType, setAgentType] = useState<AgentType>("claude");
+  const [agentId, setAgentId] = useState<AgentClientId>("claude");
   const [projectPath, setProjectPath] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const retryStubId = useRef<string | null>(null);
   const submitAttempt = useRef(0);
+  // Launch options. Each holds an EXPLICIT pick only — "default"/"auto"/false
+  // mean "say nothing and let the agent's or machine's own default win".
+  const [model, setModel] = useState("default");
+  const [effort, setEffort] = useState("default");
+  const [stableMode, setStableMode] = useState<StableModePick>("auto");
+  const [isolated, setIsolated] = useState(false);
+  // Tri-state label pick: undefined = untouched (inherit the focused chip's
+  // bucket, which beginOptimisticSession stamps on its own); null = explicitly
+  // "no label" (defeats the inheritance); string = an explicit bucket.
+  const [bucketPick, setBucketPick] = useState<string | null | undefined>(undefined);
+  const buckets = useInboxStore((s) => s.buckets);
+  const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
+  const effectiveBucketId = bucketPick === undefined ? (activeBucketFilter ?? null) : bucketPick;
+  const [modelSheetVisible, setModelSheetVisible] = useState(false);
+  const [showAllRecents, setShowAllRecents] = useState(false);
   // Machine picker. `deviceId` holds an EXPLICIT pick only: left null, routing
   // picks the machine (deviceRouting) and the folder list stays the union across
   // online devices — the behaviour before this row existed.
   const [deviceId, setDeviceId] = useState<string | null>(null);
-  const rawDevices = (useQuery(api.devices.listDevices, visible ? {} : "skip") ?? []) as Device[];
+  const rawDevices = (useQuery(api.devices.listDevices, visible ? {} : "skip") ?? []) as MachineDevice[];
   // listDevices is last_seen-sorted, so heartbeats would reshuffle the chips
   // under the user's thumb. Hold them still: locals first, then by name.
   const devices = useMemo(
@@ -131,19 +189,22 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
     [rawDevices],
   );
   // What auto-routing would choose, so the highlighted chip matches where the
-  // session actually lands: the most-recently-active online local machine, or —
-  // when no local is up — the most-recently-seen one, which routing queues for
-  // rather than handing the session to an always-awake remote (deviceRouting
-  // rungs 4 and 6). Reads rawDevices — the last_seen-sorted wire order — so
-  // first match wins; the display sort above must not leak into the prediction.
-  const defaultDeviceId = useMemo(() => {
-    const locals = rawDevices.filter((d) => !d.is_remote);
-    return (locals.find((d) => d.online) ?? locals[0])?.device_id;
-  }, [rawDevices]);
+  // session actually lands. One ladder with the web picker (machinePicker), fed
+  // the folder being typed so a machine holding that checkout wins — the same
+  // rung routing uses. Feeding the previous answer back in pins the highlight
+  // against heartbeat reordering; writing the ref during render is safe because
+  // it only caches the value just computed.
+  const stickyDefaultRef = useRef<string | null>(null);
+  const defaultDeviceId = defaultMachineId(rawDevices, {
+    ownerDeviceId: null,
+    projectPath: projectPath.trim() || null,
+    sticky: stickyDefaultRef.current,
+  });
+  stickyDefaultRef.current = defaultDeviceId;
   const selectedDeviceId = deviceId ?? defaultDeviceId;
   const recentProjects = useQuery(
     api.users.getRecentProjectPaths,
-    visible ? { limit: 6, ...(deviceId ? { device_id: deviceId } : {}) } : "skip",
+    visible ? { limit: 50, ...(deviceId ? { device_id: deviceId } : {}) } : "skip",
   );
 
   useEffect(() => {
@@ -152,23 +213,68 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
     }
   }, [visible, recentProjects]);
 
-  // Deliver an explicit machine pick to the session the sheet just created.
-  // The pick must ride the CREATE itself, never a follow-up reconfigure: the
-  // create's server side already enqueues a start_session at whatever routing
-  // chose, so retargeting afterwards races a second spawn against the first —
-  // two machines can each claim the same conversation (review finding, pl-224).
-  // Never stamp the machine routing would have chosen anyway: an explicit
-  // target short-circuits at rung 1, skipping the rung that prefers whichever
-  // online machine actually holds the checkout. Re-checked at submit time
-  // because heartbeats can reorder the devices between the pick and the send.
-  const machinePickForCreate = () =>
-    deviceId && deviceId !== defaultDeviceId ? deviceId : undefined;
+  // Deliver every launch choice to the session the sheet creates. They must ride
+  // the CREATE itself, never a follow-up reconfigure: the create's server side
+  // already enqueues a start_session at whatever routing chose, so retargeting
+  // afterwards races a second spawn against the first — two machines can each
+  // claim the same conversation (review finding, pl-224).
+  // Only picks that DIFFER from the default are stamped. Undefined lets the
+  // default win, which is not the same as pinning it: stamping the machine
+  // routing would have chosen anyway short-circuits at rung 1, skipping the rung
+  // that prefers whichever online machine actually holds the checkout, and
+  // stamping stable_mode "auto" would override the machine's `cast stable`
+  // setting. Read at submit time because heartbeats can reorder the devices
+  // between the pick and the send.
+  const launchStampsForCreate = () => ({
+    target_device_id: deviceId && deviceId !== defaultDeviceId ? deviceId : undefined,
+    model: model !== "default" ? model : undefined,
+    effort: effort !== "default" ? effort : undefined,
+    stable_mode: stableMode !== "auto" ? stableMode : undefined,
+    isolated: isolated || undefined,
+  });
+
+  // The label rides the store's post-create marker: _postCreateBucketId is in
+  // the sessions/conversations preserveFields whitelist, survives the stub→real
+  // rekey, and resumePostCreateBucketIntentFor replays it once the id lands —
+  // including for a create that parks offline and resolves much later. (Awaiting
+  // the tracked create promise here instead is a race lost by design:
+  // trackSessionCreate reaps pendingSessionCreates before any later
+  // continuation could read it.) An untouched pill writes nothing — the store
+  // already stamped the focused chip's bucket at beginOptimisticSession.
+  const stampLabelIntent = (stubId: string) => {
+    if (bucketPick === undefined) return;
+    const store = useInboxStore.getState();
+    for (const table of ["sessions", "conversations"] as const) {
+      const row = (store as any)[table][stubId];
+      if (!row) continue;
+      const next = { ...row };
+      if (bucketPick) next._postCreateBucketId = bucketPick;
+      else delete next._postCreateBucketId;
+      store.syncRecord(table, stubId, next);
+    }
+  };
 
   const finishSessionCreate = (conversationId: string) => {
+    // Filing doesn't affect the spawn. The stub path is covered by the marker
+    // stamped at submit; a create that resolved in-line (retry of an already
+    // landed create) has no stub rows left to carry it, so assign directly —
+    // guarded, because the marker replay may have filed it already.
+    if (effectiveBucketId && isConvexId(conversationId)) {
+      const st = useInboxStore.getState();
+      if (convBucketMap(st.bucketAssignments)[conversationId] !== effectiveBucketId) {
+        st.assignSessionToBucket(conversationId, effectiveBucketId);
+      }
+    }
     retryStubId.current = null;
     setSubmitError(null);
     setProjectPath("");
     setDeviceId(null);
+    setModel("default");
+    setEffort("default");
+    setStableMode("auto");
+    setIsolated(false);
+    setBucketPick(undefined);
+    setShowAllRecents(false);
     onClose();
     onSessionCreated(conversationId);
   };
@@ -192,7 +298,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
     setSubmitting(true);
     setSubmitError(null);
     const store = useInboxStore.getState();
-    const agent_type = agentType === "claude" ? "claude_code" : agentType;
+    const agent_type = toConvexAgentType(agentId);
     const path = projectPath.trim() || undefined;
     let stubId = retryStubId.current ?? "";
 
@@ -208,7 +314,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             project_path: path,
             git_root: path,
             session_id: stubId,
-            target_device_id: machinePickForCreate(),
+            ...launchStampsForCreate(),
           }).then((convexId: string) => {
             if (convexId) store.resolveSessionId(stubId, convexId);
             return convexId || stubId;
@@ -232,13 +338,19 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               project_path: path,
               git_root: path,
               session_id: createdStubId,
-              target_device_id: machinePickForCreate(),
+              ...launchStampsForCreate(),
             }),
         });
         stubId = started.stubId;
         retryStubId.current = stubId;
         ready = started.materialize();
       }
+
+      // Synchronous with the branches above — the stub rows (when any) still
+      // exist and the rekey continuation can't have run yet, so the marker is
+      // in place before the id resolves. The already-resolved retry has no stub
+      // rows; finishSessionCreate's direct assign covers it.
+      stampLabelIntent(stubId);
 
       const conversationId = await ready;
       if (submitAttempt.current !== attempt) return;
@@ -256,11 +368,76 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
     }
   };
 
-  const agents: { type: AgentType; label: string; color: string; bgColor: string }[] = [
-    { type: "claude", label: "Claude", color: Theme.orange, bgColor: "#b58900" },
-    { type: "codex", label: "Codex", color: Theme.green, bgColor: "#0f0f0f" },
-    { type: "gemini", label: "Gemini", color: Theme.blue, bgColor: "#1a73e8" },
-  ];
+  // The launch model/effort rail for the selected agent — absent for clients
+  // with no model UI (cursor, gemini), which hides the chip entirely.
+  const modelCfg = AGENT_MODEL_CONFIG[agentId];
+  const selectedDevice = devices.find((d) => d.device_id === selectedDeviceId);
+  // model_inventory is the {hash, collected_at, clients} record the daemon
+  // heartbeats (DeviceModelInventory), keyed by client id inside `clients` —
+  // never a flat id list. The literal narrowing matches the keys the contract
+  // declares; a future dynamic client extends both together.
+  const inventoryIds = agentId === "opencode" || agentId === "pi"
+    ? selectedDevice?.model_inventory?.clients?.[agentId]
+    : undefined;
+  const rail = useMemo(() => {
+    if (!modelCfg) return null;
+    const base = launchRailOptions(modelCfg);
+    if (!modelCfg.dynamic) return base;
+    // Dynamic clients (opencode, pi) address an open provider/model namespace,
+    // so the picked machine's heartbeat-reported inventory is the only list that
+    // reflects what will actually launch. Default + the live featured head,
+    // mirroring web's ModelEffortMenu — the curated aliases are dropped so the
+    // same model can't appear twice under two keys.
+    const featured = featuredModelOptions(inventoryIds ?? []);
+    if (featured.length === 0) return base;
+    return {
+      models: [...base.models.filter((m) => m.key === "default"), ...featured],
+      efforts: base.efforts,
+    };
+  }, [modelCfg, inventoryIds]);
+  const modelLabel = rail?.models.find((m) => m.key === model)?.label ?? "Default";
+
+  // Pre-create filing. The pill shows where the session will actually land —
+  // the explicit pick when there is one, else the focused chip's bucket the
+  // store inherits on its own — so it never reads "+ label" while the create
+  // quietly files elsewhere.
+  const labels = useMemo(() => sortLabels(buckets), [buckets]);
+  const chosenLabel = effectiveBucketId ? buckets[effectiveBucketId] : null;
+  const openBucketPicker = () => {
+    const clear = () => setBucketPick(null);
+    const pick = (b: BucketItem) => setBucketPick(b._id === effectiveBucketId ? null : b._id);
+    if (Platform.OS === 'ios') {
+      const names = labels.map((b) => (b._id === effectiveBucketId ? `✓ ${b.name}` : b.name));
+      const options = [...names, 'No label', 'Cancel'];
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex: options.length - 1, title: 'Label' },
+        (index) => {
+          if (index < labels.length) pick(labels[index]);
+          else if (index === labels.length) clear();
+        },
+      );
+    } else {
+      Alert.alert('Label', undefined, [
+        ...labels.map((b) => ({ text: b._id === effectiveBucketId ? `✓ ${b.name}` : b.name, onPress: () => pick(b) })),
+        { text: 'No label', onPress: clear },
+        { text: 'Cancel', style: 'cancel' as const },
+      ]);
+    }
+  };
+
+  // The expanded folder list narrows to what the user is TYPING. A path that
+  // came from the list (or the seeding effect) is a selection, not a query, so
+  // it must not collapse the browser to a single row.
+  const allRecents = recentProjects ?? [];
+  const typed = projectPath.trim().toLowerCase();
+  // The rows render ~-collapsed (displayPath), so a query typed from what the
+  // list shows — or from the input's own "~/src/my-project" placeholder — must
+  // match too, not just the raw absolute spelling.
+  const matchesTyped = (p: string) =>
+    p.toLowerCase().includes(typed) || displayPath(p).toLowerCase().includes(typed);
+  const browseRecents = typed && !allRecents.some((p) => p.path.toLowerCase() === typed)
+    ? allRecents.filter((p) => matchesTyped(p.path))
+    : allRecents;
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={handleClose}>
@@ -275,26 +452,38 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
           </TouchableOpacity>
         </RNView>
 
-        <ScrollView style={modalStyles.body} keyboardShouldPersistTaps="handled">
+        <ScrollView style={modalStyles.body} contentContainerStyle={modalStyles.bodyContent} keyboardShouldPersistTaps="handled">
           <RNText style={modalStyles.label}>Agent</RNText>
+          {/* Registry-derived (AGENT_LAUNCH_OPTIONS): adding a client descriptor
+              is all it takes to appear here. Six won't fit one row, so it wraps. */}
           <RNView style={modalStyles.agentRow}>
-            {agents.map((a) => (
-              <TouchableOpacity
-                key={a.type}
-                style={[modalStyles.agentBtn, agentType === a.type && { borderColor: a.color, backgroundColor: a.color + "20" }]}
-                onPress={() => {
-                  setAgentType(a.type);
-                  setSubmitError(null);
-                }}
-                disabled={submitting}
-                activeOpacity={0.7}
-              >
-                <AgentLogo type={a.type} size={20} bgColor={agentType === a.type ? a.bgColor : Theme.textMuted0} />
-                <RNText style={[modalStyles.agentBtnText, agentType === a.type && { color: a.color }]}>
-                  {a.label}
-                </RNText>
-              </TouchableOpacity>
-            ))}
+            {AGENT_LAUNCH_OPTIONS.map((a) => {
+              const active = agentId === a.id;
+              const accent = agentAccents[a.id];
+              return (
+                <TouchableOpacity
+                  key={a.id}
+                  style={[modalStyles.agentBtn, active && { borderColor: accent.color, backgroundColor: accent.color + "20" }]}
+                  onPress={() => {
+                    setSubmitError(null);
+                    // Re-tapping the active agent must not wipe a model/effort
+                    // pick; the reset below is for actual switches only (the
+                    // rails differ per client, so a pick can't carry over).
+                    if (a.id === agentId) return;
+                    setAgentId(a.id);
+                    setModel("default");
+                    setEffort("default");
+                  }}
+                  disabled={submitting}
+                  activeOpacity={0.7}
+                >
+                  <AgentLogo id={a.id} label={a.label} size={20} bgColor={active ? accent.logoBg : Theme.textMuted0} />
+                  <RNText style={[modalStyles.agentBtnText, active && { color: accent.color }]} numberOfLines={1}>
+                    {a.label}
+                  </RNText>
+                </TouchableOpacity>
+              );
+            })}
           </RNView>
 
           {/* Machine row. One machine is no choice at all, so it only appears
@@ -355,9 +544,9 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             autoCapitalize="none"
             editable={!submitting}
           />
-          {recentProjects && recentProjects.length > 0 && (
+          {allRecents.length > 0 && (
             <RNView style={modalStyles.recentRow}>
-              {recentProjects.slice(0, 4).map((p) => (
+              {allRecents.slice(0, 6).map((p) => (
                 <TouchableOpacity
                   key={p.path}
                   // `suggested` entries are padding — roots the picked machine
@@ -380,8 +569,113 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                   </RNText>
                 </TouchableOpacity>
               ))}
+              {allRecents.length > 6 && (
+                <TouchableOpacity
+                  style={modalStyles.recentChip}
+                  onPress={() => setShowAllRecents((v) => !v)}
+                  disabled={submitting}
+                  activeOpacity={0.7}
+                >
+                  <RNText style={[modalStyles.recentChipText, showAllRecents && { color: Theme.accent }]}>
+                    {showAllRecents ? "Less" : `More… (${allRecents.length - 6})`}
+                  </RNText>
+                </TouchableOpacity>
+              )}
             </RNView>
           )}
+          {showAllRecents && (
+            <RNView style={modalStyles.recentList}>
+              {browseRecents.length === 0 ? (
+                <RNText style={modalStyles.hintText}>No folders match "{projectPath.trim()}"</RNText>
+              ) : browseRecents.map((p) => (
+                <TouchableOpacity
+                  key={p.path}
+                  style={[modalStyles.recentListRow, p.suggested && modalStyles.recentChipSuggested]}
+                  onPress={() => {
+                    setProjectPath(p.path);
+                    setSubmitError(null);
+                  }}
+                  disabled={submitting}
+                  activeOpacity={0.7}
+                >
+                  <RNText style={[modalStyles.recentListText, projectPath === p.path && { color: Theme.accent }]} numberOfLines={1}>
+                    {displayPath(p.path)}
+                  </RNText>
+                </TouchableOpacity>
+              ))}
+            </RNView>
+          )}
+
+          {rail && (
+            <>
+              <RNText style={modalStyles.label}>Model</RNText>
+              <TouchableOpacity
+                style={modalStyles.selectChip}
+                onPress={() => setModelSheetVisible(true)}
+                disabled={submitting}
+                activeOpacity={0.7}
+              >
+                <RNText style={modalStyles.selectChipText} numberOfLines={1}>
+                  {effort === "default" ? modelLabel : `${modelLabel} · ${effort}`}
+                </RNText>
+                <FontAwesome name="angle-down" size={13} color={Theme.textMuted0} />
+              </TouchableOpacity>
+            </>
+          )}
+
+          <RNText style={modalStyles.label}>Context</RNText>
+          <RNView style={modalStyles.segmentRow}>
+            {STABLE_MODES.map((m) => {
+              const active = stableMode === m.key;
+              return (
+                <TouchableOpacity
+                  key={m.key}
+                  style={[modalStyles.segment, active && { borderColor: Theme.cyan, backgroundColor: Theme.cyan + "18" }]}
+                  onPress={() => setStableMode(m.key)}
+                  disabled={submitting}
+                  activeOpacity={0.7}
+                >
+                  <RNText style={[modalStyles.segmentText, active && { color: Theme.cyan, fontWeight: "600" }]}>{m.label}</RNText>
+                </TouchableOpacity>
+              );
+            })}
+          </RNView>
+          <RNText style={modalStyles.hintText}>
+            {STABLE_MODES.find((m) => m.key === stableMode)?.title}
+          </RNText>
+
+          <RNView style={modalStyles.switchRow}>
+            <RNText style={modalStyles.switchLabel}>Isolated worktree</RNText>
+            <Switch
+              value={isolated}
+              onValueChange={setIsolated}
+              disabled={submitting}
+              trackColor={{ true: Theme.cyan, false: Theme.borderLight }}
+            />
+          </RNView>
+
+          {labels.length > 0 && (
+            <RNView style={modalStyles.labelPillRow}>
+              <TouchableOpacity
+                style={[modalStyles.labelPill, !chosenLabel && modalStyles.labelPillEmpty]}
+                onPress={openBucketPicker}
+                disabled={submitting}
+                activeOpacity={0.7}
+              >
+                {chosenLabel ? (
+                  <>
+                    <RNView style={[modalStyles.labelPillDot, { backgroundColor: labelHexColor(chosenLabel.name) }]} />
+                    <RNText style={[modalStyles.labelPillText, { color: labelHexColor(chosenLabel.name) }]} numberOfLines={1}>
+                      {chosenLabel.name}
+                    </RNText>
+                  </>
+                ) : (
+                  <RNText style={modalStyles.labelPillText}>+ label</RNText>
+                )}
+              </TouchableOpacity>
+            </RNView>
+          )}
+
           {submitError ? (
             <RNText style={modalStyles.errorText}>{submitError}</RNText>
           ) : null}
@@ -409,6 +703,21 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             </RNView>
           </TouchableOpacity>
         </RNView>
+
+        {rail && (
+          <ModelEffortSheet
+            visible={modelSheetVisible}
+            onClose={() => setModelSheetVisible(false)}
+            models={rail.models}
+            efforts={rail.efforts}
+            modelKey={model}
+            effortKey={effort === "default" ? null : effort}
+            onSelect={(sel) => {
+              if (sel.model !== undefined) setModel(sel.model);
+              if (sel.effort !== undefined) setEffort(sel.effort);
+            }}
+          />
+        )}
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -428,14 +737,17 @@ const modalStyles = StyleSheet.create({
   },
   title: { fontSize: 18, fontWeight: "600", color: Theme.text },
   body: { flex: 1, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
+  bodyContent: { paddingBottom: Spacing.lg },
   label: { fontSize: 13, fontWeight: "600", color: Theme.textMuted, marginBottom: 6, marginTop: Spacing.md },
-  agentRow: { flexDirection: "row", gap: 10 },
+  agentRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   agentBtn: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: "30%",
     flexDirection: "row",
     gap: 6,
     justifyContent: "center",
     paddingVertical: 10,
+    paddingHorizontal: 6,
     borderRadius: 10,
     borderWidth: 1.5,
     borderColor: Theme.borderLight,
@@ -480,6 +792,61 @@ const modalStyles = StyleSheet.create({
   },
   recentChipSuggested: { opacity: 0.55 },
   recentChipText: { fontSize: 12, color: Theme.textMuted, fontWeight: "500" },
+  recentList: { marginTop: 8, borderRadius: 10, backgroundColor: Theme.bgAlt, overflow: "hidden" },
+  recentListRow: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+  },
+  recentListText: { fontSize: 13, color: Theme.textMuted },
+  selectChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    maxWidth: "100%",
+  },
+  selectChipText: { fontSize: 13, color: Theme.text, fontWeight: "500", flexShrink: 1 },
+  segmentRow: { flexDirection: "row", gap: 8 },
+  segment: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+  },
+  segmentText: { fontSize: 13, color: Theme.textMuted, fontWeight: "500" },
+  hintText: { fontSize: 11, color: Theme.textMuted0, marginTop: 6, lineHeight: 15 },
+  switchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: Spacing.lg,
+  },
+  switchLabel: { fontSize: 14, color: Theme.text, fontWeight: "500" },
+  labelPillRow: { flexDirection: "row", marginTop: Spacing.md },
+  labelPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+  },
+  labelPillEmpty: { borderStyle: "dashed" },
+  labelPillDot: { width: 6, height: 6, borderRadius: 2 },
+  labelPillText: { fontSize: 12, color: Theme.textMuted0, fontWeight: "500" },
   errorText: {
     color: Theme.red,
     fontSize: 13,

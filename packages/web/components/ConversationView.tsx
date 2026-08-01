@@ -17,7 +17,7 @@ import { compressImage } from "../lib/compressImage";
 import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner, agentSupportsFork, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, agentSupportsFork, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType } from "@codecast/shared/contracts";
 import {
   extractCodexExecActions,
   formatToolName,
@@ -1243,14 +1243,9 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   );
 }
 
-const AGENT_OPTIONS = [
-  { type: "claude_code", label: "Claude" },
-  { type: "codex", label: "Codex" },
-  { type: "cursor", label: "Cursor" },
-  { type: "gemini", label: "Gemini" },
-  { type: "opencode", label: "OpenCode" },
-  { type: "pi", label: "pi" },
-] as const;
+// Registry-derived (shared with the mobile sheet): adding a client descriptor
+// is all it takes to appear here. This surface keys by the convex spelling.
+const AGENT_OPTIONS = AGENT_LAUNCH_OPTIONS.map((a) => ({ type: a.convexType, label: a.label }));
 
 function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedWorkflowId, onSelectWorkflow, workflows, handleRef }: {
   conversation: ConversationData;
@@ -1272,7 +1267,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   }));
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
 
-  const handleAgentSwitch = useCallback(async (agentType: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi") => {
+  const handleAgentSwitch = useCallback(async (agentType: ConvexAgentType) => {
     if (agentType === currentAgent) return;
     try {
       const id = storeSession?._id || conversation._id;

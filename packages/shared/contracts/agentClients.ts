@@ -198,6 +198,8 @@ export interface AgentClientDescriptor {
   id: AgentClientId;
   /** The spelling the Convex schema / wire protocol uses. */
   convexId: ConvexAgentType;
+  /** Picker display name ("Claude", "OpenCode", "pi"). */
+  displayName: string;
   /** Exact fenced transports that are valid for this agent family. */
   executionTransports: readonly AgentExecutionTransport[];
   /** Executable launched to start a fresh session. */
@@ -275,6 +277,7 @@ const PI_MODEL: AgentModelConfig = {
 export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   claude: {
     id: "claude",
+    displayName: "Claude",
     convexId: "claude_code",
     executionTransports: ["tmux"],
     binary: "claude",
@@ -292,6 +295,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   },
   codex: {
     id: "codex",
+    displayName: "Codex",
     convexId: "codex",
     executionTransports: ["tmux", "app-server"],
     binary: "codex",
@@ -310,6 +314,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   },
   cursor: {
     id: "cursor",
+    displayName: "Cursor",
     convexId: "cursor",
     executionTransports: ["tmux"],
     binary: "cursor-agent",
@@ -338,6 +343,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   },
   gemini: {
     id: "gemini",
+    displayName: "Gemini",
     convexId: "gemini",
     executionTransports: ["tmux"],
     binary: "gemini",
@@ -357,6 +363,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   },
   opencode: {
     id: "opencode",
+    displayName: "OpenCode",
     convexId: "opencode",
     executionTransports: ["tmux"],
     binary: "opencode",
@@ -407,6 +414,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   },
   pi: {
     id: "pi",
+    displayName: "pi",
     convexId: "pi",
     executionTransports: ["tmux"],
     binary: "pi",
@@ -455,6 +463,35 @@ export const AGENT_MODEL_CONFIG: Record<string, AgentModelConfig> = Object.fromE
     .filter(([, d]) => d.modelConfig)
     .map(([id, d]) => [id, d.modelConfig as AgentModelConfig]),
 );
+
+/** One new-session agent choice: both id spellings plus the picker label, so
+ *  each surface keys off whichever spelling its wire calls take. */
+export interface AgentLaunchOption {
+  id: AgentClientId;
+  convexType: ConvexAgentType;
+  label: string;
+}
+
+/** The agent row of every new-session surface (web AgentSwitcher, mobile
+ *  sheet), derived from the registry in declaration order — adding a client
+ *  descriptor is all it takes to appear in the pickers. */
+export const AGENT_LAUNCH_OPTIONS: AgentLaunchOption[] = Object.values(AGENT_CLIENTS).map((d) => ({
+  id: d.id,
+  convexType: d.convexId,
+  label: d.displayName,
+}));
+
+/** The launch-time model/effort rail for a blank session: picker-only models
+ *  (midSessionOnly, e.g. Sonnet 1M) are hidden, and effort gains the "default"
+ *  stop (= omit the flag, the agent's saved default wins). One definition for
+ *  the web menu, the mobile switcher chip, and the mobile new-session sheet;
+ *  the live (mid-session) rail is just cfg.models/cfg.efforts unfiltered. */
+export function launchRailOptions(cfg: AgentModelConfig): { models: ModelOption[]; efforts: string[] } {
+  return {
+    models: cfg.models.filter((m) => !m.midSessionOnly),
+    efforts: ["default", ...cfg.efforts],
+  };
+}
 
 /** Web/conversation agent_type → registry client id (claude_code → claude). */
 export function modelAgentKey(agentType: string | undefined): AgentClientId {
