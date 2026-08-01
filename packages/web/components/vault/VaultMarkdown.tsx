@@ -11,7 +11,7 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markd
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { ExternalLink } from "lucide-react";
+import { ChevronDown, ExternalLink } from "lucide-react";
 import { MD_COMPONENTS, CollapsibleImage } from "../tools/MarkdownRenderer";
 import {
   parseWikiInner,
@@ -42,9 +42,23 @@ export interface VaultLinkContextValue {
   openTag?: (tag: string) => void;
   /** Render an embedded note body (depth-limited by the provider). */
   renderEmbed?: (parts: WikiLinkParts, resolvedPath: string | null) => React.ReactNode;
+  /** Toggle the `- [ ]` / `- [x]` on a source line of THIS note. `line` is
+   *  1-based in the rendered body, which starts below the frontmatter — the
+   *  provider owns the offset back to the file. */
+  toggleTask?: (line: number, checked: boolean) => void;
 }
 
 export const VaultLinkContext = createContext<VaultLinkContextValue | null>(null);
+
+/** False inside a transclusion: the body rendered there belongs to a DIFFERENT
+ *  note than the link context, so its line numbers would write to the wrong
+ *  file. Checkboxes in embeds render, but don't take clicks. */
+export const TaskEditContext = createContext(true);
+
+/** The source line of the task item a checkbox sits in. react-markdown gives
+ *  positions on the list item (the `input` mdast-util-to-hast synthesizes has
+ *  none), so the item hands its line down to the checkbox. */
+const TaskSourceLine = createContext<number | null>(null);
 
 function WikiLinkAnchor({ href, children }: { href: string; children: React.ReactNode }) {
   const ctx = useContext(VaultLinkContext);
@@ -162,6 +176,49 @@ function VaultImage({ src, alt }: { src?: string | Blob; alt?: string }) {
     if (resolved) return <CollapsibleImage src={resolved} alt={alt} />;
   }
   return <CollapsibleImage src={src} alt={alt} />;
+}
+
+/** A GFM task item, made live: clicking the checkbox rewrites the bracket on
+ *  the note's source line (Obsidian's behavior — reading mode is not read-only
+ *  for tasks). Non-task items fall through to the shared renderer. */
+function VaultListItem({ node, children }: any) {
+  const ctx = useContext(VaultLinkContext);
+  const editable = useContext(TaskEditContext);
+  const className: unknown = node?.properties?.className;
+  const isTask = Array.isArray(className) && className.includes("task-list-item");
+  const line: unknown = node?.position?.start?.line;
+  if (isTask && typeof line === "number") {
+    const checked = !!node.children?.find((c: any) => c.tagName === "input")?.properties?.checked;
+    return (
+      <li
+        className={`list-none -ml-4 ${checked ? "text-sol-text-muted" : "text-sol-text-secondary"}`}
+        data-vault-task-line={line}
+      >
+        <TaskSourceLine.Provider value={editable && ctx?.toggleTask ? line : null}>
+          {children}
+        </TaskSourceLine.Provider>
+      </li>
+    );
+  }
+  const Base = MD_COMPONENTS.li as React.ComponentType<{ children?: React.ReactNode }> | undefined;
+  return Base ? <Base>{children}</Base> : <li>{children}</li>;
+}
+
+function VaultCheckbox({ type, checked }: { type?: string; checked?: boolean }) {
+  const ctx = useContext(VaultLinkContext);
+  const line = useContext(TaskSourceLine);
+  if (type !== "checkbox") return null;
+  if (line === null || !ctx?.toggleTask) {
+    return <input type="checkbox" checked={!!checked} disabled readOnly className="mr-1.5 align-middle" />;
+  }
+  return (
+    <input
+      type="checkbox"
+      checked={!!checked}
+      onChange={(e) => ctx.toggleTask!(line, e.target.checked)}
+      className="mr-1.5 align-middle cursor-pointer accent-[var(--sol-cyan)]"
+    />
+  );
 }
 
 const CALLOUT_STYLES: Record<string, { border: string; accent: string; label: string }> = {
@@ -310,11 +367,38 @@ function rehypeVaultHeadingIds() {
 }
 
 /** Heading components render the id the rehype pass computed (never their own
- *  — per-component slugs can't see document order, which dedupe requires). */
+ *  — per-component slugs can't see document order, which dedupe requires).
+ *  Each heading also carries a fold toggle: clicking the chevron hides every
+ *  sibling element until the next heading of the same or higher level, the way
+ *  Obsidian's reading view folds a section. Fold state is CSS-only (a data
+ *  attribute plus a sibling selector), so it survives re-renders without any
+ *  React state keyed to positions that shift when the note changes. */
 function anchoredHeading(Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6", className: string) {
+  const level = Number(Tag.slice(1));
   return function VaultHeading({ id, children }: { id?: string; children?: React.ReactNode }) {
     return (
-      <Tag id={id} className={className}>
+      <Tag id={id} className={`vault-heading ${className}`} data-vault-level={level}>
+        <button
+          type="button"
+          className="vault-fold-toggle"
+          aria-label="Fold section"
+          onClick={(e) => {
+            const h = e.currentTarget.parentElement as HTMLElement | null;
+            if (!h) return;
+            const folded = h.getAttribute("data-folded") === "true";
+            h.setAttribute("data-folded", folded ? "false" : "true");
+            // Hide siblings up to the next heading of the same or higher level.
+            let el = h.nextElementSibling as HTMLElement | null;
+            while (el) {
+              const lvl = el.getAttribute?.("data-vault-level");
+              if (lvl && Number(lvl) <= level) break;
+              el.style.display = folded ? "" : "none";
+              el = el.nextElementSibling as HTMLElement | null;
+            }
+          }}
+        >
+          <ChevronDown className="w-3 h-3" />
+        </button>
         {children}
       </Tag>
     );
@@ -327,6 +411,8 @@ const VAULT_COMPONENTS: Components = {
   a: VaultLink,
   img: VaultImage,
   blockquote: VaultBlockquote,
+  li: VaultListItem,
+  input: VaultCheckbox,
   h1: anchoredHeading("h1", "text-lg font-bold mt-0 mb-3 text-sol-text"),
   h2: anchoredHeading("h2", "text-base font-semibold mt-4 mb-2 text-sol-text"),
   h3: anchoredHeading("h3", "text-sm font-semibold mt-3 mb-1 text-sol-text-muted"),

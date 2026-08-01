@@ -67,7 +67,9 @@ export type ShortcutAction =
   | 'list.edit'
   | 'list.actions'
   | 'vault.quickSwitch'
-  | 'vault.search';
+  | 'vault.search'
+  | 'vault.find'
+  | 'vault.toggleEdit';
 
 export interface ShortcutDef {
   key: string;
@@ -178,6 +180,11 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'meta++', action: 'zoom.in', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom in' },
   { key: 'meta+-', action: 'zoom.out', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom out' },
   { key: 'meta+0', action: 'zoom.reset', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Reset zoom' },
+  // Find inside the open vault note. Listed BEFORE the desktop page-find so a
+  // visible note claims the chord first; the vault handler declines (falls
+  // through to find.toggle, or to the browser) whenever no note is on screen
+  // in reading mode.
+  { key: 'ctrl+f', mac: 'meta+f', action: 'vault.find', skipInputCheck: true, description: 'Find in note' },
   { key: 'meta+f', action: 'find.toggle', when: 'desktop', skipInputCheck: true, description: 'Find in page' },
 
   { key: 'd', action: 'conv.toggleDiff', when: 'conversation', description: 'Toggle diff panel' },
@@ -220,6 +227,10 @@ export const SHORTCUTS: ShortcutDef[] = [
   // Cmd+O mirrors Obsidian's quick switcher. The handler declines when no
   // vault is connected, so the chord costs nothing in vault-less workspaces.
   { key: 'ctrl+o', mac: 'meta+o', action: 'vault.quickSwitch', skipInputCheck: true, description: 'Open vault note' },
+  // Obsidian's edit/read chord. skipInputCheck because the editor it toggles IS
+  // an input; the handler declines unless the vault is the visible tab with a
+  // note open, so the chord costs nothing anywhere else.
+  { key: 'ctrl+e', mac: 'meta+e', action: 'vault.toggleEdit', skipInputCheck: true, description: 'Toggle vault edit / read mode' },
   { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
 
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
