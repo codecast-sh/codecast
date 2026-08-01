@@ -34,6 +34,7 @@ import { useShortcutAction } from "../../shortcuts";
 import { VaultExplorer } from "../../components/vault/VaultExplorer";
 import { VaultNoteView } from "../../components/vault/VaultNoteView";
 import { VaultRightPanel } from "../../components/vault/VaultRightPanel";
+import { VaultFindBar } from "../../components/vault/VaultFindBar";
 import { HoverPreviewProvider } from "../../components/vault/VaultHoverPreview";
 import { VaultSearchPane } from "../../components/vault/VaultSearchPane";
 import { useVaultStore } from "../../store/vaultStore";
@@ -44,6 +45,13 @@ const VaultGraphView = lazy(() =>
 );
 
 const headerButtonClass = "text-sol-text-dim hover:text-sol-text transition-colors";
+
+// Which notes are open in source mode, remembered per file for as long as the
+// app is loaded: leave a note mid-edit, read three others, come back and you're
+// still editing. Deliberately NOT in the URL — ?f= addresses the note, and a
+// shared link should open it the way the recipient reads notes, not the way the
+// sender happened to be editing one.
+const editModeByPath = new Map<string, boolean>();
 
 const separatorClass =
   "relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan";
@@ -105,12 +113,15 @@ function VaultContent() {
   const setDirsExpanded = useVaultStore((s) => s.setDirsExpanded);
   const opError = useVaultStore((s) => s.opError);
   const clearOpError = useVaultStore((s) => s.clearOpError);
+  const renameReport = useVaultStore((s) => s.lastRenameReport);
+  const clearRenameReport = useVaultStore((s) => s.clearRenameReport);
 
   const activePath = searchParams.get("f");
   const targetLineRaw = searchParams.get("l");
   const targetLine = targetLineRaw ? parseInt(targetLineRaw, 10) : undefined;
   const showGraph = searchParams.get("view") === "graph";
-  const [leftTab, setLeftTab] = useState<"files" | "search">("files");
+  const leftTab = useVaultStore((s) => s.leftPaneTab);
+  const setLeftTab = useVaultStore((s) => s.setLeftPaneTab);
 
   useWatchEffect(() => {
     if (connection === "idle") void connect(convex);
@@ -139,7 +150,7 @@ function VaultContent() {
       const path = kind === "note" ? await newNote("") : await newFolder("");
       if (path && kind === "note") openNote(path);
     },
-    [newNote, newFolder, openNote],
+    [newNote, newFolder, openNote, setLeftTab],
   );
 
   const collapseAll = useCallback(() => {
@@ -173,6 +184,31 @@ function VaultContent() {
     return true;
   });
 
+  const [, bumpEditMode] = useState(0);
+  const editing = !!activePath && (editModeByPath.get(activePath) ?? false);
+  const toggleEdit = useCallback(() => {
+    if (!activePath) return false;
+    editModeByPath.set(activePath, !(editModeByPath.get(activePath) ?? false));
+    bumpEditMode((n) => n + 1);
+    return true;
+  }, [activePath]);
+
+  useShortcutAction("vault.toggleEdit", () => {
+    if (!isTabActive || showGraph) return false;
+    return toggleEdit();
+  });
+
+  // Cmd+F finds inside the open note. Declines (so the desktop app's own
+  // page-find keeps working) unless a note is actually on screen in reading
+  // mode — the editor has CodeMirror's own search panel.
+  const [findOpen, setFindOpen] = useState(false);
+  useShortcutAction("vault.find", () => {
+    if (!isTabActive || showGraph || !activePath) return false;
+    if (document.querySelector(".cm-content")) return false;
+    setFindOpen((v) => !v);
+    return true;
+  });
+
   const activeVault = useMemo(
     () => vaults.find((v) => v.id === activeVaultId) ?? null,
     [vaults, activeVaultId],
@@ -203,6 +239,29 @@ function VaultContent() {
             {opError}
           </span>
           <button type="button" onClick={clearOpError} title="Dismiss" className="hover:opacity-70">
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      )}
+      {renameReport && renameReport.linksRewritten + renameReport.skipped > 0 && (
+        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
+          <span className="flex-1 truncate">
+            {renameReport.linksRewritten > 0 && (
+              <>
+                Updated {renameReport.linksRewritten}{" "}
+                {renameReport.linksRewritten === 1 ? "link" : "links"} in {renameReport.filesChanged}{" "}
+                {renameReport.filesChanged === 1 ? "note" : "notes"}
+              </>
+            )}
+            {renameReport.skipped > 0 && (
+              <span className="text-sol-yellow">
+                {renameReport.linksRewritten > 0 ? " · " : ""}
+                {renameReport.skipped} {renameReport.skipped === 1 ? "link" : "links"} left alone —
+                those notes changed under the rename
+              </span>
+            )}
+          </span>
+          <button type="button" onClick={clearRenameReport} title="Dismiss" className="hover:opacity-70">
             <X className="w-3 h-3" />
           </button>
         </div>
@@ -330,7 +389,7 @@ function VaultContent() {
         <Separator className={separatorClass} />
         {/* The graph owns everything right of the explorer: the backlinks pane
             is a list of the same edges it already draws. */}
-        <Panel id="vault-content" minSize={400} className="min-w-0">
+        <Panel id="vault-content" minSize={400} className="min-w-0 relative">
           {showGraph ? (
             <Suspense
               fallback={
@@ -347,7 +406,14 @@ function VaultContent() {
             </Suspense>
           ) : activePath ? (
             <HoverPreviewProvider onNavigate={(p) => openNote(p)}>
-              <VaultNoteView path={activePath} targetLine={targetLine} onNavigate={openNote} />
+              {findOpen && <VaultFindBar onClose={() => setFindOpen(false)} />}
+              <VaultNoteView
+                path={activePath}
+                targetLine={targetLine}
+                editing={editing}
+                onToggleEdit={toggleEdit}
+                onNavigate={openNote}
+              />
             </HoverPreviewProvider>
           ) : (
             <div className="h-full flex flex-col items-center justify-center gap-2 text-sol-text-dim">

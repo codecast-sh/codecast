@@ -26,11 +26,23 @@ import {
   bodyKey,
   deleteVaultBodies,
   loadVaultBodies,
+  loadVaultBookmarks,
   loadVaultMeta,
   saveVaultBodies,
+  saveVaultBookmarks,
   saveVaultMeta,
   type VaultBodyRow,
 } from "../lib/vault/db";
+import {
+  addBookmark as addBookmarkTo,
+  findBookmark,
+  removeBookmark as removeBookmarkFrom,
+  retargetBookmarks as retargetList,
+  retitleBookmark,
+  sortBookmarks,
+  type BookmarkInput,
+  type BookmarkItem,
+} from "../lib/vault/bookmarks";
 import {
   ancestorDirs,
   joinVaultPath,
@@ -39,6 +51,8 @@ import {
   siblingNames,
   type VaultSortMode,
 } from "../lib/vault/explorerModel";
+import { applySpanEdits, planFolderRewrites, type FileRewrite } from "../lib/vault/linkRewrite";
+import { syncVaultIndex, vaultIndex } from "../lib/vault/indexSingleton";
 
 export type VaultConnection =
   | "idle"          // not yet asked
@@ -47,10 +61,24 @@ export type VaultConnection =
   | "cached"        // painting from IDB, daemon unreachable
   | "no-daemon";    // discovery failed and no cache exists
 
+export type VaultRightPanelTab = "backlinks" | "outgoing" | "outline" | "tags" | "bookmarks";
+
 export interface VaultBody {
   content: string;
   mtime: number;
   etag: string;
+}
+
+/** What a rename did to the links pointing at the renamed file. */
+export interface RenameReport {
+  /** The rename that produced this, for the strip's wording. */
+  path: string;
+  filesChanged: number;
+  linksRewritten: number;
+  /** Links deliberately left alone: the file had changed under the plan, or
+   *  its write didn't land. Surfaced rather than swallowed — a silent partial
+   *  rewrite is the one outcome nobody can recover from. */
+  skipped: number;
 }
 
 interface VaultState {
@@ -71,6 +99,10 @@ interface VaultState {
   /** Last failed file operation, for a dismissible strip in the UI. */
   opError: string | null;
   clearOpError: () => void;
+  /** What the last rename did to the vault's links, for a dismissible strip.
+   *  Transient: never persisted, cleared when the next rename starts. */
+  lastRenameReport: RenameReport | null;
+  clearRenameReport: () => void;
   /** Explorer expand/collapse state (per active vault, session-lived). */
   expandedDirs: Record<string, boolean>;
   /** Recently opened note paths, most recent first (feeds switcher ranking). */
@@ -87,19 +119,46 @@ interface VaultState {
   /** Quick switcher (Cmd+O) visibility — ephemeral UI state. */
   quickSwitchOpen: boolean;
   setQuickSwitchOpen: (open: boolean) => void;
+  /** Left pane tab and the search pane's query, lifted here so a saved-search
+   *  bookmark can switch to Search and type its query in for you. */
+  leftPaneTab: "files" | "search";
+  setLeftPaneTab: (tab: "files" | "search") => void;
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
+  openSearch: (query: string) => void;
+
+  /** Bookmarks for the active vault, oldest first. Persisted to the vault's
+   *  own IndexedDB — a bookmark names a path on THIS machine. */
+  bookmarks: BookmarkItem[];
+  /** The vault the loaded list belongs to (null while a load is in flight). */
+  bookmarksVaultId: string | null;
+  loadBookmarks: () => Promise<void>;
+  addBookmark: (item: BookmarkInput) => void;
+  /** Pin or unpin a target — what every bookmark button in the UI calls. */
+  toggleBookmark: (item: BookmarkInput) => void;
+  removeBookmark: (id: string) => void;
+  setBookmarkTitle: (id: string, title: string) => void;
+  /** Follow the vault when paths move or vanish; `resolve` returns the new
+   *  path, null to drop the bookmark, or undefined to leave it alone. Driven
+   *  by lib/vault/bookmarksHost, which watches the file table. */
+  retargetBookmarks: (resolve: (path: string) => string | null | undefined) => void;
   /** Right panel state — lifted so a #tag pill click can open the tag pane. */
-  rightPanelTab: "backlinks" | "outline" | "tags";
-  setRightPanelTab: (tab: "backlinks" | "outline" | "tags") => void;
+  rightPanelTab: VaultRightPanelTab;
+  setRightPanelTab: (tab: VaultRightPanelTab) => void;
   selectedTag: string | null;
   setSelectedTag: (tag: string | null) => void;
   openTagPane: (tag: string) => void;
+  /** One-shot explorer reveal request (breadcrumb click): expand + scroll. */
+  revealTarget: string | null;
+  requestReveal: (path: string) => void;
+  clearReveal: () => void;
   toggleDir: (path: string) => void;
   setDirsExpanded: (paths: string[], expanded: boolean) => void;
   noteOpened: (path: string) => void;
   connect: (convex: ConvexReactClient, opts?: { force?: boolean }) => Promise<void>;
   selectVault: (vaultId: string) => Promise<void>;
   refresh: () => Promise<void>;
-  writeFile: (path: string, content: string) => Promise<void>;
+  writeFile: (path: string, content: string, baseEtag?: string) => Promise<void>;
   createFile: (path: string, content?: string) => Promise<void>;
   /** Moves an entry; a folder carries its whole subtree with it. */
   renamePath: (path: string, to: string) => Promise<void>;
@@ -115,6 +174,9 @@ interface VaultState {
 }
 
 const BODY_FETCH_CONCURRENCY = 12;
+// Rewrites are writes, not reads: kept modest so a folder move touching a
+// hundred notes doesn't flood the daemon's write path.
+const REWRITE_CONCURRENCY = 4;
 const PERSIST_DEBOUNCE_MS = 800;
 // A "reset" WS event arriving right after connect duplicates the scan the
 // connect path just ran; scans started within this window are skipped.
@@ -189,6 +251,37 @@ function stageDelete(vaultId: string, path: string) {
   pendingDeletesFor(vaultId).add(path);
   schedulePersist();
 }
+
+// Recent renames, old path → new path, so an editor instance unmounting AFTER
+// a rename can redirect its final flush instead of resurrecting the old file
+// (review finding, R8). Entries are short-lived — the flush happens within the
+// same tick-ish window as the rename.
+const recentMoves = new Map<string, { to: string; at: number }>();
+
+export function resolveRecentMove(path: string): string | null {
+  const hit = recentMoves.get(path);
+  if (!hit) return null;
+  if (Date.now() - hit.at > 30_000) {
+    recentMoves.delete(path);
+    return null;
+  }
+  return hit.to;
+}
+
+function forgetMoves(moves: { from: string; to: string }[]) {
+  for (const m of moves) recentMoves.delete(m.from);
+}
+
+function recordMoves(moves: { from: string; to: string }[]) {
+  const now = Date.now();
+  for (const m of moves) recentMoves.set(m.from, { to: m.to, at: now });
+  // Prune anything stale so the map can't grow unbounded.
+  for (const [k, v] of recentMoves) if (now - v.at > 30_000) recentMoves.delete(k);
+}
+
+// Bookmark ids only have to be unique within one vault's list; the counter
+// keeps two bookmarks made in the same millisecond apart.
+let bookmarkSeq = 0;
 
 // Last-opened vault id, so the IDB cache can paint on a boot where the daemon
 // is unreachable (discovery failing must not blank a vault we've already seen).
@@ -310,6 +403,62 @@ function applyMoves(moves: [string, string][]): void {
   });
 }
 
+/**
+ * Apply a link-rewrite plan, one file at a time through the normal writeFile
+ * path so every rewrite carries its If-Match etag and a 409 lands in the same
+ * conflict flow a hand edit would. Nothing is forced.
+ *
+ * The plan was built from the index BEFORE the move; applySpanEdits re-checks
+ * the text at every span, so a file that changed in between loses only the
+ * edits that no longer match, and says so.
+ */
+async function applyLinkRewrites(plan: FileRewrite[]): Promise<Omit<RenameReport, "path"> | null> {
+  if (!plan.length) return null;
+  let filesChanged = 0;
+  let linksRewritten = 0;
+  let skipped = 0;
+
+  const queue = [...plan];
+  const workers = Array.from({ length: Math.min(REWRITE_CONCURRENCY, queue.length) }, async () => {
+    while (queue.length) {
+      const job = queue.shift();
+      if (!job) return;
+      const store = useVaultStore.getState();
+      const body = store.bodies[job.source];
+      if (!body) {
+        skipped += job.edits.length;
+        continue;
+      }
+      const result = applySpanEdits(body.content, job.edits);
+      skipped += result.skipped;
+      if (!result.applied) continue;
+      try {
+        await store.writeFile(job.source, result.content);
+      } catch (e) {
+        skipped += result.applied;
+        // Keep the first reason: a strip that names one file the user can go
+        // look at beats one that names the last of five.
+        useVaultStore.setState((s) => ({
+          opError:
+            s.opError ??
+            `Couldn't update links in ${job.source}: ${e instanceof Error ? e.message : String(e)}`,
+        }));
+        continue;
+      }
+      // A conflicting write leaves the file on disk untouched: those links are
+      // still pointing at the old name until the user resolves the conflict.
+      if (useVaultStore.getState().conflicts[job.source]) {
+        skipped += result.applied;
+        continue;
+      }
+      filesChanged++;
+      linksRewritten += result.applied;
+    }
+  });
+  await Promise.all(workers);
+  return { filesChanged, linksRewritten, skipped };
+}
+
 /** Shared body of newNote/newFolder: take the first free name, let the create's
  *  optimistic write paint the row, reveal it, and hand it to inline rename —
  *  all before the daemon answers. */
@@ -428,18 +577,102 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   sortMode: "name-asc" as const,
   renameTarget: null,
   quickSwitchOpen: false,
+  leftPaneTab: "files" as const,
+  searchQuery: "",
   rightPanelTab: "backlinks" as const,
   selectedTag: null,
+  bookmarks: [],
+  bookmarksVaultId: null,
   opError: null,
+  lastRenameReport: null,
 
   clearOpError: () => set({ opError: null }),
+  clearRenameReport: () => set({ lastRenameReport: null }),
 
   setQuickSwitchOpen: (open) => set({ quickSwitchOpen: open }),
+
+  setLeftPaneTab: (tab) => set({ leftPaneTab: tab }),
+  setSearchQuery: (query) => set({ searchQuery: query }),
+  openSearch: (query) => set({ leftPaneTab: "search", searchQuery: query }),
+
+  loadBookmarks: async () => {
+    const vaultId = get().activeVaultId;
+    // Clear first: the list on screen belongs to the vault we just left.
+    set({ bookmarks: [], bookmarksVaultId: null });
+    if (!vaultId) return;
+    const stored = await loadVaultBookmarks(vaultId);
+    if (get().activeVaultId !== vaultId) return;
+    // Anything bookmarked while the read was in flight belongs to this vault
+    // too — merged rather than replaced, or a click landing in that window is
+    // silently thrown away.
+    const added = get().bookmarks;
+    const merged = added.reduce(addBookmarkTo, stored);
+    set({ bookmarks: sortBookmarks(merged), bookmarksVaultId: vaultId });
+    if (merged !== stored) void saveVaultBookmarks(vaultId, merged);
+  },
+
+  addBookmark: (item) => {
+    const { bookmarks, activeVaultId } = get();
+    const next = addBookmarkTo(bookmarks, {
+      ...item,
+      id: `bm-${Date.now().toString(36)}-${(bookmarkSeq++).toString(36)}`,
+      createdAt: Date.now(),
+    } as BookmarkItem);
+    if (next === bookmarks) return;
+    set({ bookmarks: next });
+    if (activeVaultId) void saveVaultBookmarks(activeVaultId, next);
+  },
+
+  toggleBookmark: (item) => {
+    const existing = findBookmark(get().bookmarks, item);
+    if (existing) get().removeBookmark(existing.id);
+    else get().addBookmark(item);
+  },
+
+  removeBookmark: (id) => {
+    const { bookmarks, activeVaultId } = get();
+    const next = removeBookmarkFrom(bookmarks, id);
+    if (next === bookmarks) return;
+    set({ bookmarks: next });
+    if (activeVaultId) void saveVaultBookmarks(activeVaultId, next);
+  },
+
+  setBookmarkTitle: (id, title) => {
+    const { bookmarks, activeVaultId } = get();
+    const next = retitleBookmark(bookmarks, id, title);
+    if (next === bookmarks) return;
+    set({ bookmarks: next });
+    if (activeVaultId) void saveVaultBookmarks(activeVaultId, next);
+  },
+
+  retargetBookmarks: (resolve) => {
+    const { bookmarks, activeVaultId } = get();
+    const next = retargetList(bookmarks, resolve);
+    if (next === bookmarks) return;
+    set({ bookmarks: next });
+    if (activeVaultId) void saveVaultBookmarks(activeVaultId, next);
+  },
 
   setSortMode: (mode) => set({ sortMode: mode }),
   setRenameTarget: (path) => set({ renameTarget: path }),
 
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
+  revealTarget: null,
+  requestReveal: (path) => {
+    const dirs = path.split("/").slice(0, -1);
+    const acc: string[] = [];
+    let cur = "";
+    for (const seg of dirs) {
+      cur = cur ? `${cur}/${seg}` : seg;
+      acc.push(cur);
+    }
+    set((s) => {
+      const expandedDirs = { ...s.expandedDirs };
+      for (const d of acc) expandedDirs[d] = true;
+      return { expandedDirs, revealTarget: path };
+    });
+  },
+  clearReveal: () => set({ revealTarget: null }),
   setSelectedTag: (tag) => set({ selectedTag: tag }),
   openTagPane: (tag) => set({ rightPanelTab: "tags", selectedTag: tag }),
 
@@ -533,6 +766,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
         conflicts: {},
         loadingPaths: {},
         renameTarget: null,
+        lastRenameReport: null,
       });
     } else {
       set({ activeVaultId: vaultId });
@@ -601,16 +835,22 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     if (endpoint && activeVaultId) await syncActiveVault(endpoint, activeVaultId);
   },
 
-  writeFile: async (path, content) => {
+  writeFile: async (path, content, baseEtag) => {
     const { endpoint, activeVaultId, bodies } = get();
     if (!endpoint || !activeVaultId) throw new Error("vault not connected");
     const base = bodies[path];
+    // The editor passes the etag of the version it actually has on screen —
+    // compare-and-swap from the CALLER's viewpoint. Without it, an external
+    // clean write (link rewrite, WS echo) would refresh bodies[path].etag and
+    // the next autosave would silently clobber that write with older text
+    // (review finding, R8). Absent an explicit base, fall back to the store's.
+    const guard = baseEtag ?? base?.etag;
     // Optimistic: the UI reflects the write immediately; disk follows.
     set((s) => ({
       bodies: { ...s.bodies, [path]: { content, mtime: Date.now(), etag: base?.etag ?? "" } },
     }));
     try {
-      const res = await writeVaultFile(endpoint, activeVaultId, path, content, base?.etag || undefined);
+      const res = await writeVaultFile(endpoint, activeVaultId, path, content, guard || undefined);
       const body: VaultBody = { content, mtime: res.mtime, etag: res.etag };
       set((s) => ({
         bodies: { ...s.bodies, [path]: body },
@@ -667,14 +907,28 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     // A folder rename is one daemon op (fsp.rename moves the directory) but
     // many store keys: every descendant path changes with it.
     const moves = renameMoves(Object.keys(get().files), path, to);
+    // The link rewrite is planned HERE, against the index as it stands before
+    // anything moves: once the file is gone from its old path, so are the
+    // backlinks that name it. Applying the plan waits for the move to succeed.
+    // The index is force-synced first — its normal refresh is deferred to an
+    // idle callback, and a rename in that window must not quietly find no
+    // backlinks and rewrite nothing.
+    syncVaultIndex(activeVaultId, get().bodies);
+    const plan = planFolderRewrites(vaultIndex, moves.map(([from, dest]) => ({ from, to: dest })));
     // Snapshot exactly the keys the move touches — a rollback that restored
     // whole tables would also revert a WS event that landed mid-op. Rows
     // sitting on a destination are captured too, so a rejected
     // rename-over-existing doesn't evict the real file from the tree.
     const snapshot = snapshotPaths(get(), moves.flat());
+    // The redirect hint is recorded with the OPTIMISTIC move, not after the
+    // daemon answers: the store update unmounts an open editor immediately,
+    // and its final flush needs to know where the file went (review finding,
+    // R8 — recording later left a window where the flush had nowhere to go).
+    recordMoves(moves.map(([from, dest]) => ({ from, to: dest })));
+
     // Optimistic move; the watcher's reconcile confirms with removed+add.
     applyMoves(moves);
-    set({ opError: null });
+    set({ opError: null, lastRenameReport: null });
     try {
       await vaultOp(endpoint, activeVaultId, { op: "rename", path, to });
       for (const [from, dest] of moves) {
@@ -683,10 +937,21 @@ export const useVaultStore = create<VaultState>((set, get) => ({
         if (body) stageBody(activeVaultId, dest, body);
       }
     } catch (e) {
+      // The move never happened — drop the redirect hint so a later flush
+      // doesn't send this file's text to a path that doesn't exist.
+      forgetMoves(moves.map(([from, dest]) => ({ from, to: dest })));
       restorePaths(snapshot, moves);
       set({ opError: `Couldn't rename ${path}: ${e instanceof Error ? e.message : String(e)}` });
       throw e;
     }
+    // The rewrite is its own act, and it does NOT block the rename: the tree,
+    // the URL and the open note follow the move immediately while the writes
+    // fan out behind them. The outcome arrives through lastRenameReport.
+    void applyLinkRewrites(plan).then((report) => {
+      if (report && get().activeVaultId === activeVaultId) {
+        set({ lastRenameReport: { path: to, ...report } });
+      }
+    });
   },
 
   deletePath: async (path) => {

@@ -22,7 +22,7 @@ import {
 import { scheduleAutoSwitchCheck } from "./accountSwitch";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
-import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
+import { classifyDocContent, extractTitleFromContent, findSameInlineDoc, inlineDocSourceKey } from "./docExtraction";
 import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
 
 type DocExtractionMessage = {
@@ -30,6 +30,7 @@ type DocExtractionMessage = {
   content?: string;
   tool_calls?: Array<{ id: string; name: string; input: string }>;
   timestamp?: number;
+  message_uuid?: string;
 };
 
 type DocExtractionConversation = {
@@ -303,36 +304,41 @@ async function extractDocsFromMessages(
   // Existing docs for this conversation, fetched lazily on the first inline
   // candidate. Dedup must be by stable key AND content: legacy inline docs were
   // keyed by wall-clock (`inline://<conv>/<Date.now()>`), so a re-synced message
-  // never matches its old key — content equality is what stops re-inserts.
-  let convDocs: Array<{ source_file?: string; content: string }> | null = null;
+  // never matches its old key — content equality is what stops re-inserts. A
+  // message re-synced WHILE STILL STREAMING arrives as successive longer
+  // snapshots (each restamped by the CLI when the transcript entry has no
+  // timestamp), so an inline doc whose content is a prefix of the candidate is
+  // the same message too — converge it instead of inserting a copy.
+  let convDocs: Array<{ _id?: Id<"docs">; source_file?: string; source?: string; content: string }> | null = null;
   for (const msg of messages) {
     if (msg.role === "assistant" && msg.content && msg.content.length > 5000) {
-      const headingCount = (msg.content.match(/^#{1,3}\s/gm) || []).length;
+      const content = msg.content;
+      const headingCount = (content.match(/^#{1,3}\s/gm) || []).length;
       if (headingCount >= 3) {
-        const syntheticPath = inlineDocSourceKey(conversation.user_id, msg.timestamp);
+        const syntheticPath = inlineDocSourceKey(conversation.user_id, msg.timestamp, msg.message_uuid);
         if (convDocs === null) {
           convDocs = (await ctx.db
             .query("docs")
             .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversation_id))
-            .collect()) as Array<{ source_file?: string; content: string }>;
+            .collect()) as Array<{ _id?: Id<"docs">; source_file?: string; source?: string; content: string }>;
         }
         // Same-conversation guard first (covers legacy wall-clock-keyed docs by
-        // content); then the user+message key via the global index, which is what
-        // dedups across forks/resumes of the same transcript.
-        const existing =
-          convDocs.some((d) => d.source_file === syntheticPath || d.content === msg.content) ||
-          !!(await ctx.db
+        // content, and streaming growth by prefix); then the user+message key via
+        // the global index, which is what dedups across forks/resumes of the
+        // same transcript.
+        const sameDoc =
+          findSameInlineDoc(convDocs, syntheticPath, content) ??
+          (await ctx.db
             .query("docs")
             .withIndex("by_source_file", (q: any) => q.eq("source_file", syntheticPath))
-            .first());
-        if (!existing) {
-          convDocs.push({ source_file: syntheticPath, content: msg.content });
-          await ctx.db.insert("docs", {
+            .first()) ?? undefined;
+        if (!sameDoc) {
+          const insertedId = await ctx.db.insert("docs", {
             user_id: conversation.user_id,
             team_id: teamVisibleConvTeam(conversation),
-            title: extractTitleFromContent(msg.content),
-            content: msg.content,
-            doc_type: classifyDocContent(msg.content),
+            title: extractTitleFromContent(content),
+            content,
+            doc_type: classifyDocContent(content),
             source: "inline_extract",
             source_file: syntheticPath,
             conversation_id,
@@ -342,6 +348,17 @@ async function extractDocsFromMessages(
             created_at: msg.timestamp || Date.now(),
             updated_at: msg.timestamp || Date.now(),
           });
+          convDocs.push({ _id: insertedId, source_file: syntheticPath, source: "inline_extract", content });
+        } else if (sameDoc._id && content.length > sameDoc.content.length) {
+          // A later snapshot of the same message: converge on the longest text
+          // rather than freezing at the first capture. A shorter candidate is a
+          // replayed old snapshot — leave the doc alone.
+          await ctx.db.patch(sameDoc._id, {
+            title: extractTitleFromContent(content),
+            content,
+            updated_at: msg.timestamp || Date.now(),
+          });
+          sameDoc.content = content;
         }
       }
     }
