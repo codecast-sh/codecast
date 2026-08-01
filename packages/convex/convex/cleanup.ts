@@ -290,7 +290,8 @@ export async function applyHideTransition(
   ctx: { db: any },
   doc: any,
   patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
-): Promise<{ action: "reap" | "kill" | "none"; canceledSchedules: number }> {
+  opts?: { cascade?: boolean },
+): Promise<{ action: "reap" | "kill" | "none"; canceledSchedules: number; cascaded: number }> {
   const action = classifyHideTransition(patch, doc, await conversationHasNoWork(ctx, doc));
   let canceledSchedules = 0;
   if (action === "reap") {
@@ -313,7 +314,17 @@ export async function applyHideTransition(
       canceledSchedules = await cancelTasksBoundToConversation(ctx, doc.user_id, doc._id);
     }
   }
-  return { action, canceledSchedules };
+  // The nested group (Task subagents + agent-team teammates) always comes down
+  // with the card, no matter which surface asked — the group is one unit. Runs
+  // on every hide SET (not just fresh transitions) because a stash has action
+  // "none" yet must still take its children, and the per-child already-hidden
+  // guard inside makes re-asserts cheap and race-safe. The cascade's own
+  // per-child transition call opts out to stay single-level.
+  let cascaded = 0;
+  if (opts?.cascade !== false && (patch.inbox_dismissed_at || patch.inbox_stashed_at)) {
+    cascaded = await cascadeHideToNestedChildren(ctx, doc, patch);
+  }
+  return { action, canceledSchedules, cascaded };
 }
 
 // A hide gesture on a session takes its NESTED group with it — the same set
@@ -361,7 +372,7 @@ export async function cascadeHideToNestedChildren(
     if (child[field]) continue; // already hidden — never re-kill
     const childPatch = { [field]: stamp };
     await ctx.db.patch(child._id, childPatch);
-    await applyHideTransition(ctx, child, childPatch);
+    await applyHideTransition(ctx, child, childPatch, { cascade: false });
     cascaded++;
   }
   return cascaded;

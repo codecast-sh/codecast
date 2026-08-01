@@ -78,14 +78,26 @@ export function ModelEffortMenu({
   /** Dynamic clients: scope the live inventory to the session's device. */
   ownerDeviceId?: string | null;
 }) {
-  const { dynamic, featured, all } = useDynamicModels(agentType, ownerDeviceId);
+  const { dynamic, featured, all, menuRows } = useDynamicModels(agentType, ownerDeviceId);
   const [search, setSearch] = useState("");
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
   if (!cfg) return null;
   // Dynamic clients: Default + the curated featured head; typing searches the
+<<<<<<< HEAD
   // device's full inventory. Static clients: the shared launch/live rail.
   const rail = midSession ? { models: cfg.models, efforts: [...cfg.efforts] } : launchRailOptions(cfg);
   const models = dynamic ? [cfg.models[0], ...featured] : rail.models;
+=======
+  // device's full inventory. Menu-dynamic clients (claude) on the LIVE rail:
+  // Default + the harvested /model menu rows — the session's actual choices,
+  // tracking CC's menu across releases (stale curated options drop out, new
+  // rows appear). Launch rail and unharvested devices: the contract list.
+  const models = dynamic
+    ? [cfg.models[0], ...featured]
+    : midSession && menuRows.length > 0
+      ? [cfg.models[0], ...menuRows]
+      : cfg.models.filter((m: ModelOption) => (midSession ? true : !m.midSessionOnly));
+>>>>>>> 51a6771b7 (chore: snapshot in-progress multi-session work)
   const q = search.trim().toLowerCase();
   const matches = dynamic && q
     ? all.filter((id) => id.toLowerCase().includes(q) && !models.some((m) => m.key === id)).slice(0, 24)
