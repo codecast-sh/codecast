@@ -44,7 +44,7 @@ function Content() {
       <header className="flex items-center gap-3 px-4 sm:px-6 py-3 border-b border-sol-border/30">
         <Compass className="w-5 h-5 text-sol-cyan" strokeWidth={1.6} />
         <div className="min-w-0 flex-1">
-          <h1 className="text-sm font-semibold text-sol-text">Steering</h1>
+          <h1 className="text-sm font-semibold text-sol-text">Steering (WIP)</h1>
           <p className="text-[11px] text-sol-text-dim hidden sm:block">
             Outcomes, beliefs, learning, and initiatives in one operating map
           </p>
