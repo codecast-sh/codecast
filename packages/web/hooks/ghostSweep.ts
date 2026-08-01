@@ -48,18 +48,25 @@ export function collectGhostSweepCandidates(
   const blankAndIdle = (s: InboxSession, cutoff: number) =>
     (s.message_count ?? 0) === 0
     && !s.has_pending
-    && !s.is_pinned
     && !store.pendingMessages[s._id]?.length
     && !store.pendingSessionCreates[s._id]
     && s._id !== store.currentSessionId
     && mine(s)
     && (s.started_at ?? s.updated_at ?? 0) < cutoff;
   const all = Object.values(store.sessions);
+  // Pinned STUBS are still swept: a stub with no create in flight can never
+  // become a real session, and its pin exists only in this device's cache (the
+  // server never had the row, so the pin patch was dropped). Exempting them
+  // made a pinned orphan immortal — the one flag the user set disabled the
+  // only janitor that could remove it.
   const stubs = all
     .filter((s) => !isConvexId(s._id) && blankAndIdle(s, now - STUB_SWEEP_MIN_AGE_MS))
     .map((s) => s._id);
+  // Real rows keep the pin exemption: pin means "never auto-clean", and a
+  // pinned conversation deleted server-side still resolves via tombstone
+  // forwarding, so leaving its card is safe.
   const candidates = all
-    .filter((s) => isConvexId(s._id) && blankAndIdle(s, now - GHOST_SWEEP_MIN_AGE_MS))
+    .filter((s) => isConvexId(s._id) && !s.is_pinned && blankAndIdle(s, now - GHOST_SWEEP_MIN_AGE_MS))
     .map((s) => s._id)
     .slice(0, 200);
   // A stub (no server conversation) that holds a queued/failed user message and
