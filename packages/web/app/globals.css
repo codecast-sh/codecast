@@ -2138,3 +2138,31 @@ pre[class*="language-"] {
 .vault-prose blockquote {
   font-style: normal;
 }
+/* Search-hit flash on the target section heading. */
+.vault-flash { animation: vaultFlash 1.3s ease-out; border-radius: 4px; }
+@keyframes vaultFlash {
+  0%, 30% { background: color-mix(in srgb, var(--sol-cyan) 18%, transparent); }
+  100% { background: transparent; }
+}
+/* Inline #tag pills in vault notes. */
+.vault-prose .vault-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 9999px;
+  font-size: 0.85em;
+  line-height: 1.5;
+  color: var(--sol-cyan);
+  background: color-mix(in srgb, var(--sol-cyan) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-cyan) 22%, transparent);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.vault-prose .vault-tag:hover {
+  background: color-mix(in srgb, var(--sol-cyan) 18%, transparent);
+}
+/* Obsidian tables hug their content — override the typography plugin's
+   width:100% (prose table). */
+.vault-prose table {
+  width: auto;
+}

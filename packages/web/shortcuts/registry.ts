@@ -66,7 +66,8 @@ export type ShortcutAction =
   | 'list.search'
   | 'list.edit'
   | 'list.actions'
-  | 'vault.quickSwitch';
+  | 'vault.quickSwitch'
+  | 'vault.search';
 
 export interface ShortcutDef {
   key: string;
@@ -187,6 +188,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   // app's other Ctrl chords.
   { key: 'ctrl+b', action: 'conv.toggleTree', when: 'conversation', skipInputCheck: true, description: 'Toggle branch map' },
   { key: 'h', action: 'conv.toggleThinking', when: 'conversation', description: 'Toggle thinking blocks' },
+  // Obsidian's search chord, sharing keys with conv.favorite below. Listed
+  // FIRST on purpose: a background conversation tab keeps the 'conversation'
+  // context active while the vault tab is visible, so favorite would otherwise
+  // always win. The vault handler declines (returns false) unless the vault is
+  // the visible tab, and the dispatcher then falls through to favorite.
+  { key: 'ctrl+shift+f', mac: 'meta+shift+f', action: 'vault.search', skipInputCheck: true, description: 'Search vault' },
   { key: 'ctrl+shift+f', mac: 'meta+shift+f', action: 'conv.favorite', when: 'conversation', skipInputCheck: true, description: 'Toggle favorite' },
   { key: 'r', action: 'conv.review', when: 'conversation', description: 'Review / comment on a reply' },
   { key: 'meta+shift+l', action: 'conv.copyLink', when: 'conversation', skipInputCheck: true, description: 'Copy conversation link' },
