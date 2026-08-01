@@ -577,7 +577,9 @@ function barHtml(o: BrandOpts): string {
     });
     mgr.appendChild(seg);
     mgr.appendChild(el("div","__cc_note",
-      {owner:"Only you can publish edits.",link:"Anyone with the edit link can publish new versions.",team:"Your teammates can publish edits."}[ac.edit_mode||"owner"]||""));
+      {owner:"Only you can publish edits.",
+       link:"Anyone with the edit link can publish new versions — and read the source, password or not.",
+       team:"Your teammates can publish edits — and read the source, password or not."}[ac.edit_mode||"owner"]||""));
 
     mgr.appendChild(el("div","__cc_h2","Links"));
     var lr=el("div","__cc_chips");

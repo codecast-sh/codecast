@@ -62,9 +62,18 @@ async function slugRateLimited(
   max: number,
   windowMs: number,
 ): Promise<Response | null> {
+  // A malformed slug can never match a real artifact, so reject it before it
+  // becomes a rate-limit key — otherwise each garbage slug mints its own
+  // never-throttled counter row.
+  if (!/^[A-Za-z0-9]{6,32}$/.test(slug)) {
+    return new Response(JSON.stringify({ error: "Not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json", ...CORS },
+    });
+  }
   try {
     const res = (await ctx.runMutation(internal.ipRateLimit.bump, {
-      key: `${name}:${slug || "unknown"}`,
+      key: `${name}:${slug}`,
       max,
       window_ms: windowMs,
     })) as { ok: boolean; retry_after_ms?: number };
@@ -79,7 +88,17 @@ async function slugRateLimited(
       });
     }
   } catch {
-    // Fail open.
+    // Fail CLOSED, unlike the auth limiter in http.ts. That one protects
+    // sign-in, where a limiter blip locking out the fleet is worse than the
+    // abuse. Here the trade runs the other way: a rejected comment or password
+    // attempt costs a legitimate viewer one retry, while failing open during
+    // contention means failing open during exactly the flood this exists to
+    // stop — and heavy write contention on one counter row is what a flood
+    // against a single artifact looks like.
+    return new Response(JSON.stringify({ error: "Temporarily unavailable — please retry." }), {
+      status: 503,
+      headers: { "Content-Type": "application/json", "Retry-After": "5", ...CORS },
+    });
   }
   return null;
 }
