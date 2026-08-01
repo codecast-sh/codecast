@@ -13,6 +13,8 @@ import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  Bookmark,
+  BookmarkX,
   ChevronRight,
   FilePlus2,
   FileText,
@@ -47,6 +49,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { isBookmarked, type BookmarkInput } from "../../lib/vault/bookmarks";
+import { useVaultBookmarks } from "../../lib/vault/bookmarksHost";
 import { useVaultStore } from "../../store/vaultStore";
 
 export { noteDisplayName };
@@ -138,6 +142,7 @@ export const VaultExplorer = memo(function VaultExplorer({
   const expandedDirs = useVaultStore((s) => s.expandedDirs);
   const sortMode = useVaultStore((s) => s.sortMode);
   const renameTarget = useVaultStore((s) => s.renameTarget);
+  const revealTarget = useVaultStore((s) => s.revealTarget);
   const toggleDir = useVaultStore((s) => s.toggleDir);
   const setDirsExpanded = useVaultStore((s) => s.setDirsExpanded);
   const setRenameTarget = useVaultStore((s) => s.setRenameTarget);
@@ -145,6 +150,8 @@ export const VaultExplorer = memo(function VaultExplorer({
   const deletePath = useVaultStore((s) => s.deletePath);
   const newNote = useVaultStore((s) => s.newNote);
   const newFolder = useVaultStore((s) => s.newFolder);
+  const toggleBookmark = useVaultStore((s) => s.toggleBookmark);
+  const bookmarks = useVaultBookmarks();
 
   const tree = useMemo(() => buildVaultTree(files, sortMode), [files, sortMode]);
   const rows = useMemo(() => flattenTree(tree, expandedDirs), [tree, expandedDirs]);
@@ -181,6 +188,18 @@ export const VaultExplorer = memo(function VaultExplorer({
     const idx = rows.findIndex((r) => r.node.path === activePath);
     if (idx >= 0) virtualizer.scrollToIndex(idx, { align: "auto" });
   }, [activePath, rows, virtualizer]);
+
+  // Breadcrumb "reveal in explorer": ancestors were expanded by the store;
+  // scroll the row into view once it exists in the flattened model.
+  useWatchEffect(() => {
+    if (!revealTarget) return;
+    const idx = rows.findIndex((r) => r.node.path === revealTarget);
+    if (idx >= 0) {
+      virtualizer.scrollToIndex(idx, { align: "center" });
+      setFocusIndex(idx);
+      useVaultStore.getState().clearReveal();
+    }
+  }, [revealTarget, rows, virtualizer]);
 
   // A row being renamed has to be mounted for its input to exist, and the
   // virtualizer only mounts what's in view — a note created inside a long
@@ -297,6 +316,12 @@ export const VaultExplorer = memo(function VaultExplorer({
   // Creates land inside the folder that was right-clicked, or in the vault root
   // when the click was on empty space. Files offer no creates.
   const menuDir = menuNode?.dir ? menuNode.path : "";
+  // Both kinds of row can be bookmarked; a folder bookmark reveals the folder,
+  // a file bookmark opens the note.
+  const menuBookmark: BookmarkInput | null = menuNode
+    ? { kind: menuNode.dir ? "folder" : "note", path: menuNode.path }
+    : null;
+  const menuBookmarked = !!menuBookmark && isBookmarked(bookmarks, menuBookmark);
 
   return (
     <div
@@ -313,7 +338,12 @@ export const VaultExplorer = memo(function VaultExplorer({
       className="h-full overflow-y-auto overflow-x-hidden outline-none text-[13px] select-none"
     >
       {rows.length === 0 ? (
-        <div className="px-3 py-6 text-xs text-sol-text-muted text-center">No files in this vault yet.</div>
+        <div className="px-3 py-6 text-xs leading-5 text-sol-text-muted text-center">
+          No files in this vault yet.
+          <div className="mt-1 text-sol-text-dim">
+            Right-click here, or use the new note button above, to write the first one.
+          </div>
+        </div>
       ) : (
         <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
           {virtualizer.getVirtualItems().map((vi) => {
@@ -420,6 +450,22 @@ export const VaultExplorer = memo(function VaultExplorer({
             {menuNode && (
               <>
                 {menuNode.dir && <DropdownMenuSeparator />}
+                <DropdownMenuItem
+                  onSelect={() => {
+                    closeMenu();
+                    if (menuBookmark) toggleBookmark(menuBookmark);
+                  }}
+                >
+                  {menuBookmarked ? (
+                    <>
+                      <BookmarkX className="w-3.5 h-3.5 mr-2" /> Remove bookmark
+                    </>
+                  ) : (
+                    <>
+                      <Bookmark className="w-3.5 h-3.5 mr-2" /> Bookmark
+                    </>
+                  )}
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() => {
                     closeMenu();

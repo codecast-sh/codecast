@@ -10,6 +10,7 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
 import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
+import { useVaultStore } from "../store/vaultStore";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, resolveShowOld } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { PageIcon } from "./RecentlyViewedMenu";
@@ -59,6 +60,9 @@ import {
   Folder,
   Star,
   Link as LinkIcon,
+  Shuffle,
+  Waypoints,
+  FilePlus2,
 } from "lucide-react";
 
 const api = _api as any;
@@ -1072,6 +1076,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // with a query the dedicated search groups below take over. The standalone
   // Electron palette window has its own store, so chip-view items (which
   // mutate THIS window's filters) are meaningless there and skipped.
+  const vaultReady = useVaultStore((st) => st.vaults.length > 0 || st.activeVaultId !== null);
   const recentVisits = useInboxStore((s) => (open ? s.recentVisits : EMPTY_RECENT_VISITS));
   const recentVisitRows = useMemo(
     () => (open ? resolveRecentVisits(useInboxStore.getState(), RECENT_VISITS_RENDER_CAP, { skipViews: standalone }) : []),
@@ -1889,6 +1894,52 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             </CommandPrimitive.Item>
           ))}
         </CommandPrimitive.Group>
+
+        {vaultReady && (
+          <CommandPrimitive.Group heading="Vault" className={groupClass}>
+            <CommandPrimitive.Item
+              key="vault-random"
+              value="Vault random note surprise"
+              onSelect={() => {
+                const s = useVaultStore.getState();
+                const notes = Object.keys(s.files).filter(
+                  (p) => !s.files[p].dir && /\.(md|markdown)$/i.test(p),
+                );
+                if (!notes.length) return;
+                const pick = notes[Math.floor(Math.random() * notes.length)];
+                s.noteOpened(pick);
+                navigate(`/vault?f=${encodeURIComponent(pick)}`);
+              }}
+              className={itemClass}
+            >
+              <Shuffle className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+              <span className="truncate">Vault: Random note</span>
+            </CommandPrimitive.Item>
+            <CommandPrimitive.Item
+              key="vault-new-note"
+              value="Vault new note create markdown"
+              onSelect={() => {
+                closePalette();
+                void useVaultStore.getState().newNote("").then((p) => {
+                  if (p) navigate(`/vault?f=${encodeURIComponent(p)}`);
+                });
+              }}
+              className={itemClass}
+            >
+              <FilePlus2 className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+              <span className="truncate">Vault: New note</span>
+            </CommandPrimitive.Item>
+            <CommandPrimitive.Item
+              key="vault-graph"
+              value="Vault graph view links map"
+              onSelect={() => navigate("/vault?view=graph")}
+              className={itemClass}
+            >
+              <Waypoints className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+              <span className="truncate">Vault: Open graph</span>
+            </CommandPrimitive.Item>
+          </CommandPrimitive.Group>
+        )}
 
         <CommandPrimitive.Group heading="Create" className={groupClass}>
           <CommandPrimitive.Item

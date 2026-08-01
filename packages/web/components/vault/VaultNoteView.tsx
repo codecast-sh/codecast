@@ -3,10 +3,12 @@
 // images. Link behavior (resolution, navigation, embeds, tags) comes from the
 // shared useVaultLinkCtx hook so hover-preview cards behave identically.
 
-import { memo, useMemo } from "react";
+import { lazy, memo, Suspense, useMemo } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { ChevronRight, FileText } from "lucide-react";
+import { BookOpen, ChevronRight, FileText, Pencil } from "lucide-react";
 import { noteDisplayName } from "./VaultExplorer";
+import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
+import { BookmarkToggle } from "./VaultBookmarksPane";
 import { VaultLinkContext, VaultMarkdown } from "./VaultMarkdown";
 import { useVaultLinkCtx } from "./useVaultLinkCtx";
 import { splitFrontmatter } from "../../lib/vault/frontmatter";
@@ -18,9 +20,21 @@ import { VaultProperties } from "./VaultProperties";
 // Compat re-export: several vault modules import this from here.
 export { splitFrontmatter };
 
+// CodeMirror and the markdown grammar are ~100kB that reading a note never
+// needs; the editor loads the first time someone actually edits.
+const VaultEditor = lazy(() =>
+  import("./VaultEditor").then((m) => ({ default: m.VaultEditor })),
+);
+
+// Per-note scroll positions, session-lived. Restored when a note reopens;
+// a search-hit targetLine wins over memory.
+const scrollMemory = new Map<string, number>();
+
 export const VaultNoteView = memo(function VaultNoteView({
   path,
   targetLine,
+  editing = false,
+  onToggleEdit,
   onNavigate,
 }: {
   path: string;
@@ -28,6 +42,10 @@ export const VaultNoteView = memo(function VaultNoteView({
    *  markdown has no per-line anchors, so we scroll to the nearest heading at
    *  or above the line — the same section the hit lives in. */
   targetLine?: number;
+  /** Source mode. The breadcrumbs and title stay put across the switch so the
+   *  two modes read as one note rather than two screens. */
+  editing?: boolean;
+  onToggleEdit?: () => void;
   onNavigate: (path: string | null) => void;
 }) {
   const body = useVaultStore((s) => s.bodies[path]);
@@ -48,6 +66,32 @@ export const VaultNoteView = memo(function VaultNoteView({
   useVaultIndexVersion();
 
   const linkCtx = useVaultLinkCtx(path, (p) => onNavigate(p));
+
+  // Capture scroll position (rAF-throttled) and restore it when the note
+  // reopens without an explicit target.
+  useWatchEffect(() => {
+    const container = document.querySelector("[data-vault-note-scroll]");
+    if (!container || !body) return;
+    if (!targetLine) {
+      const saved = scrollMemory.get(path);
+      if (saved !== undefined) container.scrollTop = saved;
+      else container.scrollTop = 0;
+    }
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        scrollMemory.set(path, container.scrollTop);
+      });
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+     
+  }, [path, !!body]);
 
   // Scroll a search hit's section into view once the body has rendered, using
   // the DEDUPED slug for that occurrence (duplicate heading texts get -2/-3).
@@ -84,33 +128,87 @@ export const VaultNoteView = memo(function VaultNoteView({
         <nav className="flex items-center gap-1 text-[11px] text-sol-text-dim mb-1 flex-wrap">
           {segments.slice(0, -1).map((seg, i) => (
             <span key={i} className="flex items-center gap-1">
-              <span>{seg}</span>
+              <button
+                type="button"
+                className="hover:text-sol-text-muted transition-colors"
+                title="Reveal in explorer"
+                onClick={() => useVaultStore.getState().requestReveal(segments.slice(0, i + 1).join("/"))}
+              >
+                {seg}
+              </button>
               <ChevronRight className="w-3 h-3" />
             </span>
           ))}
-          <span className="text-sol-text-muted">{title}</span>
+          <button
+            type="button"
+            className="text-sol-text-muted hover:text-sol-text transition-colors"
+            title="Reveal in explorer"
+            onClick={() => useVaultStore.getState().requestReveal(path)}
+          >
+            {title}
+          </button>
         </nav>
-        <h1 className="text-2xl font-semibold text-sol-text mb-3 break-words">{title}</h1>
-
-        <VaultLinkContext.Provider value={linkCtx}>
-          {frontmatter && (
-            <VaultProperties
-              frontmatter={vaultIndex.note(path)?.parsed?.frontmatter ?? null}
-              raw={frontmatter}
-              onTagClick={(t) => useVaultStore.getState().openTagPane(t.replace(/^#/, ""))}
-            />
+        <div className="flex items-start gap-3 mb-3">
+          <h1 className="flex-1 text-2xl font-semibold text-sol-text break-words">{title}</h1>
+          <BookmarkToggle
+            target={{ kind: "note", path }}
+            label="Bookmark this note"
+            className="mt-1.5 flex-shrink-0"
+          />
+          {onToggleEdit && (
+            <button
+              type="button"
+              onClick={onToggleEdit}
+              aria-pressed={editing}
+              title={editing ? "Read (Ctrl+E)" : "Edit source (Ctrl+E)"}
+              className={`mt-1.5 flex-shrink-0 transition-colors ${
+                editing ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
+              }`}
+            >
+              {editing ? <BookOpen className="w-4 h-4" /> : <Pencil className="w-4 h-4" />}
+            </button>
           )}
+        </div>
 
-          {body ? (
-            <div className="vault-prose prose prose-sm max-w-none">
-              <VaultMarkdown content={markdown} />
-            </div>
-          ) : loading ? (
-            <div className="text-sm text-sol-text-dim py-8">Loading note…</div>
-          ) : (
-            <div className="text-sm text-sol-text-dim py-8">Empty note.</div>
-          )}
-        </VaultLinkContext.Provider>
+        {editing ? (
+          <Suspense
+            fallback={<div className="text-sm text-sol-text-dim py-8">Loading editor…</div>}
+          >
+            {/* Keyed by path: an editor instance owns one note's document,
+                undo history and save timer. Handing it a different note would
+                keep the old text on screen and flush it to the new path. */}
+            <VaultEditor key={path} path={path} onExit={() => onToggleEdit?.()} />
+          </Suspense>
+        ) : (
+          <VaultLinkContext.Provider value={linkCtx}>
+            {frontmatter && (
+              <VaultProperties
+                frontmatter={vaultIndex.note(path)?.parsed?.frontmatter ?? null}
+                raw={frontmatter}
+                onTagClick={(t) => useVaultStore.getState().openTagPane(t.replace(/^#/, ""))}
+              />
+            )}
+
+            {body ? (
+              <div className="vault-prose prose prose-sm max-w-none">
+                <VaultMarkdown content={markdown} />
+              </div>
+            ) : loading ? (
+              <div className="text-sm text-sol-text-dim py-8">Loading note…</div>
+            ) : (
+              <div className="text-sm text-sol-text-dim py-8">
+                This note is empty. Press <MenuKeyCaps action="vault.toggleEdit" /> to write in it.
+              </div>
+            )}
+          </VaultLinkContext.Provider>
+        )}
+
+        {body && !editing && (
+          <div className="mt-8 pt-2 border-t border-sol-border/20 flex items-center gap-3 text-[10px] text-sol-text-dim">
+            <span className="tabular-nums">{vaultIndex.note(path)?.parsed?.wordCount ?? 0} words</span>
+            <span className="tabular-nums">{vaultIndex.backlinks(path).length} backlinks</span>
+          </div>
+        )}
       </div>
     </div>
   );

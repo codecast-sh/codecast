@@ -8,10 +8,12 @@ import { createContext, memo, useContext, useMemo } from "react";
 import { FileText } from "lucide-react";
 import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { noteDisplayName } from "./VaultExplorer";
-import { VaultMarkdown, type VaultLinkContextValue } from "./VaultMarkdown";
+import { TaskEditContext, VaultMarkdown, type VaultLinkContextValue } from "./VaultMarkdown";
 import type { WikiLinkParts } from "../../lib/vault/remarkWikiLink";
 import { vaultAssetUrl } from "../../lib/vault/client";
-import { splitFrontmatter } from "../../lib/vault/frontmatter";
+import { extractEmbedSection } from "../../lib/vault/embedSection";
+import { frontmatterLineOffset } from "../../lib/vault/frontmatter";
+import { toggleTaskInContent } from "../../lib/vault/taskToggle";
 import { useVaultStore } from "../../store/vaultStore";
 import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import { headingSlugs } from "../../lib/vault/parseNote";
@@ -19,18 +21,17 @@ import { headingSlugs } from "../../lib/vault/parseNote";
 export const EmbedDepthContext = createContext(0);
 const MAX_EMBED_DEPTH = 2;
 
-function EmbeddedNote({ path }: { path: string }) {
-  const body = useVaultStore((s) => s.bodies[path]);
+function EmbeddedNote({ markdown }: { markdown: string }) {
   const depth = useContext(EmbedDepthContext);
-  const [, markdown] = useMemo(() => splitFrontmatter(body?.content ?? ""), [body?.content]);
-  if (!body) {
-    return <span className="block text-xs text-sol-text-dim italic">Embedded note unavailable: {path}</span>;
-  }
   return (
     <EmbedDepthContext.Provider value={depth + 1}>
-      <span className="block vault-prose prose prose-sm max-w-none">
-        <VaultMarkdown content={markdown} />
-      </span>
+      {/* The link context here belongs to the HOST note; these lines belong to
+          the embedded one, so their checkboxes must not write anywhere. */}
+      <TaskEditContext.Provider value={false}>
+        <span className="block vault-prose prose prose-sm max-w-none">
+          <VaultMarkdown content={markdown} />
+        </span>
+      </TaskEditContext.Provider>
     </EmbedDepthContext.Provider>
   );
 }
@@ -45,6 +46,20 @@ export function EmbedCard({
   onOpen: (path: string) => void;
 }) {
   const depth = useContext(EmbedDepthContext);
+  const content = useVaultStore((s) => (resolvedPath ? s.bodies[resolvedPath]?.content : undefined));
+  const indexVersion = useVaultIndexVersion();
+  // `![[Note#Heading]]` and `![[Note#^id]]` show that slice, not the whole
+  // note. The index's parse is reused when it has one — the same headings and
+  // block lines the outline and link resolution already agree on.
+  const section = useMemo(
+    () =>
+      resolvedPath && content !== undefined
+        ? extractEmbedSection(content, parts, vaultIndex.note(resolvedPath)?.parsed ?? null)
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [content, resolvedPath, parts.subpath, parts.subpathType, indexVersion],
+  );
+
   if (!resolvedPath) {
     return (
       <span className="wiki-link wiki-link-unresolved" title={`"${parts.target}" does not exist`}>
@@ -68,10 +83,25 @@ export function EmbedCard({
       >
         <FileText className="w-3 h-3" />
         {noteDisplayName(resolvedPath.split("/").pop()!)}
-        {parts.subpath && <span className="text-sol-text-dim">› {parts.subpath}</span>}
+        {parts.subpath && (
+          <span className="text-sol-text-dim">
+            › {parts.subpathType === "block" ? `^${parts.subpath}` : parts.subpath}
+          </span>
+        )}
+        {section?.missing && (
+          <span className="ml-auto text-[10px] font-normal text-sol-text-dim italic">
+            section not found — showing the whole note
+          </span>
+        )}
       </span>
       <span className="block px-3 py-2">
-        <EmbeddedNote path={resolvedPath} />
+        {section ? (
+          <EmbeddedNote markdown={section.content} />
+        ) : (
+          <span className="block text-xs text-sol-text-dim italic">
+            Embedded note unavailable: {resolvedPath}
+          </span>
+        )}
       </span>
     </span>
   );
@@ -85,7 +115,12 @@ export function scrollToHeading(headingText: string, notePath: string, delayMs =
   const slugs = headingSlugs(headings);
   const idx = headings.findIndex((h) => h.text.toLowerCase() === headingText.toLowerCase());
   const slug = idx >= 0 ? slugs[idx] : null;
-  if (!slug) return;
+  if (slug) scrollToHeadingSlug(slug, delayMs);
+}
+
+/** Scroll to an already-deduped slug. Bookmarked headings store this form, so
+ *  the second "Notes" heading in a note stays the second one. */
+export function scrollToHeadingSlug(slug: string, delayMs = 0) {
   const go = () => {
     const el = document.getElementById(`vh-${slug}`);
     el?.scrollIntoView({ block: "start", behavior: delayMs ? "smooth" : "auto" });
@@ -129,6 +164,18 @@ export function useVaultLinkCtx(
         return assetPath ? vaultAssetUrl(endpoint, activeVaultId, assetPath) : null;
       },
       openTag: (tag) => useVaultStore.getState().openTagPane(tag),
+      toggleTask: (line, checked) => {
+        // Read the body at CLICK time, not render time: the line number is only
+        // meaningful against the content it was rendered from, and the offset
+        // back past the frontmatter comes from that same string.
+        const store = useVaultStore.getState();
+        const content = store.bodies[path]?.content;
+        if (content === undefined) return;
+        const next = toggleTaskInContent(content, line + frontmatterLineOffset(content), checked);
+        // Null means that line isn't a task any more — a stale render, or the
+        // file changed underneath. Writing a guess would be worse than nothing.
+        if (next !== null) void store.writeFile(path, next).catch(() => {});
+      },
       renderEmbed: (parts, resolvedPath) => (
         <EmbedCard parts={parts} resolvedPath={resolvedPath} onOpen={onNavigate} />
       ),

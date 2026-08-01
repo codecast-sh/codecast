@@ -13,6 +13,7 @@ import fuzzysort from "fuzzysort";
 import { CornerDownLeft, FilePlus2, FileText, Clock } from "lucide-react";
 import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { useVaultStore } from "../../store/vaultStore";
+import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import { useInboxStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { noteDisplayName } from "./VaultExplorer";
@@ -24,29 +25,49 @@ interface SwitchTarget {
   name: string;          // display name (no .md)
   prepName: Fuzzysort.Prepared;
   prepPath: Fuzzysort.Prepared;
+  /** Frontmatter aliases — Obsidian's switcher matches them like names. */
+  aliases: { text: string; prep: Fuzzysort.Prepared }[];
 }
 
 const RESULT_CAP = 40;
 const RECENT_CAP = 12;
 
-function useSwitchTargets(): SwitchTarget[] {
-  const files = useVaultStore((s) => s.files);
-  return useMemo(
-    () =>
-      Object.keys(files)
-        .filter((p) => !files[p].dir && isVaultMarkdownPath(p))
-        .map((path) => {
-          const name = noteDisplayName(path.split("/").pop()!);
-          return { path, name, prepName: fuzzysort.prepare(name), prepPath: fuzzysort.prepare(path) };
-        }),
-    [files],
-  );
+const EMPTY_TARGETS: SwitchTarget[] = [];
+
+/** The fuzzy corpus is only built while the dialog is OPEN. This component is
+ *  mounted globally, and files/indexVersion tick on every autosave anywhere in
+ *  the vault — rebuilding thousands of fuzzysort.prepare() results on each
+ *  keystroke of an unrelated note, for a closed dialog, is pure churn (review
+ *  finding, R8; same class as the sidebar wake-gate incidents). Opening the
+ *  dialog is the natural refresh point.
+ */
+function useSwitchTargets(open: boolean): SwitchTarget[] {
+  const files = useVaultStore((s) => (open ? s.files : EMPTY_FILES));
+  const indexVersion = useVaultIndexVersion();
+  return useMemo(() => {
+    if (!open) return EMPTY_TARGETS;
+    return Object.keys(files)
+      .filter((p) => !files[p].dir && isVaultMarkdownPath(p))
+      .map((path) => {
+        const name = noteDisplayName(path.split("/").pop()!);
+        const aliases = (vaultIndex.note(path)?.parsed?.aliases ?? []).map((a) => ({
+          text: a,
+          prep: fuzzysort.prepare(a),
+        }));
+        return { path, name, aliases, prepName: fuzzysort.prepare(name), prepPath: fuzzysort.prepare(path) };
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, files, indexVersion]);
 }
+
+const EMPTY_FILES: Record<string, never> = {};
 
 interface RankedResult {
   target: SwitchTarget;
   nameResult: Fuzzysort.Result | null;
   pathResult: Fuzzysort.Result | null;
+  /** Set when an alias outranked name and path — the row shows it. */
+  aliasResult: { text: string; result: Fuzzysort.Result } | null;
   score: number;
 }
 
@@ -56,9 +77,23 @@ function rank(targets: SwitchTarget[], query: string, recents: string[]): Ranked
   for (const t of targets) {
     const nameResult = fuzzysort.single(query, t.prepName);
     const pathResult = fuzzysort.single(query, t.prepPath);
-    const base = Math.max(nameResult?.score ?? 0, (pathResult?.score ?? 0) * 0.9);
+    let aliasBest: { text: string; result: Fuzzysort.Result } | null = null;
+    for (const a of t.aliases) {
+      const r = fuzzysort.single(query, a.prep);
+      if (r && (!aliasBest || r.score > aliasBest.result.score)) aliasBest = { text: a.text, result: r };
+    }
+    const nameScore = nameResult?.score ?? 0;
+    const pathScore = (pathResult?.score ?? 0) * 0.9;
+    const aliasScore = (aliasBest?.result.score ?? 0) * 0.95;
+    const base = Math.max(nameScore, pathScore, aliasScore);
     if (base <= 0) continue;
-    out.push({ target: t, nameResult, pathResult, score: base + (recentBoost.get(t.path) ?? 0) });
+    out.push({
+      target: t,
+      nameResult,
+      pathResult,
+      aliasResult: aliasScore > nameScore && aliasScore >= pathScore ? aliasBest : null,
+      score: base + (recentBoost.get(t.path) ?? 0),
+    });
   }
   out.sort((a, b) => b.score - a.score);
   return out.slice(0, RESULT_CAP);
@@ -86,7 +121,7 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
   const connection = useVaultStore((s) => s.connection);
   const router = useRouter();
 
-  const targets = useSwitchTargets();
+  const targets = useSwitchTargets(open);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -111,7 +146,7 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
       const rest = targets
         .filter((t) => !recentPaths.includes(t.path))
         .slice(0, RESULT_CAP - recent.length);
-      return [...recent, ...rest].map((t) => ({ target: t, nameResult: null, pathResult: null, score: 0 }));
+      return [...recent, ...rest].map((t) => ({ target: t, nameResult: null, pathResult: null, aliasResult: null, score: 0 }));
     }
     return rank(targets, query.trim(), recentPaths);
   }, [query, targets, recentPaths]);
@@ -216,6 +251,11 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
               )}
               <span className="truncate">
                 <Highlighted result={r.nameResult} fallback={r.target.name} />
+                {r.aliasResult && (
+                  <span className="ml-1.5 text-[11px] text-sol-text-dim">
+                    via <Highlighted result={r.aliasResult.result} fallback={r.aliasResult.text} />
+                  </span>
+                )}
               </span>
               {r.target.path.includes("/") && (
                 <span className="ml-auto truncate text-[11px] text-sol-text-dim max-w-[45%]">

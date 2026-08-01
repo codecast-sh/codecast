@@ -27,6 +27,7 @@ import {
   parseVaultQuery,
 } from "../../lib/vault/searchQuery";
 import { useVaultStore } from "../../store/vaultStore";
+import { BookmarkToggle } from "./VaultBookmarksPane";
 import { noteDisplayName } from "./VaultExplorer";
 
 /** Matches shown per file before the "N more" toggle. Obsidian shows a similar
@@ -181,7 +182,9 @@ export const VaultSearchPane = memo(function VaultSearchPane({
   onNavigate: (path: string, line?: number) => void;
   inputRef?: React.RefObject<HTMLInputElement | null>;
 }) {
-  const [raw, setRaw] = useState("");
+  // The query lives in the store so a saved-search bookmark can put one here.
+  const raw = useVaultStore((s) => s.searchQuery);
+  const setRaw = useVaultStore((s) => s.setSearchQuery);
   const query = useDebounce(raw, 150);
   const version = useVaultIndexVersion();
   const bodies = useVaultStore((s) => s.bodies);
@@ -283,6 +286,14 @@ export const VaultSearchPane = memo(function VaultSearchPane({
             autoComplete="off"
             className="flex-1 min-w-0 bg-transparent outline-none text-[12px] text-sol-text placeholder:text-sol-text-dim"
           />
+          {raw.trim() && (
+            <BookmarkToggle
+              target={{ kind: "search", query: raw.trim() }}
+              label="Bookmark this search"
+              size="w-3.5 h-3.5"
+              className="flex-shrink-0"
+            />
+          )}
           {raw && (
             <button
               type="button"

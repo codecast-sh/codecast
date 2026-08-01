@@ -2166,3 +2166,25 @@ pre[class*="language-"] {
 .vault-prose table {
   width: auto;
 }
+/* Right-panel tabs: drop labels to icons when the pane is narrow. */
+.vault-panel-cq { container-type: inline-size; }
+@container (max-width: 320px) {
+  .vault-panel-cq .vault-tab-label { display: none; }
+}
+/* Reading-view heading folds: the chevron only appears on hover, and rotates
+   when its section is collapsed. */
+.vault-prose .vault-heading { position: relative; }
+.vault-prose .vault-fold-toggle {
+  position: absolute;
+  left: -1.15rem;
+  top: 0.15em;
+  opacity: 0;
+  color: var(--sol-text-dim);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.vault-prose .vault-heading:hover .vault-fold-toggle { opacity: 0.7; }
+.vault-prose .vault-fold-toggle:hover { opacity: 1; color: var(--sol-text-muted); }
+.vault-prose .vault-heading[data-folded="true"] .vault-fold-toggle {
+  opacity: 0.7;
+  transform: rotate(-90deg);
+}
