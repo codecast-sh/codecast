@@ -94,6 +94,27 @@ export function parseConvexAccessTokenIdentity(
   return { principalId, sessionId };
 }
 
+/**
+ * True when two access tokens carry the same principal AND the same durable
+ * auth session — i.e. one is a routine rotation of the other. Rotation
+ * preserves the session id (see the adapter contract above), and the durable
+ * credential binding that authorizes a namespace is derived from that session
+ * id, so a rotated token is authorized by the very binding already in use.
+ */
+export function accessTokensShareAuthSession(
+  a: string | null,
+  b: string | null,
+): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const identityA = parseConvexAccessTokenIdentity(a);
+  if (!identityA) return false;
+  const identityB = parseConvexAccessTokenIdentity(b);
+  return !!identityB &&
+    identityA.principalId === identityB.principalId &&
+    identityA.sessionId === identityB.sessionId;
+}
+
 export function credentialEvidenceMatchesServerIdentity(
   evidence: CredentialEvidence,
   accessToken: string | null,
