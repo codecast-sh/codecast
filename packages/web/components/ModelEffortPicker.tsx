@@ -6,6 +6,7 @@ import {
   modelAgentKey,
   isDynamicModelKey,
   dynamicModelOption,
+  launchRailOptions,
   type ModelOption,
 } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
@@ -82,10 +83,9 @@ export function ModelEffortMenu({
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
   if (!cfg) return null;
   // Dynamic clients: Default + the curated featured head; typing searches the
-  // device's full inventory. Static clients: the contract list as before.
-  const models = dynamic
-    ? [cfg.models[0], ...featured]
-    : cfg.models.filter((m: ModelOption) => (midSession ? true : !m.midSessionOnly));
+  // device's full inventory. Static clients: the shared launch/live rail.
+  const rail = midSession ? { models: cfg.models, efforts: [...cfg.efforts] } : launchRailOptions(cfg);
+  const models = dynamic ? [cfg.models[0], ...featured] : rail.models;
   const q = search.trim().toLowerCase();
   const matches = dynamic && q
     ? all.filter((id) => id.toLowerCase().includes(q) && !models.some((m) => m.key === id)).slice(0, 24)
@@ -139,7 +139,7 @@ export function ModelEffortMenu({
         {/* "default" = no pin, the agent's saved default wins. Launch rail
             only: the live picker has no session-scoped default stop (the
             /effort auto one-shot rewrites the user's GLOBAL config). */}
-        {[...(midSession ? [] : ["default"]), ...cfg.efforts].map((level: string) => {
+        {rail.efforts.map((level: string) => {
           const active = level === "default" ? !effort : level === effort;
           return (
             <button
