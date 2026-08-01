@@ -44,7 +44,7 @@ async function getOwnerTeamVisibility(
   return membership?.visibility || "summary";
 }
 
-function isVisibilityShareable(visibility: string): boolean {
+export function isVisibilityShareable(visibility: string): boolean {
   return visibility !== "hidden" && visibility !== "activity";
 }
 

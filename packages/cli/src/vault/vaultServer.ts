@@ -287,7 +287,15 @@ async function handleOp(
     const dest = scoped(vault, op.to ?? null);
     if (!dest) return sendJson(res, 400, headers, { error: "bad path" });
     if (!fs.existsSync(target.abs)) return sendJson(res, 404, headers, { error: "not found" });
-    if (fs.existsSync(dest.abs)) return sendJson(res, 409, headers, { error: "exists" });
+    // "exists" must not block a case-only rename ("notes" → "Notes"): on the
+    // case-insensitive filesystems macOS ships, existsSync(dest) is true
+    // because dest IS the source. Same-inode means same entry — let it through.
+    if (fs.existsSync(dest.abs)) {
+      const same =
+        fs.statSync(target.abs).ino === fs.statSync(dest.abs).ino &&
+        target.abs.toLowerCase() === dest.abs.toLowerCase();
+      if (!same) return sendJson(res, 409, headers, { error: "exists" });
+    }
     await fsp.mkdir(path.dirname(dest.abs), { recursive: true });
     await fsp.rename(target.abs, dest.abs);
     const stat = await fsp.stat(dest.abs);
