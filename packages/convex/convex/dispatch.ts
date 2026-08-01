@@ -27,6 +27,7 @@ import { isSessionOwner } from "./sessionOwners";
 import { patchCommentWithRevision } from "./commentViewWrites";
 import { canAccessConversation } from "./lib/access";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
+import { linkConversationToEntityBestEffort } from "./conversationLinks";
 
 type TableConfig =
   | {
@@ -190,6 +191,10 @@ function validatedCreateContinuation(
     throw new Error(`Invalid ${action} continuation`);
   }
   const continuation = raw as Record<string, unknown>;
+  // Steering creates deliberately
+  // accept NO continuation yet: the client middleware doesn't know their
+  // navigation targets until the Phase 2 UI defines routes, and a one-sided
+  // allowance would just persist a continuation nothing acts on.
   if (
     continuation.version === 1 &&
     continuation.kind === "navigate" &&
@@ -427,6 +432,11 @@ async function linkConversationToObject(
     await ctx.db.patch(conversationId, {
       active_task_id: objectId as Id<"tasks">,
     });
+    // Compatibility dual-write onto the steering association rail (best-effort;
+    // legacy fields stay authoritative — see conversationLinks.ts).
+    await linkConversationToEntityBestEffort(ctx, userId, {
+      entityType: "task", entityId: objectId, conversationId, relationship: "work",
+    });
     return;
   }
 
@@ -439,6 +449,9 @@ async function linkConversationToObject(
         session_ids: [...existing, conversationId],
       });
     }
+    await linkConversationToEntityBestEffort(ctx, userId, {
+      entityType: "plan", entityId: objectId, conversationId, relationship: "work",
+    });
   }
 }
 
@@ -1134,6 +1147,35 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.projects.webUpdate, { id, ...fields });
   },
 
+  // Steering entities ride the same delegate pattern as plans/projects: the
+  // client mutates its collection optimistically; the side-effect performs the
+  // authoritative write through the public mutation (access checks, cross-ref
+  // validation, containment) in the same transaction.
+  updateStrategy: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    await (ctx as any).runMutation(api.strategies.webUpdate, { id, ...fields });
+  },
+  updateSteeringItem: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    await (ctx as any).runMutation(api.steeringItems.webUpdate, { id, ...fields });
+  },
+  deleteSteeringItem: async (ctx, userId, [id]: [string]) => {
+    await (ctx as any).runMutation(api.steeringItems.webDelete, { id });
+  },
+  deleteStrategy: async (ctx, userId, [id]: [string]) => {
+    await (ctx as any).runMutation(api.strategies.webDelete, { id });
+  },
+  linkEntities: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.objectLinks.webCreateLink, opts);
+  },
+  unlinkEntities: async (ctx, userId, [id]: [string]) => {
+    await (ctx as any).runMutation(api.objectLinks.webDeleteLink, { id });
+  },
+  linkEntityConversation: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.conversationLinks.webLinkConversation, opts);
+  },
+  unlinkEntityConversation: async (ctx, userId, [id]: [string]) => {
+    await (ctx as any).runMutation(api.conversationLinks.webUnlinkConversation, { id });
+  },
+
   toggleBookmark: async (ctx, userId, [conversationId, messageId]: [string, string]) => {
     return await (ctx as any).runMutation(api.bookmarks.toggleBookmark, {
       conversation_id: conversationId,
@@ -1438,6 +1480,30 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       arguments: opts,
       result,
       create: () => ctx.runMutation!(api.projects.webCreate, opts),
+    });
+  },
+  createStrategy: async (ctx, userId, [opts]: [any], result) => {
+    if (!hasReceiptCommandId(result)) {
+      return await ctx.runMutation!(api.strategies.webCreate, opts);
+    }
+    validatedCreateContinuation("createStrategy", result);
+    return await runReceiptBackedCreate(ctx, userId, {
+      action: "createStrategy",
+      commandName: "strategies.create/v2",
+      arguments: opts,
+      result,
+      create: () => ctx.runMutation!(api.strategies.webCreate, opts),
+    });
+  },
+  createSteeringItem: async (ctx, userId, [opts]: [any], result) => {
+    if (!hasReceiptCommandId(result)) return await ctx.runMutation!(api.steeringItems.webCreate, opts);
+    validatedCreateContinuation("createSteeringItem", result);
+    return await runReceiptBackedCreate(ctx, userId, {
+      action: "createSteeringItem",
+      commandName: "steering_items.create/v1",
+      arguments: opts,
+      result,
+      create: () => ctx.runMutation!(api.steeringItems.webCreate, opts),
     });
   },
   promoteDocToPlan: async (ctx, userId, [docId]: [string]) => {

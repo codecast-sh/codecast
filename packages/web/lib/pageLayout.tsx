@@ -28,6 +28,7 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   // would break them.
   /^\/sessions(\/|$)/,
   /^\/anchor(\/|$)/,
+  /^\/steering(\/|$)/,
   /^\/admin\//,
 ];
 

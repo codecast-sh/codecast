@@ -1,20 +1,12 @@
 // Pure scroll-decision logic for ConversationView, extracted so it can be
 // unit-tested without a DOM. See conversationScroll.test.ts.
 //
-// Streaming follow intent is deliberately kept separate from scroll geometry.
-// A new response starts in reading mode even though its short initial content is
-// necessarily "at the bottom". Only an explicit trip to the live edge resumes
-// following; otherwise every new chunk would steal the viewport from the reader.
-
-export type StreamingScrollMode = "reading" | "following";
-
-export function nextStreamingScrollMode(
-  mode: StreamingScrollMode,
-  event: "turn-start" | "reached-live-edge" | "scroll-up",
-): StreamingScrollMode {
-  if (event === "turn-start" || event === "scroll-up") return "reading";
-  if (event === "reached-live-edge") return "following";
-  return mode;
+// Streaming follows the tail until the user deliberately scrolls away. Once
+// that intent latch is set, geometry must not override it: a row re-measure or
+// new chunk can make the viewport look "near bottom" without the reader asking
+// to be moved there.
+export function shouldFollowStreaming(userScrolled: boolean): boolean {
+  return !userScrolled;
 }
 
 export interface JumpReadyInput {

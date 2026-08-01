@@ -9,7 +9,15 @@
 // The pure helpers (scopeFromDoc / decidePatchScope) are unit-tested without a
 // db; the db-touching emit/lookup are thin shells around them.
 
-export type ChangeEntity = "conversations" | "tasks" | "docs" | "plans";
+export type ChangeEntity =
+  | "conversations"
+  | "tasks"
+  | "docs"
+  | "plans"
+  | "projects"
+  | "strategies"
+  | "steering_items"
+  ;
 
 // The tables whose writes feed the change log. A table is tracked iff its rows
 // carry the uniform { user_id, team_id? } scope shape every catch-up query relies
@@ -19,6 +27,9 @@ export const TRACKED_TABLES: ReadonlySet<ChangeEntity> = new Set([
   "tasks",
   "docs",
   "plans",
+  "projects",
+  "strategies",
+  "steering_items",
 ]);
 
 export type ChangeScope = {
@@ -28,7 +39,7 @@ export type ChangeScope = {
 
 // The owner/team scope of an entity, read straight off its document. Every
 // tracked table uses these exact field names (verified against schema.ts), so
-// one extractor covers all four. Pure — unit-tested.
+// one extractor covers them all. Pure — unit-tested.
 export function scopeFromDoc(doc: any): ChangeScope {
   return {
     owner_user_id: doc?.user_id ? String(doc.user_id) : undefined,
@@ -51,8 +62,9 @@ export function patchNeedsDocRead(
 
 // Identify which tracked table an id belongs to. `db.normalizeId(table, id)` is a
 // pure string check (no document read) that returns the id iff it belongs to
-// that table's id space, so this costs at most four cheap checks and never a
-// query. Returns null for untracked ids (the interceptor then skips emission).
+// that table's id space, so this costs at most one cheap check per tracked table
+// and never a query. Returns null for untracked ids (the interceptor then skips
+// emission).
 export function trackedTableOf(db: any, id: any): ChangeEntity | null {
   for (const table of TRACKED_TABLES) {
     if (db.normalizeId(table, id)) return table;

@@ -15,6 +15,15 @@ const daemonCommandValidator = v.union(
   ...DAEMON_COMMANDS.map((c) => v.literal(c)),
 );
 
+// The entity kinds that can participate in cross-object and entity-conversation
+// links. Kept in sync with LINKABLE_ENTITY_TYPES in lib/steering.ts.
+const linkableEntityTypeValidator = v.union(
+  v.literal("strategy"),
+  v.literal("steering_item"),
+  v.literal("task"),
+  v.literal("plan"),
+);
+
 export default defineSchema({
   ...authTables,
   users: defineTable({
@@ -1919,6 +1928,7 @@ export default defineSchema({
     project_path: v.optional(v.string()),
     target_date: v.optional(v.number()),
     labels: v.optional(v.array(v.string())),
+
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -1926,6 +1936,138 @@ export default defineSchema({
     .index("by_user_status", ["user_id", "status"])
     .index("by_team_id", ["team_id"])
     .index("by_short_id", ["short_id"]),
+
+  // Steering: the organization's current understanding and chosen approach.
+  // The row supplies identity, scope, lifecycle, ownership and review timing;
+  // the structured narrative lives in an ordinary Doc (doc_id) so Strategy
+  // reads like a living document, not an ontology form.
+  strategies: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    short_id: v.string(),
+    title: v.string(),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("active"),
+      v.literal("archived"),
+    ),
+    owner_id: v.optional(v.id("users")),
+    doc_id: v.optional(v.id("docs")),
+    review_at: v.optional(v.number()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_team_id", ["team_id"])
+    .index("by_short_id", ["short_id"])
+    .index("by_doc_id", ["doc_id"]),
+
+  // Canonical organizational primitive. Kinds share operating mechanics while
+  // retaining explicit, kind-aware fields and completion language.
+  steering_items: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    short_id: v.string(),
+    kind: v.union(
+      v.literal("objective"),
+      v.literal("bet"),
+      v.literal("initiative"),
+      v.literal("question"),
+    ),
+    parent_item_id: v.optional(v.id("steering_items")),
+    title: v.string(),
+    description: v.optional(v.string()),
+    owner_id: v.optional(v.id("users")),
+    priority: v.union(
+      v.literal("urgent"),
+      v.literal("high"),
+      v.literal("medium"),
+      v.literal("low"),
+      v.literal("none"),
+    ),
+    sort_order: v.optional(v.number()),
+    status: v.union(
+      v.literal("draft"), v.literal("active"), v.literal("paused"),
+      v.literal("achieved"), v.literal("supported"), v.literal("weakened"),
+      v.literal("invalidated"), v.literal("completed"), v.literal("open"),
+      v.literal("investigating"), v.literal("resolved"), v.literal("closed"),
+      v.literal("dropped"), v.literal("archived"),
+    ),
+    target_date: v.optional(v.number()),
+    started_at: v.optional(v.number()),
+    review_at: v.optional(v.number()),
+    completed_at: v.optional(v.number()),
+    success_criteria: v.optional(v.array(v.string())),
+    hypothesis: v.optional(v.string()),
+    resolution_summary: v.optional(v.string()),
+    intent: v.optional(v.string()),
+    rationale: v.optional(v.string()),
+    result_summary: v.optional(v.string()),
+    why_it_matters: v.optional(v.string()),
+    current_answer: v.optional(v.string()),
+    resolved_at: v.optional(v.number()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_team_id", ["team_id"])
+    .index("by_short_id", ["short_id"])
+    .index("by_parent_item_id", ["parent_item_id"]),
+
+  // Steering: constrained typed cross-object relationships between Strategy,
+  // Steering Items, Tasks, and Plans. Recursive primary placement stays in
+  // parent_item_id; this table carries only cross-cutting edges. Writes flow
+  // through objectLinks.ts, which validates
+  // the (from, link, to) combination and same-workspace containment — there is
+  // no arbitrary graph mutation surface.
+  entity_links: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    from_type: linkableEntityTypeValidator,
+    from_id: v.string(),
+    to_type: linkableEntityTypeValidator,
+    to_id: v.string(),
+    link_type: v.union(
+      v.literal("advances"),
+      v.literal("tests"),
+      v.literal("supports"),
+      v.literal("blocks"),
+      v.literal("challenges"),
+      v.literal("investigates"),
+      v.literal("executes"),
+      v.literal("relates"),
+    ),
+    created_at: v.number(),
+  })
+    .index("by_from", ["from_type", "from_id"])
+    .index("by_to", ["to_type", "to_id"]),
+
+  // Steering: entity-to-conversation association. Messages stay in the existing
+  // conversations/messages substrate; this row only records that a conversation
+  // relates to a Steering object (or Task/Plan) and how. Existing direct
+  // task/plan conversation fields remain part of their existing execution
+  // surfaces; new associations also write here (see dispatch.linkConversationToObject).
+  //
+  // Steering-entity deletion sweeps its rows (deleteEntityRelationRows). A row
+  // whose conversation / task / plan side is hard-deleted lingers instead:
+  // reads re-check access and omit danglers (no leak) and unlink can clear
+  // them, so a GC hook on those deleters is deliberately deferred past Phase 1.
+  entity_conversations: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    entity_type: linkableEntityTypeValidator,
+    entity_id: v.string(),
+    conversation_id: v.id("conversations"),
+    relationship: v.union(
+      v.literal("discussion"),
+      v.literal("work"),
+      v.literal("investigation"),
+      v.literal("evidence"),
+    ),
+    created_at: v.number(),
+  })
+    .index("by_entity", ["entity_type", "entity_id"])
+    .index("by_conversation", ["conversation_id"]),
 
   plans: defineTable({
     user_id: v.id("users"),
@@ -2793,6 +2935,9 @@ export default defineSchema({
       v.literal("tasks"),
       v.literal("docs"),
       v.literal("plans"),
+      v.literal("projects"),
+      v.literal("strategies"),
+      v.literal("steering_items"),
     ),
     entity_id: v.string(),
     op: v.union(v.literal("upsert"), v.literal("delete")),

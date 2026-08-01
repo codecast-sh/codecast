@@ -38,6 +38,7 @@ const Routines = lazy(() => import("@/app/workflows/page"));
 const Triggers = lazy(() => import("@/app/triggers/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
 const Anchor = lazy(() => import("@/app/anchor/page"));
+const Steering = lazy(() => import("@/app/steering/page"));
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
 const TeamMember = lazy(() => import("@/app/team/[username]/page"));
@@ -67,6 +68,8 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/projects\/([^/]+)$/, paramNames: ["id"], component: ProjectDetail },
   { pattern: /^\/team\/activity$/, paramNames: [], component: TeamActivity },
   { pattern: /^\/team\/([^/]+)$/, paramNames: ["username"], component: TeamMember },
+  // Same component as /steering so switching sections reconciles (no re-mount).
+  { pattern: /^\/steering\/([^/]+)$/, paramNames: ["section"], component: Steering },
   // Static routes
   { pattern: /^\/tasks$/, paramNames: [], component: Tasks },
   { pattern: /^\/docs$/, paramNames: [], component: Docs },
@@ -81,6 +84,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/schedules$/, paramNames: [], component: Triggers },
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
   { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
+  { pattern: /^\/steering$/, paramNames: [], component: Steering },
   { pattern: /^\/team$/, paramNames: [], component: Team },
   { pattern: /^\/search$/, paramNames: [], component: Search },
   { pattern: /^\/vault$/, paramNames: [], component: Vault },

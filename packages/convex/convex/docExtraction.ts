@@ -39,6 +39,27 @@ export function extractTitleFromContent(content: string): string {
  *  - No conversation id — forking/resuming re-syncs the same transcript into a
  *    new conversation, and the same message must still map to ONE doc. Identity
  *    is (user, source message). */
-export function inlineDocSourceKey(userId: string, msgTimestamp: number | undefined): string {
-  return `inline://${userId}/${msgTimestamp ?? 0}`;
+export function inlineDocSourceKey(
+  userId: string,
+  msgTimestamp: number | undefined,
+  messageUuid?: string,
+): string {
+  const sourceId = messageUuid ? `uuid/${encodeURIComponent(messageUuid)}` : `${msgTimestamp ?? 0}`;
+  return `inline://${userId}/${sourceId}`;
+}
+
+export type InlineDocSnapshotRelation = "same" | "incoming_longer" | "existing_longer" | "different";
+
+export function shouldUseInlineDocSnapshotFallback(messageUuid?: string): boolean {
+  return !messageUuid;
+}
+
+export function inlineDocSnapshotRelation(
+  existingContent: string,
+  incomingContent: string,
+): InlineDocSnapshotRelation {
+  if (existingContent === incomingContent) return "same";
+  if (incomingContent.startsWith(existingContent)) return "incoming_longer";
+  if (existingContent.startsWith(incomingContent)) return "existing_longer";
+  return "different";
 }
