@@ -615,3 +615,18 @@ export function basenameOf(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash >= 0 ? path.slice(slash + 1) : path;
 }
+
+/** Deduped anchor slugs for a heading list, in document order: the first
+ *  occurrence keeps the bare slug (so `[[Note#Details]]` reaches it — the
+ *  Obsidian rule), repeats get `-2`, `-3`, …. The reading view's rehype pass
+ *  stamps ids with the SAME rule over the same document order, so outline
+ *  rows, search-hit jumps, and heading links always agree with the DOM. */
+export function headingSlugs(headings: { text: string }[]): string[] {
+  const seen = new Map<string, number>();
+  return headings.map((h) => {
+    const base = slugifyHeading(h.text);
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    return n === 1 ? base : `${base}-${n}`;
+  });
+}

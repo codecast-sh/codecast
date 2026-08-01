@@ -234,13 +234,17 @@ function printPublishResult(
 
 function accessFromOptions(options: {
   password?: string | boolean;
+  passwordValue?: string;
+  passwordStdin?: boolean;
   emailGate?: boolean;
   expires?: string;
   editMode?: string;
 }): Record<string, unknown> | undefined {
   const flags: AccessFlagValues = {};
-  // commander: undefined = untouched, string = --password P, false = --no-password
-  if (options.password !== undefined) flags.password = options.password as string | false;
+  // commander: undefined = untouched, string = --password P, false = --no-password.
+  // passwordValue (from --password-stdin) wins: it never touches argv.
+  if (options.passwordValue !== undefined) flags.password = options.passwordValue;
+  else if (options.password !== undefined) flags.password = options.password as string | false;
   if (options.emailGate !== undefined) flags.emailGate = options.emailGate;
   if (options.expires !== undefined) {
     const parsed = parseExpires(options.expires);
@@ -326,6 +330,7 @@ interface PublishOptions {
   json?: boolean;
   watch?: boolean;
   password?: string | boolean;
+  passwordValue?: string;
   emailGate?: boolean;
   expires?: string;
   editMode?: string;
@@ -473,7 +478,8 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     .option("--new", "Publish under a fresh URL even if this path was published before")
     .option("--json", "Emit the raw JSON response")
     .option("--watch", "Keep watching the file/directory and republish on change")
-    .option("--password <password>", "Require a password to view")
+    .option("--password <password>", "Require a password to view (visible in ps — prefer --password-stdin)")
+    .option("--password-stdin", "Read the view password from stdin (keeps it out of the process list)")
     .option("--no-password", "Clear the password gate")
     .option("--email-gate", "Require an email address to view")
     .option("--no-email-gate", "Clear the email gate")
@@ -508,6 +514,17 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
           process.exit(1);
         }
         return runOpen(deps, args[0], json);
+      }
+      // --password-stdin keeps the secret out of argv (and out of `ps`).
+      if ((options as { passwordStdin?: boolean }).passwordStdin) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+        const value = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+        if (!value) {
+          console.error(fmt.error("--password-stdin was set but stdin was empty"));
+          process.exit(1);
+        }
+        options.passwordValue = value;
       }
       return runPublish(deps, target, options);
     });

@@ -7,6 +7,10 @@
 // in lockstep with any future token retune.
 
 import type { ITheme } from "@xterm/xterm";
+import { cssVar, isDarkTheme } from "../solTheme";
+
+// Re-exported so terminal callers keep importing theme concerns from one place.
+export { isDarkTheme, observeTheme } from "../solTheme";
 
 // Canonical Solarized base ramp — fallbacks when a token is missing.
 const BASE = {
@@ -19,15 +23,6 @@ const BASE = {
   base2: "#eee8d5",
   base3: "#fdf6e3",
 };
-
-function cssVar(styles: CSSStyleDeclaration, name: string, fallback: string): string {
-  const v = styles.getPropertyValue(name).trim();
-  return v || fallback;
-}
-
-export function isDarkTheme(): boolean {
-  return document.documentElement.classList.contains("dark");
-}
 
 export function buildTerminalTheme(): ITheme {
   const styles = getComputedStyle(document.documentElement);
@@ -60,11 +55,4 @@ export function buildTerminalTheme(): ITheme {
     brightCyan: BASE.base1,
     brightWhite: BASE.base3,
   };
-}
-
-/** Re-run `apply` whenever the html class flips between light/dark. */
-export function observeTheme(apply: () => void): () => void {
-  const observer = new MutationObserver(apply);
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-  return () => observer.disconnect();
 }
