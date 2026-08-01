@@ -36,11 +36,52 @@ const CORS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
+type ActionCtx = Parameters<Parameters<typeof httpAction>[0]>[0];
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json", ...CORS },
   });
+}
+
+// Rate limit for the unauthenticated artifact endpoints (comment, unlock,
+// email-unlock). Returns a 429 to short-circuit, else null; FAILS OPEN so a
+// limiter glitch never blocks legitimate viewers.
+//
+// Keyed by SLUG, not by IP. Behind the self-hosted proxy mesh the client
+// address this deployment observes is an internal 100.64.0.x that rotates per
+// request, so an IP key silently multiplies the real limit by the number of
+// proxy instances (measured: 8 posts in a row all passed a "6/min" IP limit).
+// The slug is also the honest unit of abuse — it bounds how much a single
+// artifact can inject into its owner's session, whatever the source.
+async function slugRateLimited(
+  ctx: ActionCtx,
+  slug: string,
+  name: string,
+  max: number,
+  windowMs: number,
+): Promise<Response | null> {
+  try {
+    const res = (await ctx.runMutation(internal.ipRateLimit.bump, {
+      key: `${name}:${slug || "unknown"}`,
+      max,
+      window_ms: windowMs,
+    })) as { ok: boolean; retry_after_ms?: number };
+    if (!res.ok) {
+      return new Response(JSON.stringify({ error: "Too many requests — slow down and try again shortly." }), {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(Math.ceil((res.retry_after_ms ?? windowMs) / 1000)),
+          ...CORS,
+        },
+      });
+    }
+  } catch {
+    // Fail open.
+  }
+  return null;
 }
 
 export const corsPreflight = httpAction(async () => new Response(null, { status: 204, headers: CORS }));
@@ -350,6 +391,10 @@ export const unlock = httpAction(async (ctx, request) => {
   try {
     const { slug, password } = await request.json();
     if (!slug || typeof password !== "string") return json({ error: "Missing slug or password" }, 400);
+    // Online guessing bound: short "share with a client" passwords are the
+    // realistic case, so the hash comparison alone is not the whole defense.
+    const limited = await slugRateLimited(ctx, slug, "artifact-unlock", 12, 60_000);
+    if (limited) return limited;
     const artifact = await ctx.runQuery(internal.artifacts.bySlug, { slug });
     if (!artifact?.password_hash) return json({ error: "Not found" }, 404);
     const hash = await passwordHash(password, slug);
@@ -363,6 +408,8 @@ export const unlock = httpAction(async (ctx, request) => {
 export const emailUnlock = httpAction(async (ctx, request) => {
   try {
     const { slug, email } = await request.json();
+    const limited = await slugRateLimited(ctx, slug, "artifact-email-unlock", 20, 60_000);
+    if (limited) return limited;
     if (!slug || typeof email !== "string" || !email.includes("@") || email.length > 254) {
       return json({ error: "Enter a valid email" }, 400);
     }
@@ -415,7 +462,6 @@ export const manage = httpAction(async (ctx, request) => {
 // blobs (blob-ownership invariant: no row ever shares a storage_id).
 // ---------------------------------------------------------------------------
 
-type ActionCtx = Parameters<Parameters<typeof httpAction>[0]>[0];
 
 async function performRollback(ctx: ActionCtx, slug: string, targetVersion: number): Promise<string | null> {
   const art = await ctx.runQuery(internal.artifacts.historyBySlug, { slug });
@@ -657,6 +703,10 @@ export const sourceForWeb = action({
 export const comment = httpAction(async (ctx, request) => {
   try {
     const body = await request.json();
+    // Unauthenticated, and it DELIVERS TEXT INTO A LIVE AGENT SESSION — the
+    // one endpoint where flooding is both cheap and consequential.
+    const limited = await slugRateLimited(ctx, String(body.slug ?? ""), "artifact-comment", 6, 60_000);
+    if (limited) return limited;
     const result = await ctx.runMutation(api.artifacts.submitComments, {
       slug: String(body.slug ?? ""),
       author_name: String(body.author_name ?? ""),
@@ -695,14 +745,27 @@ export const view = httpAction(async (ctx, request) => {
 const notFound = (msg: string) =>
   new Response(msg, { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8" } });
 
+// The sandbox CSP is what keeps published content from ever acting with real
+// convex.codecast.sh privileges. It must ride on EVERY response that a browser
+// could treat as a document — including bundle assets, where a secondary
+// .html/.svg file inside an upload is directly navigable. nosniff stops a
+// mislabeled asset from being sniffed into one.
+const ARTIFACT_SECURITY_HEADERS = {
+  "Content-Security-Policy":
+    "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock",
+  "X-Content-Type-Options": "nosniff",
+  // Gate tokens (?k=, ?e=) live in the query string, so never let them ride a
+  // Referer header out to whatever a published page links to.
+  "Referrer-Policy": "no-referrer",
+  "X-Robots-Tag": "noindex",
+};
+
 const htmlResponse = (html: string, status: number, cache: string) =>
   new Response(html, {
     status,
     headers: {
       "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy":
-        "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock",
-      "X-Robots-Tag": "noindex",
+      ...ARTIFACT_SECURITY_HEADERS,
       "Cache-Control": cache,
       "Access-Control-Allow-Origin": "*",
     },
@@ -770,7 +833,15 @@ export const serve = httpAction(async (ctx, request) => {
           edited_by: x.edited_by,
         })),
       }),
-      { status: 200, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" } },
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Referrer-Policy": "no-referrer",
+          "Cache-Control": "no-store",
+          "Access-Control-Allow-Origin": "*",
+        },
+      },
     );
   }
 
@@ -781,7 +852,12 @@ export const serve = httpAction(async (ctx, request) => {
     if (!blob) return notFound("No thumbnail");
     return new Response(blob, {
       status: 200,
-      headers: { "Content-Type": "image/png", "Cache-Control": CACHE_IMMUTABLE, "Access-Control-Allow-Origin": "*" },
+      headers: {
+        "Content-Type": "image/png",
+        ...ARTIFACT_SECURITY_HEADERS,
+        "Cache-Control": CACHE_IMMUTABLE,
+        "Access-Control-Allow-Origin": "*",
+      },
     });
   }
 
@@ -802,6 +878,7 @@ export const serve = httpAction(async (ctx, request) => {
       status: 200,
       headers: {
         "Content-Type": asset.content_type,
+        ...ARTIFACT_SECURITY_HEADERS,
         "Cache-Control": versioned ? CACHE_IMMUTABLE : CACHE_CURRENT,
         "Access-Control-Allow-Origin": "*",
       },
@@ -883,7 +960,12 @@ export const serve = httpAction(async (ctx, request) => {
     if (srcParam === "raw") {
       return new Response(source, {
         status: 200,
-        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": CACHE_CURRENT, "Access-Control-Allow-Origin": "*" },
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          ...ARTIFACT_SECURITY_HEADERS,
+          "Cache-Control": CACHE_CURRENT,
+          "Access-Control-Allow-Origin": "*",
+        },
       });
     }
     return htmlResponse(
