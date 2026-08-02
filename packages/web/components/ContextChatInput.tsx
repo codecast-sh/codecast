@@ -31,6 +31,9 @@ interface ContextChatInputProps {
   linkedObjectId?: string;
   projectPath?: string;
   conversationId?: string;
+  /** Steering surfaces pass the viewer's selected workspace so the created
+   *  conversation lands in that room, not the active repo's team. */
+  steeringWorkspace?: { workspace: "team"; team_id: string } | { workspace: "personal" };
 }
 
 export function ContextChatInput({
@@ -41,6 +44,7 @@ export function ContextChatInput({
   linkedObjectId,
   projectPath: projectPathProp,
   conversationId,
+  steeringWorkspace,
 }: ContextChatInputProps) {
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -119,6 +123,7 @@ export function ContextChatInput({
         ...(linkedObjectId
           ? { linked_object: { type: contextType, id: linkedObjectId } }
           : {}),
+        ...(steeringWorkspace ? { steering_workspace: steeringWorkspace } : {}),
       }),
     });
 
@@ -155,7 +160,7 @@ export function ContextChatInput({
         store.markOptimisticAsFailed(sid, clientId);
         console.error("Failed to create context session", error);
       });
-  }, [message, contextType, contextTitle, getContextBody, agentKey, linkedObjectId, projectPathProp, conversationId]);
+  }, [message, contextType, contextTitle, getContextBody, agentKey, linkedObjectId, projectPathProp, conversationId, steeringWorkspace]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

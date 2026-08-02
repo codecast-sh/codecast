@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useInboxStore, type SteeringItem } from "../../store/inboxStore";
 import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
+import { steeringArgs } from "../../hooks/useSyncSteering";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { ContextChatInput } from "../ContextChatInput";
 import { SteeringConversationPanel } from "./SteeringConversationPanel";
@@ -203,6 +204,7 @@ function CreateItem({
 }
 
 function PortfolioConversation({ items }: { items: SteeringItem[] }) {
+  const workspace = steeringArgs(useWorkspaceArgs());
   const context = [
     "You are entering the team's Steering operating room.",
     "Help the user reason about strategic execution: clarify intended change, surface assumptions and uncertainty, connect explicit execution, and challenge incoherence.",
@@ -235,6 +237,7 @@ function PortfolioConversation({ items }: { items: SteeringItem[] }) {
           contextType="steering_portfolio"
           contextTitle="Steering portfolio"
           getContextBody={() => context}
+          steeringWorkspace={workspace === "skip" ? undefined : (workspace as { workspace: "team"; team_id: string } | { workspace: "personal" })}
           placeholder={items.length ? "What should we reconsider?" : "What change are you trying to make true?"}
         />
       </div>
@@ -243,7 +246,7 @@ function PortfolioConversation({ items }: { items: SteeringItem[] }) {
 }
 
 function PendingProposalShelf({ focusId }: { focusId?: string | null }) {
-  const workspace = useWorkspaceArgs();
+  const workspace = steeringArgs(useWorkspaceArgs());
   const proposalArgs = workspace === "skip" ? "skip" : { status: "proposed", ...workspace };
   const { data: proposals } = useQueryNoThrow((convexApi as any).steeringProposals.webList, proposalArgs) as { data: any[] | undefined };
   const apply = useMutation((convexApi as any).steeringProposals.webApply);
