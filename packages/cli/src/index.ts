@@ -12570,6 +12570,8 @@ steering
       { op: "create_item", key: "bet", kind: "bet", parent_ref: "objective", title: "Belief to test", hypothesis: "We believe…" },
       { op: "create_item", key: "initiative", kind: "initiative", parent_ref: "objective", title: "Bounded effort", intent: "What this effort changes" },
       { op: "create_item", key: "question", kind: "question", parent_ref: "objective", title: "Open uncertainty", why_it_matters: "Why the answer changes our direction" },
+      { op: "update_item", key: "sharpen-existing", item_ref: "si-123", fields: { intent: "A clearer intended change", status: "active" } },
+      { op: "update_strategy", key: "activate-strategy", strategy_ref: "st-123", fields: { status: "active" } },
       { op: "link", key: "advances", from_type: "steering_item", from_ref: "initiative", link_type: "advances", to_type: "steering_item", to_ref: "objective" },
     ], null, 2));
   });
