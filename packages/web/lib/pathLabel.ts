@@ -24,7 +24,8 @@ export function pathLabel(path: string): string {
     "/tasks": "Tasks",
     "/docs": "Docs",
     "/vault": "Vault",
-    "/artifacts": "Artifacts",
+    "/pages": "Pages",
+    "/artifacts": "Pages", // pre-rename alias — old saved tabs keep this path
     "/plans": "Plans",
     "/projects": "Projects",
     "/inbox": "Inbox",

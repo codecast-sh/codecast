@@ -84,7 +84,8 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/team$/, paramNames: [], component: Team },
   { pattern: /^\/search$/, paramNames: [], component: Search },
   { pattern: /^\/vault$/, paramNames: [], component: Vault },
-  { pattern: /^\/artifacts$/, paramNames: [], component: Artifacts },
+  { pattern: /^\/pages$/, paramNames: [], component: Artifacts },
+  { pattern: /^\/artifacts$/, paramNames: [], component: Artifacts }, // pre-rename alias for /pages
   { pattern: /^\/windows$/, paramNames: [], component: Windows },
   { pattern: /^\/config$/, paramNames: [], component: ConfigPage },
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },

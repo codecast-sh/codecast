@@ -145,7 +145,7 @@ export function ArtifactCard({
           <DropdownMenuTrigger asChild>
             <button
               className="p-1.5 rounded bg-sol-bg/90 border border-sol-border/60 text-sol-text-muted hover:text-sol-text shadow-sm"
-              aria-label="Artifact actions"
+              aria-label="Page actions"
             >
               <MoreHorizontal className="w-4 h-4" />
             </button>
@@ -178,7 +178,7 @@ export function ArtifactCard({
                     if (!window.confirm(`Delete "${a.title}" and its whole version history? The link stops working immediately.`)) return;
                     const r = await deleteArtifact({ slug: a.slug });
                     if (r && "error" in r && r.error) toast.error(r.error);
-                    else toast.success("Artifact deleted");
+                    else toast.success("Page deleted");
                   }}
                 >
                   <Trash2 className="w-3.5 h-3.5 mr-2" /> Delete
