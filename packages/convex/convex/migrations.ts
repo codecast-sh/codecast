@@ -1,4 +1,4 @@
-import { internalMutation, query } from "./functions";
+import { internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { redactSecrets } from "./redact";
@@ -336,7 +336,12 @@ export const fixTaskSourceFromAgent = internalMutation({
   },
 });
 
-export const analyzeMessageRoles = query({
+// internalQuery, not query: this samples the most recent conversations across
+// EVERY user and returns titles plus a preview of each first message, and it
+// walks `messages` (millions of rows) with no index. As a public function it
+// was both a cross-tenant leak and a denial-of-service handed to anyone with
+// the deployment URL. It has no callers; kept as internal for one-off use.
+export const analyzeMessageRoles = internalQuery({
   args: {
     limit: v.optional(v.number()),
   },

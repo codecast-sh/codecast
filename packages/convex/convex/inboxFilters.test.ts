@@ -336,6 +336,9 @@ describe("isApiErrorBanner", () => {
     expect(isApiErrorBanner("Claude usage limit reached. Your limit will reset at 3am (America/New_York).")).toBe(true);
     // Sentence-shaped spend-limit variant, admitted by its /usage-credits tail.
     expect(isApiErrorBanner("You've hit your monthly spend limit. Run /usage-credits to manage your limit and keep using Fable 5 or switch models to continue this chat.")).toBe(true);
+    // "reached" variant with a model-name limit, same /usage-credits tail.
+    expect(isApiErrorBanner("You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model.")).toBe(true);
+    expect(classifyApiErrorBanner("You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model.")).toBe("limit");
   });
 
   test("does not flag prose that merely opens like a limit banner", () => {
@@ -347,6 +350,7 @@ describe("isApiErrorBanner", () => {
     expect(isApiErrorBanner("You've hit your session limit · resets 11:30pm\nWait, actually let me reconsider the approach here.")).toBe(false);
     // Sentence continuation without the /usage-credits tail stays prose.
     expect(isApiErrorBanner("You've hit your monthly spend limit. You could raise it in settings or wait for the reset.")).toBe(false);
+    expect(isApiErrorBanner("You've reached your usage limit, so I'll pause the generation work here.")).toBe(false);
   });
 
   test("classifies marked opencode/pi provider errors (auth vs generic), and never a normal reply", () => {

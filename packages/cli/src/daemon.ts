@@ -17,16 +17,18 @@ import {
   saveProfile,
   getAccountsHeartbeatPayload,
   autoSaveActiveProfile,
+  migrateLegacyProfileNames,
   activeCredentialExpiresAt,
   refreshActiveCredential,
   resnapshotIfActiveFresher,
   refreshUsageSnapshots,
   deleteProfile,
 } from "./ccAccounts.js";
-import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
+import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
+import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
-import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile } from "./codexAccounts.js";
+import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile, migrateLegacyCodexProfileNames } from "./codexAccounts.js";
 import { TranscriptDirWatcher, transcriptDirWatcherConfig, decodePiCwdSlug, type TranscriptDirEvent, type DirEventWatcher } from "./transcriptDirWatcher.js";
 import {
   OpencodeStorageWatcher,
@@ -107,7 +109,8 @@ import {
   reapStaleTerminalSessions,
   type TerminalServerOptions,
 } from "./terminal/terminalServer.js";
-import { attachVaultServer, handleVaultHttp, type VaultServerOptions } from "./vault/vaultServer.js";
+import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
+import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
@@ -760,6 +763,10 @@ interface DaemonState {
   lastHeartbeatTick?: number;
   runtimeVersion?: string;
   lastSelfHealRestart?: number;
+  // macOS App Data (TCC) outcome for Cursor's data dir, recorded so later
+  // logins can start the watcher without re-touching an undecided TCC state
+  // (see cursorWatcherDecision) and doctor can explain a denial.
+  cursorAccess?: "granted" | "denied";
 }
 
 const AUTH_FAILURE_THRESHOLD = 5;
@@ -1270,6 +1277,7 @@ let hookServerPort = 0;
 const terminalToken = generateTerminalToken();
 let terminalServerHandle: { close(): void } | null = null;
 let vaultServerHandle: { close(): void } | null = null;
+let vaultMirror: VaultMirror | null = null;
 
 function terminalServerOptions(): TerminalServerOptions {
   return { token: terminalToken, log };
@@ -1279,6 +1287,28 @@ function terminalServerOptions(): TerminalServerOptions {
 // they only additionally need to know where the vault registry lives.
 function vaultServerOptions(): VaultServerOptions {
   return { ...terminalServerOptions(), configDir: CONFIG_DIR };
+}
+
+// Remote mirror pusher. Opt-in per vault and off by default, so on a machine
+// where nobody ran `cast vault mirror --on` this starts, finds nothing, and
+// costs nothing. It subscribes to the SAME watch hub the browser uses rather
+// than opening a second watcher on the same tree.
+function startVaultMirror(): void {
+  const siteUrl = getSiteUrl();
+  const token = getAuthToken();
+  if (!siteUrl || !token) return;
+
+  vaultMirror = new VaultMirror({
+    configDir: CONFIG_DIR,
+    deviceId: deviceId(),
+    transport: httpMirrorTransport(siteUrl, token),
+    // Subscribing also keeps the vault's watcher warm, which is exactly right:
+    // a mirrored vault is being watched on the user's behalf whether or not a
+    // browser tab happens to be open on it.
+    watch: (vault, onChange) => vaultWatchHub()?.subscribe(vault, onChange) ?? (() => {}),
+    log,
+  });
+  vaultMirror.start();
 }
 
 function startHookServer(
@@ -1330,6 +1360,7 @@ function startHookServer(
 
   terminalServerHandle = attachTerminalServer(server, terminalServerOptions());
   vaultServerHandle = attachVaultServer(server, vaultServerOptions());
+  startVaultMirror();
 
   // Reap idle panel terminals on boot and periodically (see terminalServer.ts).
   setTimeout(() => reapStaleTerminalSessions(log), 30_000).unref?.();
@@ -1355,6 +1386,10 @@ function startHookServer(
 }
 
 function stopHookServer(): void {
+  if (vaultMirror) {
+    vaultMirror.stop();
+    vaultMirror = null;
+  }
   if (terminalServerHandle) {
     terminalServerHandle.close();
     terminalServerHandle = null;
@@ -1962,8 +1997,22 @@ function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSetting
 // of retrying every beat. Remote devices run a pushed COPY of the primary's
 // credential, so profiles are only ever saved on the primary.
 const autoSaveDecidedAccounts = new Set<string>();
+let profileNamesMigrated = false;
 function maybeAutoSaveAccount(): void {
   if (isRemoteDevice()) return;
+  if (!profileNamesMigrated) {
+    // One-shot: profile names used to be auto-derived from the email DOMAIN
+    // (claude2@almostcandid.com → almostcandid); they now come from the local
+    // part (claude2). Rename still-auto-named profiles to the new form.
+    profileNamesMigrated = true;
+    try {
+      for (const r of migrateLegacyProfileNames()) {
+        log(`[ACCOUNTS] Renamed profile "${r.from}" → "${r.to}" (names now use the email's local part)`);
+      }
+    } catch (err) {
+      log(`[ACCOUNTS] Profile name migration failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   try {
     // Ride the mtime-cached payload for the per-beat check — ~/.claude.json
     // can be multi-MB, so an unconditional parse every 30s is real work.
@@ -1985,7 +2034,18 @@ function maybeAutoSaveAccount(): void {
 // in the inventory on the next heartbeat instead of waiting for the usage
 // cycle. One attempt per account per daemon lifetime, mirroring the CC path.
 const codexAutoSaveDecided = new Set<string>();
+let codexProfileNamesMigrated = false;
 function maybeAutoSaveCodexAccount(): void {
+  if (!codexProfileNamesMigrated) {
+    codexProfileNamesMigrated = true;
+    try {
+      for (const r of migrateLegacyCodexProfileNames()) {
+        log(`[ACCOUNTS] Renamed Codex profile "${r.from}" → "${r.to}" (names now use the email's local part)`);
+      }
+    } catch (err) {
+      log(`[ACCOUNTS] Codex profile name migration failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   try {
     const payload = getCodexAccountsHeartbeatPayload();
     const key = payload?.active_uuid || payload?.active_email;
@@ -2144,6 +2204,14 @@ async function sendHeartbeat(): Promise<void> {
  *   - on PATH        (fallback)             -> `cast`
  * Returns argv parts so callers can spawn without shell-quoting hazards.
  */
+/** Shell prefix routing an agent launch through `cast _disclaimed --` so the
+ *  agent becomes TCC self-responsible (see disclaim.ts). "" off-macOS or when
+ *  CODECAST_NO_DISCLAIM=1. */
+function disclaimPrefix(): string {
+  const { cmd, prefixArgs } = resolveCastInvocation();
+  return buildDisclaimShellPrefix([cmd, ...prefixArgs].join(" "));
+}
+
 function resolveCastInvocation(): { cmd: string; prefixArgs: string[] } {
   const argv1 = process.argv[1] || "";
   if (argv1.endsWith("daemon.ts") || argv1.endsWith("daemon.js")) {
@@ -2782,7 +2850,11 @@ async function executeRemoteCommand(
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
-        let cmdText = `${keyPrefix}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
+        // Launch through the disclaim wrapper so the agent is TCC
+        // self-responsible: privacy prompts name the agent (its own signed
+        // identity), not codecast/bun (see disclaim.ts). The wrapper execs
+        // plain argv, which works here because envPrefix starts with `env`.
+        let cmdText = `${keyPrefix}${disclaimPrefix()}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
 
         let codexThreadId: string | null = null;
         const codexSkipApprovals = binaryArgs.includes("--full-auto") || binaryArgs.includes("--dangerously-bypass-approvals-and-sandbox");
@@ -12703,7 +12775,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // Same managed-key injection as a fresh launch, so a resumed opencode/pi
     // session gets its provider key too (pl-207).
     const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
-    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeKeyPrefix}${resumeEnvPrefix} ${resumeCmd}`]);
+    // disclaimPrefix: resumed agents carry their own TCC identity, same as a
+    // fresh launch (resumeEnvPrefix always starts with `env`, so the wrapper's
+    // plain-argv exec contract holds).
+    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeKeyPrefix}${disclaimPrefix()}${resumeEnvPrefix} ${resumeCmd}`]);
     await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
 
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
@@ -16838,7 +16913,39 @@ async function main(): Promise<void> {
     logError("Cursor watcher error", error);
   });
 
-  cursorWatcher.start();
+  cursorWatcher.on("denied", () => {
+    saveDaemonState({ cursorAccess: "denied" });
+    log("Cursor sync stopped: macOS denied access to Cursor's data — run `cast doctor` for fix steps");
+  });
+
+  // Consent gate (macOS): scanning Cursor's dir is what raises the login-time
+  // "codecast would like to access data from other apps" prompt, so only scan
+  // when the user opted in or a prior run recorded the grant. `cast cursor on`
+  // flips the pref and restarts the daemon, so the one prompt fires while the
+  // user is watching that command, not at some future login.
+  const cursorDecision = cursorWatcherDecision({
+    platform: process.platform,
+    pref: config.cursor_sync,
+    recordedAccess: readDaemonState().cursorAccess,
+  });
+  if (cursorDecision === "start") {
+    // Fire-and-forget: with an undecided TCC state the probe blocks until the
+    // user answers the permission dialog, and daemon startup must not.
+    void (async () => {
+      const probe = process.platform === "darwin" ? await probeCursorAccess() : "ok";
+      if (probe === "denied") {
+        saveDaemonState({ cursorAccess: "denied" });
+        log("Cursor sync unavailable: macOS denied access to Cursor's data — run `cast doctor` for fix steps");
+      } else {
+        if (process.platform === "darwin" && probe === "ok") {
+          saveDaemonState({ cursorAccess: "granted" });
+        }
+        cursorWatcher.start();
+      }
+    })();
+  } else if (cursorDecision === "needs-consent" && fs.existsSync(defaultCursorPath())) {
+    log("Cursor detected but not synced — run `cast cursor on` to enable (macOS will ask to allow access once)");
+  }
 
   const cursorTranscriptWatcher = new CursorTranscriptWatcher();
   const cursorTranscriptSyncs = new Map<string, InvalidateSync>();
@@ -16902,7 +17009,11 @@ async function main(): Promise<void> {
     logError("Cursor transcript watcher error", error);
   });
 
-  cursorTranscriptWatcher.start();
+  // ~/.cursor/projects is a dotfile dir (no TCC gate), so only the explicit
+  // off switch disables transcript sync.
+  if (config.cursor_sync !== "off") {
+    cursorTranscriptWatcher.start();
+  }
 
   codexAppServerInstance = new CodexAppServer({
     log,

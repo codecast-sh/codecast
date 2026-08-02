@@ -1,6 +1,7 @@
 import { mutation, query, internalAction, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { enqueuePush } from "./pushRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { isConversationTeamVisible } from "./privacy";
@@ -117,7 +118,7 @@ export const notifyTeamSessionStart = internalMutation({
         continue;
       }
 
-      await ctx.db.insert("notifications", {
+      const notifId = await ctx.db.insert("notifications", {
         recipient_user_id: member._id,
         type: "team_session_start",
         actor_user_id: args.user_id,
@@ -142,8 +143,10 @@ export const notifyTeamSessionStart = internalMutation({
         );
 
         if (!alreadyPushed) {
-          await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
-            push_token: member.push_token,
+          await enqueuePush(ctx, {
+            user: member,
+            notification_id: notifId,
+            type: "team_session_start",
             title: `${actorName} started coding`,
             body,
             data: {
@@ -397,7 +400,7 @@ async function deliverSessionNotification(
     }
   }
 
-  await ctx.db.insert("notifications", {
+  const notifId = await ctx.db.insert("notifications", {
     recipient_user_id: recipientId,
     type,
     conversation_id: conversationId,
@@ -407,8 +410,10 @@ async function deliverSessionNotification(
   });
 
   if (user.push_token && user.notifications_enabled) {
-    await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
-      push_token: user.push_token,
+    await enqueuePush(ctx, {
+      user,
+      notification_id: notifId,
+      type,
       title,
       body: message,
       data: {

@@ -8,7 +8,7 @@ import {
   Send, Fingerprint, Quote, Star, BookOpen, Gauge, MonitorSmartphone, RefreshCw,
   ListFilter, FolderKanban, AppWindow, Share2, Users, Wrench, ListChecks, Workflow,
   Globe, FileText, Activity, Server, Inbox, Smartphone, GitBranch, Monitor, Brain,
-  Github, Cpu, LayoutDashboard, Boxes, Puzzle,
+  Github, Cpu, LayoutDashboard, Boxes, Puzzle, Clock,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { RELEASES, type Accent, type SectionIcon } from "./changelogData";
@@ -47,7 +47,7 @@ const ICONS: Record<SectionIcon, LucideIcon> = {
   Send, Fingerprint, Quote, Star, BookOpen, Gauge, MonitorSmartphone, RefreshCw,
   ListFilter, FolderKanban, AppWindow, Share2, Users, Wrench, ListChecks, Workflow,
   Globe, FileText, Activity, Server, Inbox, Smartphone, GitBranch, Monitor, Brain,
-  Github, Cpu, LayoutDashboard, Boxes, Puzzle,
+  Github, Cpu, LayoutDashboard, Boxes, Puzzle, Clock,
 };
 
 // Marker colors cycle down the timeline so the spine has rhythm. Order is

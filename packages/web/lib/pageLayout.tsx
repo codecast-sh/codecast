@@ -45,7 +45,7 @@ export function isFullWidthRoute(pathname: string): boolean {
 function pageMaxWidth(pathname: string): string {
   const p = routePath(pathname);
   if (p === "/team" || p.startsWith("/team/")) return "max-w-6xl";
-  if (p === "/artifacts") return "max-w-6xl"; // card grid wants the wider column
+  if (p === "/pages" || p === "/artifacts") return "max-w-6xl"; // card grid wants the wider column
   return "max-w-4xl";
 }
 
