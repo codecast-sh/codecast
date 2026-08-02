@@ -3455,6 +3455,18 @@ cliRoute("/cli/plans/bind", async (ctx, body) => {
 cliRoute("/cli/plans/unbind", async (ctx, body) => {
   return await ctx.runMutation(api.plans.unbindSession, body);
 });
+
+// Steering proposals — agents draft durable, reviewable graph changes and
+// apply them only after the user explicitly confirms the proposal id.
+cliRoute("/cli/steering/proposals/create", async (ctx, body) => {
+  return await ctx.runMutation(api.steeringProposals.cliCreate, body);
+});
+cliRoute("/cli/steering/proposals/get", async (ctx, body) => {
+  return await ctx.runQuery(api.steeringProposals.cliGet, body);
+});
+cliRoute("/cli/steering/proposals/apply", async (ctx, body) => {
+  return await ctx.runMutation(api.steeringProposals.cliApply, body);
+});
 // Unified comment route
 cliRoute("/cli/plans/comment", async (ctx, body) => {
   return await ctx.runMutation(api.plans.addComment, body);

@@ -8,6 +8,12 @@ import { AgentTypeIcon } from "./AgentTypeIcon";
 import type { AgentClientId } from "@codecast/shared/contracts";
 
 type AgentKey = AgentClientId;
+const escapeContext = (value: string) =>
+  value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+// Preserve exact prose and command examples in the context body (notably doc
+// edit strings) while preventing body content from closing the envelope.
+const protectContextBody = (value: string) =>
+  value.replace(/<\/context>/gi, "<\\/context>");
 const AGENT_TYPES: { key: AgentKey; convex: string; label: string; active: string }[] = [
   { key: "claude", convex: "claude_code", label: "Claude", active: "bg-sol-yellow/20 text-sol-yellow border-sol-yellow/50" },
   { key: "codex", convex: "codex", label: "Codex", active: "bg-emerald-500/20 text-emerald-400 border-emerald-500/50" },
@@ -24,6 +30,7 @@ interface ContextChatInputProps {
   placeholder?: string;
   linkedObjectId?: string;
   projectPath?: string;
+  conversationId?: string;
 }
 
 export function ContextChatInput({
@@ -33,6 +40,7 @@ export function ContextChatInput({
   placeholder,
   linkedObjectId,
   projectPath: projectPathProp,
+  conversationId,
 }: ContextChatInputProps) {
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -55,18 +63,30 @@ export function ContextChatInput({
     if (!text) return;
 
     const body = getContextBody();
-    const idAttr = linkedObjectId ? ` id="${linkedObjectId}"` : "";
+    const idAttr = linkedObjectId ? ` id="${escapeContext(linkedObjectId)}"` : "";
     let contextBody = body || "";
     // Prepend editing instructions for docs so the model knows how to modify them
     if (contextType === "doc" && linkedObjectId && body) {
       contextBody = `[Document ID: ${linkedObjectId}]\nTo edit this document use: cast doc edit ${linkedObjectId} --old "text to find" --new "replacement text"\nTo update title: cast doc edit ${linkedObjectId} --title "New Title"\nDo not use file Read/Write/Edit tools — this document lives in the database, not the filesystem.\n\n${body}`;
     }
     const contextBlock = contextBody
-      ? `<context type="${contextType}" title="${contextTitle}"${idAttr}>\n${contextBody}\n</context>\n\n`
+      ? `<context type="${escapeContext(contextType)}" title="${escapeContext(contextTitle)}"${idAttr}>\n${protectContextBody(contextBody)}\n</context>\n\n`
       : `[Viewing ${contextType}: ${contextTitle}]\n\n`;
     const fullMessage = contextBlock + text;
 
     const store = useInboxStore.getState();
+    if (conversationId) {
+      const clientId = store.addOptimisticMessage(conversationId, fullMessage);
+      store.sendMessage(conversationId, fullMessage, undefined, clientId);
+      useInboxStore.setState({
+        sidePanelSessionId: conversationId,
+        sidePanelOpen: true,
+      });
+      setMessage("");
+      setSelectedAgent(null);
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
+      return;
+    }
     const { projectPath, gitRoot } = store.currentConversation;
     const convexAgentType = AGENT_TYPES.find(a => a.key === agentKey)?.convex || "claude_code";
 
@@ -120,7 +140,7 @@ export function ContextChatInput({
       textareaRef.current.style.height = "auto";
     }
 
-    useInboxStore.setState({ sidePanelSessionId: sid });
+    useInboxStore.setState({ sidePanelSessionId: sid, sidePanelOpen: true });
 
     // Resolve through the shared tracked-create/by_session_id lifecycle, then
     // issue the durable send with the SAME client id as the optimistic bubble.
@@ -135,7 +155,7 @@ export function ContextChatInput({
         store.markOptimisticAsFailed(sid, clientId);
         console.error("Failed to create context session", error);
       });
-  }, [message, contextType, contextTitle, getContextBody, agentKey, linkedObjectId, projectPathProp]);
+  }, [message, contextType, contextTitle, getContextBody, agentKey, linkedObjectId, projectPathProp, conversationId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
