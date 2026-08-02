@@ -14,6 +14,61 @@ export interface CursorWatcherEvents {
   session: (event: CursorSessionEvent) => void;
   error: (error: Error) => void;
   ready: () => void;
+  /** macOS revoked/denied access to Cursor's app data mid-run; polling stops. */
+  denied: () => void;
+}
+
+export function defaultCursorPath(): string {
+  const home = process.env.HOME || "";
+  if (process.platform === "darwin") {
+    return path.join(home, "Library", "Application Support", "Cursor");
+  } else if (process.platform === "linux") {
+    return path.join(home, ".config", "Cursor");
+  } else if (process.platform === "win32") {
+    return path.join(process.env.APPDATA || "", "Cursor");
+  }
+  return path.join(home, ".cursor");
+}
+
+/** EPERM/EACCES from a read under another app's data dir is macOS App Data
+ *  protection (TCC) saying no — not a transient fs error. */
+export function isTccDeniedError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return code === "EPERM" || code === "EACCES";
+}
+
+/** One deliberate read of Cursor's workspace storage. On macOS with an
+ *  undecided TCC state this is what raises the "access data from other apps"
+ *  prompt — only call it when the user is in a consent flow (or access was
+ *  already granted). Async on purpose: the syscall BLOCKS until the user
+ *  answers the dialog, and the daemon's event loop (heartbeats, watchdog
+ *  liveness) must keep running underneath it. */
+export async function probeCursorAccess(cursorPath?: string): Promise<"ok" | "denied" | "missing"> {
+  const storagePath = path.join(cursorPath || defaultCursorPath(), "User", "workspaceStorage");
+  try {
+    await fs.promises.readdir(storagePath);
+    return "ok";
+  } catch (err) {
+    return isTccDeniedError(err) ? "denied" : "missing";
+  }
+}
+
+/**
+ * Whether the daemon may scan Cursor's app data at startup. On macOS the scan
+ * is consent-gated: it runs only when the user enabled it (`cast cursor on`)
+ * or a prior run recorded the grant — never as a surprise TCC prompt at login.
+ * Off-macOS there is no TCC, so the watcher starts unless turned off.
+ */
+export function cursorWatcherDecision(input: {
+  platform: NodeJS.Platform;
+  pref?: "on" | "off";
+  recordedAccess?: "granted" | "denied";
+}): "start" | "skip" | "needs-consent" {
+  if (input.pref === "off") return "skip";
+  if (input.platform !== "darwin") return "start";
+  if (input.pref === "on") return "start";
+  if (input.recordedAccess === "granted") return "start";
+  return "needs-consent";
 }
 
 export declare interface CursorWatcher {
@@ -49,18 +104,7 @@ export class CursorWatcher extends EventEmitter {
   }
 
   private detectCursorPath(): string {
-    const platform = process.platform;
-    const home = process.env.HOME || "";
-
-    if (platform === "darwin") {
-      return path.join(home, "Library", "Application Support", "Cursor");
-    } else if (platform === "linux") {
-      return path.join(home, ".config", "Cursor");
-    } else if (platform === "win32") {
-      return path.join(process.env.APPDATA || "", "Cursor");
-    }
-
-    return path.join(home, ".cursor");
+    return defaultCursorPath();
   }
 
   start(): void {
@@ -146,6 +190,13 @@ export class CursorWatcher extends EventEmitter {
         }
       }
     } catch (err) {
+      // Access revoked mid-run (System Settings toggle): stop polling instead
+      // of failing every 2s, and let the daemon record the denial.
+      if (isTccDeniedError(err)) {
+        this.stop();
+        this.emit("denied");
+        return;
+      }
       const error = err instanceof Error ? err : new Error(String(err));
       this.emit("error", error);
     }
