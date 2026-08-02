@@ -7,6 +7,7 @@
 //
 // No vault module may re-implement any of this.
 
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
@@ -27,6 +28,17 @@ const MAX_DEPTH = 16;
 const SCAN_CONCURRENCY = 8;
 
 const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+
+/**
+ * Content identity for a vault file: a 16-hex sha256 prefix. This ONE digest is
+ * the loopback route's ETag, the write guard the browser sends back as If-Match,
+ * and the content_hash the Convex mirror diffs on. A second hash function
+ * anywhere in the vault would mean the mirror and the local channel could
+ * disagree about whether two files are the same file.
+ */
+export function vaultContentHash(data: Buffer | string): string {
+  return crypto.createHash("sha256").update(data).digest("hex").slice(0, 16);
+}
 
 /** Files the vault serves: markdown plus the attachment set. Everything else on
  *  disk is invisible to the browser. */

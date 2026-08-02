@@ -105,6 +105,22 @@ export function removeVault(configDir: string, idOrPath: string): VaultInfo | nu
   return target;
 }
 
+/** Turn the remote mirror on or off for one vault. Off by DEFAULT and off is a
+ *  real off: the daemon tears the Convex projection down rather than leaving it
+ *  stale (see vaultMirror.ts). Returns the updated vault, or null if unknown. */
+export function setVaultMirroring(configDir: string, idOrPath: string, on: boolean): VaultInfo | null {
+  const target = findVault(configDir, idOrPath);
+  if (!target) return null;
+  const vaults = listVaults(configDir);
+  const vault = vaults.find((v) => v.id === target.id);
+  if (!vault) return null;
+  vault.mirror = on;
+  const config = readConfig(configDir);
+  config.vaults = vaults;
+  writeConfig(configDir, config);
+  return vault;
+}
+
 /** Record a fresh note count from a scan. Advisory only — written back solely
  *  when it changed, so a scan doesn't rewrite the shared config on every call. */
 export function setVaultNoteCount(configDir: string, id: string, noteCount: number): void {

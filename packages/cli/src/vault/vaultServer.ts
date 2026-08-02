@@ -10,7 +10,6 @@
 
 import * as fs from "fs";
 import * as fsp from "fs/promises";
-import * as crypto from "crypto";
 import * as http from "http";
 import * as os from "os";
 import * as path from "path";
@@ -39,6 +38,7 @@ import {
   realVaultRoot,
   resolveVaultPath,
   scanVault,
+  vaultContentHash,
   vaultContentType,
 } from "./vaultScope.js";
 import { VaultWatchHub, type VaultWatchHubOptions } from "./vaultWatcher.js";
@@ -59,10 +59,6 @@ export interface VaultServerOptions extends TerminalServerOptions {
 // through it when it exists; the routes work without it (a bare HTTP harness in
 // tests, or before the WS endpoint is attached).
 let hub: VaultWatchHub | null = null;
-
-function fileEtag(data: Buffer): string {
-  return crypto.createHash("sha256").update(data).digest("hex").slice(0, 16);
-}
 
 function sendJson(res: http.ServerResponse, status: number, headers: Record<string, string>, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json", ...headers });
@@ -185,7 +181,7 @@ async function handleGetFile(
     "Content-Type": vaultContentType(target.rel),
     "Content-Length": String(data.length),
     "Cache-Control": "no-cache",
-    ETag: fileEtag(data),
+    ETag: vaultContentHash(data),
     "X-Vault-Mtime": String(Math.round(stat.mtimeMs)),
     "X-Vault-Size": String(stat.size),
   });
@@ -218,7 +214,7 @@ async function handlePutFile(
   if (hasGuard) {
     // The guard is what stops a stale editor tab from silently overwriting a
     // change made on disk (or by another tab) since it last read the file.
-    const currentEtag = current ? fileEtag(current.data) : null;
+    const currentEtag = current ? vaultContentHash(current.data) : null;
     const currentMtime = current ? Math.round(current.stat.mtimeMs) : null;
     const mismatch = ifMatch
       ? ifMatch !== currentEtag
@@ -246,7 +242,7 @@ async function handlePutFile(
     path: target.rel,
     mtime: Math.round(stat.mtimeMs),
     size: stat.size,
-    etag: fileEtag(body),
+    etag: vaultContentHash(body),
   };
   sendJson(res, 200, headers, written);
 }
@@ -383,6 +379,14 @@ export function handleVaultHttp(
     else res.end();
   });
   return true;
+}
+
+/** The process's watch hub, once attachVaultServer has created it. The mirror
+ *  pusher subscribes through this so a mirrored vault reuses the SAME watcher
+ *  the browser does — a second RecursiveWatcher on the same tree would double
+ *  the fs pressure and could see a different file set than the routes serve. */
+export function vaultWatchHub(): VaultWatchHub | null {
+  return hub;
 }
 
 /** Wire WS /vault/ws onto the shared loopback server and own the watch hub. */
