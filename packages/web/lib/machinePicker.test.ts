@@ -24,7 +24,24 @@ describe("defaultMachineId", () => {
     expect(defaultMachineId([dev("laptop")], { ownerDeviceId: "gone" })).toBe("laptop");
   });
 
-  it("prefers an online local that has the checkout over a more recent one that doesn't", () => {
+  it("opens on the machine you last picked", () => {
+    const devices = [dev("laptop"), dev("desktop")];
+    expect(defaultMachineId(devices, { lastPicked: "desktop" })).toBe("desktop");
+  });
+
+  it("does not let a standing pick move a session that already has an owner", () => {
+    // The pick is stamped now, so honouring lastPicked here would re-point an
+    // existing session onto another machine just by opening it.
+    const devices = [dev("laptop"), dev("desktop")];
+    expect(defaultMachineId(devices, { lastPicked: "desktop", ownerDeviceId: "laptop" })).toBe("laptop");
+  });
+
+  it("ignores a standing pick whose machine is offline or gone", () => {
+    expect(defaultMachineId([dev("laptop"), dev("desktop", { online: false })], { lastPicked: "desktop" })).toBe("laptop");
+    expect(defaultMachineId([dev("laptop")], { lastPicked: "retired" })).toBe("laptop");
+  });
+
+  it("prefers an online local that has the checkout over one that doesn't", () => {
     const devices = [
       dev("laptop", { last_seen: 9000 }),
       dev("desktop", { last_seen: 1000, local_project_roots: ["/Users/j/code/codecast"] }),
@@ -32,28 +49,31 @@ describe("defaultMachineId", () => {
     expect(defaultMachineId(devices, { projectPath: "/Users/j/code/codecast" })).toBe("desktop");
   });
 
-  it("falls back to the most-recently-seen online local when nobody has the checkout", () => {
-    const devices = [dev("laptop", { last_seen: 9000 }), dev("desktop", { last_seen: 1000 })];
-    expect(defaultMachineId(devices, { projectPath: "/Users/j/code/nowhere" })).toBe("laptop");
+  it("matches a checkout by prefix, so a repo subdir still finds its machine", () => {
+    const devices = [dev("laptop"), dev("desktop", { local_project_roots: ["/Users/j/code/app"] })];
+    expect(defaultMachineId(devices, { projectPath: "/Users/j/code/app/packages/web" })).toBe("desktop");
+    // …but not a sibling that merely shares a prefix string: nobody has that
+    // checkout, so it falls to the stable tiebreak across all online locals.
+    expect(defaultMachineId(devices, { projectPath: "/Users/j/code/app-other" })).toBe("desktop");
   });
 
-  it("holds a sticky answer against heartbeat churn, but only within the candidate pool", () => {
-    // Both online and idle: whichever heartbeated last would otherwise win, and
-    // that flips every ~30s.
-    const churned = [dev("laptop", { last_seen: 9000 }), dev("desktop", { last_seen: 8000 })];
-    expect(defaultMachineId(churned, { sticky: "desktop" })).toBe("desktop");
-
-    // A folder that only exists on the laptop still moves the highlight.
-    const scoped = [
-      dev("laptop", { last_seen: 9000, local_project_roots: ["/repo"] }),
-      dev("desktop", { last_seen: 8000 }),
-    ];
-    expect(defaultMachineId(scoped, { sticky: "desktop", projectPath: "/repo" })).toBe("laptop");
+  // THE REGRESSION this ladder exists to prevent. Two idle online locals
+  // re-heartbeat every ~30s; the old tiebreak was `last_seen`, so the answer
+  // flipped between the render that showed a chip and the send that acted on it.
+  it("is stable against heartbeat churn — last_seen never decides", () => {
+    const a = [dev("laptop", { last_seen: 9000 }), dev("desktop", { last_seen: 8000 })];
+    const b = [dev("laptop", { last_seen: 8000 }), dev("desktop", { last_seen: 9000 })];
+    expect(defaultMachineId(a)).toBe(defaultMachineId(b));
   });
 
-  it("ignores a sticky machine that went offline", () => {
-    const devices = [dev("laptop"), dev("desktop", { online: false, last_seen: 9000 })];
-    expect(defaultMachineId(devices, { sticky: "desktop" })).toBe("laptop");
+  it("is stable against roster reordering", () => {
+    const devices = [dev("laptop"), dev("desktop"), dev("studio")];
+    expect(defaultMachineId(devices)).toBe(defaultMachineId([...devices].reverse()));
+  });
+
+  it("never auto-selects an online remote while a local is online", () => {
+    const devices = [dev("aaa-nose", { is_remote: true, local_project_roots: ["/repo"] }), dev("zzz-laptop")];
+    expect(defaultMachineId(devices, { projectPath: "/repo" })).toBe("zzz-laptop");
   });
 
   it("uses an online remote holding the checkout when no local is online", () => {
@@ -70,7 +90,7 @@ describe("defaultMachineId", () => {
       dev("desktop", { online: false, last_seen: 1000 }),
       dev("nose", { is_remote: true }),
     ];
-    expect(defaultMachineId(devices, { projectPath: "/repo" })).toBe("laptop");
+    expect(defaultMachineId(devices, { projectPath: "/repo" })).toBe("desktop");
   });
 
   it("falls back to an online remote for a cloud-only user", () => {
