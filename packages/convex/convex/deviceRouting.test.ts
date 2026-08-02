@@ -239,3 +239,61 @@ describe("pickOwnerDevice — cloud-only fallback (no local device exists)", () 
     expect(pickOwnerDevice([], {}, NOW)).toBeNull();
   });
 });
+
+describe("pickOwnerDevice — a machine that can't open the path doesn't win on recency", () => {
+  // The real roster this came from: a Linux box registered is_remote:false with
+  // zero project roots, heartbeating within seconds of the Mac. Rung 4 sorted on
+  // last_seen alone, so a /Users/... session could land on a machine with no
+  // /Users at all — roughly a coin flip, re-tossed every heartbeat.
+  test("Linux box heartbeat more recently, but the path is /Users/... → the Mac", () => {
+    const devices = [
+      local("nose", { platform: "linux", last_seen: NOW - 1_000 }),
+      local("mac", { platform: "darwin", last_seen: NOW - 30_000 }),
+    ];
+    expect(pickOwnerDevice(devices, { projectPath: "/Users/jasonbenn/.claude" }, NOW)).toBe("mac");
+  });
+
+  test("and symmetrically, a /home/... path skips the Mac", () => {
+    const devices = [
+      local("mac", { platform: "darwin", last_seen: NOW - 1_000 }),
+      local("nose", { platform: "linux", last_seen: NOW - 30_000 }),
+    ];
+    expect(pickOwnerDevice(devices, { projectPath: "/home/jasonbenn/src" }, NOW)).toBe("nose");
+  });
+
+  test("a shared namespace is not evidence — /opt still goes to the most recent", () => {
+    const devices = [
+      local("nose", { platform: "linux", last_seen: NOW - 1_000 }),
+      local("mac", { platform: "darwin", last_seen: NOW - 30_000 }),
+    ];
+    expect(pickOwnerDevice(devices, { projectPath: "/opt/shared" }, NOW)).toBe("nose");
+  });
+
+  test("preference, not a filter: nobody can open it → still owned, never null", () => {
+    const devices = [local("nose", { platform: "linux", last_seen: NOW - 1_000 })];
+    expect(pickOwnerDevice(devices, { projectPath: "/Users/jasonbenn/.claude" }, NOW)).toBe("nose");
+  });
+
+  test("devices with no platform reported are never excluded", () => {
+    const devices = [local("unknown", { last_seen: NOW - 1_000 }), local("mac", { platform: "darwin" })];
+    expect(pickOwnerDevice(devices, { projectPath: "/Users/j/app" }, NOW)).toBe("unknown");
+  });
+
+  test("the offline-queue rung applies it too — don't queue for a machine that can't serve", () => {
+    const devices = [
+      local("nose", { platform: "linux", last_seen: stale }),
+      local("mac", { platform: "darwin", last_seen: stale - 60_000 }),
+    ];
+    expect(pickOwnerDevice(devices, { projectPath: "/Users/jasonbenn/.claude" }, NOW)).toBe("mac");
+  });
+
+  test("an explicit pick still outranks it — you may target a box deliberately", () => {
+    const devices = [
+      local("nose", { platform: "linux" }),
+      local("mac", { platform: "darwin" }),
+    ];
+    expect(
+      pickOwnerDevice(devices, { projectPath: "/Users/jasonbenn/.claude", targetDeviceId: "nose" }, NOW),
+    ).toBe("nose");
+  });
+});

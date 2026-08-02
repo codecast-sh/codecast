@@ -153,7 +153,7 @@ import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2 } from "lucide-react";
 import { useDevices, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
-import { defaultMachineId, pathOnMyMachines } from "../lib/machinePicker";
+import { pathOnMyMachines, resolveMachineSelection } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
@@ -886,31 +886,42 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || ctxPath;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
 
-  // Feeding the previous answer back in pins the highlight against heartbeat
-  // ordering (see defaultMachineId); writing the ref during render is safe
-  // because it's a pure cache of the value we just computed.
-  const stickyDefaultRef = useRef<string | null>(null);
-  const defaultDeviceId = defaultMachineId(devices, {
+  // Where the picker opens. Deterministic (owner → your standing pick → the
+  // machine holding this checkout → stable tiebreak), so it can't change under
+  // the user between the render that shows a chip and the send that acts on it.
+  const lastPickedDeviceId = useInboxStore((s) => s.clientState.ui?.last_picked_device_id ?? null);
+  const machineOpts = {
     ownerDeviceId: storeSession?.owner_device_id ?? (conversation as any).owner_device_id ?? null,
     projectPath: currentPath,
-    sticky: stickyDefaultRef.current,
+    lastPicked: lastPickedDeviceId,
+  };
+  // The machine this session WILL run on, plus the two things that must agree
+  // with it: what gets stamped, and which machine's folders we offer.
+  const { selectedDeviceId, scopeProjectsToDeviceId } = resolveMachineSelection(devices, {
+    ...machineOpts,
+    picked: pickedDeviceId,
   });
-  stickyDefaultRef.current = defaultDeviceId;
 
-  // Only an explicit move OFF the machine this session would route to anyway
-  // scopes the folder list and rides along as target_device_id.
-  const scopedDeviceId = pickedDeviceId && pickedDeviceId !== defaultDeviceId ? pickedDeviceId : null;
-  // The unscoped query above stays mounted even while scoped — it's the shared
-  // subscription that keeps the store's recentProjects cache (which the other
-  // pickers read) warm. The scoped one only exists while a non-default machine
-  // is selected, and deliberately never feeds that cache.
+  // The folder list is scoped to the machine we're about to stamp, ALWAYS. The
+  // unscoped query is `getOnlineLocalRoots` — a union across every online local —
+  // so leaving it unscoped while the selection is forced would offer folders the
+  // target machine doesn't have, and the stamp wins rung 1 outright: the session
+  // would land on a machine that can't cd into its own project path. (Previously
+  // the same list was safe because an unstamped session could be re-routed to
+  // whichever machine actually held the checkout.)
+  const scopedDeviceId = scopeProjectsToDeviceId;
+  // The unscoped query stays mounted regardless — it's the shared subscription
+  // that keeps the store's recentProjects cache (which the other pickers read)
+  // warm. The scoped one deliberately never feeds that cache.
   const scopedProjects = useQuery(
     api.users.getRecentProjectPaths,
     scopedDeviceId ? { limit: 50, device_id: scopedDeviceId } : "skip",
   );
 
   // Memoized because five downstream useMemos take it as a dep — an identity
-  // that churned every render would defeat all of them.
+  // that churned every render would defeat all of them. While the scoped query is
+  // in flight we show nothing rather than the union: an empty list for a beat is
+  // recoverable, a path the target machine lacks is not.
   const recentProjects = useMemo<RecentProject[]>(
     () => scopedDeviceId
       ? (scopedProjects ?? [])
@@ -1045,21 +1056,32 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   // bites when the conversation already exists server-side; every new-session
   // surface defers its create, so the stamp below is what usually carries the
   // choice — see createSessionFromStub.
+  const updateClientUI = useInboxStore((s) => s.updateClientUI);
   const handleMachinePick = useCallback((d: Device) => {
-    const next = d.device_id === defaultDeviceId ? null : d.device_id;
-    setPickedDeviceId(next);
-    if (currentPath) handleSwitch(currentPath, undefined, next);
-  }, [defaultDeviceId, currentPath, handleSwitch]);
+    setPickedDeviceId(d.device_id);
+    // Remember the choice: it becomes the picker's default for subsequent NEW
+    // sessions, which is what makes "explicit every time" cost one click total
+    // rather than one click per session.
+    updateClientUI({ last_picked_device_id: d.device_id });
+    if (currentPath) handleSwitch(currentPath, undefined, d.device_id);
+  }, [currentPath, handleSwitch, updateClientUI]);
 
-  // Stamp the pick on the stub row so it rides the deferred create. Tracks
-  // scopedDeviceId rather than the raw click: if the default shifts under the
-  // user (a machine drops off, or a folder switch moves the route) the stamp
-  // clears itself, so we never pin what routing would pick anyway. The create
-  // path re-checks this too — a stub can outlive this component.
+  // Stamp the selection on the stub row so it rides the deferred create — the
+  // machine shown in the row is the machine it runs on, whether or not the user
+  // touched the picker. Previously only a move OFF the default was stamped, and
+  // an unstamped session was re-decided server-side at send time by a
+  // `last_seen` tiebreak that flips between idle machines on its own.
   const setSessionTargetDevice = useInboxStore((s) => s.setSessionTargetDevice);
   useWatchEffect(() => {
-    setSessionTargetDevice(storeSession?._id || conversation._id, scopedDeviceId);
-  }, [storeSession?._id, conversation._id, scopedDeviceId, setSessionTargetDevice]);
+    // Never clear on a null. Null now means only "the device roster hasn't
+    // loaded yet" — `useDevices()` starts empty, so defaultMachineId returns null
+    // on the first render(s). Writing that through would wipe a stamp an earlier
+    // mount already made, silently returning the session to server-side routing.
+    // There is no longer any path that intentionally clears the selection: every
+    // chip click names a machine.
+    if (!selectedDeviceId) return;
+    setSessionTargetDevice(storeSession?._id || conversation._id, selectedDeviceId);
+  }, [storeSession?._id, conversation._id, selectedDeviceId, setSessionTargetDevice]);
 
   // Hand the imperative surface up to NewSessionView's ⌥-chord router.
   // Re-assigned every render so isOpen/commitAndClose read fresh state.
@@ -1121,7 +1143,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
       {machineChips.length > 1 && (
         <div className="flex flex-wrap justify-center gap-1.5">
           {machineChips.map((d) => {
-            const selected = d.device_id === (pickedDeviceId ?? defaultDeviceId);
+            const selected = d.device_id === selectedDeviceId;
             return (
               <button
                 key={d.device_id}
