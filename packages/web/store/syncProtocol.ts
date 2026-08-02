@@ -2,7 +2,27 @@ export type PendingEntry = {
   type: "exclude" | "include" | "field";
   value?: any;
   ts?: number;
+  // Exact hidden timestamp expected from a dismiss/stash reconcile. This is
+  // intentionally distinct from `ts`, which is only the local lock freshness
+  // clock and may be sampled a millisecond later by the middleware.
+  hideAck?: number;
 };
+
+// Convex omits optional conversation inbox timestamps when they are clear,
+// while optimistic bridge transitions retain the local `null` spelling.  That
+// is the same server acknowledgement for these three fields only; all other
+// fields keep strict null/undefined semantics.
+const OPTIONAL_INBOX_TIMESTAMPS = new Set([
+  "inbox_dismissed_at",
+  "inbox_stashed_at",
+  "inbox_pinned_at",
+]);
+
+function fieldEchoesPending(field: string, incoming: unknown, pending: unknown): boolean {
+  return incoming === pending || (
+    OPTIONAL_INBOX_TIMESTAMPS.has(field) && incoming == null && pending == null
+  );
+}
 
 /**
  * Local-first sync: pending entries represent local mutations waiting for
@@ -125,7 +145,7 @@ export function applySyncTable<T extends { _id: string }>(
     if (!overrides) return record;
     let merged = record;
     for (const { key, field, entry } of overrides) {
-      if ((record as any)[field] === entry.value) {
+      if (fieldEchoesPending(field, (record as any)[field], entry.value)) {
         delete newPending[key];
       } else {
         if (merged === record) merged = { ...record };
@@ -238,7 +258,7 @@ export function applySyncRecord(
   for (const [key, entry] of Object.entries(newPending)) {
     if (entry.type !== "field" || !key.startsWith(fieldPrefix)) continue;
     const field = key.slice(fieldPrefix.length);
-    if (incoming[field] === entry.value) {
+    if (fieldEchoesPending(field, incoming[field], entry.value)) {
       delete newPending[key];
     } else {
       if (merged === incoming) merged = { ...incoming };
