@@ -195,6 +195,10 @@ export const daemonHeartbeat = mutation({
     // row so multiple machines don't clobber each other's project roots.
     device_id: v.optional(v.string()),
     device_label: v.optional(v.string()),
+    // The machine's own hostname, kept apart from the overridable device_label.
+    // Seeds the SSH-host placeholder in Settings → Devices; never becomes an
+    // ssh target on its own (see devices.ssh_host).
+    device_hostname: v.optional(v.string()),
     is_remote_device: v.optional(v.boolean()),
     // CC account inventory (names/emails/tiers, never tokens) for the switcher.
     cc_accounts: v.optional(ccAccountsValidator),
@@ -298,6 +302,7 @@ export const daemonHeartbeat = mutation({
         platform: args.platform,
         last_seen: now,
         status: "online" as const,
+        ...(args.device_hostname !== undefined ? { hostname: args.device_hostname } : {}),
         ...(args.is_remote_device !== undefined ? { is_remote: args.is_remote_device } : {}),
         ...(args.local_project_roots !== undefined
           ? { local_project_roots: args.local_project_roots }
