@@ -352,10 +352,20 @@ describe("convergence matrix — engine ordering and lifecycle", () => {
       expect(seenB.latest().rows).toEqual([]);
 
       await engineB.reconcileDurableHead();
-      // Republish is asynchronous behind the commit listener.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      await sessionB.settled();
-      expect(seenB.latest().rows.map((row) => (row.value as Row).body)).toEqual(["from-a"]);
+      // Republish is asynchronous behind the commit listener, and `settled()` can
+      // only await work already in flight — so a single macrotask hop races the
+      // republish on a loaded runner and reads back []. Poll for the publication
+      // instead of assuming one turn is enough; the assertion stays exact.
+      const republishedBodies = async () => {
+        await sessionB.settled();
+        return seenB.latest().rows.map((row) => (row.value as Row).body);
+      };
+      let bodies = await republishedBodies();
+      for (let attempt = 0; attempt < 100 && bodies.length === 0; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        bodies = await republishedBodies();
+      }
+      expect(bodies).toEqual(["from-a"]);
       sessionA.close();
       sessionB.close();
     } finally {
