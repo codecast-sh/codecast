@@ -3387,6 +3387,21 @@ describe("applyDismissedReconcile — durable cross-device dismiss", () => {
     expect(useInboxStore.getState().sessions[A].inbox_dismissed_at).toBeNull();
   });
 
+  it("CLEARS a conversation-only dismiss only on the final pass", () => {
+    const at = Date.now() - 1_000;
+    useInboxStore.setState({
+      sessions: {},
+      conversations: { [A]: { _id: A, inbox_dismissed_at: at } },
+      pending: {},
+    } as any);
+
+    useInboxStore.getState().applyDismissedReconcile([], false);
+    expect((useInboxStore.getState().conversations[A] as any).inbox_dismissed_at).toBe(at);
+
+    useInboxStore.getState().applyDismissedReconcile([], true);
+    expect((useInboxStore.getState().conversations[A] as any).inbox_dismissed_at).toBeNull();
+  });
+
   it("never CLEARs a dismissed BLANK session — its absence usually means the empty-conversation GC deleted it", () => {
     // A dismissed 0-message row leaving the server's dismissed set is (almost
     // always) cleanup.gcEmptyConversations hard-deleting it. Un-dismissing
@@ -3584,6 +3599,17 @@ describe("applyStashedReconcile — cross-device stash propagation", () => {
     } as any);
     useInboxStore.getState().applyStashedReconcile([], true);
     expect(useInboxStore.getState().sessions[realId].inbox_stashed_at ?? null).toBeNull();
+  });
+
+  it("CLEAR (final pass) un-stashes a conversation-only cached row", () => {
+    useInboxStore.setState({
+      sessions: {},
+      conversations: { [realId]: { _id: realId, inbox_stashed_at: Date.now() - 5_000 } },
+      pending: {},
+    } as any);
+
+    useInboxStore.getState().applyStashedReconcile([], true);
+    expect((useInboxStore.getState().conversations[realId] as any).inbox_stashed_at).toBeNull();
   });
 
   it("a pending local override blocks the SET (local-first)", () => {

@@ -3785,6 +3785,19 @@ function applyHiddenReconcileInDraft(
     const conv = draft.conversations[id];
     if (conv) conv[field] = null;
   }
+
+  // A direct conversation view (and markKilling) can retain metadata after its
+  // inbox row is absent. SET already updates that conversation-only twin, so a
+  // complete hidden-set pass must clear it symmetrically on a remote restore.
+  // There is no inbox card here, so the session-only blank-GC guard does not
+  // apply; clearing metadata cannot resurrect a row into the inbox.
+  for (const id of Object.keys(draft.conversations)) {
+    if (draft.sessions[id] || !isConvexId(id)) continue;
+    const conv = draft.conversations[id];
+    const at = conv[field];
+    if (!at || at < cutoff || server.has(id) || lockedLocal(id)) continue;
+    conv[field] = null;
+  }
 }
 
 // Shared body of stashSession/killSession: hide `id` (and its nested
