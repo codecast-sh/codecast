@@ -187,7 +187,17 @@ export const webListForEntity = query({
       const conversation = await ctx.db.get(row.conversation_id);
       if (!conversation) continue;
       if (!(await canAccessConversation(ctx, userId, conversation))) continue;
-      result.push(row);
+      result.push({
+        ...row,
+        conversation: {
+          _id: conversation._id,
+          title: conversation.title,
+          updated_at: conversation.updated_at,
+          message_count: conversation.message_count,
+          agent_type: conversation.agent_type,
+          status: conversation.status,
+        },
+      });
     }
     return result;
   },

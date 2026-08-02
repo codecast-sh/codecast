@@ -1,13 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { BookOpen, CalendarClock, MessageSquare, Plus } from "lucide-react";
+import { BookOpen, CalendarClock, Plus } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import { api as convexApi } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
 import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
+import { SteeringConversationPanel } from "./SteeringConversationPanel";
 
-export function StrategySection() {
+export function StrategySection({ selectedId }: { selectedId?: string | null }) {
   const workspace = useWorkspaceArgs();
   const inActiveWorkspace = (row: { team_id?: string }) =>
     workspace !== "skip" &&
@@ -29,8 +30,8 @@ export function StrategySection() {
           (a, b) =>
             Number(b.status === "active") - Number(a.status === "active") ||
             b.updated_at - a.updated_at,
-        )[0],
-    [strategies, workspace],
+        ).find((row) => !selectedId || row._id === selectedId || row.short_id === selectedId) ?? Object.values(strategies).filter(inActiveWorkspace).sort((a, b) => Number(b.status === "active") - Number(a.status === "active") || b.updated_at - a.updated_at)[0],
+    [strategies, workspace, selectedId],
   );
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
@@ -50,6 +51,10 @@ export function StrategySection() {
   const links = useQuery(
     (convexApi as any).objectLinks.webListForEntity,
     strategy ? { entity_type: "strategy", entity_id: strategy._id } : "skip",
+  ) as any;
+  const strategyDoc = useQuery(
+    (convexApi as any).docs.webGet,
+    strategy?.doc_id ? { id: strategy.doc_id } : "skip",
   ) as any;
   const linkedItemIds = new Set<string>(
     strategy && links
@@ -196,20 +201,24 @@ export function StrategySection() {
             {createError}
           </p>
         )}
-        <div
-          className="mt-7 border-t border-sol-border/30 pt-5"
-          data-steering-conversation-slot={strategy._id}
-        >
-          <div className="flex items-center gap-2">
-            <MessageSquare className="w-4 h-4 text-sol-cyan" />
-            <h3 className="text-sm font-medium text-sol-text">
-              Strategy conversation
-            </h3>
+        {strategy.doc_id && strategyDoc === undefined ? (
+          <div className="mt-8 border-t border-sol-border/30 pt-6">
+            <div className="h-24 animate-pulse rounded-xl bg-sol-bg-highlight" />
+            <p className="mt-2 text-xs text-sol-text-dim">
+              Loading the authoritative Strategy before conversation…
+            </p>
           </div>
-          <p className="mt-2 text-xs text-sol-text-dim">
-            The reusable contextual conversation panel mounts here in ct-40647.
-          </p>
-        </div>
+        ) : (
+          <SteeringConversationPanel
+            entityType="strategy"
+            entity={strategy}
+            items={Object.values(items).filter(inActiveWorkspace)}
+            narrative={strategyDoc?.content}
+            relationships={informedItems.map(
+              (item) => `${item.kind}: ${item.title} [${item.status}]`,
+            )}
+          />
+        )}
       </article>
       <aside className="lg:border-l lg:border-sol-border/30 lg:pl-5">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-sol-text-dim">

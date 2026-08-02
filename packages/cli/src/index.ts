@@ -12509,6 +12509,71 @@ doc
     console.log(`${c.green}ok${c.reset} Deleted ${c.cyan}${id}${c.reset}`);
   });
 
+// ── Steering ───────────────────────────────────────────────
+
+const steering = program
+  .command("steering")
+  .description("Propose and apply confirmed changes to the organizational Steering graph")
+  .showHelpAfterError(true);
+
+const steeringProposal = steering
+  .command("proposal")
+  .description("Manage reviewable Steering graph proposals");
+
+steeringProposal
+  .command("create")
+  .description("Create a proposal from a JSON operations file; does not mutate the Steering graph")
+  .requiredOption("--title <text>", "Proposal title")
+  .requiredOption("--operations-file <path>", "JSON array of create_item/create_strategy/link operations")
+  .option("--summary <text>", "Human-readable rationale")
+  .action(async (options: any) => {
+    const fs = await import("fs");
+    const operations = JSON.parse(fs.readFileSync(options.operationsFile, "utf-8"));
+    if (!Array.isArray(operations)) throw new Error("operations-file must contain a JSON array");
+    const result = await cliPost("/cli/steering/proposals/create", {
+      title: options.title,
+      summary: options.summary,
+      operations,
+      conversation_id: detectCurrentSessionId(),
+    });
+    console.log(`${c.green}ok${c.reset} Proposed ${c.cyan}${result.short_id}${c.reset}: ${options.title}`);
+    console.log(fmt.muted(`  Review this proposal in Steering. Apply only after explicit confirmation.`));
+  });
+
+steeringProposal
+  .command("show")
+  .argument("<proposal_id>", "Proposal short id (sp-…)")
+  .action(async (proposalId: string) => {
+    const result = await cliPost("/cli/steering/proposals/get", { short_id: proposalId });
+    if (!result) { console.error("Proposal not found"); process.exit(1); }
+    console.log(JSON.stringify(result, null, 2));
+  });
+
+steeringProposal
+  .command("apply")
+  .argument("<proposal_id>", "Proposal short id (sp-…)")
+  .requiredOption("--yes", "Confirm the user explicitly approved this exact proposal")
+  .action(async (proposalId: string) => {
+    const result = await cliPost("/cli/steering/proposals/apply", { short_id: proposalId });
+    console.log(`${c.green}ok${c.reset} Applied ${c.cyan}${proposalId}${c.reset}`);
+    for (const entity of result.entities ?? []) {
+      if (entity.short_id) console.log(`  ${c.green}+${c.reset} ${c.cyan}${entity.short_id}${c.reset} (${entity.type})`);
+    }
+  });
+
+steering
+  .command("proposal-format")
+  .description("Print the accepted proposal operation format")
+  .action(() => {
+    console.log(JSON.stringify([
+      { op: "create_item", key: "objective", kind: "objective", title: "Desired change", success_criteria: ["Observable evidence"] },
+      { op: "create_item", key: "bet", kind: "bet", parent_ref: "objective", title: "Belief to test", hypothesis: "We believe…" },
+      { op: "create_item", key: "initiative", kind: "initiative", parent_ref: "objective", title: "Bounded effort", intent: "What this effort changes" },
+      { op: "create_item", key: "question", kind: "question", parent_ref: "objective", title: "Open uncertainty", why_it_matters: "Why the answer changes our direction" },
+      { op: "link", key: "advances", from_type: "steering_item", from_ref: "initiative", link_type: "advances", to_type: "steering_item", to_ref: "objective" },
+    ], null, 2));
+  });
+
 // ── Plans ─────────────────────────────────────────────────
 
 const plan = program

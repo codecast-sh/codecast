@@ -71,8 +71,12 @@ export async function requireAccessibleLinkableEntity(
 ): Promise<any> {
   const table = ENTITY_TABLE[entityType];
   const id = ctx.db.normalizeId ? ctx.db.normalizeId(table, rawId) : rawId;
-  if (!id) notFound(`${entityType} not found`);
-  const entity = await ctx.db.get(id);
+  const entity = id
+    ? await ctx.db.get(id)
+    : await ctx.db
+        .query(table)
+        .withIndex("by_short_id", (q: any) => q.eq("short_id", rawId))
+        .unique();
   if (!entity || !(await ENTITY_ACCESS[entityType](ctx, userId, entity))) {
     notFound(`${entityType} not found`);
   }
