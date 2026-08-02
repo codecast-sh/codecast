@@ -81,17 +81,30 @@ function paragraphAbove(lines: string[], idLine: number): [number, number] | nul
   return [start, end];
 }
 
+/** Visual width of an indent run. A raw character count reads one tab as
+ *  shallower than two spaces, so a tab-indented continuation under a
+ *  space-indented parent looked like a dedent and its lines were dropped
+ *  (review finding, R12). Four columns per tab matches CommonMark's list
+ *  handling and Obsidian's default.
+ */
+const TAB_WIDTH = 4;
+function indentWidth(run: string): number {
+  let width = 0;
+  for (const ch of run) width += ch === "\t" ? TAB_WIDTH - (width % TAB_WIDTH) : 1;
+  return width;
+}
+
 /** A list item owns everything indented under it — continuation text and
  *  nested items — so an embedded checklist item doesn't lose its children. */
 function listItemSpan(lines: string[], line: number): [number, number] {
-  const indent = LIST_ITEM_RE.exec(lines[line - 1])?.[1].length ?? 0;
+  const indent = indentWidth(LIST_ITEM_RE.exec(lines[line - 1])?.[1] ?? "");
   let end = line;
   for (let i = line; i < lines.length; i++) {
     const text = lines[i];
     // Blank lines inside an item are kept only if something indented follows:
     // `end` only advances on a deeper line, and the slice carries the gaps.
     if (!text.trim()) continue;
-    const lead = text.length - text.trimStart().length;
+    const lead = indentWidth(text.slice(0, text.length - text.trimStart().length));
     if (lead <= indent) break;
     end = i + 1;
   }

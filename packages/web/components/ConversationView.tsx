@@ -831,7 +831,15 @@ function restorePickerFocus(prev: HTMLElement | null) {
 // machine has but has no session history in, so it reads dimmer than a real recent.
 type RecentProject = { path: string; count: number; lastActive: number; suggested?: boolean };
 
-function ProjectSwitcher({ conversation, handleRef }: { conversation: ConversationData; handleRef?: React.MutableRefObject<PickerHandle | null> }) {
+function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
+  conversation: ConversationData;
+  handleRef?: React.MutableRefObject<PickerHandle | null>;
+  // Where the machine picker renders. Omitted → inline above the folder chips
+  // (the standalone non-owner surface). Provided → portaled into the host's
+  // slot (NewSessionView puts it on the Context line); null while the slot
+  // element hasn't mounted yet, during which nothing renders.
+  machineSlot?: HTMLElement | null;
+}) {
   const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 50 });
   const cachedProjects = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
@@ -862,6 +870,9 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     [devices],
   );
   const [pickedDeviceId, setPickedDeviceId] = useState<string | null>(null);
+  // Machine picker rests as a single pill showing where the session will run;
+  // clicking it unfolds the full chip row for an explicit pick.
+  const [machinesOpen, setMachinesOpen] = useState(false);
   const currentConvContext = useInboxStore((s) => s.currentConversation);
   // The context fallback can point at a TEAMMATE's session (team inbox) whose
   // checkout no machine of ours has — never present that as the current project.
@@ -1090,36 +1101,57 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     }
   }, [pickList, hi, handleSwitch, exitPicker]);
 
+  // Mouse-first, and hidden entirely for the single-machine case so that
+  // experience is untouched. Offline machines stay pickable: routing falls
+  // back server-side to an online machine that has the repo. Rests collapsed
+  // as one pill (the machine the session will run on); a click unfolds the
+  // full chip row.
+  const routedMachine = machineChips.find((d) => d.device_id === (pickedDeviceId ?? defaultDeviceId)) ?? machineChips[0];
+  const machineUi = machineChips.length > 1 && routedMachine ? (
+    machinesOpen ? (
+      <div className="flex flex-wrap justify-end gap-1.5">
+        {machineChips.map((d) => {
+          const selected = d.device_id === (pickedDeviceId ?? defaultDeviceId);
+          return (
+            <button
+              key={d.device_id}
+              onClick={() => { handleMachinePick(d); setMachinesOpen(false); }}
+              title={d.online
+                ? `Run this session on ${deviceDisplayName(d)}`
+                : `${deviceDisplayName(d)} is offline — will fall back to an online machine with this repo`}
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border transition-all ${
+                selected
+                  ? `${deviceAccentClasses(d)} font-medium`
+                  : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70"
+              } ${d.online ? "" : "opacity-50"}`}
+            >
+              <DeviceIcon d={d} className="w-3 h-3 shrink-0" />
+              <span className="truncate max-w-[10rem]">{deviceDisplayName(d)}</span>
+              <DeviceDot online={d.online} />
+            </button>
+          );
+        })}
+      </div>
+    ) : (
+      <button
+        onClick={() => setMachinesOpen(true)}
+        title={`Runs on ${deviceDisplayName(routedMachine)} — click to choose a machine`}
+        className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 transition-all"
+      >
+        <DeviceIcon d={routedMachine} className="w-3 h-3 shrink-0" />
+        <span className="truncate max-w-[10rem]">{deviceDisplayName(routedMachine)}</span>
+        <DeviceDot online={routedMachine.online} />
+      </button>
+    )
+  ) : null;
+
   return (
     <div className="flex flex-col items-center gap-3">
-      {/* Mouse-first, and hidden entirely for the single-machine case so that
-          experience is untouched. Offline machines stay pickable: routing falls
-          back server-side to an online machine that has the repo. */}
-      {machineChips.length > 1 && (
-        <div className="flex flex-wrap justify-center gap-1.5">
-          {machineChips.map((d) => {
-            const selected = d.device_id === (pickedDeviceId ?? defaultDeviceId);
-            return (
-              <button
-                key={d.device_id}
-                onClick={() => handleMachinePick(d)}
-                title={d.online
-                  ? `Run this session on ${deviceDisplayName(d)}`
-                  : `${deviceDisplayName(d)} is offline — will fall back to an online machine with this repo`}
-                className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border transition-all ${
-                  selected
-                    ? `${deviceAccentClasses(d)} font-medium`
-                    : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70"
-                } ${d.online ? "" : "opacity-50"}`}
-              >
-                <DeviceIcon d={d} className="w-3 h-3 shrink-0" />
-                <span className="truncate max-w-[10rem]">{deviceDisplayName(d)}</span>
-                <DeviceDot online={d.online} />
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {machineSlot === undefined
+        ? machineUi
+        : machineUi && machineSlot
+          ? createPortal(machineUi, machineSlot)
+          : null}
 
       {!currentPath && recentProjects.length > 0 && (
         <div className="text-sol-text-dim text-xs">select a project</div>
@@ -1210,9 +1242,41 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
         )}
       </div>
 
-      <NewSessionBucketPill conversation={conversation} />
+      {/* One quiet meta row instead of three stacked ones: label, worktree
+          toggle, keyboard hints. The picker's filter input still takes its own
+          row while active — it replaces the hints, not the whole row. */}
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+        <NewSessionBucketPill conversation={conversation} />
 
-      {picking ? (
+        <button
+          onClick={() => {
+            const turningOn = !isolated;
+            useInboxStore.getState().setIsolatedWorktreeMode(turningOn);
+            if (turningOn && currentPath) {
+              handleSwitch(currentPath, true);
+            }
+          }}
+          className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+          title="Create session in an isolated git worktree"
+        >
+          <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${isolated ? "bg-sol-cyan/30" : "bg-sol-bg-alt"}`}>
+            <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
+          </span>
+          <span className={isolated ? "text-sol-cyan" : ""}>isolated worktree</span>
+        </button>
+
+        {!picking && recentProjects.length > 0 && (
+          <button
+            onClick={focusPicker}
+            className="inline-flex items-center gap-2.5 text-[10px] opacity-40 hover:opacity-90 transition-opacity"
+          >
+            <HintKeys keys={[ALT_CAP, "K"]} label="pick folder" />
+            <HintKeys keys={[ALT_CAP, "J"]} label="pick agent" />
+          </button>
+        )}
+      </div>
+
+      {picking && (
         <div className="flex items-center gap-2 text-[11px] font-mono">
           <input
             ref={pickerRef}
@@ -1232,32 +1296,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
             <HintKeys keys={["Esc"]} label="back" />
           </span>
         </div>
-      ) : recentProjects.length > 0 ? (
-        <button
-          onClick={focusPicker}
-          className="inline-flex items-center gap-2.5 text-[10px] opacity-40 hover:opacity-90 transition-opacity"
-        >
-          <HintKeys keys={[ALT_CAP, "K"]} label="pick folder" />
-          <HintKeys keys={[ALT_CAP, "J"]} label="pick agent" />
-        </button>
-      ) : null}
-
-      <button
-        onClick={() => {
-          const turningOn = !isolated;
-          useInboxStore.getState().setIsolatedWorktreeMode(turningOn);
-          if (turningOn && currentPath) {
-            handleSwitch(currentPath, true);
-          }
-        }}
-        className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
-        title="Create session in an isolated git worktree"
-      >
-        <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${isolated ? "bg-sol-cyan/30" : "bg-sol-bg-alt"}`}>
-          <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
-        </span>
-        <span className={isolated ? "text-sol-cyan" : ""}>isolated worktree</span>
-      </button>
+      )}
 
     </div>
   );
@@ -1537,6 +1576,10 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   // mac Option+letter composes special characters into e.key.
   const projectsRef = useRef<PickerHandle | null>(null);
   const agentsRef = useRef<PickerHandle | null>(null);
+  // The machine picker's logic lives in ProjectSwitcher (a machine pick scopes
+  // the folder list), but it renders down on the Context line — this slot is
+  // the portal target StableContextPicker mounts at the end of that line.
+  const [machineSlot, setMachineSlot] = useState<HTMLElement | null>(null);
   useEffect(() => {
     const onChord = (e: KeyboardEvent) => {
       if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
@@ -1563,12 +1606,15 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   return (
     <div className="flex flex-col items-center w-full flex-1 min-h-0">
       <ErrorBoundary name="ProjectSwitcher" level="inline">
-        <ProjectSwitcher conversation={conversation} handleRef={projectsRef} />
+        <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} />
       </ErrorBoundary>
       <div className="flex-1" />
       <ErrorBoundary name="StableContextPicker" level="inline">
         <div className="w-full px-4 mb-4">
-          <StableContextPicker conversationId={conversation._id} />
+          <StableContextPicker
+            conversationId={conversation._id}
+            trailing={<div ref={setMachineSlot} className="flex-shrink-0 min-w-0" />}
+          />
         </div>
       </ErrorBoundary>
       <AgentSwitcher
@@ -8346,7 +8392,7 @@ function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolL
   );
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, composerPlaceholder, workingSinceTs, workingTool }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, composerPlaceholder, workingSinceTs, workingTool }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -9804,6 +9850,29 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       onSubmitWithIntent(navigate);
       return;
     }
+    // Fork-and-send: branch the session from its latest message and deliver the
+    // composed text into the fork, leaving the parent thread untouched.
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && onForkSend) {
+      e.preventDefault();
+      // With a message selected, plain submit already forks from the selection —
+      // delegate so the combo honors the selection anchor instead of the tail.
+      if (isSelectionActive && selectedMessageUuid && onForkFromMessage) {
+        void handleSubmit(e);
+        return;
+      }
+      const text = attachReviewToMessage(conversationId, message).trim();
+      if (text) {
+        sendingRef.current = true;
+        if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+        setMessage("");
+        messageRef.current = "";
+        useInboxStore.getState().clearDraftFinal(conversationId);
+        sendingRef.current = false;
+        onForkSend(text);
+        onMessageSent?.();
+      }
+      return;
+    }
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       const text = message.trim();
@@ -10387,6 +10456,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             <ShortcutHint keys={["Ctrl", "Enter"]} label="Queue message" />
             <ShortcutHint keys={["Alt", "Enter"]} label="Reply and advance" />
             <ShortcutHint keys={["Alt", "Shift", "Enter"]} label="Reply and dismiss" />
+            <ShortcutHint keys={["Cmd", "Shift", "Enter"]} label="Fork and send" />
             <ShortcutHint keys={["Enter"]} label="Send message" />
             <div className="border-t border-sol-border/20 mt-1.5 pt-1.5">
               <button
@@ -11351,6 +11421,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       .then((realId) => sendInlineMessage(realId, content, undefined, clientId))
       .catch(() => {}); // fork failure already surfaced by doFork
   }, [conversation, doFork, addOptimisticMsg, sendInlineMessage]);
+
+  // Same capability gate as forkHandler: hide fork-and-send where forks can't run.
+  const forkSendHandler = agentSupportsFork(conversation?.agent_type) ? handleForkReply : undefined;
 
   const isForkLoading = false;
   const [loadingBranchId, setLoadingBranchId] = useState<string | null>(null);
@@ -14755,7 +14828,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open
