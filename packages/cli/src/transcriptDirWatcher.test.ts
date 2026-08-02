@@ -11,6 +11,7 @@ import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import {
   TranscriptDirWatcher,
   transcriptDirWatcherConfig,
+  agentSessionFromTranscriptPath,
   expandTranscriptRoot,
   encodePiCwdSlug,
   decodePiCwdSlug,
@@ -81,10 +82,11 @@ describe("transcriptDirWatcherConfig — gemini config matches the old GeminiWat
     expect(cfg.basePath).toBe(oldGemini.basePath());
     expect(cfg.basePath).toBe(expandTranscriptRoot(AGENT_CLIENTS.gemini.transcriptRoots[0]));
   });
-  test("watch filter requires .json under a chats path", () => {
+  test("watch filter requires .json under a chats path segment", () => {
     for (const rel of [`ph/chats${path.sep}a.json`, "chats/a.json", "a.json", "ph/chats/a.jsonl", "ph/other/a.json"]) {
       expect(cfg.watchFilter(rel)).toBe(oldGemini.watchFilter(rel));
     }
+    expect(cfg.watchFilter("ph/not-chats/a.json")).toBe(false);
   });
   test("scan predicate requires .json in a dir ending /chats", () => {
     for (const [dir, name] of [["/x/ph/chats", "a.json"], ["/x/ph", "a.json"], ["/x/ph/chats", "a.jsonl"]] as [string, string][]) {
@@ -280,5 +282,48 @@ describe("TranscriptDirWatcher — live behavior via the pi config", () => {
 
     watcher.stop();
     fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
+// ── Spawner identification: transcript path → agent session ─────────────────
+// A `claude -p` child launched from a CODEX session's exec tool has no pid
+// registry entry anywhere in its ancestor chain (only Claude Code writes those),
+// so the daemon names the ancestor by the transcript it holds open instead.
+describe("agentSessionFromTranscriptPath", () => {
+  const HOME = process.env.HOME || "";
+
+  test("names a codex session from its rollout filename's trailing uuid", () => {
+    // The real jx798rq parent: the codex process that spawned three top-level
+    // reviewers held exactly this file open.
+    const p = path.join(HOME, ".codex/sessions/2026/08/01/rollout-2026-08-01T23-03-27-019fbf23-9395-7c32-9946-f420e4f967b4.jsonl");
+    expect(agentSessionFromTranscriptPath(p)).toEqual({
+      agentType: "codex",
+      sessionId: "019fbf23-9395-7c32-9946-f420e4f967b4",
+    });
+  });
+
+  test("names claude, gemini, and pi sessions from their own layouts", () => {
+    expect(agentSessionFromTranscriptPath(path.join(HOME, ".claude/projects/-Users-j-code/828ac129-18e8-4a03-a18c-254037389be9.jsonl")))
+      .toEqual({ agentType: "claude", sessionId: "828ac129-18e8-4a03-a18c-254037389be9" });
+    expect(agentSessionFromTranscriptPath(path.join(HOME, ".gemini/tmp/abc123/chats/session-1.json")))
+      .toEqual({ agentType: "gemini", sessionId: "session-1" });
+    expect(agentSessionFromTranscriptPath(path.join(HOME, ".pi/agent/sessions/-Users-j-code/2026-08-02T11-10-00_019fbf23-9395-7c32-9946-f420e4f967b4.jsonl")))
+      .toEqual({ agentType: "pi", sessionId: "019fbf23-9395-7c32-9946-f420e4f967b4" });
+  });
+
+  test("refuses a claude subagent transcript: it names the child, not the process's session", () => {
+    // A live claude process holds its subagents' transcripts open alongside its
+    // own — linking a spawnee to one of those would be the wrong parent.
+    const p = path.join(HOME, ".claude/projects/-Users-j-code/parent-uuid/subagents/agent-child.jsonl");
+    expect(agentSessionFromTranscriptPath(p)).toBeNull();
+  });
+
+  test("ignores non-transcript files a process happens to hold open", () => {
+    expect(agentSessionFromTranscriptPath("/dev/null")).toBeNull();
+    expect(agentSessionFromTranscriptPath(path.join(HOME, ".claude/settings.json"))).toBeNull();
+    expect(agentSessionFromTranscriptPath(path.join(HOME, ".gemini/tmp/project/not-chats/session.json"))).toBeNull();
+    expect(agentSessionFromTranscriptPath(path.join(HOME, ".codex/sessions/rollout.json"))).toBeNull();
+    // opencode/cursor keep every session in one SQLite store — no per-session file.
+    expect(agentSessionFromTranscriptPath(path.join(HOME, ".local/share/opencode/opencode.db"))).toBeNull();
   });
 });
