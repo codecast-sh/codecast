@@ -7,6 +7,7 @@ import {
   isResumeInvocation,
   matchSingleFreshStartedConversation,
   matchStartedConversation,
+  parseLsofPidPaths,
   parsePidPpidMap,
   resolveSpawnerSessionId,
 } from "./sessionProcessMatcher.js";
@@ -287,5 +288,31 @@ describe("spawn-parent resolution", () => {
   test("resolveSpawnerSessionId returns null when no ancestor is registered", () => {
     const sid = resolveSpawnerSessionId([8123, 500, 400], () => null, "child-session");
     expect(sid).toBeNull();
+  });
+
+  test("parseLsofPidPaths groups each process's open files under its pid", () => {
+    // Real `lsof -p 46028 -F pn` shape: a p-line opens the block, n-lines follow.
+    const out = [
+      "p46028",
+      "n/Users/j/.codex/sessions/2026/08/01/rollout-2026-08-01T23-03-27-019fbf23-9395-7c32-9946-f420e4f967b4.jsonl",
+      "n/dev/null",
+      "p45992",
+      "n/Users/j/.claude/projects/-Users-j-code/abc.jsonl",
+      "",
+    ].join("\n");
+    expect(parseLsofPidPaths(out)).toEqual(
+      new Map([
+        [46028, [
+          "/Users/j/.codex/sessions/2026/08/01/rollout-2026-08-01T23-03-27-019fbf23-9395-7c32-9946-f420e4f967b4.jsonl",
+          "/dev/null",
+        ]],
+        [45992, ["/Users/j/.claude/projects/-Users-j-code/abc.jsonl"]],
+      ]),
+    );
+  });
+
+  test("parseLsofPidPaths ignores n-lines with no open process block and unparseable pids", () => {
+    const out = ["n/orphan/path", "pnotapid", "n/also/orphan", "p77junk", "n/still-orphan", "p77", "n/kept"].join("\n");
+    expect(parseLsofPidPaths(out)).toEqual(new Map([[77, ["/kept"]]]));
   });
 });

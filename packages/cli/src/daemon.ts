@@ -27,7 +27,7 @@ import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile } from "./codexAccounts.js";
-import { TranscriptDirWatcher, transcriptDirWatcherConfig, decodePiCwdSlug, type TranscriptDirEvent, type DirEventWatcher } from "./transcriptDirWatcher.js";
+import { TranscriptDirWatcher, transcriptDirWatcherConfig, agentSessionFromTranscriptPath, decodePiCwdSlug, type TranscriptDirEvent, type DirEventWatcher } from "./transcriptDirWatcher.js";
 import {
   OpencodeStorageWatcher,
   opencodeDbPath,
@@ -64,6 +64,7 @@ import {
   isRecognizedAgentComm,
   isResumeInvocation,
   matchStartedConversation,
+  parseLsofPidPaths,
   parsePidPpidMap,
   resolveSpawnerSessionId,
 } from "./sessionProcessMatcher.js";
@@ -5078,6 +5079,29 @@ async function pidsWithFileOpen(filePath: string): Promise<number[]> {
   }
 }
 
+// Identify ancestors that write no pid registry (every client except claude) by
+// the transcript each one holds open — one lsof covers the whole chain, and the
+// first agent-owned path a process has open names its session.
+async function ancestorTranscriptSessionIds(pids: number[]): Promise<Map<number, string>> {
+  const byPid = new Map<number, string>();
+  if (pids.length === 0) return byPid;
+  try {
+    const { stdout } = await execAsync(`lsof -p ${pids.join(",")} -F pn 2>/dev/null`);
+    for (const [pid, paths] of parseLsofPidPaths(stdout)) {
+      for (const openPath of paths) {
+        const ref = agentSessionFromTranscriptPath(openPath);
+        if (ref) {
+          byPid.set(pid, ref.sessionId);
+          break;
+        }
+      }
+    }
+  } catch {
+    // lsof exits non-zero when a pid died mid-walk; the chain just goes unresolved
+  }
+  return byPid;
+}
+
 async function resolveSpawnerConversation(
   filePath: string,
   sessionId: string,
@@ -5093,13 +5117,18 @@ async function resolveSpawnerConversation(
   const { stdout: psOut } = await execAsync("ps -axo pid=,ppid=");
   const pidToPpid = parsePidPpidMap(psOut);
   for (const pid of pids) {
-    const spawnerSessionId = resolveSpawnerSessionId(
-      collectAncestorPids(pidToPpid, pid),
-      readPidRegistrySessionId,
-      sessionId,
-    );
-    if (spawnerSessionId && conversationCache[spawnerSessionId]) {
-      return conversationCache[spawnerSessionId];
+    const ancestors = collectAncestorPids(pidToPpid, pid);
+    // Claude Code's pid registry first: a plain file read, no subprocess.
+    const registrySessionId = resolveSpawnerSessionId(ancestors, readPidRegistrySessionId, sessionId);
+    if (registrySessionId && conversationCache[registrySessionId]) {
+      return conversationCache[registrySessionId];
+    }
+    // Then the open-transcript route, which is the only one that can name a
+    // codex/gemini/pi spawner (`claude -p` run from a codex exec tool).
+    const openTranscripts = await ancestorTranscriptSessionIds(ancestors);
+    const openSessionId = resolveSpawnerSessionId(ancestors, (p) => openTranscripts.get(p) ?? null, sessionId);
+    if (openSessionId && conversationCache[openSessionId]) {
+      return conversationCache[openSessionId];
     }
   }
   return null;
@@ -17203,6 +17232,7 @@ async function main(): Promise<void> {
   // debounces per-file syncs through InvalidateSync; the first event for a file fixes
   // the sync closure (sessionId/projectHash are derived from the path, so later events
   // for the same file carry identical values — same as before the collapse).
+  const dirEventWatchers: DirEventWatcher[] = [];
   const registerJsonlDirWatcher = (
     watcher: DirEventWatcher,
     label: string,
@@ -17238,6 +17268,7 @@ async function main(): Promise<void> {
     watcher.on("error", (error: Error) => {
       logError(`${label} watcher error`, error);
     });
+    dirEventWatchers.push(watcher);
     watcher.start();
   };
 
@@ -17784,6 +17815,9 @@ async function main(): Promise<void> {
     watcher.stop();
     cursorWatcher.stop();
     cursorTranscriptWatcher.stop();
+    for (const dirEventWatcher of dirEventWatchers) {
+      dirEventWatcher.stop();
+    }
     codexAppServerInstance?.stop();
     opencodeServerInstance?.stop();
 
