@@ -26,8 +26,10 @@ describe("resolveLinkedSessionOpen", () => {
     expect(resolveLinkedSessionOpen(kindFor({ isOnConversationPage: true }), false)).toBe("route");
   });
 
-  it("keeps the side-column peek on working pages (tasks, docs, workflows)", () => {
-    expect(resolveLinkedSessionOpen(kindFor({}), false)).toBe("peek");
+  it("routes to the stage from working pages (tasks, docs, workflows)", () => {
+    // The old side-column peek is retired: a conversation is a primary object
+    // and always opens on the stage; the rail stays the session list.
+    expect(resolveLinkedSessionOpen(kindFor({}), false)).toBe("route");
   });
 
   it("routes on narrow viewports regardless of surface", () => {
