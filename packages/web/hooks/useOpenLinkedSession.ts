@@ -16,16 +16,14 @@ const MOBILE_MAX_WIDTH = 768;
  * The side-column peek only renders outside the inbox and conversation pages
  * (DashboardLayout's showConversationColumn), so on those surfaces openSidePanel
  * is a dead end -- it just slides out the generic session-list rail.
- *  - "peek": open in the side column beside a working page (tasks, docs, workflows)
  *  - "select": make it the current inbox conversation (instant, same path fork
  *    chips and parent links use)
  *  - "route": go to /conversation/<id> -- the universal target: an authenticated
  *    owner is redirected into the inbox with the session selected, a guest gets
  *    the read-only viewer
  */
-export function resolveLinkedSessionOpen(kind: SessionSelectKind, narrow: boolean): "peek" | "select" | "route" {
+export function resolveLinkedSessionOpen(kind: SessionSelectKind, narrow: boolean): "select" | "route" {
   if (narrow) return "route";
-  if (kind === "peekPanel") return "peek";
   if (kind === "inboxInPlace") return "select";
   return "route";
 }
@@ -77,10 +75,8 @@ export function useOpenLinkedSession() {
     const open = resolveLinkedSessionOpen(kind, narrow);
     if (open === "route") {
       router.push(`/conversation/${sid}`);
-    } else if (open === "select") {
-      store.navigateToSession(sid);
     } else {
-      store.openSidePanel(sid);
+      store.navigateToSession(sid);
     }
   }, [router, pathname, routerLocation.pathname]);
 }

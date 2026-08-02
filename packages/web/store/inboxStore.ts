@@ -686,29 +686,6 @@ export type SavedView = {
 // stable chronology that doesn't move; "bucket" = sections per manual label.
 export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan";
 
-// Discrete layout arrangements for a list+detail surface (docs/tasks/plans) and
-// the shell around it. "focus" = the list owns the full width and a selected
-// item opens as a peek overlay; "split" = classic pinned list+detail; "triage" =
-// split plus the right session rail. One state, cycled by a single shortcut,
-// replaces the independent collapse/resize juggling — every arrangement is a
-// designed state, never a hand-built one. Each surface remembers its own mode.
-export type LayoutMode = "focus" | "split" | "triage";
-export const LAYOUT_MODES: LayoutMode[] = ["focus", "split", "triage"];
-
-export function resolveLayoutMode(
-  ui: { layout_modes?: Record<string, LayoutMode> } | undefined,
-  surface: string,
-): LayoutMode {
-  return ui?.layout_modes?.[surface] ?? "split";
-}
-
-// Which surface a path's layout mode belongs to. The list+detail pages each get
-// their own memory; everything else shares one "global" slot so the cycle key
-// still moves the rail there.
-export function layoutSurfaceFromPath(pathname: string): string {
-  const seg = pathname.split("/")[1] ?? "";
-  return seg === "docs" || seg === "tasks" || seg === "plans" || seg === "vault" ? seg : "global";
-}
 
 export type ClientUI = {
   theme?: "light" | "dark";
@@ -769,9 +746,6 @@ export type ClientUI = {
   // than this count as "N new" on the collapsed header. Refreshed whenever the
   // user toggles the section (expanding IS reading the briefing).
   schedules_seen_at?: number;
-  // Per-surface layout mode memory (see LayoutMode). Layout pref → unstamped,
-  // per-device local_wins like sidebar_collapsed.
-  layout_modes?: Record<string, LayoutMode>;
   // Simple view: calm, low-chrome rendering of conversations and inbox cards —
   // secondary badges, counts and meta rows drop away. A per-user preference
   // ("my reading style follows me") → stamped LWW.
@@ -2833,9 +2807,7 @@ interface InboxStoreState {
   toggleSidePanel: () => void;
   selectPanelSession: (sessionId: string | null) => void;
 
-  // -- Layout modes (see LayoutMode) --
-  setLayoutMode: (surface: string, mode: LayoutMode) => void;
-  cycleLayoutMode: (surface: string) => void;
+  // -- Right rail --
   setRailOpen: (open: boolean) => void;
 
   // -- Task / Doc mutations (action + side effect) --
@@ -6655,41 +6627,12 @@ export const useInboxStore = create<InboxStoreState>(
     }
   }),
 
-  // The rail is part of the arrangement: triage opens it, focus/split retract
-  // it (including a peeked conversation, which also holds the rail open).
-  // Opening for triage must NOT manufacture a conversation selection the way
-  // toggleSidePanel does — triage promises the session LIST, not a peek of
-  // whatever conversation happened to be current. Mode memory itself goes
-  // through updateClientUI so it persists per-device like the other layout prefs.
-  setLayoutMode: (surface: string, mode: LayoutMode) => {
-    const s = get();
-    s.updateClientUI({ layout_modes: { ...(s.clientState.ui?.layout_modes ?? {}), [surface]: mode } });
-    if (mode === "triage") {
-      if (!s.sidePanelOpen) s.setRailOpen(true);
-    } else {
-      if (s.sidePanelOpen) s.setRailOpen(false);
-      if (s.sidePanelSessionId) s.clearSidePanelSession();
-    }
-  },
-
   // Open/close the rail WITHOUT toggleSidePanel's currentSessionId seeding —
   // the rail slot itself, not a conversation peek.
   setRailOpen: action(function (this: Draft, open: boolean) {
     this.sidePanelOpen = open;
     this.sidePanelUserClosed = !open;
   }),
-
-  // Cycle from the arrangement the user is LOOKING AT, not the stored mode:
-  // the rail has other writers (route auto-open, drag-to-collapse, the header
-  // toggle) that don't update layout_modes, and cycling from a stale stored
-  // mode makes the first keypress a silent no-op.
-  cycleLayoutMode: (surface: string) => {
-    const s = get();
-    const stored = resolveLayoutMode(s.clientState.ui, surface);
-    const railOut = s.sidePanelOpen || !!s.sidePanelSessionId;
-    const effective: LayoutMode = railOut ? "triage" : stored === "triage" ? "split" : stored;
-    s.setLayoutMode(surface, LAYOUT_MODES[(LAYOUT_MODES.indexOf(effective) + 1) % LAYOUT_MODES.length]);
-  },
 
   selectPanelSession: action(function (this: Draft, sessionId: string | null) {
     // Clicking the session that's already open in the right panel exits it — the
