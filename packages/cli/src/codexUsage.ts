@@ -21,6 +21,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { spawn } from "child_process";
+import { agentSpawnPath } from "./agentSpawnPath.js";
 
 export interface CodexUsageWindow {
   percent: number;
@@ -143,13 +144,9 @@ export function fetchRateLimitsViaAppServer(
     try {
       child = spawn(binary, ["app-server"], {
         stdio: ["pipe", "pipe", "ignore"],
-        // The daemon's launchd environment may lack the Homebrew/user bins the
-        // codex binary lives in — mirror codexAppServer's PATH augmentation.
         env: {
           ...process.env,
-          PATH: [process.env.HOME + "/.bun/bin", process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
-            .filter(Boolean)
-            .join(":"),
+          PATH: agentSpawnPath(),
         },
       });
     } catch {
