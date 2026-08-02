@@ -44,13 +44,13 @@ export type ShortcutAction =
   | 'msg.queue'
   | 'msg.sendAdvance'
   | 'msg.sendDismiss'
+  | 'msg.forkSend'
   | 'permission.approve'
   | 'permission.deny'
   | 'review.nextFile'
   | 'review.prevFile'
   | 'review.comment'
   | 'compose.focus'
-  | 'layout.cycle'
   | 'sidebar.toggleLeft'
   | 'sidebar.toggleRight'
   | 'sidebar.toggleComments'
@@ -69,7 +69,8 @@ export type ShortcutAction =
   | 'vault.quickSwitch'
   | 'vault.search'
   | 'vault.find'
-  | 'vault.toggleEdit';
+  | 'vault.toggleEdit'
+  | 'vault.sourceMode';
 
 export interface ShortcutDef {
   key: string;
@@ -213,14 +214,11 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+enter', action: 'msg.queue', when: 'conversation', skipInputCheck: true, description: 'Queue message' },
   { key: 'alt+enter', action: 'msg.sendAdvance', when: 'conversation', skipInputCheck: true, description: 'Send and advance' },
   { key: 'alt+shift+enter', action: 'msg.sendDismiss', when: 'conversation', skipInputCheck: true, description: 'Send and stash' },
+  { key: 'ctrl+shift+enter', mac: 'meta+shift+enter', action: 'msg.forkSend', when: 'conversation', skipInputCheck: true, description: 'Fork and send' },
   { key: 'y', action: 'permission.approve', when: 'conversation', description: 'Approve permission' },
   { key: 'n', action: 'permission.deny', when: 'conversation', description: 'Deny permission' },
 
   { key: 'ctrl+m', action: 'compose.focus', skipInputCheck: true, description: 'Focus message input' },
-  // One key moves between the designed arrangements (Focus → Split → Triage)
-  // instead of hand-adjusting collapses and splitters. Each surface (docs,
-  // tasks, plans, …) remembers its own last mode.
-  { key: 'ctrl+;', action: 'layout.cycle', skipInputCheck: true, description: 'Cycle layout (Focus / Split / Triage)' },
   { key: 'ctrl+[', action: 'sidebar.toggleLeft', skipInputCheck: true, description: 'Toggle left sidebar' },
   { key: 'ctrl+]', action: 'sidebar.toggleRight', skipInputCheck: true, description: 'Toggle sessions panel' },
   { key: 'ctrl+`', action: 'terminal.toggle', skipInputCheck: true, description: 'Toggle terminal' },
@@ -231,6 +229,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   // an input; the handler declines unless the vault is the visible tab with a
   // note open, so the chord costs nothing anywhere else.
   { key: 'ctrl+e', mac: 'meta+e', action: 'vault.toggleEdit', skipInputCheck: true, description: 'Toggle vault edit / read mode' },
+  // Live preview is the editing mode Cmd+E lands on; this jumps past it to the
+  // raw file, and back to live preview when you're done looking.
+  { key: 'ctrl+shift+e', mac: 'meta+shift+e', action: 'vault.sourceMode', skipInputCheck: true, description: 'Toggle vault source mode' },
   { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
 
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },

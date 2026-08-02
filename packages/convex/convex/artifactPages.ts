@@ -281,7 +281,11 @@ function barHtml(o: BrandOpts): string {
   // Version links stay on whatever host serves this document. r is a
   // cache-buster (new URL → new cache key past the 60s edge/browser cache).
   // EVERY navigation must carry the gate tokens (k/e) and live flag forward,
-  // or a reload on a gated page lands back on the password wall.
+  // or a reload on a gated page lands back on the password wall. This helper
+  // (and the a.back rewrite in pageShell) is the single place that encodes
+  // WHERE tokens live: the query string. If gated bundle assets ever move
+  // tokens into the path (e.g. /_k/<tok>/ under a base href), both must
+  // change in the same commit or in-page nav strands unlocked viewers.
   var keepHash=location.hash||"";
   var withQ=function(extra){var q=new URLSearchParams(location.search);var out=new URLSearchParams();
     ["k","e","live"].forEach(function(p){var val=q.get(p);if(val)out.set(p,val);});
@@ -757,13 +761,25 @@ function pageShell(title: string, body: string, extra = ""): string {
 ${body}
 </div>
 <script>(function(){
-  // Carry gate tokens (k/e) and the live flag onto the back-to-page link so
-  // returning from source/diff/editor doesn't land on the password wall.
-  var q=new URLSearchParams(location.search);var keep=[];
-  ["k","e","live"].forEach(function(p){var v=q.get(p);if(v)keep.push(p+"="+encodeURIComponent(v));});
-  if(keep.length){document.querySelectorAll("a.back").forEach(function(a){
-    var base=a.href.split("#")[0].split("?")[0];var hash=a.href.indexOf("#")>=0?a.href.slice(a.href.indexOf("#")):"";
-    a.href=base+"?"+keep.join("&")+hash;});}
+  // Rewrite nav links to stay on THIS origin and carry the gate tokens
+  // (k/e) and live flag: server-built links point at the canonical share
+  // host, which re-runs the gates, and dropping the tokens lands an
+  // unlocked viewer back on the password wall. Each link's own mode params
+  // (edit=1, src=raw) are merged, not replaced, and links without a
+  // fragment inherit location.hash so #o/#ed keys survive into the editor.
+  var q=new URLSearchParams(location.search);
+  document.querySelectorAll("a.back").forEach(function(a){
+    var href=a.getAttribute("href")||"";
+    if(!href||href.charAt(0)==="#")return;
+    var hashAt=href.indexOf("#");
+    var hash=hashAt>=0?href.slice(hashAt):(location.hash||"");
+    var base=hashAt>=0?href.slice(0,hashAt):href;
+    var qAt=base.indexOf("?");
+    var params=new URLSearchParams(qAt>=0?base.slice(qAt+1):"");
+    ["k","e","live"].forEach(function(p){var v=q.get(p);if(v)params.set(p,v);});
+    var qs=params.toString();
+    a.href=location.pathname+(qs?"?"+qs:"")+hash;
+  });
 })();</script>
 </body>
 </html>`;
