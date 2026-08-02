@@ -69,7 +69,8 @@ export type ShortcutAction =
   | 'vault.quickSwitch'
   | 'vault.search'
   | 'vault.find'
-  | 'vault.toggleEdit';
+  | 'vault.toggleEdit'
+  | 'vault.sourceMode';
 
 export interface ShortcutDef {
   key: string;
@@ -231,6 +232,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   // an input; the handler declines unless the vault is the visible tab with a
   // note open, so the chord costs nothing anywhere else.
   { key: 'ctrl+e', mac: 'meta+e', action: 'vault.toggleEdit', skipInputCheck: true, description: 'Toggle vault edit / read mode' },
+  // Live preview is the editing mode Cmd+E lands on; this jumps past it to the
+  // raw file, and back to live preview when you're done looking.
+  { key: 'ctrl+shift+e', mac: 'meta+shift+e', action: 'vault.sourceMode', skipInputCheck: true, description: 'Toggle vault source mode' },
   { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
 
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
