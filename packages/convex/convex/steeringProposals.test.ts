@@ -113,4 +113,41 @@ describe("Steering proposals", () => {
     await expect((webApply as any)._handler(ctx(t), { id: proposal.id })).rejects.toThrow("another workspace");
     expect(t.entity_links).toHaveLength(0);
   });
+
+  test("atomically updates existing Strategy and Steering Items by short id", async () => {
+    const t = tables();
+    t.strategies.push({ _id: "strategy_raw", user_id: USER, short_id: "st-12", title: "Draft strategy", status: "draft", created_at: 1, updated_at: 1 });
+    t.steering_items.push({ _id: "item_raw", user_id: USER, short_id: "si-12", kind: "bet", title: "Old belief", hypothesis: "Old", status: "draft", priority: "medium", created_at: 1, updated_at: 1 });
+    const proposal = await (webCreate as any)._handler(ctx(t), { workspace: "personal", title: "Sharpen the view", operations: [
+      { op: "update_strategy", key: "strategy", strategy_ref: "st-12", fields: { title: "Current strategy", status: "active" } },
+      { op: "update_item", key: "belief", item_ref: "si-12", fields: { title: "Sharper belief", hypothesis: "New", status: "active" } },
+    ] });
+    expect(t.strategies[0].title).toBe("Draft strategy");
+    expect(t.steering_items[0].hypothesis).toBe("Old");
+    await (webApply as any)._handler(ctx(t), { id: proposal.id });
+    expect(t.strategies[0]).toMatchObject({ title: "Current strategy", status: "active" });
+    expect(t.steering_items[0]).toMatchObject({ title: "Sharper belief", hypothesis: "New", status: "active" });
+  });
+
+  test("kind-changing updates remap lifecycle and clear foreign fields", async () => {
+    const t = tables();
+    t.steering_items.push({ _id: "item_raw", user_id: USER, short_id: "si-13", kind: "bet", title: "Belief", hypothesis: "Maybe", status: "active", priority: "medium", created_at: 1, updated_at: 1 });
+    const proposal = await (webCreate as any)._handler(ctx(t), { workspace: "personal", title: "This is really a question", operations: [
+      { op: "update_item", key: "reframe", item_ref: "si-13", fields: { kind: "question", why_it_matters: "It changes the path" } },
+    ] });
+    await (webApply as any)._handler(ctx(t), { id: proposal.id });
+    expect(t.steering_items[0]).toMatchObject({ kind: "question", status: "open", why_it_matters: "It changes the path" });
+    expect(t.steering_items[0].hypothesis).toBeUndefined();
+  });
+
+  test("rejects proposals that clear required lifecycle fields", async () => {
+    const t = tables();
+    await expect((webCreate as any)._handler(ctx(t), { workspace: "personal", title: "Invalid clear", operations: [
+      { op: "update_item", key: "clear", item_ref: "si-13", fields: { status: null } },
+    ] })).rejects.toThrow("status cannot be cleared");
+    await expect((webCreate as any)._handler(ctx(t), { workspace: "personal", title: "Invalid strategy clear", operations: [
+      { op: "update_strategy", key: "clear", strategy_ref: "st-13", fields: { status: null } },
+    ] })).rejects.toThrow("status cannot be cleared");
+    expect(t.steering_proposals).toHaveLength(0);
+  });
 });

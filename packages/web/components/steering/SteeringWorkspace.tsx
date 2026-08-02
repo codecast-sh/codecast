@@ -279,7 +279,7 @@ function PendingProposalShelf({ focusId }: { focusId?: string | null }) {
                   {op.title && <p className="mt-1 text-sm leading-5 text-sol-text">{op.title}</p>}
                   <div className="mt-2 space-y-1">
                     {Object.entries(op).filter(([key]) => !["op", "key", "kind", "title"].includes(key)).map(([key, value]) => (
-                      <p key={key} className="break-words text-sol-text-dim"><span className="text-sol-text-muted">{key.replaceAll("_", " ")}:</span> {Array.isArray(value) ? value.join("; ") : String(value)}</p>
+                      <p key={key} className="break-words text-sol-text-dim"><span className="text-sol-text-muted">{key.replaceAll("_", " ")}:</span> {typeof value === "object" && value !== null ? JSON.stringify(value) : String(value)}</p>
                     ))}
                   </div>
                 </div>

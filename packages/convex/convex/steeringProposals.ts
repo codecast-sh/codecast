@@ -3,7 +3,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { nextShortId } from "./counters";
-import { canAccessConversation, requireAccessibleSteeringItem, requireTeamMembership, workspaceForConversation } from "./lib/access";
+import { canAccessConversation, requireAccessibleSteeringItem, requireCanEditOwnerOrTeamEntity, requireTeamMembership, workspaceForConversation } from "./lib/access";
 import {
   linkWorkspace,
   requireAccessibleLinkableEntity,
@@ -32,6 +32,8 @@ const fieldsByKind: Record<string, Set<string>> = {
   question: new Set(["why_it_matters", "current_answer", "resolved_at"]),
 };
 const kindFields = ["success_criteria", "hypothesis", "resolution_summary", "intent", "rationale", "result_summary", "why_it_matters", "current_answer", "resolved_at"];
+const commonItemUpdateFields = new Set(["kind", "title", "description", "priority", "status", "target_date", "started_at", "review_at", "completed_at", ...kindFields]);
+const strategyUpdateFields = new Set(["title", "status", "review_at"]);
 
 async function apiUser(ctx: any, token?: string) {
   if (token) {
@@ -79,6 +81,19 @@ function validateOperations(operations: Operation[]) {
     } else if (op.op === "create_strategy") {
       if (!String(op.title ?? "").trim()) throw new Error(`Invalid Strategy operation: ${op.key}`);
       if (op.status != null && !["draft", "active", "archived"].includes(op.status)) throw new Error(`Invalid Strategy status: ${op.status}`);
+    } else if (op.op === "update_item") {
+      if (!String(op.item_ref ?? "").trim() || !op.fields || typeof op.fields !== "object" || Array.isArray(op.fields)) throw new Error(`Invalid Steering Item update: ${op.key}`);
+      for (const field of Object.keys(op.fields)) if (!commonItemUpdateFields.has(field)) throw new Error(`Unsupported Steering Item update field: ${field}`);
+      for (const field of ["kind", "status", "priority"]) if (field in op.fields && op.fields[field] == null) throw new Error(`${field} cannot be cleared`);
+      if (op.fields.kind != null && !itemKinds.has(op.fields.kind)) throw new Error(`Invalid Steering Item kind: ${op.fields.kind}`);
+      if (op.fields.priority != null && !priorities.has(op.fields.priority)) throw new Error(`Invalid priority: ${op.fields.priority}`);
+      if ("title" in op.fields && !String(op.fields.title ?? "").trim()) throw new Error("Title cannot be empty");
+    } else if (op.op === "update_strategy") {
+      if (!String(op.strategy_ref ?? "").trim() || !op.fields || typeof op.fields !== "object" || Array.isArray(op.fields)) throw new Error(`Invalid Strategy update: ${op.key}`);
+      for (const field of Object.keys(op.fields)) if (!strategyUpdateFields.has(field)) throw new Error(`Unsupported Strategy update field: ${field}`);
+      if ("status" in op.fields && op.fields.status == null) throw new Error("status cannot be cleared");
+      if (op.fields.status != null && !["draft", "active", "archived"].includes(op.fields.status)) throw new Error(`Invalid Strategy status: ${op.fields.status}`);
+      if ("title" in op.fields && !String(op.fields.title ?? "").trim()) throw new Error("Title cannot be empty");
     } else if (op.op === "link") {
       if (!op.from_type || !op.to_type || !op.link_type || !op.from_ref || !op.to_ref) throw new Error(`Invalid link operation: ${op.key}`);
     } else {
@@ -149,6 +164,44 @@ async function applyProposal(ctx: any, userId: any, proposal: any) {
       const row = { _id: id, ...scope, short_id, kind: op.kind, title: op.title.trim(), status };
       refs.set(op.key, { type: "steering_item", id: String(id), row, short_id });
       applied.push({ key: op.key, type: "steering_item", id: String(id), short_id });
+    }
+  }
+
+  for (const op of proposal.operations as Operation[]) {
+    if (op.op === "update_item") {
+      const localRef = refs.get(op.item_ref);
+      const item = localRef?.type === "steering_item"
+        ? localRef.row
+        : await requireAccessibleLinkableEntity(ctx, userId, "steering_item", op.item_ref);
+      await requireCanEditOwnerOrTeamEntity(ctx, userId, item, "steering item");
+      requireWorkspaceMatch(linkWorkspace(scope), linkWorkspace(item), "proposal update");
+      const fields = op.fields as Record<string, any>;
+      const kind = fields.kind ?? item.kind;
+      if (!itemKinds.has(kind)) throw new Error(`Invalid Steering Item kind: ${kind}`);
+      for (const field of kindFields) if (fields[field] != null && !fieldsByKind[kind].has(field)) throw new Error(`${field} is not valid for ${kind}`);
+      if (fields.status != null && !statusByKind[kind].has(fields.status)) throw new Error(`Invalid ${kind} status: ${fields.status}`);
+      const updates: any = { updated_at: now };
+      for (const [field, value] of Object.entries(fields)) updates[field] = value ?? undefined;
+      if (fields.kind && fields.kind !== item.kind) {
+        if (fields.status === undefined) updates.status = kind === "question" ? "open" : "draft";
+        for (const field of kindFields) if (!fieldsByKind[kind].has(field)) updates[field] = undefined;
+      }
+      await ctx.db.patch(item._id, updates);
+      Object.assign(item, updates);
+      applied.push({ key: op.key, type: "steering_item_update", id: String(item._id), short_id: item.short_id });
+    }
+    if (op.op === "update_strategy") {
+      const localRef = refs.get(op.strategy_ref);
+      const strategy = localRef?.type === "strategy"
+        ? localRef.row
+        : await requireAccessibleLinkableEntity(ctx, userId, "strategy", op.strategy_ref);
+      await requireCanEditOwnerOrTeamEntity(ctx, userId, strategy, "strategy");
+      requireWorkspaceMatch(linkWorkspace(scope), linkWorkspace(strategy), "proposal update");
+      const updates: any = { updated_at: now };
+      for (const [field, value] of Object.entries(op.fields as Record<string, any>)) updates[field] = value ?? undefined;
+      await ctx.db.patch(strategy._id, updates);
+      Object.assign(strategy, updates);
+      applied.push({ key: op.key, type: "strategy_update", id: String(strategy._id), short_id: strategy.short_id });
     }
   }
 

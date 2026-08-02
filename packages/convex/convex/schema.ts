@@ -2031,7 +2031,13 @@ export default defineSchema({
     operations: v.array(v.any()),
     applied_entities: v.optional(v.array(v.object({
       key: v.string(),
-      type: v.union(v.literal("strategy"), v.literal("steering_item"), v.literal("entity_link")),
+      type: v.union(
+        v.literal("strategy"),
+        v.literal("steering_item"),
+        v.literal("strategy_update"),
+        v.literal("steering_item_update"),
+        v.literal("entity_link"),
+      ),
       id: v.string(),
       short_id: v.optional(v.string()),
     }))),
