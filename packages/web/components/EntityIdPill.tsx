@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
@@ -19,10 +19,13 @@ import {
   FolderOpen,
   FileText,
   Folder,
+  Flag,
+  HelpCircle,
+  Sparkles,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { stripMarkdown, docContentPreview } from "../lib/notificationText";
-import { parseEntityUrl, ENTITY_ROUTE, isConvexId, type EntityType } from "../lib/entityLinks";
+import { parseEntityUrl, entityRoute, isConvexId, type EntityType } from "../lib/entityLinks";
 import { DocEmbed } from "./DocEmbed";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
@@ -32,7 +35,7 @@ const api = _api as any;
 // Short ids (ct-/pl-/jx prefixes) plus a bare 32-char Convex id — the latter
 // has no type prefix (docs have no short id at all), so EntityIdPill resolves
 // its table server-side before rendering.
-const ENTITY_ID_RE = /^(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,}|[a-z0-9]{32})$/i;
+const ENTITY_ID_RE = /^(?:(?:ct|pl|st|si|sp)-[a-z0-9]+|jx[a-z0-9]{5,}|[a-z0-9]{32})$/i;
 
 const STATUS_ICON: Record<string, any> = {
   draft: CircleDotDashed,
@@ -87,6 +90,9 @@ const TYPE_LABEL: Record<EntityType, string> = {
   session: "Session",
   doc: "Doc",
   project: "Project",
+  strategy: "Strategy",
+  steering_item: "Steering Item",
+  steering_proposal: "Steering Proposal",
 };
 
 /** Infer an entity type from a bare id by its prefix (back-compat path). */
@@ -95,6 +101,9 @@ function detectEntityType(id: string): EntityType | null {
   if (lower.startsWith("ct-")) return "task";
   if (lower.startsWith("pl-")) return "plan";
   if (/^jx[a-z0-9]/i.test(id)) return "session";
+  if (lower.startsWith("st-")) return "strategy";
+  if (lower.startsWith("si-")) return "steering_item";
+  if (lower.startsWith("sp-")) return "steering_proposal";
   return null;
 }
 
@@ -110,7 +119,7 @@ function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?
   // through the by_short_id index instead just resolves to null.
   if (isConvexId(id)) return { id };
   if (type === "session") return { short_id: id.slice(0, 7).toLowerCase() };
-  if (type === "task" || type === "plan") return { short_id: id.toLowerCase() };
+  if (type === "task" || type === "plan" || type === "strategy" || type === "steering_item" || type === "steering_proposal") return { short_id: id.toLowerCase() };
   return { id };
 }
 
@@ -573,6 +582,44 @@ function GenericHoverContent({ entity, type }: { entity: any; type: EntityType }
   );
 }
 
+function SteeringProposalHoverContent({ proposal, close }: { proposal: any; close: () => void }) {
+  const apply = useMutation(api.steeringProposals.webApply);
+  const dismiss = useMutation(api.steeringProposals.webDismiss);
+  const [busy, setBusy] = useState<"apply" | "dismiss" | null>(null);
+  const [error, setError] = useState("");
+  const operations = proposal.operations ?? [];
+  return (
+    <div className="space-y-3 p-3">
+      <div className="flex items-start gap-2">
+        <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-sol-cyan" />
+        <div>
+          <p className="text-xs font-medium text-sol-text">{proposal.title}</p>
+          <p className="mt-1 text-[10px] text-sol-text-dim">{proposal.short_id} · {proposal.status}</p>
+        </div>
+      </div>
+      {proposal.summary && <p className="text-[11px] leading-5 text-sol-text-muted">{proposal.summary}</p>}
+      <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+        {operations.map((op: any) => (
+          <div key={op.key} className="rounded border border-sol-border/30 bg-sol-bg-alt p-2 text-[10px]">
+            <p className="font-medium capitalize text-sol-cyan">{op.op.replaceAll("_", " ")}{op.kind ? ` · ${op.kind}` : ""}</p>
+            {op.title && <p className="mt-1 text-sol-text">{op.title}</p>}
+            {Object.entries(op).filter(([key]) => !["op", "key", "kind", "title"].includes(key)).map(([key, value]) => (
+              <p key={key} className="mt-1 break-words text-sol-text-dim"><span className="text-sol-text-muted">{key.replaceAll("_", " ")}:</span> {Array.isArray(value) ? value.join("; ") : String(value)}</p>
+            ))}
+          </div>
+        ))}
+      </div>
+      {error && <p role="alert" className="text-[10px] text-sol-red">{error}</p>}
+      {proposal.status === "proposed" && (
+        <div className="flex items-center justify-end gap-2 border-t border-sol-border/30 pt-2">
+          <button type="button" disabled={!!busy} onClick={async () => { setBusy("dismiss"); setError(""); try { await dismiss({ id: proposal._id }); close(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not dismiss"); } finally { setBusy(null); } }} className="text-[10px] text-sol-text-dim">Dismiss</button>
+          <button type="button" disabled={!!busy} onClick={async () => { setBusy("apply"); setError(""); try { await apply({ id: proposal._id }); close(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not apply"); } finally { setBusy(null); } }} className="rounded bg-sol-cyan px-2 py-1 text-[10px] font-medium text-sol-bg disabled:opacity-50">{busy === "apply" ? "Applying…" : "Apply proposal"}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: { shortId?: string; type?: EntityType; id?: string; fallback?: React.ReactNode }) {
   // `id` keeps its original case (Convex ids are case-sensitive); short-id and
   // prefix matching lowercase internally.
@@ -600,8 +647,11 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
   // docs/projects are only ever addressed by a full Convex id.
   const doc = useQuery(api.docs.webGet, type === "doc" && looksConvex ? { id: rawId } : "skip");
   const project = useQuery(api.projects.webGet, type === "project" && looksConvex ? { id: rawId } : "skip");
+  const { data: strategy } = useQueryNoThrow(api.strategies.webGetRef, type === "strategy" && queryArgs ? queryArgs : "skip");
+  const { data: steeringItem } = useQueryNoThrow(api.steeringItems.webGetRef, type === "steering_item" && queryArgs ? queryArgs : "skip");
+  const { data: steeringProposal } = useQueryNoThrow(api.steeringProposals.webGetRef, type === "steering_proposal" && queryArgs ? queryArgs : "skip");
 
-  const entity = isTask ? task : isPlan ? plan : isSession ? session : type === "doc" ? doc : type === "project" ? project : undefined;
+  const entity = isTask ? task : isPlan ? plan : isSession ? session : type === "doc" ? doc : type === "project" ? project : type === "strategy" ? strategy : type === "steering_item" ? steeringItem : type === "steering_proposal" ? steeringProposal : undefined;
   const status = entity?.status;
 
   const Icon = isSession
@@ -612,6 +662,10 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
         ? FileText
         : type === "project"
           ? Folder
+          : type === "strategy" || type === "steering_proposal"
+            ? Sparkles
+            : type === "steering_item"
+              ? entity?.kind === "objective" ? Target : entity?.kind === "bet" ? CircleDot : entity?.kind === "initiative" ? Flag : HelpCircle
           : STATUS_ICON[status || "open"] || Circle;
 
   const colors = isSession
@@ -622,6 +676,10 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
         ? "bg-sol-green/10 text-sol-green border-sol-green/20 hover:bg-sol-green/20"
         : type === "project"
           ? "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20"
+          : type === "strategy" || type === "steering_proposal"
+            ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/20 hover:bg-sol-cyan/20"
+            : type === "steering_item"
+              ? "bg-sol-magenta/10 text-sol-magenta border-sol-magenta/20 hover:bg-sol-magenta/20"
           : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
 
   // Label rules, preserving existing inline behavior:
@@ -641,7 +699,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
   // the raw id so the link still works in the brief window before the query
   // resolves. The pill IS the click target — one click navigates ("click
   // through"), exactly like any other link.
-  const href = `${ENTITY_ROUTE[type ?? "session"]}/${entity?._id ?? rawId}`;
+  const href = entityRoute(type ?? "session", entity?._id ?? rawId) ?? "#";
 
   const cancelHover = useCallback(() => {
     if (hoverTimeout.current) {
@@ -701,7 +759,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
         </Link>
       </PopoverAnchor>
       <PopoverContent
-        className={`${type === "doc" ? "w-80" : "w-64"} bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
+        className={`${type === "doc" ? "w-80" : type === "steering_proposal" ? "w-96" : "w-64"} bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
         side="top"
         align="start"
         sideOffset={6}
@@ -713,7 +771,9 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
             "inside" the card while crossing it, so moving up to click never
             dismisses the popover. */}
         <span aria-hidden className="absolute inset-x-0 top-full h-2" />
-        <Link
+        {type === "steering_proposal" && entity ? (
+          <SteeringProposalHoverContent proposal={entity} close={closeNow} />
+        ) : <Link
           href={href}
           onClick={closeNow}
           className="block p-3 no-underline cursor-pointer"
@@ -727,7 +787,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
           ) : (
             <div className="text-[11px] text-gray-500">{pillLabel}</div>
           )}
-        </Link>
+        </Link>}
       </PopoverContent>
     </Popover>
   );

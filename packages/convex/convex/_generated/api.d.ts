@@ -113,6 +113,7 @@ import type * as slack from "../slack.js";
 import type * as smallViewContracts from "../smallViewContracts.js";
 import type * as spawn from "../spawn.js";
 import type * as steeringItems from "../steeringItems.js";
+import type * as steeringProposals from "../steeringProposals.js";
 import type * as storyMode from "../storyMode.js";
 import type * as strategies from "../strategies.js";
 import type * as syncCursors from "../syncCursors.js";
@@ -242,6 +243,7 @@ declare const fullApi: ApiFromModules<{
   smallViewContracts: typeof smallViewContracts;
   spawn: typeof spawn;
   steeringItems: typeof steeringItems;
+  steeringProposals: typeof steeringProposals;
   storyMode: typeof storyMode;
   strategies: typeof strategies;
   syncCursors: typeof syncCursors;

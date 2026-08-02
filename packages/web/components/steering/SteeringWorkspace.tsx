@@ -12,14 +12,18 @@ import {
   Flag,
   HelpCircle,
   Layers3,
-  MessageSquare,
+  MessageCircle,
   Plus,
   Search,
+  Sparkles,
   Target,
   UserRound,
 } from "lucide-react";
 import { useInboxStore, type SteeringItem } from "../../store/inboxStore";
 import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { ContextChatInput } from "../ContextChatInput";
+import { SteeringConversationPanel } from "./SteeringConversationPanel";
 
 export type SteeringView = "overview" | "map" | "strategy" | "my-work";
 type Kind = SteeringItem["kind"];
@@ -195,6 +199,116 @@ function CreateItem({
         </button>
       </div>
     </form>
+  );
+}
+
+function PortfolioConversation({ items }: { items: SteeringItem[] }) {
+  const context = [
+    "You are entering the team's Steering operating room.",
+    "Help the user reason about strategic execution: clarify intended change, surface assumptions and uncertainty, connect explicit execution, and challenge incoherence.",
+    "Be a decisive thought partner, not a discovery questionnaire. Ask at most one pivotal question per response. After one or two substantive exchanges, offer a provisional Objective/Bet/Initiative/Question graph and invite correction. If the user says there is enough information, draft immediately and preserve remaining ambiguity as Question items.",
+    "Do not invent relationships, priorities, progress, or evidence. Do not mutate anything without showing the exact proposed change and receiving explicit confirmation.",
+    "Never create Plans or Tasks as a substitute for Steering structure. Plans and Tasks are separate execution primitives and may be created only after the user explicitly asks to translate confirmed Initiatives into execution.",
+    "To draft durable structure, run `cast steering proposal-format`, write the JSON operations to a temporary file, then run `cast steering proposal create --title \"…\" --summary \"…\" --operations-file <file>`. Report the resulting sp-* id verbatim so it renders as a review widget. A proposal does not mutate the graph. After the user explicitly approves that exact proposal, run `cast steering proposal apply sp-* --yes` and report every returned st-*/si-* id verbatim.",
+    items.length
+      ? `Visible portfolio items:\n${items.map((item) => `- ${item.kind}: ${item.title} [${item.status}]${item.parent_item_id ? `, parent ${item.parent_item_id}` : ""}`).join("\n")}`
+      : "The portfolio is empty. Begin from the user's natural language, form a provisional view quickly, and do not force them to resolve every uncertainty before drafting.",
+  ].join("\n\n");
+  return (
+    <div className="overflow-hidden rounded-2xl border border-sol-cyan/25 bg-sol-card shadow-sm">
+      <div className="flex gap-3 border-b border-sol-border/30 px-5 py-4">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sol-cyan/12 text-sol-cyan">
+          <Sparkles className="h-4 w-4" />
+        </div>
+        <div>
+          <p className="text-xs font-medium text-sol-text">Think with Steering</p>
+          <p className="mt-1 text-sm leading-6 text-sol-text-muted">
+            {items.length
+              ? "Challenge the portfolio, trace an uncertainty, or work through a decision. The agent sees only the explicit portfolio context below."
+              : "Start wherever the truth is messiest. Your agent will help clarify the intended change before proposing structure."}
+          </p>
+          <p className="mt-1 text-[10px] text-sol-text-dim">Sending starts a new Steering discussion and opens it beside this room.</p>
+        </div>
+      </div>
+      <div className="px-3 pt-3">
+        <ContextChatInput
+          contextType="steering_portfolio"
+          contextTitle="Steering portfolio"
+          getContextBody={() => context}
+          placeholder={items.length ? "What should we reconsider?" : "What change are you trying to make true?"}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PendingProposalShelf({ focusId }: { focusId?: string | null }) {
+  const workspace = useWorkspaceArgs();
+  const proposalArgs = workspace === "skip" ? "skip" : { status: "proposed", ...workspace };
+  const { data: proposals } = useQueryNoThrow((convexApi as any).steeringProposals.webList, proposalArgs) as { data: any[] | undefined };
+  const apply = useMutation((convexApi as any).steeringProposals.webApply);
+  const dismiss = useMutation((convexApi as any).steeringProposals.webDismiss);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  if (!proposals?.length) return null;
+  return (
+    <section className="mt-5 space-y-3" aria-label="Pending Steering proposals">
+      {proposals.map((proposal) => {
+        const operations = proposal.operations ?? [];
+        return (
+          <article id={`proposal-${proposal.short_id}`} key={proposal._id} className={`rounded-2xl border bg-sol-cyan/[0.035] p-5 ${focusId === proposal._id || focusId === proposal.short_id ? "border-sol-cyan ring-1 ring-sol-cyan/30" : "border-sol-cyan/25"}`}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-sol-cyan"><Sparkles className="h-3.5 w-3.5" /> Proposed change · {proposal.short_id}</div>
+                <h3 className="mt-2 text-base font-medium text-sol-text">{proposal.title}</h3>
+                {proposal.summary && <p className="mt-1 text-xs leading-5 text-sol-text-muted">{proposal.summary}</p>}
+              </div>
+              <span className="rounded-full border border-sol-border/40 px-2 py-1 text-[10px] text-sol-text-dim">{operations.length} exact changes</span>
+            </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              {operations.map((op: any) => (
+                <div key={op.key} className="rounded-xl border border-sol-border/35 bg-sol-card p-3 text-[11px]">
+                  <p className="font-medium capitalize text-sol-cyan">{op.op.replaceAll("_", " ")}{op.kind ? ` · ${op.kind}` : ""}</p>
+                  {op.title && <p className="mt-1 text-sm leading-5 text-sol-text">{op.title}</p>}
+                  <div className="mt-2 space-y-1">
+                    {Object.entries(op).filter(([key]) => !["op", "key", "kind", "title"].includes(key)).map(([key, value]) => (
+                      <p key={key} className="break-words text-sol-text-dim"><span className="text-sol-text-muted">{key.replaceAll("_", " ")}:</span> {Array.isArray(value) ? value.join("; ") : String(value)}</p>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {error && <p role="alert" className="mt-3 text-xs text-sol-red">{error}</p>}
+            <div className="mt-4 flex justify-end gap-3">
+              {proposal.conversation_id && <button onClick={() => useInboxStore.setState({ sidePanelSessionId: proposal.conversation_id, sidePanelOpen: true })} className="mr-auto text-xs text-sol-cyan">Open source discussion</button>}
+              <button disabled={!!busy} onClick={async () => { setBusy(proposal._id); setError(""); try { await dismiss({ id: proposal._id }); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not dismiss"); } finally { setBusy(null); } }} className="text-xs text-sol-text-dim">Dismiss</button>
+              <button disabled={!!busy} onClick={async () => { setBusy(proposal._id); setError(""); try { await apply({ id: proposal._id }); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not apply"); } finally { setBusy(null); } }} className="rounded-full bg-sol-cyan px-3 py-1.5 text-xs font-medium text-sol-bg disabled:opacity-50">{busy === proposal._id ? "Applying…" : "Apply proposal"}</button>
+            </div>
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
+function FirstRunRoom({ proposalId }: { proposalId?: string | null }) {
+  return (
+    <div className="mx-auto max-w-4xl px-4 py-10 sm:py-16">
+      <div className="mb-8 flex items-center gap-2 text-xs text-sol-cyan">
+        <Sparkles className="h-4 w-4" />
+        Strategic operating room
+      </div>
+      <h2 className="max-w-3xl text-3xl font-semibold leading-tight text-sol-text sm:text-4xl">
+        Start with the situation, not a schema.
+      </h2>
+      <p className="mt-4 max-w-2xl text-sm leading-6 text-sol-text-muted">
+        Think with an agent about the change, the uncertainty, and the work already in motion. Structure emerges only when it helps the reasoning.
+      </p>
+      <div className="mt-10"><PortfolioConversation items={[]} /><PendingProposalShelf focusId={proposalId} /></div>
+      <p className="mt-5 text-center text-[11px] text-sol-text-dim">
+        Conversation begins without creating portfolio objects. Any proposed change remains yours to confirm.
+      </p>
+    </div>
   );
 }
 
@@ -498,6 +612,43 @@ function ItemDetail({
               </button>
             </>
           )}
+          <SteeringConversationPanel
+            entityType="steering_item"
+            entity={item}
+            items={items}
+            strategy={Object.values(strategies)
+              .filter((row) => inActiveWorkspace(row as any))
+              .sort(
+                (a: any, b: any) =>
+                  Number(b.status === "active") - Number(a.status === "active") ||
+                  b.updated_at - a.updated_at,
+              )[0]}
+            linkedExecution={(links ? [...links.incoming, ...links.outgoing] : [])
+              .filter((row: any) =>
+                [row.from_type, row.to_type].some((type) =>
+                  ["task", "plan"].includes(type),
+                ),
+              )
+              .map((row: any) =>
+                `${row.link_type}: ${entityLabel(
+                  row.from_type === "steering_item" ? row.to_type : row.from_type,
+                  row.from_type === "steering_item" ? row.to_id : row.from_id,
+                )}`,
+              )}
+            relationships={(links ? [...links.incoming, ...links.outgoing] : [])
+              .filter((row: any) =>
+                ![row.from_type, row.to_type].some((type) =>
+                  ["task", "plan"].includes(type),
+                ),
+              )
+              .map((row: any) => {
+                const outgoing = row.from_type === "steering_item" && row.from_id === item._id;
+                return `${outgoing ? "outgoing" : "incoming"} ${row.link_type}: ${entityLabel(
+                  outgoing ? row.to_type : row.from_type,
+                  outgoing ? row.to_id : row.from_id,
+                )}`;
+              })}
+          />
           <div className="mt-8 border-t border-sol-border/30 pt-5">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-sol-text-dim">
@@ -676,20 +827,6 @@ function ItemDetail({
                 Add link
               </button>
             </div>
-          </div>
-          <div
-            className="mt-8 border-t border-sol-border/30 pt-5"
-            data-steering-conversation-slot={item._id}
-          >
-            <div className="flex items-center gap-2">
-              <MessageSquare className="w-4 h-4 text-sol-cyan" />
-              <h3 className="text-sm font-medium text-sol-text">
-                Conversation
-              </h3>
-            </div>
-            <p className="mt-2 text-xs text-sol-text-dim">
-              Reusable contextual conversation panel mounts here in ct-40647.
-            </p>
           </div>
         </section>
         <aside className="lg:border-l lg:border-sol-border/30 lg:pl-5">
@@ -1004,9 +1141,11 @@ function ItemDetail({
 export function SteeringWorkspace({
   view,
   selectedId,
+  proposalId,
 }: {
   view: SteeringView;
   selectedId: string | null;
+  proposalId?: string | null;
 }) {
   const inActiveWorkspace = useInActiveWorkspace();
   const router = useRouter();
@@ -1028,7 +1167,7 @@ export function SteeringWorkspace({
     [record, inActiveWorkspace],
   );
   const selected = selectedId
-    ? items.find((item) => item._id === selectedId)
+    ? items.find((item) => item._id === selectedId || item.short_id === selectedId)
     : undefined;
   const filtered = useMemo(
     () =>
@@ -1066,30 +1205,40 @@ export function SteeringWorkspace({
     .sort((a, b) => b.updated_at - a.updated_at)
     .slice(0, 6);
   if (view === "overview") {
-    const byKind = Object.fromEntries(
-      KINDS.map((k) => [
-        k.kind,
-        items.filter(
-          (i) =>
-            i.kind === k.kind && !["archived", "closed"].includes(i.status),
-        ),
-      ]),
-    );
+    if (!items.length) {
+      return <FirstRunRoom proposalId={proposalId} />;
+    }
+    const active = items.filter((item) => !["archived", "closed", "dropped"].includes(item.status));
+    const roots = active.filter((item) => !item.parent_item_id);
+    const primary = roots.find((item) => item.kind === "objective") ?? roots[0];
+    const aroundPrimary = primary
+      ? active.filter((item) => item._id === primary._id || item.parent_item_id === primary._id)
+      : [];
+    const surfaced = (kind: Kind) => aroundPrimary.find((item) => item.kind === kind);
+    const objective = surfaced("objective");
+    const bet = surfaced("bet");
+    const initiative = surfaced("initiative");
+    const question = surfaced("question");
     return (
-      <div className="max-w-7xl mx-auto p-4 sm:p-6">
-        <div className="flex items-end justify-between gap-4">
+      <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:py-10">
+        <div className="flex items-start justify-between gap-6">
           <div>
-            <p className="text-xs text-sol-text-dim">Portfolio overview</p>
-            <h2 className="mt-1 text-xl font-semibold text-sol-text">
-              What are we changing, betting, learning, and doing?
+            <div className="flex items-center gap-2 text-xs text-sol-cyan">
+              <Sparkles className="h-4 w-4" /> Strategic operating room
+            </div>
+            <h2 className="mt-3 max-w-3xl text-2xl font-semibold leading-tight text-sol-text sm:text-3xl">
+              {objective?.title ?? "What are we trying to make true?"}
             </h2>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-sol-text-muted">
+              {objective?.description ?? objective?.success_criteria?.[0] ?? "A living view of the reasoning connecting intent, uncertainty, and execution."}
+            </p>
           </div>
           <button
             onClick={() => setCreating(true)}
-            className="inline-flex items-center gap-1.5 rounded-md bg-sol-cyan px-3 py-2 text-xs font-medium text-sol-bg"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-sol-border/50 bg-sol-card px-3 py-2 text-xs text-sol-text-muted hover:text-sol-text"
           >
             <Plus className="w-4 h-4" />
-            New item
+            Add to the map
           </button>
         </div>
         {creating && (
@@ -1097,75 +1246,82 @@ export function SteeringWorkspace({
             <CreateItem onClose={() => setCreating(false)} />
           </div>
         )}
-        <div className="mt-6 grid md:grid-cols-2 gap-4">
-          {KINDS.map((meta) => {
-            const rows = byKind[meta.kind] as SteeringItem[];
-            return (
-              <section
-                key={meta.kind}
-                className="rounded-xl border border-sol-border/35 bg-sol-card p-4"
-              >
-                <div className="flex items-center justify-between">
-                  <h3 className="flex items-center gap-2 text-sm font-medium text-sol-text">
-                    <meta.icon className="w-4 h-4 text-sol-cyan" />
-                    {meta.plural}
-                  </h3>
-                  <span className="text-xs text-sol-text-dim">
-                    {rows.length}
-                  </span>
-                </div>
-                <p className="mt-1 text-[11px] text-sol-text-dim">
-                  {meta.prompt}
-                </p>
-                <div className="mt-3 space-y-1">
-                  {rows.slice(0, 4).map((i) => (
-                    <button
-                      key={i._id}
-                      onClick={() => open(i._id)}
-                      className="w-full flex items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-sol-bg-highlight"
-                    >
-                      <span className="flex-1 truncate text-sm text-sol-text">
-                        {i.title}
-                      </span>
-                      <span className="text-[10px] text-sol-text-dim capitalize">
-                        {i.status}
-                      </span>
-                    </button>
-                  ))}
-                  {!rows.length && (
-                    <p className="px-2 py-3 text-xs text-sol-text-dim">
-                      Nothing recorded yet.
-                    </p>
-                  )}
-                </div>
-              </section>
-            );
-          })}
+
+        <div className="mt-9">
+          <PortfolioConversation items={active} />
+          <PendingProposalShelf focusId={proposalId} />
         </div>
-        <section className="mt-6 rounded-xl border border-sol-border/35 bg-sol-card p-4">
-          <h3 className="text-sm font-medium text-sol-text">
-            What recently changed in our understanding?
-          </h3>
-          <p className="mt-1 text-[11px] text-sol-text-dim">
-            The latest manual updates across the portfolio.
-          </p>
-          <div className="mt-3 divide-y divide-sol-border/25">
-            {recentlyChanged.map((row) => (
-              <button
-                key={row._id}
-                onClick={() => open(row._id)}
-                className="w-full flex items-center gap-3 py-2 text-left"
-              >
-                <KindMark item={row} compact />
-                <span className="flex-1 truncate text-xs text-sol-text">
-                  {row.title}
-                </span>
-                <span className="text-[10px] text-sol-text-dim">
-                  {new Date(row.updated_at).toLocaleDateString()}
-                </span>
-              </button>
-            ))}
+
+        <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_290px]">
+          <section className="overflow-hidden rounded-2xl border border-sol-border/40 bg-sol-card">
+            <div className="border-b border-sol-border/30 px-5 py-4">
+              <p className="text-xs font-medium text-sol-text">The operating argument</p>
+              <p className="mt-1 text-[11px] text-sol-text-dim">
+                {primary ? `Only items explicitly nested under “${primary.title}” are grouped here.` : "No root branch is selected yet."}
+              </p>
+            </div>
+            <div className="divide-y divide-sol-border/25">
+              {[
+                { label: "Root objective", item: objective, empty: "Name the change we want to make true", icon: Target },
+                { label: "Nested bet", item: bet, empty: "No bet is nested in this branch", icon: CircleDot },
+                { label: "Nested initiative", item: initiative, empty: "No initiative is nested in this branch", icon: Flag },
+                { label: "Nested question", item: question, empty: "No question is nested in this branch", icon: HelpCircle },
+              ].map((row) => (
+                <button
+                  key={row.label}
+                  type="button"
+                  onClick={() => row.item ? open(row.item._id) : setCreating(true)}
+                  className="group flex w-full gap-4 px-5 py-5 text-left hover:bg-sol-bg-highlight/45"
+                >
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sol-bg-alt text-sol-cyan">
+                    <row.icon className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] uppercase tracking-wide text-sol-text-dim">{row.label}</p>
+                    <p className={`mt-1 text-base leading-6 ${row.item ? "text-sol-text" : "text-sol-text-dim"}`}>
+                      {row.item?.title ?? row.empty}
+                    </p>
+                    {row.item?.description && <p className="mt-1 line-clamp-2 text-xs leading-5 text-sol-text-muted">{row.item.description}</p>}
+                  </div>
+                  <ChevronRight className="mt-3 h-4 w-4 text-sol-text-dim opacity-0 transition-opacity group-hover:opacity-100" />
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <aside className="space-y-5">
+            <section className="rounded-2xl border border-sol-cyan/20 bg-sol-cyan/[0.045] p-5">
+              <MessageCircle className="h-5 w-5 text-sol-cyan" />
+              <h3 className="mt-4 text-sm font-medium text-sol-text">Object-level room</h3>
+              <p className="mt-2 text-xs leading-5 text-sol-text-muted">
+                Open an item when the discussion needs its lineage, explicit relationships, and linked execution as context.
+              </p>
+              {primary && (
+                <button onClick={() => open(primary._id)} className="mt-4 text-xs font-medium text-sol-cyan">
+                  Open this steering room →
+                </button>
+              )}
+            </section>
+            <section className="rounded-2xl border border-sol-border/35 bg-sol-card p-5">
+              <h3 className="text-xs font-medium text-sol-text">Recently reconsidered</h3>
+              <div className="mt-3 space-y-3">
+                {recentlyChanged.slice(0, 4).map((row) => (
+                  <button key={row._id} onClick={() => open(row._id)} className="block w-full text-left">
+                    <p className="truncate text-xs text-sol-text-muted hover:text-sol-text">{row.title}</p>
+                    <p className="mt-0.5 text-[10px] capitalize text-sol-text-dim">{row.kind} · {new Date(row.updated_at).toLocaleDateString()}</p>
+                  </button>
+                ))}
+              </div>
+            </section>
+          </aside>
+        </div>
+
+        <section className="mt-6 flex items-center justify-between rounded-xl border border-sol-border/30 px-4 py-3">
+          <div>
+            <p className="text-xs text-sol-text">Need the structural view?</p>
+            <p className="text-[11px] text-sol-text-dim">The map keeps hierarchy and cross-links available without making them the front door.</p>
           </div>
+          <button onClick={() => router.push("/steering/map")} className="text-xs text-sol-cyan">Open map →</button>
         </section>
       </div>
     );
