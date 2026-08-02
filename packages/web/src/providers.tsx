@@ -3,6 +3,7 @@ import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ReactNode, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
+import { subscribeGestures } from "../store/gestureBridge";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { NavigationProgress } from "@/components/NavigationProgress";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -12,6 +13,7 @@ import { OpenInDesktopHandoff } from "@/components/OpenInDesktopHandoff";
 import { ShortcutProvider } from "@/shortcuts";
 import { TipProvider } from "@/tips/TipProvider";
 import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
+import { useMountEffect } from "@/hooks/useMountEffect";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { identifyUser, resetUser } from "@/lib/analytics";
 import { durableAuthStorage } from "@/lib/durableAuthStorage";
@@ -20,6 +22,36 @@ import { PrincipalLocalStateProvider } from "@/components/PrincipalLocalStatePro
 
 function PrefsMigration() {
   useLocalStorageMigration();
+  return null;
+}
+
+// Cross-window gesture bridge receiver. Mounted here (not in DashboardLayout)
+// because EVERY same-origin window shares the one IndexedDB principal store and
+// can therefore clobber a sibling's gesture with a stale whole-row put — the
+// compose palette has its own store and no dashboard shell. Rebinding on the
+// signed-in user keeps two accounts on separate channels; the effect's cleanup
+// closes the old channel, so a switched-away account stops listening.
+function GestureBridge() {
+  useMountEffect(() => {
+    const currentUserId = () => useInboxStore.getState().currentUser?._id?.toString?.() ?? null;
+    const bind = () =>
+      subscribeGestures(currentUserId(), currentUserId, (msg) =>
+        useInboxStore.getState().applyGestureBridge(msg),
+      );
+    let boundTo = currentUserId();
+    let stop = bind();
+    const unsubscribe = useInboxStore.subscribe(() => {
+      const next = currentUserId();
+      if (next === boundTo) return;
+      boundTo = next;
+      stop();
+      stop = bind();
+    });
+    return () => {
+      unsubscribe();
+      stop();
+    };
+  });
   return null;
 }
 
@@ -103,6 +135,7 @@ export function Providers({ children }: { children: ReactNode }) {
           <OpenInDesktopHandoff />
         </ErrorBoundary>
         <PrefsMigration />
+        <GestureBridge />
         <AnalyticsIdentify />
         <DispatchFailureToast />
         <Toaster position="bottom-right" />
