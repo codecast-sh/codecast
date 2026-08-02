@@ -1063,6 +1063,43 @@ describe("boot outbox drain signal (_hasBootOutboxDrained)", () => {
     wrapped._clearRuntimeBindings();
     expect(wrapped._hasBootOutboxDrained()).toBe(false);
   });
+
+  it("stays closed when a failed replay is re-queued", async () => {
+    const { wrapped, outbox } = makeHarness();
+    outbox.set("e1", seedEntry());
+
+    wrapped._setDispatch(async () => { throw new Error("offline"); });
+    await settle();
+
+    expect(outbox.has("e1")).toBe(true);
+    expect(wrapped._hasBootOutboxDrained()).toBe(false);
+  });
+
+  it("invalidates readiness for a new enqueue and reopens only after a later empty verification", async () => {
+    const { wrapped, outbox } = makeHarness();
+    let commit: (() => void) | null = null;
+    wrapped._setOutbox(
+      (entry: Entry) => new Promise<void>((resolve) => {
+        commit = () => {
+          outbox.set(entry.id, entry);
+          resolve();
+        };
+      }),
+      (id: string) => { outbox.delete(id); },
+      async () => [...outbox.values()],
+    );
+    wrapped._setDispatch(async () => "ok");
+    await settle();
+    expect(wrapped._hasBootOutboxDrained()).toBe(true);
+
+    wrapped.poke("race");
+    expect(wrapped._hasBootOutboxDrained()).toBe(false);
+
+    commit?.();
+    await settle();
+    expect(outbox.size).toBe(0);
+    expect(wrapped._hasBootOutboxDrained()).toBe(true);
+  });
 });
 
 describe("principal-bound dispatch ownership", () => {

@@ -606,6 +606,425 @@ describe("gesture bridge ordering guards", () => {
     expect(useInboxStore.getState().sessions[REAL_A].inbox_dismissed_at).toBe(900);
   });
 
+  it("a delayed older hide cannot overwrite a newer restore lock", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { inbox_dismissed_at: 100 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_dismissed_at: 100 } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "restore", ids: [REAL_A], ts: 900 });
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "kill", ids: [REAL_A], ts: 500 });
+
+    expect(useInboxStore.getState().sessions[REAL_A].inbox_dismissed_at).toBeNull();
+    expect(useInboxStore.getState().conversations[REAL_A].inbox_dismissed_at).toBeNull();
+  });
+
+  it("a no-op restore plants twin tombstones that reject a delayed kill", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { inbox_dismissed_at: null, inbox_stashed_at: null } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_dismissed_at: null, inbox_stashed_at: null } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "restore", ids: [REAL_A], ts: 900 });
+    const locks = useInboxStore.getState().pending;
+    expect(locks[`sessions:${REAL_A}:inbox_dismissed_at`]).toEqual({ type: "field", value: null, ts: 900 });
+    expect(locks[`conversations:${REAL_A}:inbox_stashed_at`]).toEqual({ type: "field", value: null, ts: 900 });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "kill", ids: [REAL_A], ts: 500 });
+
+    const state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_dismissed_at).toBeNull();
+    expect(state.sessions[REAL_A].inbox_stashed_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_dismissed_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_stashed_at).toBeNull();
+  });
+
+  it("a delayed kill cannot split a newer stash across the session and conversation twins", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A) },
+      conversations: { [REAL_A]: { _id: REAL_A } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "stash", ids: [REAL_A], ts: 900 });
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "kill", ids: [REAL_A], ts: 500 });
+
+    const state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_dismissed_at).toBeUndefined();
+    expect(state.sessions[REAL_A].inbox_stashed_at).toBe(900);
+    expect(state.conversations[REAL_A].inbox_dismissed_at).toBeUndefined();
+    expect(state.conversations[REAL_A].inbox_stashed_at).toBe(900);
+  });
+
+  it("stash clears the sender's pin state on both twins", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: 100 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: 100 } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "stash", ids: [REAL_A], ts: 900 });
+
+    const state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_stashed_at).toBe(900);
+    expect(state.sessions[REAL_A].is_pinned).toBe(false);
+    expect(state.sessions[REAL_A].inbox_pinned_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_stashed_at).toBe(900);
+    expect(state.conversations[REAL_A].inbox_pinned_at).toBeNull();
+  });
+
+  it("does not let an older stash clear a newer pin", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: 900 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: 900 } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "stash", ids: [REAL_A], ts: 500 });
+
+    const state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_stashed_at).toBeUndefined();
+    expect(state.sessions[REAL_A].is_pinned).toBe(true);
+    expect(state.sessions[REAL_A].inbox_pinned_at).toBe(900);
+    expect(state.conversations[REAL_A].inbox_stashed_at).toBeUndefined();
+    expect(state.conversations[REAL_A].inbox_pinned_at).toBe(900);
+  });
+
+  it("does not let a delayed pin undo a newer stash", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: 100 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: 100 } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "stash", ids: [REAL_A], ts: 900 });
+    useInboxStore.getState().applyGestureBridge({ kind: "pin", id: REAL_A, pinned: true, pinnedAt: 500, ts: 500 });
+
+    const state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_stashed_at).toBe(900);
+    expect(state.sessions[REAL_A].is_pinned).toBe(false);
+    expect(state.sessions[REAL_A].inbox_pinned_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_stashed_at).toBe(900);
+    expect(state.conversations[REAL_A].inbox_pinned_at).toBeNull();
+  });
+
+  it("keeps divergent twins unchanged for an older hide, then applies a newer hide to both", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { inbox_stashed_at: 100 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_stashed_at: 900 } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "kill", ids: [REAL_A], ts: 500 });
+    let state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_dismissed_at).toBeUndefined();
+    expect(state.sessions[REAL_A].inbox_stashed_at).toBe(100);
+    expect(state.conversations[REAL_A].inbox_dismissed_at).toBeUndefined();
+    expect(state.conversations[REAL_A].inbox_stashed_at).toBe(900);
+
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "kill", ids: [REAL_A], ts: 1_000 });
+    state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_dismissed_at).toBe(1_000);
+    expect(state.sessions[REAL_A].inbox_stashed_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_dismissed_at).toBe(1_000);
+    expect(state.conversations[REAL_A].inbox_stashed_at).toBeNull();
+  });
+
+  it("keeps divergent twins unchanged for an older restore, then restores both", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { inbox_dismissed_at: 100 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_dismissed_at: 900 } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "restore", ids: [REAL_A], ts: 500 });
+    let state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_dismissed_at).toBe(100);
+    expect(state.conversations[REAL_A].inbox_dismissed_at).toBe(900);
+
+    useInboxStore.getState().applyGestureBridge({ kind: "restore", ids: [REAL_A], ts: 1_000 });
+    state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_dismissed_at).toBeNull();
+    expect(state.sessions[REAL_A].inbox_stashed_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_dismissed_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_stashed_at).toBeNull();
+  });
+
+  it("keeps divergent twins unchanged for older generic fields, then applies them to both", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { inbox_dismissed_at: 100 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_dismissed_at: 900 } },
+    });
+
+    const fields = { inbox_dismissed_at: null, inbox_stashed_at: null };
+    useInboxStore.getState().applyGestureBridge({ kind: "fields", id: REAL_A, fields, ts: 500 });
+    let state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_dismissed_at).toBe(100);
+    expect(state.conversations[REAL_A].inbox_dismissed_at).toBe(900);
+
+    useInboxStore.getState().applyGestureBridge({ kind: "fields", id: REAL_A, fields, ts: 1_000 });
+    state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_dismissed_at).toBeNull();
+    expect(state.sessions[REAL_A].inbox_stashed_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_dismissed_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_stashed_at).toBeNull();
+  });
+
+  it("keeps divergent twins unchanged for an older pin, then applies the newer unpin to both", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: 100 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: 900 } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "pin", id: REAL_A, pinned: false, pinnedAt: null, ts: 500 });
+    let state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].is_pinned).toBe(true);
+    expect(state.sessions[REAL_A].inbox_pinned_at).toBe(100);
+    expect(state.conversations[REAL_A].inbox_pinned_at).toBe(900);
+
+    useInboxStore.getState().applyGestureBridge({ kind: "pin", id: REAL_A, pinned: false, pinnedAt: null, ts: 1_000 });
+    state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].is_pinned).toBe(false);
+    expect(state.sessions[REAL_A].inbox_pinned_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_pinned_at).toBeNull();
+  });
+
+  it("a newer kill atomically replaces an older stash", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A) },
+      conversations: { [REAL_A]: { _id: REAL_A } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "stash", ids: [REAL_A], ts: 500 });
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "kill", ids: [REAL_A], ts: 900 });
+
+    const state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_dismissed_at).toBe(900);
+    expect(state.sessions[REAL_A].inbox_stashed_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_dismissed_at).toBe(900);
+    expect(state.conversations[REAL_A].inbox_stashed_at).toBeNull();
+  });
+
+  it("a no-op unpin plants twin tombstones that reject a delayed pin", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: false, inbox_pinned_at: null } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: null } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "pin", id: REAL_A, pinned: false, pinnedAt: null, ts: 900 });
+    const locks = useInboxStore.getState().pending;
+    expect(locks[`sessions:${REAL_A}:is_pinned`]).toEqual({ type: "field", value: false, ts: 900 });
+    expect(locks[`sessions:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: null, ts: 900 });
+    expect(locks[`conversations:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: null, ts: 900 });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "pin", id: REAL_A, pinned: true, pinnedAt: 500, ts: 500 });
+
+    const state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].is_pinned).toBe(false);
+    expect(state.sessions[REAL_A].inbox_pinned_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_pinned_at).toBeNull();
+  });
+
+  it("a hide or stash plants pin tombstones on already-unpinned twins", () => {
+    const originalNow = Date.now;
+    Date.now = () => 1_000;
+    try {
+      for (const [mode, hiddenField] of [["kill", "inbox_dismissed_at"], ["stash", "inbox_stashed_at"]] as const) {
+        const enqueued: any[] = [];
+        const dispatched: string[] = [];
+        seed({
+          sessions: { [REAL_A]: session(REAL_A, { is_pinned: false, inbox_pinned_at: null } as any) },
+          conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: null } },
+        });
+        const store = useInboxStore.getState() as any;
+        store._setOutbox((entry: any) => { enqueued.push(entry); }, () => {}, async () => []);
+        store._setDispatch((action: string) => { dispatched.push(action); return Promise.resolve(); });
+
+        useInboxStore.getState().applyGestureBridge({ kind: "hide", mode, ids: [REAL_A], ts: 900 });
+        let state = useInboxStore.getState();
+        expect(state.sessions[REAL_A][hiddenField]).toBe(900);
+        expect(state.pending[`sessions:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: null, ts: 900, hideAck: 900 });
+        expect(state.pending[`conversations:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: null, ts: 900, hideAck: 900 });
+
+        // The late pin is older than the hide's pin-clear tombstone.
+        useInboxStore.getState().applyGestureBridge({ kind: "pin", id: REAL_A, pinned: true, pinnedAt: 500, ts: 500 });
+        state = useInboxStore.getState();
+        expect(state.sessions[REAL_A].is_pinned).toBe(false);
+        expect(state.sessions[REAL_A].inbox_pinned_at).toBeNull();
+        expect(state.conversations[REAL_A].inbox_pinned_at).toBeNull();
+        expect(enqueued).toEqual([]);
+        expect(dispatched).toEqual([]);
+
+        // A stale hidden-reconcile page cannot retire the coupled locks.
+        if (mode === "kill") {
+          useInboxStore.getState().applyDismissedReconcile([{ _id: REAL_A, inbox_dismissed_at: 500 }], false);
+        } else {
+          useInboxStore.getState().applyStashedReconcile([{ _id: REAL_A, inbox_stashed_at: 500 }], false);
+        }
+        expect(useInboxStore.getState().pending[`conversations:${REAL_A}:inbox_pinned_at`]).toBeDefined();
+
+        // Hidden rows never reach normal sessions sync. Their one-field
+        // reconcile acknowledgement retires every lock from this hide transition.
+        if (mode === "kill") {
+          useInboxStore.getState().applyDismissedReconcile([{ _id: REAL_A, inbox_dismissed_at: 900 }], false);
+        } else {
+          useInboxStore.getState().applyStashedReconcile([{ _id: REAL_A, inbox_stashed_at: 900 }], false);
+        }
+        const pending = useInboxStore.getState().pending;
+        for (const coll of ["sessions", "conversations"]) {
+          expect(pending[`${coll}:${REAL_A}:inbox_dismissed_at`]).toBeUndefined();
+          expect(pending[`${coll}:${REAL_A}:inbox_stashed_at`]).toBeUndefined();
+          expect(pending[`${coll}:${REAL_A}:inbox_pinned_at`]).toBeUndefined();
+        }
+
+        // With the hidden acknowledgement retired, a later authoritative pin is
+        // no longer overwritten by the old null tombstone on either twin.
+        useInboxStore.getState().syncTable("sessions", [session(REAL_A, { is_pinned: true, [hiddenField]: 900, inbox_pinned_at: 1_000 } as any)]);
+        useInboxStore.getState().syncRecord("conversations", REAL_A, { _id: REAL_A, [hiddenField]: 900, inbox_pinned_at: 1_000 });
+        state = useInboxStore.getState();
+        expect(state.sessions[REAL_A].is_pinned).toBe(true);
+        expect(state.sessions[REAL_A].inbox_pinned_at).toBe(1_000);
+        expect(state.conversations[REAL_A].inbox_pinned_at).toBe(1_000);
+      }
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  it("a local hide uses its visible timestamp as the hidden-reconcile acknowledgement anchor", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: 100 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: 100 } },
+    });
+    const originalNow = Date.now;
+    let calls = 0;
+    Date.now = () => (++calls === 1 ? 1_001 : 1_002);
+    try {
+      // hideSessionInDraft samples 1001 for the durable dismiss value; the
+      // middleware samples 1002 separately for local lock freshness.
+      useInboxStore.getState().killSession(REAL_A);
+      let state = useInboxStore.getState();
+      expect(state.sessions[REAL_A].inbox_dismissed_at).toBe(1_001);
+      expect(state.pending[`sessions:${REAL_A}:inbox_pinned_at`]).toMatchObject({
+        type: "field", value: null, ts: 1_002, hideAck: 1_001,
+      });
+      expect(state.pending[`conversations:${REAL_A}:inbox_pinned_at`]).toMatchObject({
+        type: "field", value: null, ts: 1_002, hideAck: 1_001,
+      });
+
+      useInboxStore.getState().applyDismissedReconcile([{ _id: REAL_A, inbox_dismissed_at: 1_000 }], false);
+      expect(useInboxStore.getState().pending[`conversations:${REAL_A}:inbox_pinned_at`]).toBeDefined();
+
+      // A newer hide supersedes the local transition. Its acknowledgement
+      // anchor must not be retired by the older operation's eventual echo.
+      useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "kill", ids: [REAL_A], ts: 1_003 });
+      useInboxStore.getState().applyDismissedReconcile([{ _id: REAL_A, inbox_dismissed_at: 1_001 }], false);
+      expect(useInboxStore.getState().pending[`conversations:${REAL_A}:inbox_pinned_at`]).toMatchObject({ hideAck: 1_003 });
+
+      useInboxStore.getState().applyDismissedReconcile([{ _id: REAL_A, inbox_dismissed_at: 1_003 }], false);
+      state = useInboxStore.getState();
+      for (const coll of ["sessions", "conversations"]) {
+        expect(state.pending[`${coll}:${REAL_A}:inbox_dismissed_at`]).toBeUndefined();
+        expect(state.pending[`${coll}:${REAL_A}:inbox_pinned_at`]).toBeUndefined();
+      }
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  it("an undo pin with an older pinnedAt still orders after delayed hide or stash", () => {
+    for (const [mode, hiddenField] of [["kill", "inbox_dismissed_at"], ["stash", "inbox_stashed_at"]] as const) {
+      seed({
+        sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: 100 } as any) },
+        conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: 100 } },
+      });
+
+      // Undo restores the original pinnedAt value, while its fresh message ts
+      // is the causal ordering stamp. This is visibly a no-op but not a
+      // causally empty transition.
+      useInboxStore.getState().applyGestureBridge({ kind: "pin", id: REAL_A, pinned: true, pinnedAt: 100, ts: 900 });
+      let state = useInboxStore.getState();
+      expect(state.pending[`sessions:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: 100, ts: 900 });
+      expect(state.pending[`conversations:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: 100, ts: 900 });
+
+      useInboxStore.getState().applyGestureBridge({ kind: "hide", mode, ids: [REAL_A], ts: 500 });
+      state = useInboxStore.getState();
+      expect(state.sessions[REAL_A][hiddenField]).toBeUndefined();
+      expect(state.sessions[REAL_A].is_pinned).toBe(true);
+      expect(state.conversations[REAL_A].inbox_pinned_at).toBe(100);
+
+      // The old payload is also the exact server echo value, so it retires the
+      // fresh ordering lock rather than pinning the field indefinitely.
+      useInboxStore.getState().syncTable("sessions", [session(REAL_A, { is_pinned: true, inbox_pinned_at: 100 } as any)]);
+      useInboxStore.getState().syncRecord("conversations", REAL_A, { _id: REAL_A, inbox_pinned_at: 100 });
+      expect(useInboxStore.getState().pending[`sessions:${REAL_A}:inbox_pinned_at`]).toBeUndefined();
+      expect(useInboxStore.getState().pending[`conversations:${REAL_A}:inbox_pinned_at`]).toBeUndefined();
+
+      useInboxStore.getState().applyGestureBridge({ kind: "hide", mode, ids: [REAL_A], ts: 1_000 });
+      state = useInboxStore.getState();
+      expect(state.sessions[REAL_A][hiddenField]).toBe(1_000);
+      expect(state.sessions[REAL_A].is_pinned).toBe(false);
+      expect(state.conversations[REAL_A][hiddenField]).toBe(1_000);
+      expect(state.conversations[REAL_A].inbox_pinned_at).toBeNull();
+    }
+  });
+
+  it("no-op undo fields plant twin tombstones that reject delayed hide and pin gestures", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: false, inbox_dismissed_at: null, inbox_stashed_at: null, inbox_pinned_at: null } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_dismissed_at: null, inbox_stashed_at: null, inbox_pinned_at: null } },
+    });
+
+    // This is undoableHideSession's real sibling payload when its snapshot was
+    // already visible in this window.
+    useInboxStore.getState().applyGestureBridge({
+      kind: "fields",
+      id: REAL_A,
+      fields: { inbox_dismissed_at: null, inbox_stashed_at: null },
+      ts: 900,
+    });
+    let locks = useInboxStore.getState().pending;
+    expect(locks[`sessions:${REAL_A}:inbox_dismissed_at`]).toEqual({ type: "field", value: null, ts: 900 });
+    expect(locks[`conversations:${REAL_A}:inbox_stashed_at`]).toEqual({ type: "field", value: null, ts: 900 });
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "kill", ids: [REAL_A], ts: 500 });
+
+    // Generic pin patches also need their no-op ordering tombstone.
+    useInboxStore.getState().applyGestureBridge({
+      kind: "fields",
+      id: REAL_A,
+      fields: { inbox_pinned_at: null },
+      ts: 900,
+    });
+    locks = useInboxStore.getState().pending;
+    expect(locks[`sessions:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: null, ts: 900 });
+    expect(locks[`conversations:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: null, ts: 900 });
+    useInboxStore.getState().applyGestureBridge({ kind: "pin", id: REAL_A, pinned: true, pinnedAt: 500, ts: 500 });
+
+    const state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_dismissed_at).toBeNull();
+    expect(state.sessions[REAL_A].inbox_stashed_at).toBeNull();
+    expect(state.sessions[REAL_A].is_pinned).toBe(false);
+    expect(state.sessions[REAL_A].inbox_pinned_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_dismissed_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_stashed_at).toBeNull();
+    expect(state.conversations[REAL_A].inbox_pinned_at).toBeNull();
+  });
+
+  it("delayed pin and hide field writes cannot overwrite newer field locks", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { inbox_dismissed_at: 100, is_pinned: true, inbox_pinned_at: 100 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_dismissed_at: 100, inbox_pinned_at: 100 } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "restore", ids: [REAL_A], ts: 900 });
+    useInboxStore.getState().applyGestureBridge({ kind: "pin", id: REAL_A, pinned: false, pinnedAt: null, ts: 900 });
+    useInboxStore.getState().applyGestureBridge({
+      kind: "fields",
+      id: REAL_A,
+      fields: { inbox_dismissed_at: 500, is_pinned: true, inbox_pinned_at: 500 },
+      ts: 500,
+    });
+
+    const state = useInboxStore.getState();
+    expect(state.sessions[REAL_A].inbox_dismissed_at).toBeNull();
+    expect(state.sessions[REAL_A].is_pinned).toBe(false);
+    expect(state.sessions[REAL_A].inbox_pinned_at).toBeNull();
+  });
+
   it("an older unpin does not undo a newer local pin", () => {
     seed({
       sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: 900 } as any) },
@@ -744,8 +1163,8 @@ describe("gesture bridge receiver is local-only", () => {
     useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "kill", ids: [REAL_A], ts: 500 });
 
     const p = useInboxStore.getState().pending;
-    expect(p[`sessions:${REAL_A}:inbox_dismissed_at`]).toEqual({ type: "field", value: 500, ts: 500 });
-    expect(p[`conversations:${REAL_A}:inbox_dismissed_at`]).toEqual({ type: "field", value: 500, ts: 500 });
+    expect(p[`sessions:${REAL_A}:inbox_dismissed_at`]).toEqual({ type: "field", value: 500, ts: 500, hideAck: 500 });
+    expect(p[`conversations:${REAL_A}:inbox_dismissed_at`]).toEqual({ type: "field", value: 500, ts: 500, hideAck: 500 });
   });
 
   // THE regression test for the field-lock defect. A sessions crawl already in
@@ -802,5 +1221,54 @@ describe("gesture bridge receiver is local-only", () => {
     // only when the server echo matches it, so a re-derived timestamp would
     // stick forever.
     expect(p[`sessions:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: 600, ts: 600 });
+  });
+
+  it("retires no-op restore and unpin tombstones on matching server echoes", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: false, inbox_dismissed_at: null, inbox_stashed_at: null, inbox_pinned_at: null } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_dismissed_at: null, inbox_stashed_at: null, inbox_pinned_at: null } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({ kind: "restore", ids: [REAL_A], ts: 900 });
+    useInboxStore.getState().applyGestureBridge({ kind: "pin", id: REAL_A, pinned: false, pinnedAt: null, ts: 900 });
+    useInboxStore.getState().syncTable("sessions", [
+      session(REAL_A, { is_pinned: false, inbox_dismissed_at: null, inbox_stashed_at: null, inbox_pinned_at: null } as any),
+    ]);
+    // Production conversation echoes omit clear optional inbox timestamps.
+    useInboxStore.getState().syncRecord("conversations", REAL_A, { _id: REAL_A });
+
+    const pending = useInboxStore.getState().pending;
+    expect(pending[`sessions:${REAL_A}:inbox_dismissed_at`]).toBeUndefined();
+    expect(pending[`sessions:${REAL_A}:inbox_stashed_at`]).toBeUndefined();
+    expect(pending[`sessions:${REAL_A}:inbox_pinned_at`]).toBeUndefined();
+    expect(pending[`conversations:${REAL_A}:inbox_dismissed_at`]).toBeUndefined();
+    expect(pending[`conversations:${REAL_A}:inbox_stashed_at`]).toBeUndefined();
+    expect(pending[`conversations:${REAL_A}:inbox_pinned_at`]).toBeUndefined();
+  });
+
+  it("retires no-op generic fields tombstones on matching server echoes", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_pinned_at: null } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_dismissed_at: null, inbox_stashed_at: null, inbox_pinned_at: null } },
+    });
+
+    useInboxStore.getState().applyGestureBridge({
+      kind: "fields",
+      id: REAL_A,
+      fields: { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_pinned_at: null },
+      ts: 900,
+    });
+    useInboxStore.getState().syncTable("sessions", [
+      session(REAL_A, { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_pinned_at: null } as any),
+    ]);
+    useInboxStore.getState().syncRecord("conversations", REAL_A, { _id: REAL_A });
+
+    const pending = useInboxStore.getState().pending;
+    expect(pending[`sessions:${REAL_A}:inbox_dismissed_at`]).toBeUndefined();
+    expect(pending[`sessions:${REAL_A}:inbox_stashed_at`]).toBeUndefined();
+    expect(pending[`sessions:${REAL_A}:inbox_pinned_at`]).toBeUndefined();
+    expect(pending[`conversations:${REAL_A}:inbox_dismissed_at`]).toBeUndefined();
+    expect(pending[`conversations:${REAL_A}:inbox_stashed_at`]).toBeUndefined();
+    expect(pending[`conversations:${REAL_A}:inbox_pinned_at`]).toBeUndefined();
   });
 });

@@ -3764,6 +3764,27 @@ function applyHiddenReconcileInDraft(
 ) {
   const server = new Map<string, number | null>();
   for (const e of entries) server.set(e._id, e[field] ?? null);
+  // A bridge hide stamps its visible hide field with the SAME timestamp used
+  // for every coupled pending lock. Hidden rows never return through normal
+  // sessions sync, so this lightweight hidden-set row is the only production
+  // acknowledgement those pin/no-op locks can receive. Match the explicit
+  // hide acknowledgement anchor rather than lock `ts`: the acting window's
+  // auto-pending freshness clock can be sampled after its hide value. An older
+  // or otherwise stale hidden result must leave every lock intact.
+  const retireAcknowledgedHide = (id: string, ts: number) => {
+    const anchors = ["sessions", "conversations"].map((coll) => draft.pending[`${coll}:${id}:${field}`]);
+    const matches = anchors.some((entry: any) =>
+      entry?.type === "field" && entry.hideAck === ts,
+    );
+    if (!matches) return false;
+    for (const coll of ["sessions", "conversations"]) {
+      for (const coupled of ["inbox_dismissed_at", "inbox_stashed_at", "inbox_pinned_at", "is_pinned"]) {
+        const key = `${coll}:${id}:${coupled}`;
+        if (draft.pending[key]?.type === "field" && draft.pending[key].hideAck === ts) delete draft.pending[key];
+      }
+    }
+    return true;
+  };
   // Locked = a pending field override is still inside its settle window.
   // Stale overrides are released (deleted) so the authoritative set can land.
   const lockedLocal = (id: string) => {
@@ -3778,6 +3799,7 @@ function applyHiddenReconcileInDraft(
   };
 
   for (const [id, ts] of server) {
+    if (ts) retireAcknowledgedHide(id, ts);
     if (!ts || lockedLocal(id)) continue;
     const sess = draft.sessions[id];
     if (sess && sess[field] !== ts) sess[field] = ts;
@@ -3974,12 +3996,23 @@ function announceHide(
 // outbox entry; the acting window owns the single server write.
 //
 // Every write is timestamp-guarded so a late, duplicated, or reordered message
-// can never regress newer local state. `notNewer` treats an absent value as 0:
-// a row that was never hidden always accepts a hide, and a row hidden AFTER the
-// incoming gesture keeps its own newer stamp.
+// can never regress newer local state. An absent visible value counts as 0, but
+// a pending field lock still carries the timestamp of a newer restore/unpin.
 function applyGestureInDraft(draft: any, msg: GestureMessage) {
-  const notNewer = (current: unknown, ts: number) =>
-    typeof current === "number" ? current <= ts : true;
+  const notNewer = (coll: "sessions" | "conversations", id: string, field: string, current: unknown, ts: number) => {
+    const pending = draft.pending[`${coll}:${id}:${field}`];
+    const currentTs = typeof current === "number" ? current : 0;
+    const pendingTs = pending?.type === "field" && typeof pending.ts === "number" ? pending.ts : 0;
+    return Math.max(currentTs, pendingTs) <= ts;
+  };
+  // A bridged gesture changes the session row and its conversation twin as one
+  // transition. Accept only when every extant twin agrees it is not older; a
+  // per-twin decision can otherwise leave one row moved and the other behind.
+  const transitionNotNewer = (id: string, fields: string[], ts: number) =>
+    (["sessions", "conversations"] as const).every((coll) => {
+      const row = draft[coll][id];
+      return !row || fields.every((field) => notNewer(coll, id, field, row[field], ts));
+    });
 
   // Write a field AND plant the pending field lock the sender's action() gets
   // for free from generateAutoPending (mutativeMiddleware). The lock is not
@@ -3999,15 +4032,53 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   // applySyncRecord, applyHiddenReconcileInDraft). They are never dispatched and
   // never enqueued — only action()/asyncAction() reach the outbox.
   //
-  // The planted value must equal what the SENDER dispatched, because the lock
-  // retires only when the server echo matches it (applyFieldOverrides). Every
-  // call below therefore passes a value carried in the message, never one
-  // re-derived here.
-  const write = (coll: "sessions" | "conversations", id: string, field: string, value: any) => {
+  // The planted value must equal the transition's post-state, because the lock
+  // retires only when the server echo matches it (applyFieldOverrides).
+  const write = (
+    coll: "sessions" | "conversations",
+    id: string,
+    field: string,
+    value: any,
+    hideAck?: number,
+  ) => {
     const row = draft[coll][id];
     if (!row) return;
-    row[field] = value;
-    draft.pending[`${coll}:${id}:${field}`] = { type: "field", value, ts: msg.ts };
+    if (row[field] !== value) row[field] = value;
+    draft.pending[`${coll}:${id}:${field}`] = { type: "field", value, ts: msg.ts, ...(hideAck !== undefined ? { hideAck } : {}) };
+  };
+
+  // An accepted gesture is one causal transition, even if every visible value
+  // already matches.  Record fresh locks for all of its constrained fields
+  // before returning to a branch-specific effect.  Otherwise an undo pin that
+  // restores the old pinnedAt payload, for example, leaves an old visible stamp
+  // and lets a delayed hide incorrectly win.
+  const acceptTransition = (
+    id: string,
+    constrained: string[],
+    changes: {
+      shared?: Record<string, any>;
+      sessions?: Record<string, any>;
+      conversations?: Record<string, any>;
+    },
+    hideAck?: number,
+  ) => {
+    if (!transitionNotNewer(id, constrained, msg.ts)) return false;
+    for (const coll of ["sessions", "conversations"] as const) {
+      const row = draft[coll][id];
+      if (!row) continue;
+      const next = {
+        ...changes.shared,
+        ...(changes[coll] ?? {}),
+      };
+      // A coupled field the message does not visibly change still takes part
+      // in its ordering barrier. Lock its retained value at this transition's
+      // timestamp so a delayed coupled gesture cannot cross the barrier.
+      for (const field of constrained) {
+        if (!Object.prototype.hasOwnProperty.call(next, field)) next[field] = row[field];
+      }
+      for (const [field, value] of Object.entries(next)) write(coll, id, field, value, hideAck);
+    }
+    return true;
   };
 
   const forget = (ids: string[], ts: number, scope: "session-row" | "all" = "all") => {
@@ -4056,33 +4127,16 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
     if (msg.forget?.length) forget(msg.forget, msg.ts);
     const field = msg.mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
     for (const sid of msg.ids) {
-      const sess = draft.sessions[sid];
-      if (sess) {
-        if (notNewer(sess[field], msg.ts)) write("sessions", sid, field, msg.ts);
-        // Kill MOVES the row to the Killed bucket: the buckets are exclusive
-        // and a killed session can't stay pinned. Mirrors hideSessionInDraft.
-        if (msg.mode === "kill") {
-          if (sess.inbox_stashed_at && notNewer(sess.inbox_stashed_at, msg.ts)) {
-            write("sessions", sid, "inbox_stashed_at", null);
-          }
-          if ((sess.is_pinned || sess.inbox_pinned_at != null) && notNewer(sess.inbox_pinned_at, msg.ts)) {
-            write("sessions", sid, "is_pinned", false);
-            write("sessions", sid, "inbox_pinned_at", null);
-          }
-        }
-      }
-      const conv = draft.conversations[sid];
-      if (conv) {
-        if (notNewer(conv[field], msg.ts)) write("conversations", sid, field, msg.ts);
-        if (msg.mode === "kill") {
-          if (conv.inbox_stashed_at && notNewer(conv.inbox_stashed_at, msg.ts)) {
-            write("conversations", sid, "inbox_stashed_at", null);
-          }
-          if (conv.inbox_pinned_at != null && notNewer(conv.inbox_pinned_at, msg.ts)) {
-            write("conversations", sid, "inbox_pinned_at", null);
-          }
-        }
-      }
+      if (!acceptTransition(sid, ["inbox_dismissed_at", "inbox_stashed_at", "inbox_pinned_at"], {
+        shared: {
+          [field]: msg.ts,
+          ...(msg.mode === "kill" ? { inbox_stashed_at: null } : {}),
+          inbox_pinned_at: null,
+        },
+        // Both hide modes move the row out of Pinned. Mirrors
+        // hideSessionInDraft, which clears a pre-existing pin for stash too.
+        sessions: { is_pinned: false },
+      }, msg.ts)) continue;
     }
     return;
   }
@@ -4091,24 +4145,11 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
     // Un-hiding is un-hiding: both flags clear, but only if this window's value
     // is no newer than the restore (a re-kill here must survive).
     for (const sid of msg.ids) {
-      const sess = draft.sessions[sid];
-      if (sess) {
-        if (sess.inbox_dismissed_at != null && notNewer(sess.inbox_dismissed_at, msg.ts)) {
-          write("sessions", sid, "inbox_dismissed_at", null);
-        }
-        if (sess.inbox_stashed_at != null && notNewer(sess.inbox_stashed_at, msg.ts)) {
-          write("sessions", sid, "inbox_stashed_at", null);
-        }
-      }
-      const conv = draft.conversations[sid];
-      if (conv) {
-        if (conv.inbox_dismissed_at != null && notNewer(conv.inbox_dismissed_at, msg.ts)) {
-          write("conversations", sid, "inbox_dismissed_at", null);
-        }
-        if (conv.inbox_stashed_at != null && notNewer(conv.inbox_stashed_at, msg.ts)) {
-          write("conversations", sid, "inbox_stashed_at", null);
-        }
-      }
+      // A no-op restore still carries a newer causal tombstone. Without these
+      // locks, a delayed older kill sees two visible nulls and re-applies.
+      acceptTransition(sid, ["inbox_dismissed_at", "inbox_stashed_at"], {
+        shared: { inbox_dismissed_at: null, inbox_stashed_at: null },
+      });
     }
     return;
   }
@@ -4116,35 +4157,31 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   if (msg.kind === "fields") {
     // Verbatim mirror of a patchConversation gesture. patchConversation
     // Object.assigns the same fields onto BOTH twins, so both get them here.
-    // The hide/pin fields are all timestamps or a boolean paired with one, so
-    // the ordering guard keys off the row's current pin/hide stamp.
-    for (const [field, value] of Object.entries(msg.fields)) {
-      const stampField = field === "is_pinned" ? "inbox_pinned_at" : field;
-      for (const coll of ["sessions", "conversations"] as const) {
-        const row = draft[coll][msg.id];
-        if (!row) continue;
-        if (!notNewer(row[stampField], msg.ts)) continue;
-        if (row[field] === value) continue;
-        write(coll, msg.id, field, value);
-      }
-    }
+    // A fields message is one causal transition: guard all touched hidden/pin
+    // state before writing any subset, so a delayed partial patch cannot leave
+    // conflicting bucket timestamps behind.
+    const fields = Object.entries(msg.fields);
+    const guardFields = [
+      ...(fields.some(([key]) => key === "inbox_dismissed_at" || key === "inbox_stashed_at")
+        ? ["inbox_dismissed_at", "inbox_stashed_at"]
+        : []),
+      ...(fields.some(([key]) => key === "is_pinned" || key === "inbox_pinned_at")
+        ? ["inbox_pinned_at"]
+        : []),
+    ];
+    acceptTransition(msg.id, guardFields, { shared: Object.fromEntries(fields) });
     return;
   }
 
   // pin — `pinnedAt` is the sender's exact written value (see gestureBridge.ts:
   // undo restores the ORIGINAL pin time, so it cannot be re-derived from ts).
-  // Already-matching rows are left untouched so a duplicate message produces no
-  // patch, and therefore no IDB write.
-  const sess = draft.sessions[msg.id];
-  if (sess && !!sess.is_pinned !== msg.pinned && notNewer(sess.inbox_pinned_at, msg.ts)) {
-    write("sessions", msg.id, "is_pinned", msg.pinned);
-    write("sessions", msg.id, "inbox_pinned_at", msg.pinnedAt);
-  }
-  const conv = draft.conversations[msg.id];
-  if (conv && (conv.inbox_pinned_at != null) !== msg.pinned && notNewer(conv.inbox_pinned_at, msg.ts)) {
-    write("conversations", msg.id, "inbox_pinned_at", msg.pinnedAt);
-    if (msg.pinned) write("conversations", msg.id, "inbox_killed_at", undefined);
-  }
+  // Repeated pin messages leave matching rows untouched; an unpin deliberately
+  // plants a null tombstone even when the row already appears unpinned.
+  acceptTransition(msg.id, ["inbox_pinned_at"], {
+    shared: { inbox_pinned_at: msg.pinnedAt },
+    sessions: { is_pinned: msg.pinned },
+    ...(msg.pinned ? { conversations: { inbox_killed_at: undefined } } : {}),
+  });
 }
 
 export const useInboxStore = create<InboxStoreState>(

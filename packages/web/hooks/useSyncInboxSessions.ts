@@ -10,7 +10,7 @@ import { useRecoveryPoll } from "./useRecoveryPoll";
 import { useEnsureDispatch } from "./useEnsureDispatch";
 import { useLiveInboxSessions, applyLiveInboxIds } from "./useLiveInboxSessions";
 import { useWatchEffect } from "./useWatchEffect";
-import { bootEagerArmed, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { bootEagerArmed, cancelReconcileCrawl, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
 import { collectGhostSweepCandidates, collectHiddenResurrectionSuspects } from "./ghostSweep";
 
 // Background reconcile for the inbox session list. The live listInboxSessions
@@ -27,11 +27,6 @@ const SESSIONS_CRAWL_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const SESSIONS_RECONCILE_PAGE_SIZE = 75;
 const SESSIONS_RECONCILE_PAGE_DELAY_MS = 60;
 const SESSIONS_RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
-// How long the boot-eager hidden-set crawls wait for the durable outbox to replay
-// before running anyway. Long enough to cover a normal boot drain (an IDB load
-// plus a few dispatches), short enough that a client which never wires dispatch
-// still heals its killed sessions in seconds rather than at the 30-minute tick.
-const BOOT_OUTBOX_DRAIN_MAX_WAIT_MS = 10_000;
 const BOOT_OUTBOX_DRAIN_POLL_MS = 250;
 // Ghost-sweep policy (age floors + candidate selection) lives in ./ghostSweep
 // so the selection is unit-testable without this hook's React/Convex imports.
@@ -89,6 +84,18 @@ export function shouldPlayWaitingSound(
   }
 
   return { play, nextWaiting };
+}
+
+export function inboxCrawlWsKey(principalId: string | null | undefined): string {
+  return principalId ? `inbox:${principalId}` : "skip";
+}
+
+export function hiddenCrawlReady(
+  bootEagerPrincipal: string | null,
+  sessWsKey: string,
+  durableOutboxDrained: boolean,
+): boolean {
+  return sessWsKey !== "skip" && bootEagerPrincipal === sessWsKey && bootEagerArmed(durableOutboxDrained);
 }
 
 export function useSyncInboxSessions() {
@@ -431,9 +438,15 @@ export function useSyncInboxSessions() {
     store.redrivePendingMessages();
     store.resumePostCreateSessionIntents();
   }, [hydrated]);
-  // Stable crawl namespace — the live arg no longer varies, so the watermark
-  // never resets on a show/hide-old toggle.
-  const sessWsKey = "inbox";
+  // The module-scope crawl state is keyed by this value. The inbox is not a
+  // shared workspace: account A's completion mark must not throttle account B,
+  // and no crawl may begin before Convex has identified the active principal.
+  const sessWsKey = inboxCrawlWsKey(currentUser?._id?.toString());
+  useEffect(() => () => {
+    cancelReconcileCrawl("sessions");
+    cancelReconcileCrawl("dismissed");
+    cancelReconcileCrawl("stashed");
+  }, [sessWsKey]);
   const [reconcileNonce, setReconcileNonce] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setReconcileNonce((n) => n + 1), SESSIONS_RECONCILE_THROTTLE_MS);
@@ -457,7 +470,7 @@ export function useSyncInboxSessions() {
     };
   }, []);
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || sessWsKey === "skip") return;
     // Incremental top-up after a full backfill; the FIRST pass seeds since=now-30d
     // so the completeness floor only pulls the last 30 days (older sessions stay
     // accessible via search/open). This MUST be a single stable value for the whole
@@ -535,7 +548,9 @@ export function useSyncInboxSessions() {
     complete: boolean,
     field: "inbox_dismissed_at" | "inbox_stashed_at",
     apply: (rows: Array<{ _id: string }>, final: boolean) => void,
+    isCurrent: () => boolean,
   ) => {
+    if (!isCurrent()) return;
     if (complete) {
       const suspects = collectHiddenResurrectionSuspects(
         useInboxStore.getState(),
@@ -545,36 +560,36 @@ export function useSyncInboxSessions() {
       if (suspects.length) {
         try {
           const existing: string[] = await convex.query(api.conversations.existingConversationIds, { ids: suspects });
+          if (!isCurrent()) return;
           const exists = new Set(existing);
           const gone = suspects.filter((id) => !exists.has(id));
           if (gone.length) useInboxStore.getState().pruneGhostSessions(gone);
         } catch {}
       }
     }
+    if (!isCurrent()) return;
     apply(rows, complete);
   }, [convex]);
 
   // BOOT OUTBOX GATE — holds the hidden-set crawls until the durable outbox has
-  // replayed (or we've waited long enough). Without it, a hide the user made
-  // offline is still parked in the outbox while the crawl asks the server for the
-  // hidden set, and the CLEAR pass un-hides it — see bootEagerArmed. The wait is
-  // bounded, so a wedged or unwired outbox delays the healer, never disables it.
+  // replayed and verified empty. Without it, a hide the user made offline is
+  // still parked in the outbox while the crawl asks the server for the hidden
+  // set, and the CLEAR pass un-hides it — see bootEagerArmed.
   // Polled rather than subscribed: _hasBootOutboxDrained is a
   // plain accessor injected by mutativeMiddleware, not reactive store state.
-  const [bootEagerReady, setBootEagerReady] = useState(false);
+  const [bootEagerPrincipal, setBootEagerPrincipal] = useState<string | null>(null);
   useEffect(() => {
-    if (!hydrated || bootEagerReady) return;
-    const startedAt = Date.now();
+    if (!hydrated || sessWsKey === "skip" || bootEagerPrincipal === sessWsKey) return;
     const check = () => {
       const drained = !!(useInboxStore.getState() as any)._hasBootOutboxDrained?.();
-      if (!bootEagerArmed(drained, Date.now() - startedAt, BOOT_OUTBOX_DRAIN_MAX_WAIT_MS)) return;
-      setBootEagerReady(true);
+      if (!bootEagerArmed(drained)) return;
+      setBootEagerPrincipal(sessWsKey);
       clearInterval(id);
     };
     const id = setInterval(check, BOOT_OUTBOX_DRAIN_POLL_MS);
     check();
     return () => clearInterval(id);
-  }, [hydrated, bootEagerReady]);
+  }, [hydrated, sessWsKey, bootEagerPrincipal]);
 
   // DISMISS RECONCILE — durable cross-device dismiss/un-dismiss propagation.
   // The live listInboxSessions channel only reaches a CONNECTED client, and the
@@ -588,7 +603,8 @@ export function useSyncInboxSessions() {
   useEffect(() => {
     // The durable throttle is not a safe fallback while the outbox is replaying:
     // a cold/expired watermark would still launch the CLEAR pass immediately.
-    if (!hydrated || !bootEagerReady) return;
+    const durableOutboxDrained = !!(useInboxStore.getState() as any)._hasBootOutboxDrained?.();
+    if (!hydrated || !hiddenCrawlReady(bootEagerPrincipal, sessWsKey, durableOutboxDrained)) return;
     // STABLE window bound for the WHOLE crawl — computed once here, never inside
     // the server handler. The lite queries range-scan their index from this lower
     // bound; a per-page Date.now() would shift the range so each continuation
@@ -607,6 +623,7 @@ export function useSyncInboxSessions() {
       // the full 30 minutes. The effect-level gate above prevents any pre-replay
       // CLEAR pass; once here, the bypass is always armed.
       bootEager: true,
+      isCurrent: () => !!(useInboxStore.getState() as any)._hasBootOutboxDrained?.(),
       pageDelayMs: SESSIONS_RECONCILE_PAGE_DELAY_MS,
       maxPages: 50,
       fetchPage: async (cursor) => {
@@ -620,8 +637,8 @@ export function useSyncInboxSessions() {
       // CLEAR (un-dismiss propagation) runs ONLY on a provably-complete crawl:
       // `complete` is false if the crawl stopped at maxPages, so a truncated set
       // can never wrongly un-dismiss the un-fetched tail.
-      onComplete: (all, complete) => applyHiddenReconcileVerified(all as any, complete, "inbox_dismissed_at",
-        (rows, final) => useInboxStore.getState().applyDismissedReconcile(rows as any, final)),
+      onComplete: (all, complete, isCurrent) => applyHiddenReconcileVerified(all as any, complete, "inbox_dismissed_at",
+        (rows, final) => useInboxStore.getState().applyDismissedReconcile(rows as any, final), isCurrent),
     });
     // Stashed twin — same mechanics, keyed on inbox_stashed_at.
     runReconcileCrawl({
@@ -629,6 +646,7 @@ export function useSyncInboxSessions() {
       wsKey: sessWsKey,
       throttleMs: SESSIONS_RECONCILE_THROTTLE_MS,
       bootEager: true,
+      isCurrent: () => !!(useInboxStore.getState() as any)._hasBootOutboxDrained?.(),
       pageDelayMs: SESSIONS_RECONCILE_PAGE_DELAY_MS,
       maxPages: 50,
       fetchPage: async (cursor) => {
@@ -639,12 +657,12 @@ export function useSyncInboxSessions() {
         return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
       },
       onPage: (rows) => useInboxStore.getState().applyStashedReconcile(rows as any, false),
-      onComplete: (all, complete) => applyHiddenReconcileVerified(all as any, complete, "inbox_stashed_at",
-        (rows, final) => useInboxStore.getState().applyStashedReconcile(rows as any, final)),
+      onComplete: (all, complete, isCurrent) => applyHiddenReconcileVerified(all as any, complete, "inbox_stashed_at",
+        (rows, final) => useInboxStore.getState().applyStashedReconcile(rows as any, final), isCurrent),
     });
-    // bootEagerReady flipping re-fires this effect to run the first pass; the
+    // bootEagerPrincipal settling re-fires this effect to run the first pass; the
     // crawls' own in-session doneAt keeps later re-fires from double-crawling.
-  }, [convex, sessWsKey, reconcileNonce, hydrated, bootEagerReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [convex, sessWsKey, reconcileNonce, hydrated, bootEagerPrincipal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { activeSessions: inboxSessions };
 }
