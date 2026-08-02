@@ -2777,6 +2777,24 @@ function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry, restore
   );
 }
 
+// Same strip for a device move ("Run here" / "Move to remote Mac"): the move
+// pipeline — worktree transfer, resume on the destination — narrated live from
+// the same daemon command rows. useDeviceMoveStatus owns the lifecycle
+// (movingSessions in the store), so this stays mounted-cheap when idle.
+function DeviceMoveStatusStrip({ conversationId }: { conversationId: string }) {
+  const { phase, stage, failure, startedAt, restoredLabel, retry } = useDeviceMoveStatus(conversationId);
+  return (
+    <RestartStatusStrip
+      phase={phase}
+      stage={stage}
+      failure={failure}
+      startedAt={startedAt}
+      onRetry={retry}
+      restoredLabel={restoredLabel}
+    />
+  );
+}
+
 const ConversationTaskProgress = memo(function ConversationTaskProgress({ conversationId }: { conversationId: string }) {
   const taskStats = useConversationTaskStats(conversationId);
   if (!taskStats) return null;
@@ -14455,6 +14473,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             startedAt={restartStartedAt}
             onRetry={handleRestartSession}
           />
+          {conversation?._id && <DeviceMoveStatusStrip conversationId={conversation._id} />}
         </div>
         {conversation && (
           <div className="absolute top-full right-3 mt-24 z-30">
