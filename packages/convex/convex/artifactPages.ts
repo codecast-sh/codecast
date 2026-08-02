@@ -61,7 +61,9 @@ export interface BrandOpts {
 // Panels (history / menu / comments / manage) are anchored dropdowns on
 // desktop and become drag-handle bottom sheets under 640px. The comments
 // panel collects MULTIPLE draft comments (pinned by tapping the page, or
-// anchored to a text selection) and sends them as ONE batch.
+// anchored to a text selection); a batch can go straight to the author's
+// session or be saved as PENDING — stored, listed on the page for every
+// viewer, and delivered later in one shot via "Send all".
 // ---------------------------------------------------------------------------
 function barHtml(o: BrandOpts): string {
   const when = new Date(o.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -69,17 +71,21 @@ function barHtml(o: BrandOpts): string {
   const currentVersion = o.currentVersion ?? version;
   const viewingOld = version < currentVersion;
   const interactive = !!o.metaUrl;
+  const chevronSvg = `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`;
+  const bubbleSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+  const linkSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`;
   const verChip = interactive
-    ? `<button id="__cc_ver" type="button" title="Version history"${viewingOld ? ' class="__cc_old"' : ""}>v${version}${viewingOld ? " (old)" : ""} ▾</button>`
+    ? `<button id="__cc_ver" type="button" title="Version history"${viewingOld ? ' class="__cc_old"' : ""}>v${version}${viewingOld ? " (old)" : ""} ${chevronSvg}</button>`
     : "";
   const latestLink = viewingOld ? `<a id="__cc_latest" href="#">Latest ↗</a>` : "";
   const sessionLink = o.sessionShortId
     ? `<a class="__cc_sess" href="https://codecast.sh/conversation/${escAttr(o.sessionShortId)}" target="_blank" rel="noopener noreferrer" title="Open the session that published this">by ${escAttr(o.sessionShortId)}</a>`
     : "";
   const commentsBtn = interactive
-    ? `<button id="__cc_cbtn" type="button" title="Comment on this page">✎ <span id="__cc_ccount">${o.commentCount || ""}</span></button>`
+    ? `<button id="__cc_cbtn" type="button" title="Comment on this page">${bubbleSvg}<span id="__cc_ccount">${o.commentCount || ""}</span></button>`
     : "";
   const menuBtn = interactive ? `<button id="__cc_menu" type="button" title="More">⋯</button>` : "";
+  const copyBtn = `<button id="__cc_copy" type="button" data-url="${escAttr(o.shareUrl)}">${linkSvg}<span id="__cc_copyt">Copy link</span></button>`;
   const cfg = {
     metaUrl: o.metaUrl ?? "",
     apiBase: o.apiBase ?? "",
@@ -96,106 +102,161 @@ function barHtml(o: BrandOpts): string {
   return `
 <style id="__cc_style">
   /* Pinned to the viewport top; the html margin reserves exactly the bar's
-     height so the artifact's content starts below it — pinned, not overlaying. */
-  html { margin-top: 36px !important; }
-  #__cc_bar { position: fixed; top: 0; left: 0; right: 0; height: 36px; z-index: 2147483647;
-    display: flex; align-items: center; gap: 8px;
+     height so the artifact's content starts below it — pinned, not overlaying.
+     Colors ride on custom properties; html.__cc_dark (set by JS from the
+     artifact's measured background luminance) flips the whole palette so the
+     bar reads as part of the page instead of a white strip over a dark one. */
+  html { margin-top: 40px !important; }
+  #__cc_bar, .__cc_panel, #__cc_hint {
+    --cc-bg: rgba(252,251,250,.88); --cc-ink: #1c1b19; --cc-mut: #5c5954; --cc-dim: rgba(28,27,25,.48);
+    --cc-line: rgba(28,27,25,.09); --cc-hov: rgba(28,27,25,.06); --cc-card: #ffffff; --cc-soft: #faf9f7;
+    --cc-inbd: rgba(28,27,25,.16); --cc-blue: #1a63c4; --cc-green: #3d8a3d; --cc-coral: #e86c5d;
+    --cc-shadow: rgba(0,0,0,.14); }
+  html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint {
+    --cc-bg: rgba(25,24,22,.82); --cc-ink: #f0eee9; --cc-mut: #b3afa6; --cc-dim: rgba(240,238,233,.45);
+    --cc-line: rgba(240,238,233,.1); --cc-hov: rgba(240,238,233,.09); --cc-card: #232220; --cc-soft: #2b2a27;
+    --cc-inbd: rgba(240,238,233,.2); --cc-blue: #7ab0f0; --cc-green: #7cc47c;
+    --cc-shadow: rgba(0,0,0,.5); }
+  #__cc_bar { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 2147483647;
+    display: flex; align-items: center; gap: 2px;
     box-sizing: border-box;
-    padding: 0 calc(14px + env(safe-area-inset-right)) 0 calc(14px + env(safe-area-inset-left));
+    padding: 0 calc(10px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
     font: 500 12px/1 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-    background: #ffffff; color: #52524e; box-shadow: 0 1px 6px rgba(0,0,0,.08);
+    background: var(--cc-bg); color: var(--cc-mut);
+    -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
+    border-bottom: 1px solid var(--cc-line); box-shadow: 0 1px 8px rgba(0,0,0,.05);
     text-align: left; }
-  #__cc_bar .__cc_brand { color: #444444; text-decoration: none; display: inline-flex; align-items: center; }
-  #__cc_bar .__cc_brand:hover { color: #1a1a18; }
-  #__cc_bar .__cc_title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; opacity: .7; }
-  #__cc_bar .__cc_sess { color: #1a63c4; text-decoration: none; white-space: nowrap; font-weight: 400; opacity: .8; }
-  #__cc_bar .__cc_sess:hover { opacity: 1; }
-  #__cc_bar .__cc_when { opacity: .5; font-weight: 400; white-space: nowrap; }
-  #__cc_bar button { all: unset; cursor: pointer; padding: 4px 8px; border-radius: 6px; font: inherit; white-space: nowrap;
-    -webkit-tap-highlight-color: transparent; }
-  #__cc_bar button:hover { background: rgba(0,0,0,.06); }
+  #__cc_bar .__cc_brand { color: var(--cc-ink); text-decoration: none; display: inline-flex; align-items: center;
+    opacity: .85; margin-right: 8px; }
+  #__cc_bar .__cc_brand:hover { opacity: 1; }
+  #__cc_bar .__cc_title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-weight: 500; color: var(--cc-ink); opacity: .82; letter-spacing: .01em; margin-right: 8px; }
+  #__cc_bar .__cc_sess { color: var(--cc-blue); text-decoration: none; white-space: nowrap; font-weight: 400;
+    opacity: .75; padding: 5px 7px; border-radius: 7px; }
+  #__cc_bar .__cc_sess:hover { opacity: 1; background: var(--cc-hov); }
+  #__cc_bar .__cc_when { color: var(--cc-dim); font-weight: 400; white-space: nowrap; padding: 0 7px; }
+  #__cc_bar .__cc_dot { color: var(--cc-dim); opacity: .6; }
+  #__cc_bar button { all: unset; cursor: pointer; padding: 5px 8px; border-radius: 7px; font: inherit; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 5px; color: var(--cc-mut);
+    -webkit-tap-highlight-color: transparent; transition: background .1s ease, color .1s ease; }
+  #__cc_bar button:hover { background: var(--cc-hov); color: var(--cc-ink); }
   #__cc_bar button[hidden] { display: none; }
-  #__cc_bar #__cc_ver.__cc_old { color: #b3661f; }
-  #__cc_bar #__cc_new { background: #e86c5d; color: #ffffff; font-weight: 600; margin-left: 2px; }
-  #__cc_bar #__cc_new:hover { background: #d85b4c; }
-  #__cc_bar #__cc_latest { color: #1a63c4; text-decoration: none; padding: 4px 8px; border-radius: 6px; white-space: nowrap; }
-  #__cc_bar #__cc_latest:hover { background: rgba(0,0,0,.06); }
-  #__cc_bar #__cc_ccount { background: rgba(232,108,93,.14); color: #c2543f; border-radius: 999px; padding: 1px 6px; font-size: 10px; font-weight: 600; }
+  #__cc_bar button svg { flex: none; opacity: .8; }
+  #__cc_bar #__cc_ver { border: 1px solid var(--cc-line); border-radius: 999px; padding: 3px 9px; gap: 4px;
+    font-weight: 600; color: var(--cc-ink); }
+  #__cc_bar #__cc_ver:hover { border-color: var(--cc-inbd); background: var(--cc-hov); }
+  #__cc_bar #__cc_ver.__cc_old { color: #c07a28; border-color: rgba(192,122,40,.45); }
+  #__cc_bar #__cc_new { background: var(--cc-coral); color: #ffffff; font-weight: 600; margin: 0 2px; padding: 5px 10px; }
+  #__cc_bar #__cc_new:hover { background: #d85b4c; color: #ffffff; }
+  #__cc_bar #__cc_latest { color: var(--cc-blue); text-decoration: none; padding: 5px 8px; border-radius: 7px; white-space: nowrap; }
+  #__cc_bar #__cc_latest:hover { background: var(--cc-hov); }
+  #__cc_bar #__cc_ccount { background: rgba(232,108,93,.16); color: #c2543f; border-radius: 999px; padding: 2px 6px;
+    font-size: 10px; font-weight: 600; }
+  html.__cc_dark #__cc_bar #__cc_ccount { color: #f0937f; }
   #__cc_bar #__cc_ccount:empty { display: none; }
-  .__cc_panel { position: fixed; top: 38px; right: 10px; z-index: 2147483647; min-width: 264px; max-width: min(92vw, 400px);
+  .__cc_panel { position: fixed; top: 46px; right: 10px; z-index: 2147483647; min-width: 272px; max-width: min(92vw, 400px);
     max-height: 72vh; overflow-y: auto; overscroll-behavior: contain;
-    background: #ffffff; color: #52524e; border-radius: 10px;
-    box-shadow: 0 6px 24px rgba(0,0,0,.16), 0 0 0 1px rgba(0,0,0,.04);
+    background: var(--cc-card); color: var(--cc-mut); border-radius: 12px;
+    box-shadow: 0 10px 32px var(--cc-shadow), 0 0 0 1px var(--cc-line);
     font: 400 12px/1.45 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; padding: 8px; text-align: left;
     opacity: 0; transform: translateY(-4px); transition: opacity .16s ease, transform .16s ease; }
   .__cc_panel.__cc_in { opacity: 1; transform: none; }
   .__cc_panel[hidden] { display: none; }
   .__cc_panel a { color: inherit; text-decoration: none; }
-  .__cc_panel .__cc_row { display: flex; justify-content: space-between; gap: 14px; align-items: baseline; padding: 6px 8px; border-radius: 6px; }
-  .__cc_panel .__cc_row:hover { background: rgba(0,0,0,.06); }
-  .__cc_panel .__cc_vlabel { font-weight: 600; color: #1a1a18; }
-  .__cc_panel a.__cc_cur .__cc_vlabel::after { content: " · current"; font-weight: 400; color: #3d8a3d; }
+  .__cc_panel .__cc_row { display: flex; justify-content: space-between; gap: 14px; align-items: baseline; padding: 6px 8px; border-radius: 7px; }
+  .__cc_panel .__cc_row:hover { background: var(--cc-hov); }
+  .__cc_panel .__cc_vlabel { font-weight: 600; color: var(--cc-ink); }
+  .__cc_panel a.__cc_cur .__cc_vlabel::after { content: " · current"; font-weight: 400; color: var(--cc-green); }
   .__cc_panel a.__cc_viewing { background: rgba(232,108,93,.12); }
-  .__cc_panel .__cc_vwhen { opacity: .55; white-space: nowrap; }
-  .__cc_panel .__cc_note { padding: 6px 8px; opacity: .55; }
+  .__cc_panel .__cc_vwhen { color: var(--cc-dim); white-space: nowrap; }
+  .__cc_panel .__cc_note { padding: 6px 8px; color: var(--cc-dim); }
   .__cc_panel .__cc_dlink { opacity: .6; margin-left: 8px; }
-  .__cc_panel .__cc_dlink:hover { opacity: 1; color: #1a63c4; }
+  .__cc_panel .__cc_dlink:hover { opacity: 1; color: var(--cc-blue); }
   .__cc_panel .__cc_ph { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px 8px; }
-  .__cc_panel .__cc_pht { font-weight: 600; color: #1a1a18; font-size: 13px; }
-  .__cc_panel .__cc_phn { opacity: .55; }
-  .__cc_panel .__cc_h2 { font-weight: 600; color: #1a1a18; padding: 12px 8px 4px; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; opacity: .7; }
+  .__cc_panel .__cc_pht { font-weight: 600; color: var(--cc-ink); font-size: 13px; }
+  .__cc_panel .__cc_phn { color: var(--cc-dim); }
+  .__cc_panel .__cc_h2 { font-weight: 600; color: var(--cc-ink); padding: 12px 8px 4px; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; opacity: .7; }
   .__cc_panel .__cc_kv { display: flex; align-items: center; gap: 8px; padding: 5px 8px; flex-wrap: wrap; }
-  .__cc_panel .__cc_k { color: #1a1a18; }
-  .__cc_panel .__cc_v { opacity: .6; }
-  .__cc_panel .__cc_v.__cc_on { color: #3d8a3d; opacity: 1; }
+  .__cc_panel .__cc_k { color: var(--cc-ink); }
+  .__cc_panel .__cc_v { color: var(--cc-dim); }
+  .__cc_panel .__cc_v.__cc_on { color: var(--cc-green); }
   .__cc_panel .__cc_sp { flex: 1; }
-  .__cc_panel .__cc_btn { all: unset; cursor: pointer; padding: 5px 10px; border-radius: 6px; background: rgba(0,0,0,.05); color: #1a1a18;
+  .__cc_panel .__cc_btn { all: unset; cursor: pointer; padding: 5px 10px; border-radius: 7px; background: var(--cc-hov); color: var(--cc-ink);
     white-space: nowrap; -webkit-tap-highlight-color: transparent; }
-  .__cc_panel .__cc_btn:hover { background: rgba(0,0,0,.1); }
+  .__cc_panel .__cc_btn:hover { filter: brightness(.96); }
+  html.__cc_dark .__cc_panel .__cc_btn:hover { filter: brightness(1.2); }
   .__cc_panel .__cc_btn:disabled { opacity: .5; cursor: default; }
-  .__cc_panel .__cc_btn.__cc_danger { color: #b3372a; background: rgba(179,55,42,.08); }
-  .__cc_panel .__cc_btn.__cc_danger:hover { background: rgba(179,55,42,.16); }
+  .__cc_panel .__cc_btn.__cc_danger { color: #c25446; background: rgba(179,55,42,.1); }
+  .__cc_panel .__cc_btn.__cc_danger:hover { background: rgba(179,55,42,.18); }
   .__cc_panel .__cc_chips { display: flex; gap: 6px; padding: 4px 8px; flex-wrap: wrap; }
-  .__cc_panel .__cc_chip2 { all: unset; cursor: pointer; padding: 4px 10px; border-radius: 999px; background: rgba(0,0,0,.05); color: #1a1a18;
+  .__cc_panel .__cc_chip2 { all: unset; cursor: pointer; padding: 4px 10px; border-radius: 999px; background: var(--cc-hov); color: var(--cc-ink);
     -webkit-tap-highlight-color: transparent; }
-  .__cc_panel .__cc_chip2:hover { background: rgba(0,0,0,.1); }
-  .__cc_panel .__cc_chip2.__cc_segon { background: #1a1a18; color: #ffffff; }
-  .__cc_panel .__cc_in2 { font: inherit; flex: 1; min-width: 120px; padding: 6px 9px; border: 1px solid rgba(0,0,0,.16); border-radius: 7px;
-    color: #1a1a18; background: #ffffff; outline: none; box-sizing: border-box; }
-  .__cc_panel .__cc_in2:focus { border-color: #e86c5d; box-shadow: 0 0 0 3px rgba(232,108,93,.15); }
-  .__cc_panel .__cc_draft { margin: 6px 8px; border: 1px solid rgba(0,0,0,.1); border-radius: 8px; padding: 8px; background: #fcfbfa; }
+  .__cc_panel .__cc_chip2:hover { filter: brightness(.96); }
+  html.__cc_dark .__cc_panel .__cc_chip2:hover { filter: brightness(1.2); }
+  .__cc_panel .__cc_chip2.__cc_segon { background: var(--cc-ink); color: var(--cc-card); }
+  .__cc_panel .__cc_in2 { font: inherit; flex: 1; min-width: 120px; padding: 6px 9px; border: 1px solid var(--cc-inbd); border-radius: 7px;
+    color: var(--cc-ink); background: var(--cc-card); outline: none; box-sizing: border-box; }
+  .__cc_panel .__cc_in2::placeholder { color: var(--cc-dim); }
+  .__cc_panel .__cc_in2:focus { border-color: var(--cc-coral); box-shadow: 0 0 0 3px rgba(232,108,93,.15); }
+  .__cc_panel .__cc_draft { margin: 6px 8px; border: 1px solid var(--cc-line); border-radius: 8px; padding: 8px; background: var(--cc-soft); }
   .__cc_panel .__cc_dtop { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .__cc_panel .__cc_dnum { width: 20px; height: 20px; border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font-weight: 600;
+  .__cc_panel .__cc_dnum { width: 20px; height: 20px; border-radius: 50% 50% 50% 4px; background: var(--cc-coral); color: #ffffff; font-weight: 600;
     font-size: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
-  .__cc_panel .__cc_dsnip { opacity: .55; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .__cc_panel .__cc_dsnip { color: var(--cc-dim); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .__cc_panel .__cc_x { all: unset; cursor: pointer; padding: 2px 7px; border-radius: 6px; opacity: .5; font-size: 14px; }
-  .__cc_panel .__cc_x:hover { opacity: 1; background: rgba(0,0,0,.07); }
-  .__cc_panel .__cc_ta { font: inherit; width: 100%; box-sizing: border-box; border: 1px solid rgba(0,0,0,.14); border-radius: 7px;
-    padding: 7px 9px; color: #1a1a18; resize: vertical; min-height: 44px; outline: none; background: #ffffff; }
-  .__cc_panel .__cc_ta:focus { border-color: #e86c5d; box-shadow: 0 0 0 3px rgba(232,108,93,.15); }
+  .__cc_panel .__cc_x:hover { opacity: 1; background: var(--cc-hov); }
+  .__cc_panel .__cc_ta { font: inherit; width: 100%; box-sizing: border-box; border: 1px solid var(--cc-inbd); border-radius: 7px;
+    padding: 7px 9px; color: var(--cc-ink); resize: vertical; min-height: 44px; outline: none; background: var(--cc-card); }
+  .__cc_panel .__cc_ta::placeholder { color: var(--cc-dim); }
+  .__cc_panel .__cc_ta:focus { border-color: var(--cc-coral); box-shadow: 0 0 0 3px rgba(232,108,93,.15); }
   .__cc_panel .__cc_addrow { display: flex; gap: 6px; padding: 6px 8px; }
   .__cc_panel .__cc_who { padding: 2px 8px 6px; display: flex; }
-  .__cc_panel .__cc_send { all: unset; cursor: pointer; display: block; text-align: center; margin: 2px 8px 6px; padding: 9px 12px;
-    border-radius: 8px; background: #e86c5d; color: #ffffff; font-weight: 600; -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_actions { display: flex; gap: 6px; margin: 2px 8px 6px; }
+  .__cc_panel .__cc_send { all: unset; cursor: pointer; flex: 1; text-align: center; padding: 9px 12px;
+    border-radius: 8px; background: var(--cc-coral); color: #ffffff; font-weight: 600; -webkit-tap-highlight-color: transparent; }
   .__cc_panel .__cc_send:hover { background: #d85b4c; }
   .__cc_panel .__cc_send:disabled { opacity: .45; cursor: default; }
-  .__cc_panel .__cc_cerr { color: #b3372a; padding: 0 8px 6px; }
+  .__cc_panel .__cc_ghost { all: unset; cursor: pointer; text-align: center; padding: 9px 12px; border-radius: 8px;
+    border: 1px solid var(--cc-inbd); color: var(--cc-ink); font-weight: 500; -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_ghost:hover { background: var(--cc-hov); }
+  .__cc_panel .__cc_ghost:disabled { opacity: .45; cursor: default; }
+  .__cc_panel .__cc_cerr { color: #c25446; padding: 0 8px 6px; }
   .__cc_panel .__cc_okwrap { text-align: center; padding: 22px 12px 26px; }
-  .__cc_panel .__cc_okmark { width: 36px; height: 36px; margin: 0 auto 10px; border-radius: 50%; background: rgba(61,138,61,.12);
-    color: #3d8a3d; font-size: 18px; line-height: 36px; }
-  .__cc_panel .__cc_okt { font-weight: 600; color: #1a1a18; margin-bottom: 4px; }
-  .__cc_panel .__cc_oks { opacity: .6; }
-  .__cc_panel .__cc_cmt { margin: 4px 8px 8px; padding: 8px; border: 1px solid rgba(0,0,0,.08); border-radius: 8px; }
-  .__cc_panel .__cc_cmeta { opacity: .55; margin-bottom: 2px; }
-  .__cc_panel .__cc_ctext { color: #1a1a18; margin: 4px 0 8px; white-space: pre-wrap; word-break: break-word; }
+  .__cc_panel .__cc_okmark { width: 36px; height: 36px; margin: 0 auto 10px; border-radius: 50%; background: rgba(61,138,61,.14);
+    color: var(--cc-green); font-size: 18px; line-height: 36px; }
+  .__cc_panel .__cc_okt { font-weight: 600; color: var(--cc-ink); margin-bottom: 4px; }
+  .__cc_panel .__cc_oks { color: var(--cc-dim); }
+  .__cc_panel .__cc_cmt { margin: 4px 8px 8px; padding: 8px; border: 1px solid var(--cc-line); border-radius: 8px; }
+  .__cc_panel .__cc_cmeta { color: var(--cc-dim); margin-bottom: 2px; }
+  .__cc_panel .__cc_ctext { color: var(--cc-ink); margin: 4px 0 8px; white-space: pre-wrap; word-break: break-word; }
+  /* Saved comments (everyone sees these; "pending" = not yet sent to the session) */
+  .__cc_panel .__cc_scmt { margin: 6px 8px; padding: 8px; border: 1px solid var(--cc-line); border-radius: 8px; cursor: default; }
+  .__cc_panel .__cc_scmt.__cc_hasloc { cursor: pointer; }
+  .__cc_panel .__cc_scmt.__cc_hasloc:hover { background: var(--cc-hov); }
+  .__cc_panel .__cc_scmt .__cc_ctext { margin: 4px 0 0; }
+  .__cc_panel .__cc_stag { border-radius: 999px; padding: 1px 7px; font-size: 10px; font-weight: 600; white-space: nowrap; }
+  .__cc_panel .__cc_stag.__cc_pend { background: rgba(192,122,40,.15); color: #c07a28; }
+  .__cc_panel .__cc_stag.__cc_sent { background: rgba(61,138,61,.13); color: var(--cc-green); }
+  .__cc_panel .__cc_pendrow { display: flex; align-items: center; gap: 8px; margin: 8px 8px 2px; padding: 7px 9px;
+    border-radius: 8px; background: rgba(192,122,40,.09); color: #c07a28; }
+  .__cc_panel .__cc_pendrow .__cc_sendall { all: unset; cursor: pointer; padding: 4px 10px; border-radius: 7px;
+    background: var(--cc-coral); color: #ffffff; font-weight: 600; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_pendrow .__cc_sendall:hover { background: #d85b4c; }
+  .__cc_panel .__cc_pendrow .__cc_sendall:disabled { opacity: .5; cursor: default; }
+  .__cc_panel .__cc_div { height: 1px; background: var(--cc-line); margin: 8px 8px 2px; }
   #__cc_pins { position: absolute; top: 0; left: 0; width: 100%; height: 0; overflow: visible; z-index: 2147483645; pointer-events: none; }
   #__cc_pins .__cc_pin { position: absolute; transform: translate(-50%,-100%); width: 22px; height: 22px;
     border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 11px/22px ui-monospace, Menlo, monospace;
     text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,.25); pointer-events: auto; cursor: pointer;
     animation: __cc_pop .18s ease; }
+  #__cc_pins .__cc_pin.__cc_spin { width: 14px; height: 14px; background: #ffffff; border: 3px solid #e86c5d;
+    box-sizing: border-box; border-radius: 50% 50% 50% 3px; font-size: 0; opacity: .85; }
+  #__cc_pins .__cc_pin.__cc_spin:hover { opacity: 1; transform: translate(-50%,-100%) scale(1.25); }
+  #__cc_pins .__cc_pin.__cc_flash { animation: __cc_pulse .9s ease 2; }
   @keyframes __cc_pop { from { transform: translate(-50%,-100%) scale(.6); opacity: 0; } }
+  @keyframes __cc_pulse { 50% { transform: translate(-50%,-100%) scale(1.5); } }
   #__cc_hint { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%);
-    z-index: 2147483647; background: #1a1a18; color: #ffffff; padding: 11px 18px; border-radius: 999px;
+    z-index: 2147483647; background: var(--cc-ink); color: var(--cc-card); padding: 11px 18px; border-radius: 999px;
     font: 500 12px/1 ui-monospace, Menlo, monospace; box-shadow: 0 6px 20px rgba(0,0,0,.3); white-space: nowrap; }
   html.__cc_pinmode, html.__cc_pinmode * { cursor: crosshair !important; }
   /* Bottom-sheet mode. The media query catches real narrow layout viewports;
@@ -204,29 +265,32 @@ function barHtml(o: BrandOpts): string {
      and the media query alone would never fire there. */
   @media (max-width: 640px) {
     #__cc_bar .__cc_when { display: none; }
+    #__cc_bar #__cc_copyt { display: none; }
     .__cc_panel { left: 0; right: 0; top: auto; bottom: 0; max-width: none; min-width: 0; max-height: 78vh;
       border-radius: 16px 16px 0 0; padding: 8px 10px calc(14px + env(safe-area-inset-bottom));
-      box-shadow: 0 -8px 32px rgba(0,0,0,.2); transform: translateY(24px); }
+      box-shadow: 0 -8px 32px var(--cc-shadow); transform: translateY(24px); }
     .__cc_panel::before { content: ""; display: block; width: 38px; height: 4px; border-radius: 2px;
-      background: rgba(0,0,0,.16); margin: 2px auto 10px; }
+      background: var(--cc-inbd); margin: 2px auto 10px; }
     .__cc_panel.__cc_in { transform: none; }
     .__cc_panel .__cc_row { padding: 11px 8px; }
     .__cc_panel .__cc_kv { padding: 8px; }
     .__cc_panel .__cc_btn { padding: 8px 12px; }
     .__cc_panel .__cc_chip2 { padding: 8px 12px; }
     .__cc_panel .__cc_send { padding: 13px 12px; }
+    .__cc_panel .__cc_ghost { padding: 13px 12px; }
     .__cc_panel .__cc_ta { min-height: 56px; }
   }
   .__cc_panel.__cc_sheet { left: 0; right: 0; top: auto; bottom: 0; max-width: none; min-width: 0; max-height: 78vh;
     border-radius: 16px 16px 0 0; padding: 8px 10px calc(14px + env(safe-area-inset-bottom));
-    box-shadow: 0 -8px 32px rgba(0,0,0,.2); transform: translateY(24px); }
+    box-shadow: 0 -8px 32px var(--cc-shadow); transform: translateY(24px); }
   .__cc_panel.__cc_sheet::before { content: ""; display: block; width: 38px; height: 4px; border-radius: 2px;
-    background: rgba(0,0,0,.16); margin: 2px auto 10px; }
+    background: var(--cc-inbd); margin: 2px auto 10px; }
   .__cc_panel.__cc_sheet.__cc_in { transform: none; }
   .__cc_panel.__cc_sheet .__cc_row { padding: 11px 8px; }
   .__cc_panel.__cc_sheet .__cc_send { padding: 13px 12px; }
+  .__cc_panel.__cc_sheet .__cc_ghost { padding: 13px 12px; }
   @media (max-width: 480px) {
-    #__cc_bar { gap: 5px; }
+    #__cc_bar { gap: 0; }
     #__cc_bar .__cc_sess { display: none; }
   }
 </style>
@@ -238,7 +302,7 @@ function barHtml(o: BrandOpts): string {
   <span class="__cc_when" id="__cc_when" data-ts="${o.updatedAt}">updated ${escAttr(when)}</span>
   ${verChip}
   ${commentsBtn}
-  <button id="__cc_copy" type="button" data-url="${escAttr(o.shareUrl)}">Copy link</button>
+  ${copyBtn}
   ${menuBtn}
 </div>
 <div id="__cc_hist" class="__cc_panel" hidden></div>
@@ -258,6 +322,24 @@ function barHtml(o: BrandOpts): string {
   var sSet=function(k,v){mem[k]=v;try{localStorage.setItem(k,v);}catch(e){}};
   var el=function(tag,cls,text){var n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
   var host=function(){return document.body||document.documentElement;};
+  // Match the artifact instead of fighting it: measure the page's effective
+  // background luminance and flip the bar (and panels) to the dark palette on
+  // dark pages. Re-checked on load because stylesheets can land after us.
+  var bgLum=function(node){try{
+    var c=getComputedStyle(node).backgroundColor||"";
+    var m=c.match(/rgba?\\(\\s*([\\d.]+)[,\\s]+([\\d.]+)[,\\s]+([\\d.]+)(?:[,\\s/]+([\\d.]+))?/);
+    if(!m)return null;
+    if(m[4]!=null&&parseFloat(m[4])<.4)return null;
+    return (0.2126*(+m[1])+0.7152*(+m[2])+0.0722*(+m[3]))/255;
+  }catch(e){return null;}};
+  var applyTheme=function(){
+    var l=document.body?bgLum(document.body):null;
+    if(l==null)l=bgLum(document.documentElement);
+    if(l==null)l=1;
+    document.documentElement.classList.toggle("__cc_dark",l<0.5);
+  };
+  applyTheme();
+  if(document.readyState!=="complete")window.addEventListener("load",applyTheme);
   var rel=function(ts){var s=Math.max(0,(Date.now()-ts)/1e3);
     return s<60?"just now":s<3600?Math.floor(s/60)+"m ago":s<86400?Math.floor(s/3600)+"h ago":s<2592e3?Math.floor(s/86400)+"d ago":new Date(ts).toLocaleDateString();};
   var inFmt=function(ts){var s=(ts-Date.now())/1e3;
@@ -272,7 +354,9 @@ function barHtml(o: BrandOpts): string {
   };
   var flashLabel=function(btn,label,back){btn.textContent=label;setTimeout(function(){btn.textContent=back;},1400);};
   if(copyBtn)copyBtn.addEventListener("click",function(){
-    copyText(copyBtn.getAttribute("data-url"),function(){flashLabel(copyBtn,"Copied","Copy link");});
+    // Flash the label span, not the button — the button also holds the icon.
+    var t=document.getElementById("__cc_copyt");
+    copyText(copyBtn.getAttribute("data-url"),function(){if(t)flashLabel(t,"Copied","Copy link");});
   });
   if(!CC.metaUrl)return;
   var api=function(path,body){return fetch(CC.apiBase+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});};
@@ -281,7 +365,11 @@ function barHtml(o: BrandOpts): string {
   // Version links stay on whatever host serves this document. r is a
   // cache-buster (new URL → new cache key past the 60s edge/browser cache).
   // EVERY navigation must carry the gate tokens (k/e) and live flag forward,
-  // or a reload on a gated page lands back on the password wall.
+  // or a reload on a gated page lands back on the password wall. This helper
+  // (and the a.back rewrite in pageShell) is the single place that encodes
+  // WHERE tokens live: the query string. If gated bundle assets ever move
+  // tokens into the path (e.g. /_k/<tok>/ under a base href), both must
+  // change in the same commit or in-page nav strands unlocked viewers.
   var keepHash=location.hash||"";
   var withQ=function(extra){var q=new URLSearchParams(location.search);var out=new URLSearchParams();
     ["k","e","live"].forEach(function(p){var val=q.get(p);if(val)out.set(p,val);});
@@ -353,15 +441,44 @@ function barHtml(o: BrandOpts): string {
       fetchMeta(render);
     });
   }
-  // --- comments: multiple drafts, pinned to the page, sent as ONE batch ---
+  // --- comments ---
+  // Three tiers: DRAFTS (this page load only) → PENDING (stored, visible to
+  // every viewer, NOT yet sent to the author's session) → SENT. Saved
+  // comments come from ?meta=1 and render as hollow pins + a list in the
+  // panel; "Send all" flushes everything pending to the session as one batch.
   var cbtn=document.getElementById("__cc_cbtn");
   var cpanel=document.getElementById("__cc_cpanel");
   var drafts=[];
+  var saved=[],savedLoaded=false;
+  var pendingCount=function(){return saved.filter(function(c){return !c.delivered;}).length;};
+  var parseAnchor=function(c){if(c.__a!==undefined)return c.__a;try{c.__a=c.anchor?JSON.parse(c.anchor):null;}catch(e){c.__a=null;}return c.__a;};
+  // Where a saved comment's pin goes. Prefer the recorded page-fraction point
+  // (exact if the content hasn't changed), then the element selector, then a
+  // right-edge rail marker when only a vertical fraction survives.
+  var posFor=function(an){
+    if(!an)return null;
+    var docEl=document.documentElement;
+    var docH=Math.max(docEl.scrollHeight,1),docW=Math.max(docEl.scrollWidth,1);
+    if(typeof an.y==="number"&&typeof an.x==="number")return{x:an.x*docW,y:an.y*docH};
+    if(an.sel){try{var n=document.querySelector(an.sel);if(n){var r=n.getBoundingClientRect();
+      if(r.width||r.height)return{x:r.left+window.pageXOffset+Math.min(r.width/2,300),y:r.top+window.pageYOffset+10};}}catch(e){}}
+    if(typeof an.y==="number")return{x:docW-26,y:an.y*docH};
+    return null;
+  };
   var pinLayer=null,hint=null,pinMode=false;
   var pinsOn=function(){if(!pinLayer){pinLayer=document.createElement("div");pinLayer.id="__cc_pins";host().appendChild(pinLayer);}return pinLayer;};
   var renderPins=function(){
-    if(!pinLayer&&!drafts.some(function(d){return d.px!=null;}))return;
+    var savedPos=saved.map(function(c){return{c:c,p:posFor(parseAnchor(c))};}).filter(function(s){return !!s.p;});
+    if(!pinLayer&&!savedPos.length&&!drafts.some(function(d){return d.px!=null;}))return;
     pinsOn().innerHTML="";
+    savedPos.forEach(function(s){
+      var p=el("div","__cc_pin __cc_spin","");
+      p.style.left=s.p.x+"px";p.style.top=s.p.y+"px";
+      p.title=s.c.author_name+": "+s.c.text.slice(0,80);
+      p.setAttribute("data-cid",s.c.id);
+      p.addEventListener("click",function(e){e.stopPropagation();openC(null,s.c.id);});
+      pinLayer.appendChild(p);
+    });
     drafts.forEach(function(d,i){
       if(d.px==null)return;
       var p=el("div","__cc_pin",String(i+1));
@@ -371,6 +488,17 @@ function barHtml(o: BrandOpts): string {
       pinLayer.appendChild(p);
     });
   };
+  var refreshSaved=function(cb){fetchMeta(function(m){
+    if(!m)return;
+    saved=m.comments||[];savedLoaded=true;
+    if(typeof m.comment_count==="number")CC.comments=m.comment_count;
+    setCount();renderPins();
+    if(cb)cb();
+  });};
+  if(CC.comments>0)refreshSaved();
+  // Fraction-based pin positions depend on the laid-out document size.
+  var rszT=null;
+  window.addEventListener("resize",function(){clearTimeout(rszT);rszT=setTimeout(renderPins,150);});
   var exitPin=function(){pinMode=false;document.documentElement.classList.remove("__cc_pinmode");if(hint){hint.remove();hint=null;}};
   var enterPin=function(){
     closeAll();pinMode=true;document.documentElement.classList.add("__cc_pinmode");
@@ -397,47 +525,68 @@ function barHtml(o: BrandOpts): string {
     if(!snip&&t&&t.textContent)snip=t.textContent.replace(/\\s+/g," ").trim();
     snip=snip.slice(0,120);
     var docH=Math.max(document.documentElement.scrollHeight,1);
-    var a={y:Math.round(e.pageY/docH*1000)/1000};
+    var docW=Math.max(document.documentElement.scrollWidth,1);
+    var a={y:Math.round(e.pageY/docH*1000)/1000,x:Math.round(e.pageX/docW*1000)/1000};
     if(snip)a.snippet=snip;
     var sp=t?selPath(t):"";
     if(sp)a.sel=sp;
     drafts.push({text:"",anchor:a,px:e.pageX,py:e.pageY});
     exitPin();renderPins();openC(drafts.length-1);
   },true);
-  var syncSend=function(){var b=document.getElementById("__cc_sendbtn");if(!b)return;
+  var syncSend=function(){
     var n=drafts.filter(function(d){return d.text.trim();}).length;
-    b.disabled=!n;b.textContent=n?("Send "+n+" comment"+(n===1?"":"s")):"Send";};
-  var doSend=function(name){
+    var b=document.getElementById("__cc_sendbtn");
+    if(b){b.disabled=!n;b.textContent=n>1?("Send "+n+" to session"):"Send to session";}
+    var g=document.getElementById("__cc_savebtn");
+    if(g){g.disabled=!n;g.textContent="Save as pending";}
+  };
+  // deliver=true → straight to the author's session. deliver=false → stored
+  // as pending: on the page for every viewer, sent later via "Send all".
+  var doSend=function(name,deliver){
     var ready=drafts.filter(function(d){return d.text.trim();});
     if(!ready.length)return;
     var b=document.getElementById("__cc_sendbtn");
+    var g=document.getElementById("__cc_savebtn");
     var errBox=cpanel.querySelector(".__cc_cerr");
-    if(b){b.disabled=true;b.textContent="Sending…";}
+    if(b){b.disabled=true;if(deliver)b.textContent="Sending…";}
+    if(g){g.disabled=true;if(!deliver)g.textContent="Saving…";}
     sSet("__cc_name",name||"");
     api("/cli/artifacts/comment",{slug:CC.slug,author_name:(name||"").trim()||"anonymous",
       author_email:gateEmail||undefined,version:CC.version,
+      deliver:deliver?undefined:false,
       comments:ready.map(function(d){var c={text:d.text.trim()};if(d.anchor)c.anchor=JSON.stringify(d.anchor);return c;})})
     .then(function(r){
       if(!r||r.error){if(errBox)errBox.textContent=(r&&r.error)||"Send failed — try again";syncSend();return;}
       drafts=[];renderPins();
-      CC.comments+=ready.length;setCount();
       cpanel.innerHTML="";
       var ok=el("div","__cc_okwrap");
       ok.appendChild(el("div","__cc_okmark","✓"));
-      ok.appendChild(el("div","__cc_okt","Sent "+ready.length+(ready.length===1?" comment":" comments")));
-      ok.appendChild(el("div","__cc_oks",r.delivered?"Delivered to the author's session.":"Saved — the author will see them."));
+      ok.appendChild(el("div","__cc_okt",(deliver?"Sent ":"Saved ")+ready.length+(ready.length===1?" comment":" comments")));
+      ok.appendChild(el("div","__cc_oks",deliver
+        ?(r.delivered?"Delivered to the author's session.":"Saved — the author will see them.")
+        :"Pending on this page — use \\u201CSend all\\u201D to deliver to the author's session."));
       cpanel.appendChild(ok);
-      setTimeout(closeAll,2400);
+      refreshSaved(function(){setTimeout(function(){if(!cpanel.hidden)renderC();},1600);});
     },function(){if(errBox)errBox.textContent="Network error — your drafts are kept";syncSend();});
   };
-  var renderC=function(focusIdx){
+  // "Send all": flush every stored-but-unsent comment (any viewer's) to the
+  // session in one batch message.
+  var sendAll=function(btn){
+    btn.disabled=true;btn.textContent="Sending…";
+    api("/cli/artifacts/comment",{slug:CC.slug,deliver_pending:true})
+    .then(function(r){
+      if(!r||r.error){btn.textContent="Failed";setTimeout(function(){if(!cpanel.hidden)renderC();},1600);return;}
+      refreshSaved(function(){if(!cpanel.hidden)renderC();});
+    },function(){btn.textContent="Network error";setTimeout(function(){if(!cpanel.hidden)renderC();},1600);});
+  };
+  var renderC=function(focusIdx,scrollToCid){
     cpanel.innerHTML="";
     var head=el("div","__cc_ph");
     head.appendChild(el("span","__cc_pht","Comments"));
-    if(CC.comments>0)head.appendChild(el("span","__cc_phn",CC.comments+" open"));
+    if(saved.length>0)head.appendChild(el("span","__cc_phn",String(saved.length)));
     cpanel.appendChild(head);
-    if(!drafts.length){
-      cpanel.appendChild(el("div","__cc_note","Pin notes anywhere on the page (or select text first). They send together as one batch, straight to the author."));
+    if(!drafts.length&&!saved.length){
+      cpanel.appendChild(el("div","__cc_note","Pin notes anywhere on the page (or select text first). Save them as pending, or send them straight to the author's session."));
     }
     drafts.forEach(function(d,i){
       var card=el("div","__cc_draft");card.setAttribute("data-i",String(i));
@@ -468,14 +617,62 @@ function barHtml(o: BrandOpts): string {
       nm.addEventListener("input",function(){sSet("__cc_name",nm.value);});
       who.appendChild(nm);cpanel.appendChild(who);
       cpanel.appendChild(el("div","__cc_cerr",""));
-      var send=el("button","__cc_send","Send");send.type="button";send.id="__cc_sendbtn";
-      send.addEventListener("click",function(){doSend(nm.value);});
-      cpanel.appendChild(send);
+      var actions=el("div","__cc_actions");
+      var save=el("button","__cc_ghost","Save as pending");save.type="button";save.id="__cc_savebtn";
+      save.title="Keep on this page without messaging the author's session";
+      save.addEventListener("click",function(){doSend(nm.value,false);});
+      var send=el("button","__cc_send","Send to session");send.type="button";send.id="__cc_sendbtn";
+      send.title="Deliver to the author's session now";
+      send.addEventListener("click",function(){doSend(nm.value,true);});
+      actions.appendChild(save);actions.appendChild(send);
+      cpanel.appendChild(actions);
+    }
+    // Saved comments — pending first as a call to action, then the list.
+    var pend=pendingCount();
+    if(pend>0){
+      var pr=el("div","__cc_pendrow");
+      pr.appendChild(el("span",null,pend+" pending — not sent yet"));
+      pr.appendChild(el("span","__cc_sp"));
+      var sa=el("button","__cc_sendall","Send all");sa.type="button";
+      sa.title="Deliver every pending comment to the author's session as one batch";
+      sa.addEventListener("click",function(){sendAll(sa);});
+      pr.appendChild(sa);
+      cpanel.appendChild(pr);
+    }
+    if(saved.length){
+      if(drafts.length||pend>0)cpanel.appendChild(el("div","__cc_div",""));
+      saved.slice().reverse().forEach(function(c){
+        var an=parseAnchor(c);
+        var hasLoc=!!posFor(an);
+        var card=el("div","__cc_scmt"+(hasLoc?" __cc_hasloc":""));
+        card.setAttribute("data-cid",c.id);
+        if(hasLoc)card.title="Jump to this comment's spot on the page";
+        var top=el("div","__cc_dtop");
+        top.appendChild(el("span","__cc_cmeta",c.author_name+" · "+rel(c.created_at)));
+        top.appendChild(el("span","__cc_sp"));
+        top.appendChild(el("span","__cc_stag "+(c.delivered?"__cc_sent":"__cc_pend"),c.delivered?"sent":"pending"));
+        card.appendChild(top);
+        if(an&&an.snippet)card.appendChild(el("div","__cc_dsnip","\\u201C"+String(an.snippet).slice(0,60)+(String(an.snippet).length>60?"…":"")+"\\u201D"));
+        card.appendChild(el("div","__cc_ctext",c.text));
+        if(hasLoc)card.addEventListener("click",function(){
+          var p=posFor(parseAnchor(c));
+          if(p)window.scrollTo({top:Math.max(0,p.y-140),behavior:"smooth"});
+          var pin=pinLayer&&pinLayer.querySelector('[data-cid="'+c.id+'"]');
+          if(pin){pin.classList.remove("__cc_flash");void pin.offsetWidth;pin.classList.add("__cc_flash");}
+        });
+        cpanel.appendChild(card);
+      });
     }
     syncSend();
     if(focusIdx!=null){var t=cpanel.querySelector('[data-i="'+focusIdx+'"] textarea');if(t)t.focus();}
+    if(scrollToCid){var sc=cpanel.querySelector('[data-cid="'+scrollToCid+'"]');if(sc)sc.scrollIntoView({block:"nearest"});}
   };
-  var openC=function(focusIdx){show(cpanel);renderC(focusIdx);};
+  var openC=function(focusIdx,scrollToCid){
+    show(cpanel);renderC(focusIdx,scrollToCid);
+    // First open: the saved list may not be loaded yet (count of 0 skips the
+    // boot fetch). Refresh, then re-render only if nothing is being typed.
+    if(!savedLoaded)refreshSaved(function(){if(!cpanel.hidden&&!drafts.length)renderC(null,scrollToCid);});
+  };
   if(cbtn&&cpanel){
     cbtn.addEventListener("click",function(e){
       e.stopPropagation();
@@ -487,7 +684,9 @@ function barHtml(o: BrandOpts): string {
         try{
           var r0=window.getSelection().getRangeAt(0).getBoundingClientRect();
           var docH=Math.max(document.documentElement.scrollHeight,1);
+          var docW=Math.max(document.documentElement.scrollWidth,1);
           a.y=Math.round((r0.top+r0.height/2+window.pageYOffset)/docH*1000)/1000;
+          a.x=Math.round((r0.left+r0.width/2+window.pageXOffset)/docW*1000)/1000;
           drafts.push({text:"",anchor:a,px:Math.round(r0.left+r0.width/2+window.pageXOffset),py:Math.round(r0.top+window.pageYOffset)});
         }catch(x){drafts.push({text:"",anchor:a,px:null,py:null});}
         renderPins();
@@ -651,6 +850,13 @@ function barHtml(o: BrandOpts): string {
       fetchMeta(function(m){
         if(!m)return;
         if(typeof m.comment_count==="number"&&m.comment_count!==CC.comments){CC.comments=m.comment_count;setCount();}
+        // Keep saved comments (and their pins) live so another viewer's
+        // comments show up without a reload. Re-render only on real change —
+        // and never redraw the panel itself mid-typing.
+        if(m.comments){
+          var sig=function(list){return list.map(function(c){return c.id+(c.delivered?"+":"-");}).join(",");};
+          if(sig(m.comments)!==sig(saved)){saved=m.comments;savedLoaded=true;renderPins();}
+        }
         if(m.version>CC.version){
           if(CC.live){location.href=verUrl(m.version,true);return;}
           if(badge){
@@ -674,7 +880,7 @@ function ogMeta(o: BrandOpts): string {
       : `\n<meta name="twitter:card" content="summary">`;
   return `
 <meta property="og:title" content="${escAttr(o.title)}">
-<meta property="og:description" content="An HTML artifact published${author} with codecast">
+<meta property="og:description" content="A page published${author} with codecast">
 <meta property="og:url" content="${escAttr(o.shareUrl)}">
 <meta property="og:site_name" content="codecast">
 <meta property="og:type" content="article">${image}
@@ -757,13 +963,25 @@ function pageShell(title: string, body: string, extra = ""): string {
 ${body}
 </div>
 <script>(function(){
-  // Carry gate tokens (k/e) and the live flag onto the back-to-page link so
-  // returning from source/diff/editor doesn't land on the password wall.
-  var q=new URLSearchParams(location.search);var keep=[];
-  ["k","e","live"].forEach(function(p){var v=q.get(p);if(v)keep.push(p+"="+encodeURIComponent(v));});
-  if(keep.length){document.querySelectorAll("a.back").forEach(function(a){
-    var base=a.href.split("#")[0].split("?")[0];var hash=a.href.indexOf("#")>=0?a.href.slice(a.href.indexOf("#")):"";
-    a.href=base+"?"+keep.join("&")+hash;});}
+  // Rewrite nav links to stay on THIS origin and carry the gate tokens
+  // (k/e) and live flag: server-built links point at the canonical share
+  // host, which re-runs the gates, and dropping the tokens lands an
+  // unlocked viewer back on the password wall. Each link's own mode params
+  // (edit=1, src=raw) are merged, not replaced, and links without a
+  // fragment inherit location.hash so #o/#ed keys survive into the editor.
+  var q=new URLSearchParams(location.search);
+  document.querySelectorAll("a.back").forEach(function(a){
+    var href=a.getAttribute("href")||"";
+    if(!href||href.charAt(0)==="#")return;
+    var hashAt=href.indexOf("#");
+    var hash=hashAt>=0?href.slice(hashAt):(location.hash||"");
+    var base=hashAt>=0?href.slice(0,hashAt):href;
+    var qAt=base.indexOf("?");
+    var params=new URLSearchParams(qAt>=0?base.slice(qAt+1):"");
+    ["k","e","live"].forEach(function(p){var v=q.get(p);if(v)params.set(p,v);});
+    var qs=params.toString();
+    a.href=location.pathname+(qs?"?"+qs:"")+hash;
+  });
 })();</script>
 </body>
 </html>`;

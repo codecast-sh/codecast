@@ -726,11 +726,18 @@ export const comment = httpAction(async (ctx, request) => {
     // one endpoint where flooding is both cheap and consequential.
     const limited = await slugRateLimited(ctx, String(body.slug ?? ""), "artifact-comment", 6, 60_000);
     if (limited) return limited;
+    // "Send all": flush stored-but-undelivered comments to the session.
+    if (body.deliver_pending === true) {
+      const flushed = await ctx.runMutation(api.artifacts.deliverPendingComments, { slug: String(body.slug ?? "") });
+      return json(flushed);
+    }
     const result = await ctx.runMutation(api.artifacts.submitComments, {
       slug: String(body.slug ?? ""),
       author_name: String(body.author_name ?? ""),
       author_email: typeof body.author_email === "string" ? body.author_email : undefined,
       version: typeof body.version === "number" ? body.version : 0,
+      // deliver:false = pending (stored + visible on the page, no session message)
+      deliver: body.deliver === false ? false : undefined,
       comments: Array.isArray(body.comments)
         ? body.comments.map((c: { text?: unknown; anchor?: unknown }) => ({
             text: String(c?.text ?? ""),
@@ -842,6 +849,7 @@ export const serve = httpAction(async (ctx, request) => {
         kind,
         views: art.views,
         comment_count: artifact.comment_count,
+        comments: artifact.open_comments,
         session: art.session_short_id ? { short_id: art.session_short_id } : null,
         gated: { password: !!art.password_hash, email: !!art.email_gate },
         versions: art.versions.map((x) => ({

@@ -364,7 +364,7 @@ describe("brandArtifactHtml", () => {
       metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
     });
     expect(out).toContain('id="__cc_ver"');
-    expect(out).toContain(">v5 ▾<");
+    expect(out).toContain(">v5 <svg");
     expect(out).toContain('"metaUrl":"https://convex.codecast.sh/cli/a/x1?meta=1"');
     expect(out).toContain('"version":5');
     expect(out).toContain('"currentVersion":5');
@@ -378,7 +378,7 @@ describe("brandArtifactHtml", () => {
       currentVersion: 5,
       metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
     });
-    expect(out).toContain(">v2 (old) ▾<");
+    expect(out).toContain(">v2 (old) <svg");
     expect(out).toContain('id="__cc_latest"');
   });
 
