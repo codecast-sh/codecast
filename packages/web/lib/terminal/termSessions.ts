@@ -10,7 +10,11 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { termWsUrl, type TerminalEndpoint } from "./endpoint";
 
-export type TermStatus = "connecting" | "open" | "exited" | "error";
+// "offline" = the socket closed before it ever opened: nothing answered, so
+// there's no terminal server to reach (daemon down / remote machine). Kept
+// separate from "error" — which means the server replied with a fault — so
+// the UI can render it as a warning instead of an error.
+export type TermStatus = "connecting" | "open" | "exited" | "error" | "offline";
 
 export interface TermTabState {
   id: string;
@@ -37,6 +41,8 @@ interface TermInstance {
   pendingResize: { cols: number; rows: number } | null;
   /** kill asked for before the session was ready; honored on ready */
   killRequested?: boolean;
+  /** lives outside the bottom panel (per-conversation split) */
+  detached?: boolean;
 }
 
 const instances = new Map<string, TermInstance>();
@@ -63,7 +69,10 @@ export function getTerminalsVersion(): number {
 }
 
 export function listTabs(): TermTabState[] {
-  return order.map((id) => instances.get(id)!.state).filter(Boolean);
+  return order.flatMap((id) => {
+    const inst = instances.get(id);
+    return inst ? [inst.state] : [];
+  });
 }
 
 export function getActiveTabId(): string | null {
@@ -113,22 +122,32 @@ export interface OpenTerminalOptions {
   target?: string;
   interactive?: boolean;
   title?: string;
+  /**
+   * Detached instances live outside the bottom panel: no tab, no activeId —
+   * the caller owns mounting (attachToContainer) and closing (closeTab).
+   * Used by the per-conversation attach split. Same registry, so all the
+   * lifecycle machinery (theme, kill, dispose) applies unchanged.
+   */
+  detached?: boolean;
 }
 
 export function openTerminal(opts: OpenTerminalOptions): string {
-  // Reattaching a session that's already open in a tab: just activate it.
+  const live = (inst: TermInstance) =>
+    inst.state.status !== "exited" && inst.state.status !== "error" && inst.state.status !== "offline";
+  // Dedupe within the same surface only: a panel tab never adopts a detached
+  // split's instance (they'd fight over the one DOM element) and vice versa.
   if (opts.name) {
     for (const [id, inst] of instances) {
-      if (inst.state.sessionName === opts.name && inst.state.status !== "exited" && inst.state.status !== "error") {
-        setActiveTab(id);
+      if (inst.detached === !!opts.detached && inst.state.sessionName === opts.name && live(inst)) {
+        if (!opts.detached) setActiveTab(id);
         return id;
       }
     }
   }
   if (opts.kind === "attach" && opts.target) {
     for (const [id, inst] of instances) {
-      if (inst.state.target === opts.target && inst.state.status !== "exited" && inst.state.status !== "error") {
-        setActiveTab(id);
+      if (inst.detached === !!opts.detached && inst.state.target === opts.target && live(inst)) {
+        if (!opts.detached) setActiveTab(id);
         return id;
       }
     }
@@ -181,9 +200,12 @@ export function openTerminal(opts: OpenTerminalOptions): string {
     resizeObserver: null,
     pendingResize: null,
   };
+  inst.detached = !!opts.detached;
   instances.set(id, inst);
-  order.push(id);
-  activeId = id;
+  if (!opts.detached) {
+    order.push(id);
+    activeId = id;
+  }
   connect(inst, opts);
   bump();
   return id;
@@ -263,8 +285,11 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
       return;
     }
     if (inst.state.status === "connecting") {
-      inst.state.status = "error";
-      inst.state.statusDetail ??= "connection failed";
+      // No reply ever came — this isn't a fault, there's just no connection.
+      // A server-sent fault (msg.type "error") already moved status off
+      // "connecting", so it can't land here.
+      inst.state.status = "offline";
+      inst.state.statusDetail ??= "no connection";
     } else if (inst.state.status === "open") {
       inst.state.status = "exited";
       inst.state.statusDetail ??= "disconnected";

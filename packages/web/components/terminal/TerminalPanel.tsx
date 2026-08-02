@@ -53,7 +53,7 @@ export function TerminalPanel() {
   const [ep, setEp] = useState<EndpointState>({ phase: "idle" });
   const [dragHeight, setDragHeight] = useState<number | null>(null);
   const [maximized, setMaximized] = useState(false);
-  const preMaxHeight = useRef(storedHeight);
+  const panelRef = useRef<HTMLDivElement>(null);
   const everOpened = useRef(false);
   const restoredOnce = useRef(false);
 
@@ -139,7 +139,15 @@ export function TerminalPanel() {
       e.preventDefault();
       const startY = e.clientY;
       const startHeight = heightRef.current;
-      const maxH = Math.round(window.innerHeight * 0.8);
+      // Full vertical range: everything from the top of the content area
+      // (the panel's flex sibling) down to the panel's bottom edge. The main
+      // content is flex-1 min-h-0, so it collapses to zero cleanly.
+      const panelEl = panelRef.current;
+      const contentEl = panelEl?.previousElementSibling as HTMLElement | null;
+      const maxH =
+        panelEl && contentEl
+          ? Math.round(panelEl.getBoundingClientRect().bottom - contentEl.getBoundingClientRect().top)
+          : Math.round(window.innerHeight * 0.9);
       let latest = startHeight;
       // Window-level listeners (not pointer capture): the terminal body is an
       // iframe-free but event-hungry surface, and window listeners keep the
@@ -172,9 +180,7 @@ export function TerminalPanel() {
     heightRef.current = storedHeight;
   }, [storedHeight]);
 
-  const height = maximized
-    ? Math.round(typeof window !== "undefined" ? window.innerHeight * 0.75 : 600)
-    : (dragHeight ?? storedHeight);
+  const height = dragHeight ?? storedHeight;
 
   const endpoint = ep.phase === "ready" ? ep.endpoint : null;
 
@@ -193,7 +199,7 @@ export function TerminalPanel() {
 
   const handleKill = (tab: TermTabState) => {
     if (tab.kind === "shell" && tab.sessionName && endpoint) {
-      if (tab.status === "exited" || tab.status === "error") {
+      if (tab.status === "exited" || tab.status === "error" || tab.status === "offline") {
         void killTerminalSession(endpoint, tab.sessionName);
         closeTab(tab.id);
       } else {
@@ -208,8 +214,12 @@ export function TerminalPanel() {
   return (
     <div
       data-terminal-panel
-      className={`flex-shrink-0 flex-col bg-sol-bg border-t border-sol-border/40 ${open ? "flex" : "hidden"}`}
-      style={{ height: open ? height : 0 }}
+      ref={panelRef}
+      // Maximized: a huge grow factor lets flexbox hand the panel all free
+      // space (the flex-1 content sibling collapses to ~0) — no pixel math,
+      // and it tracks window resizes for free.
+      className={`flex-col bg-sol-bg border-t border-sol-border/40 ${open ? "flex" : "hidden"} ${maximized ? "flex-[999_1_0%] min-h-0" : "flex-shrink-0"}`}
+      style={maximized ? undefined : { height: open ? height : 0 }}
     >
       {/* drag handle */}
       <div
@@ -278,7 +288,7 @@ export function TerminalPanel() {
         </div>
 
         <div className="flex items-center gap-0.5 flex-shrink-0">
-          {activeTab && (activeTab.status === "exited" || activeTab.status === "error") && (
+          {activeTab && (activeTab.status === "exited" || activeTab.status === "error" || activeTab.status === "offline") && (
             <button
               onClick={() => handleRestart(activeTab)}
               title="Restart terminal"
@@ -357,6 +367,12 @@ export function TerminalPanel() {
         {activeTab?.status === "error" && (
           <div className="absolute inset-x-0 bottom-0 px-3 py-1.5 text-[11px] font-mono text-sol-red bg-sol-bg/90 border-t border-sol-border/20">
             {activeTab.statusDetail ?? "terminal error"}
+          </div>
+        )}
+        {activeTab?.status === "offline" && (
+          <div className="absolute inset-x-0 bottom-0 px-3 py-1.5 text-[11px] font-mono bg-sol-bg/90 border-t border-sol-yellow/30">
+            <span className="text-sol-yellow">no connection</span>
+            <span className="text-sol-text-dim"> — the terminal needs the daemon reachable on this machine; restart the tab to retry</span>
           </div>
         )}
         {activeTab?.readOnly && activeTab.status === "open" && (
