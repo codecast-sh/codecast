@@ -30,7 +30,40 @@ export type RoutableDevice = {
   last_seen: number;
   is_remote?: boolean;
   local_project_roots?: string[];
+  /** `process.platform` as reported by the heartbeat: "darwin" | "linux" | "win32". */
+  platform?: string;
 };
+
+/**
+ * False only when the path lives in a directory namespace the device's platform
+ * provably does not have — `/Users/...` on Linux, `/home/...` on a Mac. Anything
+ * shared (`/opt`, `/tmp`, `/srv`, unknown platforms, relative paths) stays true:
+ * this exists to stop an obviously-impossible route, not to guess at checkouts.
+ *
+ * Without it the checkout-less rungs pick purely on recency, so a Linux box that
+ * heartbeat a second sooner could win a `/Users/<mac-user>/...` session it cannot
+ * even cd into.
+ */
+export function platformCanOpenPath(platform: string | undefined, p: string): boolean {
+  if (!platform) return true;
+  if (platform === "win32") return /^[A-Za-z]:[\\/]/.test(p) || !p.startsWith("/");
+  if (!p.startsWith("/")) return true;
+  if (platform === "darwin") return !p.startsWith("/home/") && !p.startsWith("/root/");
+  if (platform === "linux") return !p.startsWith("/Users/");
+  return true;
+}
+
+/**
+ * Most-recently-seen device, but a device that could actually open the path
+ * outranks every device that couldn't. Falls back to the whole pool when nothing
+ * qualifies — leaving a session unowned is worse than routing it imperfectly.
+ */
+function mostRecentPreferringOpenable(pool: RoutableDevice[], paths: string[]): string {
+  const byRecency = [...pool].sort((a, b) => b.last_seen - a.last_seen);
+  if (paths.length === 0) return byRecency[0].device_id;
+  const openable = byRecency.filter((d) => paths.every((p) => platformCanOpenPath(d.platform, p)));
+  return (openable[0] ?? byRecency[0]).device_id;
+}
 
 /**
  * Decide which device should OWN (and therefore run) a session.
@@ -114,9 +147,13 @@ export function pickOwnerDevice(
     if (matches.length > 0) return matches[0].device_id;
   }
 
-  // 4. Most-recently-active online local device.
+  // 4. Most-recently-active online local device — preferring one that could
+  //    actually cd into the path. A blind recency pick let a Linux box win a
+  //    /Users/... session by heartbeating a second sooner. Preference, not a
+  //    filter: if nothing can open it we still hand ownership to SOMEONE, because
+  //    an unowned session is the failure this ladder exists to prevent.
   if (onlineLocals.length > 0) {
-    return [...onlineLocals].sort((a, b) => b.last_seen - a.last_seen)[0].device_id;
+    return mostRecentPreferringOpenable(onlineLocals, paths);
   }
 
   // 5. No local is online, so serve from an online remote that has the checkout
@@ -131,12 +168,13 @@ export function pickOwnerDevice(
 
   // 6. No local online — queue for one anyway. Prefer the sticky owner (don't
   //    ping-pong ownership of an existing conversation between sleeping Macs),
-  //    else the local seen most recently.
+  //    else the local seen most recently. Same openability preference as rung 4:
+  //    queueing for a machine that can't open the path just delays the failure.
   if (locals.length > 0) {
     if (opts.ownerDeviceId && locals.some((d) => d.device_id === opts.ownerDeviceId)) {
       return opts.ownerDeviceId;
     }
-    return [...locals].sort((a, b) => b.last_seen - a.last_seen)[0].device_id;
+    return mostRecentPreferringOpenable(locals, paths);
   }
 
   // 7. Cloud-only user: an online remote is the only machine that can serve.

@@ -62,7 +62,7 @@ export async function awaitTrackedSessionCreateResult(
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
-import { defaultMachineId, pathOnMyMachines, type MachineCandidate } from "../lib/machinePicker";
+import { pathOnMyMachines, type MachineCandidate } from "../lib/machinePicker";
 export { isConvexId };
 
 // Canonical entity-derivation helpers live in lib/liveEntities. Re-exported here
@@ -727,6 +727,11 @@ export type ClientUI = {
   plan_view?: PlanViewPrefs;
   saved_views?: SavedView[];
   show_subagents?: boolean;
+  // The machine you last chose by hand in the new-session picker — the default
+  // the picker opens on for NEW work (defaultMachineId rung 2). Deliberately
+  // UNSTAMPED, i.e. per-device: "where should this run" is answered differently
+  // from a phone than from the laptop that holds the checkouts.
+  last_picked_device_id?: string;
   // User-set height (px) of the trigger full-prompt viewport (TriggerPromptView
   // drag handle). Layout pref → unstamped, per-device local_wins.
   trigger_prompt_height?: number;
@@ -5027,26 +5032,21 @@ export const useInboxStore = create<InboxStoreState>(
     // key ("opus") — findModelOption matches on key. A model left on a different
     // agent's id (after an agent switch) resolves to "default" and is dropped.
     const modelKey = modelOptionKey(cur?.model, agentType);
-    // The machine the user picked in the new-session row — re-checked HERE, at
-    // the moment the create fires, not at pick time. Devices go offline and
-    // reorder in between, and a stamp that has since become the machine routing
-    // would choose anyway is worse than no stamp: an explicit target wins the
-    // FIRST rung of deviceRouting, jumping the queue ahead of the rung that
-    // prefers whichever machine actually holds the checkout. An empty roster
-    // (query hasn't landed yet) can't prove that, so the user's pick stands.
+    // The machine shown in the new-session row, passed through verbatim. This
+    // used to be re-checked here and DROPPED when it matched what routing would
+    // pick anyway — an optimization that quietly became a bug: the picker's
+    // default was decided by `last_seen`, which flips between two idle laptops
+    // every ~30s, so a heartbeat landing between the click and the create could
+    // discard an explicit pick and hand the choice back to a server-side
+    // coin flip. The selection is now deterministic and always stamped, so
+    // there is nothing left to second-guess.
     const targetDeviceId = cur?.target_device_id as string | null | undefined;
-    const routedAnyway = targetDeviceId
-      ? targetDeviceId === defaultMachineId(s.machineRoster, {
-          ownerDeviceId: cur?.owner_device_id ?? null,
-          projectPath: projectPath ?? gitRoot ?? null,
-        })
-      : false;
     return s.createSession({
       agent_type: agentType,
       project_path: projectPath,
       git_root: gitRoot || undefined,
       session_id: stubId,
-      ...(targetDeviceId && !routedAnyway ? { target_device_id: targetDeviceId } : {}),
+      ...(targetDeviceId ? { target_device_id: targetDeviceId } : {}),
       ...(cur?._linkedObject?.type && cur?._linkedObject?.id
         ? { linked_object: cur._linkedObject }
         : {}),
