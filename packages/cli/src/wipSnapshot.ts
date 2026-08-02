@@ -47,7 +47,6 @@ const execFileAsync = promisify(execFile);
 export const WIP_REF_PREFIX = "refs/codecast/wip";
 
 const BRANCH_TRAILER = "codecast-branch";
-const SESSION_TRAILER = "codecast-session";
 
 export interface WipSnapshot {
   /** The snapshot commit. Its parent is the source's real HEAD. */
@@ -96,10 +95,12 @@ async function gitTry(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Pro
  * can't express, so it travels here — that keeps the ref self-describing, so a
  * restore never needs a database lookup to know where to land.
  */
-export function buildSnapshotMessage(opts: { branch: string; conversationId?: string }): string {
-  const lines = [`codecast wip snapshot`, ``, `${BRANCH_TRAILER}: ${opts.branch}`];
-  if (opts.conversationId) lines.push(`${SESSION_TRAILER}: ${opts.conversationId}`);
-  return lines.join("\n");
+export function buildSnapshotMessage(opts: { branch: string }): string {
+  // Deliberately carries NO session id. Sessions sharing a checkout must produce
+  // the IDENTICAL commit object, so git uploads it once and the siblings are
+  // free ref updates. A per-session trailer made every sibling's commit unique
+  // and forced one full push per session.
+  return [`codecast wip snapshot`, ``, `${BRANCH_TRAILER}: ${opts.branch}`].join("\n");
 }
 
 /** Read a trailer back out of a snapshot message. Returns undefined when absent
@@ -118,10 +119,7 @@ export function parseSnapshotTrailer(message: string, key: string): string | und
  * always has HEAD as its parent" shape removes a whole class of conditional at the
  * restore end. A clean snapshot is cheap — it reuses HEAD's existing tree object.
  */
-export async function createWipSnapshot(
-  cwd: string,
-  opts: { conversationId?: string } = {},
-): Promise<WipSnapshot | null> {
+export async function createWipSnapshot(cwd: string): Promise<WipSnapshot | null> {
   const head = await gitTry(cwd, ["rev-parse", "HEAD"]);
   if (!head) return null; // not a repo, or no commits yet
 
@@ -146,7 +144,7 @@ export async function createWipSnapshot(
       "-p",
       head,
       "-m",
-      buildSnapshotMessage({ branch, conversationId: opts.conversationId }),
+      buildSnapshotMessage({ branch }),
     ]);
     return { sha, base: head, branch, dirty, tree };
   } catch {
@@ -165,10 +163,19 @@ export async function createWipSnapshot(
  */
 export async function pushWipSnapshot(
   cwd: string,
-  opts: { remote: string; conversationId: string; sha: string },
+  opts: { remote: string; conversationIds: string[]; sha: string },
 ): Promise<{ ok: boolean; error?: string; permanent?: boolean }> {
+  if (!opts.conversationIds.length) return { ok: true };
   try {
-    await git(cwd, ["push", "--force", opts.remote, `${opts.sha}:${wipRef(opts.conversationId)}`]);
+    // One invocation carrying every session's refspec. Sessions sharing a
+    // checkout share the snapshot commit, so this is a single object upload plus
+    // N cheap ref updates — one round trip instead of N.
+    await git(cwd, [
+      "push",
+      "--force",
+      opts.remote,
+      ...opts.conversationIds.map((id) => `${opts.sha}:${wipRef(id)}`),
+    ]);
     return { ok: true };
   } catch (e) {
     const err = e as { stderr?: string | Buffer; message?: string };
