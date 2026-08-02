@@ -370,11 +370,17 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
   const runs = useTriggerRuns(expanded && !formMode ? task._id : null);
 
   // The session to open from this row: the run's own conversation when the daemon
-  // recorded it, otherwise the session this schedule was created from. Every row
-  // that has run or came from a session becomes one click from a real conversation.
+  // recorded it, otherwise the session this schedule was created from — its
+  // inject binding first, then the creator (a spawn trigger's only session
+  // before it has run). Every row that has run or came from a session becomes
+  // one click from a real conversation.
   const runSession = task.last_run_conversation_id;
-  const sessionId = runSession ?? task.originating_conversation_id;
-  const sessionTitle = runSession ? task.last_run_conversation_title : task.originating_conversation_title;
+  const sessionId = runSession ?? task.originating_conversation_id ?? task.created_by_conversation_id;
+  const sessionTitle = runSession
+    ? task.last_run_conversation_title
+    : task.originating_conversation_id
+      ? task.originating_conversation_title
+      : task.created_by_conversation_title;
   const sessionVerb = runSession ? "Open run session" : "Open source session";
 
   const openForm = (which: "edit" | "duplicate") => (e: React.MouseEvent) => {
@@ -689,12 +695,18 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
             {task.max_runtime_ms && <span>max runtime {fmtDuration(task.max_runtime_ms)}</span>}
             <span>created {timeAgo(task.created_at)}</span>
             {task.project_path && <span className="font-mono">{task.project_path}</span>}
-            {task.originating_conversation_id && (
+            {(task.originating_conversation_id || task.created_by_conversation_id) && (
               <Link
-                href={`/conversation/${task.originating_conversation_id}`}
+                href={`/conversation/${task.originating_conversation_id ?? task.created_by_conversation_id}`}
                 className="inline-flex items-center gap-0.5 text-sol-cyan hover:underline underline-offset-2"
               >
-                from session{task.originating_conversation_title ? `: ${task.originating_conversation_title}` : ""}
+                from session
+                {(() => {
+                  const t = task.originating_conversation_id
+                    ? task.originating_conversation_title
+                    : task.created_by_conversation_title;
+                  return t ? `: ${t}` : "";
+                })()}
                 <ExternalLink className="w-3 h-3" />
               </Link>
             )}
