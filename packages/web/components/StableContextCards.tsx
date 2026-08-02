@@ -198,7 +198,12 @@ const MODE_ITEMS = [
  * New-session context adjustment: preview the cards that will be injected and
  * let the user swap the mode or drop individual sessions for THIS session.
  */
-export function StableContextPicker({ conversationId }: { conversationId: string }) {
+export function StableContextPicker({ conversationId, trailing }: {
+  conversationId: string;
+  // Rendered at the right end of the header line — the new-session surface
+  // parks its machine picker here so the two quiet controls share one row.
+  trailing?: React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const state = useTrackedStore([
     (store) => store.sessions[conversationId]?.stable_mode,
@@ -289,22 +294,31 @@ export function StableContextPicker({ conversationId }: { conversationId: string
           type="button"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
-          className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+          className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors min-w-0"
         >
           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           <Layers className="w-3 h-3 text-sol-cyan" />
           <span>Context</span>
+          {/* Collapsed, the mode word stands in for the toggle; open, the
+              toggle itself shows it. */}
+          {!open && <span className="text-sol-cyan/80">{chosenMode ?? "auto"}</span>}
           {effectiveMode !== "off" && feed !== undefined && !(feed as any)?.error && (
-            <span className="opacity-70">
+            <span className="opacity-70 truncate">
               — {includedCount} {includedCount === 1 ? "session pointer" : "session pointers"} injected at start
             </span>
           )}
         </button>
-        <SegmentedToggle
-          value={chosenMode ?? "auto"}
-          onChange={(key) => setPrefs({ mode: key === "auto" ? null : key })}
-          items={MODE_ITEMS}
-        />
+        {/* Controls never shrink — the header text truncates instead. */}
+        <div className="flex items-center justify-end gap-3 flex-shrink-0">
+          {open && (
+            <SegmentedToggle
+              value={chosenMode ?? "auto"}
+              onChange={(key) => setPrefs({ mode: key === "auto" ? null : key })}
+              items={MODE_ITEMS}
+            />
+          )}
+          {trailing}
+        </div>
       </div>
       {open && (
         effectiveMode === "off" ? (

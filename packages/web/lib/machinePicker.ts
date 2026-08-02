@@ -127,6 +127,40 @@ export function pathOnMyMachines(
   return devices.some((d) => deviceSeesPath(d, path));
 }
 
+/** Last path segment — the name the whole resolver stack keys checkouts by. */
+export const repoName = (path: string): string =>
+  path.split("/").filter(Boolean).pop() ?? path;
+
+/**
+ * One entry per repo NAME. The same project checked out on two machines
+ * (~/src/codecast here, /Users/m1/work/codecast on m1) is one project, not two
+ * — the machine picker decides which concrete path a session gets, and the
+ * daemon remaps by repo name on whichever machine actually serves. Within a
+ * name group, keep the current path if it's there, else the variant the routed
+ * machine can open, else the highest-ranked one (input order is score order).
+ */
+export function dedupeProjectsByRepoName<T extends { path: string }>(
+  projects: T[],
+  routedDevice?: Pick<MachineCandidate, "local_project_roots"> | null,
+  currentPath?: string | null,
+): T[] {
+  const byName = new Map<string, T>();
+  const order: string[] = [];
+  const rank = (p: T): number =>
+    p.path === currentPath ? 2 : routedDevice && deviceSeesPath(routedDevice, p.path) ? 1 : 0;
+  for (const p of projects) {
+    const name = repoName(p.path);
+    const prev = byName.get(name);
+    if (!prev) {
+      byName.set(name, p);
+      order.push(name);
+    } else if (rank(p) > rank(prev)) {
+      byName.set(name, p);
+    }
+  }
+  return order.length === projects.length ? projects : order.map((n) => byName.get(n)!);
+}
+
 export function defaultMachineId(
   devices: MachineCandidate[],
   opts: {
