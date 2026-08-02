@@ -1696,7 +1696,7 @@ export const SessionCard = memo(function SessionCard({
           )}
         </div>
         {!isForeignSession && (onDismiss || onDefer || onPin) && (
-          <div className={`absolute top-0 bottom-0 right-0 flex items-center py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
+          <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex items-center py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
             {onDismiss && (
               <button
                 onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
@@ -2009,7 +2009,7 @@ export const SessionCard = memo(function SessionCard({
           omits its own pin button for pinned rows — so the pin never duplicates or
           cross-fades into a second copy. */}
       {onPin && session.is_pinned && (
-        <div className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
+        <div data-sv-fade className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
           <ShortcutTooltip label="Unpin" action="session.pin" side="left">
             <button
               onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); }}
@@ -2024,7 +2024,7 @@ export const SessionCard = memo(function SessionCard({
         </div>
       )}
       {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
-        <div className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
+        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
           {/* Pin slot, first so it anchors the top of the toolbar. When the row is
               already pinned, the persistent badge above IS the pin — here we render
               only an invisible spacer the same size, so the remaining actions sit

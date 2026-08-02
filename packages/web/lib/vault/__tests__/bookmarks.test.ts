@@ -81,6 +81,11 @@ describe("labels", () => {
     expect(bookmarkLabel(folder(""))).toBe("Vault root");
   });
 
+  test("a saved search says what it searches for", () => {
+    expect(bookmarkLabel(search("tag:draft"))).toBe("tag:draft");
+    expect(bookmarkSubtitle(search("tag:draft"))).toBe("Saved search: tag:draft");
+  });
+
   test("a heading shows its text over the note it lives in", () => {
     const h = heading("Projects/Q3 Plan.md", "Risks", "risks");
     expect(bookmarkLabel(h)).toBe("Risks");

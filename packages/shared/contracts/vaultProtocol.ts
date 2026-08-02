@@ -21,6 +21,9 @@ export interface VaultInfo {
   note_count?: number;
   /** Epoch ms when the vault was registered. */
   added_at: number;
+  /** Opt-in remote mirror (vaultMirror.ts). Absent/false means the vault is
+   *  local-only — nothing about it ever leaves this machine. */
+  mirror?: boolean;
 }
 
 /** GET /vault/roots response. */
