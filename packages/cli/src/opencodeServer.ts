@@ -33,6 +33,7 @@
 import { EventEmitter } from "events";
 import { spawn, type ChildProcess } from "child_process";
 import * as readline from "readline";
+import { agentSpawnPath } from "./agentSpawnPath.js";
 
 /** Coarse work-state the daemon's `sendAgentStatus` understands. The SSE stream is
  *  mapped down to this; content deltas are ignored (the DB path owns content). */
@@ -308,14 +309,7 @@ export class OpencodeServer extends EventEmitter {
         stdio: ["ignore", "pipe", "pipe"],
         env: {
           ...process.env,
-          PATH: [
-            process.env.HOME + "/.opencode/bin",
-            process.env.HOME + "/.bun/bin",
-            process.env.PATH,
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-          ].filter(Boolean).join(":"),
+          PATH: agentSpawnPath(process.env.HOME && `${process.env.HOME}/.opencode/bin`),
         },
       });
     } catch (err: any) {

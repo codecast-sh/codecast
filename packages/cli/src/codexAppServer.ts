@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { spawn, type ChildProcess } from "child_process";
 import * as readline from "readline";
+import { agentSpawnPath } from "./agentSpawnPath.js";
 import type { ParsedMessage, ToolCall, ToolResult, ImageBlock } from "./parser.js";
 
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -279,7 +280,7 @@ export class CodexAppServer extends EventEmitter {
         stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
-          PATH: [process.env.HOME + "/.bun/bin", process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":"),
+          PATH: agentSpawnPath(),
         },
       });
     } catch (err: any) {
