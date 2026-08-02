@@ -235,6 +235,7 @@ function remoteRepoExists(host: RemoteHost, remotePath: string): boolean {
 function ensureRemoteRepo(host: RemoteHost, localCwd: string, remotePath: string): void {
   if (remoteRepoExists(host, remotePath)) {
     ssh(host, `cd ${shq(remotePath)} && git config receive.denyCurrentBranch updateInstead`);
+    repairRemoteOrigin(host, localCwd, remotePath);
     return;
   }
   // Bundle everything reachable; scp; clone on the remote.
@@ -248,6 +249,45 @@ function ensureRemoteRepo(host: RemoteHost, localCwd: string, remotePath: string
     `git config user.email codecast@local && git config user.name codecast && rm -f ${shq(remoteBundle)}`,
   );
   fs.rmSync(bundle, { force: true });
+  repairRemoteOrigin(host, localCwd, remotePath);
+}
+
+/**
+ * Point the remote clone's origin at the repo's REAL remote, never at the
+ * transport that happened to deliver the bits.
+ *
+ * A bundle-cloned repo is born with origin = /tmp/<bundle file>, which macOS
+ * deletes within days. From then on the machine's origin/main is a frozen
+ * fiction: ancestry checks pass against stale history, `git status` reports
+ * hundreds of phantom "ahead" commits, and the wip-snapshot push loop reads the
+ * dead path as a permanent failure and retires the session's work sync. (All
+ * three happened on m1 — the 2026-08-02 "283-commit fork" that wasn't.)
+ *
+ * The transfer itself never depends on origin — moves push branch-to-branch
+ * over SSH — so origin's only job is to be the durable rendezvous. Set it to
+ * what the SOURCE repo calls origin whenever the remote's is missing or points
+ * at a local path that no longer exists there. A remote origin that is a real
+ * URL is left alone: the machine may have its own credential-appropriate form
+ * (SSH vs HTTPS) for the same repo.
+ */
+function repairRemoteOrigin(host: RemoteHost, localCwd: string, remotePath: string): void {
+  let canonical: string;
+  try {
+    canonical = git(localCwd, ["remote", "get-url", "origin"]).trim();
+  } catch {
+    return; // Local repo has no origin — nothing canonical to teach the remote.
+  }
+  if (!canonical || canonical.startsWith("/") || canonical.startsWith("file://")) return;
+  try {
+    const current = ssh(host, `cd ${shq(remotePath)} && git remote get-url origin 2>/dev/null || true`).trim();
+    const isDeadLocalPath = current.startsWith("/") || current.startsWith("file://");
+    if (current === canonical || (current && !isDeadLocalPath)) return;
+    ssh(host,
+      `cd ${shq(remotePath)} && (git remote set-url origin ${shq(canonical)} 2>/dev/null || git remote add origin ${shq(canonical)})`,
+    );
+  } catch {
+    // Best-effort: a move that worked must not fail because origin repair didn't.
+  }
 }
 
 /**

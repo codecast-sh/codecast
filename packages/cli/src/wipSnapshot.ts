@@ -168,8 +168,10 @@ export async function pushWipSnapshot(
   if (!opts.conversationIds.length) return { ok: true };
   try {
     // One invocation carrying every session's refspec. Sessions sharing a
-    // checkout share the snapshot commit, so this is a single object upload plus
-    // N cheap ref updates — one round trip instead of N.
+    // checkout share the snapshot commit (the message has no per-session
+    // trailer), so this is a single object upload plus N cheap ref updates —
+    // one network round trip instead of N. On this machine that is ~50 sessions
+    // collapsing to 6 repos.
     await git(cwd, [
       "push",
       "--force",
