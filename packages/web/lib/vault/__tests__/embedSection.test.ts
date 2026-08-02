@@ -158,3 +158,18 @@ describe("without a prebuilt parse", () => {
     expect(out.content).toContain("A risky paragraph.");
   });
 });
+
+// A tab-indented continuation under a space-indented parent must not read as a
+// dedent — raw character counts made one tab look shallower than two spaces
+// and silently dropped the continuation (review finding, R12).
+test("block embed keeps continuations when tabs and spaces mix", () => {
+  const mixed = "  - Parent item ^blk1\n\tChild continuation\n- Sibling\n";
+  const out = extractEmbedSection(mixed, { subpath: "blk1", subpathType: "block" });
+  expect(out.content).toContain("Parent item");
+  expect(out.content).toContain("Child continuation");
+  expect(out.content).not.toContain("Sibling");
+
+  const allTabs = "\t- Parent item ^blk2\n\t\tChild continuation\n";
+  const out2 = extractEmbedSection(allTabs, { subpath: "blk2", subpathType: "block" });
+  expect(out2.content).toContain("Child continuation");
+});
