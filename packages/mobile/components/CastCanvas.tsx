@@ -48,10 +48,13 @@ try {
 // call site avoids a require cycle with the code-block renderer.
 export const canvasAvailable = !!WebViewComp;
 
-// Matches web HtmlSnippet's PURIFY_CONFIG.
+// Matches web's canvasSanitize.ts policy. <use> is off DOMPurify's default
+// allowlist (it can pull external content); we re-allow it and the shell script
+// below strips any <use> whose href isn't a same-document "#id" reference.
 const PURIFY_CONFIG = JSON.stringify({
   FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'base', 'form', 'meta', 'link'],
   FORBID_ATTR: ['ping', 'formaction', 'onclick'],
+  ADD_TAGS: ['use'],
   ADD_ATTR: ['target'],
 });
 
@@ -108,6 +111,12 @@ function buildShell(code: string): string {
 </head><body><div id="root"></div>
 <script>
 (function(){
+  DOMPurify.addHook('afterSanitizeAttributes', function(node){
+    if (node.tagName && node.tagName.toLowerCase() === 'use') {
+      var href = node.getAttribute('href') || node.getAttribute('xlink:href') || '';
+      if (href.charAt(0) !== '#' && node.parentNode) node.parentNode.removeChild(node);
+    }
+  });
   var clean = DOMPurify.sanitize(${raw}, ${PURIFY_CONFIG});
   var root = document.getElementById('root');
   root.innerHTML = clean;

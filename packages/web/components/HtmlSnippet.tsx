@@ -1,6 +1,6 @@
 import { useRef, useState, useMemo, useCallback, useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import DOMPurify from "dompurify";
+import { sanitizeCanvasHtml } from "../lib/canvasSanitize";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/utils";
@@ -21,34 +21,9 @@ import { hasCharts, hydrateCharts } from "../lib/castChart";
 //    virtualized message list, where an iframe per message would be ruinous.
 // Security: conversations sync across a team, so canvases are untrusted. All
 // script execution is stripped — there is no agent JS. (Charts are rendered by
-// codecast from declarative data, never by agent code.)
-
-const PURIFY_CONFIG = {
-  // DOMPurify keeps these by default; we don't want embeds, forms, external
-  // stylesheets, or <base>/<meta> rewrites in untrusted content.
-  FORBID_TAGS: ["script", "iframe", "object", "embed", "base", "form", "meta", "link"],
-  FORBID_ATTR: ["ping", "formaction"],
-  ADD_ATTR: ["target"],
-};
-
-// Force links to open in a new tab without an opener, rather than hijacking the
-// codecast SPA. Installed once, globally.
-let hookInstalled = false;
-function ensureHooks() {
-  if (hookInstalled) return;
-  hookInstalled = true;
-  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-    if ((node as Element).tagName === "A" && (node as Element).getAttribute("href")) {
-      (node as Element).setAttribute("target", "_blank");
-      (node as Element).setAttribute("rel", "noopener noreferrer");
-    }
-  });
-}
-
-function sanitize(code: string): string {
-  ensureHooks();
-  return DOMPurify.sanitize(code, PURIFY_CONFIG);
-}
+// codecast from declarative data, never by agent code.) The sanitization policy
+// lives in lib/canvasSanitize.ts so it stays testable without this component's
+// UI dependencies.
 
 // Injected into every shadow root: a scoped reset plus themed defaults. Inherited
 // properties (font-family, line-height) cross the boundary automatically; color
@@ -172,7 +147,7 @@ export function tryRenderHtmlMessage(content: string): ReactNode {
 
 export function HtmlSnippet({ code }: { code: string }) {
   const debounced = useDebounced(code, 150);
-  const clean = useMemo(() => sanitize(debounced), [debounced]);
+  const clean = useMemo(() => sanitizeCanvasHtml(debounced), [debounced]);
   const title = useMemo(() => extractTitle(clean), [clean]);
   const [fullscreen, setFullscreen] = useState(false);
   const [showSource, setShowSource] = useState(false);
