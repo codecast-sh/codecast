@@ -757,13 +757,25 @@ function pageShell(title: string, body: string, extra = ""): string {
 ${body}
 </div>
 <script>(function(){
-  // Carry gate tokens (k/e) and the live flag onto the back-to-page link so
-  // returning from source/diff/editor doesn't land on the password wall.
-  var q=new URLSearchParams(location.search);var keep=[];
-  ["k","e","live"].forEach(function(p){var v=q.get(p);if(v)keep.push(p+"="+encodeURIComponent(v));});
-  if(keep.length){document.querySelectorAll("a.back").forEach(function(a){
-    var base=a.href.split("#")[0].split("?")[0];var hash=a.href.indexOf("#")>=0?a.href.slice(a.href.indexOf("#")):"";
-    a.href=base+"?"+keep.join("&")+hash;});}
+  // Rewrite nav links to stay on THIS origin and carry the gate tokens
+  // (k/e) and live flag: server-built links point at the canonical share
+  // host, which re-runs the gates, and dropping the tokens lands an
+  // unlocked viewer back on the password wall. Each link's own mode params
+  // (edit=1, src=raw) are merged, not replaced, and links without a
+  // fragment inherit location.hash so #o/#ed keys survive into the editor.
+  var q=new URLSearchParams(location.search);
+  document.querySelectorAll("a.back").forEach(function(a){
+    var href=a.getAttribute("href")||"";
+    if(!href||href.charAt(0)==="#")return;
+    var hashAt=href.indexOf("#");
+    var hash=hashAt>=0?href.slice(hashAt):(location.hash||"");
+    var base=hashAt>=0?href.slice(0,hashAt):href;
+    var qAt=base.indexOf("?");
+    var params=new URLSearchParams(qAt>=0?base.slice(qAt+1):"");
+    ["k","e","live"].forEach(function(p){var v=q.get(p);if(v)params.set(p,v);});
+    var qs=params.toString();
+    a.href=location.pathname+(qs?"?"+qs:"")+hash;
+  });
 })();</script>
 </body>
 </html>`;
