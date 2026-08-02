@@ -46,6 +46,10 @@ export type TaskRow = {
   last_run_session_uuid?: string;
   originating_conversation_id?: string;
   originating_conversation_title?: string;
+  // Conversation that created the trigger — attribution only (spawn triggers
+  // have no originating binding, but still trace to their parent through this).
+  created_by_conversation_id?: string;
+  created_by_conversation_title?: string;
   target_conversation_id?: string;
   retry_count?: number;
   // Haiku-distilled presentation fields (agentTasks.generateDisplaySummary).
@@ -155,8 +159,8 @@ export interface TriggerRow {
   task: TaskRow;
   // Conversation this row opens: the home conversation (inject) or the newest
   // visible run, falling back to the last recorded run even when folded (the
-  // dismissed-peek path handles it). Undefined for a spawn schedule that has
-  // never run.
+  // dismissed-peek path handles it), then to the creating session for a spawn
+  // schedule that has never run. Undefined only when none of those exist.
   openId?: string;
   // The latest outcome landed after the user's read watermark.
   unread: boolean;
@@ -354,7 +358,13 @@ export function partitionTriggerInbox(
       absorbedIds.add(run._id);
       if (!newestAbsorbed) newestAbsorbed = run;
     }
-    rows.push({ task, openId: newestAbsorbed?._id ?? task.last_run_conversation_id, unread });
+    // A spawn trigger that has never run opens the session that created it —
+    // the only conversation that can explain the trigger before a run exists.
+    rows.push({
+      task,
+      openId: newestAbsorbed?._id ?? task.last_run_conversation_id ?? task.created_by_conversation_id,
+      unread,
+    });
   }
 
   // -- Pseudo rows: loops and live subagents from the session cache --
