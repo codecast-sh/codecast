@@ -84,11 +84,16 @@ export function SyncStatusChip() {
 
   if (!mounted || !syncing) return null;
 
-  const scopes = Object.keys(liveLoading).sort(
-    (a, b) => (SCOPE_LABELS[a] ? 0 : 1) - (SCOPE_LABELS[b] ? 0 : 1) || a.localeCompare(b),
-  );
+  const known = Object.keys(SCOPE_LABELS);
+  const rank = (s: string) => {
+    const i = known.indexOf(s);
+    return i === -1 ? known.length : i;
+  };
+  const scopes = Object.keys(liveLoading).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
   const settled = scopes.filter((k) => !liveLoading[k]).length;
-  const crawls = Object.entries(syncProgress).filter(([, p]) => p.loading);
+  const crawls = Object.entries(syncProgress)
+    .filter(([, p]) => p.loading)
+    .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
 
   const color = stalled ? "var(--sol-yellow)" : "var(--sol-cyan)";
   return (
