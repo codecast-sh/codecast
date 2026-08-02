@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeProjectPath, pickInheritedGitMeta } from "./projectPaths";
+import { normalizeProjectPath, pathWithinLocalRoots, pickInheritedGitMeta } from "./projectPaths";
 
 describe("normalizeProjectPath", () => {
   // Regression: a session whose cwd fell back to $HOME (e.g. a remote/resume
@@ -36,6 +36,22 @@ describe("normalizeProjectPath", () => {
     expect(normalizeProjectPath("/private/tmp/x")).toBeNull();
     expect(normalizeProjectPath("/var/folders/sr/t5/T/cc-inject-clear-1")).toBeNull();
     expect(normalizeProjectPath("/private/var/folders/sr/t5/T/cc-inject-clear-1")).toBeNull();
+  });
+});
+
+describe("pathWithinLocalRoots", () => {
+  test("accepts a project nested below a reported project parent", () => {
+    expect(pathWithinLocalRoots(
+      "/Users/samvit/dev/union/union-mobile",
+      ["/Users/samvit/dev/union"],
+    )).toBe(true);
+  });
+
+  test("does not confuse sibling path prefixes", () => {
+    expect(pathWithinLocalRoots(
+      "/Users/samvit/dev/union-mobile-old",
+      ["/Users/samvit/dev/union-mobile"],
+    )).toBe(false);
   });
 });
 

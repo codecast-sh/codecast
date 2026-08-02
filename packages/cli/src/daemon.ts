@@ -1687,14 +1687,15 @@ async function pollDaemonCommands(): Promise<void> {
 }
 
 // Enumerate first-level children of the conventional project parent dirs
-// ("src", "projects", "repos", "code"). Matches the same path shape produced
-// by `normalizeProjectPath` in users.ts so the convex side can do a Set lookup.
+// ("src", "dev", "projects", "repos", "code"). The server accepts both these
+// roots and projects nested below them, so monorepo-style layouts such as
+// ~/dev/union/union-mobile remain available in the recent-project picker.
 // Bounded scan: only directories that actually exist on this host.
 function computeLocalProjectRoots(): string[] {
   const home = process.env.HOME;
   if (!home) return [];
   const roots = new Set<string>();
-  const parents = ["src", "Projects", "projects", "repos", "code"];
+  const parents = ["src", "dev", "Projects", "projects", "repos", "code"];
   for (const parent of parents) {
     const parentPath = path.join(home, parent);
     try {
