@@ -1,12 +1,17 @@
 import { describe, expect, it, beforeEach } from "bun:test";
 import { useInboxStore } from "./inboxStore";
 
-// The new-session machine row stamps the picked machine on the stub row
-// (setSessionTargetDevice); createSessionFromStub is where that stamp turns into
-// the create's target_device_id — or is deliberately dropped. Dropping matters:
-// an explicit target wins the FIRST rung of convex/deviceRouting, so stamping
-// the machine routing would have chosen anyway silently pins the session ahead
-// of the rung that prefers whichever machine holds the checkout.
+// The new-session machine row stamps the selected machine on the stub row
+// (setSessionTargetDevice); createSessionFromStub is where that stamp becomes the
+// create's target_device_id.
+//
+// This used to second-guess the stamp and DROP it whenever it matched what
+// routing would have picked anyway. That optimization rested on the picker's
+// default being stable, and it wasn't: the default was decided by `last_seen`,
+// which flips between two idle online machines every ~30s. A heartbeat landing
+// between the click and the create could therefore discard an explicit pick and
+// hand the decision back to a server-side recency race. The selection is now
+// deterministic and always carried through.
 
 const REAL_ID = "jx70000000000000000000000000pick"; // 32 chars => isConvexId
 
@@ -46,8 +51,6 @@ function seedStub(targetDeviceId: string | null) {
   } as any);
 }
 
-// desktop holds the checkout, laptop is merely the most recently seen — so
-// routing (and defaultMachineId) resolves "desktop" for /repo.
 const ROSTER = [
   { device_id: "laptop", is_remote: false, online: true, last_seen: 9000, local_project_roots: [] },
   { device_id: "desktop", is_remote: false, online: true, last_seen: 1000, local_project_roots: ["/repo"] },
@@ -71,17 +74,20 @@ describe("createSessionFromStub target_device_id", () => {
     expect(createOpts(calls).target_device_id).toBe("laptop");
   });
 
-  it("drops a pick that has become the machine routing picks anyway", async () => {
+  // THE REGRESSION. "desktop" is also what routing would land on for /repo, and
+  // the old code read that agreement as licence to drop the stamp — reopening the
+  // question at send time, when the roster may have reordered.
+  it("carries a pick that AGREES with routing — agreement is not a reason to drop it", async () => {
     const { calls } = installFakeDispatch();
     seedStub("desktop");
     useInboxStore.setState({ machineRoster: ROSTER } as any);
 
     await useInboxStore.getState().createSessionFromStub(STUB);
 
-    expect(createOpts(calls)).not.toHaveProperty("target_device_id");
+    expect(createOpts(calls).target_device_id).toBe("desktop");
   });
 
-  it("honours the pick when the roster hasn't loaded — an empty roster proves nothing", async () => {
+  it("carries the pick when the roster hasn't loaded", async () => {
     const { calls } = installFakeDispatch();
     seedStub("desktop");
 
@@ -90,29 +96,27 @@ describe("createSessionFromStub target_device_id", () => {
     expect(createOpts(calls).target_device_id).toBe("desktop");
   });
 
-  it("sends no target at all when the user never picked a machine", async () => {
-    const { calls } = installFakeDispatch();
-    seedStub(null);
-    useInboxStore.setState({ machineRoster: ROSTER } as any);
-
-    await useInboxStore.getState().createSessionFromStub(STUB);
-
-    expect(createOpts(calls)).not.toHaveProperty("target_device_id");
-  });
-
-  it("re-checks against the CURRENT project: a folder switch can retire the pick", async () => {
+  it("keeps the pick across a folder switch — the machine row is not the folder row", async () => {
     const { calls } = installFakeDispatch();
     seedStub("laptop");
     useInboxStore.setState({ machineRoster: ROSTER } as any);
-    // The user picked laptop for /repo (which only desktop has), then switched to
-    // a folder only laptop has — routing now lands on laptop on its own.
     useInboxStore.getState().updateSessionProject(STUB, "/laptop-only");
     useInboxStore.setState({
-      machineRoster: [
-        { ...ROSTER[0], local_project_roots: ["/laptop-only"] },
-        ROSTER[1],
-      ],
+      machineRoster: [{ ...ROSTER[0], local_project_roots: ["/laptop-only"] }, ROSTER[1]],
     } as any);
+
+    await useInboxStore.getState().createSessionFromStub(STUB);
+
+    expect(createOpts(calls).target_device_id).toBe("laptop");
+  });
+
+  // Non-picker entry points (cast spawn, triggers, forks, mobile) still create
+  // sessions with no stamp at all, and must keep falling through to the server
+  // ladder — that fallback is what stops a session being left unowned.
+  it("sends no target when there is no selection to carry", async () => {
+    const { calls } = installFakeDispatch();
+    seedStub(null);
+    useInboxStore.setState({ machineRoster: ROSTER } as any);
 
     await useInboxStore.getState().createSessionFromStub(STUB);
 
