@@ -99,6 +99,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { AssignmentBadge } from "./AssignmentBadge";
 import { AssignedToYouBanner } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
+import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
@@ -14460,7 +14461,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </ShortcutTooltip>
 
                 <span data-simple-hide className="contents">
-                  <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} />
+                  <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
                 </span>
 
                 <DropdownMenu>
