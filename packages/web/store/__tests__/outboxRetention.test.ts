@@ -1042,6 +1042,29 @@ describe("opportunistic re-drive (_drainOutbox)", () => {
   });
 });
 
+// The boot-replay signal the hidden-set reconcile crawls wait on. Their CLEAR
+// pass un-hides every local row the server's hidden set omits, so reading the
+// server before the parked hides ship resurrects a kill the user made offline.
+describe("boot outbox drain signal (_hasBootOutboxDrained)", () => {
+  it("reports drained only after a replay pass, and resets on a principal rebind", async () => {
+    const { wrapped, outbox } = makeHarness();
+    outbox.set("e1", seedEntry());
+    // Unwired: nothing has been replayed, so consumers must keep waiting.
+    expect(wrapped._hasBootOutboxDrained()).toBe(false);
+
+    wrapped._setDispatch(async () => "ok");
+    await settle();
+    expect(outbox.size).toBe(0);
+    expect(wrapped._hasBootOutboxDrained()).toBe(true);
+
+    // An account switch clears the runtime bindings. The successor principal has
+    // its own outbox rows and has replayed none of them, so a `true` carried
+    // across would tell the crawls a replay they never saw already happened.
+    wrapped._clearRuntimeBindings();
+    expect(wrapped._hasBootOutboxDrained()).toBe(false);
+  });
+});
+
 describe("principal-bound dispatch ownership", () => {
   it("A→B invalidates an in-flight A dispatch without letting A cleanup clear B", async () => {
     registerPrincipalDispatchRuntime({
