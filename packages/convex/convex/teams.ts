@@ -796,10 +796,22 @@ export const getUserByGithubId = query({
     github_id: v.string(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const user = await ctx.db
       .query("users")
       .withIndex("by_github_id", (q) => q.eq("github_id", args.github_id))
       .unique();
+    if (!user) return null;
+    // Public function, and a github_id is public information — so project to
+    // profile fields only. The raw row carries github_access_token,
+    // encryption_master_key and push_token.
+    return {
+      _id: user._id,
+      name: user.name ?? null,
+      username: user.username ?? null,
+      github_username: user.github_username ?? null,
+      github_avatar_url: user.github_avatar_url ?? null,
+      team_id: user.team_id ?? null,
+    };
   },
 });
 

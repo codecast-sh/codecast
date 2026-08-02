@@ -76,5 +76,6 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   },
   composeSubmit: (data) => ipcRenderer.send("compose-submit", data),
   openExternal: (url) => ipcRenderer.invoke("open-external", url),
+  getSystemIdleSeconds: () => ipcRenderer.invoke("get-system-idle-seconds"),
   platform: process.platform,
 });

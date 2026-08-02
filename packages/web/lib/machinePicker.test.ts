@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { defaultMachineId, pathOnMyMachines, type MachineCandidate } from "./machinePicker";
+import { dedupeProjectsByRepoName, defaultMachineId, pathOnMyMachines, type MachineCandidate } from "./machinePicker";
 
 const dev = (id: string, over: Partial<MachineCandidate> = {}): MachineCandidate => ({
   device_id: id,
@@ -79,6 +79,41 @@ describe("defaultMachineId", () => {
 
   it("is null with no devices at all", () => {
     expect(defaultMachineId([])).toBeNull();
+  });
+});
+
+describe("dedupeProjectsByRepoName", () => {
+  const p = (path: string) => ({ path });
+
+  it("collapses the same repo name across machines to one entry", () => {
+    const out = dedupeProjectsByRepoName([p("/Users/me/src/codecast"), p("/Users/m1/work/codecast"), p("/Users/me/src/app")]);
+    expect(out.map((o) => o.path)).toEqual(["/Users/me/src/codecast", "/Users/me/src/app"]);
+  });
+
+  it("keeps the variant the routed machine can open", () => {
+    const m1 = dev("m1", { local_project_roots: ["/Users/m1/work/codecast"] });
+    const out = dedupeProjectsByRepoName([p("/Users/me/src/codecast"), p("/Users/m1/work/codecast")], m1);
+    expect(out.map((o) => o.path)).toEqual(["/Users/m1/work/codecast"]);
+  });
+
+  it("keeps the current path over the routed machine's variant", () => {
+    const m1 = dev("m1", { local_project_roots: ["/Users/m1/work/codecast"] });
+    const out = dedupeProjectsByRepoName(
+      [p("/Users/me/src/codecast"), p("/Users/m1/work/codecast")],
+      m1,
+      "/Users/me/src/codecast",
+    );
+    expect(out.map((o) => o.path)).toEqual(["/Users/me/src/codecast"]);
+  });
+
+  it("preserves rank order: the group stays where its best-ranked variant first appeared", () => {
+    const out = dedupeProjectsByRepoName([p("/a/codecast"), p("/a/app"), p("/b/codecast")]);
+    expect(out.map((o) => o.path)).toEqual(["/a/codecast", "/a/app"]);
+  });
+
+  it("returns the input array untouched when there are no duplicates", () => {
+    const input = [p("/a/codecast"), p("/a/app")];
+    expect(dedupeProjectsByRepoName(input)).toBe(input);
   });
 });
 

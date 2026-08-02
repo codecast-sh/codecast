@@ -37,6 +37,8 @@ interface TermInstance {
   pendingResize: { cols: number; rows: number } | null;
   /** kill asked for before the session was ready; honored on ready */
   killRequested?: boolean;
+  /** lives outside the bottom panel (per-conversation split) */
+  detached?: boolean;
 }
 
 const instances = new Map<string, TermInstance>();
@@ -63,7 +65,10 @@ export function getTerminalsVersion(): number {
 }
 
 export function listTabs(): TermTabState[] {
-  return order.map((id) => instances.get(id)!.state).filter(Boolean);
+  return order.flatMap((id) => {
+    const inst = instances.get(id);
+    return inst ? [inst.state] : [];
+  });
 }
 
 export function getActiveTabId(): string | null {
@@ -113,22 +118,31 @@ export interface OpenTerminalOptions {
   target?: string;
   interactive?: boolean;
   title?: string;
+  /**
+   * Detached instances live outside the bottom panel: no tab, no activeId —
+   * the caller owns mounting (attachToContainer) and closing (closeTab).
+   * Used by the per-conversation attach split. Same registry, so all the
+   * lifecycle machinery (theme, kill, dispose) applies unchanged.
+   */
+  detached?: boolean;
 }
 
 export function openTerminal(opts: OpenTerminalOptions): string {
-  // Reattaching a session that's already open in a tab: just activate it.
+  const live = (inst: TermInstance) => inst.state.status !== "exited" && inst.state.status !== "error";
+  // Dedupe within the same surface only: a panel tab never adopts a detached
+  // split's instance (they'd fight over the one DOM element) and vice versa.
   if (opts.name) {
     for (const [id, inst] of instances) {
-      if (inst.state.sessionName === opts.name && inst.state.status !== "exited" && inst.state.status !== "error") {
-        setActiveTab(id);
+      if (inst.detached === !!opts.detached && inst.state.sessionName === opts.name && live(inst)) {
+        if (!opts.detached) setActiveTab(id);
         return id;
       }
     }
   }
   if (opts.kind === "attach" && opts.target) {
     for (const [id, inst] of instances) {
-      if (inst.state.target === opts.target && inst.state.status !== "exited" && inst.state.status !== "error") {
-        setActiveTab(id);
+      if (inst.detached === !!opts.detached && inst.state.target === opts.target && live(inst)) {
+        if (!opts.detached) setActiveTab(id);
         return id;
       }
     }
@@ -181,9 +195,12 @@ export function openTerminal(opts: OpenTerminalOptions): string {
     resizeObserver: null,
     pendingResize: null,
   };
+  inst.detached = !!opts.detached;
   instances.set(id, inst);
-  order.push(id);
-  activeId = id;
+  if (!opts.detached) {
+    order.push(id);
+    activeId = id;
+  }
   connect(inst, opts);
   bump();
   return id;
