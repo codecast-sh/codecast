@@ -10,6 +10,7 @@
 
 import { useVaultStore, resolveRecentMove } from "../../store/vaultStore";
 import type { BookmarkItem } from "./bookmarks";
+import { forgetVaultViewMode, moveVaultViewMode } from "./viewMode";
 
 let started = false;
 
@@ -47,6 +48,16 @@ export function ensureBookmarksStarted(): void {
     // the list.
     if (!Object.keys(s.files).length || !Object.keys(prev.files).length) return;
     s.retargetBookmarks((path) => pathChange(s.files, prev.files, path));
+    // The same file-table diff tells the view-mode memory where notes went, so
+    // a mode travels with a rename and dies with a delete instead of being
+    // inherited by whatever is created at that path later (review finding,
+    // R12). Reusing this diff keeps one source of truth for "what moved".
+    for (const path of Object.keys(prev.files)) {
+      if (s.files[path]) continue;
+      const moved = resolveRecentMove(path);
+      if (moved) moveVaultViewMode(path, moved);
+      else forgetVaultViewMode(path);
+    }
   });
 }
 

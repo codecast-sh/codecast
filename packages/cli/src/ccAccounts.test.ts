@@ -9,6 +9,7 @@ import {
   assertValidProfileName,
   deriveProfileName,
   autoSaveActiveProfile,
+  migrateLegacyProfileNames,
   getAccountsHeartbeatPayload,
   invalidateAccountsCache,
   refreshActiveCredential,
@@ -117,14 +118,15 @@ describe("assertValidProfileName", () => {
 });
 
 describe("deriveProfileName", () => {
-  it("uses the email domain's org part, lowercased", () => {
-    expect(deriveProfileName("ashot@footage.com", [])).toBe("footage");
-    expect(deriveProfileName("a@Union.APP", [])).toBe("union");
+  it("uses the email's local part, lowercased", () => {
+    expect(deriveProfileName("claude2@almostcandid.com", [])).toBe("claude2");
+    expect(deriveProfileName("Ashot@footage.com", [])).toBe("ashot");
   });
 
-  it("dedupes against taken names with -2/-3", () => {
-    expect(deriveProfileName("ashot@footage.com", ["footage"])).toBe("footage-2");
-    expect(deriveProfileName("ashot@footage.com", ["Footage", "footage-2"])).toBe("footage-3");
+  it("falls back to the domain's org part, then -2/-3, when taken", () => {
+    expect(deriveProfileName("ashot@Union.APP", ["ashot"])).toBe("union");
+    expect(deriveProfileName("ashot@footage.com", ["Ashot", "footage"])).toBe("ashot-2");
+    expect(deriveProfileName("ashot@footage.com", ["ashot", "footage", "ashot-2"])).toBe("ashot-3");
   });
 
   it("falls back to 'account' when the email yields no usable name", () => {
@@ -210,7 +212,7 @@ describe("autoSaveActiveProfile + heartbeat payload (sandboxed $HOME)", () => {
 
   it("saves an unsaved active login once, then reports covered", () => {
     const saved = autoSaveActiveProfile();
-    expect(saved?.name).toBe("footage");
+    expect(saved?.name).toBe("ashot");
     expect(saved?.email).toBe("ashot@footage.com");
     // Idempotent: the account is now covered (matched by uuid).
     expect(autoSaveActiveProfile()).toBeNull();
@@ -237,6 +239,71 @@ describe("autoSaveActiveProfile + heartbeat payload (sandboxed $HOME)", () => {
   it("returns null with no login at all", () => {
     fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({}));
     expect(autoSaveActiveProfile()).toBeNull();
+  });
+});
+
+describe("migrateLegacyProfileNames (sandboxed $HOME)", () => {
+  let home: string;
+  const savedEnv: Record<string, string | undefined> = {};
+  const secretDir = () => path.join(home, ".codecast", "cc-accounts");
+  const indexFile = () => path.join(home, ".codecast", "cc-accounts.json");
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-migrate-test-"));
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
+    process.env.HOME = home;
+    process.env.PATH = path.join(home, "empty-path");
+    process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    fs.mkdirSync(secretDir(), { recursive: true });
+    invalidateAccountsCache();
+  });
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+    invalidateAccountsCache();
+  });
+
+  const seed = (profiles: Record<string, { email: string }>, secrets: string[]) => {
+    fs.writeFileSync(indexFile(), JSON.stringify({ profiles }));
+    for (const name of secrets) {
+      fs.writeFileSync(path.join(secretDir(), `${name}.json`), `secret-of-${name}`);
+    }
+  };
+
+  it("renames domain-derived names (with -N suffixes) and moves their secrets", () => {
+    seed(
+      {
+        almostcandid: { email: "claude1@almostcandid.com" },
+        "almostcandid-2": { email: "claude2@almostcandid.com" },
+        work: { email: "boss@footage.com" }, // hand-picked — must stay
+      },
+      ["almostcandid", "almostcandid-2", "work"],
+    );
+    const renames = migrateLegacyProfileNames();
+    expect(renames.sort((a, b) => a.from.localeCompare(b.from))).toEqual([
+      { from: "almostcandid", to: "claude1" },
+      { from: "almostcandid-2", to: "claude2" },
+    ]);
+    const index = JSON.parse(fs.readFileSync(indexFile(), "utf-8"));
+    expect(Object.keys(index.profiles).sort()).toEqual(["claude1", "claude2", "work"]);
+    expect(fs.readFileSync(path.join(secretDir(), "claude2.json"), "utf-8")).toBe(
+      "secret-of-almostcandid-2",
+    );
+    expect(fs.existsSync(path.join(secretDir(), "almostcandid.json"))).toBe(false);
+    expect(fs.existsSync(path.join(secretDir(), "work.json"))).toBe(true);
+    // Idempotent: nothing left matching the legacy pattern.
+    expect(migrateLegacyProfileNames()).toEqual([]);
+  });
+
+  it("skips index-only rows whose secret is missing", () => {
+    seed({ almostcandid: { email: "claude1@almostcandid.com" } }, []);
+    expect(migrateLegacyProfileNames()).toEqual([]);
+    const index = JSON.parse(fs.readFileSync(indexFile(), "utf-8"));
+    expect(Object.keys(index.profiles)).toEqual(["almostcandid"]);
   });
 });
 

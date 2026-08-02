@@ -98,7 +98,7 @@ import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt,
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { type Config, getAgentArgs } from "./config/types.js";
 import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
-import { addVault, listVaults, removeVault } from "./vault/vaultRegistry.js";
+import { addVault, listVaults, removeVault, setVaultMirroring } from "./vault/vaultRegistry.js";
 
 const program = new Command();
 const isStableContextFastPath =
@@ -3474,6 +3474,7 @@ const vaultCmd = program
     "  cast vault add ~/notes\n" +
     "  cast vault add ~/work/wiki --name Wiki\n" +
     "  cast vault ls\n" +
+    "  cast vault mirror ~/notes --on\n" +
     "  cast vault rm ~/notes"
   )
   .showHelpAfterError(true);
@@ -3511,7 +3512,43 @@ vaultCmd
     }
     for (const v of vaults) {
       const notes = v.note_count === undefined ? "" : ` ${c.dim}${v.note_count} notes${c.reset}`;
-      console.log(`  ${c.cyan}${v.id}${c.reset} ${v.name}${notes}\n    ${c.dim}${v.root}${c.reset}`);
+      const mirror = v.mirror ? ` ${c.green}mirrored${c.reset}` : ` ${c.dim}local only${c.reset}`;
+      console.log(`  ${c.cyan}${v.id}${c.reset} ${v.name}${notes}${mirror}\n    ${c.dim}${v.root}${c.reset}`);
+    }
+  });
+
+vaultCmd
+  .command("mirror")
+  .description(
+    "Mirror a vault so other devices can read it\n\n" +
+    "Off by default. Turning it on lets this machine's daemon push note\n" +
+    "metadata (title, tags, links, headings) and the bodies of notes under\n" +
+    "64KB to codecast, so the vault is readable — never writable — from\n" +
+    "another device. The files stay here and stay canonical; the mirror is a\n" +
+    "copy that follows them. Turning it off deletes the copy.\n\n" +
+    "Examples:\n" +
+    "  cast vault mirror ~/notes --on\n" +
+    "  cast vault mirror ~/notes --off"
+  )
+  .argument("<dirOrId>", "Vault directory or id")
+  .option("--on", "Start mirroring this vault")
+  .option("--off", "Stop mirroring and delete the remote copy")
+  .action((dirOrId: string, options: any) => {
+    if (options.on === options.off) {
+      console.error(`${c.red}Pass exactly one of --on or --off.${c.reset}`);
+      process.exit(1);
+    }
+    const vault = setVaultMirroring(CONFIG_DIR, dirOrId, !!options.on);
+    if (!vault) {
+      console.error(`${c.red}No vault matching "${dirOrId}".${c.reset} List them with: cast vault ls`);
+      process.exit(1);
+    }
+    if (options.on) {
+      console.log(`${c.green}ok${c.reset} mirroring ${c.cyan}${vault.name}${c.reset} ${c.dim}${vault.root}${c.reset}`);
+      console.log(`${c.dim}The daemon pushes the first full scan within a few seconds.${c.reset}`);
+    } else {
+      console.log(`${c.green}ok${c.reset} stopped mirroring ${c.cyan}${vault.name}${c.reset}`);
+      console.log(`${c.dim}The daemon deletes the remote copy on its next cycle.${c.reset}`);
     }
   });
 
@@ -15341,6 +15378,17 @@ if (isStableContextFastPath) {
   // autobinding, and every other global CLI side effect. Hook stdout must be
   // exactly one stable-context block (or empty).
   runStableContextHook(readConfig()).catch(() => {});
+} else if (process.argv[2] === "_disclaimed") {
+  // Agent-launch wrapper (see disclaim.ts): exec the rest of argv as a TCC
+  // self-responsible process so privacy prompts name the agent, not codecast.
+  // Bypasses Commander and every global CLI side effect — this runs in the
+  // hot path of every agent spawn.
+  import("./disclaim.js")
+    .then(({ runDisclaimed }) => runDisclaimed(process.argv.slice(3)))
+    .catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(127);
+    });
 } else if (process.argv[2] === "__fugitive_blame@@") {
   import("./blame.js")
     .then(({ runFugitiveBlame }) => runFugitiveBlame(process.argv.slice(3), readConfig() ?? {}))
