@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session } = require("electron");
+const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -850,6 +850,11 @@ function installUpdateAndRestart() {
 ipcMain.handle("get-app-version", () => app.getVersion());
 ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
 ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
+// OS-wide seconds since last user input — feeds the web layer's presence
+// heartbeat so the server knows a human is at this machine even while
+// Codecast itself is unfocused. powerMonitor is only usable after app ready,
+// which holds whenever this handler runs: renderers exist only post-ready.
+ipcMain.handle("get-system-idle-seconds", () => powerMonitor.getSystemIdleTime());
 ipcMain.handle("restart-for-update", () => installUpdateAndRestart());
 // Any renderer-invoked check is user-initiated ("Try again" / "Update now"),
 // which lets it supersede a wedged in-flight download (see checkForDesktopUpdate).
