@@ -37,7 +37,7 @@ const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/a"
 const IN_SHELL_ROOT_SEGMENTS = new Set([
   // Tab pages (TabContent patterns)
   "inbox", "feed", "crosstalk", "search", "notifications", "docs", "plans", "tasks", "vault", "artifacts",
-  "projects", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "steering", "team", "config",
+  "projects", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config",
   // Standalone shell pages (own <Route>, not in TabContent)
   "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
 ]);

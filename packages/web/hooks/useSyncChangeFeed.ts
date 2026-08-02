@@ -26,10 +26,7 @@ type Collection =
   | "tasks"
   | "docs"
   | "plans"
-  | "projects"
-  | "strategies"
-  | "steeringItems"
-  ;
+  | "projects";
 
 const ENTITY_COLLECTION: Record<string, Collection> = {
   conversations: "sessions",
@@ -37,8 +34,6 @@ const ENTITY_COLLECTION: Record<string, Collection> = {
   docs: "docs",
   plans: "plans",
   projects: "projects",
-  strategies: "strategies",
-  steering_items: "steeringItems",
 };
 
 const COLLECTIONS: Collection[] = [
@@ -47,8 +42,6 @@ const COLLECTIONS: Collection[] = [
   "docs",
   "plans",
   "projects",
-  "strategies",
-  "steeringItems",
 ];
 
 // The cursor lives under its own syncMeta key (the feed is per-user, not
@@ -74,8 +67,6 @@ export function planFeedApply(changes: FeedChange[]): Record<Collection, { upser
     docs: { upsertIds: [], deleteIds: [] },
     plans: { upsertIds: [], deleteIds: [] },
     projects: { upsertIds: [], deleteIds: [] },
-    strategies: { upsertIds: [], deleteIds: [] },
-    steeringItems: { upsertIds: [], deleteIds: [] },
   };
   const latest = new Map<string, { coll: Collection; op: "upsert" | "delete" }>();
   for (const c of changes) {
@@ -115,10 +106,6 @@ async function batchGetChunk(convex: any, coll: Collection, ids: string[]): Prom
       return (await convex.query(api.plans.webGetByIds, { ids })) ?? [];
     case "projects":
       return (await convex.query(api.projects.webGetByIds, { ids })) ?? [];
-    case "strategies":
-      return (await convex.query(api.strategies.webGetByIds, { ids })) ?? [];
-    case "steeringItems":
-      return (await convex.query(api.steeringItems.webGetByIds, { ids })) ?? [];
   }
 }
 

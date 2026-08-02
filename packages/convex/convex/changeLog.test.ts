@@ -99,8 +99,6 @@ describe("trackedTableOf", () => {
     expect(trackedTableOf(db, "docs:1")).toBe("docs");
     expect(trackedTableOf(db, "plans:1")).toBe("plans");
     expect(trackedTableOf(db, "projects:1")).toBe("projects");
-    expect(trackedTableOf(db, "strategies:1")).toBe("strategies");
-    expect(trackedTableOf(db, "steering_items:1")).toBe("steering_items");
   });
   test("returns null for untracked ids", () => {
     expect(trackedTableOf(db, "messages:1")).toBeNull();
@@ -125,20 +123,7 @@ describe("makeChangeTrackedDb — emission", () => {
     expect(typeof rows[0].seq).toBe("number");
   });
 
-  test("each canonical steering table emits on insert", async () => {
-    const { db, changeRows } = makeFakeDb();
-    const tdb = makeChangeTrackedDb(db);
-    for (const table of ["strategies", "steering_items"]) {
-      await tdb.insert(table, { user_id: "users:1", team_id: "teams:9", title: "x" });
-    }
-    const rows = changeRows();
-    expect(rows.map((r: any) => r.entity_type).sort()).toEqual(
-      ["steering_items", "strategies"],
-    );
-    for (const row of rows) {
-      expect(row).toMatchObject({ op: "upsert", owner_user_id: "users:1", team_id: "teams:9" });
-    }
-  });
+
 
   test("insert into an UNtracked table emits nothing", async () => {
     const { db, changeRows } = makeFakeDb();

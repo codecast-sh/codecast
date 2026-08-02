@@ -27,14 +27,7 @@ import { isSessionOwner } from "./sessionOwners";
 import { patchCommentWithRevision } from "./commentViewWrites";
 import { canAccessConversation, requireTeamMembership } from "./lib/access";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
-import {
-  linkConversationToEntity,
-  linkConversationToEntityBestEffort,
-} from "./conversationLinks";
-import {
-  linkWorkspace,
-  requireAccessibleLinkableEntity,
-} from "./lib/steering";
+import { linkConversationToEntityBestEffort } from "./conversationLinks";
 
 type TableConfig =
   | {
@@ -198,10 +191,6 @@ function validatedCreateContinuation(
     throw new Error(`Invalid ${action} continuation`);
   }
   const continuation = raw as Record<string, unknown>;
-  // Steering creates deliberately
-  // accept NO continuation yet: the client middleware doesn't know their
-  // navigation targets until the Phase 2 UI defines routes, and a one-sided
-  // allowance would just persist a continuation nothing acts on.
   if (
     continuation.version === 1 &&
     continuation.kind === "navigate" &&
@@ -439,7 +428,7 @@ async function linkConversationToObject(
     await ctx.db.patch(conversationId, {
       active_task_id: objectId as Id<"tasks">,
     });
-    // Compatibility dual-write onto the steering association rail (best-effort;
+    // Dual-write onto the entity-conversation association rail (best-effort;
     // legacy fields stay authoritative — see conversationLinks.ts).
     await linkConversationToEntityBestEffort(ctx, userId, {
       entityType: "task", entityId: objectId, conversationId, relationship: "work",
@@ -460,15 +449,6 @@ async function linkConversationToObject(
       entityType: "plan", entityId: objectId, conversationId, relationship: "work",
     });
     return;
-  }
-
-  if (objectType === "strategy" || objectType === "steering_item") {
-    await linkConversationToEntity(ctx, userId, {
-      entityType: objectType,
-      entityId: objectId,
-      conversationId,
-      relationship: "discussion",
-    });
   }
 }
 
@@ -576,7 +556,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; steering_workspace?: { workspace?: string; team_id?: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }]) => {
     const sessionId = opts.session_id || crypto.randomUUID();
     // Idempotent on (user, session_id). The optimistic web client keys a New
     // Session by a client-minted stub id and passes it as session_id, then
@@ -652,56 +632,6 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       conversationPath,
       linkedTask?.team_id
     );
-    // A Steering conversation belongs to the selected organization's room,
-    // not whichever repository happened to be active when the composer opened.
-    // Resolve and authorize that workspace before inserting the conversation so
-    // the atomic entity link cannot fail after a valid team-scoped send.
-    if (
-      opts.linked_object?.id &&
-      (opts.linked_object.type === "strategy" ||
-        opts.linked_object.type === "steering_item")
-    ) {
-      const entity = await requireAccessibleLinkableEntity(
-        ctx,
-        userId,
-        opts.linked_object.type,
-        opts.linked_object.id,
-      );
-      const workspace = linkWorkspace(entity);
-      if (workspace.type === "team") {
-        resolvedTeamId = workspace.teamId;
-        isPrivate = false;
-        autoShared = true;
-      } else {
-        resolvedTeamId = undefined;
-        isPrivate = true;
-        autoShared = false;
-      }
-      // Steering is organization-level reasoning. Never grant the spawned agent
-      // an unrelated repository merely because it was the viewer's last active
-      // conversation; explicit execution links remain context, not cwd authority.
-      resolvedProjectPath = undefined;
-      resolvedGitRoot = undefined;
-    } else if (opts.steering_workspace) {
-      // The portfolio room has no entity to resolve a workspace from, so the
-      // composer passes the viewer's selected workspace explicitly. Honoring it
-      // here keeps the conversation — and any proposal an agent creates from it
-      // — in the room the user is actually looking at.
-      const requested = opts.steering_workspace as { workspace?: string; team_id?: string };
-      if (requested.workspace === "team" && requested.team_id) {
-        await requireTeamMembership(ctx, userId, requested.team_id as Id<"teams">);
-        resolvedTeamId = requested.team_id as Id<"teams">;
-        isPrivate = false;
-        autoShared = true;
-      } else {
-        resolvedTeamId = undefined;
-        isPrivate = true;
-        autoShared = false;
-      }
-      resolvedProjectPath = undefined;
-      resolvedGitRoot = undefined;
-    }
-
     // Nest orchestration workers under their plan's creator session so they
     // don't clutter the top-level inbox. The plan is found via a linked task
     // or a directly-linked plan; resolveWorkerParentConversation only returns
@@ -1213,28 +1143,6 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.projects.webUpdate, { id, ...fields });
   },
 
-  // Steering entities ride the same delegate pattern as plans/projects: the
-  // client mutates its collection optimistically; the side-effect performs the
-  // authoritative write through the public mutation (access checks, cross-ref
-  // validation, containment) in the same transaction.
-  updateStrategy: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
-    await (ctx as any).runMutation(api.strategies.webUpdate, { id, ...fields });
-  },
-  updateSteeringItem: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
-    await (ctx as any).runMutation(api.steeringItems.webUpdate, { id, ...fields });
-  },
-  deleteSteeringItem: async (ctx, userId, [id]: [string]) => {
-    await (ctx as any).runMutation(api.steeringItems.webDelete, { id });
-  },
-  deleteStrategy: async (ctx, userId, [id]: [string]) => {
-    await (ctx as any).runMutation(api.strategies.webDelete, { id });
-  },
-  linkEntities: async (ctx, userId, [opts]: [any]) => {
-    return await (ctx as any).runMutation(api.objectLinks.webCreateLink, opts);
-  },
-  unlinkEntities: async (ctx, userId, [id]: [string]) => {
-    await (ctx as any).runMutation(api.objectLinks.webDeleteLink, { id });
-  },
   linkEntityConversation: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.conversationLinks.webLinkConversation, opts);
   },
@@ -1546,30 +1454,6 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       arguments: opts,
       result,
       create: () => ctx.runMutation!(api.projects.webCreate, opts),
-    });
-  },
-  createStrategy: async (ctx, userId, [opts]: [any], result) => {
-    if (!hasReceiptCommandId(result)) {
-      return await ctx.runMutation!(api.strategies.webCreate, opts);
-    }
-    validatedCreateContinuation("createStrategy", result);
-    return await runReceiptBackedCreate(ctx, userId, {
-      action: "createStrategy",
-      commandName: "strategies.create/v2",
-      arguments: opts,
-      result,
-      create: () => ctx.runMutation!(api.strategies.webCreate, opts),
-    });
-  },
-  createSteeringItem: async (ctx, userId, [opts]: [any], result) => {
-    if (!hasReceiptCommandId(result)) return await ctx.runMutation!(api.steeringItems.webCreate, opts);
-    validatedCreateContinuation("createSteeringItem", result);
-    return await runReceiptBackedCreate(ctx, userId, {
-      action: "createSteeringItem",
-      commandName: "steering_items.create/v1",
-      arguments: opts,
-      result,
-      create: () => ctx.runMutation!(api.steeringItems.webCreate, opts),
     });
   },
   promoteDocToPlan: async (ctx, userId, [docId]: [string]) => {

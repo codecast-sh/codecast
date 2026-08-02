@@ -14,10 +14,7 @@ export type ChangeEntity =
   | "tasks"
   | "docs"
   | "plans"
-  | "projects"
-  | "strategies"
-  | "steering_items"
-  ;
+  | "projects";
 
 // The tables whose writes feed the change log. A table is tracked iff its rows
 // carry the uniform { user_id, team_id? } scope shape every catch-up query relies
@@ -28,8 +25,6 @@ export const TRACKED_TABLES: ReadonlySet<ChangeEntity> = new Set([
   "docs",
   "plans",
   "projects",
-  "strategies",
-  "steering_items",
 ]);
 
 export type ChangeScope = {

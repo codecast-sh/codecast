@@ -18,8 +18,6 @@ const TRACKED = [
   "docs",
   "plans",
   "projects",
-  "strategies",
-  "steering_items",
 ];
 
 function importsRawBuilder(src: string): boolean {
@@ -72,9 +70,6 @@ describe("authorization boundary coverage", () => {
       "docs.ts",
       "plans.ts",
       "projects.ts",
-      "strategies.ts",
-      "steeringItems.ts",
-      "objectLinks.ts",
       "conversationLinks.ts",
     ]) {
       const src = readFileSync(join(DIR, f), "utf8");

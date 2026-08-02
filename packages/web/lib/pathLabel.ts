@@ -20,7 +20,6 @@ export function pathLabel(path: string): string {
     } catch {}
     return "Vault";
   }
-  if (path === "/steering" || path.startsWith("/steering/")) return "Steering";
   const segments: Record<string, string> = {
     "/tasks": "Tasks",
     "/docs": "Docs",
