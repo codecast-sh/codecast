@@ -95,6 +95,21 @@ export const webGet = query({
   },
 });
 
+export const webGetRef = query({
+  args: { id: v.optional(v.string()), short_id: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const normalized = args.id ? ctx.db.normalizeId("steering_items", args.id) : null;
+    const item = normalized
+      ? await ctx.db.get(normalized)
+      : args.short_id
+        ? await ctx.db.query("steering_items").withIndex("by_short_id", q => q.eq("short_id", args.short_id!)).unique()
+        : null;
+    return item && await canAccessSteeringEntity(ctx, userId, item) ? item : null;
+  },
+});
+
 export const webGetByIds = query({
   args: { ids: v.array(v.string()) },
   handler: async (ctx, args) => {

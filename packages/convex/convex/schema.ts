@@ -2010,6 +2010,36 @@ export default defineSchema({
     .index("by_short_id", ["short_id"])
     .index("by_parent_item_id", ["parent_item_id"]),
 
+  // Reviewable agent-authored change sets for the Steering graph. Proposals
+  // are durable conversation artifacts; applying one is a single transaction.
+  steering_proposals: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    conversation_id: v.optional(v.id("conversations")),
+    short_id: v.string(),
+    title: v.string(),
+    summary: v.optional(v.string()),
+    status: v.union(
+      v.literal("proposed"),
+      v.literal("applied"),
+      v.literal("dismissed"),
+    ),
+    operations: v.array(v.any()),
+    applied_entities: v.optional(v.array(v.object({
+      key: v.string(),
+      type: v.union(v.literal("strategy"), v.literal("steering_item"), v.literal("entity_link")),
+      id: v.string(),
+      short_id: v.optional(v.string()),
+    }))),
+    created_at: v.number(),
+    updated_at: v.number(),
+    applied_at: v.optional(v.number()),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_team_id", ["team_id"])
+    .index("by_conversation_id", ["conversation_id"])
+    .index("by_short_id", ["short_id"]),
+
   // Steering: constrained typed cross-object relationships between Strategy,
   // Steering Items, Tasks, and Plans. Recursive primary placement stays in
   // parent_item_id; this table carries only cross-cutting edges. Writes flow

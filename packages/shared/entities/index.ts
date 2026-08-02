@@ -7,7 +7,7 @@
  * components or duplicated in the CLI.
  */
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "strategy" | "steering_item" | "steering_proposal";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -30,6 +30,9 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   session: "/conversation",
   doc: "/docs",
   project: "/projects",
+  strategy: "/steering/strategy",
+  steering_item: "/steering/map",
+  steering_proposal: "/steering",
 };
 
 /**
@@ -50,6 +53,10 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
   doc: "doc",
   projects: "project",
   project: "project",
+  strategy: "strategy",
+  steering: "steering_item",
+  steering_item: "steering_item",
+  steering_proposal: "steering_proposal",
 };
 
 /** Normalize a canonical type or a url-segment alias to a canonical EntityType. */
@@ -66,7 +73,11 @@ export function normalizeEntityType(type: string): EntityType | null {
  */
 export function entityRoute(type: string, id: string): string | null {
   const norm = normalizeEntityType(type);
-  return norm ? `${ENTITY_ROUTE[norm]}/${id}` : null;
+  if (!norm) return null;
+  if (norm === "steering_item") return `/steering/map?id=${encodeURIComponent(id)}`;
+  if (norm === "strategy") return `/steering/strategy?id=${encodeURIComponent(id)}`;
+  if (norm === "steering_proposal") return `/steering?proposal=${encodeURIComponent(id)}`;
+  return `${ENTITY_ROUTE[norm]}/${id}`;
 }
 
 /**
@@ -91,6 +102,9 @@ export function inferEntityTypeFromShortId(id: string): EntityType | null {
   const s = (id || "").trim();
   if (/^ct-/.test(s)) return "task";
   if (/^pl-/.test(s)) return "plan";
+  if (/^st-/.test(s)) return "strategy";
+  if (/^si-/.test(s)) return "steering_item";
+  if (/^sp-/.test(s)) return "steering_proposal";
   return null;
 }
 

@@ -37,6 +37,7 @@ function Content() {
     ? (raw as SteeringView)
     : "overview";
   const selectedId = search.get("id");
+  const proposalId = search.get("proposal");
   const navigate = (next: SteeringView) =>
     router.push(next === "overview" ? "/steering" : `/steering/${next}`);
   return (
@@ -75,10 +76,10 @@ function Content() {
             </div>
           ) : view === "strategy" ? (
             <div className="max-w-6xl mx-auto p-4 sm:p-6">
-              <StrategySection />
+              <StrategySection selectedId={selectedId} />
             </div>
           ) : (
-            <SteeringWorkspace view={view} selectedId={selectedId} />
+            <SteeringWorkspace view={view} selectedId={selectedId} proposalId={proposalId} />
           )}
         </ErrorBoundary>
       </main>

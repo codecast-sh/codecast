@@ -27,7 +27,14 @@ import { isSessionOwner } from "./sessionOwners";
 import { patchCommentWithRevision } from "./commentViewWrites";
 import { canAccessConversation } from "./lib/access";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
-import { linkConversationToEntityBestEffort } from "./conversationLinks";
+import {
+  linkConversationToEntity,
+  linkConversationToEntityBestEffort,
+} from "./conversationLinks";
+import {
+  linkWorkspace,
+  requireAccessibleLinkableEntity,
+} from "./lib/steering";
 
 type TableConfig =
   | {
@@ -452,6 +459,16 @@ async function linkConversationToObject(
     await linkConversationToEntityBestEffort(ctx, userId, {
       entityType: "plan", entityId: objectId, conversationId, relationship: "work",
     });
+    return;
+  }
+
+  if (objectType === "strategy" || objectType === "steering_item") {
+    await linkConversationToEntity(ctx, userId, {
+      entityType: objectType,
+      entityId: objectId,
+      conversationId,
+      relationship: "discussion",
+    });
   }
 }
 
@@ -630,11 +647,42 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     }
 
     const conversationPath = resolvedGitRoot || resolvedProjectPath;
-    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
+    let { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
       mappings,
       conversationPath,
       linkedTask?.team_id
     );
+    // A Steering conversation belongs to the selected organization's room,
+    // not whichever repository happened to be active when the composer opened.
+    // Resolve and authorize that workspace before inserting the conversation so
+    // the atomic entity link cannot fail after a valid team-scoped send.
+    if (
+      opts.linked_object?.id &&
+      (opts.linked_object.type === "strategy" ||
+        opts.linked_object.type === "steering_item")
+    ) {
+      const entity = await requireAccessibleLinkableEntity(
+        ctx,
+        userId,
+        opts.linked_object.type,
+        opts.linked_object.id,
+      );
+      const workspace = linkWorkspace(entity);
+      if (workspace.type === "team") {
+        resolvedTeamId = workspace.teamId;
+        isPrivate = false;
+        autoShared = true;
+      } else {
+        resolvedTeamId = undefined;
+        isPrivate = true;
+        autoShared = false;
+      }
+      // Steering is organization-level reasoning. Never grant the spawned agent
+      // an unrelated repository merely because it was the viewer's last active
+      // conversation; explicit execution links remain context, not cwd authority.
+      resolvedProjectPath = undefined;
+      resolvedGitRoot = undefined;
+    }
 
     // Nest orchestration workers under their plan's creator session so they
     // don't clutter the top-level inbox. The plan is found via a linked task

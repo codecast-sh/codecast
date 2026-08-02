@@ -108,9 +108,11 @@ function EnsureDocTrigger({ planId }: { planId: any }) {
 
 export default function PlanDetailPage() {
   const params = useParams();
-  const id = params?.id as string;
+  const id = params?.id as string | undefined;
 
-  const queryArgs = id.startsWith("pl-") ? { short_id: id } : { id };
+  // id can be transiently undefined while a tab pane mounts; skip until it
+  // resolves (same guard as projects/[id]).
+  const queryArgs = id ? (id.startsWith("pl-") ? { short_id: id } : { id }) : "skip";
   const plan = useQuery(api.plans.webGet, queryArgs);
   const webUpdate = useInboxStore((s) => s.updatePlan);
   const generateShareLink = useMutation(api.plans.generateShareLink);

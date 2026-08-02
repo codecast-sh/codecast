@@ -12,7 +12,7 @@ import { useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { KeyRound, Zap, Hexagon } from "lucide-react";
+import { KeyRound, Zap, ZapOff, Hexagon } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "./ui/popover";
 import { Switch } from "./ui/switch";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -108,8 +108,10 @@ export function AccountUsageChip() {
   const [switching, setSwitching] = useState<string | null>(null);
 
   // The primary (non-remote) machine is the one whose login rotates through
-  // profiles; remotes mirror it, so their meters would be duplicates.
-  const device = data?.devices.find((d) => !d.is_remote);
+  // profiles; remotes mirror it, so their meters would be duplicates. Online
+  // only: the query also carries a recently-offline primary (for the settings
+  // page's auto-switch toggle), whose meters would render stale here.
+  const device = data?.devices.find((d) => !d.is_remote && d.online !== false);
   const profiles: ProfileRow[] = device?.profiles ?? [];
   const active = profiles.find((p) => p.email && p.email === device?.active_email);
   const codex = device?.codex_usage;
@@ -211,12 +213,19 @@ export function AccountUsageChip() {
               }
               onHover={codex ? () => setHovered("codex") : undefined}
             />
-            {autoOn && (
+            {autoOn ? (
               <Zap
                 className="h-3 w-3"
                 style={{ color: exhausted ? "var(--sol-red)" : "var(--sol-cyan)" }}
                 aria-label="Auto-switch enabled"
               />
+            ) : (
+              active && (
+                <ZapOff
+                  className="h-3 w-3 text-sol-text-dim opacity-60"
+                  aria-label="Auto-switch off — open to re-enable"
+                />
+              )
             )}
           </button>
         </PopoverTrigger>
@@ -324,19 +333,19 @@ export function AccountUsageChip() {
         </div>
 
         <div className="border-t border-sol-border/60 px-3 py-2.5">
-          {active && (
-            <div className="flex items-center gap-2">
-              <Zap className={`h-3.5 w-3.5 ${autoOn ? "text-sol-cyan" : "text-sol-text-dim"}`} />
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-medium text-sol-text">Auto-switch on limits</div>
-                <div className="text-[10px] leading-snug text-sol-text-dim">
-                  Hop to the freshest account and continue limit-parked sessions until everything is
-                  unblocked or every account is spent.
-                </div>
+          {/* Device-level flag — shown even when the current login isn't a
+              saved profile, so the off state is always recoverable from here. */}
+          <div className="flex items-center gap-2">
+            <Zap className={`h-3.5 w-3.5 ${autoOn ? "text-sol-cyan" : "text-sol-text-dim"}`} />
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-medium text-sol-text">Auto-switch on limits</div>
+              <div className="text-[10px] leading-snug text-sol-text-dim">
+                Hop to the freshest account and continue limit-parked sessions until everything is
+                unblocked or every account is spent.
               </div>
-              <Switch checked={autoOn} onCheckedChange={handleToggle} disabled={pendingToggle !== null} />
             </div>
-          )}
+            <Switch checked={autoOn} onCheckedChange={handleToggle} disabled={pendingToggle !== null} />
+          </div>
           {autoOn && exhausted && (
             <div className="mt-1.5 rounded bg-sol-red/10 px-2 py-1 text-[10px] text-sol-red">
               All accounts are at their limits — will retry at the next window reset.
