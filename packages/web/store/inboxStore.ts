@@ -2505,7 +2505,7 @@ interface InboxStoreState {
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; steering_workspace?: { workspace: "team"; team_id: string } | { workspace: "personal" }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -4599,7 +4599,7 @@ export const useInboxStore = create<InboxStoreState>(
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; steering_workspace?: { workspace: "team"; team_id: string } | { workspace: "personal" }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];

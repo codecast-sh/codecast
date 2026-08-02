@@ -25,7 +25,7 @@ import {
 import { advanceLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { isSessionOwner } from "./sessionOwners";
 import { patchCommentWithRevision } from "./commentViewWrites";
-import { canAccessConversation } from "./lib/access";
+import { canAccessConversation, requireTeamMembership } from "./lib/access";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import {
   linkConversationToEntity,
@@ -576,7 +576,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; steering_workspace?: { workspace?: string; team_id?: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }]) => {
     const sessionId = opts.session_id || crypto.randomUUID();
     // Idempotent on (user, session_id). The optimistic web client keys a New
     // Session by a client-minted stub id and passes it as session_id, then
@@ -680,6 +680,24 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       // Steering is organization-level reasoning. Never grant the spawned agent
       // an unrelated repository merely because it was the viewer's last active
       // conversation; explicit execution links remain context, not cwd authority.
+      resolvedProjectPath = undefined;
+      resolvedGitRoot = undefined;
+    } else if (opts.steering_workspace) {
+      // The portfolio room has no entity to resolve a workspace from, so the
+      // composer passes the viewer's selected workspace explicitly. Honoring it
+      // here keeps the conversation — and any proposal an agent creates from it
+      // — in the room the user is actually looking at.
+      const requested = opts.steering_workspace as { workspace?: string; team_id?: string };
+      if (requested.workspace === "team" && requested.team_id) {
+        await requireTeamMembership(ctx, userId, requested.team_id as Id<"teams">);
+        resolvedTeamId = requested.team_id as Id<"teams">;
+        isPrivate = false;
+        autoShared = true;
+      } else {
+        resolvedTeamId = undefined;
+        isPrivate = true;
+        autoShared = false;
+      }
       resolvedProjectPath = undefined;
       resolvedGitRoot = undefined;
     }

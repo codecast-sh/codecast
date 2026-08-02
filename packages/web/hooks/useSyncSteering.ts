@@ -9,7 +9,7 @@ const api = _api as any;
 
 // Steering entities are workspace-scoped, never project-path-scoped — drop the
 // path so the webList validators (which take no project_path) accept the args.
-function steeringArgs(args: WorkspaceArgs): Record<string, any> | "skip" {
+export function steeringArgs(args: WorkspaceArgs): Record<string, any> | "skip" {
   if (args === "skip") return "skip";
   const { project_path: _path, ...rest } = args as Record<string, any>;
   return rest;

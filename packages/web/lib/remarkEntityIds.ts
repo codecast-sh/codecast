@@ -6,8 +6,8 @@ import { isConvexId } from "./entityLinks";
 // The bare 32-char alternative catches full Convex ids — the only handle docs
 // have (no short id). EntityIdPill resolves their table server-side; ids that
 // resolve to nothing render back as plain text.
-const ENTITY_ID_RE = /\b(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32})\b/gi;
-const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+|[a-z0-9]{32}))?\](?:\s*\([^)]*\))?/g;
+const ENTITY_ID_RE = /\b(?:(?:ct|pl|st|si|sp)-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32})\b/gi;
+const MENTION_RE = /@\[([^\]]*?)(?:\s+((?:ct|pl|st|si|sp)-\w+|jx\w+|doc:\w+|[a-z0-9]{32}))?\](?:\s*\([^)]*\))?/g;
 // Obsidian-style transclusion: ![[doc:<convex id>]]. Only docs are embeddable —
 // they're the entity whose body IS markdown meant to be read in place.
 const EMBED_RE = /!\[\[(doc:[a-z0-9]{32})\]\]/g;
@@ -63,7 +63,7 @@ export function remarkEntityIds() {
       [
         MENTION_RE,
         (_match: string, name: string, entityId?: string) => {
-          if (entityId && (/^(ct|pl)-/.test(entityId) || /^jx[a-z0-9]/i.test(entityId) || isConvexId(entityId))) {
+          if (entityId && (/^(ct|pl|st|si|sp)-/.test(entityId) || /^jx[a-z0-9]/i.test(entityId) || isConvexId(entityId))) {
             return {
               type: "link",
               url: `entity://${entityId.toLowerCase()}`,

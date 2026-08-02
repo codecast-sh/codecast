@@ -83,6 +83,7 @@ import type * as messageFeed from "../messageFeed.js";
 import type * as messageViewContracts from "../messageViewContracts.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
+import type * as migrations_steeringWorkspaceMove from "../migrations_steeringWorkspaceMove.js";
 import type * as notificationRouter from "../notificationRouter.js";
 import type * as notifications from "../notifications.js";
 import type * as objectLinks from "../objectLinks.js";
@@ -214,6 +215,7 @@ declare const fullApi: ApiFromModules<{
   messageViewContracts: typeof messageViewContracts;
   messages: typeof messages;
   migrations: typeof migrations;
+  migrations_steeringWorkspaceMove: typeof migrations_steeringWorkspaceMove;
   notificationRouter: typeof notificationRouter;
   notifications: typeof notifications;
   objectLinks: typeof objectLinks;
