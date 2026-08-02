@@ -78,6 +78,7 @@ interface SearchConversation {
   user?: { name: string | null; email: string | null };
   matches: SearchMatch[];
   context: ContextMessage[];
+  title_match?: boolean;
 }
 
 interface SearchResult {
@@ -88,6 +89,10 @@ interface SearchResult {
   // read-budget/capacity error and the CLI fell back — see cliSearchRequest).
   titles_only?: boolean;
   content_search_error?: string;
+  // Set when a -s/-e window reaches past the content mirror's retention:
+  // content matches can't cover the requested range, so title/summary hits
+  // (rows with title_match) are the reliable signal there.
+  content_window_days?: number;
 }
 
 interface SearchOptions {
@@ -273,6 +278,9 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
   if (result.titles_only) {
     lines.push(`${c.yellow}Content search unavailable${c.reset}${c.dim} (${result.content_search_error || "backend overloaded"}) — showing title/summary matches only. Try a more specific word for full-text results.${c.reset}`);
     lines.push("");
+  } else if (result.content_window_days) {
+    lines.push(`${c.dim}Content search covers the last ${result.content_window_days} days; older sessions in this window match by title/summary only (marked "title match").${c.reset}`);
+    lines.push("");
   }
 
   if (result.total_matches === 0 && result.conversations.length === 0) {
@@ -282,7 +290,9 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
     return lines.join("\n");
   }
 
-  lines.push(result.titles_only
+  const allTitleRows =
+    result.conversations.length > 0 && result.conversations.every((cv) => cv.title_match);
+  lines.push(result.titles_only || allTitleRows
     ? `Found ${result.conversations.length} session${result.conversations.length === 1 ? "" : "s"} by title/summary\n`
     : `Found ${result.total_matches} match${result.total_matches === 1 ? "" : "es"} in ${result.conversations.length} conversation${result.conversations.length === 1 ? "" : "s"}\n`);
 
@@ -299,6 +309,7 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
       `${c.dim}${conv.message_count} msgs${c.reset}`,
       truncatePath(conv.project_path) ? `${c.dim}${truncatePath(conv.project_path)}${c.reset}` : "",
       userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
+      !result.titles_only && conv.title_match ? `${c.dim}title match${c.reset}` : "",
     ].filter(Boolean).join(" | ");
     lines.push(meta);
     lines.push("");
