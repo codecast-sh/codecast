@@ -127,10 +127,8 @@ const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 const Triggers = lazy(() => import("@/app/triggers/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
 const Anchor = lazy(() => import("@/app/anchor/page"));
-// Steering = the organizational map (Overview/Map/Strategy/My work).
 // One component serves the index and every section
 // so section switches reconcile in place instead of remounting.
-const Steering = lazy(() => import("@/app/steering/page"));
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
 const TeamMember = lazy(() => import("@/app/team/[username]/page"));
@@ -228,9 +226,6 @@ export const ROUTES: RouteEntry[] = [
   { path: "sessions", component: cast(Sessions), layout: "dashboardShell", tab: "/sessions" },
   // Full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions), not an isOnXPage flag.
   { path: "anchor", component: cast(Anchor), layout: "dashboardShell", tab: "/anchor" },
-  // Steering is full-bleed via FULL_WIDTH_PATTERNS too (no isOnXPage flag).
-  { path: "steering", component: cast(Steering), layout: "dashboardShell", tab: "/steering" },
-  { path: "steering/:section", component: cast(Steering), layout: "dashboardShell", tab: "/steering/:section" },
   { path: "team", component: cast(Team), layout: "dashboardShell", tab: "/team" },
   { path: "team/activity", component: cast(TeamActivity), layout: "dashboardShell", tab: "/team/activity" },
   { path: "team/:username", component: cast(TeamMember), layout: "dashboardShell", tab: "/team/:username" },

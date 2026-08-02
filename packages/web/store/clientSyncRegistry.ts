@@ -99,22 +99,6 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     localFirst: true,
   },
-  // Steering collections (Organizational Steering Phase 1). Same shape as
-  // tasks/docs/plans: persisted delta caches, deferred hydration, local-first
-  // pending protection. Rows always carry their prefixed short_id (required by
-  // schema), so the validators drop any foreign document persisted here.
-  strategies: {
-    persistence: { kind: "collection", key: "strategies" },
-    hydration: { phase: "deferred" },
-    localFirst: true,
-    validRow: (row: any) => typeof row?.short_id === "string" && row.short_id.startsWith("st-"),
-  },
-  steeringItems: {
-    persistence: { kind: "collection", key: "steeringItems" },
-    hydration: { phase: "deferred" },
-    localFirst: true,
-    validRow: (row: any) => typeof row?.short_id === "string" && ["objective", "bet", "initiative", "question"].includes(row?.kind),
-  },
   buckets: {
     persistence: { kind: "collection", key: "buckets" },
     localFirst: true,

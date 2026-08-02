@@ -24,10 +24,7 @@ export type FeedChange = {
     | "tasks"
     | "docs"
     | "plans"
-    | "projects"
-    | "strategies"
-    | "steering_items"
-    ;
+    | "projects";
   entity_id: string;
   op: "upsert" | "delete";
 };

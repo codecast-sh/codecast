@@ -591,7 +591,7 @@ export const bindSession = mutation({
     const sessionIds = plan.session_ids || [];
     if (!sessionIds.some(id => id === conv._id)) {
       sessionIds.push(conv._id);
-      // Compatibility dual-write: the steering association row alongside the
+      // Compatibility dual-write: the entity-conversation association row alongside the
       // legacy session_ids field (already workspace-matched above; best-effort
       // so the legacy bind can never start failing on the new rail).
       await linkConversationToEntityBestEffort(ctx, auth.userId, {

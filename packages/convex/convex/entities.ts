@@ -10,9 +10,6 @@ const ID_TYPE_TABLES = [
   ["plans", "plan"],
   ["conversations", "session"],
   ["projects", "project"],
-  ["strategies", "strategy"],
-  ["steering_items", "steering_item"],
-  ["steering_proposals", "steering_proposal"],
 ] as const;
 
 /**

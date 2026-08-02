@@ -48,59 +48,6 @@ export async function canAccessProject(
   return await isTeamMember(ctx, userId, project.team_id);
 }
 
-// ── Owner-or-team: Strategy and Steering Items ──
-// Same rule as docs/plans: the owner always has access; a non-owner has access
-// iff the entity carries a team_id AND the user is a member of that team.
-// `owner_id` expresses responsibility, never exclusive access — it grants
-// nothing here.
-export async function canAccessSteeringEntity(
-  ctx: AccessCtx,
-  userId: Id<"users">,
-  entity: { user_id: Id<"users">; team_id?: Id<"teams"> },
-): Promise<boolean> {
-  if (String(entity.user_id) === String(userId)) return true;
-  if (!entity.team_id) return false;
-  return await isTeamMember(ctx, userId, entity.team_id);
-}
-
-export const canAccessStrategy = canAccessSteeringEntity;
-export const canAccessSteeringItem = canAccessSteeringEntity;
-
-// ── Edit policy: owner-or-team entities ──
-// Steering is collaborative: membership grants edit, ownership expresses
-// responsibility rather than exclusive access. This is the ONE policy for
-// Strategy and Steering Items. Fails closed with Forbidden.
-export async function requireCanEditOwnerOrTeamEntity(
-  ctx: AccessCtx,
-  userId: Id<"users">,
-  entity: { user_id: Id<"users">; team_id?: Id<"teams"> },
-  label: string,
-): Promise<void> {
-  if (String(entity.user_id) === String(userId)) return;
-  if (entity.team_id && (await isTeamMember(ctx, userId, entity.team_id))) return;
-  forbidden(`Forbidden: cannot edit this ${label}`);
-}
-
-// Hard deletion is more destructive than an edit: the creator may always
-// delete their own entity; inside a team, only a team admin may delete
-// somebody else's. Fails closed with Forbidden.
-export async function requireCanDeleteOwnerOrTeamEntity(
-  ctx: AccessCtx,
-  userId: Id<"users">,
-  entity: { user_id: Id<"users">; team_id?: Id<"teams"> },
-  label: string,
-): Promise<void> {
-  if (String(entity.user_id) === String(userId)) return;
-  if (entity.team_id) {
-    const membership = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_team", (q: any) =>
-        q.eq("user_id", userId).eq("team_id", entity.team_id))
-      .first();
-    if (membership?.role === "admin") return;
-  }
-  forbidden(`Forbidden: cannot delete this ${label}`);
-}
 
 export async function canAccessPullRequest(
   ctx: AccessCtx,
@@ -231,30 +178,6 @@ export async function requireAccessibleProject(
   const project = await ctx.db.get(projectId);
   if (!project || !(await canAccessProject(ctx, userId, project))) notFound("Project not found");
   return project;
-}
-
-export async function requireAccessibleStrategy(
-  ctx: AccessCtx,
-  userId: Id<"users">,
-  strategyId: Id<"strategies">,
-): Promise<any> {
-  const strategy = await ctx.db.get(strategyId);
-  if (!strategy || !(await canAccessSteeringEntity(ctx, userId, strategy))) {
-    notFound("Strategy not found");
-  }
-  return strategy;
-}
-
-export async function requireAccessibleSteeringItem(
-  ctx: AccessCtx,
-  userId: Id<"users">,
-  itemId: Id<"steering_items">,
-): Promise<any> {
-  const item = await ctx.db.get(itemId);
-  if (!item || !(await canAccessSteeringEntity(ctx, userId, item))) {
-    notFound("Steering item not found");
-  }
-  return item;
 }
 
 export async function requireAccessibleDoc(

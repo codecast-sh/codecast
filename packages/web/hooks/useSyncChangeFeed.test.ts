@@ -12,22 +12,12 @@ describe("planFeedApply", () => {
       c("docs", "d1"),
       c("plans", "p1"),
       c("projects", "pj1"),
-      c("strategies", "s1"),
-      c("steering_items", "si1"),
     ]);
     expect(plan.sessions.upsertIds).toEqual(["k1"]);
     expect(plan.tasks.upsertIds).toEqual(["t1"]);
     expect(plan.docs.upsertIds).toEqual(["d1"]);
     expect(plan.plans.upsertIds).toEqual(["p1"]);
     expect(plan.projects.upsertIds).toEqual(["pj1"]);
-    expect(plan.strategies.upsertIds).toEqual(["s1"]);
-    expect(plan.steeringItems.upsertIds).toEqual(["si1"]);
-  });
-
-  it("routes steering deletes for prune", () => {
-    const plan = planFeedApply([c("steering_items", "si1", "delete"), c("strategies", "s1", "delete")]);
-    expect(plan.steeringItems.deleteIds).toEqual(["si1"]);
-    expect(plan.strategies.deleteIds).toEqual(["s1"]);
   });
 
   it("splits upserts from deletes", () => {

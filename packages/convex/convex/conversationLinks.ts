@@ -1,7 +1,7 @@
-// Steering: entity-to-conversation associations (entity_conversations table).
+// Entity-to-conversation associations (entity_conversations table).
 // Messages stay in the existing conversations/messages substrate; these rows
-// only record that a conversation relates to a Strategy / Steering Item /
-// Task / Plan and how (discussion, work, investigation, evidence).
+// only record that a conversation relates to a Task / Plan and how
+// (discussion, work, investigation, evidence).
 //
 // Containment: the entity workspace comes from { user_id, team_id? }; the
 // conversation workspace comes from workspaceForConversation, which treats
@@ -14,21 +14,82 @@ import { mutation, query } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   canAccessConversation,
+  canAccessPlan,
+  canAccessTask,
   requireAccessibleConversation,
   requireWorkspaceMatch,
   workspaceForConversation,
+  workspaceForResource,
+  type AuthorizedWorkspace,
 } from "./lib/access";
-import {
-  linkableEntityExists,
-  linkWorkspace,
-  requireAccessibleLinkableEntity,
-  type LinkableEntityType,
-} from "./lib/steering";
 import { notFound } from "./lib/auth";
+import type { Id } from "./_generated/dataModel";
+
+export type LinkableEntityType = "task" | "plan";
+type AccessCtx = { db: any };
+
+const ENTITY_TABLE: Record<LinkableEntityType, string> = {
+  task: "tasks",
+  plan: "plans",
+};
+
+const ENTITY_ACCESS: Record<
+  LinkableEntityType,
+  (ctx: AccessCtx, userId: Id<"users">, entity: any) => Promise<boolean>
+> = {
+  task: canAccessTask,
+  plan: canAccessPlan,
+};
+
+// Resolve a raw entity reference to its accessible document, or fail closed.
+// normalizeId keeps a foreign-table id from ever reaching db.get as the wrong
+// type; access failure and absence are indistinguishable (NOT_FOUND).
+async function requireAccessibleLinkableEntity(
+  ctx: AccessCtx,
+  userId: Id<"users">,
+  entityType: LinkableEntityType,
+  rawId: string,
+): Promise<any> {
+  const table = ENTITY_TABLE[entityType];
+  const id = ctx.db.normalizeId ? ctx.db.normalizeId(table, rawId) : rawId;
+  const entity = id
+    ? await ctx.db.get(id)
+    : await ctx.db
+        .query(table)
+        .withIndex("by_short_id", (q: any) => q.eq("short_id", rawId))
+        .unique();
+  if (!entity || !(await ENTITY_ACCESS[entityType](ctx, userId, entity))) {
+    notFound(`${entityType} not found`);
+  }
+  return entity;
+}
+
+// Whether a link endpoint's document still exists at all — irrespective of
+// the caller's access. Distinguishes a truly-gone endpoint (dangler) from one
+// that merely isn't visible to the caller (fail closed).
+async function linkableEntityExists(
+  ctx: AccessCtx,
+  entityType: LinkableEntityType,
+  rawId: string,
+): Promise<boolean> {
+  const table = ENTITY_TABLE[entityType];
+  const id = ctx.db.normalizeId ? ctx.db.normalizeId(table, rawId) : rawId;
+  if (!id) return false;
+  return !!(await ctx.db.get(id));
+}
+
+// The workspace a link row lives in, derived from its endpoints. Tasks and
+// plans use the plain { user_id, team_id? } shape. (Conversation links derive
+// their workspace separately via workspaceForConversation — team_id on a
+// conversation is routing, not scope.)
+function linkWorkspace(entity: {
+  user_id: Id<"users">;
+  team_id?: Id<"teams">;
+}): AuthorizedWorkspace {
+  return workspaceForResource(entity);
+}
 
 const entityTypeValidator = v.union(
-  v.literal("strategy"),
-  v.literal("steering_item"),
   v.literal("task"),
   v.literal("plan"),
 );

@@ -871,7 +871,7 @@ export const update = mutation({
         const existing = task.conversation_ids || [];
         if (!existing.some((id) => id === conv._id)) {
           updates.conversation_ids = [...existing, conv._id];
-          // Compatibility dual-write: the steering association row alongside
+          // Compatibility dual-write: the entity-conversation association row alongside
           // the legacy conversation_ids field. Best-effort — this update may
           // simultaneously move the task's workspace, which the strict
           // containment check reads from the pre-patch row.
