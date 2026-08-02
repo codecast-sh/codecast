@@ -25,6 +25,8 @@ type DeviceAccounts = {
   device_id: string;
   label: string;
   is_remote: boolean;
+  /** Absent on servers that predate the field — those only return online devices. */
+  online?: boolean;
   active_email?: string;
   profiles: Array<{ name: string; email?: string; tier?: string; subscription?: string; usage?: CcUsage }>;
   auto_switch: boolean;
@@ -168,6 +170,7 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
+  const online = device.online !== false;
   const activeProfile = device.profiles.find((p) => p.email && p.email === device.active_email);
   // Suggest the email's org part as the profile name (ashot@footage.com -> footage).
   const suggested = (device.active_email?.split("@")[1]?.split(".")[0] ?? "work").toLowerCase();
@@ -213,10 +216,17 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
           </span>
         )}
         <span className="inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim">
-          <span className="h-1.5 w-1.5 rounded-full bg-sol-green" />
-          online
+          <span className={`h-1.5 w-1.5 rounded-full ${online ? "bg-sol-green" : "bg-sol-border"}`} />
+          {online ? "online" : "offline"}
         </span>
       </div>
+
+      {!online && (
+        <p className="mt-2 text-[11px] leading-relaxed text-sol-text-dim">
+          The daemon on this machine isn't reporting right now (<CopyableCommand cmd="cast restart" /> brings
+          it back). Account switching needs it; the auto-switch setting below still saves.
+        </p>
+      )}
 
       <div className="mt-3 space-y-1.5">
         {device.profiles.map((p) => {
@@ -267,7 +277,7 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={busy !== null || device.is_remote}
+                      disabled={busy !== null || device.is_remote || !online}
                       onClick={() => handleSwitch(p.name)}
                       className="h-6 px-2 text-[11px]"
                     >
@@ -275,7 +285,7 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
                     </Button>
                     <button
                       onClick={() => setConfirmRemove(p.name)}
-                      disabled={busy !== null}
+                      disabled={busy !== null || !online}
                       title="Remove this profile from the machine"
                       className="shrink-0 rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-red/10 hover:text-sol-red"
                     >
@@ -299,7 +309,7 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
 
       {!device.is_remote && <AutoSwitchToggle device={device} />}
 
-      {!device.is_remote && device.active_email && !activeProfile && (
+      {!device.is_remote && online && device.active_email && !activeProfile && (
         <SaveCurrentForm device={device} suggestedName={suggested} />
       )}
       {!device.is_remote && activeProfile && (
