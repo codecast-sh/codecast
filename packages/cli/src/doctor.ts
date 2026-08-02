@@ -34,6 +34,7 @@ import type { Config } from "./config/types.js";
 import { getMachineKey, hardwareId } from "./machineKey.js";
 import { deviceId } from "./remote/device.js";
 import { probeAllClients, hasBin } from "./doctorClients.js";
+import { defaultCursorPath } from "./cursorWatcher.js";
 
 // ── deps handed in by index.ts ───────────────────────────────────────────────
 // The CLI entrypoint owns config decryption and the daemon state-file helpers;
@@ -54,6 +55,7 @@ export interface DoctorDeps {
     lastHeartbeatTick?: number;
     lastWatchdogCheck?: number;
     authExpired?: boolean;
+    cursorAccess?: "granted" | "denied";
   } | null;
   getStuckSyncs: () => Array<{ sessionId: string; unsyncedBytes: number; lastSyncedAt: number }>;
 }
@@ -346,6 +348,44 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
         ? `${retryDepth} retry item(s) draining`
         : "clear",
   });
+
+  // ── macOS app-data access (TCC) ──
+  // Reading another app's data (Cursor's chat db) needs a per-app macOS grant;
+  // the daemon records the outcome in its state file (see cursorWatcherDecision).
+  if (process.platform === "darwin") {
+    const cursorPref = deps.config.cursor_sync;
+    const cursorAccess = state?.cursorAccess;
+    if (cursorPref === "off") {
+      record({ name: "cursor sync", status: "skip", detail: "disabled (`cast cursor on` to enable)" });
+    } else if (cursorAccess === "granted") {
+      record({ name: "cursor sync", status: "pass", detail: "app data access granted" });
+    } else if (cursorAccess === "denied") {
+      record({
+        name: "cursor sync",
+        status: "warn",
+        detail: "macOS denied access to Cursor's data — System Settings → Privacy & Security → allow codecast (or grant Full Disk Access), then `cast cursor on`",
+      });
+    } else if (fs.existsSync(defaultCursorPath())) {
+      record({ name: "cursor sync", status: "warn", detail: "Cursor detected but not synced — run `cast cursor on` (macOS asks to allow access once)" });
+    } else {
+      record({ name: "cursor sync", status: "skip", detail: "Cursor not installed" });
+    }
+
+    // Permission grants attach to the daemon's code-signing identity. Release
+    // binaries are Developer ID-signed with a stable identifier, so grants
+    // survive updates; a from-source daemon runs under the ad-hoc-signed bun
+    // binary, so prompts say "bun" and grants can reset when bun updates.
+    try {
+      const launcher = fs.readFileSync(path.join(deps.configDir, "daemon-launcher.sh"), "utf-8");
+      if (/\/\.bun\/bin\/bun|[\s']bun[\s']/.test(launcher)) {
+        record({
+          name: "tcc identity",
+          status: "warn",
+          detail: "daemon runs from source under bun — permission prompts show \"bun\" and grants reset on bun updates; use the installed binary for a stable identity",
+        });
+      }
+    } catch {}
+  }
 
   const tmuxAvailable = hasBin("tmux");
   const runtime = resolveStubRuntime();
