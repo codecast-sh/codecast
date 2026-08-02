@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { canAccessConversation } from "./lib/access";
 import { isConversationTeamVisible } from "./privacy";
 
 export const addCommit = mutation({
@@ -28,6 +29,19 @@ export const addCommit = mutation({
     }))),
   },
   handler: async (ctx, args) => {
+    // Public mutation that writes into a caller-supplied conversation's
+    // timeline and schedules team-activity and insight generation against it.
+    // Without these checks anyone could fabricate commits in another user's
+    // session and trigger billed work on it.
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    if (args.conversation_id) {
+      const conversation = await ctx.db.get(args.conversation_id);
+      if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) {
+        throw new Error("No access to that conversation");
+      }
+    }
+
     const existing = await ctx.db
       .query("commits")
       .withIndex("by_sha", (q) => q.eq("sha", args.sha))
@@ -89,6 +103,13 @@ export const linkCommitToSession = mutation({
     conversation_id: v.id("conversations"),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const target = await ctx.db.get(args.conversation_id);
+    if (!target || !(await canAccessConversation(ctx, userId, target))) {
+      throw new Error("No access to that conversation");
+    }
+
     const commit = await ctx.db
       .query("commits")
       .withIndex("by_sha", (q) => q.eq("sha", args.commit_sha))
@@ -96,6 +117,14 @@ export const linkCommitToSession = mutation({
 
     if (!commit) {
       throw new Error(`Commit with sha ${args.commit_sha} not found`);
+    }
+    // Repointing a commit that already belongs to a conversation requires
+    // access to the one it is leaving, not just the one it is joining.
+    if (commit.conversation_id) {
+      const current = await ctx.db.get(commit.conversation_id);
+      if (current && !(await canAccessConversation(ctx, userId, current))) {
+        throw new Error("No access to that commit");
+      }
     }
 
     await ctx.db.patch(commit._id, {
@@ -106,11 +135,42 @@ export const linkCommitToSession = mutation({
   },
 });
 
+// `commits` rows carry files[].patch — the actual source diff — so every read
+// below must be authenticated. NOTE: the table has no user_id/team_id column,
+// and syncRepositoryCommits creates rows with no conversation_id, so a row's
+// owner is only reachable when conversation_id is set. Rows without one cannot
+// be attributed and are withheld (fail closed). Giving `commits` an owner
+// column is the real fix; until then these read as "signed in, and either the
+// row is yours by conversation or it is not served".
+async function accessibleCommits<T extends { conversation_id?: Id<"conversations"> }>(
+  ctx: Parameters<typeof canAccessConversation>[0] & { db: any },
+  userId: Id<"users">,
+  commits: T[],
+): Promise<T[]> {
+  const verdict = new Map<string, boolean>();
+  const out: T[] = [];
+  for (const c of commits) {
+    if (!c.conversation_id) continue;
+    const key = c.conversation_id.toString();
+    if (!verdict.has(key)) {
+      const conversation = await ctx.db.get(c.conversation_id);
+      verdict.set(key, conversation ? await canAccessConversation(ctx, userId, conversation) : false);
+    }
+    if (verdict.get(key)) out.push(c);
+  }
+  return out;
+}
+
 export const getCommitsForConversation = query({
   args: {
     conversation_id: v.id("conversations"),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) return [];
+
     const commits = await ctx.db
       .query("commits")
       .withIndex("by_conversation_id", (q) =>
@@ -127,10 +187,14 @@ export const getCommitBySha = query({
     sha: v.string(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const commit = await ctx.db
       .query("commits")
       .withIndex("by_sha", (q) => q.eq("sha", args.sha))
       .first();
+    if (!commit) return null;
+    return (await accessibleCommits(ctx, userId, [commit]))[0] ?? null;
   },
 });
 
@@ -140,18 +204,21 @@ export const getCommitsByRepository = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
     const commits = await ctx.db
       .query("commits")
       .withIndex("by_repository", (q) => q.eq("repository", args.repository))
       .collect();
 
     commits.sort((a, b) => b.timestamp - a.timestamp);
+    const allowed = await accessibleCommits(ctx, userId, commits);
 
     if (args.limit) {
-      return commits.slice(0, args.limit);
+      return allowed.slice(0, args.limit);
     }
 
-    return commits;
+    return allowed;
   },
 });
 
@@ -163,6 +230,8 @@ export const getCommitsForTimeline = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
     const limit = args.limit ?? 100;
 
     const commits = await ctx.db
@@ -185,7 +254,7 @@ export const getCommitsForTimeline = query({
       filtered = filtered.filter((c) => c.repository === args.repository);
     }
 
-    return filtered.slice(0, limit);
+    return (await accessibleCommits(ctx, userId, filtered)).slice(0, limit);
   },
 });
 
@@ -263,18 +332,11 @@ export const clearMyGitHubData = mutation({
   },
 });
 
-export const clearAllCommits = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const allCommits = await ctx.db.query("commits").collect();
-    let deleted = 0;
-    for (const commit of allCommits) {
-      await ctx.db.delete(commit._id);
-      deleted++;
-    }
-    return { deleted };
-  },
-});
+// REMOVED: clearAllCommits — an argument-less public mutation that deleted the
+// entire commits table for every user. Convex exports every public function, so
+// it was callable by anyone with the deployment URL and had no caller in the
+// repo. `clearMyGitHubData` above covers the legitimate case, scoped to the
+// authenticated user's own conversations.
 
 export const syncAllMyRepositories = action({
   args: {
