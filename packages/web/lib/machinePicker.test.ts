@@ -201,3 +201,41 @@ describe("resolveMachineSelection", () => {
     expect(resolveMachineSelection([], {}).scopeProjectsToDeviceId).toBeNull();
   });
 });
+
+describe("resolveMachineSelection — a transient empty roster", () => {
+  // `useDevices()` is `useQuery(...) ?? []`, so the roster reads EMPTY on every
+  // mount and again on any Convex reconnect. That gap used to resolve to null,
+  // and null scoping reverted the folder list to the cross-machine union while
+  // the stub's stamp survived — so the UI could offer a machine-B-only path for a
+  // session already pinned to machine A, and the create would send it to A.
+  const ROSTER = [dev("A"), dev("B")];
+
+  it("preserves BOTH the stamp and the project scoping across the gap", () => {
+    const loaded = resolveMachineSelection(ROSTER, { picked: "A" });
+    expect(loaded.stampDeviceId).toBe("A");
+
+    const duringGap = resolveMachineSelection([], { existingStamp: loaded.stampDeviceId });
+    expect(duringGap.stampDeviceId).toBe("A");
+    expect(duringGap.scopeProjectsToDeviceId).toBe("A"); // never null → never the union
+  });
+
+  it("keeps scope and stamp equal in the gap, so neither half can drift", () => {
+    const r = resolveMachineSelection([], { existingStamp: "A" });
+    expect(r.scopeProjectsToDeviceId).toBe(r.stampDeviceId);
+  });
+
+  it("is only a fallback — a live roster decides again, so a stale stamp can't stick", () => {
+    const r = resolveMachineSelection(ROSTER, { existingStamp: "B", lastPicked: "A" });
+    expect(r.selectedDeviceId).toBe("A");
+  });
+
+  it("an active pick still outranks the recorded stamp", () => {
+    expect(resolveMachineSelection(ROSTER, { picked: "B", existingStamp: "A" }).stampDeviceId).toBe("B");
+  });
+
+  it("still null when there is no roster AND no prior decision", () => {
+    const r = resolveMachineSelection([], {});
+    expect(r.stampDeviceId).toBeNull();
+    expect(r.scopeProjectsToDeviceId).toBeNull();
+  });
+});

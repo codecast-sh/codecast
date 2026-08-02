@@ -852,16 +852,19 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     () => recentProjectPathsFromSessionKeys(loadedSessionProjectKeys, currentUser?._id ? String(currentUser._id) : null),
     [loadedSessionProjectKeys, currentUser?._id],
   );
-  // Narrowed: only _id/project_path/git_root/owner_device_id are read here, none of
-  // which change on a heartbeat — so the always-rendered ProjectSwitcher no longer
-  // re-renders ~1×/s.
+  // Narrowed: only _id/project_path/git_root/owner_device_id/target_device_id are
+  // read here, none of which change on a heartbeat — so the always-rendered
+  // ProjectSwitcher no longer re-renders ~1×/s. Anything the machine row needs
+  // must be listed HERE: a field left out reads back undefined, and reading it
+  // through an `as any` cast silently defeats that (which is how the empty-roster
+  // fallback below shipped broken once already). Keep the reads typed.
   // resolveLiveSessionId follows the row across the compose popup's stub→real rekey
   // (which deletes sessions[stub]); without it a folder click after the create lands
   // updates the backend but never moves the highlight, since storeSession goes stale.
   const storeSession = useInboxStore(useShallow((s) => {
     const sess = s.sessions[s.resolveLiveSessionId(conversation._id)];
     if (!sess) return undefined;
-    return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root, owner_device_id: sess.owner_device_id };
+    return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root, owner_device_id: sess.owner_device_id, target_device_id: sess.target_device_id };
   }));
   const isolated = useInboxStore((s) => s.isolatedWorktreeMode);
   const convCommand = useInboxStore((s) => s.convCommand);
@@ -896,10 +899,15 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     lastPicked: lastPickedDeviceId,
   };
   // The machine this session WILL run on, plus the two things that must agree
-  // with it: what gets stamped, and which machine's folders we offer.
+  // with it: what gets stamped, and which machine's folders we offer. The stamp
+  // already on the row is the last-resort rung — `devices` reads empty on mount
+  // and on any Convex reconnect, and without it that gap would drop the folder
+  // list back to the cross-machine union while the stamp survived.
+  const existingStamp = storeSession?.target_device_id ?? null;
   const { selectedDeviceId, scopeProjectsToDeviceId } = resolveMachineSelection(devices, {
     ...machineOpts,
     picked: pickedDeviceId,
+    existingStamp,
   });
 
   // The folder list is scoped to the machine we're about to stamp, ALWAYS. The
