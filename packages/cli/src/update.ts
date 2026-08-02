@@ -13,7 +13,7 @@ const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "6"; // bumped: send with judgment — interruptions aren't free
 const VISUAL_VERSION = "3"; // cast-canvas: broader Plot marks + declarative transforms
 const FORKS_VERSION = "2"; // bumped: --label flag on cast fork / cast spawn + default label inheritance on fork
-const PUBLISH_VERSION = "2"; // bumped: markdown/bundle publishes, --watch + ?live=1, gates, rollback/diff, comments as session messages
+const PUBLISH_VERSION = "3"; // bumped: management subcommands (versions/comments/viewers/links/set) usable without the source file
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_RETRY_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
