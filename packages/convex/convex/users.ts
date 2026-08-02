@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import type { PaginationOptions, PaginationResult, RegisteredQuery } from "convex/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots } from "./devices";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
@@ -196,6 +196,20 @@ export const daemonHeartbeat = mutation({
     device_id: v.optional(v.string()),
     device_label: v.optional(v.string()),
     is_remote_device: v.optional(v.boolean()),
+    // Git-plane health per repo (gitPlane.ts) — metadata only, mirrors the
+    // devices.git_plane schema field.
+    git_plane: v.optional(v.array(v.object({
+      root: v.string(),
+      origin: v.optional(v.string()),
+      origin_ok: v.boolean(),
+      fetch_ok: v.optional(v.boolean()),
+      ahead: v.optional(v.number()),
+      behind: v.optional(v.number()),
+      branch: v.optional(v.string()),
+      fetched_at: v.optional(v.number()),
+      repaired_from: v.optional(v.string()),
+      error: v.optional(v.string()),
+    }))),
     // CC account inventory (names/emails/tiers, never tokens) for the switcher.
     cc_accounts: v.optional(ccAccountsValidator),
     // DEPRECATED: old daemons still send the machine-wide Codex snapshot;
@@ -302,6 +316,7 @@ export const daemonHeartbeat = mutation({
         ...(args.local_project_roots !== undefined
           ? { local_project_roots: args.local_project_roots }
           : {}),
+        ...(args.git_plane !== undefined ? { git_plane: args.git_plane } : {}),
         ...(args.cc_accounts !== undefined ? { cc_accounts: args.cc_accounts } : {}),
         ...(args.codex_usage !== undefined ? { codex_usage: args.codex_usage } : {}),
         ...(args.codex_accounts !== undefined ? { codex_accounts: args.codex_accounts } : {}),
@@ -863,6 +878,19 @@ export const updatePrivacySettings = mutation({
   },
 });
 
+// The profile header shape: publicUserCard plus the two fields the profile
+// page reads directly. NEVER return a raw `users` row from a public function —
+// the row carries github_access_token, encryption_master_key and push_token
+// alongside the profile fields, and this deployment has no global auth gate.
+function profileHeaderCard(user: Doc<"users"> | null) {
+  if (!user) return null;
+  return {
+    ...publicUserCard(user),
+    github_avatar_url: user.github_avatar_url ?? null,
+    daemon_last_seen: user.daemon_last_seen ?? null,
+  };
+}
+
 export const getUserByUsername = query({
   args: {
     username: v.optional(v.string()),
@@ -870,22 +898,22 @@ export const getUserByUsername = query({
   },
   handler: async (ctx, args) => {
     if (args.user_id) {
-      return ctx.db.get(args.user_id);
+      return profileHeaderCard(await ctx.db.get(args.user_id));
     }
     if (args.username) {
       const byUsername = await ctx.db
         .query("users")
         .withIndex("by_github_username", (q) => q.eq("github_username", args.username))
         .first();
-      if (byUsername) return byUsername;
+      if (byUsername) return profileHeaderCard(byUsername);
       const asId = ctx.db.normalizeId("users", args.username);
-      if (asId) return ctx.db.get(asId);
+      if (asId) return profileHeaderCard(await ctx.db.get(asId));
       const lower = args.username.toLowerCase();
       const all = await ctx.db.query("users").take(200);
-      return all.find((u) =>
+      return profileHeaderCard(all.find((u) =>
         u.name?.toLowerCase() === lower ||
         u.github_username?.toLowerCase() === lower
-      ) || null;
+      ) ?? null);
     }
     return null;
   },
