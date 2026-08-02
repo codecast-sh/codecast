@@ -801,6 +801,14 @@ export function mutativeMiddleware(config: any, opts?: {
 
     let draining = false;
     let drainAgain = false;
+    // Whether a drain pass has loaded the outbox and attempted every entry in it
+    // (delivered, re-queued, or given up on). Consumers that must not act on a
+    // PRE-REPLAY view of server state wait on this — the boot-eager hidden-set
+    // crawls, whose CLEAR pass would otherwise un-hide a dismiss still parked here
+    // (see bootEagerArmed in hooks/reconcileCrawl.ts). Stays false while the
+    // outbox is unwired or a drain aborts on a rotated binding; those consumers
+    // bound their own wait rather than blocking forever.
+    let bootOutboxDrained = false;
     async function drainOutbox(countAttempts = true) {
       const captured = dispatchBinding;
       const capturedLoad = outboxLoadFn;
@@ -922,6 +930,10 @@ export function mutativeMiddleware(config: any, opts?: {
             }
           }
         }
+        // Every parked entry has now been attempted — the replay is no longer
+        // racing readers of server state. Set after the loop, so an abort partway
+        // through leaves it false for the successor binding's drain to satisfy.
+        bootOutboxDrained = true;
       } catch (e) {
         // A binding rotated mid-drain (page-load verification rebind, account
         // switch). Every drain call site is fire-and-forget, so letting this
@@ -1258,6 +1270,12 @@ export function mutativeMiddleware(config: any, opts?: {
     // live socket stranded reaches the server WITHOUT waiting for a reload.
     wrapped._drainOutbox = () => { drainOutbox(false); };
 
+    // Whether the durable outbox has been replayed once since load — see
+    // bootOutboxDrained. Polled by the boot-eager hidden-set crawls, which must
+    // not run their un-hide CLEAR pass against a server that hasn't received the
+    // hides still parked here.
+    wrapped._hasBootOutboxDrained = () => bootOutboxDrained;
+
     // Whether a dispatch fired right now would actually reach the server: a
     // binding exists and its captured authorization is still current. A false
     // here is the only visible symptom of a binding stranded by a
@@ -1290,6 +1308,12 @@ export function mutativeMiddleware(config: any, opts?: {
       outboxEnqueueFn = null;
       outboxRemoveFn = null;
       outboxLoadFn = null;
+      // The drained flag described the OUTGOING principal's outbox. The successor
+      // has its own principal-scoped rows and has replayed none of them, so
+      // carrying the flag across would tell the boot-eager hidden-set crawls the
+      // replay already happened and let them read the server before the new
+      // account's parked hides ship — the exact race the flag exists to prevent.
+      bootOutboxDrained = false;
       // Receipt waiters intentionally survive a runtime/auth rebind. Their
       // random entry ids can resolve only when that exact principal-scoped
       // outbox row drains again; another account cannot present the row. This

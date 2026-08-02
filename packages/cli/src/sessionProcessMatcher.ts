@@ -119,6 +119,13 @@ export function matchStartedConversation(
 // with its CURRENT session id. These are the pure pieces: parse one
 // `ps -axo pid=,ppid=` snapshot, enumerate ancestors nearest-first, and map
 // the first registered ancestor to a session id (skipping the child itself).
+//
+// Only Claude Code writes that pid registry, so a codex/gemini/pi/opencode
+// spawner leaves every ancestor unregistered — the child used to stay a loose
+// first-class card no matter how deep the chain. The second identification
+// route covers those: an ancestor is named by the TRANSCRIPT IT HOLDS OPEN,
+// read from one `lsof -F pn` over the whole chain
+// (see agentSessionFromTranscriptPath).
 
 export function parsePidPpidMap(psOutput: string): Map<number, number> {
   const map = new Map<number, number>();
@@ -145,6 +152,28 @@ export function collectAncestorPids(
     pid = pidToPpid.get(pid);
   }
   return ancestors;
+}
+
+/** Parse `lsof -F pn` into pid → the paths that process has open. The -F stream
+ *  is flat: a `p<pid>` line opens a process block and every `n<path>` line after
+ *  it belongs to that process until the next `p` line. */
+export function parseLsofPidPaths(output: string): Map<number, string[]> {
+  const byPid = new Map<number, string[]>();
+  let current: string[] | null = null;
+  for (const line of output.split("\n")) {
+    if (line.startsWith("p")) {
+      const pid = parseInt(line.slice(1), 10);
+      if (isNaN(pid)) {
+        current = null;
+        continue;
+      }
+      current = byPid.get(pid) || [];
+      byPid.set(pid, current);
+    } else if (line.startsWith("n") && current) {
+      current.push(line.slice(1));
+    }
+  }
+  return byPid;
 }
 
 export function resolveSpawnerSessionId(
