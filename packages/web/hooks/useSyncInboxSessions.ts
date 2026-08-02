@@ -442,6 +442,7 @@ export function useSyncInboxSessions() {
   // shared workspace: account A's completion mark must not throttle account B,
   // and no crawl may begin before Convex has identified the active principal.
   const sessWsKey = inboxCrawlWsKey(currentUser?._id?.toString());
+  // eslint-disable-next-line no-restricted-syntax -- cleanup keyed to the principal; cancels in-flight crawls on wsKey change
   useEffect(() => () => {
     cancelReconcileCrawl("sessions");
     cancelReconcileCrawl("dismissed");
@@ -578,6 +579,7 @@ export function useSyncInboxSessions() {
   // Polled rather than subscribed: _hasBootOutboxDrained is a
   // plain accessor injected by mutativeMiddleware, not reactive store state.
   const [bootEagerPrincipal, setBootEagerPrincipal] = useState<string | null>(null);
+  // eslint-disable-next-line no-restricted-syntax -- polled outbox-drain gate; effect manages its own interval
   useEffect(() => {
     if (!hydrated || sessWsKey === "skip" || bootEagerPrincipal === sessWsKey) return;
     const check = () => {
