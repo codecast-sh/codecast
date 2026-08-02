@@ -132,10 +132,14 @@ export function DocumentDetailLayout({
             {isEditing ? <Edit3 className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
           </button>
           {topBarRight}
+          {/* Layout (pin/full) controls from the surrounding list surface —
+              they live IN this header so the detail has exactly one chrome
+              row and one close button. Null outside a DetailSplitLayout. */}
+          <PeekLayoutControls />
           <Link
             href={backHref}
             className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
-            title="Close"
+            title="Close (Esc)"
           >
             <X className="w-4 h-4" />
           </Link>

@@ -386,7 +386,7 @@ export default function TaskDetailPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <DetailSplitLayout list={<TaskListContent />} surface="tasks" closeHref="/tasks">
+        <DetailSplitLayout list={<TaskListContent />} closeHref="/tasks">
           <ErrorBoundary name="TaskDetail" level="panel">
             <TaskDetailContent />
           </ErrorBoundary>

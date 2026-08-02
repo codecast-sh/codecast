@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useInboxStore, isSessionWaitingForInput, layoutSurfaceFromPath } from "../store/inboxStore";
+import { useInboxStore, isSessionWaitingForInput } from "../store/inboxStore";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
@@ -191,9 +191,6 @@ export function useGlobalShortcutActions() {
     useInboxStore.getState().toggleSidePanel();
   }, []));
 
-  useShortcutAction('layout.cycle', useCallback(() => {
-    useInboxStore.getState().cycleLayoutMode(layoutSurfaceFromPath(window.location.pathname));
-  }, []));
 
   useShortcutAction('sidebar.toggleComments', useCallback(() => {
     const store = useInboxStore.getState();

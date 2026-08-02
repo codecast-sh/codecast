@@ -1696,7 +1696,7 @@ export const SessionCard = memo(function SessionCard({
           )}
         </div>
         {!isForeignSession && (onDismiss || onDefer || onPin) && (
-          <div className={`absolute top-0 bottom-0 right-0 flex items-center py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
+          <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex items-center py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
             {onDismiss && (
               <button
                 onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
@@ -2009,7 +2009,7 @@ export const SessionCard = memo(function SessionCard({
           omits its own pin button for pinned rows — so the pin never duplicates or
           cross-fades into a second copy. */}
       {onPin && session.is_pinned && (
-        <div className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
+        <div data-sv-fade className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
           <ShortcutTooltip label="Unpin" action="session.pin" side="left">
             <button
               onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); }}
@@ -2024,7 +2024,7 @@ export const SessionCard = memo(function SessionCard({
         </div>
       )}
       {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
-        <div className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
+        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
           {/* Pin slot, first so it anchors the top of the toolbar. When the row is
               already pinned, the persistent badge above IS the pin — here we render
               only an invisible spacer the same size, so the remaining actions sit
@@ -2575,8 +2575,9 @@ export function SessionListPanel({
       .catch(() => {});
   }, [handleSelect, router, convex]);
   // Schedule bars under cards: the schedules bound to a VISIBLE session — the
-  // ones it originates (inject, any type) plus, for a run card, the schedule
-  // that spawned it. Keyed off partition.rows so bars share the unread state.
+  // ones it originates (inject, any type), the spawn triggers it created
+  // (attribution, not routing), plus, for a run card, the schedule that
+  // spawned it. Keyed off partition.rows so bars share the unread state.
   const scheduleBarRowsFor = useCallback((sess: InboxSession): TriggerRow[] => {
     const rows = schedulePartitionRef.current.rows;
     const out: TriggerRow[] = [];
@@ -2587,6 +2588,7 @@ export function SessionListPanel({
       if (r.kind === "subagent") continue;
       if (
         r.task.originating_conversation_id === sess._id ||
+        r.task.created_by_conversation_id === sess._id ||
         (!!sess.agent_task_id && r.task._id === sess.agent_task_id)
       ) {
         out.push(r);
@@ -3682,60 +3684,3 @@ export function SessionListPanel({
   );
 }
 
-// -- ConversationColumn (session panel for non-inbox pages) --
-
-export const ConversationColumn = memo(function ConversationColumn() {
-  const s = useTrackedStore([
-    s => s.sidePanelSessionId,
-    // Only this one row is read below — subscribe to it, not the whole map, so a
-    // heartbeat on any OTHER session doesn't re-render the side panel.
-    s => s.sessions[s.sidePanelSessionId ?? ""],
-  ]);
-  const router = useRouter();
-
-  const session = s.sidePanelSessionId ? (s.sessions[s.sidePanelSessionId] ?? null) : null;
-  const sessionRenderKey = getSessionRenderKey(session);
-
-  useWatchEffect(() => {
-    if (s.sidePanelSessionId && !session) s.selectPanelSession(null);
-  }, [s.sidePanelSessionId, session]);
-
-  const handleBack = useCallback(() => {
-    s.selectPanelSession(null);
-  }, [s.selectPanelSession]);
-
-  const handleExpand = useCallback(() => {
-    if (!s.sidePanelSessionId) return;
-    s.navigateToSession(s.sidePanelSessionId);
-    router.push('/inbox');
-  }, [s.sidePanelSessionId, s.navigateToSession, router]);
-
-  const handleClose = useCallback(() => {
-    s.selectPanelSession(null);
-  }, [s.selectPanelSession]);
-
-  const handleSendAndDismiss = useCallback(() => {
-    if (s.sidePanelSessionId) animatedHideSession(s.sidePanelSessionId, "stash");
-  }, [s.sidePanelSessionId]);
-
-  if (!session || !s.sidePanelSessionId) return null;
-
-  return (
-    <div className="h-full flex flex-col">
-      <div className="h-full">
-        <InboxConversation
-          key={sessionRenderKey || s.sidePanelSessionId}
-          sessionId={s.sidePanelSessionId}
-          isIdle={session.is_idle}
-          onSendAndAdvance={() => {}}
-          onSendAndDismiss={handleSendAndDismiss}
-          lastUserMessage={session.last_user_message}
-          sessionError={session.session_error}
-          onBack={handleBack}
-          onExpandToMain={handleExpand}
-          onClose={handleClose}
-        />
-      </div>
-    </div>
-  );
-});

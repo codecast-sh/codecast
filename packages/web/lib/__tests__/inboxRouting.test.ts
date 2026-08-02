@@ -16,10 +16,10 @@ describe("inboxRouting", () => {
 });
 
 describe("resolveSessionSelectKind", () => {
-  it("opens a peek column on plain working pages", () => {
+  it("promotes to the stage (leave) on plain working pages", () => {
     expect(resolveSessionSelectKind({
       isOnSettingsPage: false, isOnInboxPage: false, isOnConversationPage: false,
-    })).toBe("peekPanel");
+    })).toBe("leave");
   });
 
   it("selects in place on the inbox", () => {
