@@ -6,6 +6,7 @@ import {
   decodeCodexAuth,
   saveCodexProfile,
   autoSaveActiveCodexProfile,
+  migrateLegacyCodexProfileNames,
   resnapshotIfActiveCodexFresher,
   refreshCodexUsageSnapshots,
   getCodexAccountsHeartbeatPayload,
@@ -111,10 +112,21 @@ describe("codexAccounts", () => {
       expect(() => saveCodexProfile("nope")).toThrow(CodexAccountError);
     });
 
-    it("auto-save enrolls once, derives the org name, then no-ops", () => {
+    it("auto-save enrolls once, derives the local-part name, then no-ops", () => {
       writeActiveAuth(authJson());
-      expect(autoSaveActiveCodexProfile()?.name).toBe("almostcandid");
+      expect(autoSaveActiveCodexProfile()?.name).toBe("ashot");
       expect(autoSaveActiveCodexProfile()).toBeNull();
+    });
+
+    it("migrates legacy domain-derived names, moving the snapshot dir", () => {
+      writeActiveAuth(authJson());
+      saveCodexProfile("almostcandid"); // old auto-derived name for ashot@almostcandid.com
+      expect(migrateLegacyCodexProfileNames()).toEqual([{ from: "almostcandid", to: "ashot" }]);
+      expect(Object.keys(readProfileIndex().profiles)).toEqual(["ashot"]);
+      expect(fs.existsSync(path.join(profileDir("ashot"), "auth.json"))).toBe(true);
+      expect(fs.existsSync(profileDir("almostcandid"))).toBe(false);
+      // Idempotent, and hand-picked names stay.
+      expect(migrateLegacyCodexProfileNames()).toEqual([]);
     });
 
     it("resnapshot copies the live auth only when it rotated past the stored one", () => {
@@ -152,7 +164,7 @@ describe("codexAccounts", () => {
       expect(cache.accounts["acct-1"].weekly?.percent).toBe(15);
       expect(cache.accounts["acct-2"].weekly?.percent).toBe(40);
       // The refresh auto-enrolled the active login as a profile.
-      expect(readProfileIndex().profiles.almostcandid.account_id).toBe("acct-1");
+      expect(readProfileIndex().profiles.ashot.account_id).toBe("acct-1");
     });
 
     it("throttles per-account probes within minIntervalMs", async () => {
@@ -190,7 +202,7 @@ describe("codexAccounts", () => {
       expect(payload.active_uuid).toBe("acct-1");
       expect(payload.profiles).toHaveLength(1);
       const p = payload.profiles[0];
-      expect(p.name).toBe("almostcandid");
+      expect(p.name).toBe("ashot");
       expect(p.subscription).toBe("pro"); // RPC's live plan reading
       expect(p.usage?.weekly?.percent).toBe(15);
       expect(p.usage?.reset_credits).toEqual({ available: 1 });

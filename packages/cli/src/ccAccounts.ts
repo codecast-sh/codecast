@@ -278,6 +278,22 @@ function readProfileSecret(name: string): string | null {
   }
 }
 
+function deleteProfileSecret(name: string): void {
+  if (useFileStore()) {
+    fs.rmSync(path.join(profileFileDir(), `${name}.json`), { force: true });
+    return;
+  }
+  try {
+    execFileSync(
+      "security",
+      ["delete-generic-password", "-s", `${PROFILE_KEYCHAIN_PREFIX}${name}`],
+      { stdio: "ignore" },
+    );
+  } catch {
+    // Keychain item already gone (index-only entry) — nothing to delete.
+  }
+}
+
 function writeProfileSecret(name: string, content: string): void {
   if (useFileStore()) {
     atomicWriteFile(path.join(profileFileDir(), `${name}.json`), content);
@@ -386,19 +402,7 @@ export function deleteProfile(name: string): CcProfileMeta {
         `(the daemon re-saves the active login automatically, so removing it wouldn't stick)`,
     );
   }
-  if (useFileStore()) {
-    fs.rmSync(path.join(profileFileDir(), `${name}.json`), { force: true });
-  } else {
-    try {
-      execFileSync(
-        "security",
-        ["delete-generic-password", "-s", `${PROFILE_KEYCHAIN_PREFIX}${name}`],
-        { stdio: "ignore" },
-      );
-    } catch {
-      // Keychain item already gone (index-only entry) — still drop the index row.
-    }
-  }
+  deleteProfileSecret(name);
   delete index.profiles[name];
   writeProfileIndex(index);
   invalidateAccountsCache();
@@ -878,18 +882,64 @@ export function getAccountsHeartbeatPayload(): AccountsHeartbeatPayload | null {
 // Auto-save: every login becomes a profile without the user asking
 // ---------------------------------------------------------------------------
 
-/** Derive a profile name from an email: the org part of the domain
- * (ashot@footage.com → footage), deduped with -2/-3 against taken names.
- * Mirrors the web Settings suggestion so auto-saved and hand-saved profiles
- * end up named the same way. */
+/** Derive a profile name from an email: the local part before the @
+ * (claude2@almostcandid.com → claude2). If that's taken, fall back to the
+ * domain's org part (ashot@gmail.com → gmail beats ashot-2), then to -2/-3
+ * suffixes. Mirrors the web Settings suggestion so auto-saved and hand-saved
+ * profiles end up named the same way. */
 export function deriveProfileName(email: string | undefined, taken: string[]): string {
-  const org = email?.split("@")[1]?.split(".")[0]?.toLowerCase().replace(/[^a-z0-9._-]/g, "");
-  const base = org && VALID_PROFILE_NAME.test(org) ? org : "account";
+  const clean = (part: string | undefined) => part?.toLowerCase().replace(/[^a-z0-9._-]/g, "");
+  const [localRaw, domainRaw] = email?.includes("@") ? email.split("@") : [];
+  const candidates = [clean(localRaw), clean(domainRaw?.split(".")[0])].filter(
+    (c): c is string => !!c && VALID_PROFILE_NAME.test(c),
+  );
   const takenSet = new Set(taken.map((t) => t.toLowerCase()));
+  for (const c of candidates) if (!takenSet.has(c)) return c;
+  const base = candidates[0] ?? "account";
   if (!takenSet.has(base)) return base;
   for (let i = 2; ; i++) {
     if (!takenSet.has(`${base}-${i}`)) return `${base}-${i}`;
   }
+}
+
+/** True when a profile name still looks auto-derived under the old rule (the
+ * email domain's org part, optionally -N deduped: claude2@almostcandid.com →
+ * almostcandid / almostcandid-2). Hand-picked names don't match. */
+export function isLegacyDerivedName(name: string, email: string | undefined): boolean {
+  if (!email?.includes("@")) return false;
+  const org = email.split("@")[1]?.split(".")[0]?.toLowerCase().replace(/[^a-z0-9._-]/g, "");
+  return (
+    !!org &&
+    (name === org || (name.startsWith(`${org}-`) && /^\d+$/.test(name.slice(org.length + 1))))
+  );
+}
+
+/** Rename profiles whose name still carries the old auto-derived form to the
+ * current derivation (the email's local part: claude2). Moves the secret
+ * snapshot along with the index row; returns the renames performed. */
+export function migrateLegacyProfileNames(): Array<{ from: string; to: string }> {
+  const index = readProfileIndex();
+  const renames: Array<{ from: string; to: string }> = [];
+  for (const [name, meta] of Object.entries(index.profiles)) {
+    if (!isLegacyDerivedName(name, meta.email)) continue;
+    const desired = deriveProfileName(
+      meta.email,
+      Object.keys(index.profiles).filter((n) => n !== name),
+    );
+    if (desired === name) continue;
+    const raw = readProfileSecret(name);
+    if (raw === null) continue; // index-only row — nothing safe to move
+    writeProfileSecret(desired, raw);
+    deleteProfileSecret(name);
+    index.profiles[desired] = meta;
+    delete index.profiles[name];
+    renames.push({ from: name, to: desired });
+  }
+  if (renames.length) {
+    writeProfileIndex(index);
+    invalidateAccountsCache();
+  }
+  return renames;
 }
 
 /** Snapshot the active login as a profile iff no saved profile already covers

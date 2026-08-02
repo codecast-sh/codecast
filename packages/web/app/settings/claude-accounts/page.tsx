@@ -172,8 +172,8 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
 
   const online = device.online !== false;
   const activeProfile = device.profiles.find((p) => p.email && p.email === device.active_email);
-  // Suggest the email's org part as the profile name (ashot@footage.com -> footage).
-  const suggested = (device.active_email?.split("@")[1]?.split(".")[0] ?? "work").toLowerCase();
+  // Suggest the email's local part as the profile name (claude2@almostcandid.com -> claude2).
+  const suggested = (device.active_email?.split("@")[0] ?? "work").toLowerCase();
 
   const handleSwitch = async (profile: string) => {
     setBusy(profile);
