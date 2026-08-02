@@ -170,7 +170,6 @@ export const VaultBookmarksPane = memo(function VaultBookmarksPane({
                 <button
                   type="button"
                   onClick={() => open(item)}
-                  onDoubleClick={() => setRenamingId(item.id)}
                   title={bookmarkSubtitle(item)}
                   className="flex-1 min-w-0 text-left truncate hover:text-sol-text"
                 >

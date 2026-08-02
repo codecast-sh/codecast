@@ -12,6 +12,14 @@ import type { ConvexReactClient } from "convex/react";
 import type { VaultFileEntry, VaultInfo, VaultWsEvent } from "@codecast/shared/contracts";
 import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 import {
+  DEFAULT_DAILY_SETTINGS,
+  adjacentDailyNote,
+  dailyNotePath,
+  expandTemplate,
+  shiftDays,
+  type DailyNoteSettings,
+} from "../lib/vault/dailyNotes";
+import {
   getVaultEndpoint,
   listVaults,
   readVaultFile,
@@ -168,6 +176,14 @@ interface VaultState {
    *  reveal it, and put it in inline rename. Resolves to the created path, or
    *  null when the daemon refused (opError carries the reason). */
   newNote: (dir: string) => Promise<string | null>;
+  /** Daily notes: settings live per vault in the prefs table; the defaults are
+   *  Obsidian's (a "Daily" folder, ISO date names). */
+  dailySettings: DailyNoteSettings;
+  setDailySettings: (next: Partial<DailyNoteSettings>) => void;
+  /** Open (creating if needed) the note for a date — today by default. */
+  openDailyNote: (date?: Date) => Promise<string | null>;
+  /** Nearest EXISTING daily note before/after the given date, or null. */
+  adjacentDaily: (date: Date, direction: -1 | 1) => string | null;
   newFolder: (dir: string) => Promise<string | null>;
   resolveConflictWithDisk: (path: string) => void;
   resolveConflictKeepMine: (path: string) => Promise<void>;
@@ -989,6 +1005,52 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   },
 
   newNote: (dir) => createThenRename(dir, "Untitled", ".md", (path) => get().createFile(path, "")),
+
+  dailySettings: DEFAULT_DAILY_SETTINGS,
+
+  setDailySettings: (next) => set((s) => ({ dailySettings: { ...s.dailySettings, ...next } })),
+
+  openDailyNote: async (date) => {
+    const when = date ?? new Date();
+    const settings = get().dailySettings;
+    const path = dailyNotePath(when, settings);
+    if (get().files[path]) return path;
+    // A template is optional; without one the note starts with its own title
+    // so it never opens completely blank.
+    // A template whose body hasn't streamed in yet must not silently degrade
+    // to "no template" — fetch it on demand (review finding, R12; unreachable
+    // until a settings UI ships, fixed before it can be).
+    let templateBody = settings.template ? get().bodies[settings.template]?.content : undefined;
+    if (settings.template && templateBody === undefined) {
+      const { endpoint, activeVaultId } = get();
+      if (endpoint && activeVaultId && get().files[settings.template]) {
+        try {
+          const file = await readVaultFile(endpoint, activeVaultId, settings.template);
+          templateBody = file?.content;
+        } catch {
+          templateBody = undefined;
+        }
+      }
+    }
+    const title = path.split("/").pop()!.replace(/\.md$/i, "");
+    const body = templateBody
+      ? expandTemplate(templateBody, { title, date: when })
+      : `# ${title}\n\n`;
+    try {
+      await get().createFile(path, body);
+      return path;
+    } catch {
+      return null;
+    }
+  },
+
+  adjacentDaily: (date, direction) => {
+    const existing = adjacentDailyNote(Object.keys(get().files), date, get().dailySettings, direction);
+    if (existing) return existing;
+    // Nothing exists on that side — offer the literal adjacent day's path so a
+    // caller can create it (Obsidian's "next daily note" makes tomorrow).
+    return dailyNotePath(shiftDays(date, direction), get().dailySettings);
+  },
 
   newFolder: (dir) => createThenRename(dir, "New folder", "", (path) => get().createFolder(path)),
 
