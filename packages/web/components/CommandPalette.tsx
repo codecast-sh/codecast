@@ -61,6 +61,7 @@ import {
   Star,
   Link as LinkIcon,
   Shuffle,
+  CalendarDays,
   Waypoints,
   FilePlus2,
 } from "lucide-react";
@@ -1928,6 +1929,23 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             >
               <FilePlus2 className="w-4 h-4 text-sol-cyan flex-shrink-0" />
               <span className="truncate">Vault: New note</span>
+            </CommandPrimitive.Item>
+            <CommandPrimitive.Item
+              key="vault-daily"
+              value="Vault daily note today journal"
+              onSelect={() => {
+                closePalette();
+                void useVaultStore.getState().openDailyNote().then((p) => {
+                  if (p) {
+                    useVaultStore.getState().noteOpened(p);
+                    navigate(`/vault?f=${encodeURIComponent(p)}`);
+                  }
+                });
+              }}
+              className={itemClass}
+            >
+              <CalendarDays className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+              <span className="truncate">Vault: Today&apos;s daily note</span>
             </CommandPrimitive.Item>
             <CommandPrimitive.Item
               key="vault-graph"

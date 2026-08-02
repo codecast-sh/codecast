@@ -11,6 +11,22 @@ import { create } from "zustand";
 import type { ConvexReactClient } from "convex/react";
 import type { VaultFileEntry, VaultInfo, VaultWsEvent } from "@codecast/shared/contracts";
 import { isVaultMarkdownPath } from "@codecast/shared/contracts";
+import { lastDiscoveryFailure, type DiscoveryFailure } from "../lib/terminal/endpoint";
+import {
+  fetchRemoteBody,
+  fetchRemoteNotes,
+  listRemoteVaults,
+  remoteNotesToFileTable,
+  type RemoteVault,
+} from "../lib/vault/remoteMirror";
+import {
+  DEFAULT_DAILY_SETTINGS,
+  adjacentDailyNote,
+  dailyNotePath,
+  expandTemplate,
+  shiftDays,
+  type DailyNoteSettings,
+} from "../lib/vault/dailyNotes";
 import {
   getVaultEndpoint,
   listVaults,
@@ -19,6 +35,7 @@ import {
   subscribeVaultEvents,
   writeVaultFile,
   vaultOp,
+  VaultRequestError,
   VaultWriteConflict,
   type VaultEndpoint,
 } from "../lib/vault/client";
@@ -96,6 +113,19 @@ interface VaultState {
   loadingPaths: Record<string, true>;
   /** A write hit a 409: someone changed the file on disk under us. */
   conflicts: Record<string, VaultBody>;
+  /** Vaults mirrored from OTHER machines — read-only projections. Present
+   *  alongside local vaults; the surface hides every write affordance for one. */
+  remoteVaults: RemoteVault[];
+  /** Set while the active vault is a remote mirror rather than local disk. */
+  isRemote: boolean;
+  /** Why the local daemon couldn't be reached — drives cause-specific guidance
+   *  instead of one message that blames the daemon for a browser permission. */
+  unreachableReason: DiscoveryFailure | "old-daemon" | "refused" | "error";
+  /** The underlying failure text, shown verbatim in the teaching state so a
+   *  cause we did not anticipate is still diagnosable from the screen. */
+  unreachableDetail: string | null;
+  openRemoteVault: (vaultId: string) => Promise<void>;
+  loadRemoteBody: (path: string) => Promise<void>;
   /** Last failed file operation, for a dismissible strip in the UI. */
   opError: string | null;
   clearOpError: () => void;
@@ -168,6 +198,14 @@ interface VaultState {
    *  reveal it, and put it in inline rename. Resolves to the created path, or
    *  null when the daemon refused (opError carries the reason). */
   newNote: (dir: string) => Promise<string | null>;
+  /** Daily notes: settings live per vault in the prefs table; the defaults are
+   *  Obsidian's (a "Daily" folder, ISO date names). */
+  dailySettings: DailyNoteSettings;
+  setDailySettings: (next: Partial<DailyNoteSettings>) => void;
+  /** Open (creating if needed) the note for a date — today by default. */
+  openDailyNote: (date?: Date) => Promise<string | null>;
+  /** Nearest EXISTING daily note before/after the given date, or null. */
+  adjacentDaily: (date: Date, direction: -1 | 1) => string | null;
   newFolder: (dir: string) => Promise<string | null>;
   resolveConflictWithDisk: (path: string) => void;
   resolveConflictKeepMine: (path: string) => Promise<void>;
@@ -566,6 +604,10 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   connection: "idle",
   endpoint: null,
   vaults: [],
+  remoteVaults: [],
+  isRemote: false,
+  unreachableReason: "none",
+  unreachableDetail: null,
   activeVaultId: null,
   files: {},
   bodies: {},
@@ -728,22 +770,42 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       // selectVault paints it and leaves connection as "cached"; only a truly
       // never-seen vault lands on the no-daemon teaching state.
       const remembered = get().activeVaultId ?? readLastVaultId();
-      set({ endpoint: null });
+      set({ endpoint: null, unreachableReason: lastDiscoveryFailure(), unreachableDetail: null });
       if (remembered && !get().scannedAt) {
         await get().selectVault(remembered);
       }
       set((s) => ({ connection: s.scannedAt ? "cached" : "no-daemon" }));
+      // Even with no local daemon, a mirrored vault from another machine is
+      // still readable — offer it rather than dead-ending.
+      void listRemoteVaults(convex)
+        .then((remote) => set({ remoteVaults: remote }))
+        .catch(() => {});
       return;
     }
     let vaults: VaultInfo[] = [];
     try {
       vaults = await listVaults(ep);
-    } catch {
-      // Daemon answered the probe but predates the vault routes.
-      set((s) => ({ connection: s.scannedAt ? "cached" : "no-daemon", endpoint: ep }));
+    } catch (e) {
+      // The probe succeeded, so the daemon is alive; only a 404 means it truly
+      // predates the vault routes. Anything else (a refusal, a fetch the
+      // browser rejected) used to be reported as "too old", which sent people
+      // to update a daemon that was already current.
+      const status = e instanceof VaultRequestError ? e.status : 0;
+      set((s) => ({
+        connection: s.scannedAt ? "cached" : "no-daemon",
+        endpoint: ep,
+        unreachableReason: status === 404 ? "old-daemon" : status ? "refused" : "error",
+        unreachableDetail: e instanceof Error ? e.message : String(e),
+      }));
       return;
     }
-    set({ endpoint: ep, vaults });
+    set({ endpoint: ep, vaults, unreachableReason: "none", unreachableDetail: null });
+
+    // Remote mirrors are additive: they list alongside local vaults so a vault
+    // from another machine is reachable without leaving the surface.
+    void listRemoteVaults(convex)
+      .then((remote) => set({ remoteVaults: remote }))
+      .catch(() => {});
 
     const active = get().activeVaultId ?? readLastVaultId() ?? vaults[0]?.id ?? null;
     if (active) await get().selectVault(active);
@@ -828,6 +890,59 @@ export const useVaultStore = create<VaultState>((set, get) => ({
         if (convexRef) void useVaultStore.getState().connect(convexRef, { force: true });
       }),
     });
+  },
+
+  openRemoteVault: async (vaultId) => {
+    const convex = convexRef;
+    if (!convex) return;
+    const vault = get().remoteVaults.find((v) => v.id === vaultId);
+    if (!vault) return;
+    // A remote vault replaces the local view wholesale: different machine,
+    // different file set. The WS subscription is dropped because there is
+    // nothing local to watch.
+    wsDispose?.();
+    wsDispose = null;
+    set({
+      activeVaultId: vaultId,
+      isRemote: true,
+      files: {},
+      bodies: {},
+      conflicts: {},
+      loadingPaths: {},
+      connection: "discovering",
+    });
+    try {
+      const notes = await fetchRemoteNotes(convex, vaultId, vault.device_id);
+      if (get().activeVaultId !== vaultId) return;
+      set({
+        files: remoteNotesToFileTable(notes),
+        scannedAt: vault.last_synced_at,
+        connection: "connected",
+      });
+    } catch {
+      if (get().activeVaultId === vaultId) set({ connection: "no-daemon" });
+    }
+  },
+
+  loadRemoteBody: async (path) => {
+    const convex = convexRef;
+    const { activeVaultId, isRemote, bodies } = get();
+    if (!convex || !activeVaultId || !isRemote || bodies[path]) return;
+    const vault = get().remoteVaults.find((v) => v.id === activeVaultId);
+    set((s) => ({ loadingPaths: { ...s.loadingPaths, [path]: true } }));
+    const res = await fetchRemoteBody(convex, activeVaultId, path, vault?.device_id);
+    if (get().activeVaultId !== activeVaultId) return;
+    set((s) => ({
+      loadingPaths: omit(s.loadingPaths, path),
+      bodies:
+        res.content === null
+          ? s.bodies
+          : { ...s.bodies, [path]: { content: res.content, mtime: 0, etag: "" } },
+      opError:
+        res.content === null && res.reason === "not-uploaded"
+          ? `${path} isn't mirrored — its body lives on the machine that owns this vault.`
+          : s.opError,
+    }));
   },
 
   refresh: async () => {
@@ -989,6 +1104,52 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   },
 
   newNote: (dir) => createThenRename(dir, "Untitled", ".md", (path) => get().createFile(path, "")),
+
+  dailySettings: DEFAULT_DAILY_SETTINGS,
+
+  setDailySettings: (next) => set((s) => ({ dailySettings: { ...s.dailySettings, ...next } })),
+
+  openDailyNote: async (date) => {
+    const when = date ?? new Date();
+    const settings = get().dailySettings;
+    const path = dailyNotePath(when, settings);
+    if (get().files[path]) return path;
+    // A template is optional; without one the note starts with its own title
+    // so it never opens completely blank.
+    // A template whose body hasn't streamed in yet must not silently degrade
+    // to "no template" — fetch it on demand (review finding, R12; unreachable
+    // until a settings UI ships, fixed before it can be).
+    let templateBody = settings.template ? get().bodies[settings.template]?.content : undefined;
+    if (settings.template && templateBody === undefined) {
+      const { endpoint, activeVaultId } = get();
+      if (endpoint && activeVaultId && get().files[settings.template]) {
+        try {
+          const file = await readVaultFile(endpoint, activeVaultId, settings.template);
+          templateBody = file?.content;
+        } catch {
+          templateBody = undefined;
+        }
+      }
+    }
+    const title = path.split("/").pop()!.replace(/\.md$/i, "");
+    const body = templateBody
+      ? expandTemplate(templateBody, { title, date: when })
+      : `# ${title}\n\n`;
+    try {
+      await get().createFile(path, body);
+      return path;
+    } catch {
+      return null;
+    }
+  },
+
+  adjacentDaily: (date, direction) => {
+    const existing = adjacentDailyNote(Object.keys(get().files), date, get().dailySettings, direction);
+    if (existing) return existing;
+    // Nothing exists on that side — offer the literal adjacent day's path so a
+    // caller can create it (Obsidian's "next daily note" makes tomorrow).
+    return dailyNotePath(shiftDays(date, direction), get().dailySettings);
+  },
 
   newFolder: (dir) => createThenRename(dir, "New folder", "", (path) => get().createFolder(path)),
 

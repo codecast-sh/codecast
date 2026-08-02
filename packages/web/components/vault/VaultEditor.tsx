@@ -1,10 +1,18 @@
-// Vault source-mode editor: CodeMirror 6 over the note's exact bytes.
+// Vault editor: CodeMirror 6 over the note's exact bytes, in either of the two
+// editing modes.
 //
-// Source mode shows the file as it is — frontmatter included — and its contract
-// is byte fidelity: opening a note and saving it without typing writes nothing
-// at all, and a note that is edited comes back with only the edited span
-// changed. That rules out any round trip through a rich-text document model
-// (see .claude/vault-drive/library-decisions.md #3), and it's why the line
+// LIVE PREVIEW renders the markdown in place and shows raw syntax only where
+// the cursor is; SOURCE shows the file as it is, frontmatter included. They are
+// the same editor — one document, one undo history, one save timer, with the
+// live-preview decorations swapped in and out of a compartment — because
+// switching modes mid-sentence must not lose an undo step or strand an edit in
+// an unmounted buffer.
+//
+// The contract of both is byte fidelity: opening a note and saving it without
+// typing writes nothing at all, and a note that is edited comes back with only
+// the edited span changed. That rules out any round trip through a rich-text
+// document model (see .claude/vault-drive/library-decisions.md #3) — and it is
+// why live preview is decorations rather than rendering — and it's why the line
 // separator is detected up front and carried back out at save time: CodeMirror
 // splits on \n, \r\n and \r but always joins with "\n", so a CRLF note would
 // otherwise be silently rewritten end to end.
@@ -16,7 +24,7 @@
 // If-Match etag rides along and a 409 lands in the same conflicts map a rename
 // rewrite would. Autosave is debounced; Cmd+S forces it now.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, type MutableRefObject } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
@@ -51,9 +59,13 @@ import { tags as t } from "@lezer/highlight";
 import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { cssVar, isDarkTheme, observeTheme, withAlpha } from "../../lib/solTheme";
 import { detectLineSeparator, docChange } from "../../lib/vault/editorDoc";
-import { vaultIndex } from "../../lib/vault/indexHost";
+import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import { parseNote } from "../../lib/vault/parseNote";
 import { noteDisplayName } from "../../lib/vault/explorerModel";
+import { livePreview, refreshLivePreview, type LivePreviewContext } from "../../lib/vault/livePreview";
+import type { VaultEditMode } from "../../lib/vault/viewMode";
+import { useVaultLinkCtx } from "./useVaultLinkCtx";
+import type { VaultLinkContextValue } from "./VaultMarkdown";
 import { useVaultStore, resolveRecentMove } from "../../store/vaultStore";
 
 const AUTOSAVE_MS = 800;
@@ -290,22 +302,96 @@ function wikiCompletionSource(fromPath: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Live preview
+// ---------------------------------------------------------------------------
+
+const ABSOLUTE_URL = /^([a-z][a-z0-9+.-]*:|\/\/)/i;
+
+/** Live preview asks the same questions the reading view asks — where does this
+ *  link point, where does this image live, what happens when it's clicked — so
+ *  it gets its answers from the SAME builder (useVaultLinkCtx). A rendered wiki
+ *  link that resolved differently in the two modes would be a bug nobody could
+ *  explain.
+ *
+ *  Read through a ref rather than captured: the link context is rebuilt every
+ *  time the vault index changes, and rebuilding this object would mean
+ *  reconfiguring the editor on every index bump. The extension holds one stable
+ *  object; freshness comes from a `refreshLivePreview` effect instead. */
+function makeLiveContext(
+  ref: MutableRefObject<VaultLinkContextValue>,
+  openInNewTab: (path: string) => void,
+): LivePreviewContext {
+  return {
+    resolveWiki: (parts) => {
+      const res = ref.current.resolve(parts.target, parts);
+      return { path: res.path, ambiguous: res.ambiguous };
+    },
+    assetUrl: (raw) =>
+      ABSOLUTE_URL.test(raw) ? raw : ref.current.assetUrl(decodeURIComponent(raw)),
+    openWikiLink: (parts, newTab) => {
+      const res = ref.current.resolve(parts.target, parts);
+      // A dangling link is an offer to write the note, the same offer the
+      // reading view's faded link makes.
+      if (!res.path) return ref.current.createNote?.(parts.target);
+      if (newTab) return openInNewTab(res.path);
+      ref.current.navigate(res.path, parts.subpath, parts.subpathType);
+    },
+    openTag: (tag) => ref.current.openTag?.(tag),
+    openHref: (href, newTab) => {
+      // A relative link to another note stays inside the app; anything with a
+      // scheme is the web, and the web opens in its own tab.
+      if (!ABSOLUTE_URL.test(href) && /\.(md|markdown)(#.*)?$/i.test(href)) {
+        const clean = decodeURIComponent(href.split("#")[0]);
+        if (newTab) openInNewTab(clean);
+        else ref.current.navigate(clean);
+        return;
+      }
+      window.open(href, "_blank", "noopener,noreferrer");
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-const STATUS_LABEL: Record<SaveStatus, string> = {
-  clean: "editing",
-  dirty: "editing · unsaved",
-  saving: "editing · saving…",
-  saved: "editing · saved",
-  stale: "editing · changed on disk",
-  error: "editing · couldn't save",
+/** Source mode's half of the compartment. A shared constant, not a fresh `[]`
+ *  each render, for the same identity reason as `liveExt`. */
+const NO_LIVE_PREVIEW: Extension = [];
+
+const MODE_LABEL: Record<VaultEditMode, string> = {
+  live: "live preview",
+  source: "source",
 };
 
-export function VaultEditor({ path, onExit }: { path: string; onExit: () => void }) {
+const STATUS_SUFFIX: Record<SaveStatus, string> = {
+  clean: "",
+  dirty: " · unsaved",
+  saving: " · saving…",
+  saved: " · saved",
+  stale: " · changed on disk",
+  error: " · couldn't save",
+};
+
+export function VaultEditor({
+  path,
+  mode,
+  onExit,
+  onNavigate,
+}: {
+  path: string;
+  mode: VaultEditMode;
+  onExit: () => void;
+  /** Following a rendered wiki link in live preview. */
+  onNavigate: (path: string) => void;
+}) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const themeRef = useRef(new Compartment());
+  // Live preview lives in its own compartment so switching modes reconfigures
+  // ONE extension instead of rebuilding the editor — undo history, the save
+  // timer and the etag this buffer is editing on top of all survive the switch.
+  const liveRef = useRef(new Compartment());
   // The document as CodeMirror holds it (line breaks normalized to "\n") that
   // corresponds to what's on disk. Everything dirty/clean is decided against
   // this; file bytes are only reconstituted at write time.
@@ -324,6 +410,22 @@ export function VaultEditor({ path, onExit }: { path: string; onExit: () => void
 
   const conflict = useVaultStore((s) => s.conflicts[path]);
   const body = useVaultStore((s) => s.bodies[path]);
+
+  const linkCtx = useVaultLinkCtx(path, onNavigate);
+  const linkCtxRef = useRef(linkCtx);
+  linkCtxRef.current = linkCtx;
+  // Built once and kept: CodeMirror resolves a reconfiguration by extension
+  // IDENTITY, so a stable value makes "reconfigure to the mode you are already
+  // in" free, and switching back to live preview reuses the same plugin rather
+  // than tearing one down and building another.
+  const [liveExt] = useState<Extension>(() =>
+    livePreview(
+      makeLiveContext(linkCtxRef, (p) =>
+        window.open(`/vault?f=${encodeURIComponent(p)}`, "_blank", "noopener,noreferrer"),
+      ),
+    ),
+  );
+  const modeExt = mode === "live" ? liveExt : NO_LIVE_PREVIEW;
 
   // The path this editor should write to RIGHT NOW: itself, unless the file
   // was renamed under us (autosave firing mid-rename would otherwise write to
@@ -431,6 +533,7 @@ export function VaultEditor({ path, onExit }: { path: string; onExit: () => void
           markdown({ base: markdownLanguage }),
           autocompletion({ override: [wikiCompletionSource(path)], icons: false }),
           themeRef.current.of(solEditorTheme()),
+          liveRef.current.of(modeExt),
           // Order matters: closing a completion or a search panel with Escape
           // has to win over leaving the editor, and each of those returns false
           // when there's nothing of its own to close.
@@ -516,6 +619,21 @@ export function VaultEditor({ path, onExit }: { path: string; onExit: () => void
     };
   });
 
+  // Switching between live preview and source: one compartment, no remount.
+  // The initial configuration already matches, so this only ever does work on a
+  // real change of mode.
+  useWatchEffect(() => {
+    viewRef.current?.dispatch({ effects: liveRef.current.reconfigure(modeExt) });
+  }, [modeExt]);
+
+  // A note appearing or being renamed elsewhere in the vault turns a dangling
+  // wiki link live (or the reverse) without a character of THIS note changing —
+  // so the decorations have to be asked again, since nothing else would.
+  const indexVersion = useVaultIndexVersion();
+  useWatchEffect(() => {
+    if (mode === "live") viewRef.current?.dispatch({ effects: refreshLivePreview.of(null) });
+  }, [indexVersion, mode]);
+
   // The note changed underneath us — a WS echo of another writer, a link
   // rewrite from a rename, our own save coming back. Clean: adopt it in place.
   // Dirty: leave every character alone and say so; the next save carries the
@@ -588,7 +706,8 @@ export function VaultEditor({ path, onExit }: { path: string; onExit: () => void
       <div ref={hostRef} />
       <div className="mt-6 pt-2 border-t border-sol-border/20 flex items-center gap-3 text-[10px] text-sol-text-dim">
         <span className={status === "error" || status === "stale" ? "text-sol-yellow" : undefined}>
-          {STATUS_LABEL[status]}
+          {MODE_LABEL[mode]}
+          {STATUS_SUFFIX[status]}
         </span>
         <span className="tabular-nums">{words} words</span>
       </div>

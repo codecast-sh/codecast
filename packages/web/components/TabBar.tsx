@@ -3,13 +3,18 @@ import { X, Plus } from "lucide-react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { useShortcutAction, formatShortcutLabel } from "../shortcuts";
 import { pathLabel } from "../lib/pathLabel";
+import { vaultNoteTitle } from "../lib/vault/noteTitle";
 
 function tabTitle(tab: AppTab, sessions: Record<string, any>): string {
   if (tab.sessionId && sessions[tab.sessionId]) {
     const s = sessions[tab.sessionId];
     return s.title || s.session_id?.slice(0, 12) || "Session";
   }
-  return tab.title || pathLabel(tab.path);
+  // A vault note is titled by its own H1 or frontmatter title when the index
+  // knows one — the filename is the fallback, not the identity (Obsidian's
+  // rule). Read lazily so no vault code loads for anyone who never opens one.
+  const vaultTitle = vaultNoteTitle(tab.path);
+  return vaultTitle ?? tab.title ?? pathLabel(tab.path);
 }
 
 export function TabBar() {

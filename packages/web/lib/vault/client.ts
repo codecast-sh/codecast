@@ -34,23 +34,64 @@ function authHeaders(ep: VaultEndpoint): Record<string, string> {
   return { Authorization: `Bearer ${ep.token}` };
 }
 
+// Chrome 142+ Local Network Access lets a request declare where it is going,
+// so the browser can classify a loopback destination before DNS and exempt it
+// from mixed-content blocking on a hosted https origin.
+//
+// The value "loopback" only exists from Chrome 142. Older Chromium implements
+// the SAME member with the earlier enum ("local"), so passing "loopback" there
+// is not ignored — WebIDL rejects it and fetch throws a TypeError before any
+// request leaves. The desktop app runs Electron 33 (Chromium 130), so this
+// broke every vault request there while the terminal, which never sets the
+// option, kept working. Detect once, and never send a value the runtime will
+// refuse.
+export function pickAddressSpaceInit(
+  makeRequest: (init: RequestInit) => unknown,
+): Record<string, unknown> {
+  for (const value of ["loopback", "local"]) {
+    try {
+      makeRequest({ targetAddressSpace: value } as RequestInit);
+      return { targetAddressSpace: value };
+    } catch {
+      // This runtime knows the member but not this value — try the older name.
+    }
+  }
+  return {};
+}
+
+const ADDRESS_SPACE_INIT: Record<string, unknown> = pickAddressSpaceInit(
+  (init) => new Request("http://127.0.0.1/", init),
+);
+
 async function vaultFetch(ep: VaultEndpoint, path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${termHttpBase(ep)}${path}`, {
+  const request = {
     ...init,
     headers: { ...authHeaders(ep), ...(init?.headers as Record<string, string>) },
     signal: init?.signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    // Chrome 142+ Local Network Access: declaring the target address space
-    // lets Chrome classify the loopback destination before DNS, which exempts
-    // the request from mixed-content blocking on the hosted https origin (the
-    // user grants a one-time per-origin permission instead). Not yet in TS DOM
-    // types, hence the cast.
-    ...({ targetAddressSpace: "loopback" } as Record<string, unknown>),
-  });
+  };
+  try {
+    return await fetch(`${termHttpBase(ep)}${path}`, { ...request, ...ADDRESS_SPACE_INIT });
+  } catch (e) {
+    // A rejected address-space value throws before the request is sent. Retry
+    // plainly rather than reporting a working daemon as unreachable.
+    if (e instanceof TypeError && Object.keys(ADDRESS_SPACE_INIT).length) {
+      return await fetch(`${termHttpBase(ep)}${path}`, request);
+    }
+    throw e;
+  }
+}
+
+/** Carries the HTTP status so a caller can distinguish a daemon that has no
+ *  vault routes (404) from one that refused the request (403) or failed. */
+export class VaultRequestError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
 }
 
 export async function listVaults(ep: VaultEndpoint): Promise<VaultInfo[]> {
   const res = await vaultFetch(ep, "/vault/roots");
-  if (!res.ok) throw new Error(`vault roots: ${res.status}`);
+  if (!res.ok) throw new VaultRequestError(`vault roots: ${res.status}`, res.status);
   const body = (await res.json()) as { vaults: VaultInfo[] };
   return body.vaults ?? [];
 }

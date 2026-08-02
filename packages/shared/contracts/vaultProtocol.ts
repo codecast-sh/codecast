@@ -21,7 +21,9 @@ export interface VaultInfo {
   note_count?: number;
   /** Epoch ms when the vault was registered. */
   added_at: number;
-  /** Opt-in one-way Convex mirror for cross-device reading. */
+  /** Opt-in one-way remote mirror (vaultMirror.ts) for cross-device reading.
+   *  Absent/false means the vault is local-only — nothing about it ever leaves
+   *  this machine. */
   mirror?: boolean;
 }
 

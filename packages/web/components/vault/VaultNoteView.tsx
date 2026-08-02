@@ -9,13 +9,14 @@ import { BookOpen, ChevronRight, FileText, Pencil } from "lucide-react";
 import { noteDisplayName } from "./VaultExplorer";
 import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { BookmarkToggle } from "./VaultBookmarksPane";
-import { VaultLinkContext, VaultMarkdown } from "./VaultMarkdown";
+import { VaultLinkContext, VaultMarkdown, FoldScopeContext } from "./VaultMarkdown";
 import { useVaultLinkCtx } from "./useVaultLinkCtx";
 import { splitFrontmatter } from "../../lib/vault/frontmatter";
 import { useVaultStore } from "../../store/vaultStore";
 import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import { headingSlugs } from "../../lib/vault/parseNote";
 import { VaultProperties } from "./VaultProperties";
+import type { VaultViewMode } from "../../lib/vault/viewMode";
 
 // Compat re-export: several vault modules import this from here.
 export { splitFrontmatter };
@@ -33,7 +34,7 @@ const scrollMemory = new Map<string, number>();
 export const VaultNoteView = memo(function VaultNoteView({
   path,
   targetLine,
-  editing = false,
+  mode = "reading",
   onToggleEdit,
   onNavigate,
 }: {
@@ -42,13 +43,15 @@ export const VaultNoteView = memo(function VaultNoteView({
    *  markdown has no per-line anchors, so we scroll to the nearest heading at
    *  or above the line — the same section the hit lives in. */
   targetLine?: number;
-  /** Source mode. The breadcrumbs and title stay put across the switch so the
-   *  two modes read as one note rather than two screens. */
-  editing?: boolean;
+  /** Reading, live preview, or raw source. The breadcrumbs and title stay put
+   *  across every switch so the three read as one note rather than three
+   *  screens. */
+  mode?: VaultViewMode;
   onToggleEdit?: () => void;
   onNavigate: (path: string | null) => void;
 }) {
   const body = useVaultStore((s) => s.bodies[path]);
+  const isRemote = useVaultStore((s) => s.isRemote);
   const loading = useVaultStore((s) => !!s.loadingPaths[path]);
   const exists = useVaultStore((s) => !!s.files[path]);
 
@@ -60,6 +63,12 @@ export const VaultNoteView = memo(function VaultNoteView({
     () => splitFrontmatter(body?.content ?? ""),
     [body?.content],
   );
+
+  // A mirrored vault ships metadata for every note but bodies only on demand:
+  // fetch this one's the first time it's opened.
+  useWatchEffect(() => {
+    if (isRemote && !body) void useVaultStore.getState().loadRemoteBody(path);
+  }, [isRemote, path, !!body]);
 
   // Re-render (and re-resolve every wiki link) whenever the index changes — a
   // new note can turn a dangling link live without this note re-parsing.
@@ -159,25 +168,35 @@ export const VaultNoteView = memo(function VaultNoteView({
             <button
               type="button"
               onClick={onToggleEdit}
-              aria-pressed={editing}
-              title={editing ? "Read (Ctrl+E)" : "Edit source (Ctrl+E)"}
+              aria-pressed={mode !== "reading"}
+              title={
+                mode === "reading"
+                  ? "Edit (Ctrl+E) · raw source with Ctrl+Shift+E"
+                  : `Read (Ctrl+E) — editing in ${mode === "live" ? "live preview" : "source"}`
+              }
               className={`mt-1.5 flex-shrink-0 transition-colors ${
-                editing ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
+                mode !== "reading" ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
               }`}
             >
-              {editing ? <BookOpen className="w-4 h-4" /> : <Pencil className="w-4 h-4" />}
+              {mode === "reading" ? <Pencil className="w-4 h-4" /> : <BookOpen className="w-4 h-4" />}
             </button>
           )}
         </div>
 
-        {editing ? (
+        {mode !== "reading" ? (
           <Suspense
             fallback={<div className="text-sm text-sol-text-dim py-8">Loading editor…</div>}
           >
             {/* Keyed by path: an editor instance owns one note's document,
                 undo history and save timer. Handing it a different note would
                 keep the old text on screen and flush it to the new path. */}
-            <VaultEditor key={path} path={path} onExit={() => onToggleEdit?.()} />
+            <VaultEditor
+              key={path}
+              path={path}
+              mode={mode}
+              onExit={() => onToggleEdit?.()}
+              onNavigate={onNavigate}
+            />
           </Suspense>
         ) : (
           <VaultLinkContext.Provider value={linkCtx}>
@@ -191,7 +210,9 @@ export const VaultNoteView = memo(function VaultNoteView({
 
             {body ? (
               <div className="vault-prose prose prose-sm max-w-none">
-                <VaultMarkdown content={markdown} />
+                <FoldScopeContext.Provider value={path}>
+                  <VaultMarkdown content={markdown} />
+                </FoldScopeContext.Provider>
               </div>
             ) : loading ? (
               <div className="text-sm text-sol-text-dim py-8">Loading note…</div>
@@ -203,7 +224,7 @@ export const VaultNoteView = memo(function VaultNoteView({
           </VaultLinkContext.Provider>
         )}
 
-        {body && !editing && (
+        {body && mode === "reading" && (
           <div className="mt-8 pt-2 border-t border-sol-border/20 flex items-center gap-3 text-[10px] text-sol-text-dim">
             <span className="tabular-nums">{vaultIndex.note(path)?.parsed?.wordCount ?? 0} words</span>
             <span className="tabular-nums">{vaultIndex.backlinks(path).length} backlinks</span>
