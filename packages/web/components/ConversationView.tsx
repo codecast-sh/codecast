@@ -815,6 +815,7 @@ const ALT_CAP = isMac ? "⌥" : "Alt";
 type PickerHandle = {
   focus: () => boolean;
   isOpen: () => boolean;
+  move?: (delta: -1 | 1) => boolean;
   // Commit the highlighted item and close WITHOUT restoring focus — the router
   // is about to move focus to the next picker.
   commitAndClose?: () => void;
@@ -1067,6 +1068,10 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     handleRef.current = {
       focus: focusPicker,
       isOpen: () => picking,
+      move: (delta) => {
+        setHi((i) => (pickList.length ? (i + delta + pickList.length) % pickList.length : 0));
+        return pickList.length > 0;
+      },
       commitAndClose: () => {
         const sel = pickList[clampedHi];
         if (sel) handleSwitch(sel.path);
@@ -1345,6 +1350,17 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
     return true;
   }, [currentAgent]);
 
+  const moveAgentPicker = useCallback((delta: -1 | 1) => {
+    if (!picking) prevFocusRef.current = document.activeElement as HTMLElement | null;
+    setHi((i) => {
+      const currentIndex = Math.max(0, AGENT_OPTIONS.findIndex((a) => a.type === currentAgent));
+      const base = picking ? i : currentIndex;
+      return (base + delta + AGENT_OPTIONS.length) % AGENT_OPTIONS.length;
+    });
+    setPicking(true);
+    return true;
+  }, [currentAgent, picking]);
+
   // Post-commit focus — same race as the project picker's (see note there).
   useEffect(() => {
     if (picking) holderRef.current?.focus();
@@ -1383,7 +1399,11 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   // Hand the imperative surface up to NewSessionView's ⌥-chord router.
   useEffect(() => {
     if (!handleRef) return;
-    handleRef.current = { focus: focusAgentPicker, isOpen: () => picking };
+    handleRef.current = {
+      focus: focusAgentPicker,
+      isOpen: () => picking,
+      move: moveAgentPicker,
+    };
   });
   useEffect(() => () => { if (handleRef) handleRef.current = null; }, [handleRef]);
 
@@ -1560,11 +1580,17 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
       if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
       const up = e.code === "KeyK" || e.code === "ArrowUp";
       const down = e.code === "KeyJ" || e.code === "ArrowDown";
-      if (!up && !down) return;
+      const left = e.code === "KeyH" || e.code === "ArrowLeft";
+      const right = e.code === "KeyL" || e.code === "ArrowRight";
+      if (!up && !down && !left && !right) return;
       if (hasOpenModal()) return;
       e.preventDefault();
       e.stopPropagation();
-      if (up) {
+      if (left || right) {
+        const delta: -1 | 1 = left ? -1 : 1;
+        if (projectsRef.current?.isOpen()) projectsRef.current.move?.(delta);
+        else agentsRef.current?.move?.(delta);
+      } else if (up) {
         if (!projectsRef.current?.isOpen()) projectsRef.current?.focus();
       } else {
         if (projectsRef.current?.isOpen()) projectsRef.current.commitAndClose?.();
