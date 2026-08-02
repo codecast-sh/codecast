@@ -12,7 +12,7 @@ export interface ControlClientEvents {
 }
 
 export type ControlClientMode =
-  | { kind: "create"; sessionName: string; cwd?: string }
+  | { kind: "create"; sessionName: string; cwd?: string; fresh?: boolean }
   | { kind: "attach"; target: string; readOnly: boolean };
 
 /**
@@ -100,6 +100,13 @@ export class TmuxControlClient {
     // Consume it before issuing commands or every reply pairs off-by-one.
     await this.expectReply();
 
+    // A brand-new session has no history to seed, so stream from the very
+    // first byte instead of capture-seeding. Waiting for the capture would
+    // DROP the shell's initial prompt: it usually prints after capture-pane
+    // runs but before the seeded flag flips, leaving the terminal blank until
+    // the user's first Enter forces a new prompt.
+    if (this.mode.kind === "create" && this.mode.fresh) this.seeded = true;
+
     if (this.mode.kind === "create") {
       // No status line for panel terminals: control clients never render it,
       // and without this the window reserves a row for a bar nobody sees.
@@ -119,7 +126,7 @@ export class TmuxControlClient {
     const paneRows = parseInt(parts[2] ?? "", 10) || rows;
     const sessionName = parts[3] || (this.mode.kind === "create" ? this.mode.sessionName : this.mode.target);
 
-    const seed = await this.captureSeed(paneRows);
+    const seed = this.seeded ? Buffer.alloc(0) : await this.captureSeed(paneRows);
     this.seeded = true;
     return { cols: paneCols, rows: paneRows, seed, sessionName };
   }
@@ -159,7 +166,9 @@ export class TmuxControlClient {
       case "output":
         // Pre-seed output is folded into the capture; other panes' output
         // (splits, other windows) is out of scope for a single-pane view.
-        if (this.seeded && ev.paneId === this.paneId) this.events.onOutput(ev.data);
+        // paneId is still null in the fresh-create stream-from-start window —
+        // a single-pane session has nothing else that could be emitting.
+        if (this.seeded && (!this.paneId || ev.paneId === this.paneId)) this.events.onOutput(ev.data);
         break;
       case "reply": {
         const p = this.pending.shift();

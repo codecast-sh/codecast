@@ -306,7 +306,9 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions): void {
       }
       if (!name.startsWith(TERM_SESSION_PREFIX)) return fail("bad session name");
       const cwd = typeof hello.cwd === "string" && hello.cwd.startsWith("/") ? hello.cwd : undefined;
-      mode = { kind: "create", sessionName: name, cwd };
+      // Fresh vs reattach decides the seeding strategy (see controlClient).
+      const fresh = tmuxRun(["has-session", "-t", name]).status !== 0;
+      mode = { kind: "create", sessionName: name, cwd, fresh };
     } else if (hello.mode === "attach") {
       const target = hello.target ?? "";
       // Attach only to sessions this product owns: agent sessions the daemon
