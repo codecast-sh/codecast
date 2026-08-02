@@ -1,4 +1,5 @@
-import { useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
+import { bridgeUserId, useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
+import { broadcastGesture } from "./gestureBridge";
 import { pushUndo, showUndoToast } from "./undoStack";
 import { declareViewNav } from "./viewNav";
 
@@ -124,18 +125,33 @@ export function undoableHideSession(id: string, mode: HideSessionMode) {
       animateSessionEnter(id);
       // Push the SNAPSHOT flags, not blanket nulls: undoing a dismiss of a
       // session that was stashed at the time must land it back in Stashed.
+      const restoredFlags = Object.fromEntries(
+        snap.allIds.map((sid) => {
+          const prev = snap.sessions[sid] ?? (snap.conversations[sid] as any);
+          return [sid, {
+            inbox_dismissed_at: prev?.inbox_dismissed_at ?? null,
+            inbox_stashed_at: prev?.inbox_stashed_at ?? null,
+          }];
+        })
+      );
       store.applyUndoPatches({
-        conversations: Object.fromEntries(
-          snap.allIds.map((sid) => {
-            const prev = snap.sessions[sid] ?? (snap.conversations[sid] as any);
-            return [sid, {
-              inbox_dismissed_at: prev?.inbox_dismissed_at ?? null,
-              inbox_stashed_at: prev?.inbox_stashed_at ?? null,
-            }];
-          })
-        ),
+        conversations: restoredFlags,
         client_state: { _: { current_conversation_id: snap.currentSessionId } },
       });
+      // killSession/stashSession announced the hide, so siblings now hold the
+      // HIDDEN row; an un-announced undo leaves it there and that stale row
+      // re-puts the undone hide into shared IDB, resurrecting it. A "fields"
+      // message per id rather than a "restore": the snapshot is not always all
+      // null (undoing a kill of a row that was stashed must land it back in
+      // Stashed), so each id carries its own verbatim values — the same ones
+      // applyUndoPatches dispatches, which is what lets the receiver's field
+      // lock retire on the server echo. ONE timestamp for the whole gesture, so
+      // the sibling's locks all key off the single undo. redo() re-hides
+      // through kill/stashSession, which broadcast on their own.
+      const ts = Date.now();
+      for (const [sid, fields] of Object.entries(restoredFlags)) {
+        broadcastGesture({ kind: "fields", id: sid, fields, ts }, bridgeUserId(store));
+      }
       // Schedules the kill canceled come back with the session: the patch above
       // clears inbox_dismissed_at, and the server's un-hide transition
       // (dispatch.applyPatches) re-arms the stamped tasks authoritatively.
@@ -224,6 +240,17 @@ export function undoablePinSession(id: string) {
       store.applyUndoPatches({
         conversations: { [id]: { inbox_pinned_at: prevPinnedAt } },
       });
+      // pinSession broadcast the flip, so a sibling now holds the PINNED row;
+      // undoing without announcing leaves it there, and that stale row both
+      // re-puts the undone pin into shared IDB and inverts the sibling's next
+      // toggle (`!is_pinned` reads the value we just reverted). Carry the exact
+      // restored inbox_pinned_at — the receiver's pending lock retires only
+      // when the server echo matches it, and applyUndoPatches dispatches this
+      // same value. redo() calls pinSession, which broadcasts on its own.
+      broadcastGesture(
+        { kind: "pin", id, pinned: !!wasPinned, pinnedAt: prevPinnedAt, ts: Date.now() },
+        bridgeUserId(store),
+      );
     },
     redo: () => {
       useInboxStore.getState().pinSession(id);
