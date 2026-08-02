@@ -11552,13 +11552,21 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
   // 50-deep backlog a given repo's snapshot went HOURS stale, which is the whole
   // point of the feature. One snapshot per checkout, one push carrying every
   // sibling's refspec.
-  const byCwd = new Map<string, typeof eligible>();
+  //
+  // Keyed by repo TOPLEVEL, sharing sweepGitPlaneFleet's notion of "same repo"
+  // rather than inventing a second one: sessions whose cwd is a subdirectory of
+  // the same checkout collapse together (they have one working tree, so they'd
+  // otherwise be snapshotted once per subdirectory), while linked worktrees stay
+  // separate because --show-toplevel returns the worktree root. Falls back to the
+  // cwd when the root can't be read, which only loses the deduplication.
+  const byRoot = new Map<string, typeof eligible>();
   for (const e of eligible) {
-    const group = byCwd.get(e.cwd);
+    const key = (await repoRootFor(e.cwd)) ?? e.cwd;
+    const group = byRoot.get(key);
     if (group) group.push(e);
-    else byCwd.set(e.cwd, [e]);
+    else byRoot.set(key, [e]);
   }
-  const repos = [...byCwd.entries()].map(([cwd, sessions]) => ({ cwd, sessions }));
+  const repos = [...byRoot.entries()].map(([cwd, sessions]) => ({ cwd, sessions }));
 
   // Rotate the ORDER (not the membership): every repo is snapshotted every pass,
   // but when the push cap bites, priority rotates so no repo is starved.
