@@ -10,7 +10,7 @@ import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import {
   Settings, Keyboard, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut,
-  BookOpen, ExternalLink, Radio, Newspaper,
+  BookOpen, ExternalLink, Radio, Newspaper, Compass,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -223,6 +223,7 @@ export function UserMenu() {
             <MenuItem icon={History} label="Timeline" onClick={() => go("/timeline")} />
             <MenuItem icon={Rss} label="Feed" onClick={() => go("/feed")} />
             <MenuItem icon={Radio} label="Crosstalk" onClick={() => go("/crosstalk")} />
+            <MenuItem icon={Compass} label="Steering" onClick={() => go("/steering")} />
             <MenuItem icon={ListChecks} label="Tasks" onClick={() => go("/tasks")} />
             <MenuItem icon={FileText} label="Documents" onClick={() => go("/docs")} />
             <MenuItem icon={FolderGit2} label="Projects" onClick={() => go("/projects")} />

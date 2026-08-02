@@ -373,11 +373,39 @@ function rehypeVaultHeadingIds() {
  *  Obsidian's reading view folds a section. Fold state is CSS-only (a data
  *  attribute plus a sibling selector), so it survives re-renders without any
  *  React state keyed to positions that shift when the note changes. */
+/** Which sections are folded, keyed by note path + heading id. Session-lived
+ *  and outside React: folds are a view gesture, and rebuilding them from state
+ *  on every keystroke of an unrelated note would be churn for nothing. */
+const foldedSections = new Set<string>();
+
+/** The note a rendered body belongs to, so fold state is keyed per note. A
+ *  context rather than a module variable: refs attach bottom-up, so a heading
+ *  would otherwise read the PREVIOUS note's scope and never restore its fold. */
+export const FoldScopeContext = createContext("");
+
+function applyFold(h: HTMLElement, level: number, folded: boolean) {
+  h.setAttribute("data-folded", folded ? "true" : "false");
+  let el = h.nextElementSibling as HTMLElement | null;
+  while (el) {
+    const lvl = el.getAttribute?.("data-vault-level");
+    if (lvl && Number(lvl) <= level) break;
+    el.style.display = folded ? "none" : "";
+    el = el.nextElementSibling as HTMLElement | null;
+  }
+}
+
 function anchoredHeading(Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6", className: string) {
   const level = Number(Tag.slice(1));
   return function VaultHeading({ id, children }: { id?: string; children?: React.ReactNode }) {
+    const scope = useContext(FoldScopeContext);
+    const key = `${scope}::${id ?? ""}`;
+    // Re-apply a remembered fold once this heading's siblings exist in the DOM.
+    const ref = (node: HTMLElement | null) => {
+      if (!node) return;
+      if (foldedSections.has(key)) requestAnimationFrame(() => applyFold(node, level, true));
+    };
     return (
-      <Tag id={id} className={`vault-heading ${className}`} data-vault-level={level}>
+      <Tag ref={ref as never} id={id} className={`vault-heading ${className}`} data-vault-level={level}>
         <button
           type="button"
           className="vault-fold-toggle"
@@ -385,16 +413,10 @@ function anchoredHeading(Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6", className
           onClick={(e) => {
             const h = e.currentTarget.parentElement as HTMLElement | null;
             if (!h) return;
-            const folded = h.getAttribute("data-folded") === "true";
-            h.setAttribute("data-folded", folded ? "false" : "true");
-            // Hide siblings up to the next heading of the same or higher level.
-            let el = h.nextElementSibling as HTMLElement | null;
-            while (el) {
-              const lvl = el.getAttribute?.("data-vault-level");
-              if (lvl && Number(lvl) <= level) break;
-              el.style.display = folded ? "" : "none";
-              el = el.nextElementSibling as HTMLElement | null;
-            }
+            const nowFolded = h.getAttribute("data-folded") !== "true";
+            applyFold(h, level, nowFolded);
+            if (nowFolded) foldedSections.add(key);
+            else foldedSections.delete(key);
           }}
         >
           <ChevronDown className="w-3 h-3" />
