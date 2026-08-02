@@ -12,21 +12,24 @@ import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
+import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
 import {
   useProfile,
   saveProfile,
   getAccountsHeartbeatPayload,
   autoSaveActiveProfile,
+  migrateLegacyProfileNames,
   activeCredentialExpiresAt,
   refreshActiveCredential,
   resnapshotIfActiveFresher,
   refreshUsageSnapshots,
   deleteProfile,
 } from "./ccAccounts.js";
-import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
+import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
+import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
-import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile } from "./codexAccounts.js";
+import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile, migrateLegacyCodexProfileNames } from "./codexAccounts.js";
 import { TranscriptDirWatcher, transcriptDirWatcherConfig, agentSessionFromTranscriptPath, decodePiCwdSlug, type TranscriptDirEvent, type DirEventWatcher } from "./transcriptDirWatcher.js";
 import {
   OpencodeStorageWatcher,
@@ -108,7 +111,8 @@ import {
   reapStaleTerminalSessions,
   type TerminalServerOptions,
 } from "./terminal/terminalServer.js";
-import { attachVaultServer, handleVaultHttp, type VaultServerOptions } from "./vault/vaultServer.js";
+import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
+import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
@@ -761,6 +765,10 @@ interface DaemonState {
   lastHeartbeatTick?: number;
   runtimeVersion?: string;
   lastSelfHealRestart?: number;
+  // macOS App Data (TCC) outcome for Cursor's data dir, recorded so later
+  // logins can start the watcher without re-touching an undecided TCC state
+  // (see cursorWatcherDecision) and doctor can explain a denial.
+  cursorAccess?: "granted" | "denied";
 }
 
 const AUTH_FAILURE_THRESHOLD = 5;
@@ -1271,6 +1279,7 @@ let hookServerPort = 0;
 const terminalToken = generateTerminalToken();
 let terminalServerHandle: { close(): void } | null = null;
 let vaultServerHandle: { close(): void } | null = null;
+let vaultMirror: VaultMirror | null = null;
 
 function terminalServerOptions(): TerminalServerOptions {
   return { token: terminalToken, log };
@@ -1280,6 +1289,28 @@ function terminalServerOptions(): TerminalServerOptions {
 // they only additionally need to know where the vault registry lives.
 function vaultServerOptions(): VaultServerOptions {
   return { ...terminalServerOptions(), configDir: CONFIG_DIR };
+}
+
+// Remote mirror pusher. Opt-in per vault and off by default, so on a machine
+// where nobody ran `cast vault mirror --on` this starts, finds nothing, and
+// costs nothing. It subscribes to the SAME watch hub the browser uses rather
+// than opening a second watcher on the same tree.
+function startVaultMirror(): void {
+  const siteUrl = getSiteUrl();
+  const token = getAuthToken();
+  if (!siteUrl || !token) return;
+
+  vaultMirror = new VaultMirror({
+    configDir: CONFIG_DIR,
+    deviceId: deviceId(),
+    transport: httpMirrorTransport(siteUrl, token),
+    // Subscribing also keeps the vault's watcher warm, which is exactly right:
+    // a mirrored vault is being watched on the user's behalf whether or not a
+    // browser tab happens to be open on it.
+    watch: (vault, onChange) => vaultWatchHub()?.subscribe(vault, onChange) ?? (() => {}),
+    log,
+  });
+  vaultMirror.start();
 }
 
 function startHookServer(
@@ -1331,6 +1362,7 @@ function startHookServer(
 
   terminalServerHandle = attachTerminalServer(server, terminalServerOptions());
   vaultServerHandle = attachVaultServer(server, vaultServerOptions());
+  startVaultMirror();
 
   // Reap idle panel terminals on boot and periodically (see terminalServer.ts).
   setTimeout(() => reapStaleTerminalSessions(log), 30_000).unref?.();
@@ -1356,6 +1388,10 @@ function startHookServer(
 }
 
 function stopHookServer(): void {
+  if (vaultMirror) {
+    vaultMirror.stop();
+    vaultMirror = null;
+  }
   if (terminalServerHandle) {
     terminalServerHandle.close();
     terminalServerHandle = null;
@@ -1964,8 +2000,22 @@ function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSetting
 // of retrying every beat. Remote devices run a pushed COPY of the primary's
 // credential, so profiles are only ever saved on the primary.
 const autoSaveDecidedAccounts = new Set<string>();
+let profileNamesMigrated = false;
 function maybeAutoSaveAccount(): void {
   if (isRemoteDevice()) return;
+  if (!profileNamesMigrated) {
+    // One-shot: profile names used to be auto-derived from the email DOMAIN
+    // (claude2@almostcandid.com → almostcandid); they now come from the local
+    // part (claude2). Rename still-auto-named profiles to the new form.
+    profileNamesMigrated = true;
+    try {
+      for (const r of migrateLegacyProfileNames()) {
+        log(`[ACCOUNTS] Renamed profile "${r.from}" → "${r.to}" (names now use the email's local part)`);
+      }
+    } catch (err) {
+      log(`[ACCOUNTS] Profile name migration failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   try {
     // Ride the mtime-cached payload for the per-beat check — ~/.claude.json
     // can be multi-MB, so an unconditional parse every 30s is real work.
@@ -1987,7 +2037,18 @@ function maybeAutoSaveAccount(): void {
 // in the inventory on the next heartbeat instead of waiting for the usage
 // cycle. One attempt per account per daemon lifetime, mirroring the CC path.
 const codexAutoSaveDecided = new Set<string>();
+let codexProfileNamesMigrated = false;
 function maybeAutoSaveCodexAccount(): void {
+  if (!codexProfileNamesMigrated) {
+    codexProfileNamesMigrated = true;
+    try {
+      for (const r of migrateLegacyCodexProfileNames()) {
+        log(`[ACCOUNTS] Renamed Codex profile "${r.from}" → "${r.to}" (names now use the email's local part)`);
+      }
+    } catch (err) {
+      log(`[ACCOUNTS] Codex profile name migration failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   try {
     const payload = getCodexAccountsHeartbeatPayload();
     const key = payload?.active_uuid || payload?.active_email;
@@ -2035,6 +2096,8 @@ async function sendHeartbeat(): Promise<void> {
         autostart_enabled: isAutostartEnabled(),
         has_tmux: hasTmux(),
         local_project_roots: computeLocalProjectRoots(),
+        // Per-repo git health (origin real? fetch ok? ahead/behind) — see gitPlane.ts.
+        git_plane: gitPlaneHeartbeatPayload(),
         device_id: deviceId(),
         device_label: deviceLabel(),
         is_remote_device: isRemoteDevice(),
@@ -2146,6 +2209,14 @@ async function sendHeartbeat(): Promise<void> {
  *   - on PATH        (fallback)             -> `cast`
  * Returns argv parts so callers can spawn without shell-quoting hazards.
  */
+/** Shell prefix routing an agent launch through `cast _disclaimed --` so the
+ *  agent becomes TCC self-responsible (see disclaim.ts). "" off-macOS or when
+ *  CODECAST_NO_DISCLAIM=1. */
+function disclaimPrefix(): string {
+  const { cmd, prefixArgs } = resolveCastInvocation();
+  return buildDisclaimShellPrefix([cmd, ...prefixArgs].join(" "));
+}
+
 function resolveCastInvocation(): { cmd: string; prefixArgs: string[] } {
   const argv1 = process.argv[1] || "";
   if (argv1.endsWith("daemon.ts") || argv1.endsWith("daemon.js")) {
@@ -2784,7 +2855,11 @@ async function executeRemoteCommand(
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
-        let cmdText = `${keyPrefix}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
+        // Launch through the disclaim wrapper so the agent is TCC
+        // self-responsible: privacy prompts name the agent (its own signed
+        // identity), not codecast/bun (see disclaim.ts). The wrapper execs
+        // plain argv, which works here because envPrefix starts with `env`.
+        let cmdText = `${keyPrefix}${disclaimPrefix()}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
 
         let codexThreadId: string | null = null;
         const codexSkipApprovals = binaryArgs.includes("--full-auto") || binaryArgs.includes("--dangerously-bypass-approvals-and-sandbox");
@@ -11367,6 +11442,15 @@ async function runHeartbeatMaintenance(): Promise<void> {
   if (tick % WIP_SNAPSHOT_EVERY_N_FLUSHES === 0) {
     await sweepWipSnapshots(ids).catch((e) => log(`[WIP] pass error: ${(e as Error)?.message ?? e}`));
   }
+
+  // Keep every repo's origin real, fetched, and measured; un-retires wip pushes
+  // when a repaired remote makes them possible again. See sweepGitPlaneFleet.
+  // Runs right after the wip sweep on its own cadence so a repair this tick is
+  // already usable by the next wip pass. Fetch frequency is gated inside the
+  // engine (per-repo interval), so this cadence only bounds repair latency.
+  if (tick % GIT_PLANE_EVERY_N_FLUSHES === 0) {
+    await sweepGitPlaneFleet(ids).catch((e) => log(`[GITPLANE] pass error: ${(e as Error)?.message ?? e}`));
+  }
 }
 
 // ─── Working-tree snapshots ────────────────────────────────────────────────
@@ -11390,6 +11474,7 @@ async function runHeartbeatMaintenance(): Promise<void> {
 //   - every git call is async; a sync exec here would block the daemon's loop
 //     past the watchdog's stale-heartbeat threshold on a large repo.
 const WIP_SNAPSHOT_EVERY_N_FLUSHES = 10; // ~5 min (flush = 30s), same cadence as the reaper
+const GIT_PLANE_EVERY_N_FLUSHES = 10; // ~5 min repair latency; fetches self-gate to ~10 min per repo
 const WIP_SNAPSHOT_CONCURRENCY = 3;
 // PUSHES per pass, not sessions per pass. Every eligible session is snapshotted
 // every pass (local and cheap), and the tree hash gates the network — so steady
@@ -11418,18 +11503,13 @@ const wipSnapshotGivenUp = new Map<string, string>();
 /** Round-robin cursor so every session gets a turn under MAX_PER_PASS. */
 let wipSweepCursor = 0;
 
-async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
-  if (!sessionIds.length) return;
-  // Off switch, read fresh each pass so it takes effect without a restart. This
-  // loop writes to the user's real git remotes, and this daemon runs from source
-  // on dev machines where the watchdog reloads whatever is on disk within ~1min —
-  // a side-effecting path like this needs a way to be inert that doesn't require
-  // stopping the daemon (which would take every session's sync down with it).
-  if (readConfig()?.wip_snapshots_enabled === false) return;
+/** Sessions with both a conversation id and a real local cwd — the common
+ * ground of every git-side sweep (wip snapshots, git-plane health). */
+function collectGitSweepTargets(
+  sessionIds: string[],
+): Array<{ sessionId: string; conversationId: string; cwd: string }> {
   const cache = readConversationCache();
-  // Only sessions with a conversation (the id the destination will look up) and a
-  // real local cwd can be snapshotted.
-  const eligible: Array<{ sessionId: string; conversationId: string; cwd: string }> = [];
+  const targets: Array<{ sessionId: string; conversationId: string; cwd: string }> = [];
   for (const sessionId of sessionIds) {
     const conversationId = cache[sessionId];
     if (!conversationId) continue;
@@ -11441,27 +11521,42 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
       cwd = file.agentType === "codex" ? extractCodexCwd(head) : extractCwd(head);
     } catch {}
     if (!cwd || !fs.existsSync(cwd)) continue;
-    if (wipSnapshotGivenUp.has(cwd)) continue; // retired: this checkout's remote refuses pushes
-    eligible.push({ sessionId, conversationId, cwd });
+    targets.push({ sessionId, conversationId, cwd });
   }
+  return targets;
+}
+
+async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
+  if (!sessionIds.length) return;
+  // Off switch, read fresh each pass so it takes effect without a restart. This
+  // loop writes to the user's real git remotes, and this daemon runs from source
+  // on dev machines where the watchdog reloads whatever is on disk within ~1min —
+  // a side-effecting path like this needs a way to be inert that doesn't require
+  // stopping the daemon (which would take every session's sync down with it).
+  if (readConfig()?.wip_snapshots_enabled === false) return;
+  // Retired checkouts (unpushable remote) are skipped; the git-plane sweep
+  // un-retires them when it repairs the repo's origin or sees a fetch recover.
+  const eligible = collectGitSweepTargets(sessionIds).filter(
+    (t) => !wipSnapshotGivenUp.has(t.cwd),
+  );
   if (!eligible.length) return;
 
   // Group by CHECKOUT, because that is what a snapshot actually describes. Many
-  // sessions share one repo — on this machine ~50 sessions live in ~6 checkouts —
-  // and per-session work was quadratic waste: N identical trees snapshotted, N
+  // sessions share one repo — on a busy machine ~50 sessions live in ~6 checkouts
+  // — and per-session work was quadratic waste: N identical trees snapshotted, N
   // near-identical commits pushed to N refs. Worse, it defeated the tree-hash
   // throttle entirely: any agent touching a shared checkout invalidated every
-  // sibling's cache at once, so `unchanged` sat at 0 and every pass pushed a full
-  // batch forever (observed live: pushed=10 unchanged=0 for hours). That also made
-  // the freshness promise hollow — with a per-pass cap and a 50-deep backlog a
-  // given repo's snapshot went HOURS stale, which is the whole point of the
-  // feature. One snapshot per checkout, one push carrying every sibling's refspec.
-  // (If gitPlane's repoRootFor lands, key this by repo toplevel instead so
-  // subdirectory sessions collapse too.)
+  // sibling session's cache at once, so `unchanged` sat at 0 and every pass
+  // pushed a full batch forever (observed live: pushed=10 unchanged=0 for hours).
+  // That also made the freshness promise hollow — with a per-pass cap and a
+  // 50-deep backlog a given repo's snapshot went HOURS stale, which is the whole
+  // point of the feature. One snapshot per checkout, one push carrying every
+  // sibling's refspec.
   const byCwd = new Map<string, typeof eligible>();
   for (const e of eligible) {
-    const g = byCwd.get(e.cwd);
-    if (g) g.push(e); else byCwd.set(e.cwd, [e]);
+    const group = byCwd.get(e.cwd);
+    if (group) group.push(e);
+    else byCwd.set(e.cwd, [e]);
   }
   const repos = [...byCwd.entries()].map(([cwd, sessions]) => ({ cwd, sessions }));
 
@@ -11503,8 +11598,9 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
         pushed++;
       } else if (res.permanent) {
         // Not pushable, and waiting won't change that — retire it (logged once)
-        // rather than failing on every pass forever. The reorientation notice
-        // still tells a moved agent only pushed work is present.
+        // rather than failing on every pass forever. Keyed by checkout, since
+        // pushability is a property of the remote. The reorientation notice still
+        // tells a moved agent only pushed work is present.
         wipSnapshotGivenUp.set(t.cwd, res.error ?? "push refused");
         log(`[WIP] giving up on ${label} (remote not pushable): ${res.error}`);
       } else {
@@ -11519,6 +11615,66 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
     log(
       `[WIP] snapshots pushed=${pushed} unchanged=${skipped}${deferred ? ` deferred=${deferred}` : ""} of ${targets.length} repos (${eligible.length} sessions)`,
     );
+  }
+}
+
+// ─── Git-plane health ──────────────────────────────────────────────────────
+// Keeps every repo with live sessions anchored to a REAL origin (repairing
+// transport-leftover origins like dead bundle paths), fetched on a cadence,
+// and measured (ahead/behind), with the result riding the device heartbeat.
+// Engine in gitPlane.ts; this is the fleet glue. When a repo's remote becomes
+// usable again (origin repaired, failing fetch recovered), the wip-snapshot
+// retirement latch for its checkouts is dropped so work sync resurrects
+// without a daemon restart — the m1 failure mode (2026-08-02) where a dead
+// bundle origin silently retired every session's snapshot pushes.
+
+/** Latest sweep result, capped, for the next heartbeat to report. */
+let latestGitPlane: RepoPlaneState[] | undefined;
+
+export function gitPlaneHeartbeatPayload(): RepoPlaneState[] | undefined {
+  return latestGitPlane?.slice(0, GIT_PLANE_REPORT_CAP);
+}
+
+async function sweepGitPlaneFleet(sessionIds: string[]): Promise<void> {
+  if (!sessionIds.length || !syncServiceRef) return;
+  const targets = collectGitSweepTargets(sessionIds);
+  if (!targets.length) return;
+
+  // Group by repo TOPLEVEL (not cwd): several checkout cwds — worktrees,
+  // subdirectory sessions — can share one repo whose origin is the shared fact.
+  const byRoot = new Map<string, { conversationIds: string[]; cwds: Set<string> }>();
+  for (const t of targets) {
+    const root = await repoRootFor(t.cwd);
+    if (!root) continue;
+    const group = byRoot.get(root) ?? { conversationIds: [], cwds: new Set() };
+    if (!group.conversationIds.includes(t.conversationId)) group.conversationIds.push(t.conversationId);
+    group.cwds.add(t.cwd);
+    byRoot.set(root, group);
+  }
+  if (!byRoot.size) return;
+
+  const states = await sweepGitPlane(
+    [...byRoot.entries()].map(([root, g]) => ({ root, conversationIds: g.conversationIds })),
+    {
+      resolveCanonical: async (conversationId) => {
+        const info = await syncServiceRef!.getProjectInfo(conversationId).catch(() => null);
+        return info?.git_remote_url ?? undefined;
+      },
+      onRemoteUsable: (root) => {
+        for (const cwd of byRoot.get(root)?.cwds ?? []) {
+          if (wipSnapshotGivenUp.delete(cwd)) {
+            log(`[GITPLANE] un-retired wip snapshots for ${cwd}`);
+          }
+          lastPushedWipTree.delete(cwd);
+        }
+      },
+      log,
+    },
+  );
+  latestGitPlane = states;
+  const bad = states.filter((s) => !s.origin_ok || s.fetch_ok === false);
+  if (bad.length) {
+    log(`[GITPLANE] ${states.length} repos, ${bad.length} unhealthy: ${bad.map((s) => `${path.basename(s.root)}(${!s.origin_ok ? "origin" : "fetch"})`).join(", ")}`);
   }
 }
 
@@ -12757,7 +12913,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // Same managed-key injection as a fresh launch, so a resumed opencode/pi
     // session gets its provider key too (pl-207).
     const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
-    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeKeyPrefix}${resumeEnvPrefix} ${resumeCmd}`]);
+    // disclaimPrefix: resumed agents carry their own TCC identity, same as a
+    // fresh launch (resumeEnvPrefix always starts with `env`, so the wrapper's
+    // plain-argv exec contract holds).
+    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeKeyPrefix}${disclaimPrefix()}${resumeEnvPrefix} ${resumeCmd}`]);
     await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
 
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
@@ -16892,7 +17051,39 @@ async function main(): Promise<void> {
     logError("Cursor watcher error", error);
   });
 
-  cursorWatcher.start();
+  cursorWatcher.on("denied", () => {
+    saveDaemonState({ cursorAccess: "denied" });
+    log("Cursor sync stopped: macOS denied access to Cursor's data — run `cast doctor` for fix steps");
+  });
+
+  // Consent gate (macOS): scanning Cursor's dir is what raises the login-time
+  // "codecast would like to access data from other apps" prompt, so only scan
+  // when the user opted in or a prior run recorded the grant. `cast cursor on`
+  // flips the pref and restarts the daemon, so the one prompt fires while the
+  // user is watching that command, not at some future login.
+  const cursorDecision = cursorWatcherDecision({
+    platform: process.platform,
+    pref: config.cursor_sync,
+    recordedAccess: readDaemonState().cursorAccess,
+  });
+  if (cursorDecision === "start") {
+    // Fire-and-forget: with an undecided TCC state the probe blocks until the
+    // user answers the permission dialog, and daemon startup must not.
+    void (async () => {
+      const probe = process.platform === "darwin" ? await probeCursorAccess() : "ok";
+      if (probe === "denied") {
+        saveDaemonState({ cursorAccess: "denied" });
+        log("Cursor sync unavailable: macOS denied access to Cursor's data — run `cast doctor` for fix steps");
+      } else {
+        if (process.platform === "darwin" && probe === "ok") {
+          saveDaemonState({ cursorAccess: "granted" });
+        }
+        cursorWatcher.start();
+      }
+    })();
+  } else if (cursorDecision === "needs-consent" && fs.existsSync(defaultCursorPath())) {
+    log("Cursor detected but not synced — run `cast cursor on` to enable (macOS will ask to allow access once)");
+  }
 
   const cursorTranscriptWatcher = new CursorTranscriptWatcher();
   const cursorTranscriptSyncs = new Map<string, InvalidateSync>();
@@ -16956,7 +17147,11 @@ async function main(): Promise<void> {
     logError("Cursor transcript watcher error", error);
   });
 
-  cursorTranscriptWatcher.start();
+  // ~/.cursor/projects is a dotfile dir (no TCC gate), so only the explicit
+  // off switch disables transcript sync.
+  if (config.cursor_sync !== "off") {
+    cursorTranscriptWatcher.start();
+  }
 
   codexAppServerInstance = new CodexAppServer({
     log,
