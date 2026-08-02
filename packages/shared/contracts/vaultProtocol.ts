@@ -21,6 +21,8 @@ export interface VaultInfo {
   note_count?: number;
   /** Epoch ms when the vault was registered. */
   added_at: number;
+  /** Opt-in one-way Convex mirror for cross-device reading. */
+  mirror?: boolean;
 }
 
 /** GET /vault/roots response. */
