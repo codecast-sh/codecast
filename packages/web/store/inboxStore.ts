@@ -18,6 +18,7 @@ import type { PrincipalEpoch } from "./local-first/types";
 import type { DispatchAuthorizationCapture } from "./local-first/dispatchGate";
 import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrategy } from "./clientSyncRegistry";
 import { makeCollectionSig } from "./wakeSig";
+import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { type AgentStatus, ACTIVE_AGENT_STATUSES, isLivenessStale, modelOptionKey } from "@codecast/shared/contracts";
@@ -2404,6 +2405,8 @@ interface InboxStoreState {
   // deleted (the empty-conversation GC). Plants the exclude pending entries that
   // authorize the IDB row delete and block crawl re-adds.
   pruneGhostSessions: (ids: string[]) => void;
+  // Receiver for the cross-window gesture bridge — see gestureBridge.ts.
+  applyGestureBridge: (msg: GestureMessage) => void;
   pruneFeedEntities: (collection: "sessions" | "tasks" | "docs" | "plans", ids: string[]) => void;
   clearFeedExcludes: (collection: "sessions" | "tasks" | "docs" | "plans", ids: string[]) => void;
   markServerDeleted: (convId: string) => void;
@@ -3643,8 +3646,25 @@ function applyHiddenReconcileInDraft(
 // children) out of the active buckets, advancing the current selection past the
 // removed set. Stash writes inbox_stashed_at; dismiss writes inbox_dismissed_at
 // and clears any stash (the row MOVES to Dismissed — the buckets are exclusive).
-function hideSessionInDraft(draft: any, id: string, mode: "stash" | "kill") {
-  const now = Date.now();
+//
+// Returns the two resolved id sets so the calling action can announce them on
+// the cross-window gesture bridge (gestureBridge.ts): `hidden` are the rows
+// that got a hide timestamp, `forgotten` the rows deleted outright. Only this
+// function knows the cascade (nested children) and which members turned out to
+// be stubs/foreign, so returning them is the least invasive way to surface it —
+// the action body must NOT return them onward, since an action()'s return value
+// becomes its server dispatch payload.
+//
+// `now` is the gesture's timestamp. Bulk kill passes ONE for the whole sweep so
+// every row it stamps carries the same value its single broadcast does — a
+// per-row Date.now() drifts across a long sweep, and a receiver's field lock
+// holding a value the server never echoes back never retires.
+function hideSessionInDraft(
+  draft: any,
+  id: string,
+  mode: "stash" | "kill",
+  now: number = Date.now(),
+): { hidden: string[]; forgotten: string[]; ts: number } {
   const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const sessionValues = Object.values(draft.sessions) as InboxSession[];
   // The removed set must match what the card visually contains, so the sweep
@@ -3661,6 +3681,8 @@ function hideSessionInDraft(draft: any, id: string, mode: "stash" | "kill") {
   // The viewer. A session whose user_id isn't ours was injected into this cache
   // by viewing/searching a TEAMMATE's session — we can't durably hide it.
   const me = draft.currentUser?._id?.toString?.();
+  const hidden: string[] = [];
+  const forgotten: string[] = [];
   let newSessionId = draft.currentSessionId;
   if (draft.currentSessionId && allIds.includes(draft.currentSessionId)) {
     // Advance in the order the user is LOOKING at (active view mode, same as
@@ -3691,8 +3713,10 @@ function hideSessionInDraft(draft: any, id: string, mode: "stash" | "kill") {
       delete draft.conversations[sid];
       delete draft.messages[sid];
       delete draft.pendingMessages[sid];
+      forgotten.push(sid);
       continue;
     }
+    hidden.push(sid);
     const sess = draft.sessions[sid];
     const wasPinned = sess?.is_pinned;
     if (sess) {
@@ -3721,6 +3745,240 @@ function hideSessionInDraft(draft: any, id: string, mode: "stash" | "kill") {
   // effect snaps the view back onto it (resurfacing the dismissed/killed session
   // as a peek) the next time it runs — e.g. when the tab is re-activated.
   syncActiveInboxTabPath(draft, newSessionId);
+  return { hidden, forgotten, ts: now };
+}
+
+// The signed-in user, as the gesture bridge stamps it on outbound messages and
+// matches it on inbound ones. Exported for undoActions, whose undo closures
+// broadcast the reverted value (an un-announced undo leaves a sibling holding
+// the pre-undo row — see gestureBridge.ts).
+export function bridgeUserId(state: any): string | null {
+  return state.currentUser?._id?.toString?.() ?? null;
+}
+
+// The bridged subset of a generic field patch, or null if it touches none of
+// them. Values pass through verbatim so the receiver's planted locks hold
+// exactly what the sender dispatched (see applyGestureInDraft's `write`).
+function pickBridgedFields(
+  fields: Record<string, any>,
+): Partial<Record<BridgedField, number | boolean | null>> | null {
+  let out: Partial<Record<BridgedField, number | boolean | null>> | null = null;
+  for (const field of BRIDGED_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(fields, field)) continue;
+    const value = fields[field];
+    if (value !== null && typeof value !== "number" && typeof value !== "boolean") continue;
+    out ??= {};
+    out[field] = value;
+  }
+  return out;
+}
+
+// Sender half for the hide gestures. Called from inside the action body (the
+// mutative recipe), alongside soundDismiss/soundKill — the local mutation is
+// already fully computed on the draft at this point and lands synchronously
+// when the middleware commits it, so a sibling can never observe the broadcast
+// "before" this window's own state change.
+function announceHide(
+  draft: any,
+  mode: "stash" | "kill",
+  result: { hidden: string[]; forgotten: string[]; ts: number },
+) {
+  if (result.hidden.length === 0 && result.forgotten.length === 0) return;
+  broadcastGesture(
+    {
+      kind: "hide",
+      mode,
+      ids: result.hidden,
+      ...(result.forgotten.length ? { forget: result.forgotten } : {}),
+      ts: result.ts,
+    },
+    bridgeUserId(draft),
+  );
+}
+
+// Receiver half of the cross-window gesture bridge (see gestureBridge.ts for
+// the clobber mechanism this defends against). Applies a SIBLING window's
+// gesture to this window's in-memory rows, so this window's next whole-row IDB
+// put carries the gesture instead of writing the pre-gesture row back over it.
+//
+// Deliberately narrow — fields and row removal only. It never touches
+// currentSessionId, the tab path, or any navigation state: the user is looking
+// at THIS window, and a dismiss they made in another one must not move their
+// view here. It runs under sync(), so it neither dispatches nor enqueues an
+// outbox entry; the acting window owns the single server write.
+//
+// Every write is timestamp-guarded so a late, duplicated, or reordered message
+// can never regress newer local state. `notNewer` treats an absent value as 0:
+// a row that was never hidden always accepts a hide, and a row hidden AFTER the
+// incoming gesture keeps its own newer stamp.
+function applyGestureInDraft(draft: any, msg: GestureMessage) {
+  const notNewer = (current: unknown, ts: number) =>
+    typeof current === "number" ? current <= ts : true;
+
+  // Write a field AND plant the pending field lock the sender's action() gets
+  // for free from generateAutoPending (mutativeMiddleware). The lock is not
+  // bookkeeping — it is the only thing that makes the bridged value survive:
+  //   • applySyncTable's applyFieldOverrides re-asserts it over an incoming
+  //     server row (delta mode replaces the row wholesale), and
+  //   • applyHiddenReconcileInDraft's SET/CLEAR passes skip a locked row
+  //     (lockedLocal).
+  // Without it, a sessions crawl already in flight in THIS window — a wake
+  // reconcile pages for seconds — lands the pre-gesture server row, the bridged
+  // hide silently vanishes, and this window's next whole-row put writes the
+  // un-hidden row over the acting window's in shared IDB. That is precisely the
+  // bug the bridge exists to prevent, so an unlocked apply is worse than none.
+  //
+  // This does NOT breach the receiver's no-server-write contract: {type:"field"}
+  // pendings are consumed only by the local sync appliers (applySyncTable,
+  // applySyncRecord, applyHiddenReconcileInDraft). They are never dispatched and
+  // never enqueued — only action()/asyncAction() reach the outbox.
+  //
+  // The planted value must equal what the SENDER dispatched, because the lock
+  // retires only when the server echo matches it (applyFieldOverrides). Every
+  // call below therefore passes a value carried in the message, never one
+  // re-derived here.
+  const write = (coll: "sessions" | "conversations", id: string, field: string, value: any) => {
+    const row = draft[coll][id];
+    if (!row) return;
+    row[field] = value;
+    draft.pending[`${coll}:${id}:${field}`] = { type: "field", value, ts: msg.ts };
+  };
+
+  const forget = (ids: string[], ts: number, scope: "session-row" | "all" = "all") => {
+    for (const fid of ids) {
+      // Mirror ALL of pruneGhostSessions' IN-USE guards, not just the first.
+      // (Its skip for a row this window doesn't hold does NOT carry over: there
+      // the absence means no evidence, here the sender is the evidence, and the
+      // exclude is what stops an in-flight crawl re-adding what it just deleted.)
+      // Declining only ever makes the receiver more conservative — the sender
+      // still owns its own durable delete — while deleting here would destroy
+      // state this window knows about and the sender did not:
+      //   • currentSessionId: the conversation view would blank out mid-read.
+      //   • pendingMessages: unsent user TEXT queued in this window.
+      //   • pendingSessionCreates: a create still in flight, about to rekey.
+      if (draft.currentSessionId === fid) continue;
+      if (draft.pendingMessages[fid]?.length) continue;
+      if (fid in draft.pendingSessionCreates) continue;
+      delete draft.sessions[fid];
+      // The exclude is what authorizes the durable IDB row delete — a bare
+      // store-shrink is ignored by the collection diff (same reason
+      // pruneGhostSessions plants them) — and it also stops a delta crawl from
+      // re-adding the row this window was just told is gone.
+      draft.pending[`sessions:${fid}`] = { type: "exclude", ts };
+      // markKilling drops the inbox CARD but keeps the conversation cached (the
+      // server still has it, marked completed). Mirroring that exactly matters:
+      // an exclude planted here for a conversation that still exists would
+      // blind this window to it on every later crawl.
+      if (scope === "session-row") continue;
+      delete draft.conversations[fid];
+      delete draft.messages[fid];
+      delete draft.pendingMessages[fid];
+      delete draft.pagination[fid];
+      draft.pending[`conversations:${fid}`] = { type: "exclude", ts };
+    }
+  };
+
+  if (msg.kind === "forget") {
+    forget(msg.ids, msg.ts, msg.scope ?? "all");
+    return;
+  }
+
+  if (msg.kind === "hide") {
+    // A mixed cascade (real rows flagged, stubs/foreign rows deleted) rides
+    // ONE message, so the deletions are applied here rather than as a separate
+    // forget broadcast — see gestureBridge.ts.
+    if (msg.forget?.length) forget(msg.forget, msg.ts);
+    const field = msg.mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
+    for (const sid of msg.ids) {
+      const sess = draft.sessions[sid];
+      if (sess) {
+        if (notNewer(sess[field], msg.ts)) write("sessions", sid, field, msg.ts);
+        // Kill MOVES the row to the Killed bucket: the buckets are exclusive
+        // and a killed session can't stay pinned. Mirrors hideSessionInDraft.
+        if (msg.mode === "kill") {
+          if (sess.inbox_stashed_at && notNewer(sess.inbox_stashed_at, msg.ts)) {
+            write("sessions", sid, "inbox_stashed_at", null);
+          }
+          if ((sess.is_pinned || sess.inbox_pinned_at != null) && notNewer(sess.inbox_pinned_at, msg.ts)) {
+            write("sessions", sid, "is_pinned", false);
+            write("sessions", sid, "inbox_pinned_at", null);
+          }
+        }
+      }
+      const conv = draft.conversations[sid];
+      if (conv) {
+        if (notNewer(conv[field], msg.ts)) write("conversations", sid, field, msg.ts);
+        if (msg.mode === "kill") {
+          if (conv.inbox_stashed_at && notNewer(conv.inbox_stashed_at, msg.ts)) {
+            write("conversations", sid, "inbox_stashed_at", null);
+          }
+          if (conv.inbox_pinned_at != null && notNewer(conv.inbox_pinned_at, msg.ts)) {
+            write("conversations", sid, "inbox_pinned_at", null);
+          }
+        }
+      }
+    }
+    return;
+  }
+
+  if (msg.kind === "restore") {
+    // Un-hiding is un-hiding: both flags clear, but only if this window's value
+    // is no newer than the restore (a re-kill here must survive).
+    for (const sid of msg.ids) {
+      const sess = draft.sessions[sid];
+      if (sess) {
+        if (sess.inbox_dismissed_at != null && notNewer(sess.inbox_dismissed_at, msg.ts)) {
+          write("sessions", sid, "inbox_dismissed_at", null);
+        }
+        if (sess.inbox_stashed_at != null && notNewer(sess.inbox_stashed_at, msg.ts)) {
+          write("sessions", sid, "inbox_stashed_at", null);
+        }
+      }
+      const conv = draft.conversations[sid];
+      if (conv) {
+        if (conv.inbox_dismissed_at != null && notNewer(conv.inbox_dismissed_at, msg.ts)) {
+          write("conversations", sid, "inbox_dismissed_at", null);
+        }
+        if (conv.inbox_stashed_at != null && notNewer(conv.inbox_stashed_at, msg.ts)) {
+          write("conversations", sid, "inbox_stashed_at", null);
+        }
+      }
+    }
+    return;
+  }
+
+  if (msg.kind === "fields") {
+    // Verbatim mirror of a patchConversation gesture. patchConversation
+    // Object.assigns the same fields onto BOTH twins, so both get them here.
+    // The hide/pin fields are all timestamps or a boolean paired with one, so
+    // the ordering guard keys off the row's current pin/hide stamp.
+    for (const [field, value] of Object.entries(msg.fields)) {
+      const stampField = field === "is_pinned" ? "inbox_pinned_at" : field;
+      for (const coll of ["sessions", "conversations"] as const) {
+        const row = draft[coll][msg.id];
+        if (!row) continue;
+        if (!notNewer(row[stampField], msg.ts)) continue;
+        if (row[field] === value) continue;
+        write(coll, msg.id, field, value);
+      }
+    }
+    return;
+  }
+
+  // pin — `pinnedAt` is the sender's exact written value (see gestureBridge.ts:
+  // undo restores the ORIGINAL pin time, so it cannot be re-derived from ts).
+  // Already-matching rows are left untouched so a duplicate message produces no
+  // patch, and therefore no IDB write.
+  const sess = draft.sessions[msg.id];
+  if (sess && !!sess.is_pinned !== msg.pinned && notNewer(sess.inbox_pinned_at, msg.ts)) {
+    write("sessions", msg.id, "is_pinned", msg.pinned);
+    write("sessions", msg.id, "inbox_pinned_at", msg.pinnedAt);
+  }
+  const conv = draft.conversations[msg.id];
+  if (conv && (conv.inbox_pinned_at != null) !== msg.pinned && notNewer(conv.inbox_pinned_at, msg.ts)) {
+    write("conversations", msg.id, "inbox_pinned_at", msg.pinnedAt);
+    if (msg.pinned) write("conversations", msg.id, "inbox_killed_at", undefined);
+  }
 }
 
 export const useInboxStore = create<InboxStoreState>(
@@ -4003,7 +4261,7 @@ export const useInboxStore = create<InboxStoreState>(
   // Stash = set aside WITHOUT killing (Stashed bucket, agent keeps running).
   stashSession: action(function (this: Draft, id: string) {
     soundDismiss();
-    hideSessionInDraft(this, id, "stash");
+    announceHide(this, "stash", hideSessionInDraft(this, id, "stash"));
   }),
 
   // Kill = done with it. The server tears the agent down on the hide data
@@ -4013,7 +4271,7 @@ export const useInboxStore = create<InboxStoreState>(
   // historical name inbox_dismissed_at; the UI calls the bucket "Killed".)
   killSession: action(function (this: Draft, id: string) {
     soundKill();
-    hideSessionInDraft(this, id, "kill");
+    announceHide(this, "kill", hideSessionInDraft(this, id, "kill"));
   }),
 
   // Bulk kill ("Kill all" on the Stashed bucket): one action so the patches
@@ -4024,7 +4282,19 @@ export const useInboxStore = create<InboxStoreState>(
   killSessions: action(function (this: Draft, ids: string[]) {
     if (ids.length === 0) return;
     soundKill();
-    for (const id of ids) hideSessionInDraft(this, id, "kill");
+    // "Kill all" is ONE user gesture: one timestamp for every row it stamps and
+    // for the single merged broadcast (the sound plays once for the same reason).
+    // Per-row Date.now() drifts across a long sweep, so the message's timestamp
+    // matched only the last row — every sibling lock planted for an earlier row
+    // held a value the server would never echo, and so would never retire.
+    const now = Date.now();
+    const merged = { hidden: [] as string[], forgotten: [] as string[], ts: now };
+    for (const id of ids) {
+      const r = hideSessionInDraft(this, id, "kill", now);
+      merged.hidden.push(...r.hidden);
+      merged.forgotten.push(...r.forgotten);
+    }
+    announceHide(this, "kill", merged);
   }),
 
   // Bulk-dismiss a precomputed set of sessions locally (instant, optimistic). A
@@ -4035,12 +4305,28 @@ export const useInboxStore = create<InboxStoreState>(
   // rows. Used by the "dismiss old sessions" inbox prompt.
   markSessionsDismissed: sync(function (this: Draft, ids: string[]) {
     const now = Date.now();
+    const stamped: string[] = [];
     for (const id of ids) {
       const sess = this.sessions[id];
-      if (sess && !sess.inbox_dismissed_at) sess.inbox_dismissed_at = now;
+      if (sess && !sess.inbox_dismissed_at) {
+        sess.inbox_dismissed_at = now;
+        stamped.push(id);
+      }
       if (this.conversations[id] && !(this.conversations[id] as any).inbox_dismissed_at) {
         (this.conversations[id] as any).inbox_dismissed_at = now;
       }
+    }
+    // The bulk sweep is the highest-volume dismissal path there is, and every
+    // row it stamps is one a sibling window would otherwise re-put un-dismissed
+    // — dozens of sessions climbing back into the inbox at once. One message
+    // for the whole sweep, carrying only the ids actually stamped.
+    //
+    // mode:"kill" is the shape (it writes inbox_dismissed_at). The receiver's
+    // kill also clears stash/pin, which this action doesn't — a no-op in
+    // practice, since the caller's stale set already excludes hidden and pinned
+    // rows, and the receiver's ts guard protects a sibling's newer pin anyway.
+    if (stamped.length) {
+      broadcastGesture({ kind: "hide", mode: "kill", ids: stamped, ts: now }, bridgeUserId(this));
     }
   }),
 
@@ -4089,10 +4375,19 @@ export const useInboxStore = create<InboxStoreState>(
   // manually (only action() auto-plants).
   pruneGhostSessions: sync(function (this: Draft, ids: string[]) {
     const now = Date.now();
+    const removed: string[] = [];
     for (const id of ids) {
+      // Nothing here to remove → do nothing at all. Callers re-fire on ids they
+      // already pruned (ConversationView's 3s retry, ComposeView's unmount), and
+      // acting on an absent row is pure downside: the excludes are STICKY, so
+      // planting them for a row this window never held blinds it if that id ever
+      // arrives on a later crawl, and the broadcast would order sibling windows
+      // to drop a row on evidence this window doesn't have.
+      if (!(id in this.sessions) && !(id in this.conversations)) continue;
       if (this.currentSessionId === id) continue;
       if (this.pendingMessages[id]?.length) continue;
       if (id in this.pendingSessionCreates) continue;
+      removed.push(id);
       delete this.sessions[id];
       delete this.conversations[id];
       delete this.messages[id];
@@ -4101,6 +4396,18 @@ export const useInboxStore = create<InboxStoreState>(
       this.pending[`sessions:${id}`] = { type: "exclude", ts: now };
       this.pending[`conversations:${id}`] = { type: "exclude", ts: now };
     }
+    // A sibling window still holding the ghost in memory would re-put the whole
+    // row and resurrect it (see gestureBridge.ts). Only the ids actually removed
+    // are announced — the guards above are per-window.
+    if (removed.length) broadcastGesture({ kind: "forget", ids: removed, ts: now }, bridgeUserId(this));
+  }),
+
+  // Apply a gesture a sibling window performed (cross-window gesture bridge).
+  // sync(): purely local convergence — the acting window already dispatched the
+  // single server write, so this must never dispatch or enqueue an outbox entry.
+  // Mechanics and guards in applyGestureInDraft.
+  applyGestureBridge: sync(function (this: Draft, msg: GestureMessage) {
+    applyGestureInDraft(this, msg);
   }),
 
   // Change-feed prune: the entity is gone or no longer visible to this user, so
@@ -4216,6 +4523,7 @@ export const useInboxStore = create<InboxStoreState>(
   // Bring a stashed/dismissed session (and its hidden children) back into the
   // active inbox. Clears BOTH hide flags — un-hiding is un-hiding.
   restoreSession: action(function (this: Draft, id: string) {
+    const now = Date.now();
     const childIds = Object.values(this.sessions as Record<string, InboxSession>)
       .filter((s) => isSessionHidden(s) && s.parent_conversation_id === id)
       .map((s) => s._id);
@@ -4235,6 +4543,9 @@ export const useInboxStore = create<InboxStoreState>(
     this.currentSessionId = id;
     this.viewingDismissedId = null;
     recordCurrentConversationPointer(this, id);
+    // Sibling windows converge on the same clear (gestureBridge.ts) — but only
+    // the flags: the view move above is this window's alone.
+    broadcastGesture({ kind: "restore", ids: allIds, ts: now }, bridgeUserId(this));
   }),
 
   deferSession: action(function (this: Draft, id: string) {
@@ -4251,7 +4562,8 @@ export const useInboxStore = create<InboxStoreState>(
 
   pinSession: action(function (this: Draft, id: string) {
     const newPinned = !this.sessions[id]?.is_pinned;
-    const pinnedAt = newPinned ? Date.now() : null;
+    const now = Date.now();
+    const pinnedAt = newPinned ? now : null;
     if (this.sessions[id]) {
       this.sessions[id].is_pinned = newPinned;
       this.sessions[id].inbox_pinned_at = pinnedAt;
@@ -4260,6 +4572,11 @@ export const useInboxStore = create<InboxStoreState>(
       (this.conversations[id] as any).inbox_pinned_at = pinnedAt;
       if (newPinned) (this.conversations[id] as any).inbox_killed_at = undefined;
     }
+    // Pin is a TOGGLE read off this window's row, so a sibling that never saw
+    // the flip computes the opposite value from its stale row on the next
+    // toggle (and its whole-row put un-pins what the user just pinned). The
+    // broadcast therefore carries the RESOLVED value, not "toggle".
+    broadcastGesture({ kind: "pin", id, pinned: newPinned, pinnedAt, ts: now }, bridgeUserId(this));
   }),
 
   renameSession: action(function (this: Draft, id: string, title: string) {
@@ -4293,6 +4610,17 @@ export const useInboxStore = create<InboxStoreState>(
     if (this.sessions[id]) Object.assign(this.sessions[id], fields);
     if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
     Object.assign(this.conversations[id], fields);
+    // Both of this action's real callers are USER GESTURES on the /sessions
+    // surface, and both write the bridged hide/pin fields: handleTogglePin
+    // sends { inbox_pinned_at }, handleToggleDismiss sends { inbox_stashed_at }
+    // or { inbox_dismissed_at: null, inbox_stashed_at: null }. A hidden row
+    // drops out of listInboxSessions, so a sibling inbox window can never learn
+    // about them through the live channel either — its next whole-row put would
+    // strip the flag in shared IDB and the session would climb back out of
+    // Stashed. Announce the exact subset written; a patch touching none of the
+    // four (rename, project switch, …) broadcasts nothing.
+    const bridged = pickBridgedFields(fields);
+    if (bridged) broadcastGesture({ kind: "fields", id, fields: bridged, ts: Date.now() }, bridgeUserId(this));
   }),
 
   // Rekey-only durable server flush. Stub writes are protected locally but
@@ -5264,6 +5592,11 @@ export const useInboxStore = create<InboxStoreState>(
       newSessionId = next?._id ?? null;
     }
     delete this.sessions[id];
+    // Killing an already-dismissed session HARD-REMOVES its inbox row, so a
+    // sibling window still holding that row would re-put it and the killed card
+    // would come back (gestureBridge.ts). Scoped to the session row because
+    // that is all this action drops — the conversation stays cached.
+    broadcastGesture({ kind: "forget", ids: [id], scope: "session-row", ts: Date.now() }, bridgeUserId(this));
     declareViewNav("gesture");
     this.currentSessionId = newSessionId;
     recordCurrentConversationPointer(this, newSessionId ?? undefined);
