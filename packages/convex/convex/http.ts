@@ -3678,6 +3678,16 @@ artifactPost("/cli/artifacts/edit", artifactEdit);
 artifactPost("/cli/artifacts/comment", artifactComment);
 artifactPost("/cli/artifacts/view", artifactView);
 
+// Vault remote mirror — the daemon's push channel (packages/cli/src/vault/
+// vaultMirror.ts). Mirroring is opt-in per vault; a vault nobody turned on
+// never reaches these routes at all. The body upload URL deliberately reuses
+// images.generateUploadUrl: it is the generic "give this authenticated user a
+// storage upload URL" mutation, and a vault-specific twin of it would be the
+// same function under a second name.
+cliRoute("/cli/vault/register", async (ctx, body) => ctx.runMutation(api.vaultMirror.cliRegisterMirror, body));
+cliRoute("/cli/vault/upsert", async (ctx, body) => ctx.runMutation(api.vaultMirror.cliUpsertNotes, body));
+cliRoute("/cli/vault/upload-url", async (ctx, body) => ctx.runMutation(api.images.generateUploadUrl, body));
+
 cliRoute("/cli/artifacts/list", async (ctx, body) => ctx.runQuery(api.artifacts.listFromCLI, body));
 cliRoute("/cli/artifacts/delete", async (ctx, body) => ctx.runMutation(api.artifacts.deleteFromCLI, body));
 

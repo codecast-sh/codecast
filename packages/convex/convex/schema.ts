@@ -2638,6 +2638,70 @@ export default defineSchema({
     view_count: v.number(),
   }).index("by_artifact_email", ["artifact_id", "email"]),
 
+  // Remote mirror of a local markdown vault: one row per registered vault the
+  // user turned mirroring on for (`cast vault mirror <dir> --on`). The daemon on
+  // the owning device is the only writer; the browser reads. Mirroring is opt-in
+  // and off by default, so a row existing here IS the user's consent. See
+  // convex/vaultMirror.ts and shared/contracts/vaultMirror.ts.
+  vault_mirrors: defineTable({
+    user_id: v.id("users"),
+    // Which machine's disk this mirror projects. A vault id is derived from the
+    // absolute root path, so two machines with ~/notes produce the SAME vault_id
+    // — the device is what tells the two mirrors apart.
+    device_id: v.string(),
+    vault_id: v.string(),
+    name: v.string(),
+    root: v.string(),
+    note_count: v.number(),
+    last_synced_at: v.number(),
+    // Reserved for the later sharing tier (directory_team_mappings). Nothing
+    // reads it yet: this phase is strictly owner-only.
+    is_public: v.optional(v.boolean()),
+  })
+    .index("by_user", ["user_id"])
+    .index("by_user_vault", ["user_id", "vault_id", "device_id"]),
+
+  // Note METADATA only. A body is never a field here: the docs table's 12-per-
+  // page clamp exists because Convex materializes whole bodies into a 64MB
+  // isolate heap before a handler can strip them, and a vault would hit that
+  // harder. Bodies live in ctx.storage; body_storage_id points at one.
+  vault_notes: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    vault_id: v.string(),
+    // Denormalized so a note row renders its vault's name without a join.
+    vault_name: v.string(),
+    // Vault-relative, "/"-separated.
+    path: v.string(),
+    title: v.string(),
+    mtime: v.number(),
+    size: v.number(),
+    // 16-hex sha256 prefix — the same digest the loopback /vault/file route
+    // serves as its ETag, so local and remote agree on file identity.
+    content_hash: v.string(),
+    tags: v.array(v.string()),
+    // Wiki-link targets as written; the reader resolves them against its own
+    // file list (it needs the whole vault to do that, and it has it).
+    links: v.array(v.string()),
+    heading_count: v.number(),
+    is_dir: v.optional(v.boolean()),
+    body_storage_id: v.optional(v.id("_storage")),
+    // Stamp of the full scan that last touched this row. A `complete` push
+    // sweeps rows carrying an older stamp — that is how deletions the daemon
+    // never observed as events still reach the mirror.
+    scan_id: v.optional(v.string()),
+    updated_at: v.number(),
+  })
+    // A row's identity is (user, vault, DEVICE, path). The device belongs in the
+    // key because a vault id is derived from the absolute root path, so two
+    // machines that both keep ~/notes produce the same vault_id — without the
+    // device in the key their daemons would overwrite each other's rows forever.
+    .index("by_user_vault_device", ["user_id", "vault_id", "device_id", "path"])
+    // Reader index: one vault across every device the user mirrors it from.
+    .index("by_user_vault", ["user_id", "vault_id", "path"])
+    .index("by_vault_path", ["vault_id", "path"])
+    .index("by_user", ["user_id"]),
+
   doc_snapshots: defineTable({
     id: v.string(),
     version: v.number(),
