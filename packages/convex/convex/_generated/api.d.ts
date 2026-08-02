@@ -86,6 +86,7 @@ import type * as notificationRouter from "../notificationRouter.js";
 import type * as notifications from "../notifications.js";
 import type * as orchestrationEvents from "../orchestrationEvents.js";
 import type * as patterns from "../patterns.js";
+import type * as pushRouter from "../pushRouter.js";
 import type * as pendingMessageWrites from "../pendingMessageWrites.js";
 import type * as pendingMessages from "../pendingMessages.js";
 import type * as permissions from "../permissions.js";
@@ -212,6 +213,7 @@ declare const fullApi: ApiFromModules<{
   notifications: typeof notifications;
   orchestrationEvents: typeof orchestrationEvents;
   patterns: typeof patterns;
+  pushRouter: typeof pushRouter;
   pendingMessageWrites: typeof pendingMessageWrites;
   pendingMessages: typeof pendingMessages;
   permissions: typeof permissions;

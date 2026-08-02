@@ -25,6 +25,13 @@ import { showBrowserHandoffToast } from "./BrowserHandoffToast";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
+import { usePresenceReporter } from "../hooks/usePresenceReporter";
+
+// A native banner is for something that JUST happened. Rows older than this at
+// the time we first see them (a sleep/offline gap replaying on reconnect) stay
+// in the bell but don't banner — the phone already covered the away window,
+// and a wake shouldn't replay a storm of stale banners on top.
+const BANNER_FRESH_MS = 3 * 60_000;
 
 export function DesktopProvider() {
   const router = useRouter();
@@ -68,6 +75,10 @@ export function DesktopProvider() {
     updateBadge(needsInputCount);
   }, [needsInputCount]);
 
+  // Report "a human is at this desktop" so the server holds mobile pushes
+  // while you're here (pushRouter.ts). Runs on web and Electron alike.
+  usePresenceReporter();
+
   const notifications = useQuery(api.notifications.list);
   const mountedAtRef = useRef<number>(Date.now());
   const seenIdsRef = useRef<Set<string>>(new Set());
@@ -95,7 +106,12 @@ export function DesktopProvider() {
     }
 
     for (const n of notifications) {
-      if (!seenIdsRef.current.has(n._id) && !n.read && n.created_at >= mountedAtRef.current) {
+      if (
+        !seenIdsRef.current.has(n._id) &&
+        !n.read &&
+        n.created_at >= mountedAtRef.current &&
+        Date.now() - n.created_at < BANNER_FRESH_MS
+      ) {
         const actor = n.actor?.name || n.actor?.github_username;
         const title = actor ? `${actor}` : "Codecast";
         const body = cleanNotificationBody(n.message) || n.message;

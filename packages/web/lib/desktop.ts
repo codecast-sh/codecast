@@ -22,6 +22,9 @@ declare global {
       // Open an https URL in the system default browser (used by the
       // browser-based desktop sign-in). Absent on older builds — gate on it.
       openExternal: (url: string) => Promise<void>;
+      // Machine-wide seconds since last user input (Electron powerMonitor).
+      // Absent on older builds — gate on it.
+      getSystemIdleSeconds: () => Promise<number>;
       platform: string;
     };
   }
@@ -128,11 +131,37 @@ export function conversationIdFromPath(path: string): string | null {
 // with the user's own profile) firing a handoff while the user types here must
 // not yank the view. Installed once by DesktopProvider.
 let lastDesktopInputAt = 0;
+let inputTrackerInstalled = false;
 export function installDesktopInputTracker(): void {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined" || inputTrackerInstalled) return;
+  inputTrackerInstalled = true;
   const note = () => { lastDesktopInputAt = Date.now(); };
   window.addEventListener("pointerdown", note, { capture: true, passive: true });
   window.addEventListener("keydown", note, { capture: true, passive: true });
+}
+
+// 0 until the first input after page load. Consumers that need "activity"
+// rather than strictly "input" (presence) should combine this with their own
+// signals (focus changes) — see usePresenceReporter.
+export function getLastDesktopInputAt(): number {
+  return lastDesktopInputAt;
+}
+
+// Milliseconds since the machine's last user input. On Electron this is the
+// OS-wide answer (powerMonitor), so it stays correct while Codecast sits
+// unfocused behind another app. In a browser we only see input on our own
+// page — callers pass their best in-page activity floor.
+export async function getIdleMs(inPageActivityFloor: number): Promise<number> {
+  if (isElectron()) {
+    const fn = bridge("getSystemIdleSeconds");
+    if (fn) {
+      try {
+        return (await fn()) * 1000;
+      } catch { /* fall through to in-page signal */ }
+    }
+  }
+  const last = Math.max(lastDesktopInputAt, inPageActivityFloor);
+  return last > 0 ? Date.now() - last : Number.MAX_SAFE_INTEGER;
 }
 
 const AUTO_DEEPLINK_QUIET_MS = 30_000;
