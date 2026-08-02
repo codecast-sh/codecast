@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>terminal harness v2</title>
+    <script>
+      localStorage.setItem("CAST_TERM_ENDPOINT", "42871:dev-token-not-secret");
+      localStorage.setItem("cast_term_panel", JSON.stringify({ open: true, height: 300 }));
+    </script>
+  </head>
+  <body class="font-mono">
+    <div id="root"></div>
+    <script type="module" src="/_termtest.tsx"></script>
+  </body>
+</html>
