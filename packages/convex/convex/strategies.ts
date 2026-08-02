@@ -65,6 +65,21 @@ export const webGet = query({
   },
 });
 
+export const webGetRef = query({
+  args: { id: v.optional(v.string()), short_id: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const normalized = args.id ? ctx.db.normalizeId("strategies", args.id) : null;
+    const strategy = normalized
+      ? await ctx.db.get(normalized)
+      : args.short_id
+        ? await ctx.db.query("strategies").withIndex("by_short_id", q => q.eq("short_id", args.short_id!)).unique()
+        : null;
+    return strategy && await canAccessSteeringEntity(ctx, userId, strategy) ? strategy : null;
+  },
+});
+
 // Change-feed batch fetch: current state for a set of strategy ids the user
 // can access (own or team). Inaccessible / gone ids are omitted; the feed
 // drives the prune. See changeFeed.ts.

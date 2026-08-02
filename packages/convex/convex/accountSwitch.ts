@@ -730,8 +730,13 @@ export const clearPendingSwitchCommands = internalMutation({
   },
 });
 
-// The web switcher's data: per online device, the active account and saved
-// profile names the daemon reported on its heartbeat.
+// The web switcher's data: per device, the active account and saved profile
+// names the daemon reported on its heartbeat. Online devices are the live set;
+// a recently-seen offline PRIMARY is included too (marked `online: false`) so
+// the auto-switch flag — a server-side setting the daemon never executes the
+// toggling of — stays reachable while the daemon restarts or is down.
+const OFFLINE_PRIMARY_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+
 export const listAccountProfiles = query({
   args: {},
   handler: async (ctx) => {
@@ -744,11 +749,16 @@ export const listAccountProfiles = query({
       .collect();
     return {
       devices: devices
-        .filter((d) => isDeviceOnline(d, now) && (d.cc_accounts || d.codex_usage))
+        .filter(
+          (d) =>
+            (isDeviceOnline(d, now) && (d.cc_accounts || d.codex_usage)) ||
+            (!d.is_remote && !!d.cc_accounts && now - d.last_seen < OFFLINE_PRIMARY_GRACE_MS),
+        )
         .map((d) => ({
           device_id: d.device_id,
           label: d.label,
           is_remote: d.is_remote === true,
+          online: isDeviceOnline(d, now),
           active_email: d.cc_accounts?.active_email,
           profiles: d.cc_accounts?.profiles ?? [],
           codex_usage: d.codex_usage,
