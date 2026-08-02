@@ -1079,14 +1079,15 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   // Focus lives in a real <input> (below) so the global capture-phase shortcut
   // dispatcher treats us as "typing" and suppresses single-letter hotkeys
   // (f/t/d/…). Letters + Backspace are handled natively by the input (onChange);
-  // we only intercept the arrow keys that drive chip selection.
+  // we only intercept the keys that drive chip selection. Option+H/L mirror
+  // Left/Right while the arrow-key path remains available.
   const handlePickerKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "ArrowRight") {
+    if (e.key === "ArrowRight" || (e.altKey && e.code === "KeyL")) {
       e.preventDefault();
       setHi((i) => (pickList.length ? (i + 1) % pickList.length : 0));
       return;
     }
-    if (e.key === "ArrowLeft") {
+    if (e.key === "ArrowLeft" || (e.altKey && e.code === "KeyH")) {
       e.preventDefault();
       setHi((i) => (pickList.length ? (i - 1 + pickList.length) % pickList.length : 0));
       return;
@@ -1350,12 +1351,12 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   }, [picking]);
 
   const handleAgentKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "ArrowRight") {
+    if (e.key === "ArrowRight" || (e.altKey && e.code === "KeyL")) {
       e.preventDefault();
       setHi((i) => (i + 1) % AGENT_OPTIONS.length);
       return;
     }
-    if (e.key === "ArrowLeft") {
+    if (e.key === "ArrowLeft" || (e.altKey && e.code === "KeyH")) {
       e.preventDefault();
       setHi((i) => (i - 1 + AGENT_OPTIONS.length) % AGENT_OPTIONS.length);
       return;
@@ -1557,8 +1558,8 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   useEffect(() => {
     const onChord = (e: KeyboardEvent) => {
       if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
-      const up = e.code === "ArrowUp";
-      const down = e.code === "ArrowDown";
+      const up = e.code === "KeyK" || e.code === "ArrowUp";
+      const down = e.code === "KeyJ" || e.code === "ArrowDown";
       if (!up && !down) return;
       if (hasOpenModal()) return;
       e.preventDefault();
