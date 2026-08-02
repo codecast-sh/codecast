@@ -98,7 +98,7 @@ import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt,
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { type Config, getAgentArgs } from "./config/types.js";
 import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
-import { addVault, listVaults, removeVault } from "./vault/vaultRegistry.js";
+import { addVault, listVaults, removeVault, setVaultMirroring } from "./vault/vaultRegistry.js";
 
 const program = new Command();
 const isStableContextFastPath =
@@ -419,6 +419,8 @@ interface DaemonState {
   lastWatchdogCheck?: number;
   runtimeVersion?: string;
   watchdogRestarts?: number;
+  /** macOS App Data (TCC) outcome for Cursor's data dir (written by the daemon). */
+  cursorAccess?: "granted" | "denied";
   /** Stamped on every daemon state write — lets `--wait` tell a fresh state file from a stale one. */
   timestamp?: number;
 }
@@ -3474,6 +3476,7 @@ const vaultCmd = program
     "  cast vault add ~/notes\n" +
     "  cast vault add ~/work/wiki --name Wiki\n" +
     "  cast vault ls\n" +
+    "  cast vault mirror ~/notes --on\n" +
     "  cast vault rm ~/notes"
   )
   .showHelpAfterError(true);
@@ -3511,7 +3514,43 @@ vaultCmd
     }
     for (const v of vaults) {
       const notes = v.note_count === undefined ? "" : ` ${c.dim}${v.note_count} notes${c.reset}`;
-      console.log(`  ${c.cyan}${v.id}${c.reset} ${v.name}${notes}\n    ${c.dim}${v.root}${c.reset}`);
+      const mirror = v.mirror ? ` ${c.green}mirrored${c.reset}` : ` ${c.dim}local only${c.reset}`;
+      console.log(`  ${c.cyan}${v.id}${c.reset} ${v.name}${notes}${mirror}\n    ${c.dim}${v.root}${c.reset}`);
+    }
+  });
+
+vaultCmd
+  .command("mirror")
+  .description(
+    "Mirror a vault so other devices can read it\n\n" +
+    "Off by default. Turning it on lets this machine's daemon push note\n" +
+    "metadata (title, tags, links, headings) and the bodies of notes under\n" +
+    "64KB to codecast, so the vault is readable — never writable — from\n" +
+    "another device. The files stay here and stay canonical; the mirror is a\n" +
+    "copy that follows them. Turning it off deletes the copy.\n\n" +
+    "Examples:\n" +
+    "  cast vault mirror ~/notes --on\n" +
+    "  cast vault mirror ~/notes --off"
+  )
+  .argument("<dirOrId>", "Vault directory or id")
+  .option("--on", "Start mirroring this vault")
+  .option("--off", "Stop mirroring and delete the remote copy")
+  .action((dirOrId: string, options: any) => {
+    if (options.on === options.off) {
+      console.error(`${c.red}Pass exactly one of --on or --off.${c.reset}`);
+      process.exit(1);
+    }
+    const vault = setVaultMirroring(CONFIG_DIR, dirOrId, !!options.on);
+    if (!vault) {
+      console.error(`${c.red}No vault matching "${dirOrId}".${c.reset} List them with: cast vault ls`);
+      process.exit(1);
+    }
+    if (options.on) {
+      console.log(`${c.green}ok${c.reset} mirroring ${c.cyan}${vault.name}${c.reset} ${c.dim}${vault.root}${c.reset}`);
+      console.log(`${c.dim}The daemon pushes the first full scan within a few seconds.${c.reset}`);
+    } else {
+      console.log(`${c.green}ok${c.reset} stopped mirroring ${c.cyan}${vault.name}${c.reset}`);
+      console.log(`${c.dim}The daemon deletes the remote copy on its next cycle.${c.reset}`);
     }
   });
 
@@ -5378,6 +5417,18 @@ function parseRelativeDate(input: string): number | null {
   return isNaN(parsed) ? null : parsed;
 }
 
+// End bounds parse date-only inputs to the END of that day, so
+// `-s 2026-06-05 -e 2026-06-05` means the whole day instead of an empty
+// window (a bare date otherwise parses to midnight starting the day).
+function parseEndDate(input: string): number | null {
+  const parsed = parseRelativeDate(input);
+  if (parsed === null) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input.trim())) {
+    return parsed + 24 * 60 * 60 * 1000 - 1;
+  }
+  return parsed;
+}
+
 program
   .command("search")
   .description(
@@ -5438,7 +5489,7 @@ program
       }
     }
     if (options.end) {
-      endTime = parseRelativeDate(options.end) ?? undefined;
+      endTime = parseEndDate(options.end) ?? undefined;
       if (!endTime) {
         console.error(`Invalid end date: ${options.end}`);
         process.exit(1);
@@ -5544,7 +5595,7 @@ program
       }
     }
     if (options.end) {
-      endTime = parseRelativeDate(options.end) ?? undefined;
+      endTime = parseEndDate(options.end) ?? undefined;
       if (!endTime) {
         console.error(`Invalid end date: ${options.end}`);
         process.exit(1);
@@ -5994,7 +6045,7 @@ program
       }
     }
     if (options.end) {
-      endTime = parseRelativeDate(options.end) ?? undefined;
+      endTime = parseEndDate(options.end) ?? undefined;
       if (!endTime) {
         console.error(`Invalid end date: ${options.end}`);
         process.exit(1);
@@ -10194,7 +10245,7 @@ Question: ${query}`,
     }
     const endHint = options.end ?? suggestedEnd;
     if (endHint) {
-      endTime = parseRelativeDate(endHint) ?? undefined;
+      endTime = parseEndDate(endHint) ?? undefined;
       if (!endTime) {
         console.error(`Invalid end date: ${endHint}`);
         process.exit(1);
@@ -10968,14 +11019,17 @@ trigger
       process.exit(1);
     }
 
-    // By default, capture the originating session so triggered runs inject
-    // back into the live conversation instead of spawning fresh agents.
-    // --for overrides detection: the ref is resolved server-side (own sessions
-    // only), so a trigger can be bound to a session from any shell.
-    // --spawn skips capture entirely: no bound session = each run spawns a
-    // fresh agent, and the run's conversation is linked back to the trigger
-    // via agent_task_id (the strip at the top of the session in the UI).
-    const sessionId = options.for || options.spawn ? null : findCurrentSessionFromProcess(getRealCwd());
+    // The current session is captured for two separate purposes:
+    //   • creatorSessionUuid — pure attribution (created_by_conversation_id):
+    //     which conversation armed this trigger. Sent ALWAYS, --spawn included,
+    //     so spawn triggers and their runs still trace back to their parent.
+    //   • sessionId — the inject binding (originating_conversation_id): its
+    //     presence makes runs inject into that session. --for overrides
+    //     detection (resolved server-side, own sessions only); --spawn skips
+    //     the binding so each run spawns a fresh agent, linked back to the
+    //     trigger via agent_task_id (the strip at the top of the session).
+    const creatorSessionUuid = findCurrentSessionFromProcess(getRealCwd());
+    const sessionId = options.for || options.spawn ? null : creatorSessionUuid;
     if (sessionId) {
       try {
         const resp = await cliFetchRead(`${siteUrl}/cli/sessions`, {
@@ -11007,7 +11061,8 @@ trigger
       console.error(
         "runs will spawn fresh sessions (no history) in " +
           (options.project || getRealCwd()) +
-          ", each linked back to this trigger"
+          ", each linked back to this trigger" +
+          (creatorSessionUuid ? " and to this session as its creator" : "")
       );
     } else if (!originating_conversation_id && !options.for) {
       console.error(
@@ -11028,6 +11083,7 @@ trigger
           context_summary,
           originating_conversation_id,
           originating_session_ref: options.for,
+          created_by_session_ref: creatorSessionUuid ?? undefined,
           target_conversation_id,
           project_path: options.project || getRealCwd(),
           agent_type: options.agent,
@@ -15341,6 +15397,17 @@ if (isStableContextFastPath) {
   // autobinding, and every other global CLI side effect. Hook stdout must be
   // exactly one stable-context block (or empty).
   runStableContextHook(readConfig()).catch(() => {});
+} else if (process.argv[2] === "_disclaimed") {
+  // Agent-launch wrapper (see disclaim.ts): exec the rest of argv as a TCC
+  // self-responsible process so privacy prompts name the agent, not codecast.
+  // Bypasses Commander and every global CLI side effect — this runs in the
+  // hot path of every agent spawn.
+  import("./disclaim.js")
+    .then(({ runDisclaimed }) => runDisclaimed(process.argv.slice(3)))
+    .catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(127);
+    });
 } else if (process.argv[2] === "__fugitive_blame@@") {
   import("./blame.js")
     .then(({ runFugitiveBlame }) => runFugitiveBlame(process.argv.slice(3), readConfig() ?? {}))

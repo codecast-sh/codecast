@@ -1837,6 +1837,12 @@ export default defineSchema({
     context_summary: v.optional(v.string()),
     originating_conversation_id: v.optional(v.id("conversations")),
     target_conversation_id: v.optional(v.id("conversations")),
+    // Conversation that CREATED this trigger — pure attribution, no routing
+    // meaning. originating_conversation_id does double duty (its presence makes
+    // runs inject into that session), so a --spawn trigger must leave it empty;
+    // this field keeps the parent link anyway, so spawn triggers and their runs
+    // still trace back to the session that armed them.
+    created_by_conversation_id: v.optional(v.id("conversations")),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
     // Device that created the task (CLI `cast trigger add`). When set, only
