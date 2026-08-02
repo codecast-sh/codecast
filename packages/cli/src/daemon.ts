@@ -11602,7 +11602,7 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
 /** Latest sweep result, capped, for the next heartbeat to report. */
 let latestGitPlane: RepoPlaneState[] | undefined;
 
-export function gitPlaneHeartbeatPayload(): RepoPlaneState[] | undefined {
+function gitPlaneHeartbeatPayload(): RepoPlaneState[] | undefined {
   return latestGitPlane?.slice(0, GIT_PLANE_REPORT_CAP);
 }
 
