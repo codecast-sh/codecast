@@ -16,7 +16,7 @@ import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { compressImage } from "../lib/compressImage";
 import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import {
@@ -147,8 +147,8 @@ import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2 } from "lucide-react";
-import { useDevices, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
-import { defaultMachineId, pathOnMyMachines } from "../lib/machinePicker";
+import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
+import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
@@ -831,7 +831,15 @@ function restorePickerFocus(prev: HTMLElement | null) {
 // machine has but has no session history in, so it reads dimmer than a real recent.
 type RecentProject = { path: string; count: number; lastActive: number; suggested?: boolean };
 
-function ProjectSwitcher({ conversation, handleRef }: { conversation: ConversationData; handleRef?: React.MutableRefObject<PickerHandle | null> }) {
+function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
+  conversation: ConversationData;
+  handleRef?: React.MutableRefObject<PickerHandle | null>;
+  // Where the machine picker renders. Omitted → inline above the folder chips
+  // (the standalone non-owner surface). Provided → portaled into the host's
+  // slot (NewSessionView puts it on the Context line); null while the slot
+  // element hasn't mounted yet, during which nothing renders.
+  machineSlot?: HTMLElement | null;
+}) {
   const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 50 });
   const cachedProjects = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
@@ -862,6 +870,9 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     [devices],
   );
   const [pickedDeviceId, setPickedDeviceId] = useState<string | null>(null);
+  // Machine picker rests as a single pill showing where the session will run;
+  // clicking it unfolds the full chip row for an explicit pick.
+  const [machinesOpen, setMachinesOpen] = useState(false);
   const currentConvContext = useInboxStore((s) => s.currentConversation);
   // The context fallback can point at a TEAMMATE's session (team inbox) whose
   // checkout no machine of ours has — never present that as the current project.
@@ -905,9 +916,21 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
 
   useConvexSync(freshProjects, setRecentProjects);
 
+  // One chip per repo name: the same project checked out on several machines
+  // collapses to the routed machine's variant, and "other" means a different
+  // PROJECT — the current one's foreign checkout is the machine row's job.
+  const routedDevice = useMemo(
+    () => devices.find((d) => d.device_id === (pickedDeviceId ?? defaultDeviceId)) ?? null,
+    [devices, pickedDeviceId, defaultDeviceId],
+  );
+  const dedupedRecents = useMemo(
+    () => dedupeProjectsByRepoName(recentProjects, routedDevice, currentPath),
+    [recentProjects, routedDevice, currentPath],
+  );
   const otherProjects = useMemo(() => {
-    return recentProjects.filter((p: { path: string }) => p.path !== currentPath);
-  }, [recentProjects, currentPath]);
+    const currentName = currentPath ? repoName(currentPath) : null;
+    return dedupedRecents.filter((p) => p.path !== currentPath && (!currentName || repoName(p.path) !== currentName));
+  }, [dedupedRecents, currentPath]);
 
   const visibleProjects = otherProjects.slice(0, 6);
 
@@ -950,7 +973,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     if (filter.trim()) {
       return buildProjectPathOptions({
         query: filter,
-        recentPaths: recentProjects.map((p: { path: string }) => p.path),
+        recentPaths: dedupedRecents.map((p: { path: string }) => p.path),
         home: homeDir,
         base: projectBase,
         currentPath,
@@ -958,7 +981,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     }
     const base: { path: string }[] = currentPath ? [{ path: currentPath }] : [];
     return base.concat(otherProjects);
-  }, [filter, recentProjects, currentPath, otherProjects, homeDir, projectBase]);
+  }, [filter, dedupedRecents, currentPath, otherProjects, homeDir, projectBase]);
 
   // Distinguish "you typed the folder you're already in" from a real miss.
   const filterIsCurrent = !!currentPath && resolveCustomPath(filter, homeDir, projectBase) === currentPath;
@@ -1029,7 +1052,12 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   const handleMachinePick = useCallback((d: Device) => {
     const next = d.device_id === defaultDeviceId ? null : d.device_id;
     setPickedDeviceId(next);
-    if (currentPath) handleSwitch(currentPath, undefined, next);
+    if (!currentPath) return;
+    // Same project, THAT machine's checkout: keep the stored path truthful for
+    // where the session now routes (the daemon would remap by repo name anyway,
+    // but the label/tooltip shouldn't show a path the machine doesn't have).
+    const remapped = d.local_project_roots?.find((r) => repoName(r) === repoName(currentPath)) ?? currentPath;
+    handleSwitch(remapped, undefined, next);
   }, [defaultDeviceId, currentPath, handleSwitch]);
 
   // Stamp the pick on the stub row so it rides the deferred create. Tracks
@@ -1090,36 +1118,58 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     }
   }, [pickList, hi, handleSwitch, exitPicker]);
 
+  // Mouse-first, and hidden entirely for the single-machine case so that
+  // experience is untouched. Offline machines stay pickable: routing falls
+  // back server-side to an online machine that has the repo. Rests collapsed
+  // as one pill (the machine the session will run on); a click unfolds the
+  // full chip row.
+  const routedMachine = machineChips.find((d) => d.device_id === (pickedDeviceId ?? defaultDeviceId)) ?? machineChips[0];
+  const machineUi = machineChips.length > 1 && routedMachine ? (
+    machinesOpen ? (
+      <div className="flex flex-wrap justify-end gap-1.5 max-w-[26rem]">
+        {machineChips.map((d) => {
+          const selected = d.device_id === (pickedDeviceId ?? defaultDeviceId);
+          return (
+            <button
+              key={d.device_id}
+              onClick={() => { handleMachinePick(d); setMachinesOpen(false); }}
+              title={d.online
+                ? `Run this session on ${deviceDisplayName(d)}`
+                : `${deviceDisplayName(d)} is offline — will fall back to an online machine with this repo`}
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border transition-all ${
+                selected
+                  ? `${deviceAccentClasses(d)} font-medium`
+                  : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70"
+              } ${d.online ? "" : "opacity-50"}`}
+            >
+              <DeviceIcon d={d} className="w-3 h-3 shrink-0" />
+              <span className="truncate max-w-[10rem]">{deviceDisplayName(d)}</span>
+              <DeviceDot online={d.online} />
+            </button>
+          );
+        })}
+      </div>
+    ) : (
+      <button
+        onClick={() => setMachinesOpen(true)}
+        title={`Runs on ${deviceDisplayName(routedMachine)} — click to choose a machine`}
+        className="group/machine inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 hover:bg-sol-bg-alt/50 transition-all"
+      >
+        <DeviceIcon d={routedMachine} className="w-3 h-3 shrink-0" />
+        <span className="truncate max-w-[10rem]">{deviceDisplayName(routedMachine)}</span>
+        <DeviceDot online={routedMachine.online} />
+        <ChevronDown className="w-3 h-3 shrink-0 opacity-50 group-hover/machine:opacity-100 transition-opacity" />
+      </button>
+    )
+  ) : null;
+
   return (
     <div className="flex flex-col items-center gap-3">
-      {/* Mouse-first, and hidden entirely for the single-machine case so that
-          experience is untouched. Offline machines stay pickable: routing falls
-          back server-side to an online machine that has the repo. */}
-      {machineChips.length > 1 && (
-        <div className="flex flex-wrap justify-center gap-1.5">
-          {machineChips.map((d) => {
-            const selected = d.device_id === (pickedDeviceId ?? defaultDeviceId);
-            return (
-              <button
-                key={d.device_id}
-                onClick={() => handleMachinePick(d)}
-                title={d.online
-                  ? `Run this session on ${deviceDisplayName(d)}`
-                  : `${deviceDisplayName(d)} is offline — will fall back to an online machine with this repo`}
-                className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border transition-all ${
-                  selected
-                    ? `${deviceAccentClasses(d)} font-medium`
-                    : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70"
-                } ${d.online ? "" : "opacity-50"}`}
-              >
-                <DeviceIcon d={d} className="w-3 h-3 shrink-0" />
-                <span className="truncate max-w-[10rem]">{deviceDisplayName(d)}</span>
-                <DeviceDot online={d.online} />
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {machineSlot === undefined
+        ? machineUi
+        : machineUi && machineSlot
+          ? createPortal(machineUi, machineSlot)
+          : null}
 
       {!currentPath && recentProjects.length > 0 && (
         <div className="text-sol-text-dim text-xs">select a project</div>
@@ -1210,9 +1260,41 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
         )}
       </div>
 
-      <NewSessionBucketPill conversation={conversation} />
+      {/* One quiet meta row instead of three stacked ones: label, worktree
+          toggle, keyboard hints. The picker's filter input still takes its own
+          row while active — it replaces the hints, not the whole row. */}
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+        <NewSessionBucketPill conversation={conversation} />
 
-      {picking ? (
+        <button
+          onClick={() => {
+            const turningOn = !isolated;
+            useInboxStore.getState().setIsolatedWorktreeMode(turningOn);
+            if (turningOn && currentPath) {
+              handleSwitch(currentPath, true);
+            }
+          }}
+          className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+          title="Create session in an isolated git worktree"
+        >
+          <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${isolated ? "bg-sol-cyan/30" : "bg-sol-bg-alt"}`}>
+            <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
+          </span>
+          <span className={isolated ? "text-sol-cyan" : ""}>isolated worktree</span>
+        </button>
+
+        {!picking && recentProjects.length > 0 && (
+          <button
+            onClick={focusPicker}
+            className="inline-flex items-center gap-2.5 text-[10px] opacity-40 hover:opacity-90 transition-opacity"
+          >
+            <HintKeys keys={[ALT_CAP, "K"]} label="pick folder" />
+            <HintKeys keys={[ALT_CAP, "J"]} label="pick agent" />
+          </button>
+        )}
+      </div>
+
+      {picking && (
         <div className="flex items-center gap-2 text-[11px] font-mono">
           <input
             ref={pickerRef}
@@ -1232,32 +1314,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
             <HintKeys keys={["Esc"]} label="back" />
           </span>
         </div>
-      ) : recentProjects.length > 0 ? (
-        <button
-          onClick={focusPicker}
-          className="inline-flex items-center gap-2.5 text-[10px] opacity-40 hover:opacity-90 transition-opacity"
-        >
-          <HintKeys keys={[ALT_CAP, "K"]} label="pick folder" />
-          <HintKeys keys={[ALT_CAP, "J"]} label="pick agent" />
-        </button>
-      ) : null}
-
-      <button
-        onClick={() => {
-          const turningOn = !isolated;
-          useInboxStore.getState().setIsolatedWorktreeMode(turningOn);
-          if (turningOn && currentPath) {
-            handleSwitch(currentPath, true);
-          }
-        }}
-        className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
-        title="Create session in an isolated git worktree"
-      >
-        <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${isolated ? "bg-sol-cyan/30" : "bg-sol-bg-alt"}`}>
-          <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
-        </span>
-        <span className={isolated ? "text-sol-cyan" : ""}>isolated worktree</span>
-      </button>
+      )}
 
     </div>
   );
@@ -1537,6 +1594,10 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   // mac Option+letter composes special characters into e.key.
   const projectsRef = useRef<PickerHandle | null>(null);
   const agentsRef = useRef<PickerHandle | null>(null);
+  // The machine picker's logic lives in ProjectSwitcher (a machine pick scopes
+  // the folder list), but it renders down on the Context line — this slot is
+  // the portal target StableContextPicker mounts at the end of that line.
+  const [machineSlot, setMachineSlot] = useState<HTMLElement | null>(null);
   useEffect(() => {
     const onChord = (e: KeyboardEvent) => {
       if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
@@ -1563,12 +1624,15 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   return (
     <div className="flex flex-col items-center w-full flex-1 min-h-0">
       <ErrorBoundary name="ProjectSwitcher" level="inline">
-        <ProjectSwitcher conversation={conversation} handleRef={projectsRef} />
+        <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} />
       </ErrorBoundary>
       <div className="flex-1" />
       <ErrorBoundary name="StableContextPicker" level="inline">
         <div className="w-full px-4 mb-4">
-          <StableContextPicker conversationId={conversation._id} />
+          <StableContextPicker
+            conversationId={conversation._id}
+            trailing={<div ref={setMachineSlot} className="flex-shrink-0 min-w-0" />}
+          />
         </div>
       </ErrorBoundary>
       <AgentSwitcher
@@ -1875,9 +1939,9 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
           .trim() || "This session was signed out.";
     } else if (isLimit) {
       // The card heading already says "limit", so drop the redundant
-      // "You've hit your" lead-in and keep the informative tail
+      // "You've hit/reached your" lead-in and keep the informative tail
       // ("Session limit · resets 11:30pm (America/New_York)").
-      const detail = trimmed.replace(/^you['’]ve hit your\s*/i, "");
+      const detail = trimmed.replace(/^you['’]ve (?:hit|reached) your\s*/i, "");
       message = detail.charAt(0).toUpperCase() + detail.slice(1);
     } else if (isConnection) {
       // The card heading already says the error part, so keep just the detail
@@ -2260,6 +2324,8 @@ function extractPlanContent(text: string): string | null {
 type UserMessageKind =
   | { kind: 'normal' }
   | { kind: 'command' }
+  | { kind: 'bash_input'; command: string }
+  | { kind: 'bash_output'; stdout: string; stderr: string }
   | { kind: 'interrupt'; tone: 'sky' | 'amber' }
   | { kind: 'background_agent_stopped'; agentName?: string }
   | { kind: 'skill_expansion'; cmdName?: string }
@@ -2275,6 +2341,7 @@ type UserMessageKind =
   | { kind: 'continuation' }
   | { kind: 'poll_response' }
   | { kind: 'scheduled_task' }
+  | { kind: 'machine_move'; destination?: string; machineChanged: boolean }
   | { kind: 'session_message'; from: string; body: string; name?: string };
 
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:", "[Codecast import]"];
@@ -2327,6 +2394,12 @@ function classifyUserMessage(
     return { kind: 'poll_response' };
   }
   if (!tStripped) return { kind: 'noise' };
+  // `!` bash mode: the typed command and its output arrive as two consecutive
+  // user messages; they pair up into one terminal block at render time.
+  const bashCmd = parseBashInput(tNoReminders);
+  if (bashCmd !== null) return { kind: 'bash_input', command: bashCmd };
+  const bashOut = parseBashOutput(tNoReminders);
+  if (bashOut) return { kind: 'bash_output', stdout: bashOut.stdout, stderr: bashOut.stderr };
   if (isCommandMessage(tNoReminders)) {
     if (isSkillExpansion(t)) {
       const cmdMatch = t.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
@@ -2347,6 +2420,7 @@ function classifyUserMessage(
   if (isStrippedCommand(tNoReminders)) return { kind: 'command' };
   if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
   if (isInterruptMessage(t)) return { kind: 'interrupt', tone: 'sky' };
+  if (isMachineMoveNotice(tNoReminders)) return { kind: 'machine_move', ...parseMachineMoveNotice(tNoReminders) };
   if (isBackgroundAgentStoppedNotice(t)) return { kind: 'background_agent_stopped', agentName: backgroundAgentStoppedName(t) ?? undefined };
   if (isSkillExpansion(t)) return { kind: 'skill_expansion' };
   if (isTaskNotification(t)) {
@@ -2655,12 +2729,14 @@ function useConversationTaskStats(conversationId: string | undefined) {
 // Driven entirely by useSessionRestart's phase/stage; mounted only while a
 // restart is in some visible state, so the 1s elapsed tick costs nothing
 // otherwise.
-function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry }: {
+function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry, restoredLabel }: {
   phase: RestartPhase;
   stage: RestartStage | null;
   failure: string | null;
   startedAt: number | null;
   onRetry: () => void;
+  /** "Back live" confirmation text — device moves say where the session landed. */
+  restoredLabel?: string;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -2671,7 +2747,7 @@ function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry }: {
   if (phase === "idle") return null;
   const tone = phase === "restored" ? "ok" : phase === "failed" ? "error" : (stage?.tone ?? "active");
   const label =
-    phase === "restored" ? "Session is back live"
+    phase === "restored" ? (restoredLabel ?? "Session is back live")
     : phase === "failed" ? (failure ?? "Restart failed")
     : (stage?.label ?? "Restarting session — contacting daemon…");
   const toneClass = {
@@ -2698,6 +2774,24 @@ function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry }: {
         </button>
       )}
     </div>
+  );
+}
+
+// Same strip for a device move ("Run here" / "Move to remote Mac"): the move
+// pipeline — worktree transfer, resume on the destination — narrated live from
+// the same daemon command rows. useDeviceMoveStatus owns the lifecycle
+// (movingSessions in the store), so this stays mounted-cheap when idle.
+function DeviceMoveStatusStrip({ conversationId }: { conversationId: string }) {
+  const { phase, stage, failure, startedAt, restoredLabel, retry } = useDeviceMoveStatus(conversationId);
+  return (
+    <RestartStatusStrip
+      phase={phase}
+      stage={stage}
+      failure={failure}
+      startedAt={startedAt}
+      onRetry={retry}
+      restoredLabel={restoredLabel}
+    />
   );
 }
 
@@ -5650,6 +5744,79 @@ function CommandMessageBlock({
   );
 }
 
+// `!` bash mode: the user ran a shell command straight from the Claude Code
+// composer. The transcript records it as two user messages (<bash-input>, then
+// <bash-stdout>/<bash-stderr>); commandExpansionMap pairs them so they render
+// as ONE terminal-style card. Either half can appear alone at a page boundary.
+function BashCommandBlock({ command, stdout, stderr, timestamp, userName, avatarUrl, messageId }: {
+  command?: string;
+  stdout?: string;
+  stderr?: string;
+  timestamp: number;
+  userName?: string;
+  avatarUrl?: string | null;
+  messageId?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const out = stripAnsiCodes(stdout || "").trimEnd();
+  const err = stripAnsiCodes(stderr || "").trimEnd();
+  const hasOutput = stdout !== undefined || stderr !== undefined;
+  const lineCount = (out ? out.split("\n").length : 0) + (err ? err.split("\n").length : 0);
+  const isLong = lineCount > 12 || out.length + err.length > 1500;
+
+  const handleCopy = () => {
+    const text = command ? `!${command}` : out || err;
+    setTimeout(() => { copyToClipboard(text).then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
+  };
+
+  return (
+    <div id={messageId ? `msg-${messageId}` : undefined} className="group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 mb-6">
+      <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg rounded shadow-md px-0.5 z-10">
+        <button onClick={handleCopy} className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary" title="Copy command" aria-label="Copy command">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2 mb-2">
+        <UserIcon avatarUrl={avatarUrl} />
+        <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
+        <span className="inline-flex items-center gap-1 font-mono text-[10px] text-sol-magenta/80 bg-sol-magenta/10 border border-sol-magenta/25 rounded px-1.5 py-px" title="Shell command run from the composer">bash</span>
+        <span className="text-sol-text-dim text-xs" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+
+      <div className="pl-8">
+        <div className="rounded-md bg-sol-bg-alt/50 border border-sol-border/40 font-mono text-xs overflow-hidden">
+          {command !== undefined && (
+            <div className="flex items-start gap-2 px-3 py-2">
+              <span className="text-sol-magenta font-semibold select-none shrink-0">!</span>
+              <span className="text-sol-text whitespace-pre-wrap break-all min-w-0">{command}</span>
+            </div>
+          )}
+          {hasOutput && (
+            <div className={`px-3 py-2 ${command !== undefined ? "border-t border-sol-border/30" : ""}`}>
+              {out || err ? (
+                <>
+                  <pre className={`whitespace-pre-wrap break-all text-sol-text-muted leading-relaxed ${isLong && !expanded ? "max-h-48 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]" : ""}`}>
+                    {out}
+                    {err && <span className="text-sol-red/90">{out ? "\n" : ""}{err}</span>}
+                  </pre>
+                  {isLong && (
+                    <button onClick={() => setExpanded(e => !e)} className="mt-1 text-[11px] text-sol-text-dim hover:text-sol-text-secondary transition-colors">
+                      {expanded ? "show less" : `show all ${lineCount} lines`}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <span className="text-sol-text-dim italic">no output</span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: { content: string; timestamp: number; cmdName?: string; collapsed?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const info = extractSkillInfo(content);
@@ -5728,6 +5895,56 @@ function InterruptStatusLine({ label = "user interrupted", tone = "sky" }: { lab
       <div className={lineClass} />
       <span className={textClass}>{label}</span>
       <div className={lineClass} />
+    </div>
+  );
+}
+
+// The reorientation notice a moved session's agent receives as its first turn on
+// the destination machine (cli/src/sessionMoveNotice.ts). Detected by its composed
+// prefix: the notice rides the pending-message rail into the agent's pane and syncs
+// back from the agent's own transcript as a plain user message, so no subtype
+// survives the round-trip — the content itself is the only durable marker. Prefix
+// detection also picks up every historical move already in transcripts.
+function isMachineMoveNotice(content: string): boolean {
+  return content.trim().startsWith("[codecast] This session just moved");
+}
+
+function parseMachineMoveNotice(content: string): { destination?: string; machineChanged: boolean } {
+  const firstLine = content.trim().split("\n", 1)[0];
+  const machine = firstLine.match(/moved to a different machine\. It now runs on (.+?) in \S/);
+  if (machine) return { destination: machine[1], machineChanged: true };
+  return { machineChanged: false };
+}
+
+// Quiet switch divider for a session that changed machines (or directories)
+// mid-conversation. The gesture it reflects is "the session moved", not "someone
+// typed this", so it renders as a boundary rather than a user bubble; clicking
+// discloses the full notice text the agent was given.
+function MachineMoveDivider({ content, destination, machineChanged, timestamp }: { content: string; destination?: string; machineChanged: boolean; timestamp: number }) {
+  const [open, setOpen] = useState(false);
+  const label = machineChanged ? `switched to ${destination ?? "another machine"}` : "moved to another directory";
+  return (
+    <div className="my-5">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-3 group cursor-pointer"
+        title={`${formatFullTimestamp(timestamp)} — click for details`}
+      >
+        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sol-border to-transparent" />
+        <span className="flex items-center gap-1.5 text-[11px] text-sol-text-dim group-hover:text-sol-text-muted transition-colors">
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
+          </svg>
+          {label}
+        </span>
+        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sol-border to-transparent" />
+      </button>
+      {open && (
+        <div className="mt-2 mx-auto max-w-2xl px-4 py-3 rounded-md border border-sol-border bg-sol-card text-xs text-sol-text-muted whitespace-pre-wrap leading-relaxed">
+          {content.trim()}
+        </div>
+      )}
     </div>
   );
 }
@@ -8346,7 +8563,7 @@ function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolL
   );
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, composerPlaceholder, workingSinceTs, workingTool }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, composerPlaceholder, workingSinceTs, workingTool }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -9606,6 +9823,31 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     modeLabelTimerRef.current = setTimeout(() => setShowModeLabel(false), 1500);
   }, []);
 
+  // Fork-and-send: branch the session from its latest message and deliver the
+  // composed text into the fork, leaving the parent thread untouched. Shared by
+  // the Cmd/Ctrl+Shift+Enter combo and the fork button beside the send arrow.
+  const handleForkSend = () => {
+    if (!onForkSend) return;
+    // With a message selected, plain submit already forks from the selection —
+    // delegate so the gesture honors the selection anchor instead of the tail.
+    if (isSelectionActive && selectedMessageUuid && onForkFromMessage) {
+      void handleSubmit({ preventDefault: () => {} } as unknown as React.FormEvent);
+      return;
+    }
+    const raw = composeMode && composeRef.current ? composeRef.current.getMarkdown() : message;
+    const text = attachReviewToMessage(conversationId, raw).trim();
+    if (!text) return;
+    sendingRef.current = true;
+    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    composeRef.current?.clear();
+    setMessage("");
+    messageRef.current = "";
+    useInboxStore.getState().clearDraftFinal(conversationId);
+    sendingRef.current = false;
+    onForkSend(text);
+    onMessageSent?.();
+  };
+
   const acScrollRef = useRef(false);
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (acTrigger && acItems.length > 0) {
@@ -9802,6 +10044,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // popup on the same tick so it never lingers behind a slow create/send.
       void handleSubmit(e);
       onSubmitWithIntent(navigate);
+      return;
+    }
+    // Fork-and-send: branch the session from its latest message and deliver the
+    // composed text into the fork, leaving the parent thread untouched.
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && onForkSend) {
+      e.preventDefault();
+      handleForkSend();
       return;
     }
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
@@ -10300,6 +10549,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       >
                         <Minimize2 className="w-3.5 h-3.5" />
                       </button>
+                      {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
+                        <button
+                          type="button"
+                          onClick={handleForkSend}
+                          className="w-7 h-7 rounded-full transition-all flex items-center justify-center text-sol-text-dim/40 hover:text-sol-cyan hover:bg-sol-cyan/10"
+                          title={`Fork and send (${navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Shift+Enter)`}
+                        >
+                          <Split className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       <button
                         type="submit"
                         disabled={!canSubmit}
@@ -10337,6 +10596,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         title="Expand editor (Cmd+Shift+E)"
                       >
                         <Maximize2 className="w-3 h-3" />
+                      </button>
+                    )}
+                    {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
+                      <button
+                        type="button"
+                        onClick={handleForkSend}
+                        className="w-7 h-7 mb-0.5 rounded-full transition-all flex items-center justify-center text-sol-text-dim/40 hover:text-sol-cyan hover:bg-sol-cyan/10"
+                        title={`Fork and send (${navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Shift+Enter)`}
+                      >
+                        <Split className="w-3.5 h-3.5" />
                       </button>
                     )}
                     <button
@@ -10387,6 +10656,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             <ShortcutHint keys={["Ctrl", "Enter"]} label="Queue message" />
             <ShortcutHint keys={["Alt", "Enter"]} label="Reply and advance" />
             <ShortcutHint keys={["Alt", "Shift", "Enter"]} label="Reply and dismiss" />
+            <ShortcutHint keys={["Cmd", "Shift", "Enter"]} label="Fork and send" />
             <ShortcutHint keys={["Enter"]} label="Send message" />
             <div className="border-t border-sol-border/20 mt-1.5 pt-1.5">
               <button
@@ -11352,6 +11622,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       .catch(() => {}); // fork failure already surfaced by doFork
   }, [conversation, doFork, addOptimisticMsg, sendInlineMessage]);
 
+  // Same capability gate as forkHandler: hide fork-and-send where forks can't run.
+  const forkSendHandler = agentSupportsFork(conversation?.agent_type) ? handleForkReply : undefined;
+
   const isForkLoading = false;
   const [loadingBranchId, setLoadingBranchId] = useState<string | null>(null);
 
@@ -11666,21 +11939,30 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const commandExpansionMap = useMemo(() => {
     const byCommand = new Map<string, string>(); // command msg _id -> expansion content
     const consumed = new Set<string>();          // expansion msg _ids
+    // Same pairing for `!` bash mode: input msg _id -> the output msg's parsed streams.
+    const bashByInput = new Map<string, { stdout: string; stderr: string }>();
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
       if (item.type !== 'message') continue;
       const msg = item.data as Message;
-      if (msg.role !== 'user' || userMsgKindMap.get(msg._id)?.kind !== 'command') continue;
+      if (msg.role !== 'user') continue;
+      const kind = userMsgKindMap.get(msg._id)?.kind;
+      if (kind !== 'command' && kind !== 'bash_input') continue;
       let next: Message | null = null;
       for (let j = i + 1; j < timeline.length; j++) {
         if (timeline[j].type === 'message') { next = timeline[j].data as Message; break; }
       }
-      if (next && next.role === 'user' && next.content && userMsgKindMap.get(next._id)?.kind === 'skill_expansion') {
+      if (!next || next.role !== 'user' || !next.content) continue;
+      const nextKind = userMsgKindMap.get(next._id);
+      if (kind === 'command' && nextKind?.kind === 'skill_expansion') {
         byCommand.set(msg._id, next.content);
+        consumed.add(next._id);
+      } else if (kind === 'bash_input' && nextKind?.kind === 'bash_output') {
+        bashByInput.set(msg._id, { stdout: nextKind.stdout, stderr: nextKind.stderr });
         consumed.add(next._id);
       }
     }
-    return { byCommand, consumed };
+    return { byCommand, consumed, bashByInput };
   }, [timeline, userMsgKindMap]);
 
   const sessionSkills = useMemo(() => resolveSessionSkills({
@@ -12227,6 +12509,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const kind = userMsgKindMap.get(msg._id);
       switch (kind?.kind) {
         case 'command': return 120;
+        case 'bash_input': return 130;
+        case 'bash_output': return commandExpansionMap.consumed.has(msg._id) ? 0 : 110;
         case 'interrupt': return 30;
         case 'continuation': return 30;
         case 'skill_expansion': return commandExpansionMap.consumed.has(msg._id) ? 0 : 44;
@@ -13474,7 +13758,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const prevMsg = prevItem.data as Message;
       if (prevMsg.role === "user") {
         const kind = userMsgKindMap.get(prevMsg._id);
-        if (kind?.kind === 'tool_results_only' || kind?.kind === 'command') continue;
+        if (kind?.kind === 'tool_results_only' || kind?.kind === 'command' || kind?.kind === 'bash_input' || kind?.kind === 'bash_output') continue;
       }
       return prevMsg;
     }
@@ -13546,8 +13830,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           const cmdSender = resolveMsgSender(msg);
           return <CommandMessageBlock key={msg._id} messageId={msg._id} content={msg.content!} expansion={commandExpansionMap.byCommand.get(msg._id)} timestamp={msg.timestamp} userName={cmdSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={cmdSender ? cmdSender.avatar_url : conversation?.user?.avatar_url} agentType={conversation?.agent_type} />;
         }
+        case 'bash_input': {
+          const bashSender = resolveMsgSender(msg);
+          const paired = commandExpansionMap.bashByInput.get(msg._id);
+          return <BashCommandBlock key={msg._id} messageId={msg._id} command={kind.command} stdout={paired?.stdout} stderr={paired?.stderr} timestamp={msg.timestamp} userName={bashSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={bashSender ? bashSender.avatar_url : conversation?.user?.avatar_url} />;
+        }
+        case 'bash_output': {
+          if (commandExpansionMap.consumed.has(msg._id)) return null;
+          const bashSender = resolveMsgSender(msg);
+          return <BashCommandBlock key={msg._id} messageId={msg._id} stdout={kind.stdout} stderr={kind.stderr} timestamp={msg.timestamp} userName={bashSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={bashSender ? bashSender.avatar_url : conversation?.user?.avatar_url} />;
+        }
         case 'interrupt':
           return <InterruptStatusLine key={msg._id} label={kind.tone === 'amber' ? "turn aborted" : undefined} tone={kind.tone} />;
+        case 'machine_move':
+          return <MachineMoveDivider key={msg._id} content={msg.content || ""} destination={kind.destination} machineChanged={kind.machineChanged} timestamp={msg.timestamp} />;
         case 'background_agent_stopped':
           return <InterruptStatusLine key={msg._id} label={kind.agentName ? `background agent "${kind.agentName}" stopped` : "background agent stopped"} tone="amber" />;
         case 'continuation':
@@ -14379,6 +14675,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             startedAt={restartStartedAt}
             onRetry={handleRestartSession}
           />
+          {conversation?._id && <DeviceMoveStatusStrip conversationId={conversation._id} />}
         </div>
         {conversation && (
           <div className="absolute top-full right-3 mt-24 z-30">
@@ -14755,7 +15052,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open

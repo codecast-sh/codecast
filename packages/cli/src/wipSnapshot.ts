@@ -47,7 +47,6 @@ const execFileAsync = promisify(execFile);
 export const WIP_REF_PREFIX = "refs/codecast/wip";
 
 const BRANCH_TRAILER = "codecast-branch";
-const SESSION_TRAILER = "codecast-session";
 
 export interface WipSnapshot {
   /** The snapshot commit. Its parent is the source's real HEAD. */
@@ -96,10 +95,8 @@ async function gitTry(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Pro
  * can't express, so it travels here — that keeps the ref self-describing, so a
  * restore never needs a database lookup to know where to land.
  */
-export function buildSnapshotMessage(opts: { branch: string; conversationId?: string }): string {
-  const lines = [`codecast wip snapshot`, ``, `${BRANCH_TRAILER}: ${opts.branch}`];
-  if (opts.conversationId) lines.push(`${SESSION_TRAILER}: ${opts.conversationId}`);
-  return lines.join("\n");
+export function buildSnapshotMessage(opts: { branch: string }): string {
+  return [`codecast wip snapshot`, ``, `${BRANCH_TRAILER}: ${opts.branch}`].join("\n");
 }
 
 /** Read a trailer back out of a snapshot message. Returns undefined when absent

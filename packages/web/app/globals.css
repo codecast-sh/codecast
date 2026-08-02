@@ -1060,22 +1060,18 @@ pre[class*="language-"] {
 .simple-view [data-sv-feed] .text-sm { font-size: 12px; }
 .simple-view [data-sv-feed] .text-xs { font-size: 10.5px; }
 
-/* User messages: small cream cards (the mock's #fff8e6 note-card look),
-   theme-aware via a warm tint over the page background. [id^="msg-"] scopes
-   to the message BLOCKS and leaves small inline chips that share the
-   bg-sol-blue/10 tint alone. */
+/* User messages: small note cards, distinct from the page but still
+   solarized — a blue tint over the page background (the same blue identity
+   user cards carry outside simple view), which stays cool and clean where
+   a darker warm-gray step reads muddy on the cream page. [id^="msg-"]
+   scopes to the message BLOCKS and leaves small inline chips that share
+   the bg-sol-blue/10 tint alone. */
 .simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"],
 .simple-view [data-sv-sticky] {
-  /* The mock's note card: warm white, distinctly lighter than the page. */
-  background: color-mix(in srgb, var(--sol-yellow) 6%, #ffffff) !important;
-  border: 1px solid color-mix(in srgb, var(--sol-text) 11%, transparent) !important;
+  background: color-mix(in srgb, var(--sol-blue) 12%, var(--sol-bg)) !important;
+  border: 1px solid color-mix(in srgb, var(--sol-text) 14%, transparent) !important;
   border-radius: 9px;
   box-shadow: none;
-}
-/* Dark theme has no "white": the card lifts a step ABOVE the page instead. */
-.dark .simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"],
-.dark .simple-view [data-sv-sticky] {
-  background: color-mix(in srgb, var(--sol-text) 7%, var(--sol-bg)) !important;
 }
 .simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"] {
   padding: 9px 12px;
@@ -1094,7 +1090,7 @@ pre[class*="language-"] {
 .simple-view [data-sv-sticky] .text-sm { font-size: 12px; }
 .simple-view [data-sv-sticky] .text-xs { font-size: 10.5px; }
 
-/* Author name on the cream cards: solarized blue fights the warm ground —
+/* Author name on the note cards: solarized blue fights the warm ground —
    orange is the solarized accent that belongs on it. */
 .simple-view [data-sv-sticky] .text-sol-blue,
 .simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"] .text-sol-blue {
@@ -1149,13 +1145,17 @@ pre[class*="language-"] {
 /* ---- Session rail: calm cards on a quiet ground ---- */
 .simple-view [data-sv-rail] {
   font-size: 10.5px;
+  /* Card grounds, shared with the fade overlays below so gradients always
+     land on the card's actual color. */
+  --sv-card-bg: var(--sol-bg);
+  --sv-card-active-bg: color-mix(in srgb, var(--sol-cyan) 20%, var(--sol-bg));
 }
 /* Cards float: rounded, hairline border, page-colored surface — replacing
    the row-divider look. */
 .simple-view [data-sv-rail] [data-session-id] {
   border-radius: 9px;
   margin: 3px 6px;
-  background: var(--sol-bg);
+  background: var(--sv-card-bg);
   border: 1px solid color-mix(in srgb, var(--sol-text) 9%, transparent);
 }
 .simple-view [data-sv-rail] div:has(> [data-session-id]) {
@@ -1165,26 +1165,36 @@ pre[class*="language-"] {
 .simple-view [data-sv-rail] [data-session-id][class*="border-l-"] {
   border-left-width: 1px;
 }
-/* Selected card: on the tile ground, selection = a solid cyan outline plus a
-   faint wash — unmistakable next to hairline-bordered neighbors without
-   turning the card into a color block. */
+/* Selected card: a solid cyan wash, no outline and no accent border — the
+   fill alone is the highlight, so the card never grows a frame its
+   neighbors lack. */
 .simple-view [data-sv-rail] [data-session-id][class*="ring-sol-cyan"] {
-  box-shadow: 0 0 0 1.5px var(--sol-cyan) inset;
-  background: color-mix(in srgb, var(--sol-cyan) 6%, var(--sol-bg));
+  box-shadow: none;
+  background: var(--sv-card-active-bg);
   border-color: transparent;
 }
+/* The pin badge and hover-toolbar overlays fade to the DEFAULT rail row
+   color (--sol-bg-alt) via inline styles/utility classes; on simple-view
+   cards that paints a mismatched band. Re-aim them at the card grounds. */
+.simple-view [data-sv-rail] [data-session-id] [data-sv-fade] {
+  background: linear-gradient(to right, transparent, var(--sv-card-bg) 60%) !important;
+}
+.simple-view [data-sv-rail] [data-session-id][class*="ring-sol-cyan"] [data-sv-fade] {
+  background: linear-gradient(to right, transparent, var(--sv-card-active-bg) 60%) !important;
+}
 
-/* Section headers float in negative space (the mock's NEEDS INPUT / WORKING
-   rows): tiny letterspaced label, no bar, no border — the whitespace IS the
-   separator. */
+/* Section headers (NEEDS INPUT / WORKING / PINNED): still flat — no bar —
+   but legible: a readable letterspaced label above a hairline rule, with
+   clear air between sections so each group visibly starts. */
 .simple-view [data-sv-rail] [data-sv-sec] {
   background: transparent;
-  border-bottom: none;
-  padding: 12px 12px 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-text) 10%, transparent);
+  margin-top: 10px;
+  padding: 8px 12px 6px;
 }
 .simple-view [data-sv-rail] [data-sv-sec] span {
-  font-size: 9px;
-  letter-spacing: 0.13em;
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
 }
 /* The chip/filter strip above the list quiets down until you reach for it. */
 .simple-view [data-sv-rail] > div:first-child {
@@ -1199,6 +1209,10 @@ pre[class*="language-"] {
 .simple-view [data-sv-nav] {
   font-size: 12px;
 }
+/* Rows carry .text-sm for the normal layout; simple view stays at its own scale. */
+.simple-view [data-sv-nav] .text-sm {
+  font-size: 12px;
+}
 .simple-view [data-sv-nav] .uppercase {
   font-size: 9px;
   letter-spacing: 0.18em;
@@ -1207,7 +1221,8 @@ pre[class*="language-"] {
 }
 /* Nav rows tighten; the mock's 5px rhythm. */
 .simple-view [data-sv-nav] button.w-full,
-.simple-view [data-sv-nav] a.w-full {
+.simple-view [data-sv-nav] a.w-full,
+.simple-view [data-sv-nav] [data-nav-row] {
   padding-top: 5px;
   padding-bottom: 5px;
 }
@@ -2107,26 +2122,30 @@ pre[class*="language-"] {
 }
 
 /* -- Vault: wiki links in the reading view ------------------------------- */
-.vault-prose .wiki-link {
+.vault-prose .wiki-link,
+.cm-live .wiki-link {
   color: var(--sol-cyan);
   text-decoration: none;
   border-bottom: 1px solid color-mix(in srgb, var(--sol-cyan) 35%, transparent);
   cursor: pointer;
   transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
 }
-.vault-prose .wiki-link:hover {
+.vault-prose .wiki-link:hover,
+.cm-live .wiki-link:hover {
   color: color-mix(in srgb, var(--sol-cyan) 80%, var(--sol-text));
   background: color-mix(in srgb, var(--sol-cyan) 10%, transparent);
   border-bottom-color: var(--sol-cyan);
 }
 /* Unresolved: faded — the classic dangling link; click creates the note. */
-.vault-prose .wiki-link-unresolved {
+.vault-prose .wiki-link-unresolved,
+.cm-live .wiki-link-unresolved {
   color: color-mix(in srgb, var(--sol-cyan) 45%, var(--sol-text-dim));
   border-bottom-style: dashed;
   border-bottom-color: color-mix(in srgb, var(--sol-cyan) 20%, transparent);
 }
 /* Ambiguous basename (two notes share the name): subtle warning underline. */
-.vault-prose .wiki-link-ambiguous {
+.vault-prose .wiki-link-ambiguous,
+.cm-live .wiki-link-ambiguous {
   border-bottom-color: color-mix(in srgb, var(--sol-yellow) 55%, transparent);
 }
 /* Obsidian-style plain blockquotes: no decorative curly quotes, no forced italics
@@ -2145,7 +2164,8 @@ pre[class*="language-"] {
   100% { background: transparent; }
 }
 /* Inline #tag pills in vault notes. */
-.vault-prose .vault-tag {
+.vault-prose .vault-tag,
+.cm-live .vault-tag {
   display: inline-block;
   padding: 0 6px;
   border-radius: 9999px;
@@ -2158,13 +2178,91 @@ pre[class*="language-"] {
   cursor: pointer;
   transition: background 0.12s ease;
 }
-.vault-prose .vault-tag:hover {
+.vault-prose .vault-tag:hover,
+.cm-live .vault-tag:hover {
   background: color-mix(in srgb, var(--sol-cyan) 18%, transparent);
 }
 /* Obsidian tables hug their content — override the typography plugin's
    width:100% (prose table). */
 .vault-prose table {
   width: auto;
+}
+
+/* -- Vault: live preview ------------------------------------------------- */
+/* The editor rendering its own markdown. Wiki links and tag pills are the
+   reading view's rules above (one definition, two surfaces); what follows is
+   the syntax the editor renders that the reading view renders as real HTML.
+   Sizes are in em against the editor's 13px base, so the two views stay in
+   proportion without either owning the other's font size. */
+.cm-live .wiki-link,
+.cm-live .vault-tag,
+.cm-live .cm-live-link {
+  cursor: pointer;
+}
+.cm-live .cm-live-strong { font-weight: 700; color: var(--sol-text); }
+.cm-live .cm-live-em { font-style: italic; }
+.cm-live .cm-live-strike {
+  text-decoration: line-through;
+  color: var(--sol-text-muted);
+}
+.cm-live .cm-live-code {
+  font-size: 0.92em;
+  color: var(--sol-green);
+  background: color-mix(in srgb, var(--sol-green) 9%, transparent);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.cm-live .cm-live-link {
+  color: var(--sol-blue);
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-blue) 35%, transparent);
+}
+.cm-live .cm-live-link:hover {
+  border-bottom-color: var(--sol-blue);
+  background: color-mix(in srgb, var(--sol-blue) 10%, transparent);
+}
+.cm-live .cm-live-listmark { color: var(--sol-blue); }
+.cm-live .cm-live-bullet {
+  color: var(--sol-blue);
+  /* The glyph stands where the marker character stood, so text after it does
+     not shift when the cursor arrives and the raw `-` comes back. */
+  display: inline-block;
+  width: 1ch;
+  text-align: center;
+}
+
+/* Headings: the line grows, the hashes go. Line-height is set alongside every
+   size — leaving it inherited makes a big heading crowd the line above it. */
+.cm-live .cm-live-h1 { font-size: 1.5em; font-weight: 700; line-height: 1.35; color: var(--sol-text); }
+.cm-live .cm-live-h2 { font-size: 1.3em; font-weight: 700; line-height: 1.4; color: var(--sol-text); }
+.cm-live .cm-live-h3 { font-size: 1.15em; font-weight: 600; line-height: 1.45; color: var(--sol-text); }
+.cm-live .cm-live-h4 { font-size: 1.05em; font-weight: 600; line-height: 1.5; color: var(--sol-text); }
+.cm-live .cm-live-h5 { font-weight: 600; color: var(--sol-text-muted); }
+.cm-live .cm-live-h6 { font-weight: 600; color: var(--sol-text-dim); }
+
+/* Blockquote: the `>` is replaced by the rule it always stood for. The padding
+   compensates for the border so the prose does not jump sideways when the
+   cursor lands on the line and the marker comes back. */
+.cm-live .cm-live-quote {
+  border-left: 2px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  padding-left: 10px;
+  margin-left: -12px;
+  color: var(--sol-text-muted);
+}
+.cm-live .cm-live-codeblock {
+  background: color-mix(in srgb, var(--sol-bg-alt) 55%, transparent);
+}
+.cm-live .cm-live-rule {
+  display: inline-block;
+  width: 100%;
+  vertical-align: middle;
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+}
+.cm-live .cm-live-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 4px 0;
 }
 /* Right-panel tabs: drop labels to icons when the pane is narrow. */
 .vault-panel-cq { container-type: inline-size; }
@@ -2187,4 +2285,57 @@ pre[class*="language-"] {
 .vault-prose .vault-heading[data-folded="true"] .vault-fold-toggle {
   opacity: 0.7;
   transform: rotate(-90deg);
+}
+/* Live-preview callouts: the same accent family the reading view uses, applied
+   as a line decoration since the editor renders line by line. */
+.cm-live-callout { border-left-width: 3px; border-left-style: solid; padding-left: 0.6rem; }
+.cm-live-callout-note, .cm-live-callout-info, .cm-live-callout-todo { border-left-color: var(--sol-blue); color: var(--sol-blue); }
+.cm-live-callout-tip, .cm-live-callout-hint, .cm-live-callout-important,
+.cm-live-callout-summary, .cm-live-callout-abstract { border-left-color: var(--sol-cyan); color: var(--sol-cyan); }
+.cm-live-callout-success, .cm-live-callout-check, .cm-live-callout-done { border-left-color: var(--sol-green); color: var(--sol-green); }
+.cm-live-callout-question, .cm-live-callout-help, .cm-live-callout-faq { border-left-color: var(--sol-yellow); color: var(--sol-yellow); }
+.cm-live-callout-warning, .cm-live-callout-caution, .cm-live-callout-attention { border-left-color: var(--sol-orange); color: var(--sol-orange); }
+.cm-live-callout-failure, .cm-live-callout-fail, .cm-live-callout-missing,
+.cm-live-callout-danger, .cm-live-callout-error, .cm-live-callout-bug { border-left-color: var(--sol-red); color: var(--sol-red); }
+.cm-live-callout-example { border-left-color: var(--sol-violet); color: var(--sol-violet); }
+.cm-live-callout-quote, .cm-live-callout-cite { border-left-color: var(--sol-text-dim); color: var(--sol-text-dim); }
+
+/* Sticky headings: a section's own heading stays pinned at the top of the
+   scroll container while you read that section — the reading-view equivalent
+   of knowing where you are. Only h1-h3 pin; deeper levels would stack into a
+   wall of headers on a densely structured note.
+   `position: relative` on .vault-heading (set above for the fold chevron) is
+   compatible: sticky wins where both are declared, so this override is enough. */
+.vault-prose h1.vault-heading,
+.vault-prose h2.vault-heading,
+.vault-prose h3.vault-heading {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--sol-bg);
+  /* The heading's own top margin would leave a transparent gap above it while
+     pinned, showing text sliding through. Padding moves that space inside the
+     sticky box. */
+  padding-top: 0.35rem;
+  padding-bottom: 0.2rem;
+}
+/* Nested levels pin BELOW their parent rather than on top of it. */
+.vault-prose h2.vault-heading { top: 1.9rem; z-index: 1; }
+.vault-prose h3.vault-heading { top: 3.5rem; z-index: 0; }
+
+/* Indent guides in nested lists: a hairline down each level so deep structure
+   is readable at a glance. Applied to nested lists only — a top-level list
+   needs no guide, and drawing one there just adds noise. */
+.vault-prose li > ul,
+.vault-prose li > ol {
+  position: relative;
+}
+.vault-prose li > ul::before,
+.vault-prose li > ol::before {
+  content: "";
+  position: absolute;
+  left: -0.85rem;
+  top: 0.1em;
+  bottom: 0.1em;
+  border-left: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
 }

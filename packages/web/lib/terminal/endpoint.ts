@@ -36,6 +36,18 @@ const PROBE_TIMEOUT_MS = 1500;
 
 let inflight: Promise<TerminalEndpoint | null> | null = null;
 
+/** Why the last discovery produced no endpoint. Callers surface cause-specific
+ *  guidance: a relay that returned no devices means the daemon isn't running
+ *  (or you're signed in as someone else), while candidates that all failed to
+ *  probe means the BROWSER blocked the loopback request — on a hosted origin
+ *  that's Chrome's local-network permission, which no amount of restarting the
+ *  daemon will fix. */
+export type DiscoveryFailure = "none" | "no-devices" | "probe-failed";
+let lastFailure: DiscoveryFailure = "none";
+export function lastDiscoveryFailure(): DiscoveryFailure {
+  return lastFailure;
+}
+
 function readOverride(): TerminalEndpoint | null {
   try {
     const raw = localStorage.getItem(OVERRIDE_KEY);
@@ -92,7 +104,12 @@ export async function probeEndpoint(ep: TerminalEndpoint): Promise<TerminalSessi
 
 async function discover(convex: ConvexReactClient): Promise<TerminalEndpoint | null> {
   const { commands } = await convex.mutation(api.users.requestTerminalEndpoints, {});
-  if (!commands.length) return null;
+  if (!commands.length) {
+    lastFailure = "no-devices";
+    return null;
+  }
+  // Candidates exist; anything that goes wrong from here is the probe.
+  lastFailure = "probe-failed";
 
   const deadline = Date.now() + RESULT_POLL_TIMEOUT_MS;
   const unresolved = new Map(commands.map((c) => [c.command_id, c] as const));
@@ -118,7 +135,10 @@ async function discover(convex: ConvexReactClient): Promise<TerminalEndpoint | n
           tmux: parsed.tmux,
         };
         // First endpoint that actually answers on loopback wins.
-        if (ep.port > 0 && (await probeEndpoint(ep)) !== null) return ep;
+        if (ep.port > 0 && (await probeEndpoint(ep)) !== null) {
+          lastFailure = "none";
+          return ep;
+        }
       } catch {}
     }
   }

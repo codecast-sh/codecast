@@ -1711,6 +1711,39 @@ export default defineSchema({
     // for the row(s) being superseded.
     .index("by_recipient_conversation", ["recipient_user_id", "conversation_id"]),
 
+  // "A human is at a desktop surface" — one row per user, heartbeat-written by
+  // the web/Electron client while visible (pushRouter.reportPresence). This is
+  // presence of the PERSON (input recency), distinct from daemon liveness
+  // (users.daemon_last_seen tracks the machine's agent). Read at push time to
+  // decide whether the phone needs a copy; goes stale on its own when the tab
+  // closes or the machine sleeps.
+  user_presence: defineTable({
+    user_id: v.id("users"),
+    surface: v.string(),
+    last_seen: v.number(),
+    last_input_at: v.number(),
+    focused: v.boolean(),
+    updated_at: v.number(),
+  }).index("by_user", ["user_id"]),
+
+  // Mobile push staging (pushRouter.ts). Rows wait out a routing delay (short
+  // away-debounce, or a longer hold while the desktop is active), then a
+  // per-user flush sends everything pending as ONE push — a burst of
+  // notifications aggregates instead of buzzing the phone N times. Rows whose
+  // notification is read (or superseded away) before the flush are dropped.
+  // Rows are deleted on send; the table only ever holds in-flight pushes.
+  push_outbox: defineTable({
+    user_id: v.id("users"),
+    notification_id: v.optional(v.id("notifications")),
+    type: v.optional(v.string()),
+    title: v.string(),
+    body: v.string(),
+    data: v.optional(v.any()),
+    created_at: v.number(),
+    due_at: v.number(),
+    deferred: v.boolean(),
+  }).index("by_user", ["user_id"]),
+
   // Fixed-window counters for the IP-keyed rate limiter (ipRateLimit.ts) used on
   // UNAUTHENTICATED endpoints (the auth relay, webhooks) — the existing per-user
   // rate_limits table can't cover them (no userId). Keyed per (endpoint, ip) so
@@ -1837,6 +1870,12 @@ export default defineSchema({
     context_summary: v.optional(v.string()),
     originating_conversation_id: v.optional(v.id("conversations")),
     target_conversation_id: v.optional(v.id("conversations")),
+    // Conversation that CREATED this trigger — pure attribution, no routing
+    // meaning. originating_conversation_id does double duty (its presence makes
+    // runs inject into that session), so a --spawn trigger must leave it empty;
+    // this field keeps the parent link anyway, so spawn triggers and their runs
+    // still trace back to the session that armed them.
+    created_by_conversation_id: v.optional(v.id("conversations")),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
     // Device that created the task (CLI `cast trigger add`). When set, only

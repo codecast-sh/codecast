@@ -23,7 +23,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { deriveProfileName } from "./ccAccounts.js";
+import { deriveProfileName, isLegacyDerivedName } from "./ccAccounts.js";
 import {
   codexHome,
   collectCodexUsageSnapshot,
@@ -216,6 +216,36 @@ export function autoSaveActiveCodexProfile(): (CodexProfileMeta & { name: string
   );
   if (covered) return null;
   return saveCodexProfile(deriveProfileName(active.email, Object.keys(index.profiles)));
+}
+
+/** Codex twin of ccAccounts' migrateLegacyProfileNames: rename profiles still
+ * carrying the old auto-derived form (email domain's org part) to the current
+ * derivation (the local part). A profile is a directory, so the snapshot moves
+ * with one rename. Returns the renames performed. */
+export function migrateLegacyCodexProfileNames(): Array<{ from: string; to: string }> {
+  const index = readProfileIndex();
+  const renames: Array<{ from: string; to: string }> = [];
+  for (const [name, meta] of Object.entries(index.profiles)) {
+    if (!isLegacyDerivedName(name, meta.email)) continue;
+    const desired = deriveProfileName(
+      meta.email,
+      Object.keys(index.profiles).filter((n) => n !== name),
+    );
+    if (desired === name) continue;
+    try {
+      fs.renameSync(profileDir(name), profileDir(desired));
+    } catch {
+      continue; // snapshot dir missing or target blocked — leave the row as-is
+    }
+    index.profiles[desired] = meta;
+    delete index.profiles[name];
+    renames.push({ from: name, to: desired });
+  }
+  if (renames.length) {
+    writeProfileIndex(index);
+    invalidateCodexAccountsCache();
+  }
+  return renames;
 }
 
 /** Re-snapshot the active login into the profile covering it whenever the live

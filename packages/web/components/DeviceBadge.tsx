@@ -7,12 +7,13 @@
  * lands on the most-recently-active local laptop/desktop (see convex/deviceRouting).
  */
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
+import type { RestartPhase, RestartProgressRow, RestartStage } from "../hooks/useSessionRestart";
 import {
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -193,27 +194,9 @@ export function RunOnDeviceItems({
   ownerDeviceId?: string | null;
 }) {
   const { locals, remotes } = useDevices();
-  const reassign = useMutation(api.devices.reassignToDevice);
-  const moveToRemote = useMutation(api.devices.moveToRemote);
-
-  // On a fork/new-session stub page `conversationId` is the client-minted
-  // session UUID until the create resolves — follow the store's stub→real
-  // mapping when it exists. The server accepts any ref (id / short id /
-  // session UUID), so an unmapped UUID still resolves once the create lands.
-  const realConvId = () => useInboxStore.getState().getConvexId(conversationId) ?? conversationId;
-
-  const runHere = (d: Device) => {
-    toast.info(`Moving session to ${deviceDisplayName(d)}…`);
-    reassign({ conversation_id: realConvId(), device_id: d.device_id })
-      .then(() => toast.success(`Now running on ${deviceDisplayName(d)}`))
-      .catch((e: any) => toast.error(e?.message || "Move failed"));
-  };
-  const toRemote = (d: Device) => {
-    toast.info("Moving session to remote Mac…");
-    moveToRemote({ conversation_id: realConvId(), to_device_id: d.device_id })
-      .then(() => toast.success("Moving to remote Mac…"))
-      .catch((e: any) => toast.error(e?.message || "Move failed"));
-  };
+  const move = useMoveSessionToDevice();
+  const runHere = (d: Device) => move(conversationId, { device_id: d.device_id, is_remote: false, label: deviceDisplayName(d) });
+  const toRemote = (d: Device) => move(conversationId, { device_id: d.device_id, is_remote: true, label: deviceDisplayName(d) });
 
   return (
     <>
@@ -255,4 +238,176 @@ export function RunOnDeviceItems({
       })}
     </>
   );
+}
+
+// ── Device-move progress ─────────────────────────────────────────────────────
+// A move ("Run here" / "Move to remote Mac") is a multi-step daemon pipeline —
+// worktree transfer (remote only), then a resume on the destination — that used
+// to be narrated by nothing but a toast. These hooks give it the same live
+// header strip as a kill+restart: the trigger records the move in the store
+// (movingSessions) and the status hook derives real stages from the same
+// daemon command rows getRestartProgress serves (it includes move_to_device).
+
+const MOVE_UNCLAIMED_WARN_MS = 20_000;
+// Give the pipeline its window before declaring failure: a local re-home is a
+// quick resume; a remote move transfers the worktree, which can take minutes.
+const MOVE_GIVE_UP_LOCAL_MS = 2 * 60_000;
+const MOVE_GIVE_UP_REMOTE_MS = 10 * 60_000;
+const MOVE_RESTORED_LINGER_MS = 5_000;
+// A failed strip keeps its "Try again" this long past give-up, then the entry
+// self-expires — a move navigated away from has no live owner to clear it.
+const MOVE_FAILED_LINGER_MS = 5 * 60_000;
+
+const moveGiveUpMs = (toRemote: boolean) => (toRemote ? MOVE_GIVE_UP_REMOTE_MS : MOVE_GIVE_UP_LOCAL_MS);
+
+/** Destination of a move: a device by id + the display name to narrate with. */
+export type MoveTarget = { device_id: string; is_remote: boolean; label: string };
+
+function clearMoveEntry(convId: string, startedAt: number) {
+  const cur = useInboxStore.getState().movingSessions ?? {};
+  // Only clear OUR move — a retry may have replaced the entry meanwhile.
+  if (cur[convId]?.started_at !== startedAt) return;
+  const { [convId]: _gone, ...rest } = cur;
+  useInboxStore.setState({ movingSessions: rest });
+}
+
+/**
+ * Fire a device move and record it in the store so any surface (the header
+ * strip) can narrate it live. Shared by the Run-on-device menu items and the
+ * strip's own "Try again".
+ */
+export function useMoveSessionToDevice() {
+  const reassign = useMutation(api.devices.reassignToDevice);
+  const moveToRemote = useMutation(api.devices.moveToRemote);
+  return useCallback(
+    (conversationId: string, target: MoveTarget) => {
+      // On a fork/new-session stub page `conversationId` is the client-minted
+      // session UUID until the create resolves — follow the store's stub→real
+      // mapping when it exists. The server accepts any ref (id / short id /
+      // session UUID), so an unmapped UUID still resolves once the create lands.
+      const s = useInboxStore.getState();
+      const convId = s.getConvexId(conversationId) ?? conversationId;
+      const entry = {
+        started_at: Date.now(),
+        to_device_id: target.device_id,
+        to_remote: target.is_remote,
+        to_label: target.label,
+      };
+      useInboxStore.setState({ movingSessions: { ...(s.movingSessions ?? {}), [convId]: entry } });
+      const req = target.is_remote
+        ? moveToRemote({ conversation_id: convId, to_device_id: target.device_id })
+        : reassign({ conversation_id: convId, device_id: target.device_id });
+      req.catch((e: any) => {
+        const msg = e?.message || "Move failed";
+        toast.error(msg);
+        const cur = useInboxStore.getState().movingSessions ?? {};
+        if (cur[convId]?.started_at === entry.started_at) {
+          useInboxStore.setState({ movingSessions: { ...cur, [convId]: { ...entry, error: msg } } });
+        }
+      });
+    },
+    [reassign, moveToRemote],
+  );
+}
+
+/**
+ * Live status of a device move for the conversation header strip, in the same
+ * phase/stage vocabulary as useSessionRestart so the two share a renderer:
+ * "restarting" (in flight) → "restored" (running on the destination;
+ * auto-clears) | "failed" (mutation error, daemon error, or give-up; keeps a
+ * retry, then expires). Idle (no entry) costs nothing — the progress query is
+ * skip-gated and the clock tick only runs mid-move.
+ */
+export function useDeviceMoveStatus(conversationId: string | undefined): {
+  phase: RestartPhase;
+  stage: RestartStage | null;
+  failure: string | null;
+  startedAt: number | null;
+  restoredLabel: string | undefined;
+  retry: () => void;
+} {
+  const entry = useInboxStore((s) => (conversationId ? s.movingSessions?.[conversationId] : undefined));
+  const move = useMoveSessionToDevice();
+
+  // The unclaimed warning and the give-up are time-driven, not row-driven — a
+  // coarse tick re-evaluates them, gated so it costs nothing outside a move.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!entry || entry.error) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(t);
+  }, [entry]);
+
+  const progressRaw = useQuery(
+    api.conversations.getRestartProgress,
+    entry && !entry.error && conversationId && isConvexId(conversationId)
+      ? { conversation_id: conversationId }
+      : "skip",
+  ) as RestartProgressRow[] | null | undefined;
+
+  const status = useMemo(() => {
+    const idle = {
+      phase: "idle" as RestartPhase,
+      stage: null as RestartStage | null,
+      failure: null as string | null,
+      startedAt: null as number | null,
+      restoredLabel: undefined as string | undefined,
+      retry: () => {},
+    };
+    if (!conversationId || !entry) return idle;
+    const dest = entry.to_label;
+    const base = {
+      startedAt: entry.started_at,
+      restoredLabel: `Session is now running on ${dest}`,
+      retry: () =>
+        move(conversationId, { device_id: entry.to_device_id, is_remote: entry.to_remote, label: dest }),
+    };
+    const failed = (failure: string) => ({ ...base, phase: "failed" as RestartPhase, stage: null, failure });
+    if (entry.error) return failed(entry.error);
+    // Scope to THIS move: the query returns the conversation's recent
+    // kill/resume/move rows, which can include an earlier restart or move.
+    // 10s tolerance covers client/server clock skew.
+    const rows = (progressRaw ?? []).filter((c) => c.created_at >= entry.started_at - 10_000);
+    const last = [...rows].reverse();
+    const resume = last.find((c) => c.command === "resume_session");
+    const mv = last.find((c) => c.command === "move_to_device");
+    if (resume?.executed_at) {
+      if (resume.error) return failed(`Move failed: ${resume.error}`);
+      return { ...base, phase: "restored" as RestartPhase, stage: null, failure: null };
+    }
+    if (mv?.executed_at && mv.error) return failed(`Move failed: ${mv.error}`);
+    const age = now - entry.started_at;
+    if (age > moveGiveUpMs(entry.to_remote)) {
+      return failed("Move didn't finish — a device may be offline. Check its daemon, or try again.");
+    }
+    const stage: RestartStage =
+      mv?.executed_at
+        ? { label: `Transferred — starting on ${dest}…`, tone: "active" }
+        : !rows.some((c) => c.executed_at) && age > MOVE_UNCLAIMED_WARN_MS
+          ? { label: "Waiting for the daemon to pick this up — is the source device online?", tone: "warn" }
+          : mv
+            ? { label: `Transferring session to ${dest} — this can take a few minutes…`, tone: "active" }
+            : resume
+              ? { label: `Starting on ${dest}…`, tone: "active" }
+              : { label: `Moving session to ${dest}…`, tone: "active" };
+    return { ...base, phase: "restarting" as RestartPhase, stage, failure: null };
+  }, [conversationId, entry, progressRaw, now, move]);
+
+  // Self-cleaning: a confirmed move lingers green then clears; a failed one
+  // keeps its retry for a while, then expires rather than sticking forever.
+  useEffect(() => {
+    if (!conversationId || !entry) return;
+    if (status.phase === "restored") {
+      const t = setTimeout(() => clearMoveEntry(conversationId, entry.started_at), MOVE_RESTORED_LINGER_MS);
+      return () => clearTimeout(t);
+    }
+    if (status.phase === "failed") {
+      const expireAt = entry.started_at + moveGiveUpMs(entry.to_remote) + MOVE_FAILED_LINGER_MS;
+      const t = setTimeout(() => clearMoveEntry(conversationId, entry.started_at), Math.max(0, expireAt - Date.now()));
+      return () => clearTimeout(t);
+    }
+  }, [status.phase, conversationId, entry]);
+
+  return status;
 }
