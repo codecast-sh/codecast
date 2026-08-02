@@ -48,6 +48,15 @@ export function projectOverlaps(boundRaw: string, raw: string | null | undefined
   return p === bound || p.startsWith(bound + "/") || bound.startsWith(p + "/");
 }
 
+/** Whether a project is equal to, or nested beneath, a root reported by a device. */
+export function pathWithinLocalRoots(pathRaw: string, roots: string[]): boolean {
+  const projectPath = pathRaw.replace(/\/+$/, "");
+  return roots.some((rootRaw) => {
+    const root = rootRaw.replace(/\/+$/, "");
+    return projectPath === root || projectPath.startsWith(root + "/");
+  });
+}
+
 export interface GitMetaSource {
   git_remote_url?: string | null;
   git_root?: string | null;

@@ -134,6 +134,11 @@ function followRestoredConversation(res: any, ghostId: string): boolean {
 }
 import { getLabelColor } from "../lib/labelColors";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import {
+  mergeRecentProjectPaths,
+  recentProjectPathsFromSessionKeys,
+  recentProjectSessionKey,
+} from "../lib/recentProjectPaths";
 import { soundSend } from "../lib/sounds";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
@@ -806,7 +811,7 @@ function HintKeys({ keys, label }: { keys: string[]; label: string }) {
 const ALT_CAP = isMac ? "⌥" : "Alt";
 
 // Imperative surface each null-state picker hands up to NewSessionView's
-// ⌥-chord router (⌥K/⌥↑ → project picker, ⌥J/⌥↓ → agent row).
+// ⌥-chord router (⌥↑ → project picker, ⌥↓ → agent row).
 type PickerHandle = {
   focus: () => boolean;
   isOpen: () => boolean;
@@ -835,6 +840,17 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 50 });
   const cachedProjects = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
+  const { user: currentUser } = useCurrentUser();
+  // Select stable primitive keys—not session objects, which are replaced on
+  // heartbeats. This avoids both the useSyncExternalStore allocation loop and
+  // restoring the old ~1×/s ProjectSwitcher re-render regression.
+  const loadedSessionProjectKeys = useInboxStore(useShallow((s) =>
+    Object.values(s.sessions).map(recentProjectSessionKey),
+  ));
+  const ownSessionProjects = useMemo(
+    () => recentProjectPathsFromSessionKeys(loadedSessionProjectKeys, currentUser?._id ? String(currentUser._id) : null),
+    [loadedSessionProjectKeys, currentUser?._id],
+  );
   // Narrowed: only _id/project_path/git_root/owner_device_id are read here, none of
   // which change on a heartbeat — so the always-rendered ProjectSwitcher no longer
   // re-renders ~1×/s.
@@ -895,8 +911,10 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   // Memoized because five downstream useMemos take it as a dep — an identity
   // that churned every render would defeat all of them.
   const recentProjects = useMemo<RecentProject[]>(
-    () => (scopedDeviceId ? (scopedProjects ?? []) : (freshProjects ?? cachedProjects)),
-    [scopedDeviceId, scopedProjects, freshProjects, cachedProjects],
+    () => scopedDeviceId
+      ? (scopedProjects ?? [])
+      : mergeRecentProjectPaths(freshProjects ?? cachedProjects, ownSessionProjects),
+    [scopedDeviceId, scopedProjects, freshProjects, cachedProjects, ownSessionProjects],
   );
   const suggestedPaths = useMemo(
     () => new Set(recentProjects.filter((p) => p.suggested).map((p) => p.path)),
@@ -913,7 +931,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
 
   // --- keyboard picker ---------------------------------------------------
   // The chip row doubles as a keyboard listbox. It is dormant for mouse users
-  // (renders exactly as before); ⌥K/⌥↑ anywhere in the new-session view
+  // (renders exactly as before); ⌥↑ anywhere in the new-session view
   // activates it (NewSessionView's chord router).
   const [picking, setPicking] = useState(false);
   const [filter, setFilter] = useState("");
@@ -1061,15 +1079,14 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   // Focus lives in a real <input> (below) so the global capture-phase shortcut
   // dispatcher treats us as "typing" and suppresses single-letter hotkeys
   // (f/t/d/…). Letters + Backspace are handled natively by the input (onChange);
-  // we only intercept the keys that drive chip selection. ⌥H/⌥L mirror ←/→ so
-  // the whole flow stays on the Option layer (⌥K in, ⌥H/⌥L move, ⌥J onward).
+  // we only intercept the arrow keys that drive chip selection.
   const handlePickerKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "ArrowRight" || (e.altKey && e.code === "KeyL")) {
+    if (e.key === "ArrowRight") {
       e.preventDefault();
       setHi((i) => (pickList.length ? (i + 1) % pickList.length : 0));
       return;
     }
-    if (e.key === "ArrowLeft" || (e.altKey && e.code === "KeyH")) {
+    if (e.key === "ArrowLeft") {
       e.preventDefault();
       setHi((i) => (pickList.length ? (i - 1 + pickList.length) % pickList.length : 0));
       return;
@@ -1081,7 +1098,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
       exitPicker();
       return;
     }
-    // ↓/Esc/Tab drop back to the message box (⌥J — handled by the chord
+    // ↓/Esc/Tab drop back to the message box (⌥↓ — handled by the chord
     // router before we see it — commits and moves on to the agent row).
     if (e.key === "ArrowDown" || e.key === "Escape" || e.key === "Tab") {
       e.preventDefault();
@@ -1228,7 +1245,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
           <span className="inline-flex items-center gap-2">
             <HintKeys keys={["←", "→"]} label="move" />
             <HintKeys keys={["↵"]} label={pickList[clampedHi]?.custom ? "open" : "select"} />
-            <HintKeys keys={[ALT_CAP, "J"]} label="agent" />
+            <HintKeys keys={[ALT_CAP, "↓"]} label="agent" />
             <HintKeys keys={["Esc"]} label="back" />
           </span>
         </div>
@@ -1237,8 +1254,8 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
           onClick={focusPicker}
           className="inline-flex items-center gap-2.5 text-[10px] opacity-40 hover:opacity-90 transition-opacity"
         >
-          <HintKeys keys={[ALT_CAP, "K"]} label="pick folder" />
-          <HintKeys keys={[ALT_CAP, "J"]} label="pick agent" />
+          <HintKeys keys={[ALT_CAP, "↑"]} label="pick folder" />
+          <HintKeys keys={[ALT_CAP, "↓"]} label="pick agent" />
         </button>
       ) : null}
 
@@ -1307,7 +1324,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   }, [storeSession, conversation._id, convCommand, currentAgent]);
 
   // --- keyboard mode (mirrors the project picker's) -----------------------
-  // Entered via ⌥J/⌥↓ from NewSessionView's chord router. Focus is held in a
+  // Entered via ⌥↓ from NewSessionView's chord router. Focus is held in a
   // real (1px, read-only) <input> so the capture-phase shortcut dispatcher
   // treats this as typing and single letters can't fire global hotkeys.
   const [picking, setPicking] = useState(false);
@@ -1333,12 +1350,12 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   }, [picking]);
 
   const handleAgentKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "ArrowRight" || (e.altKey && e.code === "KeyL")) {
+    if (e.key === "ArrowRight") {
       e.preventDefault();
       setHi((i) => (i + 1) % AGENT_OPTIONS.length);
       return;
     }
-    if (e.key === "ArrowLeft" || (e.altKey && e.code === "KeyH")) {
+    if (e.key === "ArrowLeft") {
       e.preventDefault();
       setHi((i) => (i - 1 + AGENT_OPTIONS.length) % AGENT_OPTIONS.length);
       return;
@@ -1353,7 +1370,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
       exitAgentPicker();
       return;
     }
-    // ↓/Esc/Tab drop back to the message box. ⌥K/⌥↑ (chord router) climbs to
+    // ↓/Esc/Tab drop back to the message box. ⌥↑ (chord router) climbs to
     // the project picker; our holder input exits via onBlur when focus moves.
     if (e.key === "ArrowDown" || e.key === "Escape" || e.key === "Tab") {
       e.preventDefault();
@@ -1417,7 +1434,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
           <span className="inline-flex items-center gap-2">
             <HintKeys keys={["←", "→"]} label="move" />
             <HintKeys keys={["↵"]} label="select" />
-            <HintKeys keys={[ALT_CAP, "K"]} label="folder" />
+            <HintKeys keys={[ALT_CAP, "↑"]} label="folder" />
             <HintKeys keys={["Esc"]} label="back" />
           </span>
         </div>
@@ -1530,7 +1547,7 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   };
   // Spatial ⌥-chords for the whole new-session surface, capture-phase on
   // window so they work no matter what holds focus (textarea, toggle, body):
-  // ⌥K/⌥↑ climbs to the project picker; ⌥J/⌥↓ drops to the agent row,
+  // ⌥↑ climbs to the project picker; ⌥↓ drops to the agent row,
   // committing the picker's highlighted project on the way through. Enter
   // inside either picker returns focus to the input. Self-gating: the listener
   // exists only while this null-state surface is mounted. e.code, not e.key —
@@ -1540,8 +1557,8 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   useEffect(() => {
     const onChord = (e: KeyboardEvent) => {
       if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
-      const up = e.code === "KeyK" || e.code === "ArrowUp";
-      const down = e.code === "KeyJ" || e.code === "ArrowDown";
+      const up = e.code === "ArrowUp";
+      const down = e.code === "ArrowDown";
       if (!up && !down) return;
       if (hasOpenModal()) return;
       e.preventDefault();

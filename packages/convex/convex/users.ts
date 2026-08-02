@@ -14,7 +14,7 @@ import { resolveTeamForPath, getProfileVisibilityPredicate, profilePublicSession
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
-import { normalizeProjectPath } from "./projectPaths";
+import { normalizeProjectPath, pathWithinLocalRoots } from "./projectPaths";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
 import { deleteCommentWithRevision } from "./commentViewWrites";
 import { deleteBookmarkWithRevision } from "./bookmarkViewWrites";
@@ -2793,8 +2793,7 @@ export const getRecentProjectPaths = query({
       : null;
     if (args.device_id && !deviceRoots) return [];
     const onlineRoots = deviceRoots ?? (await getOnlineLocalRoots(ctx, userId));
-    const localRootSet =
-      deviceRoots || onlineRoots.length > 0 ? new Set(onlineRoots) : null;
+    const localRoots = deviceRoots || onlineRoots.length > 0 ? onlineRoots : null;
 
     const pathCounts = new Map<string, { count: number; lastActive: number }>();
     for (const conv of conversations) {
@@ -2802,7 +2801,7 @@ export const getRecentProjectPaths = query({
       if (!raw) continue;
       const path = normalizeProjectPath(raw);
       if (!path) continue;
-      if (localRootSet && !localRootSet.has(path)) continue;
+      if (localRoots && !pathWithinLocalRoots(path, localRoots)) continue;
       const existing = pathCounts.get(path);
       if (existing) {
         existing.count++;
