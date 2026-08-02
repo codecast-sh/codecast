@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { performNeedsInputCheck } from "./notifications";
+import { performPushFlush } from "./pushRouter";
 
 // ── In-memory Convex-ish ctx ─────────────────────────────────────────────────
 // Same pattern as pendingMessages.teamSend.test.ts: a fake `ctx.db` faithful
@@ -177,6 +178,14 @@ describe("needs-input push — settled idle", () => {
     expect(tables.notifications[0].recipient_user_id).toBe("u1");
     expect(tables.conversations[0].needs_input_notified_key).toBe("5:idle");
 
+    // The push is STAGED in the outbox (pushRouter routes/aggregates it),
+    // not sent inline anymore.
+    expect(tables.push_outbox.length).toBe(1);
+    expect(tables.push_outbox[0].title).toBe("Fix the parser");
+    expect(tables.push_outbox[0].body).toContain("nested arrays");
+    // Drive the real flush: no desktop presence → the away debounce applies,
+    // and the flush's batching lookahead covers it — the Expo send fires.
+    await performPushFlush(ctx as any, "u1");
     const push = scheduled.find((s) => s.args.push_token);
     expect(push).toBeDefined();
     expect(push!.args.title).toBe("Fix the parser");
@@ -202,7 +211,12 @@ describe("needs-input push — settled idle", () => {
     expect(next.notified).toBe(true);
     expect(tables.notifications.length).toBe(1);
     expect(tables.notifications[0]._id).not.toBe(firstRowId); // fresh _id = new banner
-    expect(scheduled.filter((s) => s.args.push_token).length).toBe(2);
+    // Both episodes staged a push. The first row now points at a DELETED
+    // notification (the state row was superseded), so a flush would drop it
+    // and send only the fresh one — exactly the storm-collapse behavior.
+    expect(tables.push_outbox.length).toBe(2);
+    await performPushFlush(ctx as any, "u1");
+    expect(scheduled.filter((s) => s.args.push_token).length).toBe(1);
   });
 
   test("state rows replace per conversation; event rows and other convos survive", async () => {
@@ -326,8 +340,8 @@ describe("needs-input push — AskUserQuestion", () => {
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(res.notified).toBe(true);
     expect(tables.conversations[0].needs_input_notified_key).toBe("5:awaiting_input");
-    const push = scheduled.find((s) => s.args.push_token);
-    expect(push!.args.body).toBe("Deploy to prod?");
+    expect(tables.push_outbox.length).toBe(1);
+    expect(tables.push_outbox[0].body).toBe("Deploy to prod?");
   });
 
   test("an answered poll (tool_result is newer) does not push", async () => {
@@ -448,10 +462,7 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(res.notified).toBe(true);
     expect(tables.notifications.length).toBe(2);
-    expect(scheduled.filter((s) => s.args.push_token).map((s) => s.args.push_token).sort()).toEqual([
-      "tok-u1",
-      "tok-u2",
-    ]);
+    expect(tables.push_outbox.map((r: Rec) => r.user_id).sort()).toEqual(["u1", "u2"]);
   });
 });
 

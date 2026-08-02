@@ -1,6 +1,6 @@
 import { internalMutation } from "./functions";
 import { v } from "convex/values";
-import { internal } from "./_generated/api";
+import { enqueuePush } from "./pushRouter";
 
 
 const ENTITY_TYPE = v.union(
@@ -157,7 +157,7 @@ export const emit = internalMutation({
         continue;
       }
 
-      await ctx.db.insert("notifications", {
+      const notifId = await ctx.db.insert("notifications", {
         recipient_user_id: recipient._id,
         type: args.event_type as any,
         actor_user_id: args.actor_user_id,
@@ -173,21 +173,19 @@ export const emit = internalMutation({
       created++;
 
       if (recipient.push_token && recipient.notifications_enabled) {
-        await ctx.scheduler.runAfter(
-          0,
-          internal.notifications.sendPushNotification,
-          {
-            push_token: recipient.push_token,
-            title: actorName,
-            body: args.message,
-            data: {
-              entity_type: args.entity_type,
-              entity_id: args.entity_id,
-              conversationId: args.conversation_id,
-              type: args.event_type,
-            },
-          }
-        );
+        await enqueuePush(ctx, {
+          user: recipient,
+          notification_id: notifId,
+          type: args.event_type,
+          title: actorName,
+          body: args.message,
+          data: {
+            entity_type: args.entity_type,
+            entity_id: args.entity_id,
+            conversationId: args.conversation_id,
+            type: args.event_type,
+          },
+        });
       }
     }
 
