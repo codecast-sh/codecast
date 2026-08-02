@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { applySyncTable } from "../syncProtocol";
+import { applySyncRecord, applySyncTable } from "../syncProtocol";
 
 type Row = { _id: string; updated_at: number; status: "open" | "done" | "dropped" };
 
@@ -56,6 +56,32 @@ describe("applySyncTable — delta mode", () => {
     const pending = { "tasks:a": { type: "exclude" as const } };
     const { pending: nextPending } = applySyncTable("tasks", incoming, pending, prev, { isDelta: true });
     expect(nextPending["tasks:a"]?.type).toBe("exclude");
+  });
+});
+
+describe("optional inbox timestamp echoes", () => {
+  it("treats omitted timestamps as null acknowledgements without relaxing other fields", () => {
+    const pending = {
+      "conversations:a:inbox_dismissed_at": { type: "field" as const, value: null },
+      "conversations:a:inbox_stashed_at": { type: "field" as const, value: null },
+      "conversations:a:inbox_pinned_at": { type: "field" as const, value: null },
+      "conversations:a:title": { type: "field" as const, value: null },
+    };
+    const incoming = { _id: "a", updated_at: 1, status: "open" as const };
+
+    const table = applySyncTable("conversations", [incoming], pending, { a: incoming });
+    expect(table.pending["conversations:a:inbox_dismissed_at"]).toBeUndefined();
+    expect(table.pending["conversations:a:inbox_stashed_at"]).toBeUndefined();
+    expect(table.pending["conversations:a:inbox_pinned_at"]).toBeUndefined();
+    expect(table.pending["conversations:a:title"]).toEqual({ type: "field", value: null });
+    expect((table.table.a as any).title).toBeNull();
+
+    const record = applySyncRecord("conversations", "a", incoming, pending);
+    expect(record.pending["conversations:a:inbox_dismissed_at"]).toBeUndefined();
+    expect(record.pending["conversations:a:inbox_stashed_at"]).toBeUndefined();
+    expect(record.pending["conversations:a:inbox_pinned_at"]).toBeUndefined();
+    expect(record.pending["conversations:a:title"]).toEqual({ type: "field", value: null });
+    expect(record.record.title).toBeNull();
   });
 });
 

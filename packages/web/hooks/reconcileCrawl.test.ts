@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
-import { bootEagerArmed, crawlThrottledAt, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { bootEagerArmed, cancelReconcileCrawl, crawlThrottledAt, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { hiddenCrawlReady, inboxCrawlWsKey } from "./useSyncInboxSessions";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -45,30 +46,25 @@ describe("crawlThrottledAt", () => {
 // offline: the parked dispatch hasn't reached the server, and the pending field
 // lock that would have protected the row is released as stale after 5 minutes.
 // The durable throttle used to mask this by skipping the boot crawl entirely.
-const MAX_WAIT = 10_000; // BOOT_OUTBOX_DRAIN_MAX_WAIT_MS
 describe("bootEagerArmed", () => {
   it("holds the bypass while the outbox still has an unreplayed boot backlog", () => {
-    expect(bootEagerArmed(false, 0, MAX_WAIT)).toBe(false);
-    expect(bootEagerArmed(false, MAX_WAIT - 1, MAX_WAIT)).toBe(false);
+    expect(bootEagerArmed(false)).toBe(false);
   });
 
   it("arms as soon as the boot drain reports every parked entry attempted", () => {
-    expect(bootEagerArmed(true, 0, MAX_WAIT)).toBe(true);
+    expect(bootEagerArmed(true)).toBe(true);
   });
 
-  it("arms at the deadline anyway — a wedged or unwired outbox must not disable healing", () => {
-    // No dispatch binding (or a drain that keeps aborting) leaves the signal false
-    // forever; the crawl is the only healer for killed sessions, so it still runs.
-    expect(bootEagerArmed(false, MAX_WAIT, MAX_WAIT)).toBe(true);
-    expect(bootEagerArmed(false, MAX_WAIT + 5_000, MAX_WAIT)).toBe(true);
+  it("never arms a crawl against an unreplayed durable outbox", () => {
+    expect(bootEagerArmed(false)).toBe(false);
   });
 
   it("composes with the throttle once armed", () => {
     // The hook holds the crawl entirely while unarmed. Once armed, the persisted
     // watermark is ignored and the crawl runs.
-    const armed = bootEagerArmed(false, 0, MAX_WAIT);
+    const armed = bootEagerArmed(false);
     expect(crawlThrottledAt(NOW, THROTTLE, 0, NOW - 60_000, armed)).toBe(true);
-    expect(crawlThrottledAt(NOW, THROTTLE, 0, NOW - 60_000, bootEagerArmed(true, 0, MAX_WAIT))).toBe(false);
+    expect(crawlThrottledAt(NOW, THROTTLE, 0, NOW - 60_000, bootEagerArmed(true))).toBe(false);
   });
 });
 
@@ -107,4 +103,173 @@ describe("runReconcileCrawl — boot-eager wiring", () => {
     expect(calls).toBe(1);
   });
 
+});
+
+describe("inbox principal crawl keys", () => {
+  it("does not share a completion mark between accounts, and skips before identity resolves", async () => {
+    const namespace = `inbox-principal-${Math.random()}`;
+    let calls = 0;
+    const crawl = (wsKey: string) => runReconcileCrawl({
+      namespace,
+      wsKey,
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 1,
+      fetchPage: async () => {
+        calls++;
+        return { rows: [], isDone: true, continueCursor: null };
+      },
+      onPage: () => {},
+      onComplete: () => {},
+    });
+
+    crawl(inboxCrawlWsKey("account-a"));
+    await delay(40);
+    crawl(inboxCrawlWsKey("account-b"));
+    await delay(40);
+    crawl(inboxCrawlWsKey(undefined));
+    await delay(20);
+
+    expect(calls).toBe(2);
+    expect(inboxCrawlWsKey(undefined)).toBe("skip");
+  });
+
+  it("cancels an in-flight account crawl on identity loss without blocking the next account", async () => {
+    const namespace = `inbox-cancel-${Math.random()}`;
+    let releaseA: (() => void) | null = null;
+    let startedA: (() => void) | null = null;
+    const aPages: any[] = [];
+    const aCompletions: any[] = [];
+    const bPages: any[] = [];
+
+    runReconcileCrawl({
+      namespace,
+      wsKey: inboxCrawlWsKey("account-a"),
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 1,
+      fetchPage: () => new Promise((resolve) => {
+        startedA = () => resolve({ rows: [{ _id: "a" }], isDone: true, continueCursor: null });
+        releaseA = startedA;
+      }),
+      onPage: (rows) => aPages.push(rows),
+      onComplete: (rows) => aCompletions.push(rows),
+    });
+    await delay(10);
+    expect(startedA).not.toBeNull();
+
+    // This is the hook's identity-unknown transition: it must supersede A even
+    // though no replacement crawl is yet eligible to start.
+    runReconcileCrawl({
+      namespace,
+      wsKey: inboxCrawlWsKey(undefined),
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 1,
+      fetchPage: async () => ({ rows: [], isDone: true, continueCursor: null }),
+      onPage: () => {},
+      onComplete: () => {},
+    });
+
+    runReconcileCrawl({
+      namespace,
+      wsKey: inboxCrawlWsKey("account-b"),
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 1,
+      fetchPage: async () => ({ rows: [{ _id: "b" }], isDone: true, continueCursor: null }),
+      onPage: (rows) => bPages.push(rows),
+      onComplete: () => {},
+    });
+    releaseA?.();
+    await delay(40);
+
+    expect(aPages).toEqual([]);
+    expect(aCompletions).toEqual([]);
+    expect(bPages).toEqual([[{ _id: "b" }]]);
+  });
+
+  it("fences an awaited A completion after a principal switch, whether verification resolves or rejects", async () => {
+    for (const outcome of ["resolve", "reject"] as const) {
+      const namespace = `inbox-complete-fence-${outcome}-${Math.random()}`;
+      let release: (() => void) | null = null;
+      let reject: ((error: Error) => void) | null = null;
+      let verificationStarted = false;
+      const applied: string[] = [];
+
+      runReconcileCrawl({
+        namespace,
+        wsKey: inboxCrawlWsKey("account-a"),
+        throttleMs: THROTTLE,
+        pageDelayMs: 0,
+        maxPages: 1,
+        fetchPage: async () => ({ rows: [{ _id: "a" }], isDone: true, continueCursor: null }),
+        onPage: () => {},
+        onComplete: async (_rows, _complete, isCurrent) => {
+          verificationStarted = true;
+          try {
+            await new Promise<void>((resolve, rejectPromise) => {
+              release = resolve;
+              reject = rejectPromise;
+            });
+          } catch {}
+          if (isCurrent()) applied.push("a-clear");
+        },
+      });
+      await delay(10);
+      expect(verificationStarted).toBe(true);
+      cancelReconcileCrawl(namespace);
+      runReconcileCrawl({
+        namespace,
+        wsKey: inboxCrawlWsKey("account-b"),
+        throttleMs: THROTTLE,
+        pageDelayMs: 0,
+        maxPages: 1,
+        fetchPage: async () => ({ rows: [{ _id: "b" }], isDone: true, continueCursor: null }),
+        onPage: () => applied.push("b-page"),
+        onComplete: () => {},
+      });
+      if (outcome === "resolve") release?.();
+      else reject?.(new Error("offline"));
+      await delay(30);
+
+      expect(applied).toEqual(["b-page"]);
+    }
+  });
+
+  it("rechecks durable outbox readiness after a previously armed principal wakes", () => {
+    const key = inboxCrawlWsKey("account-a");
+    expect(hiddenCrawlReady(key, key, true)).toBe(true);
+    // A later failed/offline enqueue reopens the durable outbox; a wake must
+    // not use the old principal latch to launch a hidden-set CLEAR crawl.
+    expect(hiddenCrawlReady(key, key, false)).toBe(false);
+  });
+
+  it("does not complete a hidden CLEAR after the durable outbox reopens", async () => {
+    const namespace = `hidden-outbox-fence-${Math.random()}`;
+    let durableOutboxDrained = true;
+    let releaseFetch: (() => void) | null = null;
+    let clearCalls = 0;
+    runReconcileCrawl({
+      namespace,
+      wsKey: inboxCrawlWsKey("account-a"),
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 1,
+      isCurrent: () => durableOutboxDrained,
+      fetchPage: () => new Promise((resolve) => {
+        releaseFetch = () => resolve({ rows: [], isDone: true, continueCursor: null });
+      }),
+      onPage: () => {},
+      onComplete: () => { clearCalls++; },
+    });
+    await delay(10);
+    // A failed/offline enqueue makes the durable queue non-empty before this
+    // crawl can run its CLEAR phase.
+    durableOutboxDrained = false;
+    releaseFetch?.();
+    await delay(30);
+
+    expect(clearCalls).toBe(0);
+  });
 });

@@ -195,6 +195,21 @@ function generateAutoPending(
 ): Record<string, any> | null {
   let result: Record<string, any> | null = null;
   const now = Date.now();
+  // The hide value is the server acknowledgement identity; `now` below is
+  // merely this middleware pass's freshness stamp and need not equal it.
+  const hideAcks = new Map<string, number>();
+  for (const patch of patches) {
+    const path = patch.path as (string | number)[];
+    if (path.length < 3) continue;
+    const storeKey = String(path[0]);
+    const field = String(path[2]);
+    if (
+      !isProtectedSyncCollection(storeKey) ||
+      (field !== "inbox_dismissed_at" && field !== "inbox_stashed_at") ||
+      typeof patch.value !== "number"
+    ) continue;
+    hideAcks.set(`${storeKey}:${String(path[1])}`, patch.value);
+  }
 
   for (const patch of patches) {
     const path = patch.path as (string | number)[];
@@ -223,6 +238,7 @@ function generateAutoPending(
         type: "field",
         value: patch.value,
         ts: now,
+        ...(hideAcks.has(`${storeKey}:${recordId}`) ? { hideAck: hideAcks.get(`${storeKey}:${recordId}`)! } : {}),
       };
     }
   }
@@ -801,14 +817,25 @@ export function mutativeMiddleware(config: any, opts?: {
 
     let draining = false;
     let drainAgain = false;
-    // Whether a drain pass has loaded the outbox and attempted every entry in it
-    // (delivered, re-queued, or given up on). Consumers that must not act on a
-    // PRE-REPLAY view of server state wait on this — the boot-eager hidden-set
-    // crawls, whose CLEAR pass would otherwise un-hide a dismiss still parked here
-    // (see bootEagerArmed in hooks/reconcileCrawl.ts). Stays false while the
-    // outbox is unwired or a drain aborts on a rotated binding; those consumers
-    // bound their own wait rather than blocking forever.
+    // Consumers that must not act on a PRE-REPLAY view of server state wait for a
+    // verified-empty durable outbox. A failed/re-queued entry is still a pending
+    // server write, so merely attempting it cannot open this gate.
     let bootOutboxDrained = false;
+    let outboxGeneration = 0;
+    let pendingOutboxEnqueues = 0;
+    const markOutboxDirty = () => {
+      bootOutboxDrained = false;
+      outboxGeneration++;
+    };
+    const enqueueOutbox = async (enqueue: OutboxEnqueueFn, entry: OutboxEntry) => {
+      markOutboxDirty();
+      pendingOutboxEnqueues++;
+      try {
+        await enqueue(entry);
+      } finally {
+        pendingOutboxEnqueues--;
+      }
+    };
     async function drainOutbox(countAttempts = true) {
       const captured = dispatchBinding;
       const capturedLoad = outboxLoadFn;
@@ -827,6 +854,7 @@ export function mutativeMiddleware(config: any, opts?: {
       }
       draining = true;
       try {
+        const drainGeneration = outboxGeneration;
         const entries = await capturedLoad();
         assertDispatchCurrent(captured);
         // The outbox exists to survive a reload that lands in the middle of an
@@ -910,7 +938,7 @@ export function mutativeMiddleware(config: any, opts?: {
               if (!countAttempts) continue;
               const disposition = outboxFailureDisposition(entry);
               assertDispatchCurrent(captured);
-              await capturedEnqueue?.(disposition.entry);
+              if (capturedEnqueue) await enqueueOutbox(capturedEnqueue, disposition.entry);
               continue;
             }
             // Legacy non-receipt actions still treat a permanent refusal as
@@ -923,17 +951,22 @@ export function mutativeMiddleware(config: any, opts?: {
             if (!countAttempts) continue;
             const disposition = outboxFailureDisposition(entry);
             assertDispatchCurrent(captured);
-            if (disposition.keep) await capturedEnqueue?.(disposition.entry);
-            else {
+            if (disposition.keep) {
+              if (capturedEnqueue) await enqueueOutbox(capturedEnqueue, disposition.entry);
+            } else {
               rejectReceiptWaiter(entry.id, e);
               await capturedRemove?.(entry.id);
             }
           }
         }
-        // Every parked entry has now been attempted — the replay is no longer
-        // racing readers of server state. Set after the loop, so an abort partway
-        // through leaves it false for the successor binding's drain to satisfy.
-        bootOutboxDrained = true;
+        // Verify the durable queue after every mutation. The initial snapshot is
+        // not sufficient: a failed entry can be re-queued, and a new action can
+        // begin enqueueing while this drain is in flight.
+        const remaining = await capturedLoad();
+        assertDispatchCurrent(captured);
+        bootOutboxDrained = remaining.length === 0 &&
+          pendingOutboxEnqueues === 0 &&
+          drainGeneration === outboxGeneration;
       } catch (e) {
         // A binding rotated mid-drain (page-load verification rebind, account
         // switch). Every drain call site is fire-and-forget, so letting this
@@ -1069,7 +1102,7 @@ export function mutativeMiddleware(config: any, opts?: {
           // the binding while the page stays interactive, and an un-parked
           // action fired in that window would vanish with zero trace.
           const enqueued = outboxEnqueueFn
-            ? Promise.resolve(outboxEnqueueFn(entry)).then(() => {
+            ? enqueueOutbox(outboxEnqueueFn, entry).then(() => {
                 enqueueCompleted = true;
               })
             : null;
@@ -1132,6 +1165,7 @@ export function mutativeMiddleware(config: any, opts?: {
                 // deduplicated command for a later replay.
                 if (completed) {
                   await capturedRemove?.(outboxId);
+                  void drainOutbox(false);
                 }
               }, async (error) => {
                 let current = true;
@@ -1171,13 +1205,17 @@ export function mutativeMiddleware(config: any, opts?: {
             const promise = dispatched.then(async (r) => {
               assertDispatchCurrent(capturedDispatch);
               await capturedRemove?.(outboxId);
+              void drainOutbox(false);
               return r;
             }, async (e) => {
               if (e instanceof StaleDispatchBindingError) throw e;
               assertDispatchCurrent(capturedDispatch);
               // Permanent rejection: the server answered and said no — remove
               // the parked copy so the drain loops don't re-litigate it forever.
-              if (isPermanentDispatchError(e)) await capturedRemove?.(outboxId);
+              if (isPermanentDispatchError(e)) {
+                await capturedRemove?.(outboxId);
+                void drainOutbox(false);
+              }
               throw e;
             });
             if (returnsPromise) return promise;
@@ -1256,7 +1294,10 @@ export function mutativeMiddleware(config: any, opts?: {
         ? { epoch: dispatchEpoch, fn, owner: options?.owner, authorization: options?.authorization }
         : null;
       // Drain any persisted outbox entries from a prior session.
-      if (fn) drainOutbox();
+      if (fn) {
+        markOutboxDirty();
+        void drainOutbox();
+      }
     };
 
     wrapped._clearDispatch = (owner: object) => {
@@ -1299,6 +1340,7 @@ export function mutativeMiddleware(config: any, opts?: {
       outboxEnqueueFn = enqueue;
       outboxRemoveFn = remove;
       outboxLoadFn = load;
+      markOutboxDirty();
     };
 
     wrapped._clearRuntimeBindings = () => {

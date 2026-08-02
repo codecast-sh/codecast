@@ -26,6 +26,14 @@ function stateFor(namespace: string): ReconcileState {
   return s;
 }
 
+/** Abandon the active crawl in one namespace without affecting other crawls. */
+export function cancelReconcileCrawl(namespace: string): void {
+  const st = stateFor(namespace);
+  st.gen++;
+  st.runningKey = null;
+  setProgress(namespace, false, 0);
+}
+
 function setProgress(namespace: string, loading: boolean, loaded: number) {
   const prev = useInboxStore.getState().syncProgress;
   useInboxStore.setState({ syncProgress: { ...prev, [namespace]: { loading, loaded } } });
@@ -45,6 +53,8 @@ export type CrawlOptions = {
   fetchPage: (cursor: string | null) => Promise<CrawlPage>;
   /** Overlay a freshly-fetched page (delta — never prunes). */
   onPage: (rows: any[]) => void;
+  /** Dynamic lifecycle fence (principal changes, durable replay gates, etc.). */
+  isCurrent?: () => boolean;
   /**
    * Final overlay of the full set. `complete` is true only when the crawl
    * reached the true end (isDone / no next cursor), false when it stopped at
@@ -52,7 +62,7 @@ export type CrawlOptions = {
    * ignore it; a consumer that PRUNES on this pass (the dismiss reconcile's
    * CLEAR) must gate on `complete` so a truncated crawl can't drop real rows.
    */
-  onComplete: (all: any[], complete: boolean) => void;
+  onComplete: (all: any[], complete: boolean, isCurrent: () => boolean) => void | Promise<void>;
   /** Ignore the durable watermark on the first run in this page session. */
   bootEager?: boolean;
 };
@@ -114,18 +124,15 @@ export function crawlThrottledAt(
  * The durable throttle used to mask this: a reload inside 30 minutes skipped the
  * boot crawl entirely and let the outbox drain first. Boot-eager removes that
  * accident, so we reinstate the ordering on purpose — hold the bypass until the
- * boot replay has attempted every parked entry.
+ * durable outbox has been verified empty after replay.
  *
- * `maxWaitMs` bounds the wait: an outbox that never settles (no dispatch binding,
- * a wedged drain) must not disable the healing crawl forever. Waiting is also
- * self-limiting in the case that matters — if the outbox is stuck because the
- * client is offline, the crawl's own queries fail anyway, so the ordering is moot.
  * Until this returns true the caller does not launch the hidden-set crawls at all
  * — the durable throttle alone is not a safe fallback, since a client with no
- * persisted watermark has nothing to be throttled by.
+ * persisted watermark has nothing to be throttled by. A stalled outbox delays
+ * healing; it must never permit a pre-replay CLEAR pass.
  */
-export function bootEagerArmed(bootOutboxDrained: boolean, waitedMs: number, maxWaitMs: number): boolean {
-  return bootOutboxDrained || waitedMs >= maxWaitMs;
+export function bootEagerArmed(bootOutboxDrained: boolean): boolean {
+  return bootOutboxDrained;
 }
 
 /**
@@ -146,7 +153,11 @@ export function syncMetaKey(namespace: string, wsKey: string): string {
 
 export function runReconcileCrawl(opts: CrawlOptions): void {
   const { namespace, wsKey, throttleMs, pageDelayMs, maxPages } = opts;
-  if (wsKey === "skip") return;
+  if (wsKey === "skip") {
+    cancelReconcileCrawl(namespace);
+    return;
+  }
+  if (opts.isCurrent && !opts.isCurrent()) return;
   const st = stateFor(namespace);
   const metaKey = syncMetaKey(namespace, wsKey);
   // Recently completed for this workspace → serve from the IDB-cached store.
@@ -162,6 +173,13 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
   const myGen = ++st.gen;
   st.runningKey = wsKey;
   const superseded = () => st.gen !== myGen;
+  const isCurrent = () => !superseded() && (opts.isCurrent?.() ?? true);
+  const stop = (loaded: number) => {
+    if (!superseded()) {
+      st.runningKey = null;
+      setProgress(namespace, false, loaded);
+    }
+  };
 
   (async () => {
     setProgress(namespace, true, 0);
@@ -174,7 +192,7 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       // the whole crawl and leave a partial list. Give up only after several tries.
       let page: CrawlPage | null = null;
       for (let attempt = 0; attempt < 5; attempt++) {
-        if (superseded()) return;
+        if (!isCurrent()) { stop(all.length); return; }
         try { page = await opts.fetchPage(cursor); break; }
         catch {
           if (attempt === 4) {
@@ -186,7 +204,7 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
           await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
         }
       }
-      if (superseded() || !page) return; // a newer workspace crawl took over
+      if (!isCurrent() || !page) { stop(all.length); return; } // a newer workspace crawl took over
       const rows = page.rows ?? [];
       all.push(...rows);
       // Overlay each page immediately so the list fills in progressively.
@@ -202,13 +220,14 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       cursor = next;
       await new Promise((r) => setTimeout(r, pageDelayMs));
     }
-    if (superseded()) return;
+    if (!isCurrent()) { stop(all.length); return; }
     // Final completeness pass: re-overlay the full set. onComplete is a DELTA
     // overlay (the big collections are isDelta in SYNC_REGISTRY) — additive, never
     // prunes — so this only fills in rows onPage may have missed. Deletions arrive
     // as deltas, never by snapshot, so a short/truncated crawl can't gut the cache.
     // `completed` lets a pruning consumer (the dismiss CLEAR) know the set is whole.
-    opts.onComplete(all, completed);
+    await opts.onComplete(all, completed, isCurrent);
+    if (!isCurrent()) { stop(all.length); return; }
     // Persist the watermark: backfilledAt (durable throttle — skip the crawl on
     // the next launch) and cursor = the highest updated_at we just saw (so the
     // NEXT crawl resumes incrementally from here via `since`). cursor advances
