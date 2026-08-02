@@ -140,10 +140,15 @@ describe("createWipSnapshot", () => {
 });
 
 describe("snapshot message trailers", () => {
-  test("round-trips the branch and session", async () => {
-    const msg = buildSnapshotMessage({ branch: "feature/x", conversationId: "conv1" });
+  test("round-trips the branch", async () => {
+    const msg = buildSnapshotMessage({ branch: "feature/x" });
     expect(parseSnapshotTrailer(msg, "codecast-branch")).toBe("feature/x");
-    expect(parseSnapshotTrailer(msg, "codecast-session")).toBe("conv1");
+  });
+
+  test("carries NO per-session id — that is what lets siblings share one commit", () => {
+    // A session id would make every sibling's commit a distinct object, defeating
+    // git's dedup and forcing one full push per session.
+    expect(buildSnapshotMessage({ branch: "main" })).not.toContain("codecast-session");
   });
 
   test("a missing trailer is undefined, not a throw", async () => {
@@ -163,8 +168,8 @@ describe("push + restore round-trip", () => {
     fs.writeFileSync(path.join(cwd, "tracked.txt"), "uncommitted\n");
     fs.writeFileSync(path.join(cwd, "new.txt"), "untracked\n");
 
-    const snap = (await createWipSnapshot(cwd, { conversationId: "conv1" }))!;
-    expect((await pushWipSnapshot(cwd, { remote, conversationId: "conv1", sha: snap.sha })).ok).toBe(true);
+    const snap = (await createWipSnapshot(cwd))!;
+    expect((await pushWipSnapshot(cwd, { remote, conversationIds: ["conv1"], sha: snap.sha })).ok).toBe(true);
 
     // The destination: a plain clone, exactly as the daemon does it.
     const dest = tmpdir("dest") + "/clone";
@@ -196,8 +201,8 @@ describe("push + restore round-trip", () => {
     const { cwd, remote } = repo();
     fs.writeFileSync(path.join(cwd, "tracked.txt"), "x\n");
     fs.writeFileSync(path.join(cwd, "new.txt"), "y\n");
-    const snap = (await createWipSnapshot(cwd, { conversationId: "c2" }))!;
-    await pushWipSnapshot(cwd, { remote, conversationId: "c2", sha: snap.sha });
+    const snap = (await createWipSnapshot(cwd))!;
+    await pushWipSnapshot(cwd, { remote, conversationIds: ["c2"], sha: snap.sha });
 
     const dest = tmpdir("dest2") + "/clone";
     execFileSync("git", ["clone", "-q", git(cwd, ["remote", "get-url", remote]), dest]);
@@ -211,8 +216,8 @@ describe("push + restore round-trip", () => {
     const { cwd, remote } = repo();
     git(cwd, ["checkout", "-q", "-b", "clean-branch"]);
     git(cwd, ["commit", "-q", "--allow-empty", "-m", "unpushed-empty"]);
-    const snap = (await createWipSnapshot(cwd, { conversationId: "c3" }))!;
-    await pushWipSnapshot(cwd, { remote, conversationId: "c3", sha: snap.sha });
+    const snap = (await createWipSnapshot(cwd))!;
+    await pushWipSnapshot(cwd, { remote, conversationIds: ["c3"], sha: snap.sha });
 
     const dest = tmpdir("dest3") + "/clone";
     execFileSync("git", ["clone", "-q", git(cwd, ["remote", "get-url", remote]), dest]);
@@ -228,8 +233,8 @@ describe("push + restore round-trip", () => {
     const { cwd, remote } = repo();
     const bin = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe, 0x00, 0x42]);
     fs.writeFileSync(path.join(cwd, "blob.bin"), bin);
-    const snap = (await createWipSnapshot(cwd, { conversationId: "c4" }))!;
-    await pushWipSnapshot(cwd, { remote, conversationId: "c4", sha: snap.sha });
+    const snap = (await createWipSnapshot(cwd))!;
+    await pushWipSnapshot(cwd, { remote, conversationIds: ["c4"], sha: snap.sha });
 
     const dest = tmpdir("dest4") + "/clone";
     execFileSync("git", ["clone", "-q", git(cwd, ["remote", "get-url", remote]), dest]);
@@ -247,8 +252,8 @@ describe("push + restore round-trip", () => {
     git(cwd, ["push", "-q", "origin", "HEAD:refs/heads/main"]);
     fs.rmSync(path.join(cwd, "doomed.txt"));
 
-    const snap = (await createWipSnapshot(cwd, { conversationId: "cdel" }))!;
-    await pushWipSnapshot(cwd, { remote, conversationId: "cdel", sha: snap.sha });
+    const snap = (await createWipSnapshot(cwd))!;
+    await pushWipSnapshot(cwd, { remote, conversationIds: ["cdel"], sha: snap.sha });
 
     const dest = tmpdir("destdel") + "/clone";
     execFileSync("git", ["clone", "-q", git(cwd, ["remote", "get-url", remote]), dest]);
@@ -268,8 +273,8 @@ describe("push + restore round-trip", () => {
 
   test("the wip ref is hidden from branch listings", async () => {
     const { cwd, remote } = repo();
-    const snap = (await createWipSnapshot(cwd, { conversationId: "c6" }))!;
-    await pushWipSnapshot(cwd, { remote, conversationId: "c6", sha: snap.sha });
+    const snap = (await createWipSnapshot(cwd))!;
+    await pushWipSnapshot(cwd, { remote, conversationIds: ["c6"], sha: snap.sha });
     const url = git(cwd, ["remote", "get-url", remote]);
     // Present as a ref...
     expect(execFileSync("git", ["ls-remote", url, wipRef("c6")], { encoding: "utf-8" })).toContain(snap.sha);
@@ -284,8 +289,8 @@ describe("push + restore round-trip", () => {
     fs.writeFileSync(path.join(cwd, "tracked.txt"), "local-only\n");
     git(cwd, ["add", "-A"]);
     git(cwd, ["commit", "-qm", "unpushed local commit"]);
-    const snap = (await createWipSnapshot(cwd, { conversationId: "c7" }))!;
-    await pushWipSnapshot(cwd, { remote, conversationId: "c7", sha: snap.sha });
+    const snap = (await createWipSnapshot(cwd))!;
+    await pushWipSnapshot(cwd, { remote, conversationIds: ["c7"], sha: snap.sha });
     // The unpushed commit is now ON the remote (as an ancestor of the wip ref),
     // but main is untouched — we never rewrite a shared branch.
     expect(execFileSync("git", ["ls-remote", url, "refs/heads/main"], { encoding: "utf-8" })).toBe(mainBefore);
@@ -339,8 +344,8 @@ describe("isPermanentPushFailure", () => {
     git(cwd, ["add", "-A"]);
     git(cwd, ["commit", "-qm", "c"]);
     git(cwd, ["remote", "add", "origin", "/nonexistent/definitely-not-a-repo.git"]);
-    const snap = (await createWipSnapshot(cwd, { conversationId: "c" }))!;
-    const res = await pushWipSnapshot(cwd, { remote: "origin", conversationId: "c", sha: snap.sha });
+    const snap = (await createWipSnapshot(cwd))!;
+    const res = await pushWipSnapshot(cwd, { remote: "origin", conversationIds: ["c"], sha: snap.sha });
     expect(res.ok).toBe(false);
     expect(res.permanent).toBe(true);
   });
@@ -499,5 +504,42 @@ describe("applySnapshotFastForward (cast remote back)", () => {
     const { cwd } = repo();
     const res = await applySnapshotFastForward(cwd, "refs/codecast/back/nope");
     expect(res.ok).toBe(false);
+  });
+});
+
+// The bug this guards: ~50 sessions on this machine live in ~6 checkouts. Keying
+// snapshots per session meant N identical trees snapshotted and N near-identical
+// commits pushed to N refs — and any agent's edit invalidated every sibling's
+// cached tree hash at once, so the throttle never engaged and a given repo's
+// snapshot could go hours stale despite pushing constantly.
+describe("sessions sharing a checkout share one snapshot", () => {
+  test("two snapshots of the same tree are the SAME commit object", async () => {
+    const { cwd } = repo();
+    fs.writeFileSync(path.join(cwd, "tracked.txt"), "shared\n");
+    const a = (await createWipSnapshot(cwd))!;
+    const b = (await createWipSnapshot(cwd))!;
+    // Identical sha is what lets one upload serve every sibling session.
+    expect(b.sha).toBe(a.sha);
+    expect(b.tree).toBe(a.tree);
+  });
+
+  test("one push fans the same commit out to every sibling's ref", async () => {
+    const { cwd, remote } = repo();
+    fs.writeFileSync(path.join(cwd, "tracked.txt"), "shared\n");
+    const snap = (await createWipSnapshot(cwd))!;
+    const ids = ["convA", "convB", "convC"];
+    expect((await pushWipSnapshot(cwd, { remote, conversationIds: ids, sha: snap.sha })).ok).toBe(true);
+
+    const url = git(cwd, ["remote", "get-url", remote]);
+    for (const id of ids) {
+      const out = execFileSync("git", ["ls-remote", url, wipRef(id)], { encoding: "utf-8" });
+      expect(out).toContain(snap.sha);
+    }
+  });
+
+  test("an empty session list is a no-op, not a malformed push", async () => {
+    const { cwd, remote } = repo();
+    const snap = (await createWipSnapshot(cwd))!;
+    expect((await pushWipSnapshot(cwd, { remote, conversationIds: [], sha: snap.sha })).ok).toBe(true);
   });
 });
