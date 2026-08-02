@@ -10,6 +10,7 @@ import { useConvex } from "convex/react";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import {
   ArrowUpDown,
+  Cloud,
   CopyMinus,
   FilePlus2,
   FolderPlus,
@@ -38,6 +39,13 @@ import { VaultFindBar } from "../../components/vault/VaultFindBar";
 import { HoverPreviewProvider } from "../../components/vault/VaultHoverPreview";
 import { VaultSearchPane } from "../../components/vault/VaultSearchPane";
 import { useVaultStore } from "../../store/vaultStore";
+import {
+  toggleVaultEditMode,
+  toggleVaultSourceMode,
+  vaultViewMode,
+  setVaultModeScope,
+  type VaultViewMode,
+} from "../../lib/vault/viewMode";
 
 // sigma + graphology are ~40kB gzip: nobody who doesn't open the graph pays.
 const VaultGraphView = lazy(() =>
@@ -45,13 +53,6 @@ const VaultGraphView = lazy(() =>
 );
 
 const headerButtonClass = "text-sol-text-dim hover:text-sol-text transition-colors";
-
-// Which notes are open in source mode, remembered per file for as long as the
-// app is loaded: leave a note mid-edit, read three others, come back and you're
-// still editing. Deliberately NOT in the URL — ?f= addresses the note, and a
-// shared link should open it the way the recipient reads notes, not the way the
-// sender happened to be editing one.
-const editModeByPath = new Map<string, boolean>();
 
 const separatorClass =
   "relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan";
@@ -76,16 +77,118 @@ function EmptyVaultTeaching() {
   );
 }
 
-function NoDaemonTeaching() {
+function NoDaemonTeaching({
+  reason,
+  remoteVaults,
+  onRetry,
+  onOpenRemote,
+}: {
+  reason: "none" | "no-devices" | "probe-failed" | "old-daemon" | "refused" | "error";
+  detail: string | null;
+  remoteVaults: { id: string; name: string; note_count?: number }[];
+  onRetry: () => void;
+  onOpenRemote: (id: string) => void;
+}) {
+  // One dead end used to answer three different problems. The browser blocking
+  // a loopback request looks nothing like a daemon that isn't running, and
+  // telling someone to restart a healthy daemon wastes their time.
+  const copy = {
+    "probe-failed": {
+      title: "Your browser is blocking this machine",
+      body: (
+        <>
+          The daemon is running and answered, but the browser wouldn&apos;t let this page
+          reach it. Chrome asks permission the first time a site connects to your local
+          network — allow it from the address-bar icon, then retry. The desktop app has no
+          such gate.
+        </>
+      ),
+    },
+    "no-devices": {
+      title: "Can't reach the local daemon",
+      body: (
+        <>
+          The vault reads files straight from this machine, which needs the codecast daemon
+          running. Start it with <code className="text-sol-text">cast daemon</code> or check{" "}
+          <code className="text-sol-text">cast doctor</code>. If it IS running, make sure
+          you&apos;re signed in as the same account it belongs to.
+        </>
+      ),
+    },
+    "old-daemon": {
+      title: "This machine's daemon is too old for vaults",
+      body: (
+        <>
+          It answered, but it doesn&apos;t serve the vault routes yet. Run{" "}
+          <code className="text-sol-text">cast update</code> and try again.
+        </>
+      ),
+    },
+    refused: {
+      title: "The daemon refused this request",
+      body: (
+        <>
+          It answered, but turned the vault request away — usually a stale
+          connection token after a restart. Retry; if it persists, restart the
+          daemon.
+        </>
+      ),
+    },
+    error: {
+      title: "The vault request didn't go through",
+      body: (
+        <>
+          The daemon is running and answered the first check, but the vault call
+          failed before reaching it. Retry — the detail below says why.
+        </>
+      ),
+    },
+    none: {
+      title: "Can't reach the local daemon",
+      body: (
+        <>
+          Start it with <code className="text-sol-text">cast daemon</code> or check{" "}
+          <code className="text-sol-text">cast doctor</code>.
+        </>
+      ),
+    },
+  }[reason];
+
   return (
     <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-8">
       <WifiOff className="w-10 h-10 text-sol-text-dim opacity-40" />
-      <div className="text-sol-text font-medium">Can&apos;t reach the local daemon</div>
-      <div className="text-sm text-sol-text-muted max-w-md">
-        The vault reads files straight from this machine, which needs the
-        codecast daemon running. Start it with <code className="text-sol-text">cast daemon</code>{" "}
-        or check <code className="text-sol-text">cast doctor</code>.
-      </div>
+      <div className="text-sol-text font-medium">{copy.title}</div>
+      <div className="text-sm text-sol-text-muted max-w-md">{copy.body}</div>
+      {detail && (
+        <code className="text-[11px] text-sol-text-dim max-w-md break-all">{detail}</code>
+      )}
+      <button
+        type="button"
+        onClick={onRetry}
+        className="sol-btn text-xs px-3 py-1.5 mt-1"
+      >
+        Retry connection
+      </button>
+      {remoteVaults.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-sol-border/30 max-w-md">
+          <div className="text-[11px] uppercase tracking-wide text-sol-text-dim mb-1.5">
+            Mirrored from another machine
+          </div>
+          {remoteVaults.map((v) => (
+            <button
+              key={v.id}
+              type="button"
+              onClick={() => onOpenRemote(v.id)}
+              className="block w-full text-left px-2 py-1 text-[13px] text-sol-cyan hover:bg-sol-bg-alt rounded"
+            >
+              {v.name}
+              {v.note_count ? (
+                <span className="text-sol-text-dim text-[11px]"> — {v.note_count} notes, read-only</span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -104,6 +207,11 @@ function VaultContent() {
   const activeVaultId = useVaultStore((s) => s.activeVaultId);
   const connect = useVaultStore((s) => s.connect);
   const selectVault = useVaultStore((s) => s.selectVault);
+  const remoteVaults = useVaultStore((s) => s.remoteVaults);
+  const openRemoteVault = useVaultStore((s) => s.openRemoteVault);
+  const isRemote = useVaultStore((s) => s.isRemote);
+  const unreachableReason = useVaultStore((s) => s.unreachableReason);
+  const unreachableDetail = useVaultStore((s) => s.unreachableDetail);
   const refresh = useVaultStore((s) => s.refresh);
   const noteOpened = useVaultStore((s) => s.noteOpened);
   const sortMode = useVaultStore((s) => s.sortMode);
@@ -185,17 +293,31 @@ function VaultContent() {
   });
 
   const [, bumpEditMode] = useState(0);
-  const editing = !!activePath && (editModeByPath.get(activePath) ?? false);
-  const toggleEdit = useCallback(() => {
-    if (!activePath) return false;
-    editModeByPath.set(activePath, !(editModeByPath.get(activePath) ?? false));
-    bumpEditMode((n) => n + 1);
-    return true;
-  }, [activePath]);
+  // Mode memory is per vault: scoping it here means a vault switch forgets the
+  // previous vault's modes before any note of the new one is asked about.
+  setVaultModeScope(activeVaultId);
+  const mode = vaultViewMode(activePath);
+  // The mode memory is module state, not React state, so the bump is what makes
+  // a change visible; both chords go through here.
+  const applyMode = useCallback(
+    (next: (path: string) => VaultViewMode) => {
+      if (!activePath) return false;
+      next(activePath);
+      bumpEditMode((n) => n + 1);
+      return true;
+    },
+    [activePath],
+  );
+  const toggleEdit = useCallback(() => applyMode(toggleVaultEditMode), [applyMode]);
 
   useShortcutAction("vault.toggleEdit", () => {
     if (!isTabActive || showGraph) return false;
     return toggleEdit();
+  });
+
+  useShortcutAction("vault.sourceMode", () => {
+    if (!isTabActive || showGraph) return false;
+    return applyMode(toggleVaultSourceMode);
   });
 
   // Cmd+F finds inside the open note. Declines (so the desktop app's own
@@ -214,7 +336,16 @@ function VaultContent() {
     [vaults, activeVaultId],
   );
 
-  if (connection === "no-daemon") return <NoDaemonTeaching />;
+  if (connection === "no-daemon")
+    return (
+      <NoDaemonTeaching
+        reason={unreachableReason}
+        detail={unreachableDetail}
+        remoteVaults={remoteVaults}
+        onRetry={() => void connect(convex, { force: true })}
+        onOpenRemote={(id) => void openRemoteVault(id)}
+      />
+    );
   if ((connection === "connected" || connection === "cached") && vaults.length === 0 && !activeVaultId)
     return <EmptyVaultTeaching />;
   if (connection === "idle" || connection === "discovering") {
@@ -227,6 +358,12 @@ function VaultContent() {
 
   return (
     <div className="h-full flex flex-col">
+      {isRemote && (
+        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
+          <Cloud className="w-3 h-3" />
+          Read-only mirror from another machine — edits happen where the files live.
+        </div>
+      )}
       {connection === "cached" && (
         <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
           <WifiOff className="w-3 h-3" />
@@ -274,10 +411,16 @@ function VaultContent() {
         <Panel id="vault-tree" minSize={180} maxSize="42%" className="min-w-0">
           <div className="h-full flex flex-col border-r-0 bg-sol-bg-alt/40">
             <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
-              {vaults.length > 1 ? (
+              {vaults.length + remoteVaults.length > 1 ? (
                 <select
                   value={activeVaultId ?? ""}
-                  onChange={(e) => void selectVault(e.target.value)}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    // A remote id belongs to another machine's mirror; the two
+                    // open through different paths but land in the same views.
+                    if (remoteVaults.some((v) => v.id === id)) void openRemoteVault(id);
+                    else void selectVault(id);
+                  }}
                   className="flex-1 bg-transparent text-xs font-medium text-sol-text outline-none cursor-pointer"
                 >
                   {vaults.map((v) => (
@@ -285,6 +428,13 @@ function VaultContent() {
                       {v.name}
                     </option>
                   ))}
+                  {remoteVaults
+                    .filter((rv) => !vaults.some((v) => v.id === rv.id))
+                    .map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} (remote)
+                      </option>
+                    ))}
                 </select>
               ) : (
                 <div className="flex-1 text-xs font-medium text-sol-text truncate" title={activeVault?.root}>
@@ -410,7 +560,7 @@ function VaultContent() {
               <VaultNoteView
                 path={activePath}
                 targetLine={targetLine}
-                editing={editing}
+                mode={mode}
                 onToggleEdit={toggleEdit}
                 onNavigate={openNote}
               />
