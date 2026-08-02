@@ -2,7 +2,7 @@ import { mutation, query, internalMutation, type MutationCtx } from "./functions
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { maybeScheduleTitleGeneration } from "./titleGeneration";
 import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } from "./privacy";
@@ -709,8 +709,26 @@ export function imageEchoMatchesPending(
 // transcript row and leaving the delivered command's overlay unreconcilable.
 // "failed" rows are a second tier: a late echo proves a watchdog-failed row
 // actually landed. delivered/cancelled/undeliverable never re-match.
+// How far apart a status-ack "delivered" promotion and the transcript echo may
+// land while still pairing up. updateAgentStatus terminalizes injected rows the
+// moment the agent reports an active status — usually seconds before the echo
+// syncs — which made the echo unmatchable and silently dropped everything the
+// echo adopts from the pending row: sender attribution (from_user_id) on team
+// sends, client_id (web pending-copy reconcile), and images. Delivered rows are
+// a LAST-RESORT match tier: only rows not yet tied to an echo (echo_message_id
+// unset) and delivered within this window qualify, so an identical later send
+// can never be cross-stamped by an old delivered twin.
+export const DELIVERED_ECHO_ADOPTION_WINDOW_MS = 30 * 60 * 1000;
+
 export function findEchoedPendingMessage<
-  T extends { _id: unknown; content: string; created_at?: number; status: string },
+  T extends {
+    _id: unknown;
+    content: string;
+    created_at?: number;
+    status: string;
+    delivered_at?: number;
+    echo_message_id?: unknown;
+  },
 >(
   pendingMsgs: readonly T[],
   safeContent: string | undefined,
@@ -735,7 +753,19 @@ export function findEchoedPendingMessage<
   const firstMatch = (statuses: readonly string[]) => inDeliveryOrder.find(
     (pm) => statuses.includes(pm.status) && !consumed?.has(pm._id) && contentMatches(pm),
   );
-  return firstMatch(["pending", "injected"]) ?? firstMatch(["failed"]);
+  // Last resort: a row the status ack already terminalized before its echo
+  // synced. Adoption-only — markPendingDelivered on it is a no-op — and gated
+  // on never-adopted + recency so old delivered twins can't absorb a new echo.
+  const recentlyDeliveredMatch = () => inDeliveryOrder.find(
+    (pm) =>
+      pm.status === "delivered" &&
+      !pm.echo_message_id &&
+      typeof pm.delivered_at === "number" &&
+      Math.abs(msgTimestamp - pm.delivered_at) <= DELIVERED_ECHO_ADOPTION_WINDOW_MS &&
+      !consumed?.has(pm._id) &&
+      contentMatches(pm),
+  );
+  return firstMatch(["pending", "injected"]) ?? firstMatch(["failed"]) ?? recentlyDeliveredMatch();
 }
 
 export const addMessage = mutation({
@@ -854,12 +884,13 @@ export const addMessage = mutation({
     let contentToStore = safeContent;
     let clientIdToStore: string | undefined;
     let fromUserIdToStore: Id<"users"> | undefined;
+    let matchingPending: Doc<"pending_messages"> | undefined;
     if (args.role === "user") {
       const pendingMsgs = await ctx.db
         .query("pending_messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
         .collect();
-      const matchingPending = findEchoedPendingMessage(pendingMsgs, safeContent, msgTimestamp);
+      matchingPending = findEchoedPendingMessage(pendingMsgs, safeContent, msgTimestamp);
       if (matchingPending) {
         contentToStore = redactSecrets(matchingPending.content);
         clientIdToStore = matchingPending.client_id;
@@ -893,6 +924,11 @@ export const addMessage = mutation({
       client_id: clientIdToStore,
       timestamp: msgTimestamp,
     });
+    if (matchingPending) {
+      // Tie the row to its echo so a later identical send can never re-adopt it
+      // (the delivered-tier match in findEchoedPendingMessage keys off this).
+      await ctx.db.patch(matchingPending._id, { echo_message_id: messageId });
+    }
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
     const newMessageCount = conversation.message_count + 1;
     const now = Date.now();
@@ -1329,6 +1365,9 @@ export const addMessages = mutation({
                 if (Object.keys(patch).length === 0) changedCount++;
               }
               await markPendingDelivered(ctx, matchingPending);
+              if (!matchingPending.echo_message_id) {
+                await ctx.db.patch(matchingPending._id, { echo_message_id: dup._id });
+              }
             }
             ids.push(dup._id);
             continue;
@@ -1377,6 +1416,11 @@ export const addMessages = mutation({
         client_id: clientIdToStore,
         timestamp: msgTimestamp,
       });
+      if (matchingPending) {
+        // Tie the row to its echo so a later identical send can never re-adopt
+        // it (the delivered-tier match in findEchoedPendingMessage keys off this).
+        await ctx.db.patch(matchingPending._id, { echo_message_id: messageId });
+      }
       ids.push(messageId);
       insertedCount++;
       changedCount++;
