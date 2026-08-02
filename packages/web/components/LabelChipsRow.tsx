@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { Plus, X, Tag } from "lucide-react";
 import {
@@ -259,9 +260,30 @@ export function LabelChipsRow({
   });
 
   // ── Overflow popover ─────────────────────────────────────────────────────
+  // Rendered through a portal with fixed positioning: the chips row lives
+  // inside a layout panel whose sibling panels form their own stacking
+  // contexts, so an absolutely-positioned dropdown gets painted over by a
+  // neighboring panel no matter its z-index. Anchored to the row's right edge.
   const [popoverOpen, setPopoverOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
   const popRowEls = useRef<Map<string, HTMLElement>>(new Map());
+  const POPOVER_WIDTH = 256; // w-64
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!popoverOpen) { setPopoverPos(null); return; }
+    const place = () => {
+      const rect = anchorRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPopoverPos({
+        top: rect.bottom + 6,
+        left: Math.max(8, rect.right - POPOVER_WIDTH),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [popoverOpen]);
   useEffect(() => {
     if (!popoverOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -387,7 +409,7 @@ export function LabelChipsRow({
   };
 
   return (
-    <div className="relative flex-1 min-w-0 flex items-center">
+    <div ref={anchorRef} className="relative flex-1 min-w-0 flex items-center">
       {/* Clip shell: everything in-flow (row, pinned active chip, +N pill) is
           hard-clipped at the component's edge so nothing can bleed under the
           panel's icon cluster at narrow widths. The popover lives outside the
@@ -543,10 +565,11 @@ export function LabelChipsRow({
       )}
       </div>
 
-      {popoverOpen && (
+      {popoverOpen && popoverPos && createPortal(
         <div
           ref={popoverRef}
-          className="absolute right-0 top-full mt-1.5 z-50 w-64 max-h-[60vh] overflow-y-auto rounded-lg border border-sol-border/70 bg-sol-bg shadow-2xl shadow-black/30 py-1"
+          style={{ top: popoverPos.top, left: popoverPos.left }}
+          className="fixed z-[9999] w-64 max-h-[60vh] overflow-y-auto rounded-lg border border-sol-border/70 bg-sol-bg shadow-2xl shadow-black/30 py-1"
         >
           <div className="px-3 pt-1.5 pb-1 text-[9px] font-semibold uppercase tracking-widest text-sol-text-dim/70 flex items-center gap-1.5">
             <Tag className="w-2.5 h-2.5" /> Labels
@@ -682,7 +705,8 @@ export function LabelChipsRow({
               })}
             </>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
