@@ -3,6 +3,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useMemo } from "react";
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
+import { ClaudeIcon } from "./BrandIcons";
 import { EmptyState } from "./EmptyState";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
@@ -85,14 +86,6 @@ function formatDuration(ms: number): string {
     return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
   const days = Math.floor(hours / 24);
   return `${days}d`;
-}
-
-function ClaudeIcon({ className = "w-4 h-4" }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
-    </svg>
-  );
 }
 
 function GitIcon({ className = "w-4 h-4" }: { className?: string }) {

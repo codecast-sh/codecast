@@ -61,6 +61,7 @@ import {
   Star,
   Link as LinkIcon,
   Shuffle,
+  CalendarDays,
   Waypoints,
   FilePlus2,
 } from "lucide-react";
@@ -138,7 +139,7 @@ const NAV_PAGES = [
   { label: "Tasks", path: "/tasks", icon: "check", keywords: "todo work items" },
   { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
   { label: "Vault", path: "/vault", icon: "folder", keywords: "notes markdown obsidian files vault" },
-  { label: "Artifacts", path: "/artifacts", icon: "file", keywords: "published html pages share cast publish gallery" },
+  { label: "Pages", path: "/pages", icon: "file", keywords: "published html artifacts share cast publish gallery" },
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
@@ -1928,6 +1929,23 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             >
               <FilePlus2 className="w-4 h-4 text-sol-cyan flex-shrink-0" />
               <span className="truncate">Vault: New note</span>
+            </CommandPrimitive.Item>
+            <CommandPrimitive.Item
+              key="vault-daily"
+              value="Vault daily note today journal"
+              onSelect={() => {
+                closePalette();
+                void useVaultStore.getState().openDailyNote().then((p) => {
+                  if (p) {
+                    useVaultStore.getState().noteOpened(p);
+                    navigate(`/vault?f=${encodeURIComponent(p)}`);
+                  }
+                });
+              }}
+              className={itemClass}
+            >
+              <CalendarDays className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+              <span className="truncate">Vault: Today&apos;s daily note</span>
             </CommandPrimitive.Item>
             <CommandPrimitive.Item
               key="vault-graph"

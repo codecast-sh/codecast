@@ -344,8 +344,38 @@ export const ownerPanel = internalQuery({
       .query("artifact_comments")
       .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
       .collect();
+    const history = await ctx.db
+      .query("artifact_versions")
+      .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
+      .collect();
     return {
       artifact_id: artifact._id,
+      slug: artifact.slug,
+      title: artifact.title,
+      kind: artifact.kind ?? "html",
+      url: artifactUrl(artifact.slug),
+      // Version history, newest first — same shape the in-page history panel
+      // uses, so `cast publish versions` and the bar agree.
+      versions: [
+        {
+          version: artifact.version,
+          title: artifact.title,
+          size: artifact.size,
+          published_at: artifact.updated_at,
+          edited_by: artifact.last_edited_by ?? null,
+          current: true,
+        },
+        ...history
+          .map((h) => ({
+            version: h.version,
+            title: h.title,
+            size: h.size,
+            published_at: h.published_at,
+            edited_by: h.edited_by ?? null,
+            current: false,
+          }))
+          .sort((a, b) => b.version - a.version),
+      ],
       access: accessSummary(artifact),
       edit_url: artifact.edit_mode === "link" && artifact.edit_key ? `${artifactUrl(artifact.slug)}#ed=${artifact.edit_key}` : null,
       stats: { views: stats?.view_count ?? 0, last_viewed_at: stats?.last_viewed_at ?? null },
