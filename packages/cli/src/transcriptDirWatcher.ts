@@ -54,6 +54,7 @@ export interface TranscriptDirWatcherEvents {
 export interface DirEventWatcher {
   on<K extends keyof TranscriptDirWatcherEvents>(event: K, listener: TranscriptDirWatcherEvents[K]): this;
   start(): void;
+  stop(): void;
 }
 
 export declare interface TranscriptDirWatcher {
@@ -230,8 +231,8 @@ export function transcriptDirWatcherConfig(
   // full filename and the parent-of-`chats` segment is the project hash.
   return {
     basePath,
-    watchFilter: (rel) => rel.endsWith(".json") && (rel.includes(`chats${path.sep}`) || rel.includes("chats/")),
-    scanMatch: (dir, name) => name.endsWith(".json") && dir.endsWith("/chats"),
+    watchFilter: (rel) => rel.endsWith(".json") && rel.split(/[\\/]/).includes("chats"),
+    scanMatch: (dir, name) => name.endsWith(".json") && path.basename(dir) === "chats",
     extractSessionId: (filePath) => path.basename(filePath, ".json"),
     extractProjectHash: (filePath) => {
       const parts = filePath.split(path.sep);
@@ -240,4 +241,43 @@ export function transcriptDirWatcherConfig(
     },
     debounceMs: 200,
   };
+}
+
+/** Clients that give every session its own transcript FILE, so a process holding
+ *  one open can be named from the path alone. opencode and cursor keep all their
+ *  sessions in a single SQLite store and are absent by construction — an open
+ *  handle on that store says "an agent", never "which session". */
+const FILE_PER_SESSION_CLIENTS = ["claude", "codex", "gemini", "pi"] as const;
+
+/**
+ * Which agent session (if any) a transcript path belongs to — the registry-driven
+ * inverse of the watchers' session-id extraction, used to identify a spawner
+ * process by the file it holds open. Adding client #7 with its own file-per-session
+ * layout teaches this for free: list it above, and its watcher config supplies the
+ * extraction.
+ *
+ * The id is only ever used as a conversation-cache lookup key, so an unrecognized
+ * filename costs a miss, not a bad write.
+ */
+export function agentSessionFromTranscriptPath(
+  filePath: string,
+): { agentType: AgentClientId; sessionId: string } | null {
+  for (const clientId of FILE_PER_SESSION_CLIENTS) {
+    const root = expandTranscriptRoot(AGENT_CLIENTS[clientId].transcriptRoots[0]);
+    if (!filePath.startsWith(root + path.sep)) continue;
+    const relativePath = path.relative(root, filePath);
+    if (clientId === "claude") {
+      // Claude has a bespoke watcher, so its rule lives here: the session id is the
+      // filename. A live claude process holds its SUBAGENTS' transcripts open next
+      // to its own, and those name the child rather than the session running the
+      // process — skipping them keeps the wrong id out of the lookup.
+      if (!filePath.endsWith(".jsonl") || relativePath.split(path.sep).length !== 2) return null;
+      return { agentType: "claude", sessionId: path.basename(filePath, ".jsonl") };
+    }
+    const config = transcriptDirWatcherConfig(clientId);
+    if (!config.watchFilter(relativePath)) continue;
+    const sessionId = config.extractSessionId(filePath);
+    if (sessionId) return { agentType: clientId, sessionId };
+  }
+  return null;
 }
