@@ -10,7 +10,7 @@ import { useRecoveryPoll } from "./useRecoveryPoll";
 import { useEnsureDispatch } from "./useEnsureDispatch";
 import { useLiveInboxSessions, applyLiveInboxIds } from "./useLiveInboxSessions";
 import { useWatchEffect } from "./useWatchEffect";
-import { runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { bootEagerArmed, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
 import { collectGhostSweepCandidates, collectHiddenResurrectionSuspects } from "./ghostSweep";
 
 // Background reconcile for the inbox session list. The live listInboxSessions
@@ -27,6 +27,12 @@ const SESSIONS_CRAWL_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const SESSIONS_RECONCILE_PAGE_SIZE = 75;
 const SESSIONS_RECONCILE_PAGE_DELAY_MS = 60;
 const SESSIONS_RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
+// How long the boot-eager hidden-set crawls wait for the durable outbox to replay
+// before running anyway. Long enough to cover a normal boot drain (an IDB load
+// plus a few dispatches), short enough that a client which never wires dispatch
+// still heals its killed sessions in seconds rather than at the 30-minute tick.
+const BOOT_OUTBOX_DRAIN_MAX_WAIT_MS = 10_000;
+const BOOT_OUTBOX_DRAIN_POLL_MS = 250;
 // Ghost-sweep policy (age floors + candidate selection) lives in ./ghostSweep
 // so the selection is unit-testable without this hook's React/Convex imports.
 
@@ -548,6 +554,28 @@ export function useSyncInboxSessions() {
     apply(rows, complete);
   }, [convex]);
 
+  // BOOT OUTBOX GATE — holds the hidden-set crawls until the durable outbox has
+  // replayed (or we've waited long enough). Without it, a hide the user made
+  // offline is still parked in the outbox while the crawl asks the server for the
+  // hidden set, and the CLEAR pass un-hides it — see bootEagerArmed. The wait is
+  // bounded, so a wedged or unwired outbox delays the healer, never disables it.
+  // Polled rather than subscribed: _hasBootOutboxDrained is a
+  // plain accessor injected by mutativeMiddleware, not reactive store state.
+  const [bootEagerReady, setBootEagerReady] = useState(false);
+  useEffect(() => {
+    if (!hydrated || bootEagerReady) return;
+    const startedAt = Date.now();
+    const check = () => {
+      const drained = !!(useInboxStore.getState() as any)._hasBootOutboxDrained?.();
+      if (!bootEagerArmed(drained, Date.now() - startedAt, BOOT_OUTBOX_DRAIN_MAX_WAIT_MS)) return;
+      setBootEagerReady(true);
+      clearInterval(id);
+    };
+    const id = setInterval(check, BOOT_OUTBOX_DRAIN_POLL_MS);
+    check();
+    return () => clearInterval(id);
+  }, [hydrated, bootEagerReady]);
+
   // DISMISS RECONCILE — durable cross-device dismiss/un-dismiss propagation.
   // The live listInboxSessions channel only reaches a CONNECTED client, and the
   // session crawl above can't carry a dismiss (dismiss doesn't move updated_at,
@@ -558,7 +586,9 @@ export function useSyncInboxSessions() {
   // each page, SET + CLEAR on completion. Full scan (no `since`) — a dismiss-only
   // write has no updated_at watermark to resume from, and the set is small.
   useEffect(() => {
-    if (!hydrated) return;
+    // The durable throttle is not a safe fallback while the outbox is replaying:
+    // a cold/expired watermark would still launch the CLEAR pass immediately.
+    if (!hydrated || !bootEagerReady) return;
     // STABLE window bound for the WHOLE crawl — computed once here, never inside
     // the server handler. The lite queries range-scan their index from this lower
     // bound; a per-page Date.now() would shift the range so each continuation
@@ -571,6 +601,12 @@ export function useSyncInboxSessions() {
       namespace: "dismissed",
       wsKey: sessWsKey,
       throttleMs: SESSIONS_RECONCILE_THROTTLE_MS,
+      // The first run after a page load ignores the durable watermark:
+      // this crawl is the only healer for cross-device dismisses, so honoring it
+      // left a reloading client staring at resurrected killed sessions for up to
+      // the full 30 minutes. The effect-level gate above prevents any pre-replay
+      // CLEAR pass; once here, the bypass is always armed.
+      bootEager: true,
       pageDelayMs: SESSIONS_RECONCILE_PAGE_DELAY_MS,
       maxPages: 50,
       fetchPage: async (cursor) => {
@@ -592,6 +628,7 @@ export function useSyncInboxSessions() {
       namespace: "stashed",
       wsKey: sessWsKey,
       throttleMs: SESSIONS_RECONCILE_THROTTLE_MS,
+      bootEager: true,
       pageDelayMs: SESSIONS_RECONCILE_PAGE_DELAY_MS,
       maxPages: 50,
       fetchPage: async (cursor) => {
@@ -605,7 +642,9 @@ export function useSyncInboxSessions() {
       onComplete: (all, complete) => applyHiddenReconcileVerified(all as any, complete, "inbox_stashed_at",
         (rows, final) => useInboxStore.getState().applyStashedReconcile(rows as any, final)),
     });
-  }, [convex, sessWsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
+    // bootEagerReady flipping re-fires this effect to run the first pass; the
+    // crawls' own in-session doneAt keeps later re-fires from double-crawling.
+  }, [convex, sessWsKey, reconcileNonce, hydrated, bootEagerReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { activeSessions: inboxSessions };
 }
