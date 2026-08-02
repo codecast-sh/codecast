@@ -39,6 +39,10 @@ export function usePushNotifications() {
       const data = response.notification.request.content.data;
       if (data.conversationId) {
         router.push(`/session/${data.conversationId}`);
+      } else if (data.type === 'aggregate') {
+        // A batched push ("12 notifications") has no single session to open —
+        // land on the list that itemizes them.
+        router.push('/(tabs)/notifications');
       }
     };
 
