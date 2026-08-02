@@ -55,6 +55,24 @@ export function isImportNotice(content: string | null | undefined): boolean {
   return !!content && content.trimStart().startsWith(IMPORT_NOTICE_PREFIX);
 }
 
+// Claude Code's `!` bash mode records the typed command as
+// "<bash-input>cmd</bash-input>" and the result as
+// "<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>" — two consecutive
+// user-role messages. Parse them here so every surface (thread, feed, titles)
+// agrees on what they are.
+export function parseBashInput(content: string): string | null {
+  const m = content.trim().match(/^<bash-input>([\s\S]*?)<\/bash-input>$/);
+  return m ? m[1].trim() : null;
+}
+
+export function parseBashOutput(content: string): { stdout: string; stderr: string } | null {
+  const t = content.trim();
+  if (!/^<bash-(?:stdout|stderr)>/.test(t)) return null;
+  const stdout = t.match(/<bash-stdout>([\s\S]*?)<\/bash-stdout>/)?.[1] ?? "";
+  const stderr = t.match(/<bash-stderr>([\s\S]*?)<\/bash-stderr>/)?.[1] ?? "";
+  return { stdout: stdout.trim(), stderr: stderr.trim() };
+}
+
 export function isCommandMessage(content: string): boolean {
   const trimmed = content.trim();
   return COMMAND_PATTERNS.some(pattern => pattern.test(trimmed));
@@ -129,6 +147,10 @@ export function getConversationPreview(
 }
 
 export function cleanTitle(title: string): string {
+  // `!` bash-mode input: show it as the user typed it.
+  const bashCmd = parseBashInput(title);
+  if (bashCmd) return `! ${bashCmd}`;
+
   // Extract command name first (before cleanContent strips it)
   const cmdNameMatch = title.match(/<command-name>([^<]*)<\/command-name>/);
   if (cmdNameMatch) return `/${cmdNameMatch[1].replace(/^\//, "")}`;
@@ -217,6 +239,8 @@ export function isNoiseUserMessage(content: string | null | undefined): boolean 
   if (isSkillExpansion(raw)) return true;
   if (isCompactionPrompt(raw)) return true;
   if (raw.startsWith("<turn_aborted>")) return true;
+  // Bash-mode command echo: machine-recorded output, not something a person typed.
+  if (parseBashOutput(raw)) return true;
   if (isBackgroundAgentStoppedNotice(raw)) return true;
   if (INTERRUPT_PREFIXES.some((p) => raw.startsWith(p))) return true;
   if (TOOL_OUTPUT_POINTER_PREFIXES.some((p) => raw.startsWith(p))) return true;
@@ -236,6 +260,8 @@ export type FeedDisplay = { kind: "hidden" } | { kind: "text"; text: string };
 export function classifyFeedMessage(content: string | null | undefined): FeedDisplay {
   if (isNoiseUserMessage(content)) return { kind: "hidden" };
   const raw = (content || "").trim();
+  const bashCmd = parseBashInput(raw);
+  if (bashCmd) return { kind: "text", text: `! ${bashCmd}` };
   if (isCommandMessage(raw)) return { kind: "text", text: cleanTitle(raw) };
   // Spawned schedule-run prompt: preview the task text, not the wire header.
   const spawned = parseSpawnedTaskPrompt(raw);

@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { classifyFeedMessage, isNoiseUserMessage, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "./conversationProcessor";
+import { classifyFeedMessage, isNoiseUserMessage, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, cleanTitle } from "./conversationProcessor";
 
 // Regression: the message feed was dumping raw <task-notification> XML and other
 // structured/machine messages as cards. classifyFeedMessage is the single shared
@@ -61,6 +61,40 @@ describe("classifyFeedMessage — real messages show cleaned", () => {
     const d = classifyFeedMessage("Why did the background agent stop unexpectedly?");
     expect(d.kind).toBe("text");
     expect(isBackgroundAgentStoppedNotice("Why did the background agent stop unexpectedly?")).toBe(false);
+  });
+});
+
+// `!` bash mode (Claude Code composer): input renders as "! cmd", the output
+// echo is machine noise for previews. The thread pairs them into one terminal
+// block; these helpers are the shared classification everything hangs off.
+describe("bash-mode messages", () => {
+  test("parseBashInput extracts the typed command", () => {
+    expect(parseBashInput("<bash-input>pwd</bash-input>")).toBe("pwd");
+    expect(parseBashInput("<bash-input>git log --oneline | head -3</bash-input>")).toBe("git log --oneline | head -3");
+    expect(parseBashInput("run <bash-input>pwd</bash-input> for me")).toBeNull();
+    expect(parseBashInput("plain message")).toBeNull();
+  });
+
+  test("parseBashOutput extracts stdout and stderr", () => {
+    expect(parseBashOutput("<bash-stdout>/Users/m1/work/codecast</bash-stdout><bash-stderr></bash-stderr>"))
+      .toEqual({ stdout: "/Users/m1/work/codecast", stderr: "" });
+    expect(parseBashOutput("<bash-stdout></bash-stdout><bash-stderr>not found</bash-stderr>"))
+      .toEqual({ stdout: "", stderr: "not found" });
+    expect(parseBashOutput("plain message")).toBeNull();
+  });
+
+  test("feed shows the input as '! cmd'", () => {
+    expect(classifyFeedMessage("<bash-input>pwd</bash-input>")).toEqual({ kind: "text", text: "! pwd" });
+  });
+
+  test("feed hides the output echo", () => {
+    const output = "<bash-stdout>/Users/m1/work/codecast</bash-stdout><bash-stderr></bash-stderr>";
+    expect(isNoiseUserMessage(output)).toBe(true);
+    expect(classifyFeedMessage(output)).toEqual({ kind: "hidden" });
+  });
+
+  test("cleanTitle renders the input as typed", () => {
+    expect(cleanTitle("<bash-input>pwd</bash-input>")).toBe("! pwd");
   });
 });
 
