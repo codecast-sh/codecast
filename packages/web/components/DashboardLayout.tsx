@@ -330,26 +330,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const showCommentsToggle = isViewingConversation && (commentsEnabled || convHasComments);
 
 
-  // A session peeked beside a page no longer opens its own column — it lives as
-  // a tab of the ONE right rail (UnifiedRightRail), so the rail must be out
-  // whenever either the session list or a peeked conversation wants the space.
-  const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isOnSettingsPage && !isMobile;
-  const showSessionList = (s.sidePanelOpen || showConversationColumn) && !isMobile;
+  // The rail is ONLY ever the session list — a conversation never renders
+  // inside it (clicking a session promotes it to the stage instead; see
+  // resolveSessionSelectKind). sidePanelSessionId survives purely as the
+  // rail's highlight pointer.
+  const showSessionList = s.sidePanelOpen && !isMobile;
   const showMobileSessionList = s.sidePanelOpen && isMobile;
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
-  // Keyed off the rail actually being away (not just sidePanelOpen): a rail
-  // held open by a peeked conversation must not get a second list slid over it.
-  const rightPeekEnabled = !showSessionList && !isMobile;
-
-  // Clear stale conversation-column session on full conversation pages so the
-  // column doesn't reappear when navigating away. Only clear the session ID;
-  // leave sidePanelOpen untouched so the session list sidebar stays visible.
-  useWatchEffect(() => {
-    if (isOnConversationPage && s.sidePanelSessionId) {
-      s.clearSidePanelSession();
-    }
-  }, [isOnConversationPage, s.sidePanelSessionId]);
+  const rightPeekEnabled = !s.sidePanelOpen && !isMobile;
 
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
@@ -723,10 +712,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     <PageShell pathname={pathname ?? ""}>{content}</PageShell>
   );
 
-  // ONE right rail, ever. The session list and a peeked conversation share it as
-  // tabs (UnifiedRightRail) instead of stacking as separate columns — the old
-  // page + conversation column + session list pileup is unrepresentable now.
-  // Group is always rendered; the rail Panel collapses to 0 when not in use.
+  // ONE right rail, and it is only ever the session list. A conversation
+  // never renders inside it — selecting a session promotes it to the stage
+  // (sessionListOnSelect → navigate), so columns cannot pile up. The Group is
+  // always rendered; the rail Panel collapses to 0 when not in use.
   const rightArea = (
     <div className="h-full flex">
       <div className="flex-1 min-w-0 h-full">
@@ -737,29 +726,25 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             id="session-list"
             panelRef={sessionListPanelRef}
             minSize={200}
-            maxSize="60%"
+            maxSize="50%"
             defaultSize={showSessionList ? 30 : 0}
             collapsible
             collapsedSize={0}
             onResize={(size) => {
-              // Drag-to-zero closes whatever actually holds the rail open. A
-              // blind toggleSidePanel here could RE-open a rail that was out
-              // only for a peeked conversation, fighting the expand effect.
               if (size.asPercentage === 0 && showSessionList) {
-                const store = useInboxStore.getState();
-                if (store.sidePanelOpen) store.setRailOpen(false);
-                if (store.sidePanelSessionId) store.clearSidePanelSession();
+                s.toggleSidePanel();
               }
             }}
           >
             {!isMobile && (
               <ErrorBoundary name="SessionList" level="panel">
-                <UnifiedRightRail
-                  onSessionSelect={sessionListOnSelect}
-                  activeSessionId={sessionListActiveId}
-                  onCollapse={() => s.toggleSidePanel()}
-                  conversationTabAvailable={showConversationColumn}
-                />
+                <div className="w-full h-full border-l border-sol-border/30">
+                  <SessionListPanel
+                    onSessionSelect={sessionListOnSelect}
+                    activeSessionId={sessionListActiveId}
+                    onCollapse={s.toggleSidePanel}
+                  />
+                </div>
               </ErrorBoundary>
             )}
           </Panel>
