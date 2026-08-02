@@ -68,8 +68,18 @@ const preferOpenable = (list: MachineCandidate[], p?: string | null): MachineCan
  * offering it alongside a forced target let a session be stamped to a machine
  * that couldn't cd into the folder the user chose from it.
  *
- * A null result means "roster hasn't loaded" — the caller must leave any existing
- * stamp alone rather than write the null through.
+ * `existingStamp` is the LAST rung, and it exists because the roster is not
+ * reliably present: `useDevices()` is `useQuery(...) ?? []`, so it reads empty on
+ * every mount and again on any Convex reconnect. Without this rung a transient
+ * empty roster resolves to null, and null scoping silently reverts the folder
+ * list to the cross-machine union while the session's stamp survives — i.e. the
+ * UI offers a machine-B path for a session already pinned to machine A. Falling
+ * back to the decision already recorded keeps BOTH halves consistent through the
+ * gap. It only ever applies when nothing can be computed: once the roster is
+ * back, the ladder decides again, so a stale stamp can't become sticky.
+ *
+ * A null result means "no roster AND no prior decision" — the caller must leave
+ * any existing stamp alone rather than write the null through.
  */
 export function resolveMachineSelection(
   devices: MachineCandidate[],
@@ -78,9 +88,10 @@ export function resolveMachineSelection(
     ownerDeviceId?: string | null;
     projectPath?: string | null;
     lastPicked?: string | null;
+    existingStamp?: string | null;
   } = {},
 ): { selectedDeviceId: string | null; stampDeviceId: string | null; scopeProjectsToDeviceId: string | null } {
-  const selectedDeviceId = opts.picked ?? defaultMachineId(devices, opts);
+  const selectedDeviceId = opts.picked ?? defaultMachineId(devices, opts) ?? opts.existingStamp ?? null;
   return {
     selectedDeviceId,
     stampDeviceId: selectedDeviceId,
