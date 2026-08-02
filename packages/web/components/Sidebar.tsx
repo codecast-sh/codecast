@@ -1,18 +1,14 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useRef, memo } from "react";
-import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { toast } from "sonner";
-import { useQuery, useMutation, useConvex } from "convex/react";
+import { useQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
-import { compressImage } from "../lib/compressImage";
+import { cleanTitle } from "../lib/conversationProcessor";
 import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
-import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useConvexSync } from "../hooks/useConvexSync";
@@ -35,176 +31,11 @@ interface SidebarProps {
   isNarrow?: boolean;
 }
 
-function getDateGroup(timestamp: number, now: number): string {
-  const diffMs = now - timestamp;
-  const diffHours = diffMs / 3600000;
-  const diffDays = diffMs / 86400000;
-
-  if (diffHours < 1) return "Last Hour";
-  if (diffHours < 6) return "Last 6 Hours";
-  if (diffDays < 1) return "Last Day";
-  if (diffDays < 2) return "Yesterday";
-  if (diffDays < 7) return "This Week";
-  if (diffDays < 30) return "This Month";
-  return "Older";
-}
-
-
 function getShortPath(projectPath: string): string {
   const parts = projectPath.split("/").filter(Boolean);
   if (parts.length === 0) return projectPath;
   return parts[parts.length - 1];
 }
-
-function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose?: () => void }) {
-  const [isDragOver, setIsDragOver] = useState(false);
-  const dragCounter = useRef(0);
-  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
-  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
-
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current++;
-    if (e.dataTransfer.types.includes("Files")) setIsDragOver(true);
-  }, []);
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current--;
-    if (dragCounter.current === 0) setIsDragOver(false);
-  }, []);
-
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current = 0;
-    setIsDragOver(false);
-    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/"));
-    if (files.length === 0) {
-      if (e.dataTransfer.files.length > 0) toast.error("Only image files are supported");
-      return;
-    }
-    try {
-      const storageIds: Id<"_storage">[] = [];
-      for (const file of files) {
-        const uploaded = await compressImage(file);
-        const uploadUrl = await generateUploadUrl({});
-        const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": uploaded.type }, body: uploaded });
-        const { storageId } = await result.json();
-        storageIds.push(storageId);
-      }
-      await sendMessage({ conversation_id: conv._id, content: "[image]", image_storage_ids: storageIds });
-      toast.success(`Attached ${files.length} image${files.length > 1 ? "s" : ""} to "${cleanTitle(conv.title || "Untitled")}"`);
-    } catch {
-      toast.error("Failed to attach files");
-    }
-  }, [conv._id, conv.title, generateUploadUrl, sendMessage]);
-
-  return (
-    <Link
-      href={`/conversation/${conv._id}`}
-      onClick={onMobileClose}
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      className={`flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group ${
-        conv.is_subagent || nestParentIdOf(conv) || conv.worktree_name
-          ? "text-sol-text-dim/50 hover:text-sol-text-dim/70 hover:bg-sol-bg-alt/30 opacity-60"
-          : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
-      } ${isDragOver ? "ring-1 ring-sol-cyan bg-sol-cyan/10" : ""}`}
-    >
-      {conv.is_active && (
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0 -ml-1" />
-      )}
-      <span className={`truncate flex-1 leading-tight ${conv.is_subagent || nestParentIdOf(conv) || conv.worktree_name ? "text-[13px]" : ""}`}>{cleanTitle(conv.title || "Untitled")}</span>
-      {conv.worktree_name && (
-        <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px] flex-shrink-0" title={conv.worktree_branch || conv.worktree_name}>
-          {conv.worktree_name}
-        </span>
-      )}
-      {conv.message_count > 0 && (
-        <span className={`text-[10px] flex-shrink-0 tabular-nums ${msgCountColor(conv.message_count)}`}>{conv.message_count}</span>
-      )}
-    </Link>
-  );
-}
-
-const INITIAL_SESSION_LIMIT = 30;
-const SESSION_PAGE_SIZE = 50;
-
-function RecentSessions({
-  groupedSessions,
-  totalCount,
-  onMobileClose,
-}: {
-  groupedSessions: Record<string, any[]>;
-  totalCount: number;
-  onMobileClose?: () => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(INITIAL_SESSION_LIMIT);
-  const showMore = useCallback(() => setVisibleCount(c => c + SESSION_PAGE_SIZE), []);
-  const groups = ["Last Hour", "Last 6 Hours", "Last Day", "Yesterday", "This Week", "This Month", "Older"];
-
-  let rendered = 0;
-  const hiddenCount = totalCount - Math.min(visibleCount, totalCount);
-
-  return (
-    <div className="mt-4">
-      <button
-        onClick={() => setExpanded(e => !e)}
-        className="w-full flex items-center justify-between text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 hover:text-sol-text-muted transition-colors select-none"
-      >
-        <span>Recent Sessions</span>
-        <svg
-          className={`w-3 h-3 transition-transform ${expanded ? "rotate-180" : ""}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {!expanded ? null : <div className="space-y-2">
-        {groups.map((group) => {
-          if (rendered >= visibleCount) return null;
-          const items = groupedSessions[group];
-          if (!items || items.length === 0) return null;
-          const remaining = visibleCount - rendered;
-          const visible = items.slice(0, remaining);
-          rendered += visible.length;
-          return (
-            <div key={group}>
-              <div className="text-[10px] font-medium text-sol-text-dim px-3 py-0.5">{group}</div>
-              <div className="space-y-0.5">
-                {visible.map((conv: any) => (
-                  <DroppableSessionRow key={conv._id} conv={conv} onMobileClose={onMobileClose} />
-                ))}
-              </div>
-            </div>
-          );
-        })}
-        {hiddenCount > 0 && (
-          <button
-            onClick={showMore}
-            className="w-full px-3 py-1.5 text-xs text-sol-text-dim hover:text-sol-text transition-colors text-left"
-          >
-            {hiddenCount} more...
-          </button>
-        )}
-      </div>}
-    </div>
-  );
-}
-
 
 function NavSection({
   label,
@@ -212,6 +43,8 @@ function NavSection({
   isActive,
   isNarrow,
   icon,
+  title,
+  simpleHide,
   onMobileClose,
   onAdd,
   addTitle,
@@ -226,6 +59,8 @@ function NavSection({
   isActive: boolean;
   isNarrow: boolean;
   icon: React.ReactNode;
+  title?: string;
+  simpleHide?: boolean;
   onMobileClose?: () => void;
   onAdd?: () => void;
   addTitle?: string;
@@ -238,17 +73,18 @@ function NavSection({
   // Only the wide rail nests saved views; the narrow rail stays icon-only.
   const hasViews = !isNarrow && !!views && views.length > 0;
   return (
-    <div>
-      <div className={`flex items-center transition-colors motion-reduce:transition-none ${
+    <div data-simple-hide={simpleHide ? "" : undefined}>
+      <div className={`flex items-center border-l-2 transition-colors motion-reduce:transition-none ${
         isActive
-          ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-          : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+          ? "bg-sol-bg-highlight text-sol-text border-sol-cyan"
+          : "text-sol-text-muted border-transparent hover:text-sol-text hover:bg-sol-bg-highlight/60"
       }`}>
         <Link
           href={href}
           onClick={onMobileClose}
+          data-nav-row
           className={`flex-1 flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 min-w-0`}
-          title={label}
+          title={title ?? label}
         >
           {icon}
           {!isNarrow && <span>{label}</span>}
@@ -334,13 +170,13 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
   const isVault = pathname === "/vault" || pathname?.startsWith("/vault/");
-  const isArtifacts = pathname === "/artifacts" || pathname?.startsWith("/artifacts/");
+  const isPages = pathname === "/pages" || pathname?.startsWith("/pages/") ||
+    pathname === "/artifacts" || pathname?.startsWith("/artifacts/"); // /artifacts = pre-rename alias
   const isWorkflows = pathname === "/workflows" || pathname?.startsWith("/workflows/");
   const isTriggers = pathname === "/triggers" || pathname?.startsWith("/triggers/") ||
     pathname === "/schedules" || pathname?.startsWith("/schedules/"); // /schedules = pre-rename alias
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => s.teamMembers);
-  const [currentTime, setCurrentTime] = useState(Date.now());
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const teamsQuery = useQuery(api.teams.getUserTeams);
   const teams = useInboxStore((s) => s.teams);
@@ -356,13 +192,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
   const openCompose = useInboxStore((s) => s.openCompose);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
-
-  useMountEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime(Date.now());
-    }, 60000);
-    return () => clearInterval(interval);
-  });
 
   const favoritesQuery = useQuery(api.conversations.listFavorites);
   // Read bookmarks straight from the store (synced globally in useSyncInboxSessions)
@@ -512,14 +341,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       .map(v => v.path);
   }, [filteredConversations]);
 
-
-  const groupedSessions = filteredConversations.reduce((acc: Record<string, ConversationItem[]>, conv: ConversationItem) => {
-    const group = getDateGroup(conv.updated_at, currentTime);
-    if (!acc[group]) acc[group] = [];
-    acc[group].push(conv);
-    return acc;
-  }, {} as Record<string, ConversationItem[]>);
-
   const sidebarContent = (
     <>
       <div className="flex-1 flex flex-col min-h-0">
@@ -528,7 +349,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             Conversations
           </div>
         )}
-        <div>
+        <div className="text-sm">
           <button
             onClick={() => {
               useInboxStore.getState().setShowFavorites(false);
@@ -538,10 +359,10 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               }
               router.push("/inbox");
             }}
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none text-left ${
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 border-l-2 transition-colors motion-reduce:transition-none text-left ${
               isInbox
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+                ? "bg-sol-bg-highlight text-sol-text border-sol-cyan"
+                : "text-sol-text-muted border-transparent hover:text-sol-text hover:bg-sol-bg-highlight/60"
             }`}
             title="Inbox"
           >
@@ -558,10 +379,10 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           {activeTeam && (
             <Link
               href="/team/activity"
-              className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none text-left ${
+              className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 border-l-2 transition-colors motion-reduce:transition-none text-left ${
                 isTeamActivity
-                  ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                  : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+                  ? "bg-sol-bg-highlight text-sol-text border-sol-cyan"
+                  : "text-sol-text-muted border-transparent hover:text-sol-text hover:bg-sol-bg-highlight/60"
               }`}
               title={activeTeam.name}
             >
@@ -620,101 +441,82 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               </svg>
             }
           />
-          <Link
+          <NavSection
+            label="Vault"
             href="/vault"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isVault
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:bg-sol-bg-highlight hover:text-sol-text border-l-2 border-transparent"
-            }`}
-            onClick={onMobileClose}
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-6 3h4" />
-            </svg>
-            {!isNarrow && <span className="text-sm">Vault</span>}
-          </Link>
-          <Link
-            href="/artifacts"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isArtifacts
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:bg-sol-bg-highlight hover:text-sol-text border-l-2 border-transparent"
-            }`}
-            onClick={onMobileClose}
-            data-simple-hide
-          >
-            <Globe className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
-            {!isNarrow && <span className="text-sm">Artifacts</span>}
-          </Link>
-          <Link
+            isActive={isVault}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            icon={
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-6 3h4" />
+              </svg>
+            }
+          />
+          <NavSection
+            label="Pages"
+            href="/pages"
+            isActive={isPages}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            simpleHide
+            icon={<Globe className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+          />
+          <NavSection
+            label="Workflows"
             href="/workflows"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isWorkflows
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="Workflows"
-          >
-            <Workflow className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
-            {!isNarrow && <span>Workflows</span>}
-          </Link>
-          <Link
+            isActive={isWorkflows}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            icon={<Workflow className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+          />
+          <NavSection
+            label="Triggers"
             href="/triggers"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isTriggers
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="Triggers"
-          >
-            <Zap className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
-            {!isNarrow && <span>Triggers</span>}
-          </Link>
-          <Link
+            isActive={isTriggers}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            icon={<Zap className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+          />
+          <NavSection
+            label="Anchor"
             href="/anchor"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isAnchor
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
+            isActive={isAnchor}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
             title="Anchor — your standing agent"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <circle cx="12" cy="5" r="2.5" strokeWidth={1.5} />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 7.5V21M5 12H3a9 9 0 0018 0h-2" />
-            </svg>
-            {!isNarrow && <span>Anchor</span>}
-          </Link>
-          <Link
+            icon={
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <circle cx="12" cy="5" r="2.5" strokeWidth={1.5} />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 7.5V21M5 12H3a9 9 0 0018 0h-2" />
+              </svg>
+            }
+          />
+          <NavSection
+            label="Sessions"
             href="/sessions"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isSessions
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="Sessions"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            {!isNarrow && <span>Sessions</span>}
-          </Link>
-          <Link
+            isActive={!!isSessions}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            icon={
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            }
+          />
+          <NavSection
+            label="Windows"
             href="/windows"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isWindows
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="Windows"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zm10-2a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1h-4a1 1 0 01-1-1v-5z" />
+            isActive={!!isWindows}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            icon={
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zm10-2a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1h-4a1 1 0 01-1-1v-5z" />
             </svg>
-            {!isNarrow && <span>Windows</span>}
-          </Link>
+            }
+          />
         </div>
 
         {!isNarrow && bookmarks && bookmarks.length > 0 && (
@@ -860,13 +662,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           </div>
         )}
 
-        {!isNarrow && filteredConversations.length > 0 && (
-          <RecentSessions
-            groupedSessions={groupedSessions}
-            totalCount={filteredConversations.length}
-            onMobileClose={onMobileClose}
-          />
-        )}
       </div>
     </>
   );
