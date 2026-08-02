@@ -22,7 +22,7 @@ import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { Plus, PanelLeft, PanelRight, MessageSquare } from "lucide-react";
+import { Plus, PanelLeft, PanelRight, MessageSquare, SquareTerminal } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
@@ -41,7 +41,7 @@ import { pathOnMyMachines } from "../lib/machinePicker";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
-import { SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
+import { SessionListPanel } from "./GlobalSessionPanel";
 import { EdgePeek } from "./EdgePeek";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { useSyncTeamInboxSessions } from "../hooks/useSyncTeamInboxSessions";
@@ -57,6 +57,7 @@ import { TabBar } from "./TabBar";
 import { pathLabel } from "../lib/pathLabel";
 import { TabContent } from "./TabContent";
 import { TerminalDock } from "./terminal/TerminalDock";
+import { toggleTerminalOpen } from "../lib/terminal/panelPrefs";
 import { VaultQuickSwitcherDock } from "./vault/VaultQuickSwitcherDock";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { useTipActions } from "../tips";
@@ -330,26 +331,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const showCommentsToggle = isViewingConversation && (commentsEnabled || convHasComments);
 
 
-  // A session peeked beside a page no longer opens its own column — it lives as
-  // a tab of the ONE right rail (UnifiedRightRail), so the rail must be out
-  // whenever either the session list or a peeked conversation wants the space.
-  const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isOnSettingsPage && !isMobile;
-  const showSessionList = (s.sidePanelOpen || showConversationColumn) && !isMobile;
+  // The rail is ONLY ever the session list — a conversation never renders
+  // inside it (clicking a session promotes it to the stage instead; see
+  // resolveSessionSelectKind). sidePanelSessionId survives purely as the
+  // rail's highlight pointer.
+  const showSessionList = s.sidePanelOpen && !isMobile;
   const showMobileSessionList = s.sidePanelOpen && isMobile;
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
-  // Keyed off the rail actually being away (not just sidePanelOpen): a rail
-  // held open by a peeked conversation must not get a second list slid over it.
-  const rightPeekEnabled = !showSessionList && !isMobile;
-
-  // Clear stale conversation-column session on full conversation pages so the
-  // column doesn't reappear when navigating away. Only clear the session ID;
-  // leave sidePanelOpen untouched so the session list sidebar stays visible.
-  useWatchEffect(() => {
-    if (isOnConversationPage && s.sidePanelSessionId) {
-      s.clearSidePanelSession();
-    }
-  }, [isOnConversationPage, s.sidePanelSessionId]);
+  const rightPeekEnabled = !s.sidePanelOpen && !isMobile;
 
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
@@ -723,10 +713,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     <PageShell pathname={pathname ?? ""}>{content}</PageShell>
   );
 
-  // ONE right rail, ever. The session list and a peeked conversation share it as
-  // tabs (UnifiedRightRail) instead of stacking as separate columns — the old
-  // page + conversation column + session list pileup is unrepresentable now.
-  // Group is always rendered; the rail Panel collapses to 0 when not in use.
+  // ONE right rail, and it is only ever the session list. A conversation
+  // never renders inside it — selecting a session promotes it to the stage
+  // (sessionListOnSelect → navigate), so columns cannot pile up. The Group is
+  // always rendered; the rail Panel collapses to 0 when not in use.
   const rightArea = (
     <div className="h-full flex">
       <div className="flex-1 min-w-0 h-full">
@@ -737,29 +727,25 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             id="session-list"
             panelRef={sessionListPanelRef}
             minSize={200}
-            maxSize="60%"
+            maxSize="50%"
             defaultSize={showSessionList ? 30 : 0}
             collapsible
             collapsedSize={0}
             onResize={(size) => {
-              // Drag-to-zero closes whatever actually holds the rail open. A
-              // blind toggleSidePanel here could RE-open a rail that was out
-              // only for a peeked conversation, fighting the expand effect.
               if (size.asPercentage === 0 && showSessionList) {
-                const store = useInboxStore.getState();
-                if (store.sidePanelOpen) store.setRailOpen(false);
-                if (store.sidePanelSessionId) store.clearSidePanelSession();
+                s.toggleSidePanel();
               }
             }}
           >
             {!isMobile && (
               <ErrorBoundary name="SessionList" level="panel">
-                <UnifiedRightRail
-                  onSessionSelect={sessionListOnSelect}
-                  activeSessionId={sessionListActiveId}
-                  onCollapse={() => s.toggleSidePanel()}
-                  conversationTabAvailable={showConversationColumn}
-                />
+                <div className="w-full h-full border-l border-sol-border/30">
+                  <SessionListPanel
+                    onSessionSelect={sessionListOnSelect}
+                    activeSessionId={sessionListActiveId}
+                    onCollapse={() => s.toggleSidePanel()}
+                  />
+                </div>
               </ErrorBoundary>
             )}
           </Panel>
@@ -887,6 +873,17 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                   className={`flex items-center p-1.5 rounded-md transition-colors ${commentRailOpen ? "text-sol-cyan" : "text-sol-text-dim/60 hover:text-sol-text-muted"}`}
                 >
                   <MessageSquare className="w-[18px] h-[18px]" />
+                </button>
+              </ShortcutTooltip>
+            )}
+            {!isMobile && (
+              <ShortcutTooltip label="Toggle terminal" action="terminal.toggle">
+                <button
+                  onClick={(e) => { toggleTerminalOpen(); tipActions.whisper('terminal.toggle', e); }}
+                  className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+                  aria-label="Toggle terminal panel"
+                >
+                  <SquareTerminal className="w-[18px] h-[18px]" />
                 </button>
               </ShortcutTooltip>
             )}
@@ -1061,87 +1058,3 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   );
 }
 
-// The single right rail: the session list and a peeked conversation share one
-// slot as tabs instead of opening as separate columns. Selecting a session from
-// the list promotes it to the conversation tab; closing it drops back to the
-// list — things swap, they never accumulate. Both stay MOUNTED across tab
-// switches (visibility, not display — display:none would clobber preserved
-// scroll offsets) so flipping tabs never re-subscribes or flashes a loader.
-const UnifiedRightRail = memo(function UnifiedRightRail({
-  onSessionSelect,
-  activeSessionId,
-  onCollapse,
-  conversationTabAvailable,
-}: {
-  onSessionSelect: (id: string) => void;
-  activeSessionId: string | null;
-  onCollapse: () => void;
-  conversationTabAvailable: boolean;
-}) {
-  const s = useTrackedStore([
-    (st) => st.sidePanelSessionId,
-    // Tab label only — the row's other fields (heartbeats etc.) must not re-render the rail.
-    (st) => st.sessions[st.sidePanelSessionId ?? ""]?.title,
-  ]);
-  const convAvailable = conversationTabAvailable && !!s.sidePanelSessionId;
-  const [tab, setTab] = useState<"sessions" | "conversation">(convAvailable ? "conversation" : "sessions");
-  // Selecting a session promotes it; clearing it retreats to the list.
-  useWatchEffect(() => {
-    setTab(convAvailable ? "conversation" : "sessions");
-  }, [convAvailable, s.sidePanelSessionId]);
-  const showConv = convAvailable && tab === "conversation";
-  const title = s.sidePanelSessionId ? (s.sessions[s.sidePanelSessionId]?.title || "Session") : "Session";
-  // Re-clicking the already-peeked session in the Sessions tab means "back to
-  // its conversation", not dismiss — selectPanelSession's repeat-click-clears
-  // behavior was designed for when the conversation is VISIBLE beside the list.
-  const handleSelect = useCallback((id: string) => {
-    const st = useInboxStore.getState();
-    if (id && id === st.sidePanelSessionId && conversationTabAvailable) {
-      setTab("conversation");
-      return;
-    }
-    onSessionSelect(id);
-  }, [onSessionSelect, conversationTabAvailable]);
-  const tabClass = (on: boolean) =>
-    `px-2.5 py-1 rounded-t-md border border-b-0 text-[11px] max-w-[55%] truncate transition-colors ${
-      on
-        ? "bg-sol-bg border-sol-border/30 text-sol-text font-medium"
-        : "bg-transparent border-transparent text-sol-text-dim hover:text-sol-text"
-    }`;
-  return (
-    <div className="w-full h-full border-l border-sol-border/30 flex flex-col">
-      {convAvailable && (
-        <div className="flex items-end gap-1 px-1.5 pt-1.5 border-b border-sol-border/20 bg-sol-bg-alt/40 flex-shrink-0">
-          <button className={tabClass(!showConv)} onClick={() => setTab("sessions")}>Sessions</button>
-          <span className={`${tabClass(showConv)} inline-flex items-center gap-1.5 cursor-pointer`} onClick={() => setTab("conversation")} title={title}>
-            <span className="truncate min-w-0">{title}</span>
-            {/* Standard close: X dismisses the conversation column entirely. */}
-            <button
-              onClick={(e) => { e.stopPropagation(); useInboxStore.getState().clearSidePanelSession(); }}
-              className="shrink-0 -mr-0.5 p-0.5 rounded text-sol-text-dim hover:text-sol-red transition-colors"
-              title="Close conversation"
-            >
-              <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </span>
-        </div>
-      )}
-      <div className="relative flex-1 min-h-0">
-        <div className="absolute inset-0" style={{ visibility: showConv ? "hidden" : "visible" }}>
-          <SessionListPanel
-            onSessionSelect={handleSelect}
-            activeSessionId={activeSessionId}
-            onCollapse={onCollapse}
-          />
-        </div>
-        {convAvailable && (
-          <div className="absolute inset-0 bg-sol-bg" style={{ visibility: showConv ? "visible" : "hidden" }}>
-            <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-});

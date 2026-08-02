@@ -63,7 +63,10 @@ export function getTerminalsVersion(): number {
 }
 
 export function listTabs(): TermTabState[] {
-  return order.map((id) => instances.get(id)!.state).filter(Boolean);
+  return order.flatMap((id) => {
+    const inst = instances.get(id);
+    return inst ? [inst.state] : [];
+  });
 }
 
 export function getActiveTabId(): string | null {

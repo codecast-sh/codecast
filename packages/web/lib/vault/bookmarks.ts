@@ -91,7 +91,7 @@ export function defaultBookmarkLabel(item: BookmarkItem): string {
 export function bookmarkSubtitle(item: BookmarkItem): string {
   switch (item.kind) {
     case "search":
-      return "Saved search";
+      return `Saved search: ${item.query}`;
     case "heading":
       return noteDisplayName(item.path.split("/").pop() ?? item.path);
     default:

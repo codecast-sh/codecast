@@ -85,10 +85,8 @@ export function UsageMeterRow({
 }
 
 /** The full meter block for one account (either provider): one row per limit
- * window, then the codex-only extras — model mix under an explicit divider so
- * a share of your own tokens can never be misread as a pegged limit — and the
- * credits notes. A staleness note marks a snapshot that is a memory rather
- * than a live reading. */
+ * window, followed by credits notes. A staleness note marks a snapshot that
+ * is a memory rather than a live reading. */
 export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: number }) {
   if (!usage) {
     return (
@@ -98,9 +96,8 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
     );
   }
   const stale = now - usage.fetched_at > STALE_AFTER_MS;
-  const models = (usage.models ?? []).filter((m) => m.share >= 1).slice(0, 3);
   return (
-    <div className="space-y-1">
+    <div className="space-y-0.5">
       {usage.session && (
         <UsageMeterRow label="Session" percent={usage.session.percent} resetsAt={usage.session.resets_at} now={now} />
       )}
@@ -126,16 +123,6 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
           title={`Extra usage credits: ${Math.round(usage.extra.percent)}% of the monthly budget spent`}
         />
       )}
-      {models.length > 0 && (
-        <>
-          <div className="pt-1 text-[9px] uppercase tracking-wider text-sol-text-dim/80">
-            model mix — share of the week&apos;s tokens, not a limit
-          </div>
-          {models.map((m, i) => (
-            <ModelShareRow key={m.model} label={m.label} share={m.share} emphasized={i === 0} />
-          ))}
-        </>
-      )}
       {usage.credits && (usage.credits.has_credits || usage.credits.unlimited) && (
         <div className="pt-0.5 text-[10px] text-sol-text-dim">
           Credits: {usage.credits.unlimited ? "unlimited" : usage.credits.balance ?? "available"}
@@ -154,45 +141,3 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
     </div>
   );
 }
-
-/** One model's share of the week's Codex tokens. Share ≠ limit utilization, so
- * this renders in a fixed accent instead of the danger ramp — a high share of
- * your own usage is a fact, not a warning. The top model (the user's frontier
- * daily driver, e.g. Sol) gets the emphasized treatment. */
-function ModelShareRow({
-  label,
-  share,
-  emphasized,
-}: {
-  label: string;
-  share: number;
-  emphasized: boolean;
-}) {
-  const tone = emphasized ? "var(--sol-violet)" : "var(--sol-text-dim)";
-  return (
-    <div
-      className="flex items-center gap-2"
-      title={`${label}: ${share}% of this week's Codex tokens`}
-    >
-      <span
-        className={`w-12 shrink-0 text-[10px] uppercase tracking-wider ${emphasized ? "font-bold" : ""}`}
-        style={{ color: emphasized ? "var(--sol-violet)" : "var(--sol-text-dim)" }}
-      >
-        {label}
-      </span>
-      <div className="h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-sol-bg-inset">
-        <div
-          className="h-full rounded-full transition-[width] duration-500"
-          style={{ width: `${Math.min(100, share)}%`, background: tone, minWidth: share > 0 ? 3 : 0 }}
-        />
-      </div>
-      <span
-        className="w-9 shrink-0 text-right font-mono text-[11px] tabular-nums"
-        style={{ color: emphasized ? "var(--sol-violet)" : "var(--sol-text-muted)" }}
-      >
-        {share}%
-      </span>
-    </div>
-  );
-}
-
