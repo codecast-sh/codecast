@@ -61,7 +61,8 @@ export type SectionIcon =
   | "Cpu"
   | "LayoutDashboard"
   | "Boxes"
-  | "Puzzle";
+  | "Puzzle"
+  | "Clock";
 
 export interface ChangeSection {
   /** Short topical heading, e.g. "Agent memory in the CLI". */
@@ -97,12 +98,97 @@ export interface Release {
 /** Newest first. The first entry is treated as the current release. */
 export const RELEASES: Release[] = [
   {
+    id: "2026-07",
+    month: "July 2026",
+    sortDate: "2026-07-01",
+    version: "v1.1.72 – v1.1.94",
+    desktop: "Desktop v1.1.88",
+    tag: "Latest",
+    headline: "Triggers, more agents, and published pages",
+    summary:
+      "This month codecast grew beyond a single agent. OpenCode and pi joined Claude Code, Codex, Cursor, and Gemini as first-class clients, with resume and forking to match. Triggers run follow-up work on a timer or a GitHub event and live in the inbox like sessions do. And `cast publish` turns any HTML file into a public page with a stable link.",
+    sections: [
+      {
+        title: "Triggers: work that runs later",
+        accent: "blue",
+        icon: "Clock",
+        items: [
+          "`cast trigger add` schedules follow-up work: once in 30 minutes, on a recurring interval, or when a GitHub event such as a PR comment lands.",
+          "Triggers live in the inbox next to your sessions. Each run links to the conversation it spawned, with a browseable run history on every surface.",
+          "Prompts are markdown, so a trigger can carry a full brief with goals and steps. `--safe` makes a run read-only.",
+          "Killing a session cancels its triggers; restoring the session re-arms them.",
+        ],
+      },
+      {
+        title: "OpenCode, pi, and Cursor",
+        accent: "violet",
+        icon: "Boxes",
+        items: [
+          "OpenCode and pi sessions record, resume, and fork like Claude Code and Codex ones, with thinking, images, and tool calls all rendered in place.",
+          "Cursor sessions resume through the agent's own resume path instead of restarting from scratch.",
+          "A client registry describes each agent once, so the next one is cheap to add. Failed turns surface as classified error banners instead of silent stalls.",
+          "Subagents nest under the session that spawned them, whichever client is running.",
+        ],
+      },
+      {
+        title: "cast publish: pages from your terminal",
+        accent: "cyan",
+        icon: "Globe",
+        items: [
+          "`cast publish report.html` gives any HTML file a public page at a stable URL. Republishing the same file updates the same link.",
+          "Pages serve as branded documents with link previews, cached at the edge so they load fast anywhere.",
+        ],
+      },
+      {
+        title: "Owners, machines, and provider keys",
+        accent: "green",
+        icon: "Users",
+        items: [
+          "Sessions now have owners separate from who started them. An agent-run session lands in a human's inbox, and a session can belong to several owners at once.",
+          "One header control assigns owners and the machine together, and `cast spawn --device` starts work on a specific machine.",
+          "A session moved between machines carries its uncommitted work along and posts a note about the checkout it woke up on.",
+          "Store a provider API key once and codecast injects it at launch on any of your devices, encrypted in transit and at rest.",
+        ],
+      },
+      {
+        title: "The inbox, team-wide",
+        accent: "yellow",
+        icon: "Inbox",
+        items: [
+          "Team mode shows every team-visible session on one board; keyboard navigation and the command palette follow the scope you are in.",
+          "Needs-input push notifications now come from the server, so your phone buzzes when a session waits on you and not before.",
+          "Session cards show which agent client is running, and questions with multiple answers render as real checkboxes.",
+        ],
+      },
+      {
+        title: "Mobile catches up",
+        accent: "magenta",
+        icon: "Smartphone",
+        items: [
+          "A model and effort switcher in the session header, and a new-session sheet that matches web compose, machine picker included.",
+          "Inbox parity with the web sidebar: stash and kill buckets, project chips, and collapsible sections.",
+          "Canvas and full-message HTML rendering, and JetBrains Mono app-wide to match the web.",
+        ],
+      },
+      {
+        title: "Hardened and faster",
+        accent: "orange",
+        icon: "Gauge",
+        items: [
+          "The daemon survives macOS sleep: the file watcher restarts if it goes deaf, and the watchdog no longer kills a healthy daemon on wake.",
+          "Device identity binds to the hardware, so a copied config directory can't impersonate its source machine.",
+          "Search falls back to title matches when content search times out, instead of returning nothing.",
+          "We closed unauthenticated cross-tenant access holes and cut hot-path query load across the backend.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-06",
     month: "June 2026",
     sortDate: "2026-06-01",
     version: "v1.1.51 – v1.1.67",
     desktop: "Desktop v1.1.80",
-    tag: "Latest",
     headline: "Messaging, comments, and cast blame",
     summary:
       "This month we built for teams working together. You can message any session like a colleague, leave comments on a teammate's work in a side rail, and trace any line of code back to the conversation that wrote it with `cast blame`. The inbox can favorite and file sessions, and the conversation viewer got density controls for skimming long histories.",

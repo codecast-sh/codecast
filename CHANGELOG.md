@@ -10,6 +10,22 @@ then extend that file.
 
 ---
 
+## July 2026: Triggers, more agents, and published pages
+**v1.1.72 – v1.1.94 · Desktop v1.1.88**
+
+This month codecast grew beyond a single agent. OpenCode and pi joined Claude
+Code, Codex, Cursor, and Gemini as first-class clients. Triggers run follow-up
+work on a timer or a GitHub event and live in the inbox like sessions do. And
+`cast publish` turns any HTML file into a public page with a stable link.
+
+- **Triggers.** `cast trigger add` schedules follow-up work: once, on an interval, or on a GitHub event. Triggers live in the inbox, each run linked to its conversation, with browseable run history. Markdown prompts; `--safe` makes a run read-only.
+- **OpenCode, pi, and Cursor.** OpenCode and pi record, resume, and fork as first-class clients; Cursor resumes through its own resume path. A client registry makes the next agent cheap to add.
+- **`cast publish`.** Any HTML file becomes a public page at a stable URL; republishing the same file updates the same link. Branded pages with link previews, cached at the edge.
+- **Owners, machines, and provider keys.** Sessions have owners separate from who started them; agent-run sessions land in a human's inbox. One control assigns owners and machine; moved sessions carry their uncommitted work. Store a provider API key once and codecast injects it at launch on any device.
+- **The inbox, team-wide.** Team mode shows every team-visible session on one board. Needs-input push notifications now come from the server, so your phone buzzes when a session actually waits on you.
+- **Mobile catches up.** Model and effort switcher, new-session sheet parity with web compose, inbox stash and kill buckets, canvas rendering, JetBrains Mono app-wide.
+- **Hardened and faster.** The daemon survives macOS sleep; device identity binds to hardware so a copied config can't impersonate its source; search falls back to titles on timeout; cross-tenant access holes closed.
+
 ## June 2026: Messaging, comments, and cast blame
 **v1.1.51 – v1.1.67 · Desktop v1.1.80**
 
