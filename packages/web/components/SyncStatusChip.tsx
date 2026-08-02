@@ -1,5 +1,5 @@
-import { Loader2 } from "lucide-react";
-import { useState } from "react";
+import { Check, Loader2 } from "lucide-react";
+import { useRef, useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore } from "../store/inboxStore";
@@ -9,42 +9,67 @@ import { useInboxStore } from "../store/inboxStore";
 // as a distinct amber state rather than an indefinite, identical-looking spin.
 const STALL_MS = 10_000;
 
+// Human names for the store scopes the panel lists. liveLoading uses the first
+// three; the reconcile crawl also reports the dismiss/stash sweeps.
+const SCOPE_LABELS: Record<string, string> = {
+  sessions: "Sessions",
+  tasks: "Tasks",
+  docs: "Docs",
+  dismissed: "Dismissed sessions",
+  stashed: "Stashed sessions",
+};
+const scopeLabel = (scope: string) => SCOPE_LABELS[scope] ?? scope;
+
 /**
- * Header indicator that spins while the app is pulling fresh data from the
+ * Header pill that lights while the app is pulling fresh data from the
  * server — the cold-open "data syncing in" phase you see right after the desktop
- * app has been closed for a while.
+ * app has been closed for a while. Hovering it expands a panel that breaks the
+ * sync down per scope, including the background backfill's row counts.
  *
- * Driven by `liveLoading` — the first-payload state of the LIVE subscriptions
- * (inbox sessions, docs, tasks). It deliberately does NOT read `syncProgress`
- * (the background reconcile crawl that the per-page SyncProgressBadge shows):
- * that crawl pages through every row at a throttled pace and can run for
- * minutes, which kept this spinner lit ~forever. Tracking the live first load
- * instead bounds the chip to a single round-trip — it lights up while any scope
- * hasn't delivered yet and clears once they have. Warm in-app navigation never
- * flips it on, because those subscriptions stay resolved after the first load.
+ * Visibility is driven by `liveLoading` — the first-payload state of the LIVE
+ * subscriptions (inbox sessions, docs, tasks). It deliberately does NOT key off
+ * `syncProgress` (the background reconcile crawl): that crawl pages through
+ * every row at a throttled pace and can run for minutes, which kept this
+ * indicator lit ~forever. Tracking the live first load instead bounds the pill
+ * to a single round-trip — it lights while any scope hasn't delivered yet and
+ * clears once they have. Warm in-app navigation never flips it on, because
+ * those subscriptions stay resolved after the first load. The crawl only feeds
+ * the hover DETAIL, never the pill's visibility.
  *
- * Rendered as a bare little spinner (no label) so a routine scope re-subscribe —
- * e.g. switching the project filter, which re-runs the project-scoped tasks/docs
- * queries — reads as a light refresh, not a heavy global "syncing" operation. The
- * spin color carries the one remaining signal: cyan for a normal sync, amber once
- * it drags past STALL_MS so a genuinely slow backend looks different from a quick
- * one (the tooltip spells out which).
+ * Color carries the health signal: cyan for a normal sync, amber once it drags
+ * past STALL_MS so a genuinely slow backend looks different from a quick one.
  */
-// The chip spins iff some live subscription's first payload is still pending.
-// Reads ONLY `liveLoading`, never `syncProgress` (the background reconcile crawl
-// that pages every row for minutes) — that conflation kept the spinner lit
-// ~forever on every cold load. Exported for the regression test.
+// The pill shows iff some live subscription's first payload is still pending.
+// Reads ONLY `liveLoading`, never `syncProgress` — that conflation kept the
+// old spinner lit ~forever on every cold load. Exported for the regression test.
 export function selectSyncing(s: { liveLoading: Record<string, boolean> }): boolean {
   return Object.values(s.liveLoading).some(Boolean);
 }
 
 export function SyncStatusChip() {
-  const syncing = useInboxStore(selectSyncing);
+  const liveLoading = useInboxStore((s) => s.liveLoading);
+  const syncProgress = useInboxStore((s) => s.syncProgress);
+  const syncing = selectSyncing({ liveLoading });
   const [stalled, setStalled] = useState(false);
   // Mirror DaemonStatusChip: render nothing until mounted so SSR markup and the
   // first client render agree (no hydration mismatch).
   const [mounted, setMounted] = useState(false);
   useMountEffect(() => setMounted(true));
+
+  // Hover panel with a short close grace timer, same as AccountUsageChip: a
+  // diagonal pointer path can briefly exit the pill on its way into the panel,
+  // and an instant close makes that read as a dropped hover.
+  const [open, setOpen] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openNow = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+    setOpen(true);
+  };
+  const closeSoon = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setOpen(false), 160);
+  };
 
   // Arm a timer when sync starts; trip the slow state if it's still going past
   // the threshold. Reset the moment sync settles (the timer is cleared too).
@@ -59,17 +84,86 @@ export function SyncStatusChip() {
 
   if (!mounted || !syncing) return null;
 
+  const scopes = Object.keys(liveLoading).sort(
+    (a, b) => (SCOPE_LABELS[a] ? 0 : 1) - (SCOPE_LABELS[b] ? 0 : 1) || a.localeCompare(b),
+  );
+  const settled = scopes.filter((k) => !liveLoading[k]).length;
+  const crawls = Object.entries(syncProgress).filter(([, p]) => p.loading);
+
   const color = stalled ? "var(--sol-yellow)" : "var(--sol-cyan)";
   return (
-    <div
-      className="hidden md:flex items-center select-none transition-opacity duration-300"
-      title={
-        stalled
-          ? "Sync is taking longer than usual — the server may be under load."
-          : "Syncing the latest data from the server…"
-      }
-    >
-      <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color }} />
+    <div className="relative hidden md:block" onMouseEnter={openNow} onMouseLeave={closeSoon}>
+      <div
+        className="flex items-center gap-1.5 px-2 py-0.5 rounded-full select-none cursor-default transition-all duration-300"
+        style={{
+          background: `color-mix(in srgb, ${color} 12%, transparent)`,
+          border: `1px solid color-mix(in srgb, ${color} 28%, transparent)`,
+          boxShadow: `0 0 10px color-mix(in srgb, ${color} 12%, transparent)`,
+        }}
+      >
+        <Loader2 className="w-3 h-3 animate-spin" style={{ color }} />
+        <span
+          className="text-[11px] font-mono font-bold tabular-nums whitespace-nowrap"
+          style={{ color }}
+        >
+          {stalled ? "sync slow" : "syncing"}
+          {scopes.length > 1 ? ` ${settled}/${scopes.length}` : ""}
+        </span>
+      </div>
+      {open && (
+        <div className="absolute right-0 top-full z-50 pt-1.5">
+          <div className="w-[260px] rounded-md border bg-popover text-popover-foreground shadow-md">
+            <div className="border-b border-sol-border/60 px-3 py-2 text-xs font-semibold text-sol-text">
+              {stalled ? "Sync is taking longer than usual" : "Syncing the latest data"}
+            </div>
+            <div className="px-3 py-2 space-y-1.5">
+              {scopes.map((scope) => (
+                <div key={scope} className="flex items-center gap-2 text-xs">
+                  <span className="text-sol-text">{scopeLabel(scope)}</span>
+                  {liveLoading[scope] ? (
+                    <span className="ml-auto flex items-center gap-1.5 text-sol-text-dim">
+                      <Loader2 className="w-3 h-3 animate-spin" style={{ color }} />
+                      loading…
+                    </span>
+                  ) : (
+                    <span className="ml-auto flex items-center gap-1.5 text-sol-text-dim">
+                      <Check className="w-3 h-3 text-sol-green" />
+                      up to date
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            {crawls.length > 0 && (
+              <div className="border-t border-sol-border/60 px-3 py-2">
+                <div className="pb-1 text-[9px] font-semibold uppercase tracking-wider text-sol-text-dim">
+                  Background backfill
+                </div>
+                <div className="space-y-1.5">
+                  {crawls.map(([scope, p]) => (
+                    <div key={scope} className="flex items-center gap-2 text-xs">
+                      <span className="text-sol-text">{scopeLabel(scope)}</span>
+                      <span className="ml-auto flex items-center gap-1.5 tabular-nums text-sol-text-dim">
+                        <Loader2 className="w-3 h-3 animate-spin opacity-60" />
+                        {p.loaded > 0 ? `${p.loaded.toLocaleString()} rows…` : "starting…"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="pt-1.5 text-[10px] leading-snug text-sol-text-dim">
+                  Streams older items in at a throttled pace — the app is fully usable meanwhile.
+                </div>
+              </div>
+            )}
+            {stalled && (
+              <div className="border-t border-sol-border/60 px-3 py-2 text-[10px] leading-snug text-sol-yellow">
+                Still waiting on the server — it may be under load. Recent data can be incomplete
+                until this settles.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
