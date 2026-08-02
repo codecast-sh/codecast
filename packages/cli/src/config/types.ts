@@ -53,6 +53,11 @@ export interface Config {
   device_label?: string;
 
   // --- Sync scope ---
+  // Cursor chat sync (`cast cursor on|off`). Unset = auto: on where the OS
+  // doesn't gate app data, and on macOS only once a prior run recorded the
+  // TCC grant — the daemon never triggers the "access data from other apps"
+  // prompt at login on its own (see cursorWatcherDecision).
+  cursor_sync?: "on" | "off";
   excluded_paths?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];

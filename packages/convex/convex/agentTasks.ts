@@ -159,6 +159,7 @@ interface NewTaskArgs {
   context_summary?: string;
   originating_conversation_id?: string;
   target_conversation_id?: string;
+  created_by_conversation_id?: string;
   project_path?: string;
   agent_type?: string;
   created_device_id?: string;
@@ -192,6 +193,9 @@ async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) 
       : undefined,
     target_conversation_id: args.target_conversation_id
       ? args.target_conversation_id as Id<"conversations">
+      : undefined,
+    created_by_conversation_id: args.created_by_conversation_id
+      ? args.created_by_conversation_id as Id<"conversations">
       : undefined,
     project_path: args.project_path,
     agent_type: args.agent_type || "claude",
@@ -250,6 +254,7 @@ export const createTask = mutation({
     context_summary: v.optional(v.string()),
     originating_conversation_id: v.optional(v.string()),
     target_conversation_id: v.optional(v.string()),
+    created_by_conversation_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
     created_device_id: v.optional(v.string()),
@@ -268,17 +273,45 @@ export const createTask = mutation({
     // schedule should inject into — `cast trigger add --for <session>`.
     // Resolved own-only: you can bind a schedule only to your own session.
     originating_session_ref: v.optional(v.string()),
+    // Session ref of the conversation that is CREATING this trigger —
+    // attribution only (created_by_conversation_id), never routing. Sent even
+    // for --spawn triggers, so a spawn trigger still traces to its parent.
+    // Best-effort: an unresolvable ref never fails creation.
+    created_by_session_ref: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
-    const { api_token: _token, originating_session_ref, ...taskArgs } = args;
+    const { api_token: _token, originating_session_ref, created_by_session_ref, ...taskArgs } = args;
     if (originating_session_ref) {
       const conv = await findConversationByAnyRef(ctx, originating_session_ref, auth.userId);
       if (!conv) throw new Error(`No session of yours matches "${originating_session_ref}"`);
       taskArgs.originating_conversation_id = conv._id.toString();
     }
+    if (created_by_session_ref) {
+      const conv = await findConversationByAnyRef(ctx, created_by_session_ref, auth.userId);
+      if (conv) taskArgs.created_by_conversation_id = conv._id.toString();
+    }
     return await insertTask(ctx, auth.userId, taskArgs);
+  },
+});
+
+// Admin repair: stamp created_by_conversation_id on a trigger that predates the
+// field (or whose creator link failed to resolve at creation). Attribution
+// only — routing (originating_conversation_id) is deliberately untouchable
+// here; recreating with --for stays the repair path for a broken binding.
+export const adminSetCreatedByConversation = internalMutation({
+  args: {
+    task_id: v.id("agent_tasks"),
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.task_id);
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!task || !conv) return false;
+    if (task.user_id !== conv.user_id) return false;
+    await ctx.db.patch(args.task_id, { created_by_conversation_id: args.conversation_id });
+    return true;
   },
 });
 
@@ -743,6 +776,7 @@ async function withResolvedRunConversations(
   for (const t of tasks) {
     if (t.last_run_conversation_id) convIds.add(t.last_run_conversation_id);
     if (t.originating_conversation_id) convIds.add(t.originating_conversation_id);
+    if (t.created_by_conversation_id) convIds.add(t.created_by_conversation_id);
   }
   const titles = new Map<string, string>();
   await Promise.all(
@@ -787,6 +821,9 @@ async function withResolvedRunConversations(
         : resolved?.title,
       originating_conversation_title: t.originating_conversation_id
         ? titles.get(t.originating_conversation_id)
+        : undefined,
+      created_by_conversation_title: t.created_by_conversation_id
+        ? titles.get(t.created_by_conversation_id)
         : undefined,
     };
   });

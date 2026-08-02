@@ -156,7 +156,9 @@ export function App() {
               <Route path="conversation/:id/diff" element={<E name="ConversationDiff"><ConversationDiff /></E>} />
               <Route path="docs" element={<E name="Docs"><Docs /></E>} />
               <Route path="vault" element={<E name="Vault"><Vault /></E>} />
-              <Route path="artifacts" element={<E name="Artifacts"><Artifacts /></E>} />
+              <Route path="pages" element={<E name="Pages"><Artifacts /></E>} />
+              {/* /artifacts = pre-rename alias for /pages */}
+              <Route path="artifacts" element={<E name="Pages"><Artifacts /></E>} />
               <Route path="docs/:id" element={<E name="DocDetail"><DocDetail /></E>} />
               <Route path="plans" element={<E name="Plans"><Plans /></E>} />
               <Route path="plans/:id" element={<E name="PlanDetail"><PlanDetail /></E>} />

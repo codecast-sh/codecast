@@ -76,7 +76,7 @@ ${MESSAGING_SNIPPET_END}
 
 export const PUBLISH_SNIPPET_END = "<!-- /codecast-publish -->";
 export const PUBLISH_SNIPPET = `
-## Publishing artifacts (cast publish)
+## Publishing pages (cast publish)
 
 When you produce a standalone deliverable — a report, dashboard, mockup, visualization — publish it and put the returned URL inline in your reply:
 
@@ -98,9 +98,12 @@ Viewers can comment on the page; comments arrive in this session as messages —
 ${PUBLISH_SNIPPET_END}
 `;
 
-/** Generic marked-snippet installer: header check + end-marker replace, else append. */
+/** Generic marked-snippet installer: header check + end-marker replace, else append.
+ * `headers[0]` is the current section heading; the rest are legacy headings a
+ * previous CLI version wrote — matched so an update replaces the old section
+ * instead of appending a duplicate below it. */
 function installMarkedSnippetToTargets(
-  header: string,
+  headers: string[],
   endMarker: string,
   snippet: string,
   update: boolean,
@@ -112,10 +115,11 @@ function installMarkedSnippetToTargets(
       fs.mkdirSync(target.dirPath, { recursive: true });
     }
     let existing = fs.existsSync(target.filePath) ? fs.readFileSync(target.filePath, "utf-8") : "";
-    const has = existing.includes(header) && existing.includes(endMarker);
+    const header = headers.find((h) => existing.includes(h));
+    const has = header !== undefined && existing.includes(endMarker);
     if (has && !update) continue;
     if (has) {
-      const start = existing.indexOf(header);
+      const start = existing.indexOf(header!);
       const markerIdx = existing.indexOf(endMarker, start);
       let end = markerIdx !== -1 ? markerIdx + endMarker.length : existing.length;
       if (existing[end] === "\n") end++;
@@ -132,7 +136,12 @@ function installMarkedSnippetToTargets(
 }
 
 export function installPublishSnippet(update = false): { installed: boolean; updated: boolean } {
-  return installMarkedSnippetToTargets("## Publishing artifacts", PUBLISH_SNIPPET_END, PUBLISH_SNIPPET, update);
+  return installMarkedSnippetToTargets(
+    ["## Publishing pages", "## Publishing artifacts", "## Publishing HTML artifacts"],
+    PUBLISH_SNIPPET_END,
+    PUBLISH_SNIPPET,
+    update,
+  );
 }
 
 function installMessagingSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {

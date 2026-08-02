@@ -107,6 +107,7 @@ export function TriggerContextPanel({
       (t) =>
         (agentTaskId && t._id === agentTaskId) ||
         t.originating_conversation_id === conversationId ||
+        t.created_by_conversation_id === conversationId ||
         t.target_conversation_id === conversationId ||
         t.last_run_conversation_id === conversationId ||
         (sessionId && t.last_run_session_uuid === sessionId)
@@ -402,6 +403,25 @@ export function TriggerContextPanel({
                 </span>
               </ShortcutTooltip>
             )}
+            {/* Provenance: the session that armed this trigger. Only shown when
+                it's a different conversation than the one being viewed — on the
+                creator itself the strip's presence already says it. */}
+            {primary.created_by_conversation_id &&
+              primary.created_by_conversation_id !== conversationId && (
+                <ShortcutTooltip label="Open the session that created this trigger">
+                  <button
+                    onClick={() =>
+                      useInboxStore
+                        .getState()
+                        .requestNavigate(primary.created_by_conversation_id!)
+                    }
+                    className="inline-flex items-center gap-0.5 text-sol-cyan hover:underline"
+                  >
+                    from {primary.created_by_conversation_title || "session"}
+                    <ArrowUpRight className="w-3 h-3" />
+                  </button>
+                </ShortcutTooltip>
+              )}
           </div>
 
           {(primary.last_run_at || primary.last_run_summary) && (

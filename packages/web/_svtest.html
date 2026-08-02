@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <script type="module">import '/app/globals.css'</script>
+  <style>
+    body { padding: 24px; font-family: monospace; }
+    .card { max-width: 560px; border: 1px solid color-mix(in srgb, var(--sol-text) 14%, transparent); border-radius: 9px; padding: 9px 12px; margin-bottom: 14px; font-size: 12.5px; }
+    .lbl { font-size: 10px; opacity: .6; margin-bottom: 2px; }
+    .v1 { background: color-mix(in srgb, var(--sol-blue) 8%, var(--sol-bg)); }
+    .v2 { background: color-mix(in srgb, var(--sol-blue) 12%, var(--sol-bg)); }
+    .v3 { background: color-mix(in srgb, var(--sol-cyan) 10%, var(--sol-bg)); }
+    .v4 { background: color-mix(in srgb, var(--sol-blue) 9%, var(--sol-bg-alt)); }
+  </style>
+</head>
+<body>
+  <div class="prose" style="font-size:12.5px; max-width:560px; margin-bottom:14px">Assistant prose sits directly on the page background, so the card must read as a distinct surface against this text.</div>
+  <div class="card v1"><div class="lbl">v1: blue 8% over bg</div><span style="color:var(--sol-orange)">ashot</span> — I don't like it, it's like a brown poopy color</div>
+  <div class="card v2"><div class="lbl">v2: blue 12% over bg</div><span style="color:var(--sol-orange)">ashot</span> — I don't like it, it's like a brown poopy color</div>
+  <div class="card v3"><div class="lbl">v3: cyan 10% over bg</div><span style="color:var(--sol-orange)">ashot</span> — I don't like it, it's like a brown poopy color</div>
+  <div class="card v4"><div class="lbl">v4: blue 9% over bg-alt</div><span style="color:var(--sol-orange)">ashot</span> — I don't like it, it's like a brown poopy color</div>
+</body>
+</html>

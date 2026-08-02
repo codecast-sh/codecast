@@ -3652,54 +3652,80 @@ export const getConversationBySessionId = query({
 // Accepts any string: Convex document _id, session_id, or UUID.
 // Returns the access level and resolved Convex _id so the frontend
 // doesn't need to guess which ID format was used.
+// The lookup behind /conversation/<id>: accepts a full Convex id, a Claude
+// session UUID, a tombstoned (restored) id, or a 7-char short id — the form
+// entity pills fall back to before webGet resolves, and the form `cast link`
+// mints. Exported for tests.
+export async function resolveConversationForViewer(
+  ctx: any,
+  id: string,
+  authUserId: Id<"users"> | null,
+): Promise<{ access_level: "not_found" | "denied" | "owner" | "team" | "shared"; conversation_id: string | null }> {
+  let conversation = null;
+
+  // Try as Convex document ID
+  const convId = ctx.db.normalizeId("conversations", id);
+  if (convId) {
+    conversation = await ctx.db.get(convId);
+  }
+
+  // Try as session_id
+  if (!conversation) {
+    conversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", id))
+      .first();
+  }
+
+  // Tombstone forwarding: a kill/restart that restored a deleted
+  // conversation stamped its replacement with the dead id — heal stale
+  // links/cards by resolving to the replacement (newest if ever several).
+  if (!conversation) {
+    const restored = await ctx.db
+      .query("conversations")
+      .withIndex("by_restored_from", (q: any) => q.eq("restored_from_conversation_id", id))
+      .collect();
+    conversation = restored.reduce(
+      (a: any, b: any) => ((b.updated_at ?? 0) > (a?.updated_at ?? 0) ? b : a),
+      null,
+    );
+  }
+
+  // Short id: ranked resolution (own > accessible > newest) because short ids
+  // collide across users. The predicate mirrors the final access check so a
+  // colliding inaccessible row can't shadow an accessible one; when nothing is
+  // accessible the resolver still returns a candidate, so the caller reports
+  // "denied" rather than "not_found".
+  if (!conversation && !convId) {
+    conversation = await resolveConversationRefRanked(
+      ctx,
+      id.toLowerCase(),
+      authUserId ?? "",
+      async (c) => (await checkConversationAccess(ctx, authUserId, c)) !== "denied",
+    );
+  }
+
+  if (!conversation) {
+    return { access_level: "not_found" as const, conversation_id: null };
+  }
+
+  const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
+
+  if (accessLevel === "denied") {
+    return { access_level: "denied" as const, conversation_id: null };
+  }
+
+  return {
+    access_level: accessLevel,
+    conversation_id: conversation._id.toString(),
+  };
+}
+
 export const resolveConversation = query({
   args: { id: v.string() },
   handler: async (ctx, args) => {
-    let conversation = null;
-
-    // Try as Convex document ID
-    const convId = ctx.db.normalizeId("conversations", args.id);
-    if (convId) {
-      conversation = await ctx.db.get(convId);
-    }
-
-    // Try as session_id
-    if (!conversation) {
-      conversation = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.id))
-        .first();
-    }
-
-    // Tombstone forwarding: a kill/restart that restored a deleted
-    // conversation stamped its replacement with the dead id — heal stale
-    // links/cards by resolving to the replacement (newest if ever several).
-    if (!conversation) {
-      const restored = await ctx.db
-        .query("conversations")
-        .withIndex("by_restored_from", (q) => q.eq("restored_from_conversation_id", args.id))
-        .collect();
-      conversation = restored.reduce(
-        (a: any, b: any) => ((b.updated_at ?? 0) > (a?.updated_at ?? 0) ? b : a),
-        null,
-      );
-    }
-
-    if (!conversation) {
-      return { access_level: "not_found" as const, conversation_id: null };
-    }
-
     const authUserId = await getAuthUserId(ctx);
-    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
-
-    if (accessLevel === "denied") {
-      return { access_level: "denied" as const, conversation_id: null };
-    }
-
-    return {
-      access_level: accessLevel,
-      conversation_id: conversation._id.toString(),
-    };
+    return resolveConversationForViewer(ctx, args.id, authUserId);
   },
 });
 
@@ -3969,6 +3995,7 @@ export const searchForCLI = query({
         role: string;
         content: string;
       }>;
+      title_match?: boolean;
     }> = [];
 
     let totalMatches = 0;
@@ -4107,10 +4134,58 @@ export const searchForCLI = query({
       return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
     });
 
+    // A dated window usually points at history the content mirror no longer
+    // holds (it only covers the last CONTENT_WINDOW_DAYS days), so a windowed
+    // search also sweeps the title/subtitle/summary indexes — those live on
+    // the conversations table and reach all time. Title hits rank below every
+    // content hit and only fill seats the content page left open.
+    let windowTitleRows: typeof results = [];
+    const hasTimeWindow = args.start_time !== undefined || args.end_time !== undefined;
+    if (hasTimeWindow) {
+      const titleHits = await fetchTitleFieldHits(ctx, terms);
+      const contentIds = new Set(eligible.map(({ conv }) => conv._id.toString()));
+      const titleConvs = [...titleHits.values()]
+        .filter((c) => !contentIds.has(c._id.toString()))
+        .filter(isEligibleConv)
+        .sort((a, b) => b.updated_at - a.updated_at);
+      // Content pages consume the offset first; title rows page through once
+      // the content matches are exhausted.
+      const titleOffset = Math.max(0, offset - eligible.length);
+      const fill = Math.max(0, limit - page.length);
+      const titlePage = titleConvs.slice(titleOffset, titleOffset + fill);
+      const firstMsgByConv = await resolveFirstMessageTitles(ctx, titlePage);
+      windowTitleRows = titlePage.map((conv) => {
+        const isOwnConv = conv.user_id.toString() === authUserId.toString();
+        const owner = teamUserMap.get(conv.user_id.toString()) || (isOwnConv ? user : null);
+        const title = conv.title
+          || firstMsgByConv.get(conv._id.toString())
+          || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
+          || "New Session";
+        return {
+          id: conv.short_id || conv._id.toString().slice(0, 7),
+          title,
+          project_path: conv.project_path || null,
+          updated_at: new Date(conv.updated_at).toISOString(),
+          message_count: conv.message_count || 0,
+          proximityScore: 0,
+          coverage: 0,
+          user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
+          matches: [],
+          context: [],
+          title_match: true,
+        };
+      });
+    }
+
+    const windowPredatesContent =
+      args.start_time !== undefined && args.start_time < Date.now() - MIRROR_WINDOW_MS;
     return {
       total_matches: totalMatches,
-      conversations: results.slice(0, limit),
+      conversations: [...results, ...windowTitleRows].slice(0, limit),
       search_scope: projectPath || "global",
+      // Tells the CLI to explain that content matches can't reach the
+      // requested window, so title hits are the reliable signal there.
+      ...(windowPredatesContent ? { content_window_days: CONTENT_WINDOW_DAYS } : {}),
     };
   },
 });
@@ -6042,11 +6117,22 @@ export const feedForCLI = query({
     const fetchLimit = query
       ? Math.min(offset + limit + 20, 100)
       : Math.min(offset + limit + 50, 200);
+    // When the caller sets a date window, bound the index range itself. The
+    // recency fetches below only see the newest rows per user, so an older
+    // window post-filtered against them always came back empty — the range
+    // has to ride by_user_updated for old windows to return their own top-N.
+    const hasTimeWindow = args.start_time !== undefined || args.end_time !== undefined;
+    const boundByWindow = <Q extends { gte: any; lte: any }>(q: Q): Q => {
+      let qq: any = q;
+      if (args.start_time !== undefined) qq = qq.gte("updated_at", args.start_time);
+      if (args.end_time !== undefined) qq = qq.lte("updated_at", args.end_time);
+      return qq;
+    };
     let ownConversations = labelConvIds
       ? labeledConvs.filter((c) => c.user_id.toString() === authUserId.toString())
       : await ctx.db
           .query("conversations")
-          .withIndex("by_user_updated", (q) => q.eq("user_id", authUserId))
+          .withIndex("by_user_updated", (q) => boundByWindow(q.eq("user_id", authUserId)))
           .order("desc")
           .take(fetchLimit);
 
@@ -6079,9 +6165,11 @@ export const feedForCLI = query({
           visibleTeamMembers.map(async (member) => {
             const convos = await ctx.db
               .query("conversations")
-              .withIndex("by_user_updated", (q) => q.eq("user_id", member._id))
+              .withIndex("by_user_updated", (q) => boundByWindow(q.eq("user_id", member._id)))
               .order("desc")
-              .take(10);
+              // Recency justifies 10 per member on the hot path; a dated window
+              // is a deliberate archaeology query, so give it real coverage.
+              .take(hasTimeWindow ? 50 : 10);
             return convos.filter(isVisibleTeamConv);
           })
         );
