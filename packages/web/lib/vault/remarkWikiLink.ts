@@ -19,7 +19,23 @@ import type { Options as ReactMarkdownOptions } from "react-markdown";
 // closing brackets. An odd leading "!" marks an embed. Escaped \[[ is skipped
 // by requiring the char before the match not be a backslash (handled in the
 // replacer via the third arg's index — findAndReplace gives (match, ...groups)).
-const WIKI_RE = /(!?)\[\[([^\[\]|#]+)?(#[^\[\]|]+)?(?:\|([^\[\]]+))?\]\]/g;
+//
+// The three patterns below are handed out as FACTORIES because the live-preview
+// editor scans with them too, and a `g`-flagged regex carries a mutable
+// lastIndex: two scanners sharing one object would skip each other's matches.
+// Live preview reusing these is the whole reason the grammar is defined once —
+// the reading view and the editor cannot disagree about what a wiki link is.
+
+/** `[[Target#Sub|alias]]` / `![[Embed]]`, global. */
+export const wikiLinkPattern = () => /(!?)\[\[([^\[\]|#]+)?(#[^\[\]|]+)?(?:\|([^\[\]]+))?\]\]/g;
+
+/** Inline `#tag` with its leading delimiter as group 1, the tag as group 2. */
+export const inlineTagPattern = () => /(^|[\s([{<"'])#([\p{L}\p{N}_\-/]+)/gu;
+
+/** A trailing ` ^block-id` anchor, which both views render as invisible. */
+export const blockIdPattern = () => /\s\^[A-Za-z0-9-]+(?=\n|$)/g;
+
+const WIKI_RE = wikiLinkPattern();
 
 export interface WikiLinkParts {
   target: string;      // "" = same-file (e.g. [[#Heading]])
@@ -102,11 +118,16 @@ export const TAG_SCHEME = "vaulttag://";
 
 // Mirrors the index engine's TAG_RE (parseNote.ts) including the
 // pure-numeric exclusion — the pill set and the tag pane must agree.
-const INLINE_TAG_RE = /(^|[\s([{<"'])#([\p{L}\p{N}_\-/]+)/gu;
+const INLINE_TAG_RE = inlineTagPattern();
 
 // Invisible block anchors: ` ^block-id` at end of line. Obsidian hides them in
 // reading view; the id still works as a link target (the index parsed it).
-const BLOCK_ID_RE = /\s\^[A-Za-z0-9-]+(?=\n|$)/g;
+const BLOCK_ID_RE = blockIdPattern();
+
+/** A tag body that carries no meaning as a tag — `#1` in "issue #1" is a
+ *  number, not a topic. Shared with live preview so both views drop the same
+ *  matches. */
+export const isNumericTag = (tag: string) => /^\d+$/.test(tag);
 
 export function remarkWikiLink() {
   return (tree: any) => {
@@ -128,7 +149,7 @@ export function remarkWikiLink() {
         [
           INLINE_TAG_RE,
           (match: string, lead: string, tag: string) => {
-            if (/^\d+$/.test(tag)) return false;
+            if (isNumericTag(tag)) return false;
             // The leading delimiter is part of the match; keep it as text.
             return [
               { type: "text", value: lead },
