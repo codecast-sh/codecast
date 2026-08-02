@@ -107,7 +107,8 @@ import {
   reapStaleTerminalSessions,
   type TerminalServerOptions,
 } from "./terminal/terminalServer.js";
-import { attachVaultServer, handleVaultHttp, type VaultServerOptions } from "./vault/vaultServer.js";
+import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
+import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
@@ -1270,6 +1271,7 @@ let hookServerPort = 0;
 const terminalToken = generateTerminalToken();
 let terminalServerHandle: { close(): void } | null = null;
 let vaultServerHandle: { close(): void } | null = null;
+let vaultMirror: VaultMirror | null = null;
 
 function terminalServerOptions(): TerminalServerOptions {
   return { token: terminalToken, log };
@@ -1279,6 +1281,28 @@ function terminalServerOptions(): TerminalServerOptions {
 // they only additionally need to know where the vault registry lives.
 function vaultServerOptions(): VaultServerOptions {
   return { ...terminalServerOptions(), configDir: CONFIG_DIR };
+}
+
+// Remote mirror pusher. Opt-in per vault and off by default, so on a machine
+// where nobody ran `cast vault mirror --on` this starts, finds nothing, and
+// costs nothing. It subscribes to the SAME watch hub the browser uses rather
+// than opening a second watcher on the same tree.
+function startVaultMirror(): void {
+  const siteUrl = getSiteUrl();
+  const token = getAuthToken();
+  if (!siteUrl || !token) return;
+
+  vaultMirror = new VaultMirror({
+    configDir: CONFIG_DIR,
+    deviceId: deviceId(),
+    transport: httpMirrorTransport(siteUrl, token),
+    // Subscribing also keeps the vault's watcher warm, which is exactly right:
+    // a mirrored vault is being watched on the user's behalf whether or not a
+    // browser tab happens to be open on it.
+    watch: (vault, onChange) => vaultWatchHub()?.subscribe(vault, onChange) ?? (() => {}),
+    log,
+  });
+  vaultMirror.start();
 }
 
 function startHookServer(
@@ -1330,6 +1354,7 @@ function startHookServer(
 
   terminalServerHandle = attachTerminalServer(server, terminalServerOptions());
   vaultServerHandle = attachVaultServer(server, vaultServerOptions());
+  startVaultMirror();
 
   // Reap idle panel terminals on boot and periodically (see terminalServer.ts).
   setTimeout(() => reapStaleTerminalSessions(log), 30_000).unref?.();
@@ -1355,6 +1380,10 @@ function startHookServer(
 }
 
 function stopHookServer(): void {
+  if (vaultMirror) {
+    vaultMirror.stop();
+    vaultMirror = null;
+  }
   if (terminalServerHandle) {
     terminalServerHandle.close();
     terminalServerHandle = null;
