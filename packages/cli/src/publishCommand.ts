@@ -211,7 +211,7 @@ function truncate(text: string, max: number): string {
 
 /** Plain-text table for `cast publish ls` (no ANSI — callers may colorize). */
 export function formatArtifactTable(rows: ArtifactLsRow[], now: number = Date.now()): string[] {
-  if (!rows.length) return ["No published artifacts. Publish one with: cast publish <file.html>"];
+  if (!rows.length) return ["No published pages. Publish one with: cast publish <file.html>"];
   const cells = rows.map((r) => [
     r.slug,
     truncate(r.title, 32),
