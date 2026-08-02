@@ -11406,9 +11406,12 @@ const WIP_SNAPSHOT_CONCURRENCY = 3;
 // then 9/10, 10/19, 10/29 as the hash cache fills — i.e. it converges to ~0
 // pushes and stays silent until real work happens.
 const WIP_SNAPSHOT_MAX_PUSHES_PER_PASS = 8;
-/** conversation_id -> last tree hash we pushed. Skips the network when nothing changed. */
+/** checkout path -> last tree hash we pushed. Skips the network when nothing
+ * changed. Keyed by CHECKOUT, not session: the tree belongs to the repo, and
+ * keying it per session meant one agent's edit invalidated every sibling's entry
+ * at once, so the throttle never engaged. */
 const lastPushedWipTree = new Map<string, string>();
-/** conversation_id -> why we stopped trying. A repo the user can read but not push
+/** checkout path -> why we stopped trying. A repo the user can read but not push
  * (a cloned public repo, revoked access) never becomes pushable by waiting, so one
  * permanent failure retires it rather than failing every pass forever. */
 const wipSnapshotGivenUp = new Map<string, string>();
@@ -11430,7 +11433,6 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
   for (const sessionId of sessionIds) {
     const conversationId = cache[sessionId];
     if (!conversationId) continue;
-    if (wipSnapshotGivenUp.has(conversationId)) continue; // retired: unpushable remote
     const file = findSessionFile(sessionId);
     if (!file) continue;
     let cwd: string | undefined;
@@ -11439,27 +11441,49 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
       cwd = file.agentType === "codex" ? extractCodexCwd(head) : extractCwd(head);
     } catch {}
     if (!cwd || !fs.existsSync(cwd)) continue;
+    if (wipSnapshotGivenUp.has(cwd)) continue; // retired: this checkout's remote refuses pushes
     eligible.push({ sessionId, conversationId, cwd });
   }
   if (!eligible.length) return;
 
-  // Rotate the ORDER (not the membership): everyone is snapshotted every pass, but
-  // when the push cap bites, priority rotates so no session is starved.
-  const targets = eligible
-    .slice(wipSweepCursor % eligible.length)
-    .concat(eligible.slice(0, wipSweepCursor % eligible.length));
-  wipSweepCursor = (wipSweepCursor + WIP_SNAPSHOT_MAX_PUSHES_PER_PASS) % eligible.length;
+  // Group by CHECKOUT, because that is what a snapshot actually describes. Many
+  // sessions share one repo — on this machine ~50 sessions live in ~6 checkouts —
+  // and per-session work was quadratic waste: N identical trees snapshotted, N
+  // near-identical commits pushed to N refs. Worse, it defeated the tree-hash
+  // throttle entirely: any agent touching a shared checkout invalidated every
+  // sibling's cache at once, so `unchanged` sat at 0 and every pass pushed a full
+  // batch forever (observed live: pushed=10 unchanged=0 for hours). That also made
+  // the freshness promise hollow — with a per-pass cap and a 50-deep backlog a
+  // given repo's snapshot went HOURS stale, which is the whole point of the
+  // feature. One snapshot per checkout, one push carrying every sibling's refspec.
+  // (If gitPlane's repoRootFor lands, key this by repo toplevel instead so
+  // subdirectory sessions collapse too.)
+  const byCwd = new Map<string, typeof eligible>();
+  for (const e of eligible) {
+    const g = byCwd.get(e.cwd);
+    if (g) g.push(e); else byCwd.set(e.cwd, [e]);
+  }
+  const repos = [...byCwd.entries()].map(([cwd, sessions]) => ({ cwd, sessions }));
+
+  // Rotate the ORDER (not the membership): every repo is snapshotted every pass,
+  // but when the push cap bites, priority rotates so no repo is starved.
+  const targets = repos
+    .slice(wipSweepCursor % repos.length)
+    .concat(repos.slice(0, wipSweepCursor % repos.length));
+  wipSweepCursor = (wipSweepCursor + WIP_SNAPSHOT_MAX_PUSHES_PER_PASS) % repos.length;
 
   let pushed = 0;
   let skipped = 0;
   let deferred = 0;
   await runBounded(targets, WIP_SNAPSHOT_CONCURRENCY, async (t) => {
+    const label = path.basename(t.cwd);
     try {
       const remote = await defaultRemote(t.cwd);
       if (!remote) return; // no remote = nowhere to publish; the notice covers it
-      const snap = await createWipSnapshot(t.cwd, { conversationId: t.conversationId });
+      const snap = await createWipSnapshot(t.cwd);
       if (!snap) return;
-      if (lastPushedWipTree.get(t.conversationId) === snap.tree) {
+      // Keyed by checkout: the tree belongs to the repo, not the session.
+      if (lastPushedWipTree.get(t.cwd) === snap.tree) {
         skipped++;
         return; // tree unchanged since the last push — no network
       }
@@ -11471,29 +11495,29 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
       }
       const res = await pushWipSnapshot(t.cwd, {
         remote,
-        conversationId: t.conversationId,
+        conversationIds: t.sessions.map((s) => s.conversationId),
         sha: snap.sha,
       });
       if (res.ok) {
-        lastPushedWipTree.set(t.conversationId, snap.tree);
+        lastPushedWipTree.set(t.cwd, snap.tree);
         pushed++;
       } else if (res.permanent) {
         // Not pushable, and waiting won't change that — retire it (logged once)
         // rather than failing on every pass forever. The reorientation notice
         // still tells a moved agent only pushed work is present.
-        wipSnapshotGivenUp.set(t.conversationId, res.error ?? "push refused");
-        log(`[WIP] giving up on ${t.sessionId.slice(0, 8)} (remote not pushable): ${res.error}`);
+        wipSnapshotGivenUp.set(t.cwd, res.error ?? "push refused");
+        log(`[WIP] giving up on ${label} (remote not pushable): ${res.error}`);
       } else {
-        log(`[WIP] push failed for ${t.sessionId.slice(0, 8)}: ${res.error}`);
+        log(`[WIP] push failed for ${label}: ${res.error}`);
       }
     } catch (e) {
-      log(`[WIP] snapshot error for ${t.sessionId.slice(0, 8)}: ${(e as Error)?.message ?? e}`);
+      log(`[WIP] snapshot error for ${label}: ${(e as Error)?.message ?? e}`);
     }
   });
   // Silent when nothing changed (the steady state), so the log stays meaningful.
   if (pushed || deferred) {
     log(
-      `[WIP] snapshots pushed=${pushed} unchanged=${skipped}${deferred ? ` deferred=${deferred}` : ""} of ${targets.length}`,
+      `[WIP] snapshots pushed=${pushed} unchanged=${skipped}${deferred ? ` deferred=${deferred}` : ""} of ${targets.length} repos (${eligible.length} sessions)`,
     );
   }
 }
