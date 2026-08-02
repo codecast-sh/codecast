@@ -152,8 +152,8 @@ import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2 } from "lucide-react";
-import { useDevices, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
-import { pathOnMyMachines, resolveMachineSelection } from "../lib/machinePicker";
+import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
+import { defaultMachineId, pathOnMyMachines, resolveMachineSelection } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
@@ -2729,12 +2729,14 @@ function useConversationTaskStats(conversationId: string | undefined) {
 // Driven entirely by useSessionRestart's phase/stage; mounted only while a
 // restart is in some visible state, so the 1s elapsed tick costs nothing
 // otherwise.
-function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry }: {
+function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry, restoredLabel }: {
   phase: RestartPhase;
   stage: RestartStage | null;
   failure: string | null;
   startedAt: number | null;
   onRetry: () => void;
+  /** "Back live" confirmation text — device moves say where the session landed. */
+  restoredLabel?: string;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -2745,7 +2747,7 @@ function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry }: {
   if (phase === "idle") return null;
   const tone = phase === "restored" ? "ok" : phase === "failed" ? "error" : (stage?.tone ?? "active");
   const label =
-    phase === "restored" ? "Session is back live"
+    phase === "restored" ? (restoredLabel ?? "Session is back live")
     : phase === "failed" ? (failure ?? "Restart failed")
     : (stage?.label ?? "Restarting session — contacting daemon…");
   const toneClass = {

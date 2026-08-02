@@ -1,5 +1,5 @@
 "use client";
-// /artifacts — published-artifact gallery for the signed-in user.
+// /pages (alias /artifacts) — published-page gallery for the signed-in user.
 
 import { AuthGuard } from "../../components/AuthGuard";
 import { ArtifactGallery } from "../../components/artifacts/ArtifactGallery";

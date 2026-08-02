@@ -2282,6 +2282,12 @@ interface InboxStoreState {
   // entry older than the ~2m give-up budget as expired, because a restart
   // started then navigated away from has no live owner to clear it.
   restartingSessions: Record<string, number>;
+  // Device moves in flight ("Run here" / "Move to remote Mac"), keyed by
+  // conversation id. Written by useMoveSessionToDevice (DeviceBadge) so the
+  // conversation header can narrate the move like a restart. Ephemeral — never
+  // persisted; readers expire entries by age since a move navigated away from
+  // has no live owner to clear it.
+  movingSessions: Record<string, { started_at: number; to_device_id: string; to_remote: boolean; to_label: string; error?: string }>;
   pendingScrollToMessageId: string | null;
   // The bookmarked message's known timestamp, carried alongside the scroll
   // target so the conversation view can open the window AROUND it on first
@@ -4173,6 +4179,7 @@ export const useInboxStore = create<InboxStoreState>(
   pendingNavigateId: null,
   renamingSessionId: null,
   restartingSessions: {},
+  movingSessions: {},
   pendingScrollToMessageId: null,
   pendingScrollToMessageTimestamp: null,
   pendingHighlightQuery: null,

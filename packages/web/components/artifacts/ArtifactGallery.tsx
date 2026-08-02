@@ -1,5 +1,5 @@
 "use client";
-// /artifacts — gallery of the signed-in user's published artifacts
+// /pages — gallery of the signed-in user's published pages
 // (cast publish). Data: api.artifacts.listForWeb (authed convex query).
 
 import { useState } from "react";
@@ -24,7 +24,7 @@ function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center gap-3 text-center py-24 px-8">
       <Globe className="w-10 h-10 text-sol-text-dim opacity-40" />
-      <div className="text-sol-text font-medium">No published artifacts yet</div>
+      <div className="text-sol-text font-medium">No published pages yet</div>
       <div className="text-sm text-sol-text-muted max-w-md">
         Publish any HTML file, markdown doc, or directory from a session and it
         gets a stable shareable link. Re-publishing the same file updates the
@@ -74,7 +74,7 @@ export function ArtifactGallery() {
   return (
     <div className="py-6">
       <div className="flex items-baseline gap-3 mb-5">
-        <h1 className="text-lg font-semibold text-sol-text">Artifacts</h1>
+        <h1 className="text-lg font-semibold text-sol-text">Pages</h1>
         {data && artifacts.length > 0 && (
           <span className="text-xs text-sol-text-dim font-mono">{artifacts.length}</span>
         )}

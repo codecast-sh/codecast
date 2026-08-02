@@ -141,15 +141,15 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
   },
   {
     slug: "publish",
-    aliases: ["artifacts", "artifact", "htmlpub"],
+    aliases: ["pages", "artifacts", "artifact", "htmlpub"],
     name: "Publish",
-    desc: "Shareable HTML artifacts (cast publish)",
+    desc: "Shareable published pages (cast publish)",
     detail:
       "Adds `cast publish <file.html>` so agents can publish HTML deliverables — reports, " +
       "dashboards, mockups — to a stable codecast.sh/a/<id> URL you can open and share. " +
       "Re-publishing the same file keeps the same link; links are unlisted but viewable " +
       "by anyone who has them.",
-    writesTo: "CLAUDE.md — a ## Publishing HTML artifacts section with the command",
+    writesTo: "CLAUDE.md — a ## Publishing pages section with the command",
     enabledKey: "publish_enabled",
     versionKey: "publish_version",
   },

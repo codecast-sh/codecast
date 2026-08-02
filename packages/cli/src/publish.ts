@@ -22,7 +22,9 @@ import {
   bundleSizeError,
   describeAccess,
   filterBundlePaths,
+  formatAgeShort,
   formatArtifactTable,
+  formatBytes,
   isHtmlPath,
   isMarkdownPath,
   parseExpires,
@@ -311,7 +313,7 @@ async function runOpen(deps: PublishDeps, target: string, json: boolean): Promis
     (r: any) => r.slug === target || r.source_path === abs || r.source_path === target || r.source_path?.endsWith(suffix),
   );
   if (!row) {
-    console.error(fmt.error(`No artifact matches "${target}" — see cast publish ls`));
+    console.error(fmt.error(`No published page matches "${target}" — see cast publish ls`));
     process.exit(1);
   }
   if (json) {
@@ -320,6 +322,200 @@ async function runOpen(deps: PublishDeps, target: string, json: boolean): Promis
   }
   console.log(row.url);
   await open(row.url).catch(() => {});
+}
+
+// ── owner management (no republish needed) ───────────────────────────────────
+//
+// The manage endpoint authenticates with the artifact's owner_key rather than
+// an api_token, because it is also called from the published page itself. The
+// CLI holds an api_token, so it resolves the row through the authed list
+// endpoint first and reads the owner_key out of the manage_url fragment — the
+// same secret, obtained the authorized way. Nothing here needs an extra
+// backend surface.
+
+/** Find one of the caller's artifacts by slug, absolute path, or path suffix. */
+async function resolveRow(deps: PublishDeps, target: string): Promise<ArtifactLsRow> {
+  const result = await apiPost(deps, "/cli/artifacts/list", {}, { read: true });
+  const rows: ArtifactLsRow[] = result.artifacts ?? [];
+  const abs = fs.existsSync(target) ? path.resolve(target) : null;
+  const suffix = target.startsWith("/") ? target : `/${target}`;
+  const matches = rows.filter(
+    (r: any) => r.slug === target || r.source_path === abs || r.source_path === target || r.source_path?.endsWith(suffix),
+  );
+  if (matches.length > 1) {
+    console.error(fmt.error(`"${target}" matches ${matches.length} published pages — use a slug:`));
+    for (const m of matches) console.error(`  ${m.slug}  ${m.title}`);
+    process.exit(1);
+  }
+  if (!matches.length) {
+    console.error(fmt.error(`No published page matches "${target}" — see cast publish ls`));
+    process.exit(1);
+  }
+  return matches[0];
+}
+
+function ownerKeyOf(row: ArtifactLsRow): string {
+  const key = (row as any).manage_url?.split("#o=")[1];
+  if (!key) {
+    console.error(fmt.error(`No owner key for ${row.slug} — it may predate managed pages. Republish to mint one.`));
+    process.exit(1);
+  }
+  return key;
+}
+
+async function callManage(deps: PublishDeps, row: ArtifactLsRow, payload: Record<string, unknown>): Promise<any> {
+  return await apiPost(deps, "/cli/artifacts/manage", { slug: row.slug, owner_key: ownerKeyOf(row), ...payload });
+}
+
+/** formatAgeShort takes a duration, not a timestamp — this is the "how long
+ * ago was this" wrapper the management views want. */
+function ago(timestamp: number | null | undefined): string {
+  if (!timestamp) return "—";
+  return formatAgeShort(Math.max(0, Date.now() - timestamp));
+}
+
+function describeGates(access: any): string {
+  const bits: string[] = [];
+  bits.push(access.has_password ? "password on" : "no password");
+  if (access.email_gate) bits.push("email gate on");
+  if (access.expires_at) {
+    const when = access.expires_at < Date.now() ? "EXPIRED" : `expires ${new Date(access.expires_at).toLocaleString()}`;
+    bits.push(when);
+  }
+  bits.push(`edit: ${access.edit_mode ?? "owner"}`);
+  return bits.join(" · ");
+}
+
+/** Change access/title on an EXISTING artifact without republishing content —
+ * the agent-facing counterpart of the in-page manage sheet. */
+async function runSet(deps: PublishDeps, target: string, options: PublishOptions & { editMode?: string }, json: boolean): Promise<void> {
+  const row = await resolveRow(deps, target);
+  const set: Record<string, unknown> = {};
+  if (options.passwordValue !== undefined) set.password = options.passwordValue;
+  else if (options.password !== undefined) set.password = options.password === false ? null : options.password;
+  if (options.emailGate !== undefined) set.email_gate = options.emailGate;
+  if (options.editMode !== undefined) set.edit_mode = options.editMode;
+  if (options.title !== undefined) set.title = options.title;
+  if (options.expires !== undefined) {
+    const parsed = parseExpires(options.expires);
+    if ("error" in parsed) {
+      console.error(fmt.error(parsed.error));
+      process.exit(1);
+    }
+    set.expires_in_ms = parsed.ms;
+  }
+  if (!Object.keys(set).length) {
+    console.error(fmt.error("Nothing to set — pass e.g. --password X, --no-password, --email-gate, --expires 7d, --edit-mode team, --title T"));
+    process.exit(1);
+  }
+  const result = await callManage(deps, row, { set });
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`${fmt.success(icons.check)} Updated ${fmt.highlight(row.title)} ${fmt.muted(`(${row.slug})`)}`);
+  console.log(`  ${fmt.label("access:")} ${describeGates(result.access ?? {})}`);
+  if (result.edit_url) console.log(`  ${fmt.label("edit link (shareable):")} ${result.edit_url}`);
+}
+
+async function runVersions(deps: PublishDeps, target: string, json: boolean): Promise<void> {
+  const row = await resolveRow(deps, target);
+  const result = await callManage(deps, row, {});
+  if (json) {
+    console.log(JSON.stringify(result.versions ?? [], null, 2));
+    return;
+  }
+  const versions: any[] = result.versions ?? [];
+  if (!versions.length) {
+    console.log(fmt.muted("No version history yet."));
+    return;
+  }
+  console.log(`${fmt.highlight(row.title)} ${fmt.muted(`(${row.slug})`)}`);
+  for (const v of versions) {
+    const mark = v.current ? fmt.success(" ← current") : "";
+    const who = v.edited_by ? fmt.muted(` by ${v.edited_by}`) : "";
+    console.log(`  ${fmt.number(`v${v.version}`)}  ${ago(v.published_at).padStart(4)}  ${formatBytes(v.size).padStart(7)}${who}${mark}`);
+  }
+  console.log(fmt.muted(`  restore: cast publish rollback ${row.slug} <n>`));
+  console.log(fmt.muted(`  compare: ${row.url}?diff=<a>..<b>`));
+}
+
+async function runComments(
+  deps: PublishDeps,
+  target: string,
+  opts: { resolveId?: string; resolveAll?: boolean; json: boolean },
+): Promise<void> {
+  const row = await resolveRow(deps, target);
+  if (opts.resolveAll) {
+    let panel = await callManage(deps, row, {});
+    const open_ = (panel.comments ?? []).filter((c: any) => c.status === "open");
+    for (const c of open_) panel = await callManage(deps, row, { resolve_comment_id: c.id });
+    if (!opts.json) console.log(`${fmt.success(icons.check)} Resolved ${open_.length} comment${open_.length === 1 ? "" : "s"}`);
+    if (opts.json) console.log(JSON.stringify(panel.comments ?? [], null, 2));
+    return;
+  }
+  const result = opts.resolveId
+    ? await callManage(deps, row, { resolve_comment_id: opts.resolveId })
+    : await callManage(deps, row, {});
+  const comments: any[] = result.comments ?? [];
+  if (opts.json) {
+    console.log(JSON.stringify(comments, null, 2));
+    return;
+  }
+  if (opts.resolveId) console.log(`${fmt.success(icons.check)} Resolved ${opts.resolveId}`);
+  const open_ = comments.filter((c) => c.status === "open");
+  if (!open_.length) {
+    console.log(fmt.muted("No open comments."));
+    return;
+  }
+  console.log(`${fmt.highlight(row.title)} ${fmt.muted(`(${row.slug})`)} — ${open_.length} open`);
+  for (const c of open_) {
+    const who = c.author_email ? `${c.author_name} <${c.author_email}>` : c.author_name;
+    console.log(`  ${fmt.accent(c.id)}  ${fmt.muted(`${who} · v${c.version} · ${ago(c.created_at)}`)}`);
+    for (const line of String(c.text).split("\n")) console.log(`    ${line}`);
+    if (c.anchor) {
+      try {
+        const snippet = JSON.parse(c.anchor)?.snippet;
+        if (snippet) console.log(fmt.muted(`    ↳ on: "${String(snippet).slice(0, 100)}"`));
+      } catch {
+        /* opaque anchor */
+      }
+    }
+  }
+  console.log(fmt.muted(`  resolve: cast publish comments ${row.slug} --resolve <id>  |  --resolve-all`));
+}
+
+async function runViewers(deps: PublishDeps, target: string, json: boolean): Promise<void> {
+  const row = await resolveRow(deps, target);
+  const result = await callManage(deps, row, {});
+  const viewers: any[] = result.viewers ?? [];
+  if (json) {
+    console.log(JSON.stringify({ stats: result.stats, viewers }, null, 2));
+    return;
+  }
+  const stats = result.stats ?? {};
+  console.log(`${fmt.highlight(row.title)} ${fmt.muted(`(${row.slug})`)}`);
+  console.log(`  ${fmt.label("views:")} ${stats.views ?? 0}${stats.last_viewed_at ? fmt.muted(` · last ${ago(stats.last_viewed_at)}`) : ""}`);
+  if (!viewers.length) {
+    console.log(fmt.muted("  No identified viewers (email gate off, or nobody has entered an address)."));
+    return;
+  }
+  for (const v of viewers) {
+    console.log(`  ${v.email.padEnd(32)} ${fmt.muted(`${v.view_count}x · first ${ago(v.first_seen)} · last ${ago(v.last_seen)}`)}`);
+  }
+}
+
+async function runLinks(deps: PublishDeps, target: string, json: boolean): Promise<void> {
+  const row = await resolveRow(deps, target);
+  if (json) {
+    console.log(JSON.stringify(row, null, 2));
+    return;
+  }
+  console.log(`${fmt.label("share:")}  ${row.url}`);
+  console.log(`${fmt.label("manage:")} ${(row as any).manage_url} ${fmt.muted("(owner link — keep private)")}`);
+  if ((row as any).edit_url) console.log(`${fmt.label("edit:")}   ${(row as any).edit_url} ${fmt.muted("(anyone with this can publish versions)")}`);
+  console.log(`${fmt.label("source:")} ${row.url}?src=1`);
+  console.log(`${fmt.label("live:")}   ${row.url}?live=1 ${fmt.muted("(auto-reloads on new versions)")}`);
 }
 
 // ── publish + watch ──────────────────────────────────────────────────────────
@@ -467,14 +663,19 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
       "Publish an HTML/markdown file or a directory bundle to a shareable codecast.sh/a/<slug> URL\n\n" +
         "Re-publishing the same path updates the same URL (version history kept).\n\n" +
         "Subcommands:\n" +
-        "  cast publish ls                          List your published artifacts\n" +
+        "  cast publish ls                          List your published pages\n" +
         "  cast publish rm <slug|path>              Unpublish\n" +
         "  cast publish rollback <slug|path> <n>    Restore version n as a new version\n" +
-        "  cast publish open <slug|path>            Print + open the share URL",
+        "  cast publish open <slug|path>            Print + open the share URL\n" +
+        "  cast publish versions <slug|path>        Version history (+ rollback/diff hints)\n" +
+        "  cast publish comments <slug|path>        Read viewer comments; --resolve <id> | --resolve-all\n" +
+        "  cast publish viewers <slug|path>         View count + who opened it (email gate)\n" +
+        "  cast publish links <slug|path>           share / manage / edit / source / live URLs\n" +
+        "  cast publish set <slug|path> [flags]     Change gates or title WITHOUT republishing",
     )
-    .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open")
+    .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set")
     .argument("[args...]", "subcommand arguments")
-    .option("--title <title>", "Override the artifact title (default: <title> tag / first heading / filename)")
+    .option("--title <title>", "Override the page title (default: <title> tag / first heading / filename)")
     .option("--new", "Publish under a fresh URL even if this path was published before")
     .option("--json", "Emit the raw JSON response")
     .option("--watch", "Keep watching the file/directory and republish on change")
@@ -487,6 +688,8 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     .option("--edit-mode <mode>", "Who can edit in the browser: owner | link | team")
     .option("--no-thumb", "Skip the headless-Chrome thumbnail screenshot")
     .option("--open", "Open the published URL in the browser")
+    .option("--resolve <id>", "comments: mark one comment resolved")
+    .option("--resolve-all", "comments: mark every open comment resolved")
     .action(async (target: string | undefined, args: string[], options: PublishOptions) => {
       const json = !!options.json;
       if (!target) {
@@ -507,6 +710,24 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
           process.exit(1);
         }
         return runRollback(deps, args[0], args[1], json);
+      }
+      // Management subcommands. Each is shadowed by a real file/dir of the
+      // same name, so `cast publish set` still publishes ./set if it exists.
+      const MANAGEMENT = ["versions", "comments", "viewers", "links", "set"];
+      if (MANAGEMENT.includes(target) && !fs.existsSync(target)) {
+        if (!args[0]) {
+          console.error(fmt.error(`Usage: cast publish ${target} <slug|path>`));
+          process.exit(1);
+        }
+        const sub = args[0];
+        if (target === "versions") return runVersions(deps, sub, json);
+        if (target === "viewers") return runViewers(deps, sub, json);
+        if (target === "links") return runLinks(deps, sub, json);
+        if (target === "comments") {
+          const o = options as PublishOptions & { resolve?: string; resolveAll?: boolean };
+          return runComments(deps, sub, { resolveId: o.resolve, resolveAll: !!o.resolveAll, json });
+        }
+        return runSet(deps, sub, options, json);
       }
       if (target === "open" && !fs.existsSync(target)) {
         if (!args[0]) {
