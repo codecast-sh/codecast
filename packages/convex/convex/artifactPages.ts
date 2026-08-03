@@ -85,7 +85,6 @@ function barHtml(o: BrandOpts): string {
     ? `<button id="__cc_cbtn" type="button" title="Comment on this page">${bubbleSvg}<span id="__cc_ccount">${o.commentCount || ""}</span></button>`
     : "";
   const menuBtn = interactive ? `<button id="__cc_menu" type="button" title="More">⋯</button>` : "";
-  const copyBtn = `<button id="__cc_copy" type="button" data-url="${escAttr(o.shareUrl)}">${linkSvg}<span id="__cc_copyt">Copy link</span></button>`;
   const cfg = {
     metaUrl: o.metaUrl ?? "",
     apiBase: o.apiBase ?? "",
@@ -265,7 +264,6 @@ function barHtml(o: BrandOpts): string {
      and the media query alone would never fire there. */
   @media (max-width: 640px) {
     #__cc_bar .__cc_when { display: none; }
-    #__cc_bar #__cc_copyt { display: none; }
     .__cc_panel { left: 0; right: 0; top: auto; bottom: 0; max-width: none; min-width: 0; max-height: 78vh;
       border-radius: 16px 16px 0 0; padding: 8px 10px calc(14px + env(safe-area-inset-bottom));
       box-shadow: 0 -8px 32px var(--cc-shadow); transform: translateY(24px); }
@@ -302,7 +300,6 @@ function barHtml(o: BrandOpts): string {
   <span class="__cc_when" id="__cc_when" data-ts="${o.updatedAt}">updated ${escAttr(when)}</span>
   ${verChip}
   ${commentsBtn}
-  ${copyBtn}
   ${menuBtn}
 </div>
 <div id="__cc_hist" class="__cc_panel" hidden></div>

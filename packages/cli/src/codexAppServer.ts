@@ -1,5 +1,5 @@
 import { EventEmitter } from "events";
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "./proc.js";
 import * as readline from "readline";
 import type { ParsedMessage, ToolCall, ToolResult, ImageBlock } from "./parser.js";
 

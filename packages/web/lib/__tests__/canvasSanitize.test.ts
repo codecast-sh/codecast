@@ -61,4 +61,50 @@ describe("sanitizeCanvasHtml", () => {
     expect(out).toContain('target="_blank"');
     expect(out).toContain('rel="noopener noreferrer"');
   });
+
+  // No network egress: a canvas synced to teammates must not phone home.
+
+  test("removes remote images, keeps data: images", async () => {
+    const out = await sanitize(
+      '<img src="https://evil.example/pixel.png"><img src="data:image/png;base64,iVBOR" alt="ok">',
+    );
+    expect(out).not.toContain("evil.example");
+    expect(out).toContain('src="data:image/png');
+  });
+
+  test("neutralizes remote url() in style attributes, keeps local and data:", async () => {
+    const out = await sanitize(
+      '<div style="background:url(https://evil.example/x.png);color:red">a</div>' +
+        "<div style=\"background:url(data:image/gif;base64,R0l);mask:url(#m)\">b</div>",
+    );
+    expect(out).not.toContain("evil.example");
+    expect(out).toContain("color:red");
+    expect(out).toContain("url(data:image/gif");
+    expect(out).toContain("url(#m)");
+  });
+
+  test("neutralizes remote url() and @import inside <style> blocks", async () => {
+    const out = await sanitize(
+      "<style>@import url(https://evil.example/a.css); .x{background:url('https://evil.example/b.png')} .y{clip-path:url(#c)}</style><div class=x>t</div>",
+    );
+    expect(out).not.toContain("evil.example");
+    expect(out).not.toContain("@import");
+    expect(out).toContain("url(#c)");
+  });
+
+  test("scrubs remote references from svg mask/filter attributes", async () => {
+    const out = await sanitize(
+      '<svg><rect mask="url(https://evil.example/m.svg#m)" filter="url(#f)" width="5" height="5"/></svg>',
+    );
+    expect(out).not.toContain("evil.example");
+    expect(out).toContain('filter="url(#f)"');
+  });
+
+  test("removes remote svg <image>, keeps data: <image>", async () => {
+    const out = await sanitize(
+      '<svg><image href="https://evil.example/x.png"/><image href="data:image/png;base64,iVBOR"/></svg>',
+    );
+    expect(out).not.toContain("evil.example");
+    expect(out).toContain('href="data:image/png');
+  });
 });

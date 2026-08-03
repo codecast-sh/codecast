@@ -12,7 +12,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { execFileSync, spawnSync } from "child_process";
+import { execFileSync, spawnSync } from "./proc.js";
 import { isDevMode } from "./update.js";
 
 const DESKTOP_FEED = "https://dl.codecast.sh/desktop/latest-mac.yml";

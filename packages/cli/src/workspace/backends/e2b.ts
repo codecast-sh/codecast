@@ -382,7 +382,7 @@ export const E2bBackend: SandboxBackend = {
 // Helpers
 // --------------------------------------------------------------------------
 
-import { execSync } from "node:child_process";
+import { execSync } from "../../proc.js";
 
 function getRepoRemoteUrl(repoRoot: string): string | null {
   try {

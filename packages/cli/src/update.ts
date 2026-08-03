@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { execSync } from "child_process";
+import { execSync } from "./proc.js";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
