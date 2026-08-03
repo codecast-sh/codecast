@@ -16,7 +16,7 @@ import {
   tmuxSessionIsSinglePane,
   transcriptTailLastRealTimestamp,
 } from "./daemon.js";
-import { isMissingFunctionError, shouldProbeLifecycleQuery } from "./syncService.js";
+import { SyncService, isMissingFunctionError, resetLifecycleQueryLatch, shouldProbeLifecycleQuery } from "./syncService.js";
 import type { ConversationLifecycle } from "./syncService.js";
 
 // Shorthands for the two provenances getConversationLifecycle can return. The
@@ -507,5 +507,89 @@ describe("reaper pass summary", () => {
 
   test("a clean pass says so", () => {
     expect(summarizeReapSkips([])).toBe("none");
+  });
+});
+
+// Route selection inside getConversationLifecycle. The ghost case is the whole
+// reason a fallback exists: the conversation id we were handed no longer
+// resolves, but the session is alive under a twin. Routing that to the devices
+// query would take the OLDEST twin AND lose every hide field; the lifecycle
+// query's session route takes the NEWEST and keeps them.
+describe("getConversationLifecycle routing", () => {
+  const LIFECYCLE = "conversations:getConversationLifecycle";
+  const DEVICES = "devices:resolveConversationBySession";
+  const liveRow = {
+    status: "active", inbox_killed_at: null, inbox_stashed_at: 1_700_000_000_000,
+    inbox_dismissed_at: null, inbox_pinned_at: null,
+  };
+
+  // Stubs the Convex client and records which (name, selector) pairs were called.
+  function serviceWith(handler: (name: string, args: any) => unknown) {
+    resetLifecycleQueryLatch();
+    const calls: Array<{ name: string; selector: string }> = [];
+    const svc = new SyncService(
+      { convexUrl: "http://localhost:0", userId: "u", authToken: "t" },
+      { nextTranscriptSourceRevision: () => 1 },
+    );
+    (svc as any).client = {
+      query: async (name: string, args: any) => {
+        calls.push({ name, selector: args.conversation_id ? "conversation_id" : "session_id" });
+        return handler(name, args);
+      },
+    };
+    return { svc, calls };
+  }
+
+  test("an existing row resolves by conversation id and stops there", async () => {
+    const { svc, calls } = serviceWith((name) => (name === LIFECYCLE ? liveRow : null));
+    const got = await svc.getConversationLifecycle("conv-live", "sess-1");
+    expect(got).toMatchObject({ hideStateKnown: true, source: "lifecycle", inboxStashedAt: 1_700_000_000_000 });
+    expect(calls).toEqual([{ name: LIFECYCLE, selector: "conversation_id" }]);
+  });
+
+  test("a GHOST id falls through to the session route and keeps full hide state", async () => {
+    // Route A misses (deleted/remapped row); route B finds the live twin.
+    const { svc, calls } = serviceWith((name, args) =>
+      name === LIFECYCLE && args.session_id ? liveRow : null);
+    const got = await svc.getConversationLifecycle("conv-ghost", "sess-1");
+    expect(got).toMatchObject({ hideStateKnown: true, source: "lifecycle", inboxStashedAt: 1_700_000_000_000 });
+    expect(calls).toEqual([
+      { name: LIFECYCLE, selector: "conversation_id" },
+      { name: LIFECYCLE, selector: "session_id" },
+    ]);
+    // The oldest-twin, status-only query must not be consulted at all.
+    expect(calls.some((c) => c.name === DEVICES)).toBe(false);
+  });
+
+  test("both routes answering 'no such conversation' returns null, not a devices miss", async () => {
+    const { svc, calls } = serviceWith(() => null);
+    expect(await svc.getConversationLifecycle("conv-gone", "sess-1")).toBeNull();
+    expect(calls.map((c) => c.name)).toEqual([LIFECYCLE, LIFECYCLE]); // no devices call
+  });
+
+  test("an UNDEPLOYED query (both routes missing) still uses the devices fallback", async () => {
+    const { svc, calls } = serviceWith((name) => {
+      if (name === LIFECYCLE) throw new Error("Could not find public function for 'conversations:getConversationLifecycle'");
+      return { status: "completed" };
+    });
+    const got = await svc.getConversationLifecycle("conv-1", "sess-1");
+    expect(got).toEqual({ status: "completed", hideStateKnown: false, source: "status-fallback" });
+    expect(calls[calls.length - 1].name).toBe(DEVICES);
+  });
+
+  test("a transient error does not latch, and still degrades to devices for this call", async () => {
+    const { svc } = serviceWith((name) => {
+      if (name === LIFECYCLE) throw new Error("connect ECONNREFUSED 127.0.0.1:443");
+      return { status: "active" };
+    });
+    expect(await svc.getConversationLifecycle("conv-1", "sess-1")).toMatchObject({ source: "status-fallback" });
+    // Latch untouched: the next call probes the real query again.
+    expect(shouldProbeLifecycleQuery(0, Date.now())).toBe(true);
+  });
+
+  test("no session id means no ghost route and no fallback", async () => {
+    const { svc, calls } = serviceWith(() => null);
+    expect(await svc.getConversationLifecycle("conv-gone")).toBeNull();
+    expect(calls).toEqual([{ name: LIFECYCLE, selector: "conversation_id" }]);
   });
 });
