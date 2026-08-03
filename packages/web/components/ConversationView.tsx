@@ -959,8 +959,8 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // collapses to the routed machine's variant, and "other" means a different
   // PROJECT — the current one's foreign checkout is the machine row's job.
   const routedDevice = useMemo(
-    () => devices.find((d) => d.device_id === (pickedDeviceId ?? defaultDeviceId)) ?? null,
-    [devices, pickedDeviceId, defaultDeviceId],
+    () => devices.find((d) => d.device_id === selectedDeviceId) ?? null,
+    [devices, selectedDeviceId],
   );
   const dedupedRecents = useMemo(
     () => dedupeProjectsByRepoName(recentProjects, routedDevice, currentPath),
@@ -1177,12 +1177,12 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // back server-side to an online machine that has the repo. Rests collapsed
   // as one pill (the machine the session will run on); a click unfolds the
   // full chip row.
-  const routedMachine = machineChips.find((d) => d.device_id === (pickedDeviceId ?? defaultDeviceId)) ?? machineChips[0];
+  const routedMachine = machineChips.find((d) => d.device_id === selectedDeviceId) ?? machineChips[0];
   const machineUi = machineChips.length > 1 && routedMachine ? (
     machinesOpen ? (
       <div className="flex flex-wrap justify-end gap-1.5 max-w-[26rem]">
         {machineChips.map((d) => {
-          const selected = d.device_id === (pickedDeviceId ?? defaultDeviceId);
+          const selected = d.device_id === selectedDeviceId;
           return (
             <button
               key={d.device_id}
