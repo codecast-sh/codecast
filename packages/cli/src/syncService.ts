@@ -246,9 +246,18 @@ export type ExecutionControlQueryName = "getExecutionAuthority" | "listExecution
 
 /**
  * A conversation's own lifecycle + inbox visibility, as far as the daemon can
- * see it. Every field is optional: an undefined field means "not known", never
- * "not set" — see SyncService.getConversationLifecycle for which source
- * populates what.
+ * see it. `source` is load-bearing, not decoration — the two sources are NOT
+ * interchangeable, and a caller that treats them as such gets a wrong answer:
+ *
+ *  - "lifecycle": the real query, resolved by CONVERSATION ID (an exact
+ *    ctx.db.get), carrying every field. `hideStateKnown` is true.
+ *  - "status-fallback": devices:resolveConversationBySession, which resolves by
+ *    SESSION ID with `.first()` — the OLDEST twin (this repo's ct-36973
+ *    foot-gun). It carries `status` only, so `hideStateKnown` is false, and with
+ *    twins the status may belong to the wrong row in either direction.
+ *
+ * An absent hide field means "not known", never "not set" — read `hideStateKnown`
+ * before believing any of them.
  */
 export interface ConversationLifecycle {
   status?: string | null;
@@ -256,12 +265,40 @@ export interface ConversationLifecycle {
   inboxStashedAt?: number | null;
   inboxDismissedAt?: number | null;
   inboxPinnedAt?: number | null;
+  /** True only when the hide fields were actually fetched (source === "lifecycle"). */
+  hideStateKnown: boolean;
+  source: "lifecycle" | "status-fallback";
 }
 
-// Flipped off for the process the first time conversations:getConversationLifecycle
-// comes back missing, so an undeployed query costs one round trip, not one per
-// resurrection/reap. A daemon restart re-probes.
-let lifecycleQueryAvailable = true;
+// An undeployed Convex function is a PERMANENT condition; a DNS blip, a 502 or a
+// sleep-killed socket is not. Latching the query off on the latter silently
+// degrades the resurrection gate and makes the reap hide-gate misclassify for the
+// rest of the daemon's life, so we match the missing-function shape narrowly and
+// treat everything else as transient.
+export function isMissingFunctionError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return /could not find (public )?function|function not found|no such function/i.test(msg);
+}
+
+// 0 = believed available. Set to the failure time when the function is missing;
+// a re-probe past LIFECYCLE_REPROBE_MS heals a latch that was wrong (or that a
+// deploy has since fixed) without waiting for a daemon restart.
+let lifecycleQueryMissingSince = 0;
+const LIFECYCLE_REPROBE_MS = 6 * 60 * 60 * 1000;
+
+export function shouldProbeLifecycleQuery(
+  missingSince: number,
+  now: number,
+  reprobeMs: number = LIFECYCLE_REPROBE_MS,
+): boolean {
+  if (missingSince === 0) return true;
+  return now - missingSince >= reprobeMs;
+}
+
+/** Test seam: forget the latch so each case starts from a known state. */
+export function resetLifecycleQueryLatch(): void {
+  lifecycleQueryMissingSince = 0;
+}
 
 export interface GitInfo {
   commitHash?: string;
@@ -1334,12 +1371,13 @@ export class SyncService {
     conversationId: string,
     sessionId?: string,
   ): Promise<ConversationLifecycle | null> {
-    if (lifecycleQueryAvailable) {
+    if (shouldProbeLifecycleQuery(lifecycleQueryMissingSince, Date.now())) {
       try {
         const res: any = await this.client.query("conversations:getConversationLifecycle" as any, {
           api_token: this.apiToken,
           conversation_id: conversationId,
         });
+        lifecycleQueryMissingSince = 0; // the probe answered — clear any stale latch
         if (res) {
           return {
             status: res.status ?? null,
@@ -1347,21 +1385,29 @@ export class SyncService {
             inboxStashedAt: res.inbox_stashed_at ?? null,
             inboxDismissedAt: res.inbox_dismissed_at ?? null,
             inboxPinnedAt: res.inbox_pinned_at ?? null,
+            hideStateKnown: true,
+            source: "lifecycle",
           };
         }
-      } catch {
-        // Undeployed query: stop paying the round trip (and the server-side
-        // error log) for the rest of this daemon's life.
-        lifecycleQueryAvailable = false;
+        // Reached the query and it found nothing (deleted row / not ours). That
+        // is an answer, not an outage — don't paper over it with the fallback.
+        return null;
+      } catch (err) {
+        // ONLY an undeployed function latches. Anything else (network, 5xx,
+        // timeout) is transient: leave the latch alone and let the caller's own
+        // fail-open/fail-closed policy handle this one call.
+        if (isMissingFunctionError(err)) lifecycleQueryMissingSince = Date.now();
       }
     }
+    // Degraded path: status only, resolved by session id (oldest twin). Marked
+    // as such so callers can decide whether that is good enough for them.
     if (!sessionId) return null;
     try {
       const res: any = await this.client.query("devices:resolveConversationBySession" as any, {
         api_token: this.apiToken,
         session_id: sessionId,
       });
-      return res ? { status: res.status ?? null } : null;
+      return res ? { status: res.status ?? null, hideStateKnown: false, source: "status-fallback" } : null;
     } catch {
       return null;
     }

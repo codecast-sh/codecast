@@ -1,15 +1,33 @@
 import { describe, expect, test } from "bun:test";
 import {
+  askUserQuestionStillPending,
+  clearSessionTrackingForKill,
+  conversationForbidsResurrection,
   danglingUserTurnIsReapable,
+  derivedPaneNamesForConversation,
   isConversationRetired,
   parseReapCandidateRow,
   reapSkipBucket,
+  registerManagedStartedSession,
   resumeOwnerVerdict,
+  sessionKillTrackingSnapshot,
   stampedPaneReapEligibility,
   summarizeReapSkips,
+  tmuxSessionIsSinglePane,
   transcriptTailLastRealTimestamp,
 } from "./daemon.js";
+import { isMissingFunctionError, shouldProbeLifecycleQuery } from "./syncService.js";
 import type { ConversationLifecycle } from "./syncService.js";
+
+// Shorthands for the two provenances getConversationLifecycle can return. The
+// distinction is load-bearing: "status-fallback" resolves by session id via
+// `.first()` (the OLDEST twin, ct-36973) and carries no hide state at all.
+const authoritative = (over: Partial<ConversationLifecycle> = {}): ConversationLifecycle =>
+  ({ status: "active", hideStateKnown: true, source: "lifecycle", ...over });
+const degraded = (over: Partial<ConversationLifecycle> = {}): ConversationLifecycle =>
+  ({ status: "active", hideStateKnown: false, source: "status-fallback", ...over });
+const TRUSTING = { trustStatusFallback: true };   // heartbeat reconstitution only
+const STRICT = { trustStatusFallback: false };    // every other resurrection path
 
 // The three lifecycle defects confirmed on 2026-08-03, each reduced to the pure
 // decision the daemon now makes before it acts:
@@ -21,28 +39,68 @@ import type { ConversationLifecycle } from "./syncService.js";
 describe("isConversationRetired", () => {
   test("a killed conversation must never be reconstituted", () => {
     // The exact incident shape: status=completed with inbox_killed_at stamped.
-    expect(isConversationRetired({ status: "completed", inboxKilledAt: 1_700_000_000_000 })).toBe(true);
+    expect(isConversationRetired(authoritative({ status: "completed", inboxKilledAt: 1_700_000_000_000 }), STRICT)).toBe(true);
   });
 
   test("either signal alone is enough", () => {
     // killSession only sets status=completed when mark_completed is passed, so
     // inbox_killed_at can stand alone — and a conversation completed by any other
     // path is equally finished.
-    expect(isConversationRetired({ status: "active", inboxKilledAt: 1 })).toBe(true);
-    expect(isConversationRetired({ status: "completed" })).toBe(true);
+    expect(isConversationRetired(authoritative({ inboxKilledAt: 1 }), STRICT)).toBe(true);
+    expect(isConversationRetired(authoritative({ status: "completed" }), STRICT)).toBe(true);
   });
 
   test("a live conversation still reconstitutes (the crash-recovery case)", () => {
-    expect(isConversationRetired({ status: "active" })).toBe(false);
-    expect(isConversationRetired({ status: "active", inboxKilledAt: null })).toBe(false);
+    expect(isConversationRetired(authoritative(), STRICT)).toBe(false);
+    expect(isConversationRetired(authoritative({ inboxKilledAt: null }), STRICT)).toBe(false);
     // Hidden from the inbox is NOT retired: a stashed/dismissed agent keeps running.
-    expect(isConversationRetired({ status: "active", inboxStashedAt: 1, inboxDismissedAt: 1 })).toBe(false);
+    expect(isConversationRetired(authoritative({ inboxStashedAt: 1, inboxDismissedAt: 1 }), STRICT)).toBe(false);
   });
 
   test("unknown lifecycle fails OPEN — a Convex blip can't strand a live session", () => {
-    expect(isConversationRetired(null)).toBe(false);
-    expect(isConversationRetired(undefined)).toBe(false);
-    expect(isConversationRetired({})).toBe(false);
+    expect(isConversationRetired(null, STRICT)).toBe(false);
+    expect(isConversationRetired(undefined, STRICT)).toBe(false);
+    expect(isConversationRetired(null, TRUSTING)).toBe(false);
+  });
+
+  // The degraded signal resolves by session id through `.first()` — the OLDEST
+  // twin. A wrong "completed" from it would refuse to resume a LIVE session, so
+  // only the caller that can absorb a wrong refusal is allowed to act on it.
+  test("the status-only fallback is ignored by every path but heartbeat reconstitution", () => {
+    const killedLooking = degraded({ status: "completed" });
+    expect(isConversationRetired(killedLooking, STRICT)).toBe(false);   // delivery / warm pool / repair
+    expect(isConversationRetired(killedLooking, TRUSTING)).toBe(true);  // handleDeadSession
+  });
+
+  test("trust does not invent a verdict — a live-looking fallback still allows resume", () => {
+    expect(isConversationRetired(degraded({ status: "active" }), TRUSTING)).toBe(false);
+  });
+});
+
+// The gate as WIRED, not just its pure core: the .catch that must swallow a
+// lookup failure into "not retired". A throwing Convex client here would
+// otherwise take down every resume path at once.
+describe("conversationForbidsResurrection (wired)", () => {
+  test("fails OPEN when the lifecycle lookup throws", async () => {
+    const boom = () => Promise.reject(new Error("connect ECONNREFUSED"));
+    expect(await conversationForbidsResurrection("conv1", "sess1", "TEST", STRICT, boom)).toBe(false);
+    expect(await conversationForbidsResurrection("conv1", "sess1", "TEST", TRUSTING, boom)).toBe(false);
+  });
+
+  test("fails OPEN when the lookup resolves null (unknown row)", async () => {
+    const none = () => Promise.resolve(null);
+    expect(await conversationForbidsResurrection("conv1", "sess1", "TEST", STRICT, none)).toBe(false);
+  });
+
+  test("blocks on an authoritative killed verdict", async () => {
+    const killed = () => Promise.resolve(authoritative({ status: "completed", inboxKilledAt: 5 }));
+    expect(await conversationForbidsResurrection("conv1", "sess1", "TEST", STRICT, killed)).toBe(true);
+  });
+
+  test("a degraded killed verdict blocks ONLY the trusting caller", async () => {
+    const killed = () => Promise.resolve(degraded({ status: "completed" }));
+    expect(await conversationForbidsResurrection("conv1", "sess1", "TEST", STRICT, killed)).toBe(false);
+    expect(await conversationForbidsResurrection("conv1", "sess1", "TEST", TRUSTING, killed)).toBe(true);
   });
 });
 
@@ -147,41 +205,148 @@ describe("parseReapCandidateRow", () => {
     expect(parseReapCandidateRow("")).toBeNull();
   });
 
-  test("a tmux too old to expand #{@opt} yields no stamps, so nothing is misidentified", () => {
-    // Unexpanded format strings come back as the literal, not as a session id —
-    // but the pane is simply uncollected (the resume prefixes still work).
+  test("unset stamps arrive as EMPTY fields, not missing ones (the real tmux output)", () => {
+    // REAP_LIST_FORMAT always emits two tabs; tmux expands an unset user option
+    // to the empty string. Verified against live tmux:
+    //   "cc-resume-7206623b\t7206623b-…\t"   (no conversation stamp)
+    expect(parseReapCandidateRow(row("cc-resume-7206623b", "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", "")))
+      .toEqual({ tmux: "cc-resume-7206623b", sessionId: "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", convId: null, kind: "resume" });
+    // A foreign pane: both stamps empty, tabs still present.
+    expect(parseReapCandidateRow(row("my-editor", "", ""))).toBeNull();
+  });
+
+  test("a tmux too old to expand #{@opt} emits no tabs at all — still safe", () => {
+    // Degenerate input the format string can't produce on a modern tmux, but an
+    // ancient one yields the bare name: the pane is uncollected unless its NAME
+    // identifies it, which is exactly the conservative outcome we want.
     expect(parseReapCandidateRow("my-editor")).toBeNull();
     expect(parseReapCandidateRow("cc-resume-7206623b")?.kind).toBe("resume");
+    expect(parseReapCandidateRow("cc-claude-6f68a98bqm7z")).toBeNull(); // unidentifiable without stamps
   });
 });
 
 describe("stampedPaneReapEligibility", () => {
-  const lifecycle = (over: ConversationLifecycle): ConversationLifecycle => ({ status: "active", ...over });
-
   test("hidden from the inbox → eligible", () => {
     for (const field of ["inboxKilledAt", "inboxStashedAt", "inboxDismissedAt"] as const) {
-      expect(stampedPaneReapEligibility(lifecycle({ [field]: 1_700_000_000_000 })).eligible).toBe(true);
+      expect(stampedPaneReapEligibility(authoritative({ [field]: 1_700_000_000_000 })).eligible).toBe(true);
     }
   });
 
   test("visible in the inbox → NEVER reaped, however idle", () => {
-    expect(stampedPaneReapEligibility(lifecycle({}))).toEqual({ eligible: false, reason: "inbox-visible" });
+    expect(stampedPaneReapEligibility(authoritative())).toEqual({ eligible: false, reason: "inbox-visible" });
   });
 
   test("a pinned card stays visible even when killed → never reaped", () => {
     // Mirrors shouldShowInInbox: `inbox_killed_at && !inbox_pinned_at` hides it,
     // so a pin keeps the card (and its agent) around.
-    expect(stampedPaneReapEligibility(lifecycle({ inboxKilledAt: 1, inboxPinnedAt: 2 })))
+    expect(stampedPaneReapEligibility(authoritative({ inboxKilledAt: 1, inboxPinnedAt: 2 })))
       .toEqual({ eligible: false, reason: "pinned" });
   });
 
   test("unknown hide state fails CLOSED (opposite of the resurrection gate)", () => {
-    // Can't reach Convex, or the lifecycle query isn't deployed: leave it running.
     expect(stampedPaneReapEligibility(null)).toEqual({ eligible: false, reason: "hide-state-unknown" });
     expect(stampedPaneReapEligibility(undefined).eligible).toBe(false);
-    // A status-only lifecycle (the fallback query's shape) carries no hide flags,
-    // so it reads as visible rather than as permission to kill.
-    expect(stampedPaneReapEligibility({ status: "active" }).eligible).toBe(false);
+  });
+
+  // The lie this used to tell: the status-only fallback carries NO hide fields,
+  // and reading their absence as "not hidden" reported killed conversations as
+  // visible-and-skipped in the audit log while the stamped reaper quietly no-oped
+  // against an undeployed backend. Absence must report as absence.
+  test("a degraded lifecycle reports hide-state-unknown, NOT inbox-visible", () => {
+    expect(stampedPaneReapEligibility(degraded({ status: "active" })))
+      .toEqual({ eligible: false, reason: "hide-state-unknown" });
+    // Even when the degraded row happens to look killed, hide state is still unknown.
+    expect(stampedPaneReapEligibility(degraded({ status: "completed" })).reason).toBe("hide-state-unknown");
+  });
+});
+
+describe("tmuxSessionIsSinglePane", () => {
+  // The reap gates only ever inspect :0.0, but killTmuxSessionAndTree takes the
+  // whole tmux SESSION — so a split or a second window (the user's shell, another
+  // live agent) would die on one idle pane's evidence.
+  test("exactly one pane → safe to treat :0.0 as the whole session", () => {
+    expect(tmuxSessionIsSinglePane("0.0\n")).toBe(true);
+    expect(tmuxSessionIsSinglePane("0.0")).toBe(true);
+  });
+
+  test("a split or a second window → not safe", () => {
+    expect(tmuxSessionIsSinglePane("0.0\n0.1\n")).toBe(false);   // split
+    expect(tmuxSessionIsSinglePane("0.0\n1.0\n")).toBe(false);   // second window
+  });
+
+  test("empty/garbled output → not single (fail closed)", () => {
+    expect(tmuxSessionIsSinglePane("")).toBe(false);
+    expect(tmuxSessionIsSinglePane("   \n  \n")).toBe(false);
+  });
+});
+
+describe("derivedPaneNamesForConversation", () => {
+  const names = derivedPaneNamesForConversation("jx78rf6911tyzst2n8ks6f68a98bqm7z");
+
+  test("covers EVERY launchable agent, not the old hardcoded four", () => {
+    // opencode and pi mint cc-<agent>-* names too, and this sweep is the only
+    // teardown on the owner-defer path — a missing id is an unkillable pane.
+    for (const agent of ["claude", "codex", "cursor", "gemini", "opencode", "pi"]) {
+      expect(names).toContain(`cc-${agent}-6f68a98bqm7z`);
+    }
+  });
+
+  test("keys off the same 12-char conversation suffix start_session uses", () => {
+    expect(names.every((n) => n.endsWith("-6f68a98bqm7z"))).toBe(true);
+  });
+});
+
+// An in-flight resume that passed the gates BEFORE a kill can recreate the pane
+// the sweep just removed. The sweep can't cancel that promise, but it must not
+// leave the map entry behind for the next delivery to join.
+describe("clearSessionTrackingForKill", () => {
+  test("clears every per-session map the kill path owns", () => {
+    const sid = "22222222-3333-4444-8555-666666666666";
+    registerManagedStartedSession("jx7trackedconv0000000000000000000", sid, "cc-claude-trackingtest");
+    expect(sessionKillTrackingSnapshot(sid).pane).toBe(true);
+
+    clearSessionTrackingForKill(sid);
+    expect(sessionKillTrackingSnapshot(sid)).toEqual({
+      pane: false, resumeInFlight: false, resumeInFlightStarted: false, restarting: false, process: false,
+    });
+  });
+
+  test("is a no-op for an unknown or missing session id", () => {
+    expect(() => clearSessionTrackingForKill(undefined)).not.toThrow();
+    expect(() => clearSessionTrackingForKill(null)).not.toThrow();
+    expect(sessionKillTrackingSnapshot("never-seen").pane).toBe(false);
+  });
+});
+
+describe("lifecycle query latch", () => {
+  // A latch that trips on ANY error silently disables the resurrection gate for
+  // the daemon's whole life on one DNS blip. Only a missing function is permanent.
+  test("only a missing-function error latches", () => {
+    expect(isMissingFunctionError(new Error(
+      "Could not find public function for 'conversations:getConversationLifecycle'. Did you forget to run `npx convex deploy`?",
+    ))).toBe(true);
+    expect(isMissingFunctionError(new Error("function not found"))).toBe(true);
+  });
+
+  test("transient failures do NOT latch", () => {
+    for (const msg of [
+      "connect ECONNREFUSED 127.0.0.1:443",
+      "Request timed out after 30000ms",
+      "502 Bad Gateway",
+      "getaddrinfo ENOTFOUND convex.cloud",
+      "Unauthorized",
+    ]) {
+      expect(isMissingFunctionError(new Error(msg))).toBe(false);
+    }
+    expect(isMissingFunctionError(undefined)).toBe(false);
+    expect(isMissingFunctionError("some string")).toBe(false);
+  });
+
+  test("a latched-off query re-probes so a deploy (or a wrong latch) heals", () => {
+    const SIX_H = 6 * 60 * 60 * 1000;
+    expect(shouldProbeLifecycleQuery(0, 1_000)).toBe(true);              // never latched
+    expect(shouldProbeLifecycleQuery(1_000, 1_000 + SIX_H - 1)).toBe(false);
+    expect(shouldProbeLifecycleQuery(1_000, 1_000 + SIX_H)).toBe(true);  // re-probe due
   });
 });
 
@@ -198,6 +363,7 @@ describe("danglingUserTurnIsReapable", () => {
       turn: "active",
       lastRealRole: "user",
       lastRealTimestampMs: NOW - ageHours * HOUR,
+      askSidecarMtimeMs: null,
       paneIdle: true,
       now: NOW,
       ...over,
@@ -216,8 +382,6 @@ describe("danglingUserTurnIsReapable", () => {
   });
 
   test("a pending tool_use is real in-flight work — blocked at ANY age", () => {
-    // classifyTranscriptTail returns "active" for both cases; only the trailing
-    // role separates them. An open AskUserQuestion lives here too.
     expect(dangling(682, { lastRealRole: "assistant" })).toBe(false);
     expect(dangling(10_000, { lastRealRole: "assistant" })).toBe(false);
   });
@@ -235,6 +399,56 @@ describe("danglingUserTurnIsReapable", () => {
     // Never fall back to mtime here: mtime is what lies.
     expect(dangling(682, { lastRealTimestampMs: null })).toBe(false);
     expect(dangling(682, { lastRealRole: null })).toBe(false);
+  });
+
+  // THE REAL AskUserQuestion SHAPE. Claude Code buffers the AUQ tool_use out of
+  // the JSONL until it is answered, so a question-blocked session's tail ends in
+  // a USER turn (the previous, already-resolved tool_result) — indistinguishable
+  // from a dangling turn by role alone. An earlier version of this test asserted
+  // lastRealRole "assistant" for this case, which is the opposite of the on-disk
+  // shape and let the hatch through with only a footer regex protecting it.
+  test("a pending question (user tail + newer sidecar) is NEVER reaped", () => {
+    const lastMsg = NOW - 300 * HOUR;
+    expect(danglingUserTurnIsReapable({
+      turn: "active", lastRealRole: "user", lastRealTimestampMs: lastMsg,
+      askSidecarMtimeMs: lastMsg + 90_000, // question asked after the last message
+      paneIdle: true, now: NOW,
+    })).toBe(false);
+  });
+
+  test("an ANSWERED question (sidecar older than the last message) still reaps", () => {
+    // The sidecar is never deleted, so this is the common case — 3 of the 5 stuck
+    // panes carrying a sidecar here had answered their questions weeks earlier.
+    const lastMsg = NOW - 300 * HOUR;
+    expect(danglingUserTurnIsReapable({
+      turn: "active", lastRealRole: "user", lastRealTimestampMs: lastMsg,
+      askSidecarMtimeMs: lastMsg - 60_000,
+      paneIdle: true, now: NOW,
+    })).toBe(true);
+  });
+});
+
+describe("askUserQuestionStillPending", () => {
+  // Ordering, not existence: ~/.codecast/ask-input/<sid>.json is written when a
+  // question is asked and NEVER removed (123 files here, back to June), so
+  // "a sidecar exists" would permanently retire the escape hatch as sessions each
+  // accumulate one. Answering flushes the buffered turn AND appends the answer,
+  // so the transcript gains a message newer than the sidecar.
+  test("sidecar newer than the last message → still waiting on the user", () => {
+    expect(askUserQuestionStillPending(2_000, 1_000)).toBe(true);
+  });
+
+  test("sidecar older than the last message → answered, transcript moved on", () => {
+    expect(askUserQuestionStillPending(1_000, 2_000)).toBe(false);
+    expect(askUserQuestionStillPending(1_000, 1_000)).toBe(false); // not strictly newer
+  });
+
+  test("no sidecar → this session never asked a question", () => {
+    expect(askUserQuestionStillPending(null, 2_000)).toBe(false);
+  });
+
+  test("sidecar but no message clock → can't order them → assume pending", () => {
+    expect(askUserQuestionStillPending(2_000, null)).toBe(true);
   });
 });
 
@@ -281,6 +495,14 @@ describe("reaper pass summary", () => {
       "no-transcript", "pane=busy", "no-transcript", "active-12min",
       "no-transcript", "pane=busy", "active-300min", "inbox-visible",
     ])).toBe("no-transcript×3, active×2, pane=busy×2, inbox-visible×1");
+  });
+
+  test("the new skip reasons are distinguishable in the tally", () => {
+    // Each names a different root cause, and conflating them is what made the
+    // reaper look inert: an undeployed query, an attached split, and a live
+    // question are three very different reasons to do nothing.
+    expect(summarizeReapSkips(["hide-state-unknown", "multi-pane", "pending-question", "transcript=active"]))
+      .toBe("hide-state-unknown×1, multi-pane×1, pending-question×1, transcript=active×1");
   });
 
   test("a clean pass says so", () => {
