@@ -405,9 +405,6 @@ export type Message = {
   // replay as COMMAND_ID_REUSED and falsely fail an already-delivered message.
   _dispatchContent?: string;
   client_id?: string;
-  // Server-assigned conversation watermark at which this row last changed.
-  // Higher wins when a stalled subscription races revision recovery.
-  transcript_revision?: number;
   // The conversation's server-stamped `updated_at` at the instant this optimistic
   // send was added. The server bumps `updated_at` when it accepts the send, so a
   // later snapshot whose `updated_at` exceeds this baseline proves the server has
@@ -442,7 +439,6 @@ export type PaginationState = {
   loadedStartIndex: number;
   isSearchingForTarget: boolean;
   initialized: boolean;
-  transcriptRevision: number;
 };
 
 export type ConversationMeta = Record<string, any>;
@@ -2845,7 +2841,6 @@ const DEFAULT_PAGINATION: PaginationState = {
   loadedStartIndex: 0,
   isSearchingForTarget: false,
   initialized: false,
-  transcriptRevision: 0,
 };
 
 function stripImageRef(s: string): string {
@@ -2869,53 +2864,14 @@ function messageReplayKey(message: Message): string | null {
 
 function dedupeReplayedMessages(messages: Message[]): Message[] {
   const out: Message[] = [];
-  const indexByKey = new Map<string, number>();
+  const seen = new Set<string>();
   for (const message of messages) {
     const key = messageReplayKey(message);
-    const existingIndex = key ? indexByKey.get(key) : undefined;
-    if (existingIndex !== undefined) {
-      const existingRevision = out[existingIndex].transcript_revision;
-      const incomingRevision = message.transcript_revision;
-      if (
-        typeof incomingRevision === "number" &&
-        (typeof existingRevision !== "number" || incomingRevision > existingRevision)
-      ) {
-        out[existingIndex] = message;
-      }
-      continue;
-    }
-    if (key) indexByKey.set(key, out.length);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
     out.push(message);
   }
   return out;
-}
-
-function preferNewerMessage(existing: Message, incoming: Message): Message {
-  const oldRevision = existing.transcript_revision;
-  const newRevision = incoming.transcript_revision;
-  if (typeof oldRevision === "number" && typeof newRevision !== "number") {
-    return existing;
-  }
-  if (typeof oldRevision === "number" && typeof newRevision === "number") {
-    return newRevision > oldRevision ? incoming : existing;
-  }
-  return incoming;
-}
-
-function mergePaginationState(
-  existing: PaginationState | undefined,
-  meta?: Partial<PaginationState>,
-): PaginationState {
-  const current = existing || DEFAULT_PAGINATION;
-  if (!meta) return current;
-  return {
-    ...current,
-    ...meta,
-    transcriptRevision: Math.max(
-      current.transcriptRevision ?? 0,
-      meta.transcriptRevision ?? 0,
-    ),
-  };
 }
 
 // Max conversations to keep messages for in the in-memory store. Generous on
@@ -5802,11 +5758,6 @@ export const useInboxStore = create<InboxStoreState>(
     // Without this guard, the next paginated tick clobbers them and the
     // user sees the conversation snap backward.
     const existing = this.messages[convId] || [];
-    const existingById = new Map(existing.map((m: Message) => [m._id, m]));
-    msgs = msgs.map((incoming: Message) => {
-      const stored = existingById.get(incoming._id);
-      return stored ? preferNewerMessage(stored, incoming) : incoming;
-    });
     const incomingNewestTs = msgs.length > 0 ? msgs[msgs.length - 1].timestamp : -Infinity;
     const incomingIds = new Set(msgs.map((m: Message) => m._id));
     const newerLocal = existing.filter(
@@ -5814,7 +5765,7 @@ export const useInboxStore = create<InboxStoreState>(
     );
     const merged = newerLocal.length > 0 ? [...msgs, ...newerLocal] : msgs;
     this.messages[convId] = merged;
-    const pag = mergePaginationState(this.pagination[convId], meta);
+    const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
     this.pagination[convId] = pag;
     if (PRINCIPAL_SCOPED_PERSISTENCE) writeConversationMessages(convId, merged, pag);
     evictInactiveMessages(this, convId);
@@ -5823,38 +5774,22 @@ export const useInboxStore = create<InboxStoreState>(
   mergeMessages: sync(function (this: Draft, convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) {
     msgs = dedupeReplayedMessages(msgs);
     const existing = this.messages[convId] || [];
-    const merged = [...existing];
-    const existingIndexes = new Map(
-      merged.map((message: Message, index: number) => [message._id, index]),
-    );
+    const existingIds = new Set(existing.map((m: Message) => m._id));
     const existingReplayKeys = new Set(existing.map(messageReplayKey).filter((key): key is string => !!key));
-    const unique: Message[] = [];
-    let updated = false;
-    for (const m of msgs) {
-      const existingIndex = existingIndexes.get(m._id);
-      if (existingIndex !== undefined) {
-        const preferred = preferNewerMessage(merged[existingIndex], m);
-        if (preferred !== merged[existingIndex]) {
-          merged[existingIndex] = preferred;
-          updated = true;
-        }
-        continue;
-      }
+    const unique = msgs.filter((m: Message) => {
+      if (existingIds.has(m._id)) return false;
       const key = messageReplayKey(m);
-      if (key && existingReplayKeys.has(key)) continue;
-      if (key) existingReplayKeys.add(key);
-      unique.push(m);
-    }
-    if (unique.length === 0 && !updated && !meta) return;
+      return !key || !existingReplayKeys.has(key);
+    });
+    if (unique.length === 0 && !meta) return;
 
-    if (direction === "prepend") merged.unshift(...unique);
-    else merged.push(...unique);
+    const merged = direction === "prepend"
+      ? [...unique, ...existing]
+      : [...existing, ...unique];
     merged.sort((a: Message, b: Message) => a.timestamp - b.timestamp);
     // Server data only — pending messages are merged at read time
     this.messages[convId] = merged;
-    const pag = meta
-      ? mergePaginationState(this.pagination[convId], meta)
-      : this.pagination[convId];
+    const pag = meta ? { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta } : this.pagination[convId];
     if (meta) this.pagination[convId] = pag;
     if (PRINCIPAL_SCOPED_PERSISTENCE) writeConversationMessages(convId, merged, pag);
     evictInactiveMessages(this, convId);

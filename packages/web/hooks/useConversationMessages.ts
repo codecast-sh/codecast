@@ -70,26 +70,18 @@ type Message = {
   _clientId?: string;
   _isFailed?: true;
   client_id?: string;
-  transcript_revision?: number;
 };
 
-// Revisioned rows make same-id updates anywhere in the loaded window visible.
-// The full tail remains only as a compatibility fallback for legacy rows.
+// Convex patches the active streaming message in place, so its id and the list
+// length stay fixed while content/thinking/tools grow. Keep the cheap structural
+// guard, but include the full live tail so partial and final same-id updates are
+// never mistaken for an unchanged page.
 export function messagePageSyncKey(conversationId: string, messages: Message[]): string {
-  const maxTranscriptRevision = messages.reduce(
-    (max, message) => Math.max(max, message.transcript_revision ?? 0),
-    0,
-  );
-  const legacyTail = messages[messages.length - 1]?.transcript_revision == null
-    ? messages[messages.length - 1]
-    : undefined;
   return JSON.stringify([
     conversationId,
     messages.length,
     messages[0]?._id,
-    messages[messages.length - 1]?._id,
-    maxTranscriptRevision,
-    legacyTail,
+    messages[messages.length - 1],
   ]);
 }
 
@@ -247,10 +239,6 @@ export function useConversationMessages(
       useInboxStore.getState().setMessages(conversationId, messages, {
         hasMoreAbove: paginationStatusRef.current === "CanLoadMore" || paginationStatusRef.current === "LoadingMore",
         initialized: true,
-        transcriptRevision: messages.reduce(
-          (max, message) => Math.max(max, message.transcript_revision ?? 0),
-          0,
-        ),
       });
     }, [conversationId, forkCopying])
   );
@@ -287,7 +275,7 @@ export function useConversationMessages(
     useInboxStore.getState().setUserMessages(conversationId, msgs);
   }, [conversationId]));
 
-  // Safety net: server-vs-local transcript-revision recovery.
+  // Safety net: server-vs-local watermark recovery.
   //
   // usePaginatedQuery above is the primary sync path, but its reactivity can
   // stall: after loadMore() bounds the first page, during conversation_id
@@ -295,11 +283,10 @@ export function useConversationMessages(
   // skipped. Without a fallback, the local store can sit frozen while the
   // server keeps inserting messages — the user sees a stuck conversation.
   //
-  // message_count detects inserts but cannot detect a partial→final patch of an
-  // existing UUID. transcript_revision advances for both, and the recovery
-  // query returns the changed rows so refresh, retries, and subscription stalls
-  // all converge through the same path. The count path remains for legacy
-  // conversations until their first revisioned write.
+  // This loop watches storeMeta.message_count (server truth, kept fresh by
+  // the getConversationWithMeta subscription) against the local store. When
+  // they diverge, fetch the delta via getNewMessages and merge — same path
+  // useSyncInboxSessions.bgSyncMessages uses, just driven per-conversation.
   const convex = useConvex();
   const recoveryInFlightRef = useRef(false);
   // eslint-disable-next-line no-restricted-syntax -- polled recovery; effect manages its own interval
@@ -315,71 +302,43 @@ export function useConversationMessages(
       // view and the server count is a moving partial — nothing to recover.
       if ((meta as any)?.fork_status === "copying") return;
       const serverCount = (meta as any)?.message_count ?? 0;
-      const serverRevision = (meta as any)?.transcript_revision ?? 0;
-      const localRevision = state.pagination[conversationId]?.transcriptRevision ??
-        local.reduce(
-          (max: number, message: Message) =>
-            Math.max(max, message.transcript_revision ?? 0),
-          0,
-        );
-      const revisioned = serverRevision > 0;
-      if (
-        (revisioned && localRevision >= serverRevision) ||
-        (!revisioned && (serverCount === 0 || local.length >= serverCount))
-      ) return;
-      // Let the initial newest-page subscription establish the local window
-      // before recovery starts overlaying changed rows.
-      if (local.length === 0 && !state.pagination[conversationId]?.initialized) return;
+      if (serverCount === 0 || local.length >= serverCount) return;
       // Don't pile on while the initial paginated query is still inflight on
       // the very first tick — let it land if it's going to. After it settles
       // (Exhausted/CanLoadMore), recovery is the authoritative path even if
       // status briefly flips back to LoadingFirstPage during reactivity blips.
 
       recoveryInFlightRef.current = true;
+      const after = local.length > 0 ? local[local.length - 1].timestamp : 0;
       try {
+        let cursor = after;
         let fetched = 0;
-        if (revisioned) {
-          let cursor = localRevision;
-          for (let i = 0; i < 40; i++) {
-            const result: any = await convex.query(api.messages.getTranscriptChanges, {
-              conversation_id: convId,
-              after_revision: cursor,
-            });
-            if (result === null) break;
-            const nextRevision = result.last_revision ?? cursor;
-            useInboxStore.getState().mergeMessages(
-              conversationId,
-              result.messages ?? [],
-              "append",
-              { initialized: true, transcriptRevision: nextRevision },
-            );
-            fetched += result.messages?.length ?? 0;
-            if (!result.has_more || nextRevision <= cursor) break;
-            cursor = nextRevision;
+        // Bound the inner pagination loop so a buggy server can't pin us here.
+        for (let i = 0; i < 40; i++) {
+          const result: any = await convex.query(api.conversations.getNewMessages, {
+            conversation_id: convId,
+            after_timestamp: cursor,
+          });
+          // getNewMessages returns null for unauth/no-access — treat as a
+          // transient failure and surface in logs so it doesn't silently
+          // strand the UI in the loading state.
+          if (result === null) {
+            // eslint-disable-next-line no-console
+            console.warn("[useConversationMessages] recovery got null (auth not ready?)", { conversationId });
+            break;
           }
-        } else {
-          let cursor = local.length > 0 ? local[local.length - 1].timestamp : 0;
-          for (let i = 0; i < 40; i++) {
-            const result: any = await convex.query(api.conversations.getNewMessages, {
-              conversation_id: convId,
-              after_timestamp: cursor,
-            });
-            if (result === null || !result.messages?.length) break;
-            useInboxStore.getState().mergeMessages(
-              conversationId,
-              result.messages,
-              "append",
-              { initialized: true },
-            );
-            fetched += result.messages.length;
-            if (!result.has_more || result.last_timestamp == null) break;
-            cursor = result.last_timestamp;
-          }
+          if (!result.messages?.length) break;
+          useInboxStore.getState().mergeMessages(conversationId, result.messages, "append", { initialized: true });
+          fetched += result.messages.length;
+          if (!result.has_more || result.last_timestamp == null) break;
+          cursor = result.last_timestamp;
         }
         if (fetched > 0) {
+          // eslint-disable-next-line no-console
           console.log("[useConversationMessages] recovery fetched", { conversationId, fetched, serverCount });
         }
       } catch (err) {
+        // eslint-disable-next-line no-console
         console.warn("[useConversationMessages] recovery fetch failed", { conversationId, err });
       } finally {
         recoveryInFlightRef.current = false;

@@ -191,11 +191,6 @@ export function useSyncInboxSessions() {
               useInboxStore.getState().setMessages(id, [...page].reverse(), {
                 hasMoreAbove: !res.isDone,
                 initialized: true,
-                transcriptRevision: page.reduce(
-                  (max: number, message: any) =>
-                    Math.max(max, message.transcript_revision ?? 0),
-                  0,
-                ),
               });
               // We now hold the newest message; only re-sync if the count grows.
               syncedCountRef.current.set(id, serverCount);
@@ -205,54 +200,23 @@ export function useSyncInboxSessions() {
         continue;
       }
 
-      // --- Warm but stale: the revision watermark covers both inserts and
-      // same-UUID updates. Fall back to count/timestamp only for conversations
-      // that have not received a revisioned write yet. ---
-      const serverRevision = session.transcript_revision ?? 0;
-      const localRevision = store.pagination[id]?.transcriptRevision ??
-        storedMsgs.reduce(
-          (max: number, message: any) =>
-            Math.max(max, message.transcript_revision ?? 0),
-          0,
-        );
-      const revisioned = serverRevision > 0;
-      if (
-        (revisioned && localRevision >= serverRevision) ||
-        (!revisioned && serverCount <= (syncedCountRef.current.get(id) ?? 0))
-      ) continue;
+      // --- Warm but stale: fetch the delta only when genuinely newer messages
+      // exist (count grew past our last sync), walking forward from our newest. ---
+      if (serverCount <= (syncedCountRef.current.get(id) ?? 0)) continue;
+      const lastTimestamp = storedMsgs[storedCount - 1].timestamp;
       bgFetchingRef.current.add(id);
-      const fetchRevisionPage = async (afterRevision: number): Promise<void> => {
-        const result = await convex.query(api.messages.getTranscriptChanges, {
-          conversation_id: id as Id<"conversations">,
-          after_revision: afterRevision,
-        });
-        if (!result) return;
-        const nextRevision = result.last_revision ?? afterRevision;
-        useInboxStore.getState().mergeMessages(
-          id,
-          result.messages ?? [],
-          "append",
-          { initialized: true, transcriptRevision: nextRevision },
-        );
-        if (result.has_more && nextRevision > afterRevision) {
-          await fetchRevisionPage(nextRevision);
-        }
-      };
-      const fetchLegacyPage = async (afterTimestamp: number): Promise<void> => {
+      const fetchPage = async (after: number): Promise<void> => {
         const result = await convex.query(api.conversations.getNewMessages, {
           conversation_id: id as Id<"conversations">,
-          after_timestamp: afterTimestamp,
+          after_timestamp: after,
         });
         if (!result?.messages?.length) return;
         useInboxStore.getState().mergeMessages(id, result.messages, "append", { initialized: true });
         if (result.has_more && result.last_timestamp != null) {
-          await fetchLegacyPage(result.last_timestamp);
+          await fetchPage(result.last_timestamp);
         }
       };
-      const recovery = revisioned
-        ? fetchRevisionPage(localRevision)
-        : fetchLegacyPage(storedMsgs[storedCount - 1].timestamp);
-      recovery
+      fetchPage(lastTimestamp)
         .then(() => syncedCountRef.current.set(id, serverCount))
         .finally(() => bgFetchingRef.current.delete(id));
     }
