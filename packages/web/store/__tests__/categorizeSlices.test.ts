@@ -64,4 +64,13 @@ describe("categorizeSessions top-level slices", () => {
     const { sorted } = categorizeSessions(sessions, new Set());
     expect(ids(sorted)).toEqual(["p", "a", "z"]);
   });
+
+  it("shows a kept-draft blank in New (engaged-blank gate) while hiding plain blanks", () => {
+    const sessions = {
+      warm: mk("warm", { message_count: 0 }),
+      draft: mk("draft", { message_count: 0, _hasDraft: true }),
+    };
+    const { newSessions } = categorizeSessions(sessions, new Set());
+    expect(ids(newSessions)).toEqual(["draft"]);
+  });
 });

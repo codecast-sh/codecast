@@ -5,6 +5,7 @@ import { findConversationBySessionReference, resolveConversationRefRanked, findC
 import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import type { AgentStatus } from "@codecast/shared/contracts";
 import { Doc, Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
@@ -14,7 +15,7 @@ import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from ".
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, findModelOption, fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, ACTIVE_AGENT_STATUSES, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
@@ -7162,7 +7163,7 @@ const TEAM_INBOX_MEMBER_CAP = 50;
 const TEAM_INBOX_PER_MEMBER_CAP = 60;
 
 type InboxSessionMaps = {
-  agentStatusMap: Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">;
+  agentStatusMap: Map<string, AgentStatus>;
   agentStatusUpdatedAtMap: Map<string, number>;
   tmuxSessionMap: Map<string, string>;
   permissionModeMap: Map<string, string>;
@@ -7545,9 +7546,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
   );
   const childRecentlyUpdated = (now - child.updated_at) < 45 * 1000;
   const childHasPending = !!child.has_pending_messages;
-  const childAgentIdle = childAgentStatus
-    ? childAgentStatus !== "working" && childAgentStatus !== "compacting" && childAgentStatus !== "thinking" && childAgentStatus !== "connected" && childAgentStatus !== "starting" && childAgentStatus !== "resuming"
-    : false;
+  const childAgentIdle = childAgentStatus ? !ACTIVE_AGENT_STATUSES.has(childAgentStatus) : false;
   const childIsIdle = childAgentStatus
     ? childAgentIdle && !childHasPending
     : childDaemon

@@ -389,7 +389,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               <TeamIcon icon={activeTeam.icon} color={activeTeam.icon_color} className="w-5 h-5 flex-shrink-0" />
               {!isNarrow && (
                 <>
-                  <span>{activeTeam.name}</span>
+                  <span>Feed</span>
                   {teamUnreadCount !== undefined && teamUnreadCount > 0 && !isTeamActivity && (
                     <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-xs font-semibold bg-sol-cyan text-sol-bg rounded-full">
                       {teamUnreadCount}

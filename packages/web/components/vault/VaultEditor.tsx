@@ -57,6 +57,14 @@ import {
 } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { isVaultMarkdownPath } from "@codecast/shared/contracts";
+import { entityRefRoute, parseEntityRefHref } from "@codecast/shared/vault";
+import { useRouter } from "next/navigation";
+import { useMentionQuery } from "../../hooks/useMentionQuery";
+import {
+  entityCompletions,
+  wikiCompletionContext,
+  type EntityCompletionItem,
+} from "../../lib/vault/entityCompletion";
 import { cssVar, isDarkTheme, observeTheme, withAlpha } from "../../lib/solTheme";
 import { detectLineSeparator, docChange } from "../../lib/vault/editorDoc";
 import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
@@ -301,6 +309,30 @@ function wikiCompletionSource(fromPath: string) {
   };
 }
 
+/** The second source over the same `[[`: codecast objects, from the mention
+ *  query every other composer in the app uses. Notes and objects share one
+ *  dropdown, and each inserts its own syntax (see entityCompletion.ts).
+ *
+ *  `filter: false` because the mention query already ranked and matched — a
+ *  task found by typing its short id would otherwise be filtered straight back
+ *  out, since the option's label is its title. No `validFor` for the same
+ *  reason: the next keystroke asks the query again rather than re-filtering a
+ *  stale set. */
+function entityCompletionSource(
+  queryRef: MutableRefObject<(query: string) => Promise<EntityCompletionItem[]>>,
+) {
+  return async (context: CompletionContext): Promise<CompletionResult | null> => {
+    const line = context.state.doc.lineAt(context.pos);
+    const where = wikiCompletionContext(line.text, line.from, context.pos);
+    if (!where) return null;
+    const items = await queryRef.current(where.query);
+    if (context.aborted) return null;
+    const options = entityCompletions(items);
+    if (!options.length) return null;
+    return { from: where.from, options, filter: false };
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Live preview
 // ---------------------------------------------------------------------------
@@ -320,6 +352,7 @@ const ABSOLUTE_URL = /^([a-z][a-z0-9+.-]*:|\/\/)/i;
 function makeLiveContext(
   ref: MutableRefObject<VaultLinkContextValue>,
   openInNewTab: (path: string) => void,
+  openRoute: (route: string) => void,
 ): LivePreviewContext {
   return {
     resolveWiki: (parts) => {
@@ -338,6 +371,17 @@ function makeLiveContext(
     },
     openTag: (tag) => ref.current.openTag?.(tag),
     openHref: (href, newTab) => {
+      // A link to a codecast object opens the object, in the app — the same
+      // click the rendered pill takes in the reading view. It is written as a
+      // public URL so the file still works everywhere else, but following one
+      // from inside codecast should not bounce through the browser.
+      const entity = parseEntityRefHref(href);
+      const route = entity ? entityRefRoute(entity) : null;
+      if (route) {
+        if (newTab) window.open(route, "_blank", "noopener,noreferrer");
+        else openRoute(route);
+        return;
+      }
       // A relative link to another note stays inside the app; anything with a
       // scheme is the web, and the web opens in its own tab.
       if (!ABSOLUTE_URL.test(href) && /\.(md|markdown)(#.*)?$/i.test(href)) {
@@ -414,14 +458,26 @@ export function VaultEditor({
   const linkCtx = useVaultLinkCtx(path, onNavigate);
   const linkCtxRef = useRef(linkCtx);
   linkCtxRef.current = linkCtx;
+
+  // Both of these are read through refs for the same reason the link context
+  // is: the editor is configured once, and rebuilding it whenever the store or
+  // the router identity changed would throw away the undo history.
+  const router = useRouter();
+  const routerRef = useRef(router);
+  routerRef.current = router;
+  const mentionQuery = useMentionQuery();
+  const mentionQueryRef = useRef(mentionQuery);
+  mentionQueryRef.current = mentionQuery;
   // Built once and kept: CodeMirror resolves a reconfiguration by extension
   // IDENTITY, so a stable value makes "reconfigure to the mode you are already
   // in" free, and switching back to live preview reuses the same plugin rather
   // than tearing one down and building another.
   const [liveExt] = useState<Extension>(() =>
     livePreview(
-      makeLiveContext(linkCtxRef, (p) =>
-        window.open(`/vault?f=${encodeURIComponent(p)}`, "_blank", "noopener,noreferrer"),
+      makeLiveContext(
+        linkCtxRef,
+        (p) => window.open(`/vault?f=${encodeURIComponent(p)}`, "_blank", "noopener,noreferrer"),
+        (route) => routerRef.current.push(route),
       ),
     ),
   );
@@ -531,7 +587,10 @@ export function VaultEditor({
           // @codemirror/language-data, which drags in a language package per
           // supported syntax. Markdown structure highlights either way.
           markdown({ base: markdownLanguage }),
-          autocompletion({ override: [wikiCompletionSource(path)], icons: false }),
+          autocompletion({
+            override: [wikiCompletionSource(path), entityCompletionSource(mentionQueryRef)],
+            icons: false,
+          }),
           themeRef.current.of(solEditorTheme()),
           liveRef.current.of(modeExt),
           // Order matters: closing a completion or a search panel with Escape

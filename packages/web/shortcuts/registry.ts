@@ -95,9 +95,17 @@ export interface ShortcutDef {
 // force-mounted dialog's exit animation from counting as open. While a modal
 // is open it owns keyboard and focus: the shortcut dispatcher stands down and
 // background focus-stealers (composer refocus, mode-cycle chords) must not run.
-export function hasOpenModal(): boolean {
+//
+// `host`: for a keyboard handler that itself lives INSIDE a modal (e.g. the
+// new-session pickers hosted by the compose dialog). A modal that contains the
+// host doesn't block it — only a modal stacked elsewhere (a confirm dialog, the
+// settings modal) does. Without `host`, any open modal counts.
+export function hasOpenModal(host?: Element | null): boolean {
   if (typeof document === 'undefined') return false;
-  return !!document.querySelector('[aria-modal="true"]:not([data-state="closed"])');
+  const modals = document.querySelectorAll('[aria-modal="true"]:not([data-state="closed"])');
+  if (!host) return modals.length > 0;
+  for (const m of modals) if (!m.contains(host)) return true;
+  return false;
 }
 
 // Decides whether a binding bypasses the in-input guard for the focused element.
