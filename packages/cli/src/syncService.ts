@@ -244,6 +244,25 @@ export type ExecutionControlMutationName =
 
 export type ExecutionControlQueryName = "getExecutionAuthority" | "listExecutionWork";
 
+/**
+ * A conversation's own lifecycle + inbox visibility, as far as the daemon can
+ * see it. Every field is optional: an undefined field means "not known", never
+ * "not set" — see SyncService.getConversationLifecycle for which source
+ * populates what.
+ */
+export interface ConversationLifecycle {
+  status?: string | null;
+  inboxKilledAt?: number | null;
+  inboxStashedAt?: number | null;
+  inboxDismissedAt?: number | null;
+  inboxPinnedAt?: number | null;
+}
+
+// Flipped off for the process the first time conversations:getConversationLifecycle
+// comes back missing, so an undeployed query costs one round trip, not one per
+// resurrection/reap. A daemon restart re-probes.
+let lifecycleQueryAvailable = true;
+
 export interface GitInfo {
   commitHash?: string;
   branch?: string;
@@ -1291,6 +1310,58 @@ export class SyncService {
         ownerIsRemote: !!(res as any).owner_is_remote,
         ownerOnline: !!(res as any).owner_online,
       };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Lifecycle + inbox-visibility state of a conversation — the daemon's gate for
+   * "may I bring this session back?" and "may I reap its pane?". A killed or
+   * hidden conversation is exactly the one no automation may resurrect.
+   *
+   * The hide flags need a server query that does not exist yet
+   * (conversations:getConversationLifecycle — api_token authed, conversation_id
+   * in, {status, inbox_killed_at, inbox_stashed_at, inbox_dismissed_at,
+   * inbox_pinned_at} out). Until it ships this falls back to the existing
+   * api_token-authed devices:resolveConversationBySession, which carries
+   * `status` — enough to catch the completed/killed conversations the health
+   * check was resurrecting, but not the hide flags, which stay undefined so
+   * every caller that needs them fails closed. Returns null when nothing
+   * resolves, which callers read as "unknown".
+   */
+  async getConversationLifecycle(
+    conversationId: string,
+    sessionId?: string,
+  ): Promise<ConversationLifecycle | null> {
+    if (lifecycleQueryAvailable) {
+      try {
+        const res: any = await this.client.query("conversations:getConversationLifecycle" as any, {
+          api_token: this.apiToken,
+          conversation_id: conversationId,
+        });
+        if (res) {
+          return {
+            status: res.status ?? null,
+            inboxKilledAt: res.inbox_killed_at ?? null,
+            inboxStashedAt: res.inbox_stashed_at ?? null,
+            inboxDismissedAt: res.inbox_dismissed_at ?? null,
+            inboxPinnedAt: res.inbox_pinned_at ?? null,
+          };
+        }
+      } catch {
+        // Undeployed query: stop paying the round trip (and the server-side
+        // error log) for the rest of this daemon's life.
+        lifecycleQueryAvailable = false;
+      }
+    }
+    if (!sessionId) return null;
+    try {
+      const res: any = await this.client.query("devices:resolveConversationBySession" as any, {
+        api_token: this.apiToken,
+        session_id: sessionId,
+      });
+      return res ? { status: res.status ?? null } : null;
     } catch {
       return null;
     }
