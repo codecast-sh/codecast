@@ -3,6 +3,7 @@ import { applyPatches, classifyHideTransition, dispatch } from "./dispatch";
 import { reconfigureSession } from "./conversations";
 import { getReceipt } from "./localFirstCommands";
 import { makeFakeDb } from "./testDb";
+import { shouldShowInInbox } from "./inboxFilters";
 
 // The conversation hide-transition hook in applyPatches is the ONE place the
 // "dismiss = kill, stash = keep alive" contract is enforced — every dismiss
@@ -210,6 +211,23 @@ describe("inbox_killed_at survives patches that are not a revival", () => {
     const row = db._tables.conversations[0];
     expect(row.inbox_dismissed_at).toBeUndefined();
     expect(row.inbox_killed_at).toBeUndefined();
+  });
+
+  // …and the flip side of the guard: the web's restore gesture sends only the
+  // two hide stamps, but shouldShowInInbox hides a row on inbox_killed_at ALONE.
+  // The server un-kills on the dismissed-clear transition, so restore works
+  // without the client knowing the field exists (and old clients keep working).
+  test("a web-restore-shaped patch un-kills the row server-side", async () => {
+    const db = fixtures();
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_dismissed_at: null, inbox_stashed_at: null } },
+    });
+    const row = db._tables.conversations[0];
+    expect(row.inbox_dismissed_at).toBeUndefined();
+    expect(row.inbox_killed_at).toBeUndefined();
+    expect(shouldShowInInbox(row as any)).toBe(true); // visible with no pin required
+    // Restore brings the CARD back; it does not restart the agent.
+    expect(row.status).toBe("completed");
   });
 
   test("SETTING inbox_killed_at is never blocked", async () => {

@@ -2246,9 +2246,28 @@ export async function cancelFencedDeliveriesOnKill(
   ctx: DbCtx,
   conversationId: Id<"conversations">,
   now: number = Date.now(),
+  limit: number = 300,
 ): Promise<{ cancelled: number; inFlight: number }> {
   const head = await executionHead(ctx, conversationId);
-  const messages = await fencedMessages(ctx, conversationId);
+  // Read the NON-TERMINAL queue through the status index, never the whole
+  // by_conversation_id history: pending_messages is dominated by terminal
+  // delivered rows, and collecting them all is what turns a kill on a busy
+  // session into a transaction that throws (the documented anti-pattern behind
+  // collectOldLegacyPendingMessages). Capped for the same reason — the caller
+  // schedules a continuation for anything left over.
+  const messages: any[] = [];
+  for (const status of ["pending", "injected", "failed", "undeliverable"] as const) {
+    if (messages.length >= limit) break;
+    const rows = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) =>
+        q.eq("conversation_id", conversationId).eq("status", status),
+      )
+      .take(limit - messages.length);
+    for (const row of rows) {
+      if (row.delivery_protocol_version !== undefined) messages.push(row);
+    }
+  }
   let cancelled = 0;
   let inFlight = 0;
   let releasedHeadSlot = false;

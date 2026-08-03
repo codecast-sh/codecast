@@ -8906,10 +8906,19 @@ export const cliSetSessionVisibility = mutation({
     const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
 
     if (args.action === "undismiss") {
-      const wasHidden = !!(conv.inbox_dismissed_at || conv.inbox_stashed_at);
+      const wasHidden = !!(conv.inbox_dismissed_at || conv.inbox_stashed_at || conv.inbox_killed_at);
+      // inbox_killed_at clears too, or undismiss can't do what it advertises: a
+      // killed row is hidden by shouldShowInInbox on that flag alone, so
+      // clearing only the hide stamps left it invisible and `cast kill`'s own
+      // "cast undismiss <id> to resurface" hint was a false promise. (It used to
+      // work by accident — the web's pin gesture wiped the flag through the
+      // patch rail, which is exactly the hole the dispatch guard just sealed.)
+      // `status` deliberately stays: undismiss resurfaces the CARD, it does not
+      // restart the agent — that's Restart's job.
       await ctx.db.patch(conv._id, {
         inbox_dismissed_at: undefined,
         inbox_stashed_at: undefined,
+        inbox_killed_at: undefined,
       });
       // The un-kill mirror (same as the web restore path in dispatch): bring
       // back the schedules the kill canceled, stamped tasks only. Scan the
@@ -10306,14 +10315,21 @@ export const killSession = mutation({
       // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's
       // schedules (theirs are the ones bound to their session), plus the
       // caller's when a second-party owner is killing.
-      canceledSchedules = await cancelTasksBoundToConversation(ctx, conv.user_id, args.conversation_id);
-      if (conv.user_id !== userId) {
-        canceledSchedules += await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
+      // Both sweeps are RETIREMENT effects, so a persistent anchor is exempt
+      // from both — killing an anchor is dormancy, not death. Same guard as
+      // applyHideTransition: the two kill surfaces must agree about anchors, or
+      // the web button and `cast kill` leave the same session in different
+      // states (its queue survives one and not the other).
+      if (!conv.persistent) {
+        canceledSchedules = await cancelTasksBoundToConversation(ctx, conv.user_id, args.conversation_id);
+        if (conv.user_id !== userId) {
+          canceledSchedules += await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
+        }
+        // Kill is terminal for messages already queued too — same reason the
+        // schedules die: a retained message that lands later revives the session
+        // the user just killed. Only the pre-kill queue; a later send re-enqueues.
+        canceledMessages = await cancelQueuedMessagesOnKill(ctx, args.conversation_id);
       }
-      // Kill is terminal for messages already queued too — same reason the
-      // schedules die: a retained message that lands later revives the session
-      // the user just killed. Only the pre-kill queue; a later send re-enqueues.
-      canceledMessages = await cancelQueuedMessagesOnKill(ctx, args.conversation_id);
       // Take the nested group (Task subagents + agent-team teammates) down
       // with the card. The web store also sweeps optimistically for its own
       // gesture; this server twin covers every other caller. Forced, like the
