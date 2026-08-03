@@ -810,6 +810,9 @@ export const listDevices = query({
         // to, and which providers have a key on this device (ids only).
         provider_key_pubkey: d.provider_key_pubkey ?? undefined,
         managed_provider_ids: d.managed_provider_ids ?? [],
+        // Git-plane health + the device's public git key (grant-access flow).
+        git_plane: d.git_plane ?? undefined,
+        git_pubkey: d.git_pubkey ?? undefined,
         online: now - d.last_seen < ONLINE_MS,
       }))
       .sort((a: any, b: any) => b.last_seen - a.last_seen);
