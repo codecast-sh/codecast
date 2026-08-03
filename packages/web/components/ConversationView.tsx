@@ -14119,7 +14119,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </ShortcutTooltip>
 
                 <span data-simple-hide className="contents">
-                  <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} />
+                  <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} conversationId={effectiveConversationId?.toString()} />
                 </span>
 
                 <DropdownMenu>
