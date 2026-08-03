@@ -12,6 +12,11 @@ type Handler = () => boolean | void;
 interface ShortcutContextValue {
   registerAction: (action: ShortcutAction, handler: Handler) => () => void;
   setContext: (ctx: string, active: boolean) => void;
+  // Programmatic fire of an action's registered handlers — the command palette
+  // routes its command rows through this so a palette row and its keyboard
+  // chord share ONE handler. Same decline semantics as the key path (a handler
+  // returning false passes to the next); returns whether anyone handled it.
+  dispatchAction: (action: ShortcutAction) => boolean;
 }
 
 const ShortcutContext = createContext<ShortcutContextValue | null>(null);
@@ -53,6 +58,19 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
   const setContext = useCallback((ctx: string, active: boolean) => {
     if (active) contextsRef.current.add(ctx);
     else contextsRef.current.delete(ctx);
+  }, []);
+
+  const dispatchAction = useCallback((action: ShortcutAction): boolean => {
+    const actionHandlers = handlersRef.current.get(action);
+    if (!actionHandlers || actionHandlers.size === 0) return false;
+    let handled = false;
+    for (const handler of actionHandlers) {
+      const result = handler();
+      if (result === false) continue;
+      handled = true;
+      if (result === true) break;
+    }
+    return handled;
   }, []);
 
   // Bind the keydown logic to the HMR-stable capture listener in listener.ts.
@@ -104,7 +122,7 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
     return () => setShortcutHandler(null);
   });
 
-  const value: ShortcutContextValue = { registerAction, setContext };
+  const value: ShortcutContextValue = { registerAction, setContext, dispatchAction };
 
   return (
     <ShortcutContext.Provider value={value}>
@@ -116,6 +134,7 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
 const NOOP_CONTEXT: ShortcutContextValue = {
   registerAction: () => () => {},
   setContext: () => {},
+  dispatchAction: () => false,
 };
 
 export function useShortcuts(): ShortcutContextValue {

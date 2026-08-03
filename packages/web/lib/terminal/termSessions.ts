@@ -283,6 +283,14 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
             ws.send(JSON.stringify({ type: "resize", cols, rows }));
           }
           bump();
+        } else if (msg.type === "reseed") {
+          // The pane changed size under an attach view (another client, a
+          // daemon refresh): reset and repaint at the new geometry — stale
+          // columns are how spliced, garbled rows happen. The seed bytes
+          // follow this frame on the wire.
+          inst.term.reset();
+          if (msg.cols && msg.rows) inst.term.resize(msg.cols, msg.rows);
+          bump();
         } else if (msg.type === "exit") {
           inst.state.status = "exited";
           inst.state.statusDetail = msg.reason;
@@ -374,11 +382,19 @@ export function attachToContainer(id: string, el: HTMLElement): void {
   } else if (inst.term.element.parentElement !== el) {
     el.appendChild(inst.term.element);
   }
+  let pinned = true;
   inst.resizeObserver?.disconnect();
   let raf = 0;
   inst.resizeObserver = new ResizeObserver(() => {
     cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => fitInstance(inst));
+    raf = requestAnimationFrame(() => {
+      fitInstance(inst);
+      // Re-pin on container RESIZE too: shrinking the split grows the
+      // scrollable overflow with no accompanying write, which used to leave
+      // scrollTop where it was — showing the pane's middle instead of its
+      // bottom until the next output arrived.
+      if (pinned) el.scrollTop = el.scrollHeight;
+    });
   });
   inst.resizeObserver.observe(el);
   fitInstance(inst);
@@ -390,7 +406,6 @@ export function attachToContainer(id: string, el: HTMLElement): void {
   // be; scrolling back near the bottom re-engages the pin). No-op for fitted
   // shells, whose xterm exactly fills the container.
   inst.pinDispose?.dispose();
-  let pinned = true;
   const onScroll = () => {
     pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
   };

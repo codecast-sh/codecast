@@ -98,6 +98,7 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
     // See store/wakeSig.ts and the identical gate on SessionListPanel.
     s => sessionsWakeSig(s.sessions),
     s => s.sessionsWithQueuedMessages,
+    s => s.blockedReviveRequestedAt,
     s => pendingSendWakeSig(s.pendingMessages),
     s => s.currentUser?._id,
     s => s.liveInboxIds,
@@ -119,9 +120,9 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
   // Deps are the wake signatures (memoized by ref — free to re-call here), not
   // the raw s.sessions/s.pendingMessages refs those flip on every heartbeat.
   const working = useMemo(
-    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: resolveShowOld(s.clientState.ui) }).working,
+    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: resolveShowOld(s.clientState.ui), reviveRequestedAt: s.blockedReviveRequestedAt }).working,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, resolveShowOld(s.clientState.ui), coarseNow],
+    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, resolveShowOld(s.clientState.ui), coarseNow],
   );
   if (working.length === 0) return null;
   const activeAgentCount = working.length;
@@ -1038,10 +1039,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {s.compose.open && (
         <div
           className="fixed inset-0 z-[200] flex items-start justify-center pt-[12vh] bg-black/50 backdrop-blur-sm"
-          onClick={s.closeCompose}
+          // Route the backdrop click through ComposeView's guarded close so a
+          // click-away over a typed draft gets the keep/discard confirm instead
+          // of silently dropping the draft.
+          onClick={() => (composeCloseGuardRef.current ?? s.closeCompose)()}
         >
           <div onClick={(e) => e.stopPropagation()}>
-            <ComposeView key={s.compose.nonce} initialQuery={s.compose.initialQuery} context={s.compose.context} onClose={s.closeCompose} />
+            <ComposeView key={s.compose.nonce} initialQuery={s.compose.initialQuery} context={s.compose.context} onClose={s.closeCompose} closeGuardRef={composeCloseGuardRef} />
           </div>
         </div>
       )}

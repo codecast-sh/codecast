@@ -31,6 +31,7 @@ export function useNeedsInputCount(enabled = true): number {
     // re-render. See store/wakeSig.ts.
     s => sessionsWakeSig(s.sessions),
     s => s.sessionsWithQueuedMessages,
+    s => s.blockedReviveRequestedAt,
     s => pendingSendWakeSig(s.pendingMessages),
     s => s.currentUser?._id,
     s => s.liveInboxIds,
@@ -49,9 +50,9 @@ export function useNeedsInputCount(enabled = true): number {
   // categorizeSessions drop "old" rows (see its opts).
   return useMemo(
     () => enabled
-      ? categorizeSessions(filterInboxScope(s.sessions, "mine", meId ? meId.toString() : null), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: resolveShowOld(s.clientState.ui) }).needsInput.length
+      ? categorizeSessions(filterInboxScope(s.sessions, "mine", meId ? meId.toString() : null), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: resolveShowOld(s.clientState.ui), reviveRequestedAt: s.blockedReviveRequestedAt }).needsInput.length
       : 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [enabled, sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, resolveShowOld(s.clientState.ui), coarseNow],
+    [enabled, sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, resolveShowOld(s.clientState.ui), coarseNow],
   );
 }

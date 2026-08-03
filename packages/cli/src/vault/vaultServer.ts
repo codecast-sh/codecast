@@ -8,10 +8,10 @@
 // Every path the browser sends goes through vaultScope.resolveVaultPath. Nothing
 // in this file may construct a filesystem path any other way.
 
+import { spawn } from "child_process";
 import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as http from "http";
-import * as os from "os";
 import * as path from "path";
 import { WebSocketServer, WebSocket } from "ws";
 import {
@@ -31,12 +31,13 @@ import type {
   VaultWsEvent,
   VaultWsHello,
 } from "@codecast/shared/contracts";
+import { moveToTrash, writeVaultFile } from "./vaultFs.js";
 import { findVault, listVaults, setVaultNoteCount } from "./vaultRegistry.js";
 import {
   isVaultServablePath,
   normalizeVaultPath,
-  realVaultRoot,
   resolveVaultPath,
+  revealCommand,
   scanVault,
   vaultContentHash,
   vaultContentType,
@@ -97,47 +98,6 @@ function entryFor(rel: string, stat: fs.Stats): VaultFileEntry {
   return stat.isDirectory()
     ? { path: rel, mtime: Math.round(stat.mtimeMs), size: 0, dir: true }
     : { path: rel, mtime: Math.round(stat.mtimeMs), size: stat.size };
-}
-
-/**
- * Move a path out of the vault instead of deleting it. A vault is the user's
- * writing; an unlink here is unrecoverable data loss from a stray click in a
- * browser tab. Preference order: the OS trash, then a `.trash` folder inside the
- * vault itself (which the scan ignores) when the trash is on another volume.
- */
-function moveToTrash(vaultRoot: string, abs: string): string {
-  const base = path.basename(abs);
-  // $HOME, not os.homedir(): the rest of the CLI resolves the home directory the
-  // same way, and bun's os.homedir() is fixed at process start regardless of it.
-  const home = process.env.HOME || os.homedir();
-  const osTrash =
-    process.platform === "darwin"
-      ? path.join(home, ".Trash")
-      : process.platform === "linux"
-        ? path.join(home, ".local", "share", "Trash", "files")
-        : null;
-
-  const attempt = (dir: string): string | null => {
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-      let dest = path.join(dir, base);
-      for (let n = 2; fs.existsSync(dest); n++) {
-        const ext = path.extname(base);
-        dest = path.join(dir, `${base.slice(0, base.length - ext.length)} ${n}${ext}`);
-      }
-      fs.renameSync(abs, dest);
-      return dest;
-    } catch {
-      return null;
-    }
-  };
-
-  const viaOs = osTrash ? attempt(osTrash) : null;
-  if (viaOs) return viaOs;
-  // Cross-device rename (EXDEV) or no OS trash: keep it on the same volume.
-  const local = attempt(path.join(realVaultRoot(vaultRoot), ".trash"));
-  if (local) return local;
-  throw new Error("could not move to trash");
 }
 
 async function handleScan(
@@ -232,12 +192,7 @@ async function handlePutFile(
     }
   }
 
-  await fsp.mkdir(path.dirname(target.abs), { recursive: true });
-  // Write-then-rename: a reader (or a crash) never sees a half-written note.
-  const tmp = path.join(path.dirname(target.abs), `.${path.basename(target.abs)}.${process.pid}.tmp`);
-  await fsp.writeFile(tmp, body);
-  await fsp.rename(tmp, target.abs);
-  const stat = await fsp.stat(target.abs);
+  const stat = await writeVaultFile(target.abs, body);
   const written: VaultWriteResponse = {
     path: target.rel,
     mtime: Math.round(stat.mtimeMs),
@@ -264,6 +219,22 @@ async function handleOp(
 
   const target = scoped(vault, op?.path ?? null);
   if (!target) return sendJson(res, 400, headers, { error: "bad path" });
+
+  if (op.op === "reveal") {
+    // Hand the path to the platform's file manager (or its default app). The
+    // path is already confined to the vault by scoped(); argv is passed as an
+    // ARRAY with no shell, so a filename can never be read as a command.
+    if (!fs.existsSync(target.abs)) return sendJson(res, 404, headers, { error: "not found" });
+    const { cmd, args } = revealCommand(process.platform, target.abs, op.mode ?? "reveal");
+    try {
+      const child = spawn(cmd, args, { stdio: "ignore", detached: true });
+      child.unref();
+      child.on("error", () => {});
+    } catch {
+      return sendJson(res, 500, headers, { error: "could not open" });
+    }
+    return sendJson(res, 200, headers, { ok: true });
+  }
 
   if (op.op === "mkdir") {
     await fsp.mkdir(target.abs, { recursive: true });
