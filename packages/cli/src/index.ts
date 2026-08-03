@@ -9,7 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { spawn, spawnSync, execSync } from "./proc.js";
-import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
+import { buildWslAutostartTaskRun, daemonSupportedOnPlatform, isWSL, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
@@ -7682,6 +7682,20 @@ function setupLinux(disable: boolean): void {
   const systemdUserDir = path.join(home, ".config", "systemd", "user");
   const servicePath = path.join(systemdUserDir, "codecast.service");
 
+  if (isWSL()) {
+    if (disable) {
+      removeWslAutostart();
+      console.log("Removed the Windows login task (Task Scheduler).");
+      // Fall through: also remove a systemd service if one exists.
+    } else if (ensureWslAutostart()) {
+      console.log("Auto-start enabled");
+      console.log("Windows Task Scheduler starts the daemon inside WSL at login.");
+      return;
+    } else {
+      console.log("Could not create the Windows login task (interop disabled?). Trying systemd...");
+    }
+  }
+
   if (disable) {
     if (!fs.existsSync(servicePath)) {
       console.log("Auto-start is not enabled");
@@ -7734,9 +7748,43 @@ WantedBy=default.target
   }
 }
 
+// Inside WSL, systemd user services don't run at Windows login (the WSL VM
+// isn't even booted yet). The reliable autostart is on the Windows side: a
+// Task Scheduler entry that runs `wsl.exe ... codecast start` at logon —
+// booting the VM and starting the daemon, which then keeps the VM alive.
+// schtasks.exe is reachable from WSL via Windows interop; when interop is
+// disabled or the command fails, the caller falls back to systemd.
+const WSL_AUTOSTART_TASK_NAME = "CodecastDaemon";
+
+function ensureWslAutostart(): boolean {
+  const distro = process.env.WSL_DISTRO_NAME;
+  if (!distro) return false;
+  const { executablePath, args } = getExecutableInfo();
+  if (args[0] !== "--") return false; // from-source dev install: skip Windows autostart
+  const run = buildWslAutostartTaskRun(distro, os.userInfo().username, executablePath);
+  if (!run) return false;
+  try {
+    const res = spawnSync("schtasks.exe", [
+      "/Create", "/TN", WSL_AUTOSTART_TASK_NAME, "/TR", run, "/SC", "ONLOGON", "/RL", "LIMITED", "/F",
+    ], { stdio: "ignore" });
+    return res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function removeWslAutostart(): void {
+  try {
+    spawnSync("schtasks.exe", ["/Delete", "/TN", WSL_AUTOSTART_TASK_NAME, "/F"], { stdio: "ignore" });
+  } catch {}
+}
+
 function ensureAutostart(): boolean {
   const platform = process.platform;
   try {
+    if (platform === "linux" && isWSL() && ensureWslAutostart()) {
+      return true;
+    }
     if (platform === "darwin") {
       const home = process.env.HOME;
       if (!home) return false;
@@ -7860,7 +7908,7 @@ program
     "Supported platforms:\n" +
     "  - macOS: LaunchAgent\n" +
     "  - Linux: systemd user service\n" +
-    "  - Windows: not supported (use WSL); --disable removes an old task\n\n" +
+    "  - Windows: inside WSL (a Task Scheduler task starts the daemon at login)\n\n" +
     "Examples:\n" +
     "  cast setup             # Enable auto-start\n" +
     "  cast setup --disable   # Disable auto-start"
@@ -7926,6 +7974,9 @@ program
         break;
       }
       case "linux": {
+        if (isWSL()) {
+          removeWslAutostart();
+        }
         const servicePath = path.join(home, ".config", "systemd", "user", "codecast.service");
         if (fs.existsSync(servicePath)) {
           spawnSync("systemctl", ["--user", "disable", "--now", "codecast.service"], { stdio: "ignore" });
