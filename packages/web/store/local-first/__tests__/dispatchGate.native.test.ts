@@ -1,56 +1,27 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import {
   capturePrincipalDispatchAuthorization,
   getPrincipalDispatchCorrelationEpoch,
   isPrincipalDispatchAuthorizationCurrent,
-  subscribePrincipalDispatchCorrelation,
+  registerPrincipalDispatchRuntime,
   updatePrincipalDispatchCorrelation,
 } from "../dispatchGate.native";
 
-const flushNotification = async () => {
-  await Promise.resolve();
-  await Promise.resolve();
-};
+// Native twin: dispatch is wired unconditionally, mirroring the web module.
 
-afterEach(async () => {
-  updatePrincipalDispatchCorrelation(null);
-  await flushNotification();
+test("authorization is always available, before any registration", () => {
+  const capture = capturePrincipalDispatchAuthorization();
+  expect(capture).not.toBeNull();
+  expect(isPrincipalDispatchAuthorizationCurrent(capture!)).toBe(true);
+  expect(getPrincipalDispatchCorrelationEpoch()).not.toBeNull();
 });
 
-describe("native principal dispatch correlation", () => {
-  test("changes the allowed snapshot identity when correlation epoch changes", () => {
-    updatePrincipalDispatchCorrelation(10);
-    const accountA = getPrincipalDispatchCorrelationEpoch();
-    updatePrincipalDispatchCorrelation(11);
-    const accountB = getPrincipalDispatchCorrelationEpoch();
-
-    expect(accountA).not.toBeNull();
-    expect(accountB).not.toBeNull();
-    expect(accountB).not.toBe(accountA);
-  });
-
-  test("subject changes deny stale work immediately and notify mounted consumers", async () => {
-    updatePrincipalDispatchCorrelation(10);
-    await flushNotification();
-    const accountA = capturePrincipalDispatchAuthorization();
-    expect(accountA?.principalEpoch).toBe(10);
-
-    let notifications = 0;
-    const unsubscribe = subscribePrincipalDispatchCorrelation(() => { notifications++; });
-    updatePrincipalDispatchCorrelation(11);
-    expect(isPrincipalDispatchAuthorizationCurrent(accountA!)).toBe(false);
-    expect(notifications).toBe(0);
-
-    const accountB = capturePrincipalDispatchAuthorization();
-    expect(accountB?.principalEpoch).toBe(11);
-    await flushNotification();
-    expect(notifications).toBe(1);
-
-    updatePrincipalDispatchCorrelation(null);
-    expect(capturePrincipalDispatchAuthorization()).toBeNull();
-    expect(isPrincipalDispatchAuthorizationCurrent(accountB!)).toBe(false);
-    await flushNotification();
-    expect(notifications).toBe(2);
-    unsubscribe();
-  });
+test("registration and correlation churn cannot revoke authorization", () => {
+  const capture = capturePrincipalDispatchAuthorization()!;
+  registerPrincipalDispatchRuntime(null);
+  updatePrincipalDispatchCorrelation(null);
+  updatePrincipalDispatchCorrelation(42);
+  registerPrincipalDispatchRuntime({ canDispatch: false, subscribe: () => () => {} });
+  expect(isPrincipalDispatchAuthorizationCurrent(capture)).toBe(true);
+  expect(capturePrincipalDispatchAuthorization()).not.toBeNull();
 });

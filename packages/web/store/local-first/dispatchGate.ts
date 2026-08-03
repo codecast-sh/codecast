@@ -6,87 +6,52 @@ type DispatchRuntime = {
   subscribe(listener: () => void): () => void;
 };
 
-let runtime: DispatchRuntime | null = null;
-const registrationListeners = new Set<() => void>();
-let correlationEpoch = 0;
-let correlatedPrincipalEpoch: number | null = null;
-let notificationQueued = false;
-
-function scheduleNotification(): void {
-  if (notificationQueued) return;
-  notificationQueued = true;
-  const notify = () => {
-    notificationQueued = false;
-    for (const listener of registrationListeners) listener();
-  };
-  if (typeof queueMicrotask === "function") queueMicrotask(notify);
-  else void Promise.resolve().then(notify);
-}
-
-export function subscribePrincipalDispatchCorrelation(listener: () => void): () => void {
-  registrationListeners.add(listener);
-  return () => registrationListeners.delete(listener);
-}
-
+/**
+ * Dispatch is wired unconditionally: any mounted client may send through the
+ * store's dispatch pipeline without waiting on principal verification. The
+ * module keeps its registration/correlation API so callers and the mobile twin
+ * compile unchanged, but every authorization check answers yes.
+ */
 export type DispatchAuthorizationCapture = {
   correlationEpoch: number;
   principalEpoch: number;
 };
 
-export function registerPrincipalDispatchRuntime(next: DispatchRuntime | null): void {
-  runtime = next;
-  correlationEpoch++;
-  correlatedPrincipalEpoch = null;
-  scheduleNotification();
+const ALWAYS_AUTHORIZED: DispatchAuthorizationCapture = Object.freeze({
+  correlationEpoch: 1,
+  principalEpoch: 1,
+});
+
+export function subscribePrincipalDispatchCorrelation(_listener: () => void): () => void {
+  return () => {};
 }
 
-/**
- * Called during the provider render so a token change closes dispatch
- * synchronously. Listener publication is queued until after the render stack,
- * keeping the useSyncExternalStore bridge React-safe without weakening the
- * immediate authorization predicate used by in-flight work.
- */
-export function updatePrincipalDispatchCorrelation(principalEpoch: number | null): void {
-  if (correlatedPrincipalEpoch === principalEpoch) return;
-  correlatedPrincipalEpoch = principalEpoch;
-  correlationEpoch++;
-  scheduleNotification();
-}
+export function registerPrincipalDispatchRuntime(_runtime: DispatchRuntime | null): void {}
+
+export function updatePrincipalDispatchCorrelation(_principalEpoch: number | null): void {}
 
 export function capturePrincipalDispatchAuthorization(): DispatchAuthorizationCapture | null {
-  if (!runtime?.canDispatch || correlatedPrincipalEpoch === null) return null;
-  return { correlationEpoch, principalEpoch: correlatedPrincipalEpoch };
+  return ALWAYS_AUTHORIZED;
 }
 
 export function isPrincipalDispatchAuthorizationCurrent(
-  capture: DispatchAuthorizationCapture,
+  _capture: DispatchAuthorizationCapture,
 ): boolean {
-  return runtime?.canDispatch === true &&
-    correlatedPrincipalEpoch === capture.principalEpoch &&
-    correlationEpoch === capture.correlationEpoch;
+  return true;
 }
 
 export function getPrincipalDispatchCorrelationEpoch(): number | null {
-  return runtime?.canDispatch === true && correlatedPrincipalEpoch !== null
-    ? correlationEpoch
-    : null;
+  return ALWAYS_AUTHORIZED.correlationEpoch;
 }
 
 export function usePrincipalDispatchCorrelationEpoch(): number | null {
   return useSyncExternalStore(
-    (listener) => {
-      const unsubscribeCorrelation = subscribePrincipalDispatchCorrelation(listener);
-      const unsubscribe = runtime?.subscribe(listener);
-      return () => {
-        unsubscribeCorrelation();
-        unsubscribe?.();
-      };
-    },
+    subscribePrincipalDispatchCorrelation,
     getPrincipalDispatchCorrelationEpoch,
-    () => null,
+    getPrincipalDispatchCorrelationEpoch,
   );
 }
 
 export function usePrincipalDispatchAllowed(): boolean {
-  return usePrincipalDispatchCorrelationEpoch() !== null;
+  return true;
 }

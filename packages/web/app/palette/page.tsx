@@ -6,7 +6,6 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEnsureDispatch } from "../../hooks/useEnsureDispatch";
 import { useLiveInboxSessions } from "../../hooks/useLiveInboxSessions";
 import { isElectron, bridge } from "../../lib/desktop";
-import { usePrincipalLocalState } from "../../components/PrincipalLocalStateProvider";
 
 export default function PalettePage() {
   return (
@@ -28,31 +27,7 @@ export default function PalettePage() {
  * fresh blank session.
  */
 function PaletteRoot() {
-  // The provider deliberately renders locked public routes, including
-  // /palette. That must not expose this window's mutative actions before an
-  // exact principal store (and its outbox) has opened. `offline-ready` is safe:
-  // writes enqueue durably even though live dispatch waits for the server.
   useEnsureDispatch();
-  const { state } = usePrincipalLocalState();
-  const durablePrincipalReady =
-    state.phase === "offline-ready" || state.phase === "server-verified";
-  if (!durablePrincipalReady) {
-    return (
-      <section className="w-[30rem] max-w-[calc(100vw-1rem)] rounded-xl border border-sol-border bg-sol-card p-5 text-sol-text shadow-xl">
-        <h1 className="text-sm font-semibold">Codecast is not ready to write</h1>
-        <p className="mt-2 text-xs text-sol-text-muted">
-          Sign in or retry after local state opens. Creating or changing work is
-          disabled so nothing can be lost.
-        </p>
-        <button
-          className="mt-4 rounded-md border border-sol-border px-3 py-2 text-xs hover:border-sol-cyan"
-          onClick={() => window.location.reload()}
-        >
-          Retry
-        </button>
-      </section>
-    );
-  }
   return <ReadyPaletteRoot />;
 }
 

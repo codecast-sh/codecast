@@ -23,18 +23,13 @@ describe("durable dispatch call-site guards", () => {
     expect(source).toContain("sendMessage(convexId, fullMessage, undefined, clientId)");
   });
 
-  test("standalone palette never exposes writable surfaces before its principal outbox opens", async () => {
+  test("standalone palette wires dispatch unconditionally", async () => {
     const source = await Bun.file(
       new URL("../../app/palette/page.tsx", import.meta.url),
     ).text();
 
-    expect(source).toContain('state.phase === "offline-ready"');
-    expect(source).toContain('state.phase === "server-verified"');
-    expect(source).toContain("if (!durablePrincipalReady)");
+    expect(source).toContain("useEnsureDispatch()");
     expect(source).toContain("return <ReadyPaletteRoot />");
-    expect(source.indexOf("if (!durablePrincipalReady)")).toBeLessThan(
-      source.indexOf("function ReadyPaletteRoot()"),
-    );
   });
 
   test("anonymous shared conversations bypass a principal hydration that can never occur", async () => {
