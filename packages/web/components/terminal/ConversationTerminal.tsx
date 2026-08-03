@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
-import { X, RotateCw, Lock, LockOpen } from "lucide-react";
+import { X, RotateCw } from "lucide-react";
 import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import {
   attachToContainer,
@@ -30,8 +30,6 @@ interface SplitState {
   termId: string | null;
   target: string;
   height: number;
-  /** false = read-only viewer; true = keystrokes go to the pane (default) */
-  interactive: boolean;
 }
 
 const splits = new Map<string, SplitState>();
@@ -62,7 +60,7 @@ export function toggleConversationTerminal(convKey: string, target: string): voi
     if (existing.termId) closeTab(existing.termId);
     splits.delete(convKey);
   } else {
-    splits.set(convKey, { termId: null, target, height: DEFAULT_HEIGHT, interactive: true });
+    splits.set(convKey, { termId: null, target, height: DEFAULT_HEIGHT });
   }
   bump();
 }
@@ -103,7 +101,9 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
         target,
         title: target,
         detached: true,
-        interactive: current.interactive,
+        // Interactive, same as a manual `tmux attach` — the pill is just the
+        // safe version of it (ignore-size, no nesting).
+        interactive: true,
       });
       current.target = target;
       bump();
@@ -151,7 +151,8 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
     const maxH = Math.round(window.innerHeight * 0.7);
     let latest = startHeight;
     const onMove = (ev: PointerEvent) => {
-      latest = Math.min(Math.max(startHeight + (startY - ev.clientY), MIN_HEIGHT), maxH);
+      // Top-docked: dragging DOWN grows the split.
+      latest = Math.min(Math.max(startHeight + (ev.clientY - startY), MIN_HEIGHT), maxH);
       setDragHeight(latest);
     };
     const onUp = () => {
@@ -173,31 +174,12 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
 
   const close = () => toggleConversationTerminal(convKey, target);
 
-  // Interactive <-> read-only is a server-side attach flag, so flipping it
-  // reconnects (the buffer reseeds from tmux; nothing is lost).
-  const toggleInteractive = () => {
-    const current = splits.get(convKey);
-    if (!current) return;
-    current.interactive = !current.interactive;
-    if (current.termId) {
-      closeTab(current.termId);
-      current.termId = null;
-    }
-    bump();
-    void connect();
-  };
-
   return (
     <div
       data-terminal-panel
-      className="flex-shrink-0 flex flex-col bg-sol-bg border-t border-sol-border/40"
+      className="flex-shrink-0 flex flex-col bg-sol-bg border-b border-sol-border/40"
       style={{ height: dragHeight ?? split.height }}
     >
-      <div onPointerDown={onHandlePointerDown} className="group relative h-[3px] -mt-[2px] flex-shrink-0 z-10 cursor-row-resize">
-        <div className="absolute inset-x-0 -top-[3px] -bottom-[3px]" />
-        <div className="absolute inset-x-0 top-[1px] h-px bg-transparent group-hover:bg-sol-cyan transition-colors duration-150" />
-      </div>
-
       <div className="flex items-center h-[24px] px-2 gap-1.5 flex-shrink-0 bg-sol-bg-alt/30 border-b border-sol-border/20 select-none">
         <span
           className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
@@ -205,18 +187,6 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
           }`}
         />
         <span className="text-[10px] font-mono text-sol-text-muted truncate">{target}</span>
-        <button
-          onClick={toggleInteractive}
-          title={split.interactive ? "Interactive — click to make read-only" : "Read-only — click to enable typing"}
-          className={`inline-flex items-center gap-1 px-1 rounded text-[9px] font-mono border transition-colors ${
-            split.interactive
-              ? "text-sol-green border-sol-green/30 hover:bg-sol-green/10"
-              : "text-sol-violet border-sol-violet/30 hover:bg-sol-violet/10"
-          }`}
-        >
-          {split.interactive ? <LockOpen className="w-2.5 h-2.5" /> : <Lock className="w-2.5 h-2.5" />}
-          {split.interactive ? "interactive" : "read-only"}
-        </button>
         <span className="flex-1" />
         {(status === "exited" || status === "error" || status === "offline" || failure) && (
           <button
@@ -254,6 +224,11 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
           ref={containerRef}
           className={`absolute inset-0 overflow-auto pl-2 pt-1 ${status === "open" ? "" : "invisible"}`}
         />
+      </div>
+
+      <div onPointerDown={onHandlePointerDown} className="group relative h-[3px] -mb-[2px] flex-shrink-0 z-10 cursor-row-resize">
+        <div className="absolute inset-x-0 -top-[3px] -bottom-[3px]" />
+        <div className="absolute inset-x-0 bottom-[1px] h-px bg-transparent group-hover:bg-sol-cyan transition-colors duration-150" />
       </div>
     </div>
   );

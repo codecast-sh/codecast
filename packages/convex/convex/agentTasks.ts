@@ -184,8 +184,11 @@ async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) 
   const now = Date.now();
   const run_at = args.schedule_type === "event" ? undefined : (args.run_at || now);
 
+  const short_id = await nextShortId(ctx.db, "tr");
+
   const taskId = await ctx.db.insert("agent_tasks", {
     user_id: userId,
+    short_id,
     title: args.title,
     prompt: args.prompt,
     context_summary: args.context_summary,
@@ -219,7 +222,7 @@ async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) 
   // Distill a readable display_title/display_summary from the prompt (the
   // summarizer section below) — the stored title is usually prompt.slice(0,60).
   await ctx.scheduler?.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: taskId });
-  return taskId;
+  return { id: taskId, short_id };
 }
 
 // Single-task action exposed under both auth schemes.

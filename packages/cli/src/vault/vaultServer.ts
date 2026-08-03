@@ -8,6 +8,7 @@
 // Every path the browser sends goes through vaultScope.resolveVaultPath. Nothing
 // in this file may construct a filesystem path any other way.
 
+import { spawn } from "child_process";
 import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as http from "http";
@@ -264,6 +265,37 @@ async function handleOp(
 
   const target = scoped(vault, op?.path ?? null);
   if (!target) return sendJson(res, 400, headers, { error: "bad path" });
+
+  if (op.op === "reveal") {
+    // Hand the path to the platform's file manager (or its default app). The
+    // path is already confined to the vault by scoped(); argv is passed as an
+    // ARRAY with no shell, so a filename can never be read as a command.
+    if (!fs.existsSync(target.abs)) return sendJson(res, 404, headers, { error: "not found" });
+    const asOpen = op.mode === "open";
+    let cmd: string;
+    let args: string[];
+    if (process.platform === "darwin") {
+      cmd = "open";
+      args = asOpen ? [target.abs] : ["-R", target.abs];
+    } else if (process.platform === "win32") {
+      cmd = "explorer";
+      // explorer wants the file selected via /select, and the bare path to open.
+      args = asOpen ? [target.abs] : [`/select,${target.abs}`];
+    } else {
+      // Linux desktops have no "select the file" verb; the containing folder is
+      // the closest honest equivalent.
+      cmd = "xdg-open";
+      args = [asOpen ? target.abs : path.dirname(target.abs)];
+    }
+    try {
+      const child = spawn(cmd, args, { stdio: "ignore", detached: true });
+      child.unref();
+      child.on("error", () => {});
+    } catch {
+      return sendJson(res, 500, headers, { error: "could not open" });
+    }
+    return sendJson(res, 200, headers, { ok: true });
+  }
 
   if (op.op === "mkdir") {
     await fsp.mkdir(target.abs, { recursive: true });
