@@ -15,6 +15,7 @@ import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBran
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
+import { deviceGitPubkey, ensureDeviceGitKey, gitEnvFor } from "./gitIdentity.js";
 import {
   useProfile,
   saveProfile,
@@ -2100,6 +2101,9 @@ async function sendHeartbeat(): Promise<void> {
         local_project_roots: computeLocalProjectRoots(),
         // Per-repo git health (origin real? fetch ok? ahead/behind) — see gitPlane.ts.
         git_plane: gitPlaneHeartbeatPayload(),
+        // The device's PUBLIC git key (gitIdentity.ts) — not a secret; the web
+        // shows it so the user can grant this machine repo access.
+        git_pubkey: deviceGitPubkey(),
         device_id: deviceId(),
         device_label: deviceLabel(),
         is_remote_device: isRemoteDevice(),
@@ -11767,6 +11771,9 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
         remote,
         conversationIds: t.sessions.map((s) => s.conversationId),
         sha: snap.sha,
+        // Ride whichever identity the git-plane sweep proved works for this
+        // repo (the device fallback key on access-granted remote machines).
+        env: gitEnvFor((await repoRootFor(t.cwd)) ?? t.cwd),
       });
       if (res.ok) {
         lastPushedWipTree.set(t.cwd, snap.tree);
@@ -11843,13 +11850,14 @@ async function sweepGitPlaneFleet(sessionIds: string[]): Promise<void> {
           lastPushedWipTree.delete(cwd);
         }
       },
+      mintDeviceKey: () => ensureDeviceGitKey(deviceLabel()),
       log,
     },
   );
   latestGitPlane = states;
   const bad = states.filter((s) => !s.origin_ok || s.fetch_ok === false);
   if (bad.length) {
-    log(`[GITPLANE] ${states.length} repos, ${bad.length} unhealthy: ${bad.map((s) => `${path.basename(s.root)}(${!s.origin_ok ? "origin" : "fetch"})`).join(", ")}`);
+    log(`[GITPLANE] ${states.length} repos, ${bad.length} unhealthy: ${bad.map((s) => `${path.basename(s.root)}(${!s.origin_ok ? "origin" : s.needs_access ? "needs-access" : "fetch"})`).join(", ")}`);
   }
 }
 
