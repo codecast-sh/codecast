@@ -9,12 +9,13 @@ import { hasGrantedSendAccess } from "./collab";
 import { addSessionOwnerRow, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
-import { insertEnqueuedPendingMessage } from "./pendingMessageWrites";
+import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
 import {
   messagesCommandCoverageTarget,
 } from "./messageViewContracts";
 import {
   allocateFencedDeliveryMetadata,
+  cancelFencedDeliveriesOnKill,
   isFencedPendingMessage,
   legacyConversationAcceptsDaemonWork,
 } from "./executionBindings";
@@ -136,6 +137,13 @@ async function patchPendingMessageStatus(
   await ctx.db.patch(message._id, patch);
   if (patch.status === "delivered" || patch.status === "cancelled") {
     await clearHasPendingIfQuiet(ctx, message.conversation_id);
+  }
+  // The choke point for every legacy status write, so it's also where DELIVERY
+  // wakes the conversation: a message reaching the pane means the session is
+  // alive whatever its inbox flags say (see reviveConversationOnDelivery). A
+  // cancel/failure obviously must not revive anything.
+  if (patch.status === "injected" || patch.status === "delivered") {
+    await reviveConversationOnDelivery(ctx, message.conversation_id);
   }
   return true;
 }
@@ -837,25 +845,38 @@ export async function resetConversationPendingMessages(
 // touched — a LATER send re-enqueues and revives the session normally, because enqueue clears the
 // dismissed/stashed/killed flags (see the wake-up rules above).
 //
-// Fenced (delivery-protocol v2) rows are deliberately left alone: their cancellation is governed
-// by the execution-binding epoch machinery (supersession, delivery-attempt invariants), and
-// patchPendingMessageStatus already refuses them. clearHasPendingIfQuiet therefore leaves the flag
-// set when one is genuinely still in flight — an honest flag, and classifyWorkState no longer
-// reads a killed row as "working" regardless.
+// Fenced (delivery-protocol v2) rows can't be patched to "cancelled" from here — that would
+// strand their delivery_attempts row and the execution head's active slot — so they go through
+// the epoch machinery's sanctioned cancel (cancelFencedDeliveriesOnKill), which terminalizes
+// everything that hasn't started and leaves a delivery-started/ambiguous effect for the delivery
+// machinery to resolve. Those few stay counted in has_pending_messages, which is the honest
+// answer; classifyWorkState keeps the killed row out of the Working bucket regardless.
 export async function cancelQueuedMessagesOnKill(
   ctx: { db: any },
   conversationId: Id<"conversations">
 ): Promise<number> {
-  let cancelled = 0;
+  const fenced = await cancelFencedDeliveriesOnKill(ctx, conversationId);
+  let cancelled = fenced.cancelled;
+  const PAGE = 200;
   for (const status of NON_TERMINAL_PENDING_STATUSES) {
-    const rows = await ctx.db
-      .query("pending_messages")
-      .withIndex("by_conversation_status", (q: any) =>
-        q.eq("conversation_id", conversationId).eq("status", status)
-      )
-      .take(200);
-    for (const row of rows) {
-      if (await patchPendingMessageStatus(ctx, row, { status: "cancelled" as const })) cancelled++;
+    // DRAIN, don't sample: a queue deeper than one page must not survive a kill.
+    // Each pass re-queries the same status because a cancel moves the row out of
+    // it; stop as soon as a page cancels nothing, so a row this path may not
+    // touch (an in-flight fenced delivery) can't spin the loop forever.
+    for (;;) {
+      const rows = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q: any) =>
+          q.eq("conversation_id", conversationId).eq("status", status)
+        )
+        .take(PAGE);
+      if (rows.length === 0) break;
+      let progressed = 0;
+      for (const row of rows) {
+        if (await patchPendingMessageStatus(ctx, row, { status: "cancelled" as const })) progressed++;
+      }
+      if (progressed === 0) break;
+      cancelled += progressed;
     }
   }
   // Also the repair for an ALREADY-stranded row: a kill whose queue has since gone terminal

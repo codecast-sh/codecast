@@ -5879,6 +5879,7 @@ program
         id: c.id, session_id: c.session_id, title: c.title, project_path: c.project_path,
         updated_at: c.updated_at, message_count: c.message_count, agent_type: c.agent_type,
         agent_status: c.agent_status, work_state: c.work_state || "idle", is_pinned: !!c.is_pinned,
+        is_killed: !!c.is_killed,
         is_live: !!c.is_live, is_unresponsive: false, awaiting_input: false,
         idle_summary: null, last_user_message: null, active_plan: null, active_task: null,
       }));
@@ -5986,6 +5987,14 @@ program
       const cur: typeof prevRows = {};
       for (const s of sessions) {
         if (!matchesId(s)) continue;
+        // A KILL is a DEPARTURE, not a transition. A retired row keeps showing
+        // up in the query (team scope lists it; a pinned solo row survives
+        // shouldShowInInbox), so leaving it in the watched set made every kill
+        // emit transition→idle — and a bulk kill emit a storm of them — into
+        // what fleet orchestration uses as its wake signal. Dropping it here
+        // leaves the "gone" pass below to announce it exactly once, with the
+        // state it left from.
+        if (s.is_killed) continue;
         cur[s.id] = { state: s.work_state, title: s.title ?? null, session_id: s.session_id ?? null };
         if (firstFrame) continue;
         const prev = prevRows[s.id];

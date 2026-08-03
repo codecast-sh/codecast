@@ -331,30 +331,39 @@ export async function applyHideTransition(
     teardownEnqueued = await enqueueKillSessionCommand(ctx, doc);
     // A persistent anchor never auto-completes on a dismiss/kill — it goes
     // dormant, not retired (only decommissionAnchor clears `persistent`).
-    const killPatch: Record<string, any> = { inbox_killed_at: Date.now() };
+    // inbox_killed_at records when the session was FIRST killed: a forced
+    // re-kill re-runs the teardown but must not rewrite that history, or the
+    // row's honest "killed at" jumps forward every time a resurrection is
+    // stamped out (and the cascade below claims exactly this for its children).
+    const killPatch: Record<string, any> = {};
+    if (!doc?.inbox_killed_at) killPatch.inbox_killed_at = Date.now();
     if (!doc?.persistent) killPatch.status = "completed";
-    await ctx.db.patch(doc._id, killPatch);
+    if (Object.keys(killPatch).length > 0) await ctx.db.patch(doc._id, killPatch);
     // Dismiss retires the session — a standing schedule that injects
     // into it must die with it, or its next fire would silently
     // resurrect a session the user just retired. User gestures only:
     // bulk cleanup sweeps patch inbox_dismissed_at directly (not via
-    // dispatch) and deliberately leave standing schedules armed. An
-    // anchor going dormant keeps its schedules too. Task owner = the
-    // conversation's runner (a second-party owner may be triaging). Safe to
-    // re-run on a forced re-kill: it only touches scheduled/running/paused
-    // tasks, so a second pass over already-canceled ones is a no-op — and a
-    // schedule re-armed since the first kill SHOULD die again with it.
-    if (!doc?.persistent) {
-      canceledSchedules = await cancelTasksBoundToConversation(ctx, doc.user_id, doc._id);
-    }
+    // dispatch) and deliberately leave standing schedules armed. Task
+    // owner = the conversation's runner (a second-party owner may be
+    // triaging).
+    //
     // Kill is terminal for messages ALREADY queued, or the retry loop delivers
     // one later and revives a session carrying kill metadata (and an exhausted
-    // one strands the row as completed + has_pending forever). Applies to
-    // anchors too: `persistent` governs RETIREMENT (no auto-complete, schedules
-    // kept), not delivery of work queued before the user pulled the plug — a
-    // later send re-enqueues and wakes it normally. Re-runs safely on a forced
-    // re-kill, taking anything queued since the first kill with it.
-    canceledMessages = await cancelQueuedMessagesOnKill(ctx, doc._id);
+    // one strands the row as completed + has_pending forever). Re-runs safely on
+    // a forced re-kill, taking anything queued since the first kill with it.
+    //
+    // Both of these are RETIREMENT effects, so a persistent anchor is exempt
+    // from both: killing an anchor means dormancy, not death. Its schedules stay
+    // armed on purpose — and so its queue must stay too, or the anchor wakes on
+    // its next trigger and runs WITHOUT the messages the human queued for it,
+    // silently. (The schedule sweep is safe to re-run: it only touches
+    // scheduled/running/paused tasks, so a second pass over already-canceled
+    // ones is a no-op — and a schedule re-armed since the first kill SHOULD die
+    // again with it.)
+    if (!doc?.persistent) {
+      canceledSchedules = await cancelTasksBoundToConversation(ctx, doc.user_id, doc._id);
+      canceledMessages = await cancelQueuedMessagesOnKill(ctx, doc._id);
+    }
   }
   // The nested group (Task subagents + agent-team teammates) always comes down
   // with the card, no matter which surface asked — the group is one unit. Runs

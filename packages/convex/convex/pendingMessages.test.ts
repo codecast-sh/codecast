@@ -559,16 +559,77 @@ describe("cancelQueuedMessagesOnKill", () => {
     expect(db._tables.conversations[0].has_pending_messages).toBe(false);
   });
 
-  // Fenced (delivery-protocol v2) rows belong to the execution-binding epoch
-  // machinery — cancelling one here would strand its delivery attempt. Leaving
-  // the flag set is then the HONEST answer (classifyWorkState keeps the killed
-  // row out of the Working bucket regardless).
-  test("leaves fenced rows to the epoch machinery and does not lie about the flag", async () => {
+  // A queue deeper than one page must not survive a kill — the cancel drains,
+  // it doesn't sample.
+  test("drains a queue larger than one page", async () => {
+    const many = Array.from({ length: 250 }, (_, i) => ({ _id: `m${i}`, status: "pending" }));
+    const db = mkDb(many);
+    expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(250);
+    expect(db._tables.pending_messages.every((r: any) => r.status === "cancelled")).toBe(true);
+    expect(db._tables.conversations[0].has_pending_messages).toBe(false);
+  });
+
+  // Fenced (delivery-protocol v2) rows can't be patched to "cancelled" behind
+  // the epoch machinery's back — kill routes them through its sanctioned cancel
+  // instead, so kill is terminal on a fenced conversation too.
+  test("cancels UNSTARTED fenced deliveries through the epoch machinery", async () => {
     const db = mkDb([
       { _id: "m_fenced", status: "pending", delivery_protocol_version: 2, delivery_status: "pending" },
     ]);
+    expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(1);
+    expect(db._tables.pending_messages[0].status).toBe("cancelled");
+    expect(db._tables.pending_messages[0].delivery_status).toBe("cancelled-by-supersession");
+    expect(db._tables.conversations[0].has_pending_messages).toBe(false);
+  });
+
+  // A delivery already landing in the pane is the one thing kill may not
+  // rewrite — only the delivery machinery resolves it. The flag stays true,
+  // which is the honest answer (classifyWorkState keeps the killed row out of
+  // the Working bucket regardless).
+  test("leaves an in-flight fenced delivery alone and does not lie about the flag", async () => {
+    const db = mkDb([
+      { _id: "m_started", status: "pending", delivery_protocol_version: 2, delivery_status: "delivery-started" },
+    ]);
     expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(0);
     expect(db._tables.pending_messages[0].status).toBe("pending");
+    expect(db._tables.pending_messages[0].delivery_status).toBe("delivery-started");
     expect(db._tables.conversations[0].has_pending_messages).toBe(true);
+  });
+});
+
+// The delivery-side twin of the enqueue wake-up rules: if the system injects a
+// message into a conversation, that conversation is alive whatever its inbox
+// flags say. Without this, a message that outlived a kill runs the session while
+// the row still reads killed — and classifyWorkState now files that as "idle",
+// so the contradiction is invisible.
+describe("delivery revives a killed conversation", () => {
+  const CONV = "c1";
+  const killedDb = () =>
+    makeFakeDb({
+      conversations: [{
+        _id: CONV, user_id: "u1", status: "completed",
+        inbox_killed_at: 111, inbox_dismissed_at: 111, inbox_stashed_at: 111,
+      }],
+      pending_messages: [{ _id: "m1", conversation_id: CONV, status: "pending", retry_count: 0 }],
+    });
+
+  test("an injection clears the kill/dismiss stamps and re-activates the row", async () => {
+    const db = killedDb();
+    await updatePendingMessageStatusForDaemon({ db } as any, "m1" as any, "u1" as any, "dev1", { status: "injected" });
+    const conv = db._tables.conversations[0];
+    expect(conv.inbox_killed_at).toBeUndefined();
+    expect(conv.inbox_dismissed_at).toBeUndefined();
+    expect(conv.status).toBe("active");
+    // Stash survives on purpose: "keep working out of my sight" is exactly what
+    // a delivering-but-hidden session is doing (mirrors enqueue's machine wake).
+    expect(conv.inbox_stashed_at).toBe(111);
+  });
+
+  test("a CANCEL is not a delivery and revives nothing", async () => {
+    const db = killedDb();
+    await cancelQueuedMessagesOnKill({ db } as any, CONV as any);
+    const conv = db._tables.conversations[0];
+    expect(conv.inbox_killed_at).toBe(111);
+    expect(conv.status).toBe("completed");
   });
 });
