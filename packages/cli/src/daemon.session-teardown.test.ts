@@ -6,6 +6,7 @@ import {
   danglingUserTurnIsReapable,
   derivedPaneNamesForConversation,
   isConversationRetired,
+  killLocalPanesForConversation,
   parseReapCandidateRow,
   reapSkipBucket,
   registerManagedStartedSession,
@@ -315,6 +316,27 @@ describe("clearSessionTrackingForKill", () => {
     expect(() => clearSessionTrackingForKill(undefined)).not.toThrow();
     expect(() => clearSessionTrackingForKill(null)).not.toThrow();
     expect(sessionKillTrackingSnapshot("never-seen").pane).toBe(false);
+  });
+
+  // THE race the sweep exists for, and the one the first version of it missed:
+  // the kill lands after a resume passed the gates but BEFORE its pane exists.
+  // Clearing state only next to a found pane means finding none clears nothing,
+  // and the in-flight resume completes into a killed conversation.
+  // (clearConversationDeliveryAndResumeState does not cover these maps — it
+  // touches resumeFatalReasons/deliveryFailures/repairAttempts, never resumeInFlight.)
+  test("a sweep that finds ZERO panes still clears the in-flight maps", async () => {
+    const sid = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
+    // A conversation id whose derived cc-<agent>-* names cannot exist, and a
+    // session id no live pane is stamped with — so the sweep matches nothing.
+    const convId = "jx7nosuchconversation000000000000";
+    registerManagedStartedSession(convId, sid, "cc-claude-zeropanetest");
+    expect(sessionKillTrackingSnapshot(sid).pane).toBe(true);
+
+    const killed = await killLocalPanesForConversation(convId, sid, "TEST");
+    expect(killed).toBe(0);
+    // Proof the unconditional clear ran: clearSessionTrackingForKill empties every
+    // map in one body (covered above), so the pane bit flipping is the whole set.
+    expect(sessionKillTrackingSnapshot(sid).pane).toBe(false);
   });
 });
 

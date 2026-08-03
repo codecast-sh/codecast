@@ -2348,6 +2348,13 @@ export function derivedPaneNamesForConversation(conversationId: string): string[
 // the next health check or reaper pass.)
 export function clearSessionTrackingForKill(sessionId: string | null | undefined): void {
   if (!sessionId) return;
+  // NOTE on restartingSessionIds: killConversationBackends never cleared it, and
+  // this does. Harmless today because Restart enqueues kill and resume as two
+  // separate daemon commands, so the guard is not yet set when the kill runs. It
+  // stops being harmless if those ever land together or in-process: the guard is
+  // what tells the watchdog "a restart is in progress, don't mark this
+  // completed", so clearing it mid-restart would make Restart complete the
+  // session instead of restarting it. If you couple them, drop this line.
   stopManagedSessionHeartbeat(sessionId);
   stopCodexPermissionPoller(sessionId);
   resumeSessionCache.delete(sessionId);
@@ -2384,7 +2391,7 @@ export function sessionKillTrackingSnapshot(sessionId: string): Record<string, b
  * Each stops tracking BEFORE the kill, or heartbeatHealthCheck sees the vanished
  * tmux and RECONSTITUTES the agent. Returns how many panes were killed.
  */
-async function killLocalPanesForConversation(
+export async function killLocalPanesForConversation(
   conversationId: string,
   sessionIdHint: string | undefined,
   context: string,
@@ -2393,6 +2400,13 @@ async function killLocalPanesForConversation(
   const stopTracking = (id: string | null | undefined) => clearSessionTrackingForKill(id);
 
   const sessionId = sessionIdHint ?? buildReverseConversationCache(readConversationCache())[conversationId];
+  // UNCONDITIONALLY, before any pane lookup — finding no pane is not the same as
+  // having nothing to clear, and is in fact THE race this exists for: a resume
+  // that passed the gates is mid-flight and its pane does not exist YET, so a
+  // sweep that only cleared state next to a kill would leave resumeInFlight set
+  // and let that resume complete into a killed conversation. (The loops below
+  // still call it for the id stamped on a pane, which can differ from this one.)
+  clearSessionTrackingForKill(sessionId);
   if (sessionId) {
     try {
       const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
@@ -12008,6 +12022,18 @@ export function danglingUserTurnIsReapable(input: {
  * sidecar. A sidecar newer than the last real message therefore means the
  * question was asked and nothing has happened since — still pending. On the same
  * 23 panes this correctly protects exactly 2, both genuinely abandoned mid-question.
+ *
+ * KNOWN INERT SHAPES — strictly better than the pane regex alone, but not total:
+ *   - a stale sidecar from an ANSWERED earlier question masks a LATER pending one
+ *     whose own write never happened: codecast-status.sh skips the write when the
+ *     tool_input carries an empty `questions` array (statusHook.ts), and the hook
+ *     can also lose it to its own timeout. The mask reads as "pending" — the SAFE
+ *     direction (we decline to reap), so it costs a leaked pane, not a killed
+ *     question.
+ *   - a session running WITHOUT the codecast status hook writes no sidecar at all,
+ *     so it has no protection here beyond the pane classifier.
+ * Closing either needs a signal the agent emits unconditionally while blocked;
+ * the sidecar is the best one that exists today.
  */
 export function askUserQuestionStillPending(
   sidecarMtimeMs: number | null,
@@ -12067,8 +12093,14 @@ async function resolveReapSessionId(tmux: string): Promise<string | null> {
 // file falls back to the full walk. Reaper-local on purpose — findSessionFile has
 // many other callers whose freshness assumptions we're not touching.
 const reapTranscriptCache = new Map<string, SessionFileInfo>();
+// Misses need caching more than hits do: "no-transcript" is the DOMINANT skip
+// bucket, and each one paid the full walk every pass forever. TTL'd rather than
+// permanent so a transcript that shows up later (a resume materializing one) is
+// still found within half an hour.
+const reapTranscriptMisses = new Map<string, number>();
+const REAP_TRANSCRIPT_MISS_TTL_MS = 30 * 60 * 1000;
 
-function findReapTranscript(sessionId: string): SessionFileInfo | null {
+function findReapTranscript(sessionId: string, now: number = Date.now()): SessionFileInfo | null {
   const cached = reapTranscriptCache.get(sessionId);
   if (cached) {
     try {
@@ -12078,8 +12110,15 @@ function findReapTranscript(sessionId: string): SessionFileInfo | null {
       reapTranscriptCache.delete(sessionId);
     }
   }
+  const missedAt = reapTranscriptMisses.get(sessionId);
+  if (missedAt !== undefined && now - missedAt < REAP_TRANSCRIPT_MISS_TTL_MS) return null;
   const found = findSessionFile(sessionId);
-  if (found) reapTranscriptCache.set(sessionId, found);
+  if (found) {
+    reapTranscriptCache.set(sessionId, found);
+    reapTranscriptMisses.delete(sessionId);
+  } else {
+    reapTranscriptMisses.set(sessionId, now);
+  }
   return found;
 }
 
@@ -12110,7 +12149,7 @@ export function tmuxSessionIsSinglePane(listPanesStdout: string): boolean {
 async function reapBlockReason(
   sessionId: string, tmux: string, now: number,
 ): Promise<{ reason: string } | { reason: null; idleHours: number }> {
-  const file = findReapTranscript(sessionId);
+  const file = findReapTranscript(sessionId, now);
   if (!file) return { reason: "no-transcript" };
   const classifyTail = classifyTranscriptTailFor(file.agentType);
   if (!classifyTail) return { reason: `agent=${file.agentType}` };
