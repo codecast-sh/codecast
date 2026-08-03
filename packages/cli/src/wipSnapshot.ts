@@ -126,6 +126,13 @@ export async function createWipSnapshot(cwd: string): Promise<WipSnapshot | null
   const branch = (await gitTry(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])) ?? "HEAD";
   const dirty = !!(await gitTry(cwd, ["status", "--porcelain"]));
 
+  // Sibling sessions in one checkout must produce the IDENTICAL commit object so
+  // git uploads it once (see buildSnapshotMessage). Commit dates default to the
+  // current second, which broke that whenever two snapshots straddled a second
+  // boundary — the shas diverged and every sibling pushed its own copy. Pinning
+  // both dates to HEAD's makes the snapshot a pure function of tree + parent.
+  const snapshotDate = (await gitTry(cwd, ["log", "-1", "--format=%cI", head])) || "1970-01-01T00:00:00Z";
+
   // A temp index is what makes this invisible to the source: `git add -A` stages
   // into THIS file, leaving the real .git/index untouched, so a staged-but-
   // uncommitted change in the user's index survives unharmed.
@@ -145,7 +152,7 @@ export async function createWipSnapshot(cwd: string): Promise<WipSnapshot | null
       head,
       "-m",
       buildSnapshotMessage({ branch }),
-    ]);
+    ], { ...process.env, GIT_AUTHOR_DATE: snapshotDate, GIT_COMMITTER_DATE: snapshotDate });
     return { sha, base: head, branch, dirty, tree };
   } catch {
     return null;
@@ -323,7 +330,11 @@ export function remoteSnapshotScript(opts: { cwd: string; ref: string }): string
     `GIT_INDEX_FILE="$IDX" git add -A`, // respects .gitignore, same as here
     `TREE=$(GIT_INDEX_FILE="$IDX" git write-tree)`,
     `BR=$(git rev-parse --abbrev-ref HEAD)`,
-    `SNAP=$(git -c user.email=codecast@local -c user.name=codecast commit-tree "$TREE" -p HEAD ` +
+    // Same date pinning as createWipSnapshot, for the same reason: the commit
+    // must be a pure function of tree + parent, not of the second it ran in.
+    `DT=$(git log -1 --format=%cI HEAD)`,
+    `SNAP=$(GIT_AUTHOR_DATE="$DT" GIT_COMMITTER_DATE="$DT" ` +
+      `git -c user.email=codecast@local -c user.name=codecast commit-tree "$TREE" -p HEAD ` +
       `-m ${q("codecast wip snapshot")} -m "${BRANCH_TRAILER}: $BR")`,
     `rm -f "$IDX"`,
     `git update-ref ${q(opts.ref)} "$SNAP"`,
