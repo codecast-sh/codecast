@@ -1,4 +1,4 @@
-import { exec } from "child_process";
+import { exec } from "./proc.js";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as crypto from "crypto";

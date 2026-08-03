@@ -6,7 +6,7 @@
 // rides the beat only when its hash changes: once after boot, then whenever a
 // periodic recollection sees a different set (new login, upgraded client).
 
-import { execFile } from "child_process";
+import { execFile } from "./proc.js";
 import crypto from "crypto";
 import { AGENT_CLIENTS, type DeviceModelInventory } from "@codecast/shared/contracts";
 import { hasBin } from "./doctorClients.js";

@@ -16,7 +16,7 @@
  *     continue to work.
  */
 
-import { spawn } from "node:child_process";
+import { spawn } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { HookName } from "./types.js";

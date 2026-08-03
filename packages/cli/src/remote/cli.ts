@@ -231,7 +231,7 @@ export function registerRemoteCommand(program: Command): void {
       const host = loadRemoteHost(_opts.host);
       const SSH = `ssh -i ${host.keyPath} -o StrictHostKeyChecking=accept-new ${host.user}@${host.address}`;
       console.log(`tearing down ${host.user}@${host.address}`);
-      const { execSync } = await import("node:child_process");
+      const { execSync } = await import("../proc.js");
       execSync(`${SSH} 'rm -f ~/.claude/.credentials.json ~/.codecast/config.json; pkill -f "index.ts _daemon" 2>/dev/null; echo "credentials wiped, daemon stopped"'`, { stdio: "inherit" });
       if (_opts.destroy) {
         console.log("host destroy: not yet implemented (use Scaleway console or API)");

@@ -31,7 +31,7 @@
 // never syncs message bodies. SSE carries STATE (working / idle / permission) only.
 
 import { EventEmitter } from "events";
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "./proc.js";
 import * as readline from "readline";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 

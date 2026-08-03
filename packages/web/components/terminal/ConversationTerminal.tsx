@@ -132,6 +132,15 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
     }
   }, [split.termId, status]);
 
+  const reconnect = useCallback(() => {
+    const current = splits.get(convKey);
+    if (current?.termId) {
+      closeTab(current.termId);
+      current.termId = null;
+    }
+    void connect();
+  }, [convKey, connect]);
+
   const onHandlePointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
     const startY = e.clientY;
@@ -183,14 +192,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
         <span className="flex-1" />
         {(status === "exited" || status === "error" || status === "offline" || failure) && (
           <button
-            onClick={() => {
-              const current = splits.get(convKey);
-              if (current?.termId) {
-                closeTab(current.termId);
-                current.termId = null;
-              }
-              void connect();
-            }}
+            onClick={reconnect}
             title="Reconnect"
             className="p-0.5 rounded text-sol-text-dim/50 hover:text-sol-cyan transition-colors"
           >
@@ -209,7 +211,10 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
           <div className="absolute inset-0 flex items-center justify-center text-[11px] font-mono text-center px-6">
             <span>
               <span className="text-sol-yellow">no connection</span>
-              <span className="text-sol-text-dim"> — the terminal needs the daemon reachable on this machine</span>
+              <span className="text-sol-text-dim"> — the terminal needs the daemon reachable on this machine · </span>
+              <button onClick={reconnect} className="text-sol-cyan hover:underline">
+                retry
+              </button>
             </span>
           </div>
         ) : status === "exited" || status === "error" ? (

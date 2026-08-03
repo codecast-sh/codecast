@@ -7284,7 +7284,10 @@ export async function hydratePrincipalInboxCache(options: {
   (useInboxStore.getState() as any)._setOutbox(enqueueDispatch, removeDispatch, loadOutbox);
 
   setHydrating(true);
+  // TEMP boot-timing (ct-40708) — remove before commit.
+  console.log(`[boot-timing] +${Math.round(performance.now())}ms hydrate: loadCache start`);
   const cached = await loadCache();
+  console.log(`[boot-timing] +${Math.round(performance.now())}ms hydrate: loadCache done (${cached ? Object.keys(cached).length + " keys" : "empty"})`);
   if (!isCurrent()) return false;
   if (!cached) {
     setHydrating(false);

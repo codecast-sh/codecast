@@ -160,9 +160,13 @@ export function PrincipalLocalStateProvider({ children }: { children: React.Reac
       verificationCaptureRef.current.token === capture.token &&
       verificationCaptureRef.current.isAuthenticated === capture.isAuthenticated;
     void (async () => {
+      // TEMP boot-timing (ct-40708) — remove before commit.
+      const bt = (label: string) => console.log(`[boot-timing] +${Math.round(performance.now())}ms ${label}`);
+      bt(`effect start (gen=${capture.generation} authed=${capture.isAuthenticated} token=${capture.token ? "yes" : "null"})`);
       let evidence;
       try {
         evidence = await readDurableCredentialEvidence();
+        bt("evidence read done");
       } catch (error) {
         if (!isCurrentCapture()) return;
         try { await runtime.failClosed("credential-evidence-read-failed"); } catch {}
@@ -191,6 +195,7 @@ export function PrincipalLocalStateProvider({ children }: { children: React.Reac
         resolveOffline: async (credentialBinding) =>
           await offlineResolution.resolve(credentialBinding),
         onOfflineReady: () => {
+          bt("offline-ready (cached render unblocked)");
           if (!isCurrentCapture()) return;
           setAuthorizedToken(capture.token);
           setCredentialResolution({ token: capture.token, status: "ready" });
@@ -222,6 +227,7 @@ export function PrincipalLocalStateProvider({ children }: { children: React.Reac
           console.warn("[local-first] principal verification unavailable; using cached state", error);
         },
       });
+      bt(`boot outcome: ${outcome.kind}`);
       if (!isCurrentCapture() || outcome.kind === "stale" || outcome.kind === "offline-ready") {
         return;
       }

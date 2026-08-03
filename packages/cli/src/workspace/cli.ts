@@ -5,7 +5,7 @@
  * Registered via registerWorkspaceCommand(program) called from index.ts.
  */
 
-import { execSync } from "node:child_process";
+import { execSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Command } from "commander";
