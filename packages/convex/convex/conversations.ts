@@ -9,7 +9,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
-import { resetConversationPendingMessages } from "./pendingMessages";
+import { resetConversationPendingMessages, cancelQueuedMessagesOnKill } from "./pendingMessages";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
@@ -6318,6 +6318,7 @@ export const feedForCLI = query({
         hasPending,
         isUnresponsive: activity.isUnresponsive,
         messageCount: conv.message_count || 0,
+        killed: !!conv.inbox_killed_at,
       });
       workStateMap.set(conv._id.toString(), ws);
       return ws;
@@ -6461,6 +6462,9 @@ export const feedForCLI = query({
         agent_type: conv.agent_type,
         ...(convIsLive ? { is_live: true, agent_status: coercedStatusMap.get(conv._id.toString()) || undefined } : {}),
         work_state: workStateMap.get(conv._id.toString()) || "idle",
+        // A retired row. `cast sessions -w` reads this to emit a kill as a
+        // DEPARTURE from the watched set rather than a work-state transition.
+        ...(conv.inbox_killed_at ? { is_killed: true } : {}),
         is_pinned: !!conv.inbox_pinned_at,
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
         ...(sessionOwner ? { owner: sessionOwner } : {}),
@@ -7461,6 +7465,9 @@ async function enrichInboxSessionRow(
     inbox_pinned_at: conv.inbox_pinned_at ?? null,
     inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
     inbox_stashed_at: conv.inbox_stashed_at ?? null,
+    // The retired marker: classifyWorkState uses it to keep a killed row out of
+    // the Working bucket no matter what stale flags it still carries.
+    inbox_killed_at: conv.inbox_killed_at ?? null,
     agent_status: agentStatus,
     tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
@@ -7571,6 +7578,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     inbox_pinned_at: null,
     inbox_dismissed_at: child.inbox_dismissed_at ?? null,
     inbox_stashed_at: child.inbox_stashed_at ?? null,
+    inbox_killed_at: child.inbox_killed_at ?? null,
     agent_status: childAgentStatus,
     tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
@@ -8346,6 +8354,7 @@ export const inboxForCLI = query({
       agent_type?: string;
       agent_status?: string;
       work_state: WorkState;
+      is_killed: boolean;
       is_pinned: boolean;
       is_live: boolean;
       is_unresponsive: boolean;
@@ -8376,6 +8385,7 @@ export const inboxForCLI = query({
         hasPending: s.has_pending,
         isUnresponsive: s.is_unresponsive,
         messageCount: s.message_count || 0,
+        killed: !!s.inbox_killed_at,
       });
       const is_live = !!s.is_connected;
 
@@ -8400,6 +8410,9 @@ export const inboxForCLI = query({
         agent_type: s.agent_type,
         agent_status: s.agent_status,
         work_state,
+        // A retired row (still listed while pinned, or under --all). The watch
+        // stream reads it to emit a kill as a departure, not a transition.
+        is_killed: !!s.inbox_killed_at,
         is_pinned: !!s.is_pinned,
         is_live,
         is_unresponsive: !!s.is_unresponsive,
@@ -8785,6 +8798,63 @@ export const markSessionActive = mutation({
   },
 });
 
+// The daemon's read of a conversation's LIFECYCLE state (api_token auth, so it
+// works from the CLI/daemon where there's no session cookie). It gates its reap
+// on this: a session the user killed or stashed must not be brought back by the
+// daemon's own recovery paths, and no existing daemon-facing query exposes the
+// hide stamps (devices.resolveConversationBySession returns status only).
+// Returns null for a missing conversation or one the caller doesn't run —
+// same silent-null convention as its siblings, and the daemon treats null (or
+// an undeployed query) as "no lifecycle opinion" and falls back.
+//
+// Addressable by conversation_id OR session_id (exactly one), because the daemon
+// often knows only the session it is about to reap or resurrect — and the
+// session route MUST resolve the newest twin, not the oldest (see below).
+export const getConversationLifecycle = query({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.optional(v.id("conversations")),
+    session_id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    // Exactly one selector: neither is nothing to look up, and both could
+    // disagree — refusing to guess is the same discipline
+    // deleteConversationBySessionId applies to twins. Null, not a throw, so a
+    // malformed call reads as "no opinion" like every other miss here.
+    if (!!args.conversation_id === !!args.session_id) return null;
+
+    let conv = args.conversation_id ? await ctx.db.get(args.conversation_id) : null;
+    if (!conv && args.session_id) {
+      // NEWEST twin, never .first(): .first() is creation order, so it returns
+      // the OLDEST row bound to a session_id — the ct-36973 foot-gun that once
+      // made cleanup delete a live original instead of its doppelgänger. Here it
+      // would hand the daemon a dead twin's killed/stashed stamps for a session
+      // that is very much alive, and the reap gate would refuse to bring the
+      // live one back. Same newest-by-updated_at reduction resolveRestartTarget
+      // uses, and foreign twins are filtered out before the pick, so another
+      // user's row can neither be selected nor leak.
+      const twins = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id!))
+        .collect();
+      const owned = twins.filter((t) => t.user_id === userId);
+      conv = owned.length > 0
+        ? owned.reduce((a, b) => ((b.updated_at ?? 0) > (a.updated_at ?? 0) ? b : a))
+        : null;
+    }
+    if (!conv || conv.user_id !== userId) return null;
+    return {
+      status: conv.status,
+      inbox_killed_at: conv.inbox_killed_at ?? null,
+      inbox_stashed_at: conv.inbox_stashed_at ?? null,
+      inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
+      inbox_pinned_at: conv.inbox_pinned_at ?? null,
+    };
+  },
+});
+
 export const dismissFromInbox = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -8836,10 +8906,19 @@ export const cliSetSessionVisibility = mutation({
     const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
 
     if (args.action === "undismiss") {
-      const wasHidden = !!(conv.inbox_dismissed_at || conv.inbox_stashed_at);
+      const wasHidden = !!(conv.inbox_dismissed_at || conv.inbox_stashed_at || conv.inbox_killed_at);
+      // inbox_killed_at clears too, or undismiss can't do what it advertises: a
+      // killed row is hidden by shouldShowInInbox on that flag alone, so
+      // clearing only the hide stamps left it invisible and `cast kill`'s own
+      // "cast undismiss <id> to resurface" hint was a false promise. (It used to
+      // work by accident — the web's pin gesture wiped the flag through the
+      // patch rail, which is exactly the hole the dispatch guard just sealed.)
+      // `status` deliberately stays: undismiss resurfaces the CARD, it does not
+      // restart the agent — that's Restart's job.
       await ctx.db.patch(conv._id, {
         inbox_dismissed_at: undefined,
         inbox_stashed_at: undefined,
+        inbox_killed_at: undefined,
       });
       // The un-kill mirror (same as the web restore path in dispatch): bring
       // back the schedules the kill canceled, stamped tasks only. Scan the
@@ -8854,6 +8933,7 @@ export const cliSetSessionVisibility = mutation({
       return { ok: true as const, short_id: shortId, action: args.action, was_hidden: wasHidden, rearmed_schedules: rearmed };
     }
 
+    const wasHidden = !!conv.inbox_dismissed_at;
     const patch =
       args.action === "kill"
         ? { inbox_dismissed_at: Date.now() }
@@ -8862,8 +8942,22 @@ export const cliSetSessionVisibility = mutation({
     // `conv` is the pre-patch row — applyHideTransition gates on the transition.
     // The nested group (Task subagents + agent-team teammates) comes down with
     // the card via its built-in cascade — see cascadeHideToNestedChildren.
-    const { action: outcome, canceledSchedules, cascaded } = await applyHideTransition(ctx, conv, patch);
-    return { ok: true as const, short_id: shortId, action: args.action, outcome, canceled_schedules: canceledSchedules, cascaded_children: cascaded };
+    // `cast kill` is an EXPLICIT kill gesture, so it forces teardown even on an
+    // already-dismissed session (whose worker a daemon bug may have revived) —
+    // a re-asserted quiet dismiss still doesn't.
+    const { action: outcome, canceledSchedules, canceledMessages, cascaded, teardownEnqueued } =
+      await applyHideTransition(ctx, conv, patch, { forceKill: args.action === "kill" });
+    return {
+      ok: true as const,
+      short_id: shortId,
+      action: args.action,
+      outcome,
+      was_hidden: wasHidden,
+      teardown_enqueued: teardownEnqueued,
+      canceled_schedules: canceledSchedules,
+      canceled_messages: canceledMessages,
+      cascaded_children: cascaded,
+    };
   },
 });
 
@@ -10009,6 +10103,38 @@ export async function resolveRestartTarget(
     // user) restarts from the owner's inbox exactly like their own; the daemon
     // commands are routed to the runner by the callers.
     if (conv.user_id !== userId && conv.owner_user_id !== userId) throw new Error("Not authorized");
+    // An explicit Restart IS the sanctioned revival — the same gesture class as
+    // a human send, so it gets the send path's wake-up rules
+    // (enqueuePendingMessage): clear the kill/hide stamps and re-activate, in
+    // the SAME transaction that enqueues the resume. Without this the daemon
+    // received "restart me" for a row still reading as killed and its hide gate
+    // refused to bring it back. The ghost-recovery path below already did this
+    // for the twin it restores; the existing row was the gap. Patch only what's
+    // actually set, so an ordinary restart of a live session writes nothing.
+    // Read the pre-patch state first: the re-arm below is decided on what the
+    // row looked like when the user hit Restart, not on what the patch left.
+    const wasRetired = !!(conv.inbox_dismissed_at || conv.inbox_killed_at);
+    const revive: Record<string, any> = {};
+    if (conv.status === "completed") revive.status = "active" as const;
+    if (conv.inbox_killed_at) revive.inbox_killed_at = undefined;
+    if (conv.inbox_dismissed_at) revive.inbox_dismissed_at = undefined;
+    if (conv.inbox_stashed_at) revive.inbox_stashed_at = undefined;
+    if (Object.keys(revive).length > 0) {
+      await ctx.db.patch(conv._id, revive);
+      // A revival is a revival: undismiss re-arms the schedules the kill
+      // canceled (reactivateTasksCanceledOnKill), so Restart must too — without
+      // this, `cast undismiss X` brings a session's standing loops back but
+      // Restart leaves them dead forever, which is the more common gesture.
+      // Same two scans as the kill that canceled them: the RUNNER's schedules,
+      // plus the caller's when a second-party owner is restarting.
+      if (wasRetired) {
+        await reactivateTasksCanceledOnKill(ctx, conv.user_id, conv._id);
+        if (conv.user_id.toString() !== userId.toString()) {
+          await reactivateTasksCanceledOnKill(ctx, userId, conv._id);
+        }
+      }
+      return { conv: (await ctx.db.get(conv._id))!, restored: false };
+    }
     return { conv, restored: false };
   }
   let sessionId = ghost.session_id;
@@ -10171,8 +10297,12 @@ export const killSession = mutation({
     });
 
     let canceledSchedules = 0;
+    let canceledMessages = 0;
     if (conv) {
-      const patch: Record<string, any> = { inbox_killed_at: Date.now() };
+      // First-kill time, preserved across re-kills (same rule as
+      // applyHideTransition): a repeat kill re-runs teardown, it doesn't
+      // rewrite when the session was retired.
+      const patch: Record<string, any> = conv.inbox_killed_at ? {} : { inbox_killed_at: Date.now() };
       // A persistent anchor session never auto-completes — a dismiss/kill gesture
       // on its pinned card puts it to sleep, it isn't retired. Only an explicit
       // decommissionAnchor (which clears `persistent` first) may complete it.
@@ -10185,17 +10315,30 @@ export const killSession = mutation({
       // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's
       // schedules (theirs are the ones bound to their session), plus the
       // caller's when a second-party owner is killing.
-      canceledSchedules = await cancelTasksBoundToConversation(ctx, conv.user_id, args.conversation_id);
-      if (conv.user_id !== userId) {
-        canceledSchedules += await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
+      // Both sweeps are RETIREMENT effects, so a persistent anchor is exempt
+      // from both — killing an anchor is dormancy, not death. Same guard as
+      // applyHideTransition: the two kill surfaces must agree about anchors, or
+      // the web button and `cast kill` leave the same session in different
+      // states (its queue survives one and not the other).
+      if (!conv.persistent) {
+        canceledSchedules = await cancelTasksBoundToConversation(ctx, conv.user_id, args.conversation_id);
+        if (conv.user_id !== userId) {
+          canceledSchedules += await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
+        }
+        // Kill is terminal for messages already queued too — same reason the
+        // schedules die: a retained message that lands later revives the session
+        // the user just killed. Only the pre-kill queue; a later send re-enqueues.
+        canceledMessages = await cancelQueuedMessagesOnKill(ctx, args.conversation_id);
       }
       // Take the nested group (Task subagents + agent-team teammates) down
       // with the card. The web store also sweeps optimistically for its own
-      // gesture; this server twin covers every other caller, and the
-      // already-hidden skip inside makes the two paths race-safe.
-      await cascadeHideToNestedChildren(ctx, conv, { inbox_dismissed_at: Date.now() });
+      // gesture; this server twin covers every other caller. Forced, like the
+      // unconditional enqueue above: this mutation IS an explicit kill gesture,
+      // so an already-hidden child whose worker came back gets torn down again
+      // rather than skipped — the group comes down as one unit.
+      await cascadeHideToNestedChildren(ctx, conv, { inbox_dismissed_at: Date.now() }, { forceKill: true });
     }
-    return { existed: !!conv, canceled_schedules: canceledSchedules };
+    return { existed: !!conv, canceled_schedules: canceledSchedules, canceled_messages: canceledMessages };
   },
 });
 

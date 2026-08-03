@@ -3,6 +3,7 @@ import { applyPatches, classifyHideTransition, dispatch } from "./dispatch";
 import { reconfigureSession } from "./conversations";
 import { getReceipt } from "./localFirstCommands";
 import { makeFakeDb } from "./testDb";
+import { shouldShowInInbox } from "./inboxFilters";
 
 // The conversation hide-transition hook in applyPatches is the ONE place the
 // "dismiss = kill, stash = keep alive" contract is enforced — every dismiss
@@ -109,6 +110,136 @@ describe("applyPatches conversation owner gate", () => {
       project_path: "/latest",
       git_root: "/latest",
     });
+  });
+});
+
+// Kill is a DESIRED STATE, not an event. A kill patch is indistinguishable at
+// the FIELD level from a quiet re-assert of the same flag (a stub-rekey flush,
+// an undo replay), so the dispatched ACTION NAME is the only signal of intent
+// the server gets. Regression: a killed session whose worker a daemon bug
+// revived still carried inbox_dismissed_at, so the hide transition classified
+// "none" and no teardown was ever enqueued — the worker was unkillable.
+describe("explicit kill actions force teardown", () => {
+  const RUNNER = "users_runner";
+  const CONV = "conversations_killed";
+
+  function fixtures() {
+    return makeFakeDb({
+      // Already in the Killed bucket, with real work (so the empty-reap path
+      // can't fire) — the resurrection case.
+      conversations: [{
+        _id: CONV, user_id: RUNNER, session_id: "s-1", status: "completed",
+        message_count: 12, inbox_dismissed_at: 111, inbox_killed_at: 111,
+      }],
+      messages: [],
+      pending_messages: [],
+      client_state: [],
+      managed_sessions: [],
+      agent_tasks: [],
+      daemon_commands: [],
+      session_owners: [],
+    });
+  }
+
+  const run = (db: any, action: string) => (dispatch as any)._handler({
+    auth: { getUserIdentity: async () => ({ subject: `${RUNNER}|session` }) },
+    db,
+  }, {
+    action,
+    args: [],
+    patches: { conversations: { [CONV]: { inbox_dismissed_at: 222 } } },
+  });
+
+  const teardowns = (db: any) =>
+    db._tables.daemon_commands.filter((c: any) => c.command === "kill_session");
+
+  test("killSession re-enqueues teardown on an already-killed session", async () => {
+    const db = fixtures();
+    await run(db, "killSession");
+    expect(teardowns(db)).toHaveLength(1);
+    expect(JSON.parse(teardowns(db)[0].args)).toMatchObject({ conversation_id: CONV, session_id: "s-1" });
+  });
+
+  test("killSessions (the bulk gesture) forces the same way", async () => {
+    const db = fixtures();
+    await run(db, "killSessions");
+    expect(teardowns(db)).toHaveLength(1);
+  });
+
+  test("a quiet re-assert of the flag by any other action does NOT re-kill", async () => {
+    const db = fixtures();
+    await run(db, "patchConversation");
+    expect(teardowns(db)).toHaveLength(0);
+  });
+});
+
+// inbox_killed_at is the retired marker the daemon's resurrection gate and
+// classifyWorkState both read. This generic patch rail carries whatever fields
+// an action's draft touched, so an unrelated gesture can wipe it — the web's pin
+// nulls it in its draft, and a killed row is only VISIBLE while pinned
+// (shouldShowInInbox), so pin-then-wipe hit exactly the rows the marker matters
+// most for, and re-armed daemon resurrection on a killed persistent anchor.
+describe("inbox_killed_at survives patches that are not a revival", () => {
+  const RUNNER = "users_runner";
+  const CONV = "conversations_killed";
+
+  const fixtures = () =>
+    makeFakeDb({
+      conversations: [{
+        _id: CONV, user_id: RUNNER, status: "completed", message_count: 12,
+        inbox_dismissed_at: 111, inbox_killed_at: 111,
+      }],
+      messages: [], pending_messages: [], client_state: [], managed_sessions: [],
+      agent_tasks: [], daemon_commands: [], session_owners: [],
+    });
+
+  test("a pin-shaped patch (pin set, killed nulled) leaves inbox_killed_at intact", async () => {
+    const db = fixtures();
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_pinned_at: 555, is_pinned: true, inbox_killed_at: null } },
+    });
+    const row = db._tables.conversations[0];
+    expect(row.inbox_killed_at).toBe(111); // the marker survives…
+    expect(row.inbox_pinned_at).toBe(555); // …and the rest of the patch still lands
+  });
+
+  test("an un-kill (a patch clearing inbox_dismissed_at) DOES clear it", async () => {
+    const db = fixtures();
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_killed_at: null } },
+    });
+    const row = db._tables.conversations[0];
+    expect(row.inbox_dismissed_at).toBeUndefined();
+    expect(row.inbox_killed_at).toBeUndefined();
+  });
+
+  // …and the flip side of the guard: the web's restore gesture sends only the
+  // two hide stamps, but shouldShowInInbox hides a row on inbox_killed_at ALONE.
+  // The server un-kills on the dismissed-clear transition, so restore works
+  // without the client knowing the field exists (and old clients keep working).
+  test("a web-restore-shaped patch un-kills the row server-side", async () => {
+    const db = fixtures();
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_dismissed_at: null, inbox_stashed_at: null } },
+    });
+    const row = db._tables.conversations[0];
+    expect(row.inbox_dismissed_at).toBeUndefined();
+    expect(row.inbox_killed_at).toBeUndefined();
+    expect(shouldShowInInbox(row as any)).toBe(true); // visible with no pin required
+    // Restore brings the CARD back; it does not restart the agent.
+    expect(row.status).toBe("completed");
+  });
+
+  test("SETTING inbox_killed_at is never blocked", async () => {
+    const db = makeFakeDb({
+      conversations: [{ _id: CONV, user_id: RUNNER, status: "active", message_count: 12 }],
+      messages: [], pending_messages: [], client_state: [], managed_sessions: [],
+      agent_tasks: [], daemon_commands: [], session_owners: [],
+    });
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_killed_at: 777 } },
+    });
+    expect(db._tables.conversations[0].inbox_killed_at).toBe(777);
   });
 });
 

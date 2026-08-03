@@ -244,6 +244,62 @@ export type ExecutionControlMutationName =
 
 export type ExecutionControlQueryName = "getExecutionAuthority" | "listExecutionWork";
 
+/**
+ * A conversation's own lifecycle + inbox visibility, as far as the daemon can
+ * see it. `source` is load-bearing, not decoration — the two sources are NOT
+ * interchangeable, and a caller that treats them as such gets a wrong answer:
+ *
+ *  - "lifecycle": the real query, resolved by CONVERSATION ID (an exact
+ *    ctx.db.get), carrying every field. `hideStateKnown` is true.
+ *  - "status-fallback": devices:resolveConversationBySession, which resolves by
+ *    SESSION ID with `.first()` — the OLDEST twin (this repo's ct-36973
+ *    foot-gun). It carries `status` only, so `hideStateKnown` is false, and with
+ *    twins the status may belong to the wrong row in either direction.
+ *
+ * An absent hide field means "not known", never "not set" — read `hideStateKnown`
+ * before believing any of them.
+ */
+export interface ConversationLifecycle {
+  status?: string | null;
+  inboxKilledAt?: number | null;
+  inboxStashedAt?: number | null;
+  inboxDismissedAt?: number | null;
+  inboxPinnedAt?: number | null;
+  /** True only when the hide fields were actually fetched (source === "lifecycle"). */
+  hideStateKnown: boolean;
+  source: "lifecycle" | "status-fallback";
+}
+
+// An undeployed Convex function is a PERMANENT condition; a DNS blip, a 502 or a
+// sleep-killed socket is not. Latching the query off on the latter silently
+// degrades the resurrection gate and makes the reap hide-gate misclassify for the
+// rest of the daemon's life, so we match the missing-function shape narrowly and
+// treat everything else as transient.
+export function isMissingFunctionError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return /could not find (public )?function|function not found|no such function/i.test(msg);
+}
+
+// 0 = believed available. Set to the failure time when the function is missing;
+// a re-probe past LIFECYCLE_REPROBE_MS heals a latch that was wrong (or that a
+// deploy has since fixed) without waiting for a daemon restart.
+let lifecycleQueryMissingSince = 0;
+const LIFECYCLE_REPROBE_MS = 6 * 60 * 60 * 1000;
+
+export function shouldProbeLifecycleQuery(
+  missingSince: number,
+  now: number,
+  reprobeMs: number = LIFECYCLE_REPROBE_MS,
+): boolean {
+  if (missingSince === 0) return true;
+  return now - missingSince >= reprobeMs;
+}
+
+/** Test seam: forget the latch so each case starts from a known state. */
+export function resetLifecycleQueryLatch(): void {
+  lifecycleQueryMissingSince = 0;
+}
+
 export interface GitInfo {
   commitHash?: string;
   branch?: string;
@@ -1291,6 +1347,88 @@ export class SyncService {
         ownerIsRemote: !!(res as any).owner_is_remote,
         ownerOnline: !!(res as any).owner_online,
       };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Lifecycle + inbox-visibility state of a conversation — the daemon's gate for
+   * "may I bring this session back?" and "may I reap its pane?". A killed or
+   * hidden conversation is exactly the one no automation may resurrect.
+   *
+   * Three routes, best first — see the body for why each exists:
+   *   A. conversations:getConversationLifecycle by conversation_id (exact row)
+   *   B. the same query by session_id (NEWEST twin) when the id is a ghost
+   *   C. devices:resolveConversationBySession — status only, OLDEST twin — only
+   *      when the query itself is unavailable (undeployed backend / transient
+   *      error), never when it answered "no such conversation"
+   * A and B return `hideStateKnown: true`; C is marked degraded so callers can
+   * refuse to act on it. Returns null when nothing resolves, which callers read
+   * as "unknown" and handle per their own fail-open/fail-closed policy.
+   */
+  async getConversationLifecycle(
+    conversationId: string,
+    sessionId?: string,
+  ): Promise<ConversationLifecycle | null> {
+    if (shouldProbeLifecycleQuery(lifecycleQueryMissingSince, Date.now())) {
+      try {
+        // The query takes EXACTLY ONE selector (it returns null when both or
+        // neither are set), so the two routes are separate calls.
+        //
+        // Route A — the conversation id, an exact ctx.db.get. Always tried first:
+        // when the row exists this is unambiguous, with no twin reduction at all.
+        let res: any = await this.client.query("conversations:getConversationLifecycle" as any, {
+          api_token: this.apiToken,
+          conversation_id: conversationId,
+        });
+        // Route B — the GHOST case, which is the whole reason a fallback exists:
+        // the id we were handed no longer resolves (deleted/remapped row, a
+        // client's cached copy), but the session is alive under a twin. The
+        // query's session route picks the NEWEST twin by updated_at, so it beats
+        // devices:resolveConversationBySession on both counts — right row, and
+        // full hide state instead of status only.
+        if (!res && sessionId) {
+          res = await this.client.query("conversations:getConversationLifecycle" as any, {
+            api_token: this.apiToken,
+            session_id: sessionId,
+          });
+        }
+        lifecycleQueryMissingSince = 0; // the probe answered — clear any stale latch
+        if (res) {
+          return {
+            status: res.status ?? null,
+            inboxKilledAt: res.inbox_killed_at ?? null,
+            inboxStashedAt: res.inbox_stashed_at ?? null,
+            inboxDismissedAt: res.inbox_dismissed_at ?? null,
+            inboxPinnedAt: res.inbox_pinned_at ?? null,
+            hideStateKnown: true,
+            source: "lifecycle",
+          };
+        }
+        // Both routes reached the query and it found nothing. That is an answer,
+        // not an outage — and the devices fallback reads the same by_session_id
+        // index under the same user filter, so it cannot do better. Don't paper
+        // over a real "no such conversation" with a second miss.
+        return null;
+      } catch (err) {
+        // ONLY an undeployed function latches. Anything else (network, 5xx,
+        // timeout) is transient: leave the latch alone and let the caller's own
+        // fail-open/fail-closed policy handle this one call.
+        if (isMissingFunctionError(err)) lifecycleQueryMissingSince = Date.now();
+      }
+    }
+    // Legacy-backend path only — reached when the query above is undeployed or
+    // errored, never when it simply found nothing. Status only, resolved by
+    // session id through `.first()` (the OLDEST twin), so it is marked degraded
+    // and most callers refuse to act on it.
+    if (!sessionId) return null;
+    try {
+      const res: any = await this.client.query("devices:resolveConversationBySession" as any, {
+        api_token: this.apiToken,
+        session_id: sessionId,
+      });
+      return res ? { status: res.status ?? null, hideStateKnown: false, source: "status-fallback" } : null;
     } catch {
       return null;
     }

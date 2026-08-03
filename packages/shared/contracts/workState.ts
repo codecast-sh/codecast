@@ -6,7 +6,9 @@
 //   - "needs_input": the ball is in the user's court — a finished turn waiting
 //                    to be read, an open question / permission prompt, or a dead
 //                    session with output (matches the web inbox's NEEDS INPUT).
-//   - "idle":        nothing to act on: blank sessions with no messages yet.
+//   - "idle":        nothing to act on: blank sessions with no messages yet, and
+//                    killed sessions (the user already retired them, so no
+//                    stale queued work or revived worker can make them look busy).
 //
 // PURE isomorphic data — safe to import from the Convex runtime, the daemon, and
 // the browser.

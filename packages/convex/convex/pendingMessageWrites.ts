@@ -118,6 +118,40 @@ async function insertPendingMessageRow(
   });
 }
 
+/**
+ * The DELIVERY-side twin of the enqueue wake-up rules (pendingMessages'
+ * enqueuePendingMessage): if the system is injecting a message into a
+ * conversation, that conversation is alive, whatever its inbox flags still say.
+ *
+ * Without this a message that outlived a kill — a leftover legacy row, or a
+ * fenced delivery the kill could not cancel — lands in the pane and runs the
+ * session while the row still carries inbox_killed_at. The record then
+ * contradicts reality, and (since classifyWorkState now reads a killed row as
+ * "idle") it does so INVISIBLY: a session busily working while the inbox files
+ * it as retired. Record follows reality.
+ *
+ * Deliberately does NOT clear inbox_stashed_at: stash means "keep working out of
+ * my sight", so delivering into a stashed session is its intended behavior and
+ * must not drag it back into the active inbox (mirrors enqueue's machine-wake
+ * rule). Lives here, not in pendingMessages, so both the legacy status path and
+ * the fenced delivery path (executionBindings) can call it without an import
+ * cycle.
+ */
+export async function reviveConversationOnDelivery(
+  ctx: DbCtx,
+  conversationId: Id<"conversations">,
+): Promise<boolean> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) return false;
+  const revive: Record<string, unknown> = {};
+  if (conversation.inbox_killed_at) revive.inbox_killed_at = undefined;
+  if (conversation.inbox_dismissed_at) revive.inbox_dismissed_at = undefined;
+  if (conversation.status === "completed") revive.status = "active";
+  if (Object.keys(revive).length === 0) return false;
+  await ctx.db.patch(conversationId, revive);
+  return true;
+}
+
 /** The sole raw insertion path for a newly admitted product/legacy message. */
 export async function insertEnqueuedPendingMessage(
   ctx: DbCtx,

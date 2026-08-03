@@ -3,18 +3,20 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
 import { addSessionOwnerRow, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
-import { insertEnqueuedPendingMessage } from "./pendingMessageWrites";
+import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
 import {
   messagesCommandCoverageTarget,
 } from "./messageViewContracts";
 import {
   allocateFencedDeliveryMetadata,
+  cancelFencedDeliveriesOnKill,
   isFencedPendingMessage,
   legacyConversationAcceptsDaemonWork,
 } from "./executionBindings";
@@ -311,6 +313,18 @@ export async function updatePendingMessageStatusForDaemon(
     return { updated: false, skipped: true };
   }
   const updated = await patchPendingMessageStatus(ctx, message, patch);
+  // DELIVERY wakes the conversation — but ONLY here, behind the daemon gate.
+  // This must NOT live in patchPendingMessageStatus: the public
+  // updateMessageStatus mutation calls that helper directly when device_id is
+  // omitted, and its authorization (senderOrOwnerCanAct) passes on
+  // message.from_user_id alone — no conversation ownership. A teammate who sent
+  // into my session (or a replay of their client) could then post
+  // status:"injected" and un-retire a session I killed, with nothing delivered.
+  // "injected" is self-reported and reversible (the healer re-pends it), so it
+  // is only evidence of a landing when the DAEMON that owns the session says so.
+  if (updated && (patch.status === "injected" || patch.status === "delivered")) {
+    await reviveConversationOnDelivery(ctx, message.conversation_id);
+  }
   return { updated, skipped: !updated };
 }
 
@@ -824,6 +838,93 @@ export async function resetConversationPendingMessages(
 
   return resetCount;
 }
+
+// Kill is TERMINAL for messages already queued. The retry loop is otherwise indefinite, so a
+// message queued before a kill kept retrying afterwards and could still land — reviving a
+// conversation that carries kill metadata (observed live: a killed session woke up and ran 193
+// more messages while still stamped inbox_killed_at), or, once its retries were exhausted,
+// stranding the row as status "completed" + has_pending_messages true forever.
+//
+// This does NOT violate the cardinal rule (the system never drops a user message on its own):
+// killing a session is the user's own explicit stop gesture, and `cancelled` is exactly the
+// terminal state the per-message cancel button writes. Only messages queued BEFORE the kill are
+// touched — a LATER send re-enqueues and revives the session normally, because enqueue clears the
+// dismissed/stashed/killed flags (see the wake-up rules above).
+//
+// Fenced (delivery-protocol v2) rows can't be patched to "cancelled" from here — that would
+// strand their delivery_attempts row and the execution head's active slot — so they go through
+// the epoch machinery's sanctioned cancel (cancelFencedDeliveriesOnKill), which terminalizes
+// everything that hasn't started and leaves a delivery-started/ambiguous effect for the delivery
+// machinery to resolve. Those few stay counted in has_pending_messages, which is the honest
+// answer; classifyWorkState keeps the killed row out of the Working bucket regardless.
+//
+// BUDGETED, because kill must never be the gesture that fails on exactly the sessions it exists
+// for. A runaway session can hold thousands of rows; an unbounded sweep would blow the mutation's
+// write limit and throw. So one transaction cancels at most KILL_CANCEL_BUDGET rows and hands any
+// remainder to a scheduled continuation — the kill itself always lands fast, and the queue still
+// drains to empty. Callers without a scheduler (tests, non-mutation ctx) simply stop at the budget.
+const KILL_CANCEL_BUDGET = 300;
+const KILL_CANCEL_PAGE = 100;
+
+export async function cancelQueuedMessagesOnKill(
+  ctx: { db: any; scheduler?: any },
+  conversationId: Id<"conversations">
+): Promise<number> {
+  const conversation = await ctx.db.get(conversationId);
+  let budget = KILL_CANCEL_BUDGET;
+  let cancelled = 0;
+  // Only a FENCED conversation can hold fenced rows, and that sweep is the
+  // expensive one — gate it on the conversation's own marker rather than paying
+  // a scan on every ordinary kill.
+  if (conversation?.execution_protocol_state) {
+    const fenced = await cancelFencedDeliveriesOnKill(ctx, conversationId, Date.now(), budget);
+    cancelled += fenced.cancelled;
+    budget -= fenced.cancelled;
+  }
+  for (const status of NON_TERMINAL_PENDING_STATUSES) {
+    // DRAIN, don't sample: a queue deeper than one page must not survive a kill.
+    // Each pass re-queries the same status because a cancel moves the row out of
+    // it; stop as soon as a page cancels nothing, so a row this path may not
+    // touch (an in-flight fenced delivery) can't spin the loop forever.
+    while (budget > 0) {
+      const rows = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q: any) =>
+          q.eq("conversation_id", conversationId).eq("status", status)
+        )
+        .take(Math.min(KILL_CANCEL_PAGE, budget));
+      if (rows.length === 0) break;
+      let progressed = 0;
+      for (const row of rows) {
+        if (await patchPendingMessageStatus(ctx, row, { status: "cancelled" as const })) progressed++;
+      }
+      if (progressed === 0) break;
+      cancelled += progressed;
+      budget -= progressed;
+    }
+  }
+  // Also the repair for an ALREADY-stranded row: a kill whose queue has since gone terminal
+  // (undeliverable → cancelled here, or nothing left at all) still clears the stale flag.
+  await clearHasPendingIfQuiet(ctx, conversationId);
+  // Spent the whole budget → there may be more. Finish it in its own transaction;
+  // a continuation that finds nothing left simply stops.
+  if (budget <= 0 && ctx.scheduler) {
+    await ctx.scheduler.runAfter(0, internal.pendingMessages.continueKillCancellation, {
+      conversation_id: conversationId,
+    });
+  }
+  return cancelled;
+}
+
+// Overflow continuation for cancelQueuedMessagesOnKill — one budgeted pass per run,
+// re-scheduling itself (from inside the same helper) while rows remain.
+export const continueKillCancellation = internalMutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const cancelled = await cancelQueuedMessagesOnKill(ctx as any, args.conversation_id);
+    return { cancelled };
+  },
+});
 
 // Clear a conversation's has_pending_messages flag once nothing is still in flight — no
 // `pending` and no `injected` message remains. Every terminal transition (delivered, cancelled)

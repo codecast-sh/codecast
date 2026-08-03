@@ -2,6 +2,7 @@ import { internalMutation, mutation } from "./functions";
 import { v } from "convex/values";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { cancelTasksBoundToConversation } from "./agentTasks";
+import { cancelQueuedMessagesOnKill } from "./pendingMessages";
 import { nestParentIdOf } from "./ccAccountsShared";
 
 // ---------------------------------------------------------------------------
@@ -270,6 +271,9 @@ export async function reapEmptyConversation(
 //           undo (dismissed → null) never reaches here. Stays resumable.
 //  "none" — a stash of a session with real work (the whole point of stash), or
 //           a re-asserted dismiss.
+//
+// This is the decision for a PATCH; an explicit kill gesture is a desired state
+// and overrides a "none" here — see applyHideTransition's forceKill.
 export function classifyHideTransition(
   patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
   doc: { inbox_dismissed_at?: number | null },
@@ -286,32 +290,79 @@ export function classifyHideTransition(
 // every hide path — the web dispatch layer and the CLI visibility mutation
 // (cast dismiss/kill) — so a hide always gets the same teardown no matter which
 // surface asked for it.
+//
+// `forceKill` marks the caller as an EXPLICIT kill gesture (cast kill, the web's
+// killSession/killSessions actions) rather than a patch that merely happens to
+// carry the flag.
 export async function applyHideTransition(
   ctx: { db: any },
   doc: any,
   patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
-  opts?: { cascade?: boolean },
-): Promise<{ action: "reap" | "kill" | "none"; canceledSchedules: number; cascaded: number }> {
-  const action = classifyHideTransition(patch, doc, await conversationHasNoWork(ctx, doc));
+  opts?: { cascade?: boolean; forceKill?: boolean },
+): Promise<{
+  action: "reap" | "kill" | "none";
+  canceledSchedules: number;
+  canceledMessages: number;
+  cascaded: number;
+  teardownEnqueued: boolean;
+}> {
+  const classified = classifyHideTransition(patch, doc, await conversationHasNoWork(ctx, doc));
+  // Kill is a DESIRED STATE, not an event. classifyHideTransition gates on the
+  // FLAG's transition, so a quiet re-assert of an already-set inbox_dismissed_at
+  // (the web's optimistic re-patch, a stub-rekey field flush) classifies "none"
+  // and skips teardown — right for a re-assert, wrong for a deliberate one. A
+  // killed session whose worker came back (daemon resurrection) still carried
+  // the flag, so `cast kill` reported "already dismissed", never enqueued
+  // teardown, and the worker was unkillable through the supported path. An
+  // EXPLICIT kill therefore runs the kill branch whatever the flags already
+  // say; teardown is idempotent daemon-side (killing a dead pane no-ops).
+  const action = classified === "none" && opts?.forceKill && patch.inbox_dismissed_at ? "kill" : classified;
   let canceledSchedules = 0;
+  let canceledMessages = 0;
+  let teardownEnqueued = false;
   if (action === "reap") {
-    await reapEmptyConversation(ctx, doc);
+    teardownEnqueued = (await reapEmptyConversation(ctx, doc)) === "kill_enqueued";
   } else if (action === "kill") {
-    await enqueueKillSessionCommand(ctx, doc);
+    // false = an unexecuted kill_session for this conversation is ALREADY on the
+    // daemon's queue (enqueueKillSessionCommand's 1h dedupe). The desired state
+    // holds either way, so callers report which it was instead of piling on a
+    // duplicate command. A kill the daemon already executed leaves no pending
+    // row, so the re-kill that matters — the resurrection case — always inserts.
+    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc);
     // A persistent anchor never auto-completes on a dismiss/kill — it goes
     // dormant, not retired (only decommissionAnchor clears `persistent`).
-    const killPatch: Record<string, any> = { inbox_killed_at: Date.now() };
+    // inbox_killed_at records when the session was FIRST killed: a forced
+    // re-kill re-runs the teardown but must not rewrite that history, or the
+    // row's honest "killed at" jumps forward every time a resurrection is
+    // stamped out (and the cascade below claims exactly this for its children).
+    const killPatch: Record<string, any> = {};
+    if (!doc?.inbox_killed_at) killPatch.inbox_killed_at = Date.now();
     if (!doc?.persistent) killPatch.status = "completed";
-    await ctx.db.patch(doc._id, killPatch);
+    if (Object.keys(killPatch).length > 0) await ctx.db.patch(doc._id, killPatch);
     // Dismiss retires the session — a standing schedule that injects
     // into it must die with it, or its next fire would silently
     // resurrect a session the user just retired. User gestures only:
     // bulk cleanup sweeps patch inbox_dismissed_at directly (not via
-    // dispatch) and deliberately leave standing schedules armed. An
-    // anchor going dormant keeps its schedules too. Task owner = the
-    // conversation's runner (a second-party owner may be triaging).
+    // dispatch) and deliberately leave standing schedules armed. Task
+    // owner = the conversation's runner (a second-party owner may be
+    // triaging).
+    //
+    // Kill is terminal for messages ALREADY queued, or the retry loop delivers
+    // one later and revives a session carrying kill metadata (and an exhausted
+    // one strands the row as completed + has_pending forever). Re-runs safely on
+    // a forced re-kill, taking anything queued since the first kill with it.
+    //
+    // Both of these are RETIREMENT effects, so a persistent anchor is exempt
+    // from both: killing an anchor means dormancy, not death. Its schedules stay
+    // armed on purpose — and so its queue must stay too, or the anchor wakes on
+    // its next trigger and runs WITHOUT the messages the human queued for it,
+    // silently. (The schedule sweep is safe to re-run: it only touches
+    // scheduled/running/paused tasks, so a second pass over already-canceled
+    // ones is a no-op — and a schedule re-armed since the first kill SHOULD die
+    // again with it.)
     if (!doc?.persistent) {
       canceledSchedules = await cancelTasksBoundToConversation(ctx, doc.user_id, doc._id);
+      canceledMessages = await cancelQueuedMessagesOnKill(ctx, doc._id);
     }
   }
   // The nested group (Task subagents + agent-team teammates) always comes down
@@ -322,9 +373,9 @@ export async function applyHideTransition(
   // per-child transition call opts out to stay single-level.
   let cascaded = 0;
   if (opts?.cascade !== false && (patch.inbox_dismissed_at || patch.inbox_stashed_at)) {
-    cascaded = await cascadeHideToNestedChildren(ctx, doc, patch);
+    cascaded = await cascadeHideToNestedChildren(ctx, doc, patch, { forceKill: action === "kill" && opts?.forceKill });
   }
-  return { action, canceledSchedules, cascaded };
+  return { action, canceledSchedules, canceledMessages, cascaded, teardownEnqueued };
 }
 
 // A hide gesture on a session takes its NESTED group with it — the same set
@@ -343,10 +394,18 @@ export async function applyHideTransition(
 // second sees no transition and never re-kills. cast-spawn lineage
 // (spawned_by WITHOUT a team name) and forks stay first-class — the per-child
 // nestParentIdOf gate is the same one the renderer uses.
+//
+// `forceKill` overrides that skip: an EXPLICIT kill of the lead re-tears-down
+// already-flagged children too, because the group comes down as ONE unit and a
+// resurrected child is exactly the bug forcing exists to fix — a lead whose
+// teammate's pane survived is as unkillable as one whose own did. Their hide
+// STAMP is left alone (they are already hidden; only teardown re-runs), and the
+// per-child `{ cascade: false }` still keeps the sweep single-level.
 export async function cascadeHideToNestedChildren(
   ctx: { db: any },
   lead: any,
   patch: { inbox_dismissed_at?: number; inbox_stashed_at?: number },
+  opts?: { forceKill?: boolean },
 ): Promise<number> {
   const field = patch.inbox_dismissed_at ? ("inbox_dismissed_at" as const) : ("inbox_stashed_at" as const);
   const stamp = patch[field];
@@ -369,10 +428,11 @@ export async function cascadeHideToNestedChildren(
     if (idStr === leadId || seen.has(idStr)) continue;
     seen.add(idStr);
     if (nestParentIdOf(child) !== leadId) continue;
-    if (child[field]) continue; // already hidden — never re-kill
-    const childPatch = { [field]: stamp };
-    await ctx.db.patch(child._id, childPatch);
-    await applyHideTransition(ctx, child, childPatch, { cascade: false });
+    const alreadyHidden = !!child[field];
+    if (alreadyHidden && !opts?.forceKill) continue; // quiet re-assert — never re-kill
+    const childPatch = { [field]: alreadyHidden ? child[field] : stamp };
+    if (!alreadyHidden) await ctx.db.patch(child._id, childPatch);
+    await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill });
     cascaded++;
   }
   return cascaded;
