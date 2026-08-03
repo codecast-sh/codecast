@@ -34,6 +34,23 @@ export type Device = {
     stable_mode?: "solo" | "team" | "off";
     stable_global?: boolean;
   };
+  /** Per-repo git health on this device (daemon gitPlane sweep). */
+  git_plane?: Array<{
+    root: string;
+    origin?: string;
+    origin_ok: boolean;
+    fetch_ok?: boolean;
+    ahead?: number;
+    behind?: number;
+    branch?: string;
+    fetched_at?: number;
+    repaired_from?: string;
+    needs_access?: boolean;
+    identity?: string;
+    error?: string;
+  }>;
+  /** The device's PUBLIC git key — pasteable into GitHub to grant repo access. */
+  git_pubkey?: string;
   online: boolean;
 };
 
@@ -118,7 +135,12 @@ const NO_DEVICES: Device[] = [];
 /** Load the user's devices, with helpers for routing-aware decisions. */
 export function useDevices() {
   const fresh = useQuery(api.devices.listDevices, {}) as Device[] | undefined;
-  const devices = fresh ?? NO_DEVICES;
+  // While this mount's query is in flight, serve the store mirror another mount
+  // already filled — it holds full listDevices rows from THIS page load (never
+  // persisted), so a freshly mounted picker resolves its machine immediately
+  // instead of rendering an empty roster for a round-trip.
+  const mirrored = useInboxStore((s) => s.machineRoster) as Device[];
+  const devices = fresh ?? (mirrored.length > 0 ? mirrored : NO_DEVICES);
   // Mirror the roster into the store so the create path can re-check a picked
   // machine against live routing at the moment it fires (createSessionFromStub).
   // Every surface that shows a device chip keeps this warm; nothing persists it.

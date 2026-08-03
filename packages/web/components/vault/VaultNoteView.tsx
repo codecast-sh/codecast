@@ -5,10 +5,11 @@
 
 import { lazy, memo, Suspense, useMemo } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { BookOpen, ChevronRight, FileText, Pencil } from "lucide-react";
+import { BookOpen, ChevronRight, FileText, FolderOpen, Pencil } from "lucide-react";
 import { noteDisplayName } from "./VaultExplorer";
 import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { BookmarkToggle } from "./VaultBookmarksPane";
+import { fileManagerName, revealVaultPath } from "../../lib/vault/reveal";
 import { VaultLinkContext, VaultMarkdown, FoldScopeContext } from "./VaultMarkdown";
 import { useVaultLinkCtx } from "./useVaultLinkCtx";
 import { splitFrontmatter } from "../../lib/vault/frontmatter";
@@ -52,6 +53,10 @@ export const VaultNoteView = memo(function VaultNoteView({
 }) {
   const body = useVaultStore((s) => s.bodies[path]);
   const isRemote = useVaultStore((s) => s.isRemote);
+  const hasEndpoint = useVaultStore((s) => !!s.endpoint);
+  // Only offer it when the bytes are on this machine.
+  const showReveal = hasEndpoint && !isRemote;
+  const fileManager = useMemo(() => fileManagerName(), []);
   const loading = useVaultStore((s) => !!s.loadingPaths[path]);
   const exists = useVaultStore((s) => !!s.files[path]);
 
@@ -164,6 +169,20 @@ export const VaultNoteView = memo(function VaultNoteView({
             label="Bookmark this note"
             className="mt-1.5 flex-shrink-0"
           />
+          {showReveal && (
+            <button
+              type="button"
+              onClick={() => {
+                void revealVaultPath(path, "reveal").then((err) => {
+                  if (err) useVaultStore.setState({ opError: err });
+                });
+              }}
+              title={`Show this file in ${fileManager}`}
+              className="mt-1.5 flex-shrink-0 text-sol-text-dim hover:text-sol-text transition-colors"
+            >
+              <FolderOpen className="w-4 h-4" />
+            </button>
+          )}
           {onToggleEdit && (
             <button
               type="button"

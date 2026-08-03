@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useRef, memo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useShortcutAction, isMac, type ShortcutAction } from "../shortcuts";
+import { useShortcutAction, useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
+import { useTheme } from "./ThemeProvider";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { useRouter, usePathname } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
@@ -64,6 +65,16 @@ import {
   CalendarDays,
   Waypoints,
   FilePlus2,
+  Terminal,
+  Moon,
+  Sun,
+  PanelLeft,
+  PanelRight,
+  Keyboard,
+  Rows3,
+  Focus,
+  Repeat,
+  Zap,
 } from "lucide-react";
 
 const api = _api as any;
@@ -134,20 +145,52 @@ const AGENT_COLORS: Record<string, string> = {
   "agent:pi": "text-teal-400",
 };
 
-const NAV_PAGES = [
+// Ranked by expected use. `secondary` pages are reachable only by typing —
+// they'd otherwise pad the empty-palette view that lives or dies by scan speed.
+const NAV_PAGES: ReadonlyArray<{
+  label: string;
+  path: string;
+  icon: string;
+  keywords: string;
+  secondary?: boolean;
+}> = [
   { label: "Dashboard", path: "/team/activity", icon: "grid", keywords: "home sessions main activity feed team" },
+  { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
   { label: "Tasks", path: "/tasks", icon: "check", keywords: "todo work items" },
+  { label: "Plans", path: "/plans", icon: "map", keywords: "roadmap goals milestones planning" },
   { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
   { label: "Vault", path: "/vault", icon: "folder", keywords: "notes markdown obsidian files vault" },
+  { label: "Triggers", path: "/triggers", icon: "clock", keywords: "schedules cron automation recurring followup reminders" },
   { label: "Pages", path: "/pages", icon: "file", keywords: "published html artifacts share cast publish gallery" },
-  { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
-  { label: "Team Settings", path: "/settings/team", icon: "settings", keywords: "members invite workspace" },
-  { label: "Claude Accounts", path: "/settings/claude-accounts", icon: "settings", keywords: "account switch login oauth" },
-  { label: "Sync & Privacy", path: "/settings/sync", icon: "settings", keywords: "projects sharing private" },
-  { label: "Notifications", path: "/notifications", icon: "bell", keywords: "alerts updates" },
-] as const;
+  { label: "Workflows", path: "/workflows", icon: "workflow", keywords: "orchestration runs graph dot gates", secondary: true },
+  { label: "Live Sessions", path: "/sessions", icon: "session", keywords: "running machines devices liveness", secondary: true },
+  { label: "Notifications", path: "/notifications", icon: "bell", keywords: "alerts updates", secondary: true },
+  { label: "Team Settings", path: "/settings/team", icon: "settings", keywords: "members invite workspace", secondary: true },
+  { label: "Claude Accounts", path: "/settings/claude-accounts", icon: "settings", keywords: "account switch login oauth", secondary: true },
+  { label: "Sync & Privacy", path: "/settings/sync", icon: "settings", keywords: "projects sharing private", secondary: true },
+  { label: "Devices", path: "/settings/devices", icon: "cpu", keywords: "machines daemons keys cli hosts", secondary: true },
+  { label: "Integrations", path: "/settings/integrations", icon: "link", keywords: "github slack webhooks connect", secondary: true },
+  { label: "Provider Keys", path: "/settings/provider-keys", icon: "settings", keywords: "api keys openrouter anthropic openai", secondary: true },
+];
+
+// Global command rows: each fires the SAME registered handler its keyboard
+// chord uses (via dispatchAction), so behavior can't fork between the palette
+// and the key — and the keycap hint derives from the registry.
+const GLOBAL_COMMANDS: ReadonlyArray<{
+  action: ShortcutAction;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  keywords: string;
+}> = [
+  { action: "terminal.toggle", label: "Toggle terminal", icon: Terminal, keywords: "shell console panel tmux" },
+  { action: "ui.zenToggle", label: "Toggle zen mode", icon: Focus, keywords: "focus minimal distraction free" },
+  { action: "sidebar.toggleLeft", label: "Toggle left sidebar", icon: PanelLeft, keywords: "nav collapse" },
+  { action: "sidebar.toggleRight", label: "Toggle sessions panel", icon: PanelRight, keywords: "right rail collapse" },
+  { action: "inbox.toggleFlatView", label: "Cycle inbox view", icon: Rows3, keywords: "grouped time label flat layout" },
+  { action: "ui.toggleShortcutsHelp", label: "Keyboard shortcuts help", icon: Keyboard, keywords: "keys bindings hotkeys cheatsheet" },
+];
 
 function NavIcon({ type, className }: { type: string; className?: string }) {
   const c = className || "w-4 h-4";
@@ -178,6 +221,16 @@ function NavIcon({ type, className }: { type: string; className?: string }) {
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>;
     case "folder":
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>;
+    case "map":
+      return <MapIcon className={c} />;
+    case "clock":
+      return <Clock className={c} />;
+    case "workflow":
+      return <Waypoints className={c} />;
+    case "cpu":
+      return <Cpu className={c} />;
+    case "link":
+      return <LinkIcon className={c} />;
     default:
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" strokeWidth={1.5} /></svg>;
   }
@@ -929,6 +982,9 @@ const RECENT_VISITS_RENDER_CAP = 4;
 // bucket/assignment sync churn (it reads these only to label recent rows).
 const EMPTY_BUCKETS: Record<string, BucketItem> = {};
 const EMPTY_BUCKET_ASSIGNMENTS: Record<string, BucketAssignmentItem> = {};
+const EMPTY_VAULT_FILES: Record<string, { dir?: boolean; mtime: number }> = {};
+
+const MARKDOWN_RE = /\.(md|markdown)$/i;
 
 // One matcher for tasks/docs/plans over the globally-synced mention index.
 // Reuses score() (exact > prefix > substring) with a short_id fallback, and
@@ -1078,6 +1134,56 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // Electron palette window has its own store, so chip-view items (which
   // mutate THIS window's filters) are meaningless there and skipped.
   const vaultReady = useVaultStore((st) => st.vaults.length > 0 || st.activeVaultId !== null);
+
+  // Vault notes are searchable from Cmd+K like any entity. Snapshot the file
+  // index at open (same pattern as mentionIndex): the vault store churns on
+  // watcher events, and a transient overlay shouldn't re-render on them.
+  const vaultFiles = useMemo(
+    () => (open && vaultReady ? useVaultStore.getState().files : EMPTY_VAULT_FILES),
+    [open, vaultReady],
+  );
+  const vaultNoteMatches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const ranked: Array<{ path: string; base: string; rank: number; mtime: number }> = [];
+    for (const [path, entry] of Object.entries(vaultFiles)) {
+      if (entry.dir || !MARKDOWN_RE.test(path)) continue;
+      const base = (path.split("/").pop() || path).replace(MARKDOWN_RE, "");
+      const rank = Math.min(score(base, q), score(path, q));
+      if (rank === Infinity) continue;
+      ranked.push({ path, base, rank, mtime: entry.mtime || 0 });
+    }
+    ranked.sort((a, b) => a.rank - b.rank || b.mtime - a.mtime);
+    return ranked.slice(0, ENTITY_RENDER_CAP);
+  }, [vaultFiles, query]);
+
+  // Triggers (schedules) search — same list the /triggers page subscribes to,
+  // gated on an actual query so an idle palette costs nothing. Convex dedupes
+  // the subscription when the page is already open.
+  const { data: triggerList } = useQueryNoThrow(
+    api.agentTasks.webList,
+    open && query.trim().length >= 2 ? {} : "skip",
+  );
+  const triggerMatches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q.length < 2 || !Array.isArray(triggerList)) return [];
+    const ranked: Array<{ t: any; rank: number }> = [];
+    for (const t of triggerList) {
+      if (t.status === "completed" || t.status === "cancelled") continue;
+      let rank = Math.min(score(t.title || "", q), score(t.prompt || "", q));
+      if (rank === Infinity) {
+        if (!t.short_id?.toLowerCase().includes(q)) continue;
+        rank = 50;
+      }
+      ranked.push({ t, rank });
+    }
+    ranked.sort((a, b) => a.rank - b.rank || (b.t.updated_at || b.t._creationTime || 0) - (a.t.updated_at || a.t._creationTime || 0));
+    return ranked.slice(0, 6).map((r) => r.t);
+  }, [triggerList, query]);
+
+  // Global command rows fire the same handlers their keyboard chords use.
+  const { dispatchAction } = useShortcuts();
+  const { theme, toggleTheme } = useTheme();
   const recentVisits = useInboxStore((s) => (open ? s.recentVisits : EMPTY_RECENT_VISITS));
   const recentVisitRows = useMemo(
     () => (open ? resolveRecentVisits(useInboxStore.getState(), RECENT_VISITS_RENDER_CAP, { skipViews: standalone }) : []),
@@ -1314,6 +1420,22 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const q = query.trim();
     navigate(q ? `/search?q=${encodeURIComponent(q)}` : "/search");
   }, [query, navigate]);
+
+  const openVaultNote = useCallback((path: string) => {
+    useVaultStore.getState().noteOpened(path);
+    navigate(`/vault?f=${encodeURIComponent(path)}`);
+  }, [navigate]);
+
+  // One compose entry for both hosts: the standalone Electron palette window
+  // flips itself into the compose popup; in-app opens the compose overlay.
+  const startCompose = useCallback((text: string) => {
+    if (standalone) {
+      window.dispatchEvent(new CustomEvent("codecast-compose", { detail: text }));
+    } else {
+      closePalette();
+      useInboxStore.getState().openCompose(text || undefined);
+    }
+  }, [standalone, closePalette]);
 
   const navigateToSession = useCallback(
     (
@@ -1880,8 +2002,123 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
+        {triggerMatches.length > 0 && (
+          <CommandPrimitive.Group heading="Triggers" className={groupClass}>
+            {triggerMatches.map((t: any) => (
+              <CommandPrimitive.Item
+                key={`trigger-${t._id}`}
+                value={`__entity__ ${t.title} ${t.short_id || ""}|||${t._id}`}
+                onSelect={() => navigate(`/triggers?task=${t._id}`)}
+                className={itemClass}
+              >
+                {t.schedule_type === "recurring" ? (
+                  <Repeat className={`w-4 h-4 flex-shrink-0 ${t.status === "paused" ? "text-sol-yellow" : "text-sol-violet"}`} />
+                ) : t.schedule_type === "event" ? (
+                  <Zap className="w-4 h-4 flex-shrink-0 text-sol-yellow" />
+                ) : (
+                  <Clock className={`w-4 h-4 flex-shrink-0 ${t.status === "paused" ? "text-sol-yellow" : "text-sol-cyan"}`} />
+                )}
+                <span className="truncate flex-1">{t.title || "Untitled trigger"}</span>
+                {t.status === "paused" && (
+                  <span className="text-[10px] text-sol-yellow flex-shrink-0">paused</span>
+                )}
+                {t.short_id && (
+                  <span className="text-[10px] text-sol-text-dim font-mono tabular-nums flex-shrink-0">{t.short_id}</span>
+                )}
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        {(vaultNoteMatches.length > 0 || (vaultReady && query.trim().length >= 2)) && (
+          <CommandPrimitive.Group heading="Vault Notes" className={groupClass}>
+            {vaultNoteMatches.map((n) => (
+              <CommandPrimitive.Item
+                key={`vnote-${n.path}`}
+                value={`__entity__ ${n.base} ${n.path}|||vault`}
+                onSelect={() => openVaultNote(n.path)}
+                className={itemClass}
+              >
+                <FileText className="w-4 h-4 flex-shrink-0 text-sol-cyan" />
+                <span className="truncate flex-1">{n.base}</span>
+                {n.path.includes("/") && (
+                  <span className="text-[10px] text-sol-text-dim/70 font-mono truncate max-w-[180px] flex-shrink-0">
+                    {n.path.slice(0, n.path.lastIndexOf("/"))}
+                  </span>
+                )}
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(n.mtime)}</span>
+              </CommandPrimitive.Item>
+            ))}
+            {vaultReady && query.trim().length >= 2 && (
+              <CommandPrimitive.Item
+                key="vault-content-search"
+                value={`__entity__ vault content search|||${query.trim()}`}
+                onSelect={() => {
+                  useVaultStore.getState().openSearch(query.trim());
+                  navigate("/vault");
+                }}
+                className={itemClass}
+              >
+                <Search className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <span className="truncate flex-1">
+                  Search note content for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
+                </span>
+              </CommandPrimitive.Item>
+            )}
+          </CommandPrimitive.Group>
+        )}
+
+        <CommandPrimitive.Group heading="Create" className={groupClass}>
+          <CommandPrimitive.Item
+            key="create-session"
+            value="New session start agent compose run"
+            onSelect={() => startCompose("")}
+            className={itemClass}
+          >
+            <MessageSquare className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+            <span className="truncate flex-1">New Session</span>
+            <MenuKeyCaps action="session.compose" />
+          </CommandPrimitive.Item>
+          <CommandPrimitive.Item
+            key="create-task"
+            value="Create task new todo"
+            onSelect={() => { closePalette(); openCreateModal('task'); }}
+            className={itemClass}
+          >
+            <ListTodo className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+            <span className="truncate flex-1">Create Task</span>
+          </CommandPrimitive.Item>
+          <CommandPrimitive.Item
+            key="create-plan"
+            value="Create plan new project"
+            onSelect={() => { closePalette(); openCreateModal('plan'); }}
+            className={itemClass}
+          >
+            <MapIcon className="w-4 h-4 text-sol-yellow flex-shrink-0" />
+            <span className="truncate flex-1">Create Plan</span>
+          </CommandPrimitive.Item>
+          <CommandPrimitive.Item
+            key="create-doc"
+            value="Create document new note doc write"
+            onSelect={() => { closePalette(); openCreateModal('doc'); }}
+            className={itemClass}
+          >
+            <FileText className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
+            <span className="truncate flex-1">Create Document</span>
+          </CommandPrimitive.Item>
+          <CommandPrimitive.Item
+            key="create-trigger"
+            value="Create trigger new schedule cron automation reminder"
+            onSelect={() => navigate("/triggers?new=1")}
+            className={itemClass}
+          >
+            <Clock className="w-4 h-4 text-sol-violet flex-shrink-0" />
+            <span className="truncate flex-1">Create Trigger</span>
+          </CommandPrimitive.Item>
+        </CommandPrimitive.Group>
+
         <CommandPrimitive.Group heading="Pages" className={groupClass}>
-          {NAV_PAGES.map((page) => (
+          {(query.trim() ? NAV_PAGES : NAV_PAGES.filter((p) => !p.secondary)).map((page) => (
             <CommandPrimitive.Item
               key={page.path + page.label}
               value={`${page.label} ${page.keywords}`}
@@ -1956,29 +2193,65 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <Waypoints className="w-4 h-4 text-sol-cyan flex-shrink-0" />
               <span className="truncate">Vault: Open graph</span>
             </CommandPrimitive.Item>
+            {query.trim() && (
+              <CommandPrimitive.Item
+                key="vault-new-named"
+                value={`__entity__ vault new named note|||${query.trim()}`}
+                onSelect={() => {
+                  const name = query.trim().replace(/^\/+/, "");
+                  const path = MARKDOWN_RE.test(name) ? name : `${name}.md`;
+                  const s = useVaultStore.getState();
+                  // Name already taken → this is an open, not a create.
+                  if (s.files[path]) { openVaultNote(path); return; }
+                  closePalette();
+                  void s.createFile(path).then(() => {
+                    s.noteOpened(path);
+                    navigate(`/vault?f=${encodeURIComponent(path)}`);
+                  }).catch(() => toast.error(`Couldn't create ${path}`));
+                }}
+                className={itemClass}
+              >
+                <FilePlus2 className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+                <span className="truncate flex-1">
+                  Vault: New note &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
+                </span>
+              </CommandPrimitive.Item>
+            )}
           </CommandPrimitive.Group>
         )}
 
-        <CommandPrimitive.Group heading="Create" className={groupClass}>
-          <CommandPrimitive.Item
-            key="create-task"
-            value="Create task new todo"
-            onSelect={() => { closePalette(); openCreateModal('task'); }}
-            className={itemClass}
-          >
-            <ListTodo className="w-4 h-4 text-sol-cyan flex-shrink-0" />
-            <span className="truncate flex-1">Create Task</span>
-          </CommandPrimitive.Item>
-          <CommandPrimitive.Item
-            key="create-plan"
-            value="Create plan new project"
-            onSelect={() => { closePalette(); openCreateModal('plan'); }}
-            className={itemClass}
-          >
-            <MapIcon className="w-4 h-4 text-sol-yellow flex-shrink-0" />
-            <span className="truncate flex-1">Create Plan</span>
-          </CommandPrimitive.Item>
-        </CommandPrimitive.Group>
+        {!standalone && (
+          <CommandPrimitive.Group heading="Commands" className={groupClass}>
+            {GLOBAL_COMMANDS.map((cmd) => {
+              const Icon = cmd.icon;
+              return (
+                <CommandPrimitive.Item
+                  key={`cmd-${cmd.action}`}
+                  value={`${cmd.label} ${cmd.keywords}`}
+                  onSelect={() => { closePalette(); dispatchAction(cmd.action); }}
+                  className={itemClass}
+                >
+                  <Icon className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                  <span className="truncate flex-1">{cmd.label}</span>
+                  <MenuKeyCaps action={cmd.action} />
+                </CommandPrimitive.Item>
+              );
+            })}
+            <CommandPrimitive.Item
+              key="cmd-theme"
+              value="Switch theme dark light mode appearance"
+              onSelect={() => { closePalette(); toggleTheme(); }}
+              className={itemClass}
+            >
+              {theme === "dark" ? (
+                <Sun className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+              ) : (
+                <Moon className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+              )}
+              <span className="truncate flex-1">Switch to {theme === "dark" ? "light" : "dark"} theme</span>
+            </CommandPrimitive.Item>
+          </CommandPrimitive.Group>
+        )}
 
         {showWorkspaces && (
           <CommandPrimitive.Group heading="Workspaces" className={groupClass}>
@@ -2003,18 +2276,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           <CommandPrimitive.Group className={groupClass}>
             <CommandPrimitive.Item
               value="__compose__"
-              onSelect={() => {
-                if (standalone) {
-                  // Flip this palette window into the compose popup, carrying
-                  // the typed text in as the first message.
-                  window.dispatchEvent(new CustomEvent('codecast-compose', { detail: query.trim() }));
-                } else {
-                  closePalette();
-                  // Open the in-app compose popup, carrying the typed text in as
-                  // the first message — same surface, just an overlay.
-                  useInboxStore.getState().openCompose(query.trim());
-                }
-              }}
+              onSelect={() => startCompose(query.trim())}
               className={itemClass}
             >
               <span className="text-sol-yellow flex-shrink-0">
