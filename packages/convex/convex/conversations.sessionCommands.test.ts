@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { requireSessionCommandTarget, getConversationLifecycle } from "./conversations";
+import { requireSessionCommandTarget, getConversationLifecycle, killSession, cliSetSessionVisibility } from "./conversations";
+import { applyHideTransition } from "./cleanup";
+import { shouldShowInInbox } from "./inboxFilters";
 import { makeFakeDb } from "./testDb";
 
 // Session commands (send keys/escape, rewind, model switch, project/agent
@@ -164,5 +166,87 @@ describe("getConversationLifecycle", () => {
     test("an unknown session is null", async () => {
       expect(await call({ conversations: twins() }, RUNNER, { session_id: "s-unknown" })).toBeNull();
     });
+  });
+});
+
+// A persistent anchor going dormant keeps BOTH the schedules and the queue the
+// human left for it. The two kill surfaces must agree about that: applyHideTransition
+// (cast kill / the web inbox gesture) and the killSession mutation (the panel and
+// /sessions buttons) hit the same session, so a guard on only one of them leaves
+// the anchor in a different state depending on which button was pressed.
+describe("killSession vs applyHideTransition: one anchor, one answer", () => {
+  const ANCHOR = "conversations_anchor";
+  const anchorTables = () => ({
+    conversations: [{
+      _id: ANCHOR, user_id: RUNNER, session_id: "s-anchor", persistent: true,
+      status: "active", message_count: 20, has_pending_messages: true,
+    }],
+    agent_tasks: [{ _id: "t1", user_id: RUNNER, status: "scheduled", originating_conversation_id: ANCHOR }],
+    pending_messages: [{ _id: "pm1", conversation_id: ANCHOR, status: "pending", retry_count: 0 }],
+    daemon_commands: [], messages: [], managed_sessions: [], client_state: [], session_owners: [],
+  });
+
+  const expectAnchorIntact = (tables: any) => {
+    expect(tables.agent_tasks[0].status).toBe("scheduled");
+    expect(tables.pending_messages[0].status).toBe("pending");
+    expect(tables.conversations[0].status).toBe("active");
+    expect(tables.conversations[0].has_pending_messages).toBe(true);
+    // …but it IS retired from the inbox and its agent IS torn down.
+    expect(tables.conversations[0].inbox_killed_at).toBeGreaterThan(0);
+    expect(tables.daemon_commands.some((c: any) => c.command === "kill_session")).toBe(true);
+  };
+
+  test("the killSession mutation leaves an anchor's schedules and queue alone", async () => {
+    const tables = anchorTables();
+    const db = makeFakeDb(tables);
+    await (killSession as any)._handler(
+      { db, auth: { getUserIdentity: async () => ({ subject: `${RUNNER}|session` }) } },
+      { conversation_id: ANCHOR, mark_completed: true },
+    );
+    expectAnchorIntact(tables);
+  });
+
+  test("applyHideTransition agrees, given the same anchor", async () => {
+    const tables = anchorTables();
+    const db = makeFakeDb(tables);
+    const doc = { ...tables.conversations[0] };
+    const patch = { inbox_dismissed_at: Date.now() };
+    await db.patch(ANCHOR, patch);
+    await applyHideTransition({ db }, doc, patch, { forceKill: true });
+    expectAnchorIntact(tables);
+  });
+});
+
+// `cast kill` tells the user "cast undismiss <id> to resurface" — undismiss has
+// to actually deliver that. shouldShowInInbox hides a row on inbox_killed_at
+// ALONE, so clearing only the two hide stamps left the card invisible.
+describe("undismiss un-kills", () => {
+  const CONV = "conversations_killed";
+  const killedTables = () => ({
+    conversations: [{
+      _id: CONV, user_id: RUNNER, short_id: "abc1234", session_id: "s1", message_count: 9,
+      status: "completed", inbox_dismissed_at: 111, inbox_killed_at: 111,
+    }],
+    agent_tasks: [], daemon_commands: [], messages: [], pending_messages: [],
+    managed_sessions: [], client_state: [], session_owners: [],
+  });
+
+  test("cast undismiss clears the kill stamp, so the card comes back", async () => {
+    const tables = killedTables();
+    const db = makeFakeDb(tables);
+    // Pre-check: the killed row is invisible to the inbox on the kill stamp alone.
+    expect(shouldShowInInbox(tables.conversations[0] as any)).toBe(false);
+
+    const res = await (cliSetSessionVisibility as any)._handler(
+      { db, auth: { getUserIdentity: async () => ({ subject: `${RUNNER}|session` }) } },
+      { session: "abc1234", action: "undismiss" },
+    );
+    expect(res.was_hidden).toBe(true);
+    const row = tables.conversations[0] as any;
+    expect(row.inbox_killed_at).toBeUndefined();
+    expect(row.inbox_dismissed_at).toBeUndefined();
+    expect(shouldShowInInbox(row)).toBe(true); // visible with no pin required
+    // Undismiss resurfaces the CARD; restarting the agent is Restart's job.
+    expect(row.status).toBe("completed");
   });
 });

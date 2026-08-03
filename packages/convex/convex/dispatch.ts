@@ -347,6 +347,12 @@ export async function applyPatches(
           delete (finalSafe as any).inbox_killed_at;
         }
         if (Object.keys(finalSafe).length === 0) continue;
+        // Capture the PRE-patch hide state. The un-kill mirror below decides on
+        // what the row looked like BEFORE this write, and reading it afterwards
+        // would depend on ctx.db.get having handed back a snapshot rather than
+        // the row the patch mutates.
+        const wasDismissed = table === "conversations" && !!(doc as any).inbox_dismissed_at;
+        const wasKilled = table === "conversations" && !!(doc as any).inbox_killed_at;
         if (table === "comments") {
           const conversation = await ctx.db.get(doc.conversation_id as Id<"conversations">);
           if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) continue;
@@ -375,8 +381,18 @@ export async function applyPatches(
           table === "conversations" &&
           "inbox_dismissed_at" in (finalSafe as any) &&
           !(finalSafe as any).inbox_dismissed_at &&
-          (doc as any).inbox_dismissed_at
+          wasDismissed
         ) {
+          // Un-kill the row server-side. The web's restore gesture only nulls
+          // the two hide stamps, but shouldShowInInbox hides a row on
+          // inbox_killed_at alone — so without this the restored session stays
+          // invisible unless it happens to be pinned. Doing it here (rather than
+          // trusting a client to send the field) also keeps old clients working
+          // and matches `cast undismiss`. `status` is left alone: restore brings
+          // the CARD back, Restart brings the agent back.
+          if (wasKilled) {
+            await ctx.db.patch(doc._id as Id<"conversations">, { inbox_killed_at: undefined });
+          }
           await reactivateTasksCanceledOnKill(ctx, (doc as any).user_id, doc._id as Id<"conversations">);
           if ((doc as any).user_id?.toString() !== userId.toString()) {
             await reactivateTasksCanceledOnKill(ctx, userId, doc._id as Id<"conversations">);
