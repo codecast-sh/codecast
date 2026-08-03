@@ -66,10 +66,13 @@ echo "   ✓ Railway build simulation passed"
 echo ""
 
 # 1. Deploy Convex functions
+# THE deploy path (CLAUDE.md): raw `npx convex deploy` is banned. The repo-root
+# .env.local carries CONVEX_DEPLOYMENT=anonymous, which the convex CLI picks up
+# and uses INSTEAD of self-hosted prod, so a "successful" deploy here reached
+# nothing. deploy.sh moves that file aside and refuses a tree behind origin/main
+# (whole-tree snapshots delete newer prod functions).
 echo "1. Deploying Convex functions..."
-cd packages/convex
-npx convex deploy
-cd ../..
+./packages/convex/deploy.sh
 echo "   ✓ Convex deployed"
 echo ""
 
