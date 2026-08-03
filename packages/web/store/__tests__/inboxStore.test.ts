@@ -1009,47 +1009,6 @@ describe("mergeMessages — sync-recovery safety net", () => {
     expect(out.map((m: any) => m._id)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
   });
 
-  it("replaces an existing same-id message when a newer transcript revision arrives", () => {
-    const store = useInboxStore.getState();
-    store.setMessages("c1", [{
-      ...msg("stream-1", 1),
-      content: "partial",
-      transcript_revision: 10,
-    }]);
-    store.mergeMessages("c1", [{
-      ...msg("stream-1", 1),
-      content: "complete",
-      transcript_revision: 11,
-    }], "append", { initialized: true, transcriptRevision: 11 });
-
-    const out = useInboxStore.getState();
-    expect(out.messages.c1).toHaveLength(1);
-    expect(out.messages.c1[0].content).toBe("complete");
-    expect(out.pagination.c1.transcriptRevision).toBe(11);
-  });
-
-  it("does not let a stale retry or paginated snapshot overwrite a newer revision", () => {
-    const store = useInboxStore.getState();
-    const complete = {
-      ...msg("stream-1", 1),
-      content: "complete",
-      transcript_revision: 11,
-    };
-    const stale = {
-      ...msg("stream-1", 1),
-      content: "partial",
-      transcript_revision: 10,
-    };
-    store.setMessages("c1", [complete], { transcriptRevision: 11 });
-    store.mergeMessages("c1", [stale], "append", { transcriptRevision: 10 });
-    store.setMessages("c1", [stale], { transcriptRevision: 10 });
-
-    const out = useInboxStore.getState();
-    expect(out.messages.c1).toHaveLength(1);
-    expect(out.messages.c1[0].content).toBe("complete");
-    expect(out.pagination.c1.transcriptRevision).toBe(11);
-  });
-
   it("dedupes exact replayed server messages without UUIDs", () => {
     const store = useInboxStore.getState();
     const original = { ...msg("m1", 1), content: "same assistant text" };

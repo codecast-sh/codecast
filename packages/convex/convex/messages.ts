@@ -125,42 +125,6 @@ export function buildExistingMessagePatch(
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
-type MessageSourceRevision = {
-  source_device_id?: string;
-  source_revision?: number;
-};
-
-/**
- * Decide whether an incoming projection may replace an existing same-UUID row.
- *
- * Compatibility is deliberately one-way: legacy writers may continue updating
- * rows that have never entered the revisioned protocol, but they cannot
- * overwrite a revisioned row. For revisioned writers, the conversation's
- * current owner device fences a stale daemon on a machine that no longer owns
- * the session; revisions then order retries from the active device.
- */
-export function shouldApplyMessageSourceRevision(
-  existing: MessageSourceRevision,
-  incoming: MessageSourceRevision,
-  ownerDeviceId?: string,
-): boolean {
-  const incomingIsRevisioned =
-    typeof incoming.source_device_id === "string" &&
-    typeof incoming.source_revision === "number";
-  const existingIsRevisioned =
-    typeof existing.source_device_id === "string" &&
-    typeof existing.source_revision === "number";
-
-  if (!incomingIsRevisioned) return !existingIsRevisioned;
-  if (ownerDeviceId && incoming.source_device_id !== ownerDeviceId) return false;
-  if (!existingIsRevisioned) return true;
-  if (existing.source_device_id !== incoming.source_device_id) {
-    // A newly-owned device supersedes the row written by the previous owner.
-    return !ownerDeviceId || incoming.source_device_id === ownerDeviceId;
-  }
-  return incoming.source_revision! > existing.source_revision!;
-}
-
 // A /model switch emits a user line `<local-command-stdout>Set model to <Name>`
 // and NO assistant line until the next turn, so it must count as a model signal
 // or the rollup (and forks, which stamp conversations.model on every line) lag
@@ -1104,6 +1068,8 @@ export async function supersedeApiErrorBanners(
 
 const messageValidator = v.object({
   message_uuid: v.optional(v.string()),
+  // Accepted for wire compatibility with daemons that still stamp source
+  // ordering; the handler does not use them.
   source_device_id: v.optional(v.string()),
   source_revision: v.optional(v.number()),
   role: v.union(
@@ -1212,10 +1178,7 @@ export const addMessages = mutation({
 
     const ids: Id<"messages">[] = [];
     let insertedCount = 0;
-    let changedCount = 0;
     let lastUserContentStored: string | undefined;
-    let latestTranscriptRevision = conversation.transcript_revision ?? 0;
-    const advanceTranscriptRevision = () => ++latestTranscriptRevision;
 
     // Collect pending_messages ONCE per batch instead of once per user message.
     // This was the dominant per-message read amplifier on the write hot-path —
@@ -1223,7 +1186,7 @@ export const addMessages = mutation({
     // each time. Most batches have no pending rows, so we skip the read entirely
     // unless the batch actually carries a user message. consumedPendingIds keeps a
     // pending row from matching two different user messages in the same batch.
-    const batchHasUserMsg = messages.some((m) => m.role === "user");
+    const batchHasUserMsg = args.messages.some((m) => m.role === "user");
     const pendingMsgs = batchHasUserMsg
       ? await ctx.db
           .query("pending_messages")
@@ -1232,7 +1195,7 @@ export const addMessages = mutation({
       : [];
     const consumedPendingIds = new Set<Id<"pending_messages">>();
 
-    for (const msg of messages) {
+    for (const msg of args.messages) {
       const msgTimestamp = msg.timestamp || Date.now();
 
       const safeContent = msg.content ? redactSecrets(msg.content) : msg.content;
@@ -1266,14 +1229,6 @@ export const addMessages = mutation({
           .first();
 
         if (existing) {
-          if (!shouldApplyMessageSourceRevision(
-            existing,
-            msg,
-            conversation.owner_device_id,
-          )) {
-            ids.push(existing._id);
-            continue;
-          }
           const patch = buildExistingMessagePatch(existing, {
             role: msg.role,
             content: safeContent,
@@ -1284,21 +1239,8 @@ export const addMessages = mutation({
             subtype: msg.subtype,
             model: msg.model,
           });
-          const revisionAdvanced =
-            typeof msg.source_device_id === "string" &&
-            typeof msg.source_revision === "number";
-          if (patch || revisionAdvanced) {
-            await ctx.db.patch(existing._id, {
-              ...(patch ?? {}),
-              ...(revisionAdvanced
-                ? {
-                    source_device_id: msg.source_device_id,
-                    source_revision: msg.source_revision,
-                  }
-                : {}),
-              transcript_revision: advanceTranscriptRevision(),
-            });
-            changedCount++;
+          if (patch) {
+            await ctx.db.patch(existing._id, patch);
           }
           ids.push(existing._id);
           continue;
@@ -1335,18 +1277,7 @@ export const addMessages = mutation({
               patch.tool_results = safeToolResults;
             }
             if (Object.keys(patch).length > 0) {
-              await ctx.db.patch(dup._id, {
-                ...patch,
-                ...(typeof msg.source_device_id === "string" &&
-                typeof msg.source_revision === "number"
-                  ? {
-                      source_device_id: msg.source_device_id,
-                      source_revision: msg.source_revision,
-                    }
-                  : {}),
-                transcript_revision: advanceTranscriptRevision(),
-              });
-              changedCount++;
+              await ctx.db.patch(dup._id, patch);
             }
             if (matchingPending) {
               consumedPendingIds.add(matchingPending._id);
@@ -1358,11 +1289,7 @@ export const addMessages = mutation({
                 dupPatch.from_user_id = matchingPending.from_user_id;
               }
               if (Object.keys(dupPatch).length > 0) {
-                await ctx.db.patch(dup._id, {
-                  ...dupPatch,
-                  transcript_revision: advanceTranscriptRevision(),
-                });
-                if (Object.keys(patch).length === 0) changedCount++;
+                await ctx.db.patch(dup._id, dupPatch);
               }
               await markPendingDelivered(ctx, matchingPending);
               if (!matchingPending.echo_message_id) {
@@ -1402,9 +1329,6 @@ export const addMessages = mutation({
         // unattributed, which the UI reads as "the owner".
         from_user_id: matchingPending?.from_user_id,
         message_uuid: msg.message_uuid,
-        source_device_id: msg.source_device_id,
-        source_revision: msg.source_revision,
-        transcript_revision: advanceTranscriptRevision(),
         role: msg.role,
         content: contentToStore,
         thinking: safeThinking,
@@ -1423,20 +1347,19 @@ export const addMessages = mutation({
       }
       ids.push(messageId);
       insertedCount++;
-      changedCount++;
       await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
       if (msg.role === "user") lastUserContentStored = contentToStore;
     }
 
     if (insertedCount > 0) {
       const newMessageCount = conversation.message_count + insertedCount;
-      const lastMsg = messages[messages.length - 1];
+      const lastMsg = args.messages[args.messages.length - 1];
       // Use the actual max message timestamp instead of Date.now(): for live
       // sync these match, but for historical backfill (sync_mode=all dredging
       // up months-old JSONLs) Date.now() would falsely mark every old session
       // as just-active and pollute the inbox's "needs input" / "working"
       // buckets. Math.max guards against clock skew or out-of-order batches.
-      const maxMsgTs = messages.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
+      const maxMsgTs = args.messages.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
 
       // --- Supersede transient Claude Code API/auth-error banners ---
       // The CLI rewinds these out of its transcript on a successful retry, but
@@ -1445,20 +1368,20 @@ export const addMessages = mutation({
       // banner-only batch just flips the gate flag so a later turn can clear it.
       // The deletion scan only runs on the rare recovery batch — ordinary
       // traffic skips it entirely.
-      type IncomingMsg = (typeof messages)[number];
+      type IncomingMsg = (typeof args.messages)[number];
       const isBannerMsg = (m: IncomingMsg) => m.role === "assistant" && isApiErrorBanner(m.content);
       const isRealTurn = (m: IncomingMsg) =>
         !isBannerMsg(m) &&
         ((m.role === "assistant" && (!!m.content?.trim() || (m.tool_calls?.length ?? 0) > 0)) ||
           (m.role === "user" &&
             (!!m.content?.trim() || (m.tool_results?.length ?? 0) > 0 || (m.images?.length ?? 0) > 0)));
-      const batchHasBanner = messages.some(isBannerMsg);
-      const batchHasRealTurn = messages.some(isRealTurn);
-      const maxRealTurnTs = messages.reduce(
+      const batchHasBanner = args.messages.some(isBannerMsg);
+      const batchHasRealTurn = args.messages.some(isRealTurn);
+      const maxRealTurnTs = args.messages.reduce(
         (max, m) => (isRealTurn(m) ? Math.max(max, m.timestamp || 0) : max),
         0,
       );
-      const newestMsg = messages.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
+      const newestMsg = args.messages.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
       const wasPendingApiError = conversation.pending_api_error === true;
 
       let supersededBanners = 0;
@@ -1476,13 +1399,12 @@ export const addMessages = mutation({
         message_count: newMessageCount - supersededBanners,
         updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
         last_message_role: lastMsg.role,
-        transcript_revision: latestTranscriptRevision,
       };
-      const batchModel = lastKnownModelFromBatch(messages);
+      const batchModel = lastKnownModelFromBatch(args.messages);
       if (batchModel && batchModel !== conversation.model) {
         convPatch.model = batchModel;
       }
-      const batchEffort = lastKnownEffortFromBatch(messages);
+      const batchEffort = lastKnownEffortFromBatch(args.messages);
       if (batchEffort && batchEffort !== conversation.effort) {
         convPatch.effort = batchEffort;
       }
@@ -1505,7 +1427,7 @@ export const addMessages = mutation({
       ) {
         await scheduleAutoSwitchCheck(ctx, conversation.user_id);
       }
-      const userMsgs = messages.filter((m) => m.role === "user");
+      const userMsgs = args.messages.filter((m) => m.role === "user");
       if (userMsgs.length > 0) {
         const lastUserMsg = userMsgs[userMsgs.length - 1];
         const lastUserTs = userMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
@@ -1520,7 +1442,7 @@ export const addMessages = mutation({
       }
       await ctx.db.patch(args.conversation_id, convPatch);
 
-      const agentStatusProjection = getAddMessagesAgentStatusProjection(messages);
+      const agentStatusProjection = getAddMessagesAgentStatusProjection(args.messages);
       if (agentStatusProjection) {
         await ctx.scheduler.runAfter(0, internal.messages.projectAgentStatusOnAddMessages, {
           conversation_id: args.conversation_id,
@@ -1535,7 +1457,7 @@ export const addMessages = mutation({
       // all ordinary traffic; the mirror runs off this transaction.
       if (
         (conversation as { comment_fork_comment_id?: unknown }).comment_fork_comment_id &&
-        messages.some((m) => m.role === "assistant" && !!m.content?.trim())
+        args.messages.some((m) => m.role === "assistant" && !!m.content?.trim())
       ) {
         await ctx.scheduler.runAfter(0, internal.comments.mirrorAgentReply, {
           fork_conversation_id: args.conversation_id,
@@ -1546,28 +1468,13 @@ export const addMessages = mutation({
 
     }
 
-    // Inserts already patch the conversation above. A same-UUID streaming
-    // update must also advance the authoritative watermark; message_count
-    // remains unchanged, which is precisely why count-based recovery missed
-    // these updates.
-    if (changedCount > 0 && insertedCount === 0) {
-      const maxMsgTs = messages.reduce(
-        (max, m) => Math.max(max, m.timestamp || 0),
-        0,
-      );
-      await ctx.db.patch(args.conversation_id, {
-        transcript_revision: latestTranscriptRevision,
-        updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
-      });
-    }
-
     // Fold harness-loop events (ScheduleWakeup / scheduled_task_fire) into
     // conversation.loop_state. Like the AskUserQuestion check below, this must
     // run even when insertedCount is 0: tool_calls usually land as a PATCH to
     // the already-synced streaming message. The batchHasLoopEvent gate keeps
     // ordinary traffic free of the derivation.
-    if (batchHasLoopEvent(messages)) {
-      const nextLoop = deriveLoopState(conversation.loop_state, messages, Date.now());
+    if (batchHasLoopEvent(args.messages)) {
+      const nextLoop = deriveLoopState(conversation.loop_state, args.messages, Date.now());
       if (nextLoop) await ctx.db.patch(args.conversation_id, { loop_state: nextLoop });
     }
 
@@ -1580,7 +1487,7 @@ export const addMessages = mutation({
     // (insertedCount 0), which is exactly the batch that must schedule the
     // check. The check re-reads the messages table at fire time, so a poll
     // answered in the meantime is a no-op. (see notifications.checkNeedsInput)
-    const newestBatchMsg = messages.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
+    const newestBatchMsg = args.messages.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
     if (
       newestBatchMsg.role === "assistant" &&
       newestBatchMsg.tool_calls?.some((tc) => tc.name === "AskUserQuestion")
@@ -1592,21 +1499,16 @@ export const addMessages = mutation({
 
     // Doc extraction touches the docs table (index reads + inserts/patches) and is
     // not latency-critical, so keep it off the addMessages transaction. Schedule it
-    // only when a batch plausibly contains a doc — re-passing messages is size-safe
+    // only when a batch plausibly contains a doc — re-passing args.messages is size-safe
     // since that exact payload already fit this mutation's arg limit.
-    if (hasDocExtractionCandidate(messages)) {
+    if (hasDocExtractionCandidate(args.messages)) {
       await ctx.scheduler.runAfter(0, internal.messages.extractDocs, {
         conversation_id: args.conversation_id,
-        messages,
+        messages: args.messages,
       });
     }
 
-    return {
-      inserted: insertedCount,
-      ids,
-      transcript_revision:
-        changedCount > 0 ? latestTranscriptRevision : conversation.transcript_revision ?? 0,
-    };
+    return { inserted: insertedCount, ids };
   },
 });
 
@@ -1654,50 +1556,6 @@ export const extractDocs = internalMutation({
     try {
       await extractDocsFromMessages(ctx, args.messages, conversation, args.conversation_id);
     } catch {}
-  },
-});
-
-/**
- * Recovery path for inserts and in-place same-UUID updates. The conversation
- * watermark tells clients whether they are current; this query returns every
- * row changed after their last applied watermark.
- */
-export const getTranscriptChanges = query({
-  args: {
-    conversation_id: v.id("conversations"),
-    after_revision: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) return null;
-    if ((await checkConversationAccess(ctx, authUserId, conversation)) === "denied") {
-      return null;
-    }
-
-    const PAGE_LIMIT = 2000;
-    const rows = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_transcript_revision", (q) =>
-        q
-          .eq("conversation_id", args.conversation_id)
-          .gt("transcript_revision", args.after_revision)
-      )
-      .order("asc")
-      .take(PAGE_LIMIT + 1);
-    const hasMore = rows.length > PAGE_LIMIT;
-    if (hasMore) rows.length = PAGE_LIMIT;
-    const latestRevision = conversation.transcript_revision ?? 0;
-    const lastRevision = hasMore && rows.length > 0
-      ? rows[rows.length - 1].transcript_revision ?? args.after_revision
-      : latestRevision;
-
-    return {
-      messages: rows,
-      last_revision: lastRevision,
-      latest_revision: latestRevision,
-      has_more: hasMore,
-    };
   },
 });
 
@@ -2092,6 +1950,34 @@ export const getSharedMessageMeta = query({
       role: message.role,
       author: user?.name || null,
       note: share.note || null,
+    };
+  },
+});
+
+
+/**
+ * Compatibility stub for cached web clients that still poll the transcript
+ * watermark recovery path. The watermark no longer advances, so this always
+ * reports the caller as current.
+ */
+export const getTranscriptChanges = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    after_revision: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return null;
+    if ((await checkConversationAccess(ctx, authUserId, conversation)) === "denied") {
+      return null;
+    }
+    const latestRevision = conversation.transcript_revision ?? 0;
+    return {
+      messages: [],
+      last_revision: latestRevision,
+      latest_revision: latestRevision,
+      has_more: false,
     };
   },
 });
