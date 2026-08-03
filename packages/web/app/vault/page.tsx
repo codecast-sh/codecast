@@ -79,6 +79,7 @@ function EmptyVaultTeaching() {
 
 function NoDaemonTeaching({
   reason,
+  detail,
   remoteVaults,
   onRetry,
   onOpenRemote,
