@@ -8,7 +8,7 @@ import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "child_
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
-import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
+import { deviceId, deviceLabel, isRemoteDevice, stableHostname } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
@@ -2036,6 +2036,11 @@ async function sendHeartbeat(): Promise<void> {
         local_project_roots: computeLocalProjectRoots(),
         device_id: deviceId(),
         device_label: deviceLabel(),
+        // The machine's own name, kept separate from device_label (which a human
+        // can override to anything). Purely a suggested default for the SSH host
+        // in Settings → Devices — the daemon can't know whether it's reachable,
+        // so nothing builds an attach command out of it unaided.
+        device_hostname: stableHostname(),
         is_remote_device: isRemoteDevice(),
         // Saved CC account profiles (names/emails/tiers only, never tokens) so
         // the web can render the account switcher. Recomputed when the
