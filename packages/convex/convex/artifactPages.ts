@@ -45,6 +45,7 @@ export interface BrandOpts {
   slug?: string;
   kind?: string;
   sessionShortId?: string | null;
+  sessionTitle?: string | null;
   views?: number;
   commentCount?: number;
   gated?: { password: boolean; email: boolean };
@@ -72,18 +73,22 @@ function barHtml(o: BrandOpts): string {
   const viewingOld = version < currentVersion;
   const interactive = !!o.metaUrl;
   const chevronSvg = `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`;
-  const bubbleSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+  const bubbleSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
   const verChip = interactive
     ? `<button id="__cc_ver" type="button" title="Version history"${viewingOld ? ' class="__cc_old"' : ""}>v${version}${viewingOld ? " (old)" : ""} ${chevronSvg}</button>`
     : "";
-  const latestLink = viewingOld ? `<a id="__cc_latest" href="#">Latest ↗</a>` : "";
+  const upRightSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>`;
+  const dotsSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`;
+  const latestLink = viewingOld ? `<a id="__cc_latest" href="#">Latest ${upRightSvg}</a>` : "";
+  // The chip reads as the session's TITLE (a short id means nothing to a
+  // viewer); the id stays in the tooltip and the href.
   const sessionLink = o.sessionShortId
-    ? `<a class="__cc_sess" href="https://codecast.sh/conversation/${escAttr(o.sessionShortId)}" target="_blank" rel="noopener noreferrer" title="Open the session that published this">by ${escAttr(o.sessionShortId)}</a>`
+    ? `<a class="__cc_sess" href="https://codecast.sh/conversation/${escAttr(o.sessionShortId)}" target="_blank" rel="noopener noreferrer" title="Open the session that published this (${escAttr(o.sessionShortId)})">${escAttr(o.sessionTitle || `by ${o.sessionShortId}`)}</a>`
     : "";
   const commentsBtn = interactive
     ? `<button id="__cc_cbtn" type="button" title="Comment on this page">${bubbleSvg}<span id="__cc_ccount">${o.commentCount || ""}</span></button>`
     : "";
-  const menuBtn = interactive ? `<button id="__cc_menu" type="button" title="More">⋯</button>` : "";
+  const menuBtn = interactive ? `<button id="__cc_menu" type="button" title="More">${dotsSvg}</button>` : "";
   const cfg = {
     metaUrl: o.metaUrl ?? "",
     apiBase: o.apiBase ?? "",
@@ -100,6 +105,9 @@ function barHtml(o: BrandOpts): string {
   };
   return `
 <style id="__cc_style">
+  /* codecast web styles: JetBrains Mono (same Google Fonts source the web
+     app uses) + the Solarized token palette from globals.css. */
+  @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap");
   /* Pinned to the viewport top; the html margin reserves exactly the bar's
      height so the artifact's content starts below it — pinned, not overlaying.
      Colors ride on custom properties; html.__cc_dark (set by JS from the
@@ -107,20 +115,20 @@ function barHtml(o: BrandOpts): string {
      bar reads as part of the page instead of a white strip over a dark one. */
   html { margin-top: 40px !important; }
   #__cc_bar, .__cc_panel, #__cc_hint {
-    --cc-bg: rgba(252,251,250,.88); --cc-ink: #1c1b19; --cc-mut: #5c5954; --cc-dim: rgba(28,27,25,.48);
-    --cc-line: rgba(28,27,25,.09); --cc-hov: rgba(28,27,25,.06); --cc-card: #ffffff; --cc-soft: #faf9f7;
-    --cc-inbd: rgba(28,27,25,.16); --cc-blue: #1a63c4; --cc-green: #3d8a3d; --cc-coral: #e86c5d;
-    --cc-shadow: rgba(0,0,0,.14); }
+    --cc-bg: rgba(251,245,226,.9); --cc-ink: #002b36; --cc-mut: #586e75; --cc-dim: rgba(0,43,54,.48);
+    --cc-line: rgba(88,110,117,.22); --cc-hov: rgba(0,43,54,.06); --cc-card: #ffffff; --cc-soft: #fbf5e2;
+    --cc-inbd: rgba(0,43,54,.22); --cc-blue: #268bd2; --cc-green: #859900; --cc-coral: #e86c5d;
+    --cc-shadow: rgba(0,43,54,.16); }
   html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint {
-    --cc-bg: rgba(25,24,22,.82); --cc-ink: #f0eee9; --cc-mut: #b3afa6; --cc-dim: rgba(240,238,233,.45);
-    --cc-line: rgba(240,238,233,.1); --cc-hov: rgba(240,238,233,.09); --cc-card: #232220; --cc-soft: #2b2a27;
-    --cc-inbd: rgba(240,238,233,.2); --cc-blue: #7ab0f0; --cc-green: #7cc47c;
+    --cc-bg: rgba(0,43,54,.85); --cc-ink: #fdf6e3; --cc-mut: #93a1a1; --cc-dim: rgba(253,246,227,.45);
+    --cc-line: rgba(147,161,161,.18); --cc-hov: rgba(147,161,161,.1); --cc-card: #08404e; --cc-soft: #073642;
+    --cc-inbd: rgba(147,161,161,.32); --cc-blue: #268bd2; --cc-green: #859900;
     --cc-shadow: rgba(0,0,0,.5); }
   #__cc_bar { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 2147483647;
     display: flex; align-items: center; gap: 2px;
     box-sizing: border-box;
     padding: 0 calc(10px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
-    font: 500 12px/1 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    font: 500 12px/1 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     background: var(--cc-bg); color: var(--cc-mut);
     -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
     border-bottom: 1px solid var(--cc-line); box-shadow: 0 1px 8px rgba(0,0,0,.05);
@@ -131,7 +139,7 @@ function barHtml(o: BrandOpts): string {
   #__cc_bar .__cc_title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-weight: 500; color: var(--cc-ink); opacity: .82; letter-spacing: .01em; margin-right: 8px; }
   #__cc_bar .__cc_sess { color: var(--cc-blue); text-decoration: none; white-space: nowrap; font-weight: 400;
-    opacity: .75; padding: 5px 7px; border-radius: 7px; }
+    opacity: .8; padding: 5px 7px; border-radius: 7px; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; }
   #__cc_bar .__cc_sess:hover { opacity: 1; background: var(--cc-hov); }
   #__cc_bar .__cc_when { color: var(--cc-dim); font-weight: 400; white-space: nowrap; padding: 0 7px; }
   #__cc_bar .__cc_dot { color: var(--cc-dim); opacity: .6; }
@@ -147,7 +155,8 @@ function barHtml(o: BrandOpts): string {
   #__cc_bar #__cc_ver.__cc_old { color: #c07a28; border-color: rgba(192,122,40,.45); }
   #__cc_bar #__cc_new { background: var(--cc-coral); color: #ffffff; font-weight: 600; margin: 0 2px; padding: 5px 10px; }
   #__cc_bar #__cc_new:hover { background: #d85b4c; color: #ffffff; }
-  #__cc_bar #__cc_latest { color: var(--cc-blue); text-decoration: none; padding: 5px 8px; border-radius: 7px; white-space: nowrap; }
+  #__cc_bar #__cc_latest { color: var(--cc-blue); text-decoration: none; padding: 5px 8px; border-radius: 7px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 3px; }
   #__cc_bar #__cc_latest:hover { background: var(--cc-hov); }
   #__cc_bar #__cc_ccount { background: rgba(232,108,93,.16); color: #c2543f; border-radius: 999px; padding: 2px 6px;
     font-size: 10px; font-weight: 600; }
@@ -157,7 +166,7 @@ function barHtml(o: BrandOpts): string {
     max-height: 72vh; overflow-y: auto; overscroll-behavior: contain;
     background: var(--cc-card); color: var(--cc-mut); border-radius: 12px;
     box-shadow: 0 10px 32px var(--cc-shadow), 0 0 0 1px var(--cc-line);
-    font: 400 12px/1.45 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; padding: 8px; text-align: left;
+    font: 400 12px/1.45 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 8px; text-align: left;
     opacity: 0; transform: translateY(-4px); transition: opacity .16s ease, transform .16s ease; }
   .__cc_panel.__cc_in { opacity: 1; transform: none; }
   .__cc_panel[hidden] { display: none; }
@@ -245,7 +254,7 @@ function barHtml(o: BrandOpts): string {
   .__cc_panel .__cc_div { height: 1px; background: var(--cc-line); margin: 8px 8px 2px; }
   #__cc_pins { position: absolute; top: 0; left: 0; width: 100%; height: 0; overflow: visible; z-index: 2147483645; pointer-events: none; }
   #__cc_pins .__cc_pin { position: absolute; transform: translate(-50%,-100%); width: 22px; height: 22px;
-    border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 11px/22px ui-monospace, Menlo, monospace;
+    border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 11px/22px "JetBrains Mono", ui-monospace, Menlo, monospace;
     text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,.25); pointer-events: auto; cursor: pointer;
     animation: __cc_pop .18s ease; }
   #__cc_pins .__cc_pin.__cc_spin { width: 14px; height: 14px; background: #ffffff; border: 3px solid #e86c5d;
@@ -256,7 +265,7 @@ function barHtml(o: BrandOpts): string {
   @keyframes __cc_pulse { 50% { transform: translate(-50%,-100%) scale(1.5); } }
   #__cc_hint { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%);
     z-index: 2147483647; background: var(--cc-ink); color: var(--cc-card); padding: 11px 18px; border-radius: 999px;
-    font: 500 12px/1 ui-monospace, Menlo, monospace; box-shadow: 0 6px 20px rgba(0,0,0,.3); white-space: nowrap; }
+    font: 500 12px/1 "JetBrains Mono", ui-monospace, Menlo, monospace; box-shadow: 0 6px 20px rgba(0,0,0,.3); white-space: nowrap; }
   html.__cc_pinmode, html.__cc_pinmode * { cursor: crosshair !important; }
   /* Bottom-sheet mode. The media query catches real narrow layout viewports;
      the .__cc_sheet class is the same rules applied by JS from screen.width,
@@ -919,10 +928,15 @@ function pageShell(title: string, body: string, extra = ""): string {
 <meta name="robots" content="noindex">
 <title>${escHtml(title)}</title>
 <style>
-  :root { --ink: #1a1a18; --mut: #52524e; --dim: rgba(0,0,0,.45); --coral: #e86c5d; --blue: #1a63c4; --bg: #faf9f7; --card: #ffffff; }
+  @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+  /* Solarized tokens from the web app's globals.css; follows OS scheme. */
+  :root { --ink: #002b36; --mut: #586e75; --dim: rgba(0,43,54,.45); --coral: #e86c5d; --blue: #268bd2; --bg: #fbf5e2; --card: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #fdf6e3; --mut: #93a1a1; --dim: rgba(253,246,227,.45); --blue: #268bd2; --bg: #002b36; --card: #08404e; }
+  }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--mut);
-    font: 400 14px/1.5 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    font: 400 14px/1.5 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     -webkit-font-smoothing: antialiased; }
   ::selection { background: rgba(232,108,93,.25); }
   .shell { max-width: 860px; margin: 0 auto;
@@ -1240,7 +1254,7 @@ export function editorPage(o: {
   div#pv h1, div#pv h2, div#pv h3, div#pv h4 { font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 1.25; }
   div#pv h1 { font-size: 24px; } div#pv h2 { font-size: 18px; } div#pv h3 { font-size: 15px; }
   div#pv pre { background: #fff; border: 1px solid rgba(0,0,0,.08); border-radius: 8px; padding: 12px; overflow-x: auto; font-size: 12.5px; }
-  div#pv code { font: 13px/1.5 ui-monospace, Menlo, monospace; background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 4px; }
+  div#pv code { font: 13px/1.5 "JetBrains Mono", ui-monospace, Menlo, monospace; background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 4px; }
   div#pv pre code { background: none; padding: 0; }
   div#pv blockquote { margin: 0; padding: 2px 14px; border-left: 3px solid var(--coral); color: var(--mut); }
   div#pv a { color: var(--blue); }
@@ -1372,8 +1386,8 @@ ${topRow(`${o.title} — edit`, o.shareUrl, "← Back")}
 
 /** Reading theme wrapping rendered markdown. The result is the stored artifact
  * document, so it goes through brandArtifactHtml at serve time like any HTML.
- * Auto dark mode via prefers-color-scheme — the md theme only; the injected
- * bar stays its light self. */
+ * Auto dark mode via prefers-color-scheme; the injected bar reads the
+ * effective background luminance and adapts on its own. */
 export function mdDocumentHtml(o: { title: string; bodyHtml: string }): string {
   return `<!doctype html>
 <html lang="en">
@@ -1400,7 +1414,7 @@ export function mdDocumentHtml(o: { title: string; bodyHtml: string }): string {
   h4 { font-size: 14px; margin: 22px 0 6px; }
   p { margin: 0 0 14px; }
   a { color: var(--blue); text-underline-offset: 2px; }
-  code { font: 13px/1.5 ui-monospace, Menlo, monospace; background: var(--codebg); padding: 1px 5px; border-radius: 4px; }
+  code { font: 13px/1.5 "JetBrains Mono", ui-monospace, Menlo, monospace; background: var(--codebg); padding: 1px 5px; border-radius: 4px; }
   pre { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px; overflow-x: auto; }
   pre code { background: none; padding: 0; }
   blockquote { margin: 0 0 14px; padding: 2px 18px; border-left: 3px solid var(--coral); color: var(--mut); }
@@ -1410,7 +1424,7 @@ export function mdDocumentHtml(o: { title: string; bodyHtml: string }): string {
   img { max-width: 100%; border-radius: 6px; }
   table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 0 0 16px; display: block; overflow-x: auto; }
   th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
-  th { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  th { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-size: 12px; }
   hr { border: 0; border-top: 1px solid var(--line); margin: 32px 0; }
 </style>
 </head>

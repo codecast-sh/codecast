@@ -188,9 +188,16 @@ export const bySlug = internalQuery({
       .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
       .collect();
     const open = comments.filter((c) => c.status === "open").sort((a, b) => a.created_at - b.created_at);
+    // Session TITLE for the bar chip — a short id means nothing to viewers.
+    let session_title: string | null = null;
+    if (artifact.session_conversation_id) {
+      const conv = await ctx.db.get(artifact.session_conversation_id);
+      session_title = conv?.title ?? null;
+    }
     return {
       ...artifact,
       author_name: user?.name ?? null,
+      session_title,
       views: stats?.view_count ?? 0,
       comment_count: open.length,
       // Publicly visible shape for the in-page bar (?meta=1): every viewer of
