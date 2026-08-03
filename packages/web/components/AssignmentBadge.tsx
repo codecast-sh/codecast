@@ -21,6 +21,7 @@ import {
 } from "./ui/dropdown-menu";
 import {
   useDevices,
+  useForeignOwnerDevice,
   deviceDisplayName,
   deviceKindLabel,
   relativeSeen,
@@ -47,7 +48,16 @@ export function AssignmentBadge({
 }) {
   const { byId, loaded } = useDevices();
   const owners = useOwnersFromStore(conversationId);
-  const d = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
+  // A session may run on a machine outside the viewer's own device list (a
+  // teammate's, or the shared agent box whose daemon authenticates as the bot
+  // account) — resolve it via the conversation so the lobe shows its hostname
+  // instead of "Unassigned".
+  const own = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
+  const foreign = useForeignOwnerDevice(
+    conversationId,
+    loaded && !!ownerDeviceId && !own,
+  );
+  const d = own ?? (foreign || undefined);
   const { ownerList, displayFor, currentUser } = owners;
 
   // The default case — no explicit owners (implicitly yours) or just you —
@@ -64,7 +74,7 @@ export function AssignmentBadge({
     : null;
 
   const deviceTitle = d
-    ? `Runs on ${deviceDisplayName(d)} (${deviceKindLabel(d)}) — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`
+    ? `Runs on ${deviceDisplayName(d)} (${deviceKindLabel(d)})${own ? "" : " — a teammate's / shared machine"} — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`
     : "No device assigned yet — the next message routes to your most-recently-active machine.";
 
   return (
