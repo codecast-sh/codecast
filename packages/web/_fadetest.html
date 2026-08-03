@@ -1,0 +1,39 @@
+<!doctype html>
+<html class="dark">
+<head>
+<meta charset="utf-8">
+<script type="module">import '/app/globals.css'</script>
+<style>body { padding: 24px; font-family: monospace; }</style>
+</head>
+<body class="bg-sol-bg text-sol-text">
+  <h2 class="mb-4 text-sol-text-secondary">assistant clamp (h-8 → --sol-bg)</h2>
+  <div class="relative" style="max-height:160px;overflow-y:hidden" id="a">
+    <p>line 1 lorem ipsum dolor sit amet</p><p>line 2 consectetur adipiscing elit</p>
+    <p>line 3 sed do eiusmod tempor</p><p>line 4 incididunt ut labore</p>
+    <p>line 5 et dolore magna aliqua</p><p>line 6 ut enim ad minim veniam</p>
+    <p>line 7 quis nostrud exercitation</p><p>line 8 ullamco laboris nisi</p>
+    <p>line 9 ut aliquip ex ea commodo</p><p>line 10 duis aute irure</p>
+    <div class="absolute bottom-0 left-0 right-0 h-8 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]"></div>
+  </div>
+
+  <h2 class="my-4 text-sol-text-secondary">markdown clamp (h-20 → --sol-bg-inset) on inset ground</h2>
+  <div class="bg-sol-bg-inset p-3 relative" style="max-height:160px;overflow-y:hidden" id="b">
+    <p>line 1 lorem ipsum dolor sit amet</p><p>line 2 consectetur adipiscing elit</p>
+    <p>line 3 sed do eiusmod tempor</p><p>line 4 incididunt ut labore</p>
+    <p>line 5 et dolore magna aliqua</p><p>line 6 ut enim ad minim veniam</p>
+    <p>line 7 quis nostrud exercitation</p><p>line 8 ullamco laboris nisi</p>
+    <p>line 9 ut aliquip ex ea commodo</p><p>line 10 duis aute irure</p>
+    <div class="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg-inset)]"></div>
+  </div>
+
+  <h2 class="my-4 text-sol-text-secondary">h-20 → --sol-bg (user msg clamp)</h2>
+  <div class="relative" style="max-height:160px;overflow-y:hidden" id="c">
+    <p>line 1 lorem ipsum dolor sit amet</p><p>line 2 consectetur adipiscing elit</p>
+    <p>line 3 sed do eiusmod tempor</p><p>line 4 incididunt ut labore</p>
+    <p>line 5 et dolore magna aliqua</p><p>line 6 ut enim ad minim veniam</p>
+    <p>line 7 quis nostrud exercitation</p><p>line 8 ullamco laboris nisi</p>
+    <p>line 9 ut aliquip ex ea commodo</p><p>line 10 duis aute irure</p>
+    <div class="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]"></div>
+  </div>
+</body>
+</html>

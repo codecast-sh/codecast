@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID, randomBytes } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./proc.js";
 import { cliFetch } from "./cliHttp.js";
 import { fetchExport } from "./jsonlGenerator.js";
 import { claudeProjectDirName } from "./projectPathResolver.js";

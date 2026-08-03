@@ -372,7 +372,13 @@ export function TerminalPanel() {
         {activeTab?.status === "offline" && (
           <div className="absolute inset-x-0 bottom-0 px-3 py-1.5 text-[11px] font-mono bg-sol-bg/90 border-t border-sol-yellow/30">
             <span className="text-sol-yellow">no connection</span>
-            <span className="text-sol-text-dim"> — the terminal needs the daemon reachable on this machine; restart the tab to retry</span>
+            <span className="text-sol-text-dim"> — the terminal needs the daemon reachable on this machine · </span>
+            <button
+              onClick={() => handleRestart(activeTab)}
+              className="text-sol-cyan hover:underline"
+            >
+              retry
+            </button>
           </div>
         )}
         {activeTab?.readOnly && activeTab.status === "open" && (

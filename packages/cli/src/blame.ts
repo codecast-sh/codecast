@@ -7,7 +7,7 @@
 // keep parsing it; porcelain mode carries the attribution as extra
 // `codecast-*` header keys, which porcelain consumers ignore.
 
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "./proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";

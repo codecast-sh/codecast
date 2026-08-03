@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { spawn, spawnSync, type ChildProcess } from "../proc.js";
 import { existsSync, writeFileSync, unlinkSync, openSync, readFileSync, readdirSync, statSync, mkdirSync, copyFileSync, renameSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { tmuxRun } from "../tmux.js";

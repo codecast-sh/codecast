@@ -20,7 +20,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execSync, spawnSync } from "node:child_process";
+import { execSync, spawnSync } from "../../proc.js";
 import { resolveManifest } from "../resolver.js";
 import { allocatePorts, portsToEnv } from "../ports.js";
 import {
