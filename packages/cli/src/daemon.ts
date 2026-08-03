@@ -4,7 +4,8 @@ import * as path from "path";
 import { randomUUID, createHash } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
-import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "child_process";
+import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "./proc.js";
+import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
@@ -2552,7 +2553,6 @@ async function executeRemoteCommand(
         await flushRemoteLogs();
         setTimeout(() => {
           try {
-            const { execSync } = require("child_process");
             execSync("curl -fsSL codecast.sh/install | sh", { timeout: 120000, stdio: "ignore" });
             logLifecycle("reinstall_complete", `Reinstalled from v${currentVersion}`);
           } catch (e) {
@@ -15661,6 +15661,14 @@ function startWatchdog(
 }
 
 async function main(): Promise<void> {
+  // Refuse before any state, lock, or exit-handler setup: on Windows the daemon
+  // spawned a visible console window per background child (git, codex, cast) —
+  // hundreds within minutes. Exit 0 so Task Scheduler does not retry.
+  if (!daemonSupportedOnPlatform()) {
+    console.error(WINDOWS_DAEMON_UNSUPPORTED_MESSAGE);
+    process.exit(0);
+  }
+
   ensureConfigDir();
   ensureCastAlias();
 

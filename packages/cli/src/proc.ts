@@ -1,0 +1,74 @@
+/**
+ * Drop-in replacement for node:child_process that injects `windowsHide: true`
+ * into every call. On Windows, a process without a console (the daemon runs
+ * detached / under Task Scheduler) gets a NEW VISIBLE console window for every
+ * console child it spawns unless windowsHide is set — the daemon's git/codex/
+ * cast children painted hundreds of windows on a user's machine. The flag is
+ * ignored on POSIX, so injecting it unconditionally is safe everywhere.
+ *
+ * Import from this module instead of "child_process"; the exported names and
+ * signatures are identical, so only the import line changes.
+ */
+import * as cp from "node:child_process";
+import { promisify } from "node:util";
+
+export type {
+  ChildProcess,
+  ChildProcessWithoutNullStreams,
+  SpawnOptions,
+  SpawnSyncReturns,
+  ExecOptions,
+  ExecFileOptions,
+} from "node:child_process";
+
+/**
+ * Return a copy of a child_process argument list with `windowsHide: true`
+ * merged into its options. Every child_process signature is
+ * (command[, args][, options][, callback]) — options is the first plain
+ * object after the command (skipping the args array), and always precedes a
+ * trailing callback. An explicit caller-set windowsHide is respected.
+ * Exported for tests.
+ */
+export function withWindowsHide(args: unknown[]): unknown[] {
+  const out = [...args];
+  for (let i = 1; i < out.length; i++) {
+    const a = out[i];
+    if (Array.isArray(a) || typeof a === "string") continue; // args array / encoding
+    if (typeof a === "function") {
+      out.splice(i, 0, { windowsHide: true }); // no options before callback
+      return out;
+    }
+    if (a && typeof a === "object") {
+      out[i] = { windowsHide: true, ...a };
+      return out;
+    }
+    if (a == null) {
+      out[i] = { windowsHide: true }; // explicit undefined/null options slot
+      return out;
+    }
+  }
+  out.push({ windowsHide: true });
+  return out;
+}
+
+function wrap<T extends (...args: never[]) => unknown>(fn: T): T {
+  const wrapped = (...args: unknown[]) => (fn as unknown as (...a: unknown[]) => unknown)(...withWindowsHide(args));
+  // promisify(execFile)/promisify(exec) resolve {stdout, stderr} only via the
+  // promisify.custom implementation on the ORIGINAL function; a bare wrapper
+  // would fall back to generic promisification and break destructuring.
+  const custom = (fn as Record<symbol, unknown>)[promisify.custom as unknown as symbol];
+  if (typeof custom === "function") {
+    Object.defineProperty(wrapped, promisify.custom, {
+      value: (...args: unknown[]) => (custom as (...a: unknown[]) => unknown)(...withWindowsHide(args)),
+      enumerable: false,
+    });
+  }
+  return wrapped as unknown as T;
+}
+
+export const spawn: typeof cp.spawn = wrap(cp.spawn);
+export const spawnSync: typeof cp.spawnSync = wrap(cp.spawnSync);
+export const exec: typeof cp.exec = wrap(cp.exec);
+export const execSync: typeof cp.execSync = wrap(cp.execSync);
+export const execFile: typeof cp.execFile = wrap(cp.execFile);
+export const execFileSync: typeof cp.execFileSync = wrap(cp.execFileSync);

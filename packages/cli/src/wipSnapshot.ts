@@ -34,7 +34,7 @@
  * needs nothing from the database.
  */
 
-import { execFile } from "node:child_process";
+import { execFile } from "./proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";

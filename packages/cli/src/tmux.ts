@@ -1,4 +1,4 @@
-import { execSync, execFileSync, spawnSync } from "child_process";
+import { execSync, execFileSync, spawnSync } from "./proc.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 

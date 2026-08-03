@@ -345,9 +345,10 @@ describe("brandArtifactHtml", () => {
     expect(out).not.toContain("og:title");
   });
 
-  test("carries the share url into the copy button", () => {
+  test("carries the share url into the bar config (no copy button on the bar)", () => {
     const out = brandArtifactHtml("<body></body>", opts);
-    expect(out).toContain('data-url="https://codecast.sh/a/x1"');
+    expect(out).toContain('"shareUrl":"https://codecast.sh/a/x1"');
+    expect(out).not.toContain('id="__cc_copy"');
   });
 
   test("without metaUrl there is no version chip and no polling config", () => {

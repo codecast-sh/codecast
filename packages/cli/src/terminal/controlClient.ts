@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "../proc.js";
 import { ControlModeParser, toSendKeysHex, type ControlEvent } from "./controlProtocol.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
