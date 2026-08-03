@@ -6,7 +6,7 @@ import { Switch } from "../../../components/ui/switch";
 import { toast } from "sonner";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
-  Bell, BellOff, Users, MessageSquare,
+  Bell, BellOff, Users, MessageSquare, Laptop,
   CheckCircle, Terminal,
 } from "lucide-react";
 
@@ -64,6 +64,7 @@ export default function NotificationsSettingsPage() {
   const prefs = user?.notification_preferences;
   const enabled = user?.notifications_enabled ?? false;
   const mutedMembers: Id<"users">[] = (user as any)?.muted_members ?? [];
+  const machineWidePresence = (user as any)?.machine_wide_presence ?? false;
 
   const getPref = useCallback((key: NotifType) => {
     return (prefs as any)?.[key] ?? true;
@@ -72,6 +73,14 @@ export default function NotificationsSettingsPage() {
   const handleGlobalToggle = useCallback(async (value: boolean) => {
     try {
       await updatePrefs({ notifications_enabled: value });
+    } catch {
+      toast.error("Failed to update notification settings");
+    }
+  }, [updatePrefs]);
+
+  const handleToggleMachinePresence = useCallback(async (value: boolean) => {
+    try {
+      await updatePrefs({ machine_wide_presence: value });
     } catch {
       toast.error("Failed to update notification settings");
     }
@@ -135,6 +144,35 @@ export default function NotificationsSettingsPage() {
       {/* Per-type toggles */}
       {enabled && (
         <>
+          {/* Presence source for phone-push routing */}
+          <Card className="p-6 bg-sol-bg border-sol-border">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <Laptop className="w-5 h-5 text-sol-base1" />
+                <div>
+                  <span className="text-sm font-medium text-sol-text">
+                    Wait until I&apos;m away from the whole computer
+                  </span>
+                  <p className="text-xs text-sol-base1 mt-0.5">
+                    Phone notifications are already held for a few minutes while
+                    you&apos;re active in Codecast, then sent if you still haven&apos;t
+                    opened them. Turn this on and any keyboard or mouse activity on
+                    your Mac counts as being present — editor, browser, terminal — so
+                    pushes keep waiting, and arrive within a few minutes of you
+                    stepping away. Requires an up-to-date Codecast daemon on a Mac,
+                    with Codecast itself open somewhere to show you the notification;
+                    Linux machines and Macs not reporting input don&apos;t hold
+                    anything. Anything still waiting an hour later is sent regardless.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                checked={machineWidePresence}
+                onCheckedChange={handleToggleMachinePresence}
+              />
+            </div>
+          </Card>
+
           {NOTIF_SECTIONS.map((section) => {
             const Icon = section.icon;
             return (

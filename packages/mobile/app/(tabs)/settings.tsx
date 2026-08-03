@@ -158,6 +158,16 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleToggleMachinePresence = async () => {
+    try {
+      await updateNotificationPreferences({
+        machine_wide_presence: !(currentUser as any)?.machine_wide_presence,
+      });
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update notification settings');
+    }
+  };
+
   const teamMembers = useQuery(api.teams.getTeamMembers, activeTeamId ? { team_id: activeTeamId } : "skip");
 
   const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity') => {
@@ -380,6 +390,26 @@ export default function SettingsScreen() {
 
           {currentUser?.notifications_enabled && (
             <>
+              <RNView style={styles.settingDivider} />
+              <RNView style={styles.setting}>
+                <RNView style={styles.settingText}>
+                  <RNText style={styles.settingLabel}>Wait Until I'm Away From My Mac</RNText>
+                  <RNText style={styles.settingDescription}>
+                    Hold phone notifications while you're using your Mac at all, not
+                    just Codecast — they arrive a few minutes after you step away, or
+                    after an hour regardless. Needs an up-to-date Codecast daemon
+                    running on a Mac.
+                  </RNText>
+                </RNView>
+                <Switch
+                  value={(currentUser as any)?.machine_wide_presence ?? false}
+                  onValueChange={handleToggleMachinePresence}
+                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={Theme.bgHighlight}
+                />
+              </RNView>
+
               <RNView style={styles.settingDivider} />
               <RNView style={styles.setting}>
                 <RNView style={styles.settingText}>
