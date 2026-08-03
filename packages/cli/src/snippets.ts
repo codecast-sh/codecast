@@ -146,6 +146,41 @@ function installMarkedSnippetToTargets(
   return { installed: anyInstalled, updated: anyUpdated };
 }
 
+// One explanation of how agents name codecast objects in prose, shared by every
+// feature that introduces one (sessions, tasks, plans, triggers, docs). Each of
+// those snippets used to teach its own object's id in its own words — or not at
+// all, which is why agents pasted raw 32-char ids for triggers. Installed once
+// per file and refreshed in place, so having several features enabled still
+// yields exactly one copy.
+export const REFERENCES_SNIPPET_END = "<!-- /codecast-references -->";
+export const REFERENCES_SNIPPET = `
+## Referencing objects
+
+Every codecast object has a short ID. Write one into your prose and it renders as a live reference: the object's title, its current state, and a link that opens it. This works anywhere you write — messages, summaries, task comments, doc bodies, trigger prompts.
+
+| Object  | Short ID  | Where to find it |
+|---------|-----------|------------------|
+| Session | \`jx7c6zk\` | \`cast feed\`, \`cast search\`, \`cast context\` |
+| Task    | \`ct-4102\` | \`cast task ls\`, \`cast task ready\` |
+| Plan    | \`pl-88\`   | \`cast plan ls\` |
+| Trigger | \`tr-42\`   | \`cast trigger ls\` |
+| Doc     | \`doc:<id>\` | \`cast doc ls\`, \`cast doc search\` |
+
+There are two forms. Write the bare ID by default — \`Filed under ct-4102.\` — it reads as a normal sentence and still renders the full reference. Write \`@[Title id]\` — \`@[Fix the auth race ct-4102]\` — when the reader needs the name in the sentence itself.
+
+Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
+${REFERENCES_SNIPPET_END}
+`;
+
+export function installReferencesSnippet(update = false): { installed: boolean; updated: boolean } {
+  return installMarkedSnippetToTargets(
+    ["## Referencing objects"],
+    REFERENCES_SNIPPET_END,
+    REFERENCES_SNIPPET,
+    update,
+  );
+}
+
 export function installPublishSnippet(update = false): { installed: boolean; updated: boolean } {
   return installMarkedSnippetToTargets(
     ["## Publishing pages", "## Publishing artifacts", "## Publishing HTML artifacts"],

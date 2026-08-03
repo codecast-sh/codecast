@@ -93,6 +93,7 @@ export function TmuxAttachPill({
       {canSplit && (
         <ShortcutTooltip label={`Copy ${attach}`} side="bottom">
           <button
+            data-simple-hide
             onClick={copyAttach}
             className={`inline-flex items-center px-1 py-0.5 text-[10px] transition-colors border-0 border-l ${borderColor.replace("border-", "border-l-")} ${pillColors}`}
             aria-label="Copy tmux attach command"

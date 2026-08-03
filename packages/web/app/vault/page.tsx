@@ -38,6 +38,9 @@ import { VaultRightPanel } from "../../components/vault/VaultRightPanel";
 import { VaultFindBar } from "../../components/vault/VaultFindBar";
 import { HoverPreviewProvider } from "../../components/vault/VaultHoverPreview";
 import { VaultSearchPane } from "../../components/vault/VaultSearchPane";
+import { VaultPicker } from "../../components/vault/VaultPicker";
+import { VaultProjectStrip } from "../../components/vault/VaultProjectStrip";
+import { isProjectVault, vaultLandingPath } from "../../lib/vault/projectVault";
 import { useVaultStore } from "../../store/vaultStore";
 import {
   toggleVaultEditMode,
@@ -61,10 +64,11 @@ function EmptyVaultTeaching() {
   return (
     <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-8">
       <FolderTree className="w-10 h-10 text-sol-text-dim opacity-40" />
-      <div className="text-sol-text font-medium">Connect a vault</div>
+      <div className="text-sol-text font-medium">Nothing to browse yet</div>
       <div className="text-sm text-sol-text-muted max-w-md">
-        A vault is a folder of markdown files on your machine. Register one with
-        the CLI and it appears here instantly:
+        Your projects show up here on their own, as soon as one of them has a
+        README or a docs folder. To browse a folder of notes that isn&apos;t a
+        project, point the CLI at it:
       </div>
       <pre className="text-[13px] bg-sol-bg-alt border border-sol-border/30 rounded px-4 py-2 text-sol-text">
         cast vault add ~/notes
@@ -337,6 +341,31 @@ function VaultContent() {
     [vaults, activeVaultId],
   );
 
+  // Land in the project's docs rather than on an empty reading pane. A repo
+  // root is mostly source directories, so "pick a vault, then pick a note" puts
+  // the one thing worth reading two clicks away.
+  //
+  // Once per vault, and never over a note the user asked for: `landedVaults`
+  // remembers what we've already opened, so closing the note (which clears ?f=)
+  // is respected instead of being undone on the next render.
+  const landedVaults = useRef(new Set<string>());
+  // Keyed on scannedAt, NOT on the file table: `files` changes on every watcher
+  // event, and subscribing this always-mounted page to it would re-render the
+  // whole surface on every keystroke someone makes in an editor elsewhere.
+  // scannedAt moves once per scan, which is exactly when the table fills.
+  const scannedAt = useVaultStore((s) => s.scannedAt);
+  useWatchEffect(() => {
+    if (!activeVault || activePath || showGraph || !scannedAt) return;
+    if (landedVaults.current.has(activeVault.id)) return;
+    const paths = Object.keys(useVaultStore.getState().files);
+    if (!paths.length) return;
+    landedVaults.current.add(activeVault.id);
+    const landing = vaultLandingPath(activeVault, paths);
+    if (!landing) return;
+    if (activeVault.home) setDirsExpanded([activeVault.home], true);
+    openNote(landing);
+  }, [activeVault, activePath, showGraph, scannedAt, setDirsExpanded, openNote]);
+
   if (connection === "no-daemon")
     return (
       <NoDaemonTeaching
@@ -412,36 +441,17 @@ function VaultContent() {
         <Panel id="vault-tree" minSize={180} maxSize="42%" className="min-w-0">
           <div className="h-full flex flex-col border-r-0 bg-sol-bg-alt/40">
             <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
-              {vaults.length + remoteVaults.length > 1 ? (
-                <select
-                  value={activeVaultId ?? ""}
-                  onChange={(e) => {
-                    const id = e.target.value;
-                    // A remote id belongs to another machine's mirror; the two
-                    // open through different paths but land in the same views.
-                    if (remoteVaults.some((v) => v.id === id)) void openRemoteVault(id);
-                    else void selectVault(id);
-                  }}
-                  className="flex-1 bg-transparent text-xs font-medium text-sol-text outline-none cursor-pointer"
-                >
-                  {vaults.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name}
-                    </option>
-                  ))}
-                  {remoteVaults
-                    .filter((rv) => !vaults.some((v) => v.id === rv.id))
-                    .map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name} (remote)
-                      </option>
-                    ))}
-                </select>
-              ) : (
-                <div className="flex-1 text-xs font-medium text-sol-text truncate" title={activeVault?.root}>
-                  {activeVault?.name ?? "Vault"}
-                </div>
-              )}
+              <VaultPicker
+                vaults={vaults}
+                remoteVaults={remoteVaults}
+                activeVaultId={activeVaultId}
+                onSelect={(id, kind) => {
+                  // A remote id belongs to another machine's mirror; the two
+                  // open through different paths but land in the same views.
+                  if (kind === "remote") void openRemoteVault(id);
+                  else void selectVault(id);
+                }}
+              />
               {/* Tree actions, shown only while the tree is: they'd be inert
                   next to search results. */}
               {leftTab === "files" && (
@@ -506,6 +516,9 @@ function VaultContent() {
                 <Waypoints className="w-3.5 h-3.5" />
               </button>
             </div>
+            {isProjectVault(activeVault) && activeVault && (
+              <VaultProjectStrip vault={activeVault} />
+            )}
             <div className="flex items-center border-b border-sol-border/30">
               {LEFT_TABS.map(({ id, label, icon: Icon }) => (
                 <button
