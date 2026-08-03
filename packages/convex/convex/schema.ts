@@ -2964,31 +2964,6 @@ export default defineSchema({
     .index("by_owner_seq", ["owner_user_id", "seq"])
     .index("by_team_seq", ["team_id", "seq"]),
 
-  // Presence + push tables that live ONLY in prod (2026-08-02): they appear in
-  // no module, no schema, and no commit in this repo's history, so the code
-  // writing them is someone's unpushed working tree. Declared here so a deploy
-  // from main is additive — without these two blocks `convex deploy` drops
-  // `by_user` on both, and rebuilding an index means an expensive backfill.
-  // Their functions still pause until that tree is redeployed. All fields
-  // optional: main never writes these rows, it only needs prod's existing docs
-  // to validate. Replace with the real definitions when that tree merges.
-  user_presence: defineTable({
-    focused: v.optional(v.boolean()),
-    last_input_at: v.optional(v.number()),
-    last_seen: v.optional(v.number()),
-    surface: v.optional(v.string()),
-    updated_at: v.optional(v.number()),
-    user_id: v.optional(v.string()),
-  })
-    .index("by_user", ["user_id"]),
-
-  // Empty in prod at declaration time, so `user_id` is the only field the index
-  // proves exists — kept minimal rather than guessed.
-  push_outbox: defineTable({
-    user_id: v.optional(v.string()),
-  })
-    .index("by_user", ["user_id"]),
-
 }, {
   // The `messages` table is in the millions of rows, and the default
   // `schemaValidation: true` re-scans every document on every `convex deploy` —
