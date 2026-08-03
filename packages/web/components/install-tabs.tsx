@@ -68,6 +68,11 @@ export function InstallTabs() {
           )}
         </button>
       </div>
+      {platform === "windows" && (
+        <div className="px-4 pb-3 text-xs" style={{ backgroundColor: '#002b36', color: '#586e75' }}>
+          Runs in PowerShell. Installs codecast into WSL (Windows Subsystem for Linux) and sets WSL up first if needed.
+        </div>
+      )}
     </div>
   );
 }
