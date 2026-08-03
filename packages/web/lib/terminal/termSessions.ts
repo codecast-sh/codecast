@@ -8,7 +8,9 @@
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { termWsUrl, type TerminalEndpoint } from "./endpoint";
+import { buildTerminalTheme, observeTheme } from "./theme";
 
 // "offline" = the socket closed before it ever opened: nothing answered, so
 // there's no terminal server to reach (daemon down / remote machine). Kept
@@ -43,6 +45,8 @@ interface TermInstance {
   killRequested?: boolean;
   /** lives outside the bottom panel (per-conversation split) */
   detached?: boolean;
+  /** container scroll pinning teardown (see attachToContainer) */
+  pinDispose?: { dispose(): void };
 }
 
 const instances = new Map<string, TermInstance>();
@@ -131,7 +135,21 @@ export interface OpenTerminalOptions {
   detached?: boolean;
 }
 
+// Theme self-initializes with the first terminal, HERE and not in a panel
+// component: a conversation split can be the first terminal on the page, and
+// theming-by-whoever-mounted-first left it on xterm's default black whenever
+// the bottom panel hadn't been opened yet.
+let themeInitialized = false;
+function ensureTheme(): void {
+  if (themeInitialized || typeof document === "undefined") return;
+  themeInitialized = true;
+  const apply = () => applyTerminalTheme(buildTerminalTheme());
+  apply();
+  observeTheme(apply);
+}
+
 export function openTerminal(opts: OpenTerminalOptions): string {
+  ensureTheme();
   const live = (inst: TermInstance) =>
     inst.state.status !== "exited" && inst.state.status !== "error" && inst.state.status !== "offline";
   // Dedupe within the same surface only: a panel tab never adopts a detached
@@ -162,7 +180,7 @@ export function openTerminal(opts: OpenTerminalOptions): string {
     cursorBlink: true,
     cursorStyle: "bar",
     allowProposedApi: true,
-    scrollback: 5000,
+    scrollback: 20000,
     macOptionIsMeta: true,
     theme: currentTheme,
   });
@@ -181,6 +199,11 @@ export function openTerminal(opts: OpenTerminalOptions): string {
     // Plain click opens; keeps text selection unaffected.
     if (!event.defaultPrevented) window.open(uri, "_blank", "noopener");
   }));
+  // Unicode 11 width tables: without these, the glyphs agent TUIs lean on
+  // (spinners, emoji, ambiguous-width ornaments) measure one cell narrower
+  // than in VS Code's terminal and every divider drifts.
+  term.loadAddon(new Unicode11Addon());
+  term.unicode.activeVersion = "11";
 
   const inst: TermInstance = {
     state: {
@@ -359,6 +382,31 @@ export function attachToContainer(id: string, el: HTMLElement): void {
   });
   inst.resizeObserver.observe(el);
   fitInstance(inst);
+
+  // Attach views are fixed to the agent pane's size, which is usually taller
+  // than the container — so the container scrolls, and the action lives at
+  // the pane's BOTTOM. Keep the container pinned there while new output
+  // arrives, unless the user has deliberately scrolled up (then leave them
+  // be; scrolling back near the bottom re-engages the pin). No-op for fitted
+  // shells, whose xterm exactly fills the container.
+  inst.pinDispose?.dispose();
+  let pinned = true;
+  const onScroll = () => {
+    pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  };
+  el.addEventListener("scroll", onScroll, { passive: true });
+  const writeDisposable = inst.term.onWriteParsed(() => {
+    if (pinned) el.scrollTop = el.scrollHeight;
+  });
+  inst.pinDispose = {
+    dispose() {
+      el.removeEventListener("scroll", onScroll);
+      writeDisposable.dispose();
+    },
+  };
+  requestAnimationFrame(() => {
+    el.scrollTop = el.scrollHeight;
+  });
 }
 
 /** Close the tab. `killSession` also kills the backing tmux session. */
@@ -398,6 +446,7 @@ export function closeTab(id: string, opts?: { killSession?: boolean }): void {
     inst.ws?.close();
   } catch {}
   inst.resizeObserver?.disconnect();
+  inst.pinDispose?.dispose();
   inst.term.dispose();
   instances.delete(id);
   order = order.filter((x) => x !== id);
@@ -424,6 +473,17 @@ if (typeof window !== "undefined" && import.meta.env?.DEV) {
     tabs: () => listTabs().map((t) => ({ ...t })),
     active: () => activeId,
     hellos: () => helloLog.slice(),
+    // Full scrollback text of any instance (panel tab or detached split) —
+    // the only reliable way to inspect buffers from the console: a dynamic
+    // import of this module mints a second, empty registry.
+    buffer: (id: string) => {
+      const inst = instances.get(id);
+      if (!inst) return null;
+      const buf = inst.term.buffer.active;
+      const lines: string[] = [];
+      for (let i = 0; i < buf.length; i++) lines.push(buf.getLine(i)?.translateToString(true) ?? "");
+      return lines.join("\n");
+    },
   };
 }
 const helloLog: Array<Record<string, unknown>> = [];

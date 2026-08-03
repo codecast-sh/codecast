@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
-import { X, RotateCw } from "lucide-react";
+import { X, RotateCw, Lock, LockOpen } from "lucide-react";
 import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import {
   attachToContainer,
@@ -30,6 +30,8 @@ interface SplitState {
   termId: string | null;
   target: string;
   height: number;
+  /** false = read-only viewer; true = keystrokes go to the pane (default) */
+  interactive: boolean;
 }
 
 const splits = new Map<string, SplitState>();
@@ -60,7 +62,7 @@ export function toggleConversationTerminal(convKey: string, target: string): voi
     if (existing.termId) closeTab(existing.termId);
     splits.delete(convKey);
   } else {
-    splits.set(convKey, { termId: null, target, height: DEFAULT_HEIGHT });
+    splits.set(convKey, { termId: null, target, height: DEFAULT_HEIGHT, interactive: true });
   }
   bump();
 }
@@ -101,6 +103,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
         target,
         title: target,
         detached: true,
+        interactive: current.interactive,
       });
       current.target = target;
       bump();
@@ -170,6 +173,20 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
 
   const close = () => toggleConversationTerminal(convKey, target);
 
+  // Interactive <-> read-only is a server-side attach flag, so flipping it
+  // reconnects (the buffer reseeds from tmux; nothing is lost).
+  const toggleInteractive = () => {
+    const current = splits.get(convKey);
+    if (!current) return;
+    current.interactive = !current.interactive;
+    if (current.termId) {
+      closeTab(current.termId);
+      current.termId = null;
+    }
+    bump();
+    void connect();
+  };
+
   return (
     <div
       data-terminal-panel
@@ -188,7 +205,18 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
           }`}
         />
         <span className="text-[10px] font-mono text-sol-text-muted truncate">{target}</span>
-        <span className="px-1 rounded text-[9px] font-mono text-sol-violet border border-sol-violet/30">read-only</span>
+        <button
+          onClick={toggleInteractive}
+          title={split.interactive ? "Interactive — click to make read-only" : "Read-only — click to enable typing"}
+          className={`inline-flex items-center gap-1 px-1 rounded text-[9px] font-mono border transition-colors ${
+            split.interactive
+              ? "text-sol-green border-sol-green/30 hover:bg-sol-green/10"
+              : "text-sol-violet border-sol-violet/30 hover:bg-sol-violet/10"
+          }`}
+        >
+          {split.interactive ? <LockOpen className="w-2.5 h-2.5" /> : <Lock className="w-2.5 h-2.5" />}
+          {split.interactive ? "interactive" : "read-only"}
+        </button>
         <span className="flex-1" />
         {(status === "exited" || status === "error" || status === "offline" || failure) && (
           <button
@@ -204,7 +232,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
         </button>
       </div>
 
-      <div className="relative flex-1 min-h-0 overflow-auto">
+      <div className="relative flex-1 min-h-0">
         {failure ? (
           <div className="absolute inset-0 flex items-center justify-center text-[11px] font-mono text-sol-text-dim text-center px-6">{failure}</div>
         ) : status === "offline" ? (
@@ -222,9 +250,10 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
             {inst?.state.statusDetail ?? "session ended"}
           </div>
         ) : null}
-        <div className={`pl-2 pt-1 min-w-fit min-h-full ${status === "open" ? "" : "invisible"}`}>
-          <div ref={containerRef} />
-        </div>
+        <div
+          ref={containerRef}
+          className={`absolute inset-0 overflow-auto pl-2 pt-1 ${status === "open" ? "" : "invisible"}`}
+        />
       </div>
     </div>
   );
