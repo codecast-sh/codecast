@@ -103,6 +103,11 @@ export default function CliSettingsPage() {
             <p className="text-sol-text-dim text-xs">
               Token expires in 60 minutes:
             </p>
+            {os === "windows" && (
+              <p className="text-sol-text-dim text-xs">
+                Runs in PowerShell. Installs codecast into WSL (Windows Subsystem for Linux) and sets WSL up first if needed.
+              </p>
+            )}
             <div className="relative">
               <code className="block bg-sol-bg rounded-lg p-4 text-sm text-green-400 overflow-x-auto pr-20 break-all">
                 {installCommand(os, setupToken)}

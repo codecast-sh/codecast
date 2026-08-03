@@ -19,8 +19,9 @@ case "${OS}" in
     ;;
   MINGW*|MSYS*|CYGWIN*)
     echo "This looks like Windows running a POSIX shell."
-    echo "The native Windows installer is PowerShell. Run this instead:"
+    echo "codecast on Windows runs inside WSL. Run the Windows installer in PowerShell:"
     echo '  irm codecast.sh/install.ps1 | iex'
+    echo "It sets up WSL if needed and installs codecast inside it."
     echo "To link a device with a token:"
     echo '  $env:CODECAST_SETUP_TOKEN="<token>"; irm codecast.sh/install.ps1 | iex'
     exit 1
