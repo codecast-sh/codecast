@@ -4,9 +4,10 @@ import { sanitizeCanvasHtml } from "../lib/canvasSanitize";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/utils";
-import { Copy, Check, Maximize2, X, Code2, Eye } from "lucide-react";
+import { Copy, Check, Maximize2, X, Code2, Eye, ChevronDown, ChevronUp } from "lucide-react";
 import { CodeBlock } from "./CodeBlock";
 import { hasCharts, hydrateCharts } from "../lib/castChart";
+import { hydrateWidgets, WIDGET_BASE_CSS } from "../lib/castWidgets";
 
 // Inline visual canvas. The agent emits a ```cast-canvas fenced block holding
 // static HTML/CSS/SVG; we sanitize it (DOMPurify strips scripts, event handlers,
@@ -39,27 +40,36 @@ const SHADOW_BASE =
   // so freeform canvases keep their own typography.
   ".cast-chart,.cast-chart *{font-family:var(--font-mono),ui-monospace,monospace!important}" +
   ".cast-chart figure{margin:0}" +
-  ".cast-chart figure>div{margin-bottom:14px!important;color:var(--sol-text-secondary)}";
+  ".cast-chart figure>div{margin-bottom:14px!important;color:var(--sol-text-secondary)}" +
+  WIDGET_BASE_CSS;
 
-// The canvas's title for the header — an explicit data-canvas-title, else the
-// first heading. Lets the header show what the canvas IS rather than "Canvas".
-function extractTitle(html: string): string | null {
+// Inline canvases taller than this collapse behind a gradient with an expand
+// control. A fixed pixel cap (not vh) keeps measured row heights stable in the
+// virtualized message list.
+const COLLAPSE_PX = 620;
+
+// Canvas metadata parsed from the sanitized markup: the header title (explicit
+// data-canvas-title, else the first heading) and the wide hint
+// (data-canvas-size="wide"), which relaxes the fullscreen width cap for
+// dashboards and other broad layouts.
+function extractMeta(html: string): { title: string | null; wide: boolean } {
   try {
     const doc = new DOMParser().parseFromString(html, "text/html");
+    const wide = !!doc.querySelector('[data-canvas-size="wide"]');
     const clip = (s: string) => (s.length > 80 ? s.slice(0, 79) + "…" : s);
     const explicit = doc.querySelector("[data-canvas-title]")?.getAttribute("data-canvas-title")?.trim();
-    if (explicit) return clip(explicit);
+    if (explicit) return { title: clip(explicit), wide };
     const heading = doc.querySelector("h1,h2,h3,h4,h5,h6")?.textContent?.trim();
-    if (heading) return clip(heading);
+    if (heading) return { title: clip(heading), wide };
     // Fall back to a short leading label (the uppercase eyebrow many canvases use).
     const lead = doc.body.firstElementChild?.firstElementChild;
     if (lead && lead.children.length === 0) {
       const t = lead.textContent?.trim();
-      if (t && t.length <= 64) return clip(t);
+      if (t && t.length <= 64) return { title: clip(t), wide };
     }
-    return null;
+    return { title: null, wide };
   } catch {
-    return null;
+    return { title: null, wide: false };
   }
 }
 
@@ -89,6 +99,10 @@ function ShadowCanvas({ html, className = "" }: { html: string; className?: stri
     }
     const root = rootRef.current;
     root.innerHTML = `<style>${SHADOW_BASE}</style>${html}`;
+    // Widgets (tabs, sortable tables) get their behavior from OUR code — the
+    // sanitized markup carries no handlers. Synchronous and cheap (querySelector
+    // misses when the canvas has none).
+    hydrateWidgets(root);
     // Charts (Observable Plot) hydrate after layout settles so we can size them to
     // the container; Plot is lazy-loaded, so it costs nothing unless a chart appears.
     if (hasCharts(root)) {
@@ -148,10 +162,27 @@ export function tryRenderHtmlMessage(content: string): ReactNode {
 export function HtmlSnippet({ code }: { code: string }) {
   const debounced = useDebounced(code, 150);
   const clean = useMemo(() => sanitizeCanvasHtml(debounced), [debounced]);
-  const title = useMemo(() => extractTitle(clean), [clean]);
+  const { title, wide } = useMemo(() => extractMeta(clean), [clean]);
   const [fullscreen, setFullscreen] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const clipRef = useRef<HTMLDivElement>(null);
+
+  // Watch the canvas host's natural height (content can grow after mount — charts
+  // hydrate async, tabs re-show panels) to decide whether the collapse control is
+  // needed. The observer targets the host INSIDE the clipped container, because
+  // the container's own box is capped and would never report growth.
+  useEffect(() => {
+    const host = clipRef.current?.firstElementChild;
+    if (!host || showSource) return;
+    const ro = new ResizeObserver(() => {
+      setOverflowing(((host as HTMLElement).offsetHeight ?? 0) > COLLAPSE_PX);
+    });
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, [showSource, clean]);
 
   const handleCopy = useCallback(async () => {
     try {
@@ -175,6 +206,7 @@ export function HtmlSnippet({ code }: { code: string }) {
 
   if (!code.trim()) return null;
 
+  const collapsed = overflowing && !expanded;
   const headerBtn =
     "p-1 rounded text-sol-text-dim/70 hover:text-sol-text-secondary hover:bg-sol-bg-highlight/50 transition-colors";
 
@@ -209,7 +241,30 @@ export function HtmlSnippet({ code }: { code: string }) {
           <CodeBlock code={code} language="html" />
         </div>
       ) : (
-        <ShadowCanvas html={clean} className="px-5 py-4" />
+        <>
+          <div
+            ref={clipRef}
+            className="relative overflow-hidden"
+            style={collapsed ? { maxHeight: COLLAPSE_PX } : undefined}
+          >
+            <ShadowCanvas html={clean} className="px-5 py-4" />
+            {collapsed && (
+              <div
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-16"
+                style={{ background: "linear-gradient(to bottom, transparent, var(--sol-bg-alt))" }}
+              />
+            )}
+          </div>
+          {overflowing && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="flex w-full items-center justify-center gap-1 border-t border-sol-border/40 py-1 text-[11px] text-sol-text-dim hover:bg-sol-bg-highlight/40 hover:text-sol-text-secondary transition-colors"
+            >
+              {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              {expanded ? "Collapse" : "Show all"}
+            </button>
+          )}
+        </>
       )}
 
       {fullscreen &&
@@ -229,7 +284,7 @@ export function HtmlSnippet({ code }: { code: string }) {
               </button>
             </div>
             <div className="flex min-h-full items-center justify-center p-8">
-              <ShadowCanvas html={clean} className="w-full max-w-5xl" />
+              <ShadowCanvas html={clean} className={`w-full ${wide ? "max-w-none" : "max-w-5xl"}`} />
             </div>
           </div>,
           document.body,

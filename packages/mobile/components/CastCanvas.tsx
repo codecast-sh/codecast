@@ -109,15 +109,52 @@ function buildShell(code: string): string {
   a{color:var(--sol-blue)}
   img,svg,video{max-width:100%}
   .cast-chart{border:1px dashed var(--sol-border-light);border-radius:6px;padding:14px;color:var(--sol-text-dim);font-size:12px;text-align:center}
+  .cast-tabs-bar{display:flex;gap:2px;border-bottom:1px solid var(--sol-border);margin-bottom:10px;flex-wrap:wrap}
+  .cast-tabs-bar button{appearance:none;background:none;border:none;border-bottom:2px solid transparent;padding:5px 10px;margin-bottom:-1px;font:inherit;font-size:12px;color:var(--sol-text-muted)}
+  .cast-tabs-bar button[aria-selected=true]{color:var(--sol-text);border-bottom-color:var(--sol-blue)}
+  .cast-tabs>section[hidden]{display:none}
+  .cast-table th{user-select:none;white-space:nowrap}
+  .cast-table th[data-sort]:after{content:' \\2191';color:var(--sol-blue)}
+  .cast-table th[data-sort=desc]:after{content:' \\2193'}
 </style>
 <script>${DOMPURIFY_SOURCE}</script>
 </head><body><div id="root"></div>
 <script>
 (function(){
+  // Same egress rules as web's canvasSanitize.ts: no scripts (DOMPurify), no
+  // network fetches — remote images and CSS url()/@import are scrubbed so a
+  // synced canvas can't phone home from a teammate's phone.
+  function scrubCss(css){
+    return css.replace(/@import\\b[^;}]*[;}]?/gi, '')
+      .replace(/url\\(\\s*(['"]?)(?!\\s*['"]?\\s*(?:data:|#))[^)]*\\)/gi, 'none');
+  }
+  var URL_ATTRS = ['mask', 'filter', 'clip-path', 'fill', 'stroke'];
   DOMPurify.addHook('afterSanitizeAttributes', function(node){
-    if (node.tagName && node.tagName.toLowerCase() === 'use') {
-      var href = node.getAttribute('href') || node.getAttribute('xlink:href') || '';
+    var tag = node.tagName ? node.tagName.toLowerCase() : '';
+    var href;
+    if (tag === 'use') {
+      href = node.getAttribute('href') || node.getAttribute('xlink:href') || '';
       if (href.charAt(0) !== '#' && node.parentNode) node.parentNode.removeChild(node);
+    }
+    if (tag === 'image') {
+      href = node.getAttribute('href') || node.getAttribute('xlink:href') || '';
+      if (href.indexOf('data:') !== 0 && node.parentNode) node.parentNode.removeChild(node);
+    }
+    if (tag === 'img') {
+      var src = node.getAttribute('src') || '';
+      if (src.indexOf('data:') !== 0 && node.parentNode) node.parentNode.removeChild(node);
+    }
+    URL_ATTRS.forEach(function(attr){
+      var v = node.getAttribute && node.getAttribute(attr);
+      if (v && /url\\s*\\(/i.test(v)) node.setAttribute(attr, scrubCss(v));
+    });
+    var style = node.getAttribute && node.getAttribute('style');
+    if (style && /url\\s*\\(|@import/i.test(style)) node.setAttribute('style', scrubCss(style));
+  });
+  DOMPurify.addHook('afterSanitizeElements', function(node){
+    if (node.tagName && node.tagName.toLowerCase() === 'style' && node.textContent) {
+      var clean = scrubCss(node.textContent);
+      if (clean !== node.textContent) node.textContent = clean;
     }
   });
   var clean = DOMPurify.sanitize(${raw}, ${PURIFY_CONFIG});
@@ -127,6 +164,52 @@ function buildShell(code: string): string {
   // of an empty hole.
   root.querySelectorAll('.cast-chart').forEach(function(el){
     el.textContent = 'chart \\u2014 view on web';
+  });
+  // Widgets — same markup contract as web's castWidgets.ts, vanilla here.
+  root.querySelectorAll('.cast-tabs').forEach(function(tabs){
+    var panels = Array.prototype.filter.call(tabs.children, function(c){
+      return c.tagName === 'SECTION' && c.hasAttribute('data-tab');
+    });
+    if (panels.length < 2) return;
+    var bar = document.createElement('div');
+    bar.className = 'cast-tabs-bar';
+    function select(active){
+      panels.forEach(function(p, i){ p.hidden = i !== active; });
+      Array.prototype.forEach.call(bar.children, function(b, i){
+        b.setAttribute('aria-selected', String(i === active));
+      });
+    }
+    panels.forEach(function(panel, i){
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = panel.getAttribute('data-tab') || ('Tab ' + (i + 1));
+      btn.addEventListener('click', function(){ select(i); });
+      bar.appendChild(btn);
+    });
+    tabs.insertBefore(bar, tabs.firstChild);
+    var initial = panels.findIndex ? panels.findIndex(function(p){ return p.hasAttribute('data-active'); }) : -1;
+    select(initial > 0 ? initial : 0);
+  });
+  root.querySelectorAll('table.cast-table thead th').forEach(function(th){
+    th.addEventListener('click', function(){
+      var table = th.closest('table');
+      var body = table && table.tBodies[0];
+      if (!body) return;
+      var col = Array.prototype.indexOf.call(th.parentNode.children, th);
+      var dir = th.getAttribute('data-sort') === 'asc' ? 'desc' : 'asc';
+      table.querySelectorAll('th').forEach(function(h){ h.removeAttribute('data-sort'); });
+      th.setAttribute('data-sort', dir);
+      function cell(r){ var c = r.cells[col]; return c && c.textContent ? c.textContent.trim() : ''; }
+      function num(s){ return parseFloat(s.replace(/[$,%\\s]/g, '')); }
+      var rows = Array.prototype.slice.call(body.rows);
+      var numeric = rows.every(function(r){ var v = cell(r); return !v || !isNaN(num(v)); });
+      rows.sort(function(a, b){
+        var av = cell(a), bv = cell(b);
+        var cmp = numeric ? num(av) - num(bv) : av.localeCompare(bv);
+        return dir === 'asc' ? cmp : -cmp;
+      });
+      rows.forEach(function(r){ body.appendChild(r); });
+    });
   });
 })();
 </script></body></html>`;
