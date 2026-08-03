@@ -80,7 +80,11 @@ import { pushInboxViewHistory, isApplyingViewHistory, type InboxViewSnapshot } f
 // across tabs; localStorage is just a sync-readable cache for first-paint
 // values that affect layout. Keep this set TINY — every key here adds
 // localStorage churn on every change.
-const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view"] as const;
+// pinned_surfaces joins the critical set for the same reason sidebar_collapsed
+// is here: it decides the ARRANGEMENT at first paint. Seeded from localStorage
+// synchronously, a pinned split renders as a split immediately instead of
+// flashing a peek overlay until the server clientState arrives.
+const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "pinned_surfaces"] as const;
 const CRITICAL_PREFS_LS_KEY = "codecast-critical-ui";
 
 function readCriticalUiPrefs(): Record<string, any> {
@@ -243,6 +247,11 @@ export type InboxSession = {
   // focused. It survives a parked create/reload and is cleared only after the
   // authoritative bucket-assignment row syncs back.
   _postCreateBucketId?: string;
+  // Local-only "kept draft" marker for a deferred compose stub the user chose
+  // to keep instead of abandoning. It is what makes a 0-message blank VISIBLE
+  // in the inbox (categorizeSessions' engaged-blank gate) and immune to the
+  // orphaned-stub ghost sweep until the draft is sent or the row dismissed.
+  _hasDraft?: boolean;
   // Last-known model id (e.g. "claude-opus-4-8"); conversations can switch
   // models mid-stream. Shown as an inbox badge when ui.show_model_badge is on.
   model?: string | null;
@@ -1038,6 +1047,30 @@ export function sessionsWithPendingSend(
   return ids;
 }
 
+// How long a blocked-banner revive request keeps its sessions rendered as
+// WORKING before the (still-set) server blocked flag is allowed to resurface.
+// A switch revive is kill + account swap + restart + resume + first output
+// sync — tens of seconds on a healthy daemon. Past this window with the flag
+// still set, the revive evidently failed and hiding the blocked state would
+// lie.
+export const BLOCKED_REVIVE_TTL_MS = 120_000;
+
+// Session ids whose blocked-banner revive request is still inside the trust
+// window. Classification folds these into the in-flight set (the same "the
+// user already acted" forcing a queued send gets) and the banner/pill
+// excludes them, so clicking continue/switch moves the fleet instantly.
+export function freshReviveRequestIds(
+  reviveRequestedAt: Record<string, number> | undefined,
+  now: number,
+): Set<string> {
+  const ids = new Set<string>();
+  if (!reviveRequestedAt) return ids;
+  for (const id in reviveRequestedAt) {
+    if (now - reviveRequestedAt[id] < BLOCKED_REVIVE_TTL_MS) ids.add(id);
+  }
+  return ids;
+}
+
 // A pending optimistic send is "consumed" once the daemon proves it acted on it:
 // the agent picked it up (status went active) or the session is dead (stopped,
 // won't ever pick it up). At that point the optimistic entry is stale and must be
@@ -1396,6 +1429,13 @@ export function categorizeSessions(
     liveInboxIds?: Set<string>;
     // Default HIDE old. Pass true for the "show old sessions" browse toggle.
     showOld?: boolean;
+    // Blocked-banner revive stamps (store.blockedReviveRequestedAt). Fresh
+    // entries join the in-flight set below, so a fleet the user just told to
+    // continue/switch renders as WORKING immediately instead of waiting for
+    // the daemon round trip to clear pending_api_error. TTL-checked here
+    // (Date.now(), like the trust sweep) so an expired stamp resurfaces the
+    // blocked state on the callers' coarse-clock re-runs.
+    reviveRequestedAt?: Record<string, number>;
   } = {},
 ): CategorizedSessions {
   // Single walk over the whole input, splitting it into the three top-level
@@ -1497,9 +1537,10 @@ export function categorizeSessions(
   // so the existing isSessionWaitingForInput guard handles both with no extra
   // param. A brand-new session (message_count 0) with a pending first message
   // also belongs in Working, not New.
-  const inFlight = pendingSendIds.size === 0
+  const reviveIds = freshReviveRequestIds(opts.reviveRequestedAt, Date.now());
+  const inFlight = pendingSendIds.size === 0 && reviveIds.size === 0
     ? sessionsWithQueuedMessages
-    : new Set<string>([...sessionsWithQueuedMessages, ...pendingSendIds]);
+    : new Set<string>([...sessionsWithQueuedMessages, ...pendingSendIds, ...reviveIds]);
   const hasPendingSend = (s: InboxSession) => pendingSendIds.has(s._id);
   // Safety net for rows the liveness overlay can no longer refresh. The base
   // session cache never prunes (isDelta) but the sessionsLiveness overlay only
@@ -1554,7 +1595,7 @@ export function categorizeSessions(
   // row stays in the cache for palette reuse; it just doesn't render until
   // engaged (current / mid-create here, or its first send moves it to Working).
   const isEngagedBlank = (s: InboxSession) =>
-    s._id === opts.currentSessionId || !!opts.pendingCreateIds?.has(s._id);
+    s._id === opts.currentSessionId || !!opts.pendingCreateIds?.has(s._id) || !!s._hasDraft;
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && !hasPendingSend(s) && isFlat(s) && isEngagedBlank(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
   const needsInput = sorted.filter((s) => waitingForInput.get(s._id) && isFlat(s))
@@ -1591,6 +1632,8 @@ export function visualOrderSessions(
     // spawned run — leave keyboard nav entirely; they're reachable by clicking
     // the schedule row, not by Ctrl+J/K. Escalated ones aren't in this set.
     absorbedIds?: ReadonlySet<string>;
+    // See categorizeSessions — forwarded through.
+    reviveRequestedAt?: Record<string, number>;
   } = {},
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, working } =
@@ -2052,6 +2095,7 @@ export function computeManualSortKey(orderedKeys: number[], insertIndex: number)
 export function computeVisualOrder(state: {
   sessions: Record<string, InboxSession>;
   sessionsWithQueuedMessages: Set<string>;
+  blockedReviveRequestedAt?: Record<string, number>;
   activeProjectFilter?: string | null;
   pendingMessages: Record<string, any[]>;
   currentSessionId?: string | null;
@@ -2119,7 +2163,7 @@ export function computeVisualOrder(state: {
       visibleSessions,
       state.sessionsWithQueuedMessages,
       sessionsWithPendingSend(state.pendingMessages),
-      { currentSessionId: focusedId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)) },
+      { currentSessionId: focusedId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), reviveRequestedAt: state.blockedReviveRequestedAt },
     );
     return flatViewSessions(sorted, subsByParent, {
       mode,
@@ -2133,7 +2177,7 @@ export function computeVisualOrder(state: {
   // Grouped/bucket: the categorized status buckets over the SAME visible set, so
   // old sessions hidden from the render are skipped by nav too. The bucket branch
   // below splits pinned out and regroups the rest by label/project.
-  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined, absorbedIds: mode === "grouped" || mode === "bucket" || mode === "plan" ? state.scheduleNavSets?.absorbed : undefined });
+  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined, absorbedIds: mode === "grouped" || mode === "bucket" || mode === "plan" ? state.scheduleNavSets?.absorbed : undefined, reviveRequestedAt: state.blockedReviveRequestedAt });
   if (mode === "bucket") {
     const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
     const rest = base.filter((s) => !s.is_pinned);
@@ -2448,6 +2492,8 @@ interface InboxStoreState {
   killSessions: (ids: string[]) => void;
   markSessionsDismissed: (ids: string[]) => void;
   markBlockedAcknowledged: (ids: string[]) => void;
+  markBlockedReviveRequested: (ids: string[]) => void;
+  clearBlockedReviveRequested: (ids: string[]) => void;
   applyDismissedReconcile: (entries: { _id: string; inbox_dismissed_at: number | null }[], final: boolean) => void;
   applyStashedReconcile: (entries: { _id: string; inbox_stashed_at: number | null }[], final: boolean) => void;
   restoreSession: (id: string) => void;
@@ -2610,6 +2656,7 @@ interface InboxStoreState {
 
   // -- Drafts --
   setDraft: (id: string, fields: Record<string, any>) => void;
+  setSessionHasDraft: (id: string, has: boolean) => void;
   getDraft: (id: string) => Record<string, any> | undefined;
   moveDraft: (fromId: string, toId: string) => void;
   clearDraft: (id: string) => void;
@@ -2676,6 +2723,14 @@ interface InboxStoreState {
   // -- Recent projects cache --
   recentProjects: Array<{ path: string; count: number; lastActive: number }>;
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => void;
+
+  // Per-machine folder lists (the device-scoped getRecentProjectPaths results),
+  // so the new-session picker paints a machine's folders from cache instantly
+  // instead of waiting on the scoped query round-trip. Safe to serve stale: a
+  // device's cache only ever holds that same device's prior answer, so it can
+  // never offer a path the target machine lacks.
+  recentProjectsByDevice: Record<string, Array<{ path: string; count: number; lastActive: number; suggested?: boolean }>>;
+  setRecentProjectsForDevice: (deviceId: string, projects: Array<{ path: string; count: number; lastActive: number; suggested?: boolean }>) => void;
 
   // -- Machine roster (non-persisted; mirrors the live devices query) --
   // Only exists so the create path can re-check, at the moment it fires, whether
@@ -2776,6 +2831,11 @@ interface InboxStoreState {
   sessionsWithQueuedMessages: Set<string>;
   setSessionHasQueuedMessages: (sessionId: string, hasQueued: boolean) => void;
 
+  // Blocked-banner revive stamps: session id → when a continue/switch was
+  // requested. Local + persisted, never synced (the server's pending_api_error
+  // only clears when the agent actually resumes and its output syncs back).
+  blockedReviveRequestedAt: Record<string, number>;
+
   // -- Shortcuts panel --
   shortcutsPanelOpen: boolean;
   toggleShortcutsPanel: () => void;
@@ -2786,6 +2846,11 @@ interface InboxStoreState {
   closeSettingsModal: () => void;
 
   // -- Side panel --
+  // -- Stage companion (see openCompanion) --
+  companionSessionId: string | null;
+  openCompanion: (sessionId: string) => void;
+  closeCompanion: () => void;
+
   sidePanelSessionId: string | null;
   sidePanelOpen: boolean;
   sidePanelUserClosed: boolean;
@@ -4338,6 +4403,10 @@ export const useInboxStore = create<InboxStoreState>(
   setRecentProjects: action(function (this: Draft, projects: Array<{ path: string; count: number; lastActive: number }>) {
     this.recentProjects = projects;
   }),
+  recentProjectsByDevice: {},
+  setRecentProjectsForDevice: sync(function (this: Draft, deviceId: string, projects: Array<{ path: string; count: number; lastActive: number; suggested?: boolean }>) {
+    this.recentProjectsByDevice[deviceId] = projects;
+  }),
   machineRoster: [],
   setMachineRoster: sync(function (this: Draft, devices: MachineCandidate[]) {
     this.machineRoster = devices;
@@ -4501,6 +4570,28 @@ export const useInboxStore = create<InboxStoreState>(
         conv.pending_api_error_kind = null;
       }
     }
+  }),
+
+  // Optimistic "revive is in flight" stamp for the blocked-sessions banner's
+  // continue/switch actions. pending_api_error is server-derived (it clears
+  // only when the agent resumes and its new output syncs), so a direct clear
+  // here would be stomped by the next session sync. Instead the stamp is a
+  // separate local map that classification (categorizeSessions) and the
+  // banner/pill exclusion read through freshReviveRequestIds — the sessions
+  // move to WORKING instantly, and if the revive never lands the stamp ages
+  // out (BLOCKED_REVIVE_TTL_MS) and the blocked state honestly resurfaces.
+  markBlockedReviveRequested: sync(function (this: Draft, ids: string[]) {
+    const now = Date.now();
+    // Prune expired stamps on write so the map never accumulates.
+    for (const [id, at] of Object.entries(this.blockedReviveRequestedAt)) {
+      if (now - at > BLOCKED_REVIVE_TTL_MS) delete this.blockedReviveRequestedAt[id];
+    }
+    for (const id of ids) this.blockedReviveRequestedAt[id] = now;
+  }),
+
+  // Honest revert when the revive mutation fails outright.
+  clearBlockedReviveRequested: sync(function (this: Draft, ids: string[]) {
+    for (const id of ids) delete this.blockedReviveRequestedAt[id];
   }),
 
   // Durable cross-device dismiss reconcile (the backstop the live subscription
@@ -5984,6 +6075,15 @@ export const useInboxStore = create<InboxStoreState>(
     return get().drafts[id];
   },
 
+  // Kept-draft marker on the session ROW (see InboxSession._hasDraft). sync():
+  // local + IDB only — a deferred stub has no server row to dispatch to.
+  setSessionHasDraft: sync(function (this: Draft, id: string, has: boolean) {
+    const row = this.sessions[id];
+    if (!row) return;
+    if (has) row._hasDraft = true;
+    else delete row._hasDraft;
+  }),
+
   moveDraft: sync(function (this: Draft, fromId: string, toId: string) {
     if (fromId === toId) return;
     const draft = this.drafts[fromId]
@@ -6002,12 +6102,16 @@ export const useInboxStore = create<InboxStoreState>(
     delete this.drafts[id];
     if (!this.clientState.drafts) this.clientState.drafts = {};
     this.clientState.drafts[id] = null;
+    // A kept-draft row's whole reason to exist is its draft — clearing the
+    // draft (sent or discarded) retires the marker with it.
+    if (this.sessions[id]?._hasDraft) delete this.sessions[id]._hasDraft;
   }),
 
   clearDraftFinal: action(function (this: Draft, id: string) {
     delete this.drafts[id];
     if (!this.clientState.drafts) this.clientState.drafts = {};
     this.clientState.drafts[id] = null;
+    if (this.sessions[id]?._hasDraft) delete this.sessions[id]._hasDraft;
   }),
 
   // =====================
@@ -6889,6 +6993,7 @@ export const useInboxStore = create<InboxStoreState>(
   // =====================
 
   sessionsWithQueuedMessages: new Set<string>(),
+  blockedReviveRequestedAt: {},
   setSessionHasQueuedMessages: (sessionId: string, hasQueued: boolean) => {
     const prev = get().sessionsWithQueuedMessages;
     const next = new Set(prev);
@@ -6907,6 +7012,19 @@ export const useInboxStore = create<InboxStoreState>(
   openSettingsModal: (section?: SettingsSectionId) =>
     set({ settingsModalSection: section ?? DEFAULT_SETTINGS_SECTION }),
   closeSettingsModal: () => set({ settingsModalSection: null }),
+
+  // The ONE conversation allowed to share the stage with a working page (a
+  // task, a doc). Opening another replaces it — stage panes swap, they never
+  // accumulate, so the layout can never grow past page + companion + rail.
+  companionSessionId: null,
+
+  openCompanion: action(function (this: Draft, sessionId: string) {
+    this.companionSessionId = sessionId;
+  }),
+
+  closeCompanion: action(function (this: Draft) {
+    this.companionSessionId = null;
+  }),
 
   sidePanelSessionId: null,
   sidePanelOpen: false,

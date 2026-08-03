@@ -309,6 +309,24 @@ describe("POST /vault/op", () => {
     expect(fs.readFileSync(path.join(root, "notes/new.md"), "utf-8")).toBe("# new\n");
   });
 
+  test("reveal is wired and refuses a path that isn't there", async () => {
+    // The spawn itself is deliberately NOT exercised here — launching Finder
+    // from a test is a side effect on the developer's desktop, and the argv
+    // decision (the part with real logic) is covered in vaultScope.test.ts.
+    // What this pins is the WIRING: that the op reaches its own branch, and
+    // that a missing file is reported rather than handed to the OS.
+    const missing = await postOp({ op: "reveal", path: "notes/nope.md" });
+    expect(missing.status).toBe(404);
+
+    // A path escaping the vault is refused before anything else looks at it.
+    const escape = await postOp({ op: "reveal", path: "../../etc/passwd" });
+    expect(escape.status).toBe(400);
+
+    // An unknown mode is not a way to smuggle a different verb through.
+    const badMode = await postOp({ op: "reveal", path: "notes/nope.md", mode: "rm" });
+    expect(badMode.status).toBe(404);
+  });
+
   test("rename moves a note and refuses an occupied target", async () => {
     const res = await postOp({ op: "rename", path: "notes/one.md", to: "notes/sub/renamed.md" });
     expect(res.status).toBe(200);

@@ -4,6 +4,7 @@ import { redactSecrets } from "./redact.js";
 import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
 import { nextTranscriptSourceRevision } from "./transcriptRevision.js";
+import type { AgentStatus } from "@codecast/shared/contracts";
 
 const MAX_CONTENT_SIZE = 100_000;
 const MAX_TOOL_RESULT_SIZE = 50_000;
@@ -1453,7 +1454,7 @@ export class SyncService {
 
   async heartbeatManagedSession(
     sessionId: string,
-    agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming",
+    agentStatus?: AgentStatus,
   ): Promise<{ found: boolean; dismissed?: boolean } | undefined> {
     try {
       return await this.mutate("managedSessions:heartbeat" as any, {
@@ -1471,7 +1472,7 @@ export class SyncService {
   async heartbeatManagedSessionsBatch(
     sessions: Array<{
       session_id: string;
-      agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming";
+      agent_status?: AgentStatus;
       client_ts?: number;
     }>,
   ): Promise<{ updated: number } | undefined> {
@@ -1737,7 +1738,7 @@ export class SyncService {
     } catch {}
   }
 
-  async updateSessionAgentStatus(conversationId: string, status: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming", clientTs?: number, permissionMode?: string): Promise<void> {
+  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string): Promise<void> {
     if (!this.apiToken) return;
     try {
       await this.mutate(

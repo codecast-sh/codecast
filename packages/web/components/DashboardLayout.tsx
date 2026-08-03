@@ -42,6 +42,7 @@ import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from 
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
+import { StageCompanion } from "./StageCompanion";
 import { EdgePeek } from "./EdgePeek";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { useSyncTeamInboxSessions } from "../hooks/useSyncTeamInboxSessions";
@@ -98,6 +99,7 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
     // See store/wakeSig.ts and the identical gate on SessionListPanel.
     s => sessionsWakeSig(s.sessions),
     s => s.sessionsWithQueuedMessages,
+    s => s.blockedReviveRequestedAt,
     s => pendingSendWakeSig(s.pendingMessages),
     s => s.currentUser?._id,
     s => s.liveInboxIds,
@@ -119,9 +121,9 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
   // Deps are the wake signatures (memoized by ref — free to re-call here), not
   // the raw s.sessions/s.pendingMessages refs those flip on every heartbeat.
   const working = useMemo(
-    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: resolveShowOld(s.clientState.ui) }).working,
+    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: resolveShowOld(s.clientState.ui), reviveRequestedAt: s.blockedReviveRequestedAt }).working,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, resolveShowOld(s.clientState.ui), coarseNow],
+    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, resolveShowOld(s.clientState.ui), coarseNow],
   );
   if (working.length === 0) return null;
   const activeAgentCount = working.length;
@@ -200,6 +202,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
   const isGuest = !isAuthenticated && !isAuthLoading;
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  // ComposeView's guarded close (draft keep/discard confirm) — the compose
+  // backdrop below routes clicks through it. Null until the popup mounts.
+  const composeCloseGuardRef = useRef<(() => void) | null>(null);
   const s = useTrackedStore([
     s => s.clientStateInitialized,
     s => s.clientState.ui?.zen_mode,
@@ -208,6 +213,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.currentConversation?.source,
     s => s.sidePanelOpen,
     s => s.sidePanelSessionId,
+    s => s.companionSessionId,
     s => s.currentSessionId,
     s => s.viewingDismissedId,
     s => s.commentRailOpen,
@@ -308,6 +314,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
+  // Working surfaces (a task/doc/plan on the stage) open a clicked session
+  // BESIDE the page as the stage's companion; everywhere else a session is a
+  // primary object that takes the whole stage.
+  const isOnWorkingPage = isOnTasksPage || isOnDocsPage || isOnPlansPage;
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
@@ -340,6 +350,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
   const rightPeekEnabled = !s.sidePanelOpen && !isMobile;
+
+  // The companion is scoped to the working surface that opened it — leaving
+  // tasks/docs/plans closes it. Without this it becomes an ambient column that
+  // follows you between pages (the old conversation-column bug).
+  useWatchEffect(() => {
+    if (!isOnWorkingPage && s.companionSessionId) {
+      useInboxStore.getState().closeCompanion();
+    }
+  }, [isOnWorkingPage, s.companionSessionId]);
 
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
@@ -383,12 +402,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     router.push('/inbox');
   }, [router]);
 
-  const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage, isOnConversationPage });
+  const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage, isOnConversationPage, isOnWorkingPage });
+  const openAsCompanion = useCallback((id: string) => {
+    useInboxStore.getState().openCompanion(id);
+  }, []);
   const sessionListOnSelect = sessionSelectKind === "leave"
     ? handleLeaveAndOpenSession
     : sessionSelectKind === "inboxInPlace"
     ? handleInboxSessionSelect
-    : s.selectPanelSession;
+    : openAsCompanion;
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);
@@ -707,11 +729,26 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const hasTabs = s.tabs.length > 0 && !isNonTabRoute(routerLocation.pathname);
   const content = hasTabs ? <TabContent /> : children;
 
-  const pageContent = isFullWidthPage || hasTabs ? (
+  const pageContentInner = isFullWidthPage || hasTabs ? (
     <div className="h-full">{content}</div>
   ) : (
     <PageShell pathname={pathname ?? ""}>{content}</PageShell>
   );
+
+  // THE STAGE: at most two panes, ever — the page, and (optionally) one
+  // conversation running beside it. A second session swaps this one out
+  // (there is a single companionSessionId), so panes cannot accumulate.
+  // Only working surfaces host a companion; elsewhere the page owns the stage.
+  const showCompanion = !!s.companionSessionId && isOnWorkingPage && !isMobile;
+  const pageContent = showCompanion ? (
+    <Group orientation="horizontal" className="h-full" defaultLayout={{ "stage-page": 58, "stage-companion": 42 }}>
+      <Panel id="stage-page" minSize={320}>{pageContentInner}</Panel>
+      <Separator className={separatorClass} />
+      <Panel id="stage-companion" minSize={320} maxSize="65%">
+        <StageCompanion />
+      </Panel>
+    </Group>
+  ) : pageContentInner;
 
   // ONE right rail, and it is only ever the session list. A conversation
   // never renders inside it — selecting a session promotes it to the stage
@@ -1038,10 +1075,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {s.compose.open && (
         <div
           className="fixed inset-0 z-[200] flex items-start justify-center pt-[12vh] bg-black/50 backdrop-blur-sm"
-          onClick={s.closeCompose}
+          // Route the backdrop click through ComposeView's guarded close so a
+          // click-away over a typed draft gets the keep/discard confirm instead
+          // of silently dropping the draft.
+          onClick={() => (composeCloseGuardRef.current ?? s.closeCompose)()}
         >
           <div onClick={(e) => e.stopPropagation()}>
-            <ComposeView key={s.compose.nonce} initialQuery={s.compose.initialQuery} context={s.compose.context} onClose={s.closeCompose} />
+            <ComposeView key={s.compose.nonce} initialQuery={s.compose.initialQuery} context={s.compose.context} onClose={s.closeCompose} closeGuardRef={composeCloseGuardRef} />
           </div>
         </div>
       )}

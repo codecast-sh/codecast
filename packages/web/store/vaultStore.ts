@@ -339,6 +339,33 @@ function writeLastVaultId(id: string): void {
   } catch {}
 }
 
+// The vault LIST lives in localStorage rather than in the IndexedDB cache
+// beside the file tables, and deliberately: the picker has to be populated on
+// the very first render, and an IDB read — however fast — is a frame of empty
+// list first. It matters more now that the list includes every project on the
+// machine: discovering those costs the daemon a readdir per project, and first
+// paint must never wait on that. The whole list is a few hundred short records.
+const VAULT_LIST_KEY = "cast_vault_list";
+
+function readCachedVaults(): VaultInfo[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(VAULT_LIST_KEY) ?? "null");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (v): v is VaultInfo =>
+        !!v && typeof v === "object" && typeof v.id === "string" && typeof v.root === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedVaults(vaults: VaultInfo[]): void {
+  try {
+    localStorage.setItem(VAULT_LIST_KEY, JSON.stringify(vaults));
+  } catch {}
+}
+
 /** Fetch a set of markdown bodies with bounded concurrency, patching the store
  *  as each lands so the UI streams in rather than waiting for the batch. */
 async function fetchBodies(ep: VaultEndpoint, vaultId: string, paths: string[]): Promise<void> {
@@ -603,7 +630,7 @@ async function syncActiveVault(ep: VaultEndpoint, vaultId: string): Promise<void
 export const useVaultStore = create<VaultState>((set, get) => ({
   connection: "idle",
   endpoint: null,
-  vaults: [],
+  vaults: readCachedVaults(),
   remoteVaults: [],
   isRemote: false,
   unreachableReason: "none",
@@ -737,6 +764,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     convexRef = convex;
     const st = get();
     if (st.connection === "discovering") return;
+    // The picker before anything else: this is synchronous, so the list of
+    // vaults and projects is on screen in the first frame rather than after
+    // discovery, the roots call and a relay round-trip.
+    if (!st.vaults.length) {
+      const cached = readCachedVaults();
+      if (cached.length) set({ vaults: cached });
+    }
     set({ connection: st.scannedAt ? st.connection : "discovering" });
 
     // Local-first boot: paint the last vault's IDB cache NOW, in parallel with
@@ -800,6 +834,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       return;
     }
     set({ endpoint: ep, vaults, unreachableReason: "none", unreachableDetail: null });
+    // Seeds the picker on the next cold boot, before discovery answers.
+    writeCachedVaults(vaults);
 
     // Remote mirrors are additive: they list alongside local vaults so a vault
     // from another machine is reachable without leaving the surface.
