@@ -325,6 +325,27 @@ export async function applyPatches(
         ) {
           delete finalSafe.is_favorite;
         }
+        // inbox_killed_at is the retired marker: the daemon's reap/resurrection
+        // gate and classifyWorkState both read it, and a killed persistent
+        // anchor stays daemon-proof only while it's set. This generic rail
+        // carries whatever fields an action's draft happened to touch, so a
+        // gesture with nothing to do with revival can wipe it — the web's pin
+        // nulls it in its draft (see ct-41083), which deleted the marker on the
+        // very rows it matters most for (a killed row is only visible while
+        // pinned, per shouldShowInInbox). Guard by FIELD, not by action name, so
+        // an old client shipping the same patch is caught too: a CLEAR is
+        // honored only when the patch is itself an un-kill (it clears
+        // inbox_dismissed_at as well). The other sanctioned revivals — a human
+        // send (pendingMessages.enqueue), delivery, Restart — are mutations and
+        // never ride this rail. SETTING it is untouched.
+        if (
+          table === "conversations"
+          && "inbox_killed_at" in finalSafe
+          && !(finalSafe as any).inbox_killed_at
+          && !("inbox_dismissed_at" in finalSafe && !(finalSafe as any).inbox_dismissed_at)
+        ) {
+          delete (finalSafe as any).inbox_killed_at;
+        }
         if (Object.keys(finalSafe).length === 0) continue;
         if (table === "comments") {
           const conversation = await ctx.db.get(doc.conversation_id as Id<"conversations">);

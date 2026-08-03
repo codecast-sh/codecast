@@ -172,6 +172,59 @@ describe("explicit kill actions force teardown", () => {
   });
 });
 
+// inbox_killed_at is the retired marker the daemon's resurrection gate and
+// classifyWorkState both read. This generic patch rail carries whatever fields
+// an action's draft touched, so an unrelated gesture can wipe it — the web's pin
+// nulls it in its draft, and a killed row is only VISIBLE while pinned
+// (shouldShowInInbox), so pin-then-wipe hit exactly the rows the marker matters
+// most for, and re-armed daemon resurrection on a killed persistent anchor.
+describe("inbox_killed_at survives patches that are not a revival", () => {
+  const RUNNER = "users_runner";
+  const CONV = "conversations_killed";
+
+  const fixtures = () =>
+    makeFakeDb({
+      conversations: [{
+        _id: CONV, user_id: RUNNER, status: "completed", message_count: 12,
+        inbox_dismissed_at: 111, inbox_killed_at: 111,
+      }],
+      messages: [], pending_messages: [], client_state: [], managed_sessions: [],
+      agent_tasks: [], daemon_commands: [], session_owners: [],
+    });
+
+  test("a pin-shaped patch (pin set, killed nulled) leaves inbox_killed_at intact", async () => {
+    const db = fixtures();
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_pinned_at: 555, is_pinned: true, inbox_killed_at: null } },
+    });
+    const row = db._tables.conversations[0];
+    expect(row.inbox_killed_at).toBe(111); // the marker survives…
+    expect(row.inbox_pinned_at).toBe(555); // …and the rest of the patch still lands
+  });
+
+  test("an un-kill (a patch clearing inbox_dismissed_at) DOES clear it", async () => {
+    const db = fixtures();
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_killed_at: null } },
+    });
+    const row = db._tables.conversations[0];
+    expect(row.inbox_dismissed_at).toBeUndefined();
+    expect(row.inbox_killed_at).toBeUndefined();
+  });
+
+  test("SETTING inbox_killed_at is never blocked", async () => {
+    const db = makeFakeDb({
+      conversations: [{ _id: CONV, user_id: RUNNER, status: "active", message_count: 12 }],
+      messages: [], pending_messages: [], client_state: [], managed_sessions: [],
+      agent_tasks: [], daemon_commands: [], session_owners: [],
+    });
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_killed_at: 777 } },
+    });
+    expect(db._tables.conversations[0].inbox_killed_at).toBe(777);
+  });
+});
+
 describe("applyPatches bucket coverage", () => {
   test("a legacy generic bucket patch advances the v2 complete-view head once", async () => {
     const userId = "users_owner";

@@ -6462,6 +6462,9 @@ export const feedForCLI = query({
         agent_type: conv.agent_type,
         ...(convIsLive ? { is_live: true, agent_status: coercedStatusMap.get(conv._id.toString()) || undefined } : {}),
         work_state: workStateMap.get(conv._id.toString()) || "idle",
+        // A retired row. `cast sessions -w` reads this to emit a kill as a
+        // DEPARTURE from the watched set rather than a work-state transition.
+        ...(conv.inbox_killed_at ? { is_killed: true } : {}),
         is_pinned: !!conv.inbox_pinned_at,
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
         ...(sessionOwner ? { owner: sessionOwner } : {}),
@@ -8351,6 +8354,7 @@ export const inboxForCLI = query({
       agent_type?: string;
       agent_status?: string;
       work_state: WorkState;
+      is_killed: boolean;
       is_pinned: boolean;
       is_live: boolean;
       is_unresponsive: boolean;
@@ -8406,6 +8410,9 @@ export const inboxForCLI = query({
         agent_type: s.agent_type,
         agent_status: s.agent_status,
         work_state,
+        // A retired row (still listed while pinned, or under --all). The watch
+        // stream reads it to emit a kill as a departure, not a transition.
+        is_killed: !!s.inbox_killed_at,
         is_pinned: !!s.is_pinned,
         is_live,
         is_unresponsive: !!s.is_unresponsive,
@@ -8799,15 +8806,44 @@ export const markSessionActive = mutation({
 // Returns null for a missing conversation or one the caller doesn't run —
 // same silent-null convention as its siblings, and the daemon treats null (or
 // an undeployed query) as "no lifecycle opinion" and falls back.
+//
+// Addressable by conversation_id OR session_id (exactly one), because the daemon
+// often knows only the session it is about to reap or resurrect — and the
+// session route MUST resolve the newest twin, not the oldest (see below).
 export const getConversationLifecycle = query({
   args: {
     api_token: v.optional(v.string()),
-    conversation_id: v.id("conversations"),
+    conversation_id: v.optional(v.id("conversations")),
+    session_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
-    const conv = await ctx.db.get(args.conversation_id);
+    // Exactly one selector: neither is nothing to look up, and both could
+    // disagree — refusing to guess is the same discipline
+    // deleteConversationBySessionId applies to twins. Null, not a throw, so a
+    // malformed call reads as "no opinion" like every other miss here.
+    if (!!args.conversation_id === !!args.session_id) return null;
+
+    let conv = args.conversation_id ? await ctx.db.get(args.conversation_id) : null;
+    if (!conv && args.session_id) {
+      // NEWEST twin, never .first(): .first() is creation order, so it returns
+      // the OLDEST row bound to a session_id — the ct-36973 foot-gun that once
+      // made cleanup delete a live original instead of its doppelgänger. Here it
+      // would hand the daemon a dead twin's killed/stashed stamps for a session
+      // that is very much alive, and the reap gate would refuse to bring the
+      // live one back. Same newest-by-updated_at reduction resolveRestartTarget
+      // uses, and foreign twins are filtered out before the pick, so another
+      // user's row can neither be selected nor leak.
+      const twins = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id!))
+        .collect();
+      const owned = twins.filter((t) => t.user_id === userId);
+      conv = owned.length > 0
+        ? owned.reduce((a, b) => ((b.updated_at ?? 0) > (a.updated_at ?? 0) ? b : a))
+        : null;
+    }
     if (!conv || conv.user_id !== userId) return null;
     return {
       status: conv.status,
@@ -10066,6 +10102,9 @@ export async function resolveRestartTarget(
     // refused to bring it back. The ghost-recovery path below already did this
     // for the twin it restores; the existing row was the gap. Patch only what's
     // actually set, so an ordinary restart of a live session writes nothing.
+    // Read the pre-patch state first: the re-arm below is decided on what the
+    // row looked like when the user hit Restart, not on what the patch left.
+    const wasRetired = !!(conv.inbox_dismissed_at || conv.inbox_killed_at);
     const revive: Record<string, any> = {};
     if (conv.status === "completed") revive.status = "active" as const;
     if (conv.inbox_killed_at) revive.inbox_killed_at = undefined;
@@ -10073,6 +10112,18 @@ export async function resolveRestartTarget(
     if (conv.inbox_stashed_at) revive.inbox_stashed_at = undefined;
     if (Object.keys(revive).length > 0) {
       await ctx.db.patch(conv._id, revive);
+      // A revival is a revival: undismiss re-arms the schedules the kill
+      // canceled (reactivateTasksCanceledOnKill), so Restart must too — without
+      // this, `cast undismiss X` brings a session's standing loops back but
+      // Restart leaves them dead forever, which is the more common gesture.
+      // Same two scans as the kill that canceled them: the RUNNER's schedules,
+      // plus the caller's when a second-party owner is restarting.
+      if (wasRetired) {
+        await reactivateTasksCanceledOnKill(ctx, conv.user_id, conv._id);
+        if (conv.user_id.toString() !== userId.toString()) {
+          await reactivateTasksCanceledOnKill(ctx, userId, conv._id);
+        }
+      }
       return { conv: (await ctx.db.get(conv._id))!, restored: false };
     }
     return { conv, restored: false };
@@ -10239,7 +10290,10 @@ export const killSession = mutation({
     let canceledSchedules = 0;
     let canceledMessages = 0;
     if (conv) {
-      const patch: Record<string, any> = { inbox_killed_at: Date.now() };
+      // First-kill time, preserved across re-kills (same rule as
+      // applyHideTransition): a repeat kill re-runs teardown, it doesn't
+      // rewrite when the session was retired.
+      const patch: Record<string, any> = conv.inbox_killed_at ? {} : { inbox_killed_at: Date.now() };
       // A persistent anchor session never auto-completes — a dismiss/kill gesture
       // on its pinned card puts it to sleep, it isn't retired. Only an explicit
       // decommissionAnchor (which clears `persistent` first) may complete it.

@@ -47,6 +47,29 @@ describe("resolveRestartTarget", () => {
     expect(ctx.db._tables.conversations[0].inbox_killed_at).toBeUndefined();
   });
 
+  // A revival is a revival: undismiss re-arms the schedules the kill canceled,
+  // so Restart must too — otherwise the more common gesture silently leaves the
+  // session's standing loops dead forever.
+  test("restarting a killed session re-arms the triggers its kill canceled", async () => {
+    const ctx = ctxWith({
+      conversations: [{
+        _id: "conversations_1", user_id: USER, session_id: "s1",
+        status: "completed", inbox_dismissed_at: 222, inbox_killed_at: 222,
+      }],
+      agent_tasks: [
+        { _id: "t_killed", user_id: USER, status: "completed", canceled_on_kill_at: 222, originating_conversation_id: "conversations_1", schedule_type: "recurring", interval_ms: 3600000 },
+        // A schedule that finished on its own stays finished — only the kill's
+        // own casualties come back.
+        { _id: "t_natural", user_id: USER, status: "completed", originating_conversation_id: "conversations_1" },
+      ],
+    });
+    await resolveRestartTarget(ctx, USER, "conversations_1" as any, {});
+    const task = (id: string) => ctx.db._tables.agent_tasks.find((t: any) => t._id === id)!;
+    expect(task("t_killed").status).not.toBe("completed");
+    expect(task("t_killed").canceled_on_kill_at).toBeUndefined();
+    expect(task("t_natural").status).toBe("completed");
+  });
+
   test("restart wakes a merely STASHED session without touching its status", async () => {
     const ctx = ctxWith({
       conversations: [{

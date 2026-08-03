@@ -285,11 +285,14 @@ describe("cascadeHideToNestedChildren", () => {
     // back. Executed commands leave nothing pending, so the re-kill enqueues.
     for (const cmd of tables.daemon_commands) cmd.executed_at = 1;
 
+    const firstKilledAt = tables.conversations.find((r: any) => r._id === "conv_sub")!.inbox_killed_at;
     const again = await cascadeHideToNestedChildren({ db }, lead, { inbox_dismissed_at: 222 }, { forceKill: true });
     expect(again).toBe(2);
     expect(kills()).toHaveLength(4);
-    // Already-hidden children keep their original stamp — no timestamp churn.
+    // Already-hidden children keep their original stamps — no timestamp churn,
+    // on the hide flag OR on the record of when they were first killed.
     expect(tables.conversations.find((r: any) => r._id === "conv_sub")!.inbox_dismissed_at).toBe(111);
+    expect(tables.conversations.find((r: any) => r._id === "conv_sub")!.inbox_killed_at).toBe(firstKilledAt);
   });
 
   test("already-hidden children are skipped — a re-asserted hide never re-kills", async () => {
@@ -403,7 +406,9 @@ describe("applyHideTransition — explicit kill forces teardown", () => {
     expect(kills(db)).toHaveLength(1);
     expect(kills(db)[0].doc.command).toBe("kill_session");
     expect(JSON.parse(kills(db)[0].doc.args)).toMatchObject({ conversation_id: CONV, session_id: "s-1" });
-    expect(tables.conversations[0].inbox_killed_at).toBeGreaterThan(111);
+    // inbox_killed_at is FIRST-kill time: the re-kill re-runs teardown, it does
+    // not rewrite when the user retired the session.
+    expect(tables.conversations[0].inbox_killed_at).toBe(111);
   });
 
   test("a re-asserted quiet DISMISS still does not re-kill", async () => {
@@ -452,23 +457,35 @@ describe("applyHideTransition — explicit kill forces teardown", () => {
 
   // A persistent anchor goes dormant on a kill, it is never retired — only
   // decommissionAnchor clears `persistent`. Forcing must not change that.
-  test("a forced kill on a persistent anchor keeps anchor semantics", async () => {
-    const tables = mkTables({ persistent: true, status: "active" });
+  // Killing an anchor means DORMANCY, not death — so it keeps BOTH halves of
+  // what a retirement would take: its schedules stay armed, and so does the
+  // queue the human left for it. Cancelling the queue while keeping the
+  // schedules is the worst of both: the anchor wakes on its next trigger and
+  // runs without the messages the human queued, silently.
+  test("a forced kill on a persistent anchor keeps anchor semantics: schedules AND queued messages", async () => {
+    const tables = mkTables({ persistent: true, status: "active", has_pending_messages: true });
     tables.agent_tasks.push({
       _id: "t1", user_id: "u1", status: "scheduled", originating_conversation_id: CONV,
     });
+    tables.pending_messages.push(
+      { _id: "pm_queued", conversation_id: CONV, status: "pending", retry_count: 0 },
+    );
     const db = makeFakeDb(tables);
     const doc = prePatch(tables);
     const patch = { inbox_dismissed_at: 222 };
     await db.patch(CONV, patch);
 
-    const { action, canceledSchedules, teardownEnqueued } = await applyHideTransition({ db }, doc, patch, { forceKill: true });
+    const { action, canceledSchedules, canceledMessages, teardownEnqueued } =
+      await applyHideTransition({ db }, doc, patch, { forceKill: true });
     expect(action).toBe("kill");
-    expect(teardownEnqueued).toBe(true);
+    expect(teardownEnqueued).toBe(true); // the agent still comes down
     expect(canceledSchedules).toBe(0);
+    expect(canceledMessages).toBe(0);
     expect(tables.agent_tasks[0].status).toBe("scheduled");
-    expect(tables.conversations[0].status).toBe("active");
-    expect(tables.conversations[0].inbox_killed_at).toBeGreaterThan(111);
+    expect(tables.pending_messages[0].status).toBe("pending");
+    expect(tables.conversations[0].has_pending_messages).toBe(true);
+    expect(tables.conversations[0].status).toBe("active"); // never auto-completes
+    expect(tables.conversations[0].inbox_killed_at).toBe(111); // first-kill time preserved
   });
 
   // Kill is TERMINAL for messages already queued. Retained ones kept retrying:

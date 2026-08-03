@@ -25,6 +25,7 @@ import {
   requestExecutionSuccessorInDb,
   resolveAmbiguousDeliveryInDb,
   startDeliveryInDb,
+  cancelFencedDeliveriesOnKill,
 } from "./executionBindings";
 
 const USER = "users_1" as Id<"users">;
@@ -1376,5 +1377,72 @@ describe("conversation-global ordered delivery", () => {
     const replacementClaim = await claimDelivery(ctx, resent.messageId);
     expect(replacementClaim.permit.deliveryId).toBe("explicit-risk-resend");
     expect(replacementClaim.permit.conversationSequence).toBe("2");
+  });
+});
+
+// Kill teardown on a FENCED conversation. The legacy cancel path refuses these
+// rows on purpose (patching one behind the epoch machinery's back would strand
+// its attempt and the head's slot), so before this a kill cancelled NOTHING here
+// and the queue simply outlived the session.
+describe("cancelFencedDeliveriesOnKill", () => {
+  test("terminalizes unstarted deliveries, unwinds a claimed one, releases the head slot", async () => {
+    const db = makeFakeDb(tables());
+    const ctx = await initializeAndReady(db);
+    const firstId = await enqueue(ctx, "msg-1");
+    const secondId = await enqueue(ctx, "msg-2");
+    const claim = await claimDelivery(ctx, firstId);
+    expect(claim.permit.deliveryId).toBe("msg-1");
+
+    const result = await cancelFencedDeliveriesOnKill(ctx, CONVERSATION, 99);
+    expect(result).toEqual({ cancelled: 2, inFlight: 0 });
+
+    // Both rows are terminal, by the epoch machinery's own vocabulary.
+    for (const id of [firstId, secondId]) {
+      const row: any = await db.get(id);
+      expect(row.status).toBe("cancelled");
+      expect(row.delivery_status).toBe("cancelled-by-supersession");
+      expect(row.active_delivery_attempt_id).toBeUndefined();
+    }
+    // The claimed attempt is unwound, not orphaned…
+    const attempt: any = await db.get(claim.permit.attemptId);
+    expect(attempt.state).toBe("cancelled-by-supersession");
+    expect(attempt.completed_at).toBe(99);
+    // …and the conversation's delivery slot is free again.
+    const head: any = db._tables.conversation_execution_heads[0];
+    expect(head.active_delivery_attempt_id).toBeUndefined();
+    expect(head.active_delivery_state).toBeUndefined();
+  });
+
+  test("a delivery already landing in the pane is left for the delivery machinery", async () => {
+    const db = makeFakeDb(tables());
+    const ctx = await initializeAndReady(db);
+    const messageId = await enqueue(ctx, "msg-1");
+    const claim = await claimDelivery(ctx, messageId);
+    await startDeliveryInDb(ctx, USER, { ...fence(claim.permit), now: 21 });
+
+    // Never throws — a kill must not be abortable by the delivery state (the
+    // epoch path fails hard here; this one reports and moves on).
+    const result = await cancelFencedDeliveriesOnKill(ctx, CONVERSATION, 99);
+    expect(result).toEqual({ cancelled: 0, inFlight: 1 });
+    const row: any = await db.get(messageId);
+    expect(row.delivery_status).toBe("delivery-started");
+    expect(row.status).not.toBe("cancelled");
+  });
+
+  test("a started delivery revives the conversation it lands in", async () => {
+    const db = makeFakeDb(tables());
+    const ctx = await initializeAndReady(db);
+    const messageId = await enqueue(ctx, "msg-1");
+    const claim = await claimDelivery(ctx, messageId);
+    // The user kills the session AFTER the delivery was claimed — so the kill
+    // stamps land on a row whose delivery is already past the point of cancel
+    // (enqueue's own wake-up rules can't help here; they ran before the kill).
+    await db.patch(CONVERSATION, { inbox_killed_at: 5, inbox_dismissed_at: 5, status: "completed" });
+    await startDeliveryInDb(ctx, USER, { ...fence(claim.permit), now: 21 });
+
+    const conv: any = await db.get(CONVERSATION);
+    expect(conv.inbox_killed_at).toBeUndefined();
+    expect(conv.inbox_dismissed_at).toBeUndefined();
+    expect(conv.status).toBe("active");
   });
 });

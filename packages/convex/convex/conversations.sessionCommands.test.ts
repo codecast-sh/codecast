@@ -112,4 +112,57 @@ describe("getConversationLifecycle", () => {
     expect(await call({ conversations: [killedRow] }, null, { conversation_id: CONV })).toBeNull();
     expect(await call({ conversations: [] }, RUNNER, { conversation_id: CONV })).toBeNull();
   });
+
+  test("exactly one selector — neither or both is null, never a guess", async () => {
+    const tables = { conversations: [killedRow] };
+    expect(await call(tables, RUNNER, {})).toBeNull();
+    expect(await call(tables, RUNNER, { conversation_id: CONV, session_id: "s1" })).toBeNull();
+  });
+
+  // The session route resolves the NEWEST twin. .first() is creation order —
+  // the OLDEST row bound to the session_id (the ct-36973 foot-gun) — which for
+  // this query means handing the daemon a dead twin's stamps for a live session.
+  describe("by session_id", () => {
+    const twins = (extra: Record<string, any> = {}) => [
+      { _id: "conversations_old", user_id: RUNNER, session_id: "s1", updated_at: 10, status: "completed", inbox_killed_at: 999 },
+      { _id: "conversations_new", user_id: RUNNER, session_id: "s1", updated_at: 50, status: "active", ...extra },
+    ];
+
+    test("the newest twin wins — a dead older twin cannot speak for a live session", async () => {
+      expect(await call({ conversations: twins() }, RUNNER, { session_id: "s1" })).toEqual({
+        status: "active",
+        inbox_killed_at: null,
+        inbox_dismissed_at: null,
+        inbox_stashed_at: null,
+        inbox_pinned_at: null,
+      });
+    });
+
+    test("newest-wins holds whatever order the rows come back in", async () => {
+      const reversed = twins().reverse();
+      expect((await call({ conversations: reversed }, RUNNER, { session_id: "s1" }))!.status).toBe("active");
+    });
+
+    test("the newest twin's own hide state is reported faithfully", async () => {
+      const stashed = twins({ inbox_stashed_at: 777 });
+      expect(await call({ conversations: stashed }, RUNNER, { session_id: "s1" })).toMatchObject({
+        status: "active",
+        inbox_stashed_at: 777,
+        inbox_killed_at: null,
+      });
+    });
+
+    test("a foreign twin on the same session_id is neither selected nor leaked", async () => {
+      const mixed = [
+        { _id: "conversations_mine", user_id: RUNNER, session_id: "s1", updated_at: 10, status: "active" },
+        { _id: "conversations_theirs", user_id: STRANGER, session_id: "s1", updated_at: 99, status: "completed", inbox_killed_at: 5 },
+      ];
+      expect((await call({ conversations: mixed }, RUNNER, { session_id: "s1" }))!.status).toBe("active");
+      expect(await call({ conversations: mixed }, "users_nobody", { session_id: "s1" })).toBeNull();
+    });
+
+    test("an unknown session is null", async () => {
+      expect(await call({ conversations: twins() }, RUNNER, { session_id: "s-unknown" })).toBeNull();
+    });
+  });
 });
