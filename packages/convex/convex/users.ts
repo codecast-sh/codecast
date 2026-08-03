@@ -208,8 +208,12 @@ export const daemonHeartbeat = mutation({
       branch: v.optional(v.string()),
       fetched_at: v.optional(v.number()),
       repaired_from: v.optional(v.string()),
+      needs_access: v.optional(v.boolean()),
+      identity: v.optional(v.string()),
       error: v.optional(v.string()),
     }))),
+    // The device's PUBLIC git key — see schema devices.git_pubkey.
+    git_pubkey: v.optional(v.string()),
     // CC account inventory (names/emails/tiers, never tokens) for the switcher.
     cc_accounts: v.optional(ccAccountsValidator),
     // DEPRECATED: old daemons still send the machine-wide Codex snapshot;

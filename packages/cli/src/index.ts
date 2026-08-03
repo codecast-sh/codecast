@@ -9,7 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { spawn, spawnSync, execSync } from "./proc.js";
-import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
+import { buildWslAutostartTaskRun, daemonSupportedOnPlatform, isWSL, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
@@ -2306,27 +2306,22 @@ const VISUAL_SNIPPET_END = "<!-- /codecast-visual -->";
 const VISUAL_SNIPPET = `
 ## Visual Canvas
 
-Some results land better seen than read. Emit a \`cast-canvas\` block of self-contained HTML/CSS/SVG and codecast renders it inline — themed to match, expandable to fullscreen.
+When structure or magnitude carries the meaning — comparisons, flows, timelines, metrics, dashboards — emit a \`cast-canvas\` block of self-contained HTML/CSS/SVG. Codecast renders it inline, themed, expandable to fullscreen. Let the canvas be the centerpiece of such a reply, and keep markdown for ordinary prose.
 
 \`\`\`cast-canvas
-<div> … </div>
+<div data-canvas-title="Shown in the header"> … </div>
 \`\`\`
 
-**Reach for it whenever structure or magnitude carries the meaning**, not only when you'd otherwise draw ASCII. Comparing a few options, a system's data flow, a before/after, a timeline, a set of metrics, where the time or tokens went, a dashboard summarizing a run — all read faster as a designed layout than as paragraphs. Keep markdown for ordinary prose answers; when laying it out is what makes the point land, let the canvas be the centerpiece of your reply, not a footnote.
+**Theme with \`--sol-*\` tokens; never hardcode colors.** Text \`--sol-text/-text-muted/-text-dim\` · surfaces \`--sol-card/-bg-alt/-border\` · accents \`--sol-blue/green/yellow/red/magenta/cyan/orange/violet\` · soft fill \`color-mix(in srgb, var(--sol-blue) 14%, transparent)\`. Full CSS and SVG: grid/flex panels, gradients, \`<defs>\`+\`<use>\`, CSS animations/transitions, hover states, \`<details>\`. Compose like a considered report: title, one-line takeaway, then panels. \`data-canvas-size="wide"\` on the root lets a dashboard use the full screen width.
 
-**Treat it as a real design surface.** You have full CSS and SVG: grid and flexbox for multi-panel layouts, \`color-mix()\` for tints, gradients for depth, cards with \`--sol-card\` backgrounds and \`--sol-border\` rules, hand-drawn SVG for diagrams. Compose deliberately — a title and a one-line takeaway up top, then panels, stat callouts, or a chart beneath — so it reads like a considered report, not a wall of text in a box.
+**Sandboxed: no scripts, no network.** Remote images and fonts are stripped — embed images as \`data:\` URIs. Interactivity is declarative; codecast supplies the behavior:
 
-**Theme with the \`--sol-*\` tokens** so it follows light/dark; never hardcode colors. Text: \`--sol-text\` / \`--sol-text-muted\` / \`--sol-text-dim\`. Surfaces: \`--sol-card\` / \`--sol-bg-alt\` / \`--sol-border\`. Accents: \`--sol-blue\`, \`--sol-green\`, \`--sol-yellow\`, \`--sol-red\`, \`--sol-magenta\`, \`--sol-cyan\`, \`--sol-orange\`, \`--sol-violet\`. For a soft fill, \`color-mix(in srgb, var(--sol-blue) 14%, transparent)\`. Title it with a heading or \`data-canvas-title\` — that shows in the header.
+- Tabs: \`<div class="cast-tabs"><section data-tab="Label">…</section>…</div>\`
+- Sortable table: \`<table class="cast-table">\` — headers become click-to-sort
+- Tooltip: \`data-tip="text"\` on any element
+- Chart: \`<div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>\`
 
-It runs sandboxed: **no scripts, no web fonts, no external resources** (it inherits codecast's mono font). Carry the work with layout, color, SVG, and the built-in chart engine rather than JS.
-
-**Charts are declarative** — describe the data, codecast renders it with Observable Plot (never your JS), themed automatically:
-
-\`\`\`html
-<div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>
-\`\`\`
-
-You have **every Observable Plot mark and transform** by name — the whole gallery, not a fixed menu — so fit the form to the data instead of reaching for bars and lines: distributions (\`boxY\`, \`density\`), relationships (\`dot\`, \`hexbin\`), parts of a whole (stacked \`areaY\`/\`barY\`), magnitude grids (\`cell\` heatmaps), flows and fields (\`vector\`, \`arrow\`, \`link\`), and on. Set \`fill\`/\`stroke\` to a field for multi-series (add \`"color":{"legend":true}\`), facet with \`fx\`/\`fy\`, layer marks freely, and let Plot aggregate with a transform — \`"transform":{"kind":"binX","out":{"y":"count"}}\` for a histogram, likewise \`hexbin\`, \`groupX\`, \`dodgeX\`, \`windowY\` — rather than pre-summing.
+**Charts get every Observable Plot mark and transform by name** — fit the form to the data: \`dot\`, \`boxY\`, \`density\`, \`cell\` heatmaps, stacked \`areaY\`, \`arrow\`, \`vector\`, and on. Multi-series: \`fill\`/\`stroke\` as a field plus \`"color":{"legend":true}\`; facet with \`fx\`/\`fy\`; aggregate declaratively — \`"transform":{"kind":"binX","out":{"y":"count"}}\`, likewise \`groupX\`, \`hexbin\`, \`dodgeX\`, \`windowY\` — rather than pre-summing.
 ${VISUAL_SNIPPET_END}
 `;
 
@@ -7666,6 +7661,20 @@ function setupLinux(disable: boolean): void {
   const systemdUserDir = path.join(home, ".config", "systemd", "user");
   const servicePath = path.join(systemdUserDir, "codecast.service");
 
+  if (isWSL()) {
+    if (disable) {
+      removeWslAutostart();
+      console.log("Removed the Windows login task (Task Scheduler).");
+      // Fall through: also remove a systemd service if one exists.
+    } else if (ensureWslAutostart()) {
+      console.log("Auto-start enabled");
+      console.log("Windows Task Scheduler starts the daemon inside WSL at login.");
+      return;
+    } else {
+      console.log("Could not create the Windows login task (interop disabled?). Trying systemd...");
+    }
+  }
+
   if (disable) {
     if (!fs.existsSync(servicePath)) {
       console.log("Auto-start is not enabled");
@@ -7718,9 +7727,43 @@ WantedBy=default.target
   }
 }
 
+// Inside WSL, systemd user services don't run at Windows login (the WSL VM
+// isn't even booted yet). The reliable autostart is on the Windows side: a
+// Task Scheduler entry that runs `wsl.exe ... codecast start` at logon —
+// booting the VM and starting the daemon, which then keeps the VM alive.
+// schtasks.exe is reachable from WSL via Windows interop; when interop is
+// disabled or the command fails, the caller falls back to systemd.
+const WSL_AUTOSTART_TASK_NAME = "CodecastDaemon";
+
+function ensureWslAutostart(): boolean {
+  const distro = process.env.WSL_DISTRO_NAME;
+  if (!distro) return false;
+  const { executablePath, args } = getExecutableInfo();
+  if (args[0] !== "--") return false; // from-source dev install: skip Windows autostart
+  const run = buildWslAutostartTaskRun(distro, os.userInfo().username, executablePath);
+  if (!run) return false;
+  try {
+    const res = spawnSync("schtasks.exe", [
+      "/Create", "/TN", WSL_AUTOSTART_TASK_NAME, "/TR", run, "/SC", "ONLOGON", "/RL", "LIMITED", "/F",
+    ], { stdio: "ignore" });
+    return res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function removeWslAutostart(): void {
+  try {
+    spawnSync("schtasks.exe", ["/Delete", "/TN", WSL_AUTOSTART_TASK_NAME, "/F"], { stdio: "ignore" });
+  } catch {}
+}
+
 function ensureAutostart(): boolean {
   const platform = process.platform;
   try {
+    if (platform === "linux" && isWSL() && ensureWslAutostart()) {
+      return true;
+    }
     if (platform === "darwin") {
       const home = process.env.HOME;
       if (!home) return false;
@@ -7844,7 +7887,7 @@ program
     "Supported platforms:\n" +
     "  - macOS: LaunchAgent\n" +
     "  - Linux: systemd user service\n" +
-    "  - Windows: not supported (use WSL); --disable removes an old task\n\n" +
+    "  - Windows: inside WSL (a Task Scheduler task starts the daemon at login)\n\n" +
     "Examples:\n" +
     "  cast setup             # Enable auto-start\n" +
     "  cast setup --disable   # Disable auto-start"
@@ -7910,6 +7953,9 @@ program
         break;
       }
       case "linux": {
+        if (isWSL()) {
+          removeWslAutostart();
+        }
         const servicePath = path.join(home, ".config", "systemd", "user", "codecast.service");
         if (fs.existsSync(servicePath)) {
           spawnSync("systemctl", ["--user", "disable", "--now", "codecast.service"], { stdio: "ignore" });
