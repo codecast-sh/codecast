@@ -5,6 +5,11 @@ import {
   buildEntityUrl,
   inferEntityTypeFromShortId,
   normalizeEntityType,
+  entityRoute,
+  entityTypeFromId,
+  isEntityId,
+  entityMentionRegex,
+  bareEntityIdRegex,
 } from "./entityLinks";
 
 describe("isConvexId", () => {
@@ -140,5 +145,108 @@ describe("normalizeEntityType", () => {
     expect(normalizeEntityType("tasks")).toBe("task");
     expect(normalizeEntityType("docs")).toBe("doc");
     expect(normalizeEntityType("widget")).toBeNull();
+  });
+});
+
+describe("triggers as first-class referenceable objects", () => {
+  // Regression: a trigger id in agent prose rendered as a raw 32-char blob
+  // (`Trigger \`rx72qtvpbmmrmwcjqmhzawejsx8bq9gm\` marked complete`) because the
+  // trigger type was never registered here — no short-id prefix, no route, no
+  // url segment. Everything below is what registering it must buy.
+
+  test("tr- short ids resolve to the trigger type", () => {
+    expect(inferEntityTypeFromShortId("tr-42")).toBe("trigger");
+    expect(inferEntityTypeFromShortId("TR-42")).toBe("trigger");
+    expect(entityTypeFromId("tr-42")).toBe("trigger");
+  });
+
+  test("a trigger routes to the list page's ?task= deep link", () => {
+    // Triggers have no detail page of their own; the list page opens one row.
+    expect(entityRoute("trigger", "tr-42")).toBe("/triggers?task=tr-42");
+    expect(buildEntityUrl("trigger", "tr-42")).toBe("https://codecast.sh/triggers?task=tr-42");
+  });
+
+  test("a trigger url round-trips back to { type, id }", () => {
+    expect(parseEntityUrl("https://codecast.sh/triggers?task=tr-42")).toEqual({
+      type: "trigger",
+      id: "tr-42",
+    });
+    // The gear-verb deep link from the inbox uses the full Convex id.
+    expect(parseEntityUrl(`/triggers?task=${CONVEX_ID}`)).toEqual({
+      type: "trigger",
+      id: CONVEX_ID,
+    });
+    // Pre-rename alias still resolves.
+    expect(parseEntityUrl("/schedules?task=tr-7")).toEqual({ type: "trigger", id: "tr-7" });
+    // The bare list page addresses no single object.
+    expect(parseEntityUrl("/triggers")).toBeNull();
+  });
+
+  test("query-addressed parsing does not swallow path-addressed types", () => {
+    expect(parseEntityUrl("/tasks/ct-1?from=inbox")).toEqual({ type: "task", id: "ct-1" });
+    expect(parseEntityUrl("/tasks")).toBeNull();
+  });
+});
+
+describe("entityTypeFromId", () => {
+  test("types every id shape that carries its own type", () => {
+    expect(entityTypeFromId("ct-4102")).toBe("task");
+    expect(entityTypeFromId("pl-88")).toBe("plan");
+    expect(entityTypeFromId("tr-42")).toBe("trigger");
+    expect(entityTypeFromId("jx7c6zk")).toBe("session");
+    expect(entityTypeFromId(`doc:${CONVEX_ID}`)).toBe("doc");
+  });
+
+  test("a bare Convex id carries no type and must be resolved server-side", () => {
+    // A Convex id can even start with "jx" — prefix sniffing would call it a
+    // session and query the wrong table.
+    expect(entityTypeFromId(CONVEX_ID)).toBeNull();
+    expect(entityTypeFromId("jx75sqw53801qvexsvem39mbhh88c8wt")).toBeNull();
+  });
+});
+
+describe("isEntityId", () => {
+  test("accepts every registered handle", () => {
+    for (const id of ["ct-4102", "pl-88", "tr-42", "jx7c6zk", CONVEX_ID]) {
+      expect(isEntityId(id)).toBe(true);
+    }
+  });
+
+  test("rejects ordinary words and partial ids", () => {
+    expect(isEntityId("trigger")).toBe(false);
+    expect(isEntityId("tr-")).toBe(false);
+    expect(isEntityId("hello world")).toBe(false);
+    expect(isEntityId("")).toBe(false);
+  });
+});
+
+describe("entityMentionRegex", () => {
+  test("captures the title and id of an @[Title id] mention", () => {
+    const m = entityMentionRegex().exec("see @[Growth audit tr-42] for details");
+    expect(m?.[1]).toBe("Growth audit");
+    expect(m?.[2]).toBe("tr-42");
+  });
+
+  test("returns a fresh regex each call, so callers cannot poison lastIndex", () => {
+    const a = entityMentionRegex();
+    a.exec("@[One ct-1] @[Two ct-2]");
+    expect(a.lastIndex).toBeGreaterThan(0);
+    expect(entityMentionRegex().lastIndex).toBe(0);
+  });
+
+  test("requireId skips a bare @[Name] person mention", () => {
+    expect(entityMentionRegex({ requireId: true }).test("hi @[Ashot]")).toBe(false);
+    expect(entityMentionRegex().test("hi @[Ashot]")).toBe(true);
+  });
+});
+
+describe("bareEntityIdRegex", () => {
+  test("finds every object handle in a sentence", () => {
+    const text = "Filed ct-4102 under pl-88, trigger tr-42 fires hourly; see jx7c6zk.";
+    expect(text.match(bareEntityIdRegex())).toEqual(["ct-4102", "pl-88", "tr-42", "jx7c6zk"]);
+  });
+
+  test("does not match a word that merely starts with a prefix", () => {
+    expect("the transaction triggered a plan".match(bareEntityIdRegex())).toBeNull();
   });
 });

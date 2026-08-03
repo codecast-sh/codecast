@@ -5,71 +5,50 @@ type DispatchRuntime = {
   subscribe(listener: () => void): () => void;
 };
 
+/**
+ * Native twin of dispatchGate: dispatch is wired unconditionally, no principal
+ * correlation gates it. The API shape is preserved for shared callers.
+ */
 export type DispatchAuthorizationCapture = {
   correlationEpoch: number;
   principalEpoch: number;
 };
 
-let authorizedPrincipalEpoch: number | null = null;
-let correlationEpoch = 0;
-const listeners = new Set<() => void>();
-let notificationQueued = false;
+const ALWAYS_AUTHORIZED: DispatchAuthorizationCapture = Object.freeze({
+  correlationEpoch: 1,
+  principalEpoch: 1,
+});
 
-function scheduleNotification(): void {
-  if (notificationQueued) return;
-  notificationQueued = true;
-  const notify = () => {
-    notificationQueued = false;
-    for (const listener of listeners) listener();
-  };
-  if (typeof queueMicrotask === "function") queueMicrotask(notify);
-  else void Promise.resolve().then(notify);
+export function subscribePrincipalDispatchCorrelation(_listener: () => void): () => void {
+  return () => {};
 }
 
-export function subscribePrincipalDispatchCorrelation(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-// Native intentionally advertises memory-only capability. Its principal
-// boundary supplies server-verified authorization; it does not open v2 durable
-// state or parse the web auth package's pinned refresh-token format.
 export function registerPrincipalDispatchRuntime(_runtime: DispatchRuntime | null): void {}
 
-export function updatePrincipalDispatchCorrelation(principalEpoch: number | null): void {
-  if (authorizedPrincipalEpoch === principalEpoch) return;
-  authorizedPrincipalEpoch = principalEpoch;
-  correlationEpoch++;
-  scheduleNotification();
-}
+export function updatePrincipalDispatchCorrelation(_principalEpoch: number | null): void {}
 
 export function capturePrincipalDispatchAuthorization(): DispatchAuthorizationCapture | null {
-  return authorizedPrincipalEpoch === null
-    ? null
-    : { correlationEpoch, principalEpoch: authorizedPrincipalEpoch };
+  return ALWAYS_AUTHORIZED;
 }
 
 export function isPrincipalDispatchAuthorizationCurrent(
-  capture: DispatchAuthorizationCapture,
+  _capture: DispatchAuthorizationCapture,
 ): boolean {
-  return capture.correlationEpoch === correlationEpoch &&
-    capture.principalEpoch === authorizedPrincipalEpoch;
+  return true;
 }
 
 export function getPrincipalDispatchCorrelationEpoch(): number | null {
-  return authorizedPrincipalEpoch === null ? null : correlationEpoch;
+  return ALWAYS_AUTHORIZED.correlationEpoch;
 }
 
 export function usePrincipalDispatchCorrelationEpoch(): number | null {
   return useSyncExternalStore(
-    (listener) => {
-      return subscribePrincipalDispatchCorrelation(listener);
-    },
+    subscribePrincipalDispatchCorrelation,
     getPrincipalDispatchCorrelationEpoch,
-    () => null,
+    getPrincipalDispatchCorrelationEpoch,
   );
 }
 
 export function usePrincipalDispatchAllowed(): boolean {
-  return usePrincipalDispatchCorrelationEpoch() !== null;
+  return true;
 }

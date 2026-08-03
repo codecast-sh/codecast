@@ -115,6 +115,7 @@ import {
 } from "./terminal/terminalServer.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
+import { enumerateProjectRoots, MAX_PROJECT_ROOTS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
@@ -1731,24 +1732,7 @@ async function pollDaemonCommands(): Promise<void> {
 // ~/dev/union/union-mobile remain available in the recent-project picker.
 // Bounded scan: only directories that actually exist on this host.
 function computeLocalProjectRoots(): string[] {
-  const home = process.env.HOME;
-  if (!home) return [];
-  const roots = new Set<string>();
-  const parents = ["src", "dev", "Projects", "projects", "repos", "code"];
-  for (const parent of parents) {
-    const parentPath = path.join(home, parent);
-    try {
-      const stat = fs.statSync(parentPath);
-      if (!stat.isDirectory()) continue;
-      for (const child of fs.readdirSync(parentPath)) {
-        if (child.startsWith(".")) continue;
-        const full = path.join(parentPath, child);
-        try {
-          if (fs.statSync(full).isDirectory()) roots.add(full);
-        } catch {}
-      }
-    } catch {}
-  }
+  const roots = new Set<string>(enumerateProjectRoots());
   // Also include any project_paths we've actually started a session in — covers
   // non-conventional locations the user has used recently.
   for (const info of startedSessionTmux.values()) {
@@ -1758,7 +1742,7 @@ function computeLocalProjectRoots(): string[] {
       } catch {}
     }
   }
-  return Array.from(roots).slice(0, 300);
+  return Array.from(roots).slice(0, MAX_PROJECT_ROOTS);
 }
 
 // Sync-backlog fields published on every heartbeat so the web can show a
@@ -6293,7 +6277,7 @@ export async function processSessionFile(
             const capturedSize = stats.size;
             if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
               lastIdleNotifiedSize.set(sessionId, capturedSize);
-              sendAgentStatus(syncService, conversationId, sessionId, "idle");
+              sendAgentStatus(syncService, conversationId, sessionId, resolveTurnEndStatus(sessionId, filePath));
             }
           } else {
             sendAgentStatus(syncService, conversationId, sessionId, "working");
@@ -6304,7 +6288,7 @@ export async function processSessionFile(
               lastIdleNotifiedSize.set(sessionId, capturedSize);
               idleTimers.set(sessionId, setTimeout(() => {
                 idleTimers.delete(sessionId);
-                sendAgentStatus(syncService, capturedConvId, sessionId, "idle");
+                sendAgentStatus(syncService, capturedConvId, sessionId, resolveTurnEndStatus(sessionId, filePath));
               }, IDLE_DEBOUNCE_MS));
             }
           }
@@ -9063,6 +9047,129 @@ export function classifyTranscriptTail(tailContent: string): TranscriptTurnState
   return "unknown";
 }
 
+// Open background work in a Claude JSONL transcript: tasks the harness started
+// (run_in_background Bash, a command moved to the background on timeout, a
+// Monitor) that have not yet reached a terminal state. While any is open, the
+// harness re-invokes the agent when it finishes — so a turn that ended with an
+// open task is "waiting" (an active substate), not idle/needs-input.
+//
+// Opens come from tool_result text (the id is only ever surfaced there);
+// closes come from:
+//   - a <task-notification> user message carrying a <status> tag. Terminal
+//     notifications (completed/failed/stopped) always carry one; Monitor
+//     interim event notifications carry none and must NOT close the task.
+//   - a TaskStop tool_use (the agent tore the task down; no notification comes).
+// Lines are scoped to `currentSessionId` when given: a resumed session's file
+// replays prior-run history verbatim (original sessionId preserved per line),
+// and those runs' tasks died with their process — counting them would latch a
+// phantom "waiting".
+export function scanOpenBackgroundTasks(content: string, currentSessionId?: string): Set<string> {
+  const open = new Set<string>();
+  const OPEN_PATTERNS = [
+    /running in background with ID: ([A-Za-z0-9_-]+)/g,
+    /moved to the background \(ID: ([A-Za-z0-9_-]+)\)/g,
+    /Monitor started \(task ([A-Za-z0-9_-]+)/g,
+  ];
+  for (const rawLine of content.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let d: {
+      type?: string;
+      sessionId?: string;
+      operation?: string;
+      content?: unknown;
+      attachment?: { prompt?: unknown };
+      message?: { role?: string; content?: unknown };
+    };
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue; // partial/corrupt line (mid-write tail) -> skip
+    }
+    if (currentSessionId && d.sessionId && d.sessionId !== currentSessionId) continue;
+    // A notification that arrives while the agent is mid-turn is recorded as a
+    // queue-operation (top-level content) and an attachment (prompt), never as
+    // a plain user message — close on the delivered forms. "remove" = dequeued
+    // for delivery; an enqueue alone is left open (the wake hasn't happened
+    // yet, so the session is still the harness's move).
+    if (d.type === "queue-operation") {
+      if (d.operation === "remove" && typeof d.content === "string") closeNotifiedTasks(d.content, open);
+      continue;
+    }
+    if (d.type === "attachment") {
+      const prompt = d.attachment?.prompt;
+      if (typeof prompt === "string") closeNotifiedTasks(prompt, open);
+      continue;
+    }
+    if (d.type !== "user" && d.type !== "assistant") continue;
+    const blocks = d.message?.content;
+    // Terminal task notification: a string-content user message (or text block)
+    // with both a task id and a status tag.
+    const surface = typeof blocks === "string" ? blocks : "";
+    if (!Array.isArray(blocks)) {
+      closeNotifiedTasks(surface, open);
+      continue;
+    }
+    for (const b of blocks) {
+      if (!b || typeof b !== "object") continue;
+      const block = b as { type?: string; name?: string; input?: unknown; content?: unknown; text?: string };
+      if (block.type === "text" && block.text) {
+        closeNotifiedTasks(block.text, open);
+      } else if (block.type === "tool_result") {
+        const text = typeof block.content === "string"
+          ? block.content
+          : Array.isArray(block.content)
+            ? block.content.map((c) => (c && typeof c === "object" ? String((c as { text?: unknown }).text ?? "") : "")).join(" ")
+            : "";
+        for (const pat of OPEN_PATTERNS) {
+          pat.lastIndex = 0;
+          for (const m of text.matchAll(pat)) open.add(m[1]);
+        }
+      } else if (block.type === "tool_use" && block.name === "TaskStop") {
+        const taskId = (block.input as { task_id?: unknown } | undefined)?.task_id;
+        if (typeof taskId === "string") open.delete(taskId);
+      }
+    }
+  }
+  return open;
+}
+
+function closeNotifiedTasks(text: string, open: Set<string>): void {
+  if (!text.includes("<task-notification>")) return;
+  const id = /<task-id>([A-Za-z0-9_-]+)<\/task-id>/.exec(text)?.[1];
+  if (id && /<status>[^<]+<\/status>/.test(text)) open.delete(id);
+}
+
+// Cached whole-file wrapper for scanOpenBackgroundTasks. Turn-end and reconcile
+// both consult it; the reconcile runs on every heartbeat, so re-parsing an
+// unchanged multi-MB transcript each tick is not acceptable — the file size is
+// the cache key (a JSONL transcript only ever appends).
+const openTaskScanCache = new Map<string, { size: number; open: string[] }>();
+export function openBackgroundTaskIds(transcriptPath: string, sessionId?: string): string[] {
+  try {
+    const size = fs.statSync(transcriptPath).size;
+    const cached = openTaskScanCache.get(transcriptPath);
+    if (cached && cached.size === size) return cached.open;
+    const open = [...scanOpenBackgroundTasks(fs.readFileSync(transcriptPath, "utf8"), sessionId)];
+    openTaskScanCache.set(transcriptPath, { size, open });
+    return open;
+  } catch {
+    return []; // unreadable transcript -> no claim of open work
+  }
+}
+
+// The status a finished turn should settle into: "waiting" when the transcript
+// shows open background work (the harness will re-invoke the agent), plain
+// "idle" otherwise. Claude transcripts only — other clients don't surface
+// background tasks in a scannable form.
+function resolveTurnEndStatus(sessionId: string, transcriptPath?: string): "idle" | "waiting" {
+  const file = transcriptPath
+    ? { path: transcriptPath, agentType: "claude" as const }
+    : findSessionFile(sessionId);
+  if (!file || file.agentType !== "claude") return "idle";
+  return openBackgroundTaskIds(file.path, sessionId).length > 0 ? "waiting" : "idle";
+}
+
 // Codex's rollout JSONL marks turn boundaries with `event_msg` records instead of
 // a per-message stop_reason. A turn ends with `task_complete` (and `turn_aborted`/
 // `task_aborted` for interrupted ones); a turn is in flight after `task_started`
@@ -9204,6 +9311,27 @@ export function reconciledStatus(
   if (isActive && turn === "idle") return "idle";
   if (isQuiet && turn === "active") return "working";
   return null;
+}
+
+// reconciledStatus with background-task awareness layered on:
+//   - a turn-ended correction lands on "waiting" instead of "idle" while the
+//     transcript still holds open background work (the harness will re-invoke);
+//   - a stored "waiting" self-heals in both directions: forward to "working"
+//     when the transcript went active (task notification arrived but the
+//     activity hook was lost), and down to "idle" once the turn is ended with
+//     no open work left (lost final Stop hook). Ambiguity defers, as ever.
+export function reconciledStatusWithTasks(
+  stored: AgentStatus | undefined,
+  turn: TranscriptTurnState,
+  hasOpenTasks: boolean,
+): AgentStatus | null {
+  if (stored === "waiting") {
+    if (turn === "active") return "working";
+    if (turn === "idle" && !hasOpenTasks) return "idle";
+    return null;
+  }
+  const base = reconciledStatus(stored, turn);
+  return base === "idle" && hasOpenTasks ? "waiting" : base;
 }
 
 // The role of the most recent *real* (non-system/meta) message in a Claude JSONL
@@ -11885,7 +12013,7 @@ function reconcileStatusFromTranscript(sessionId: string, syncService: SyncServi
   if (resumeSessionCache.has(sessionId)) return;
   // Cheap in-memory gate first: skip the file read entirely unless the stored
   // status is one we'd ever correct.
-  if (!(stored === "working" || stored === "thinking" || stored === "idle" || stored === "connected")) {
+  if (!(stored === "working" || stored === "thinking" || stored === "idle" || stored === "connected" || stored === "waiting")) {
     return;
   }
   const file = findSessionFile(sessionId);
@@ -11899,7 +12027,14 @@ function reconcileStatusFromTranscript(sessionId: string, syncService: SyncServi
   } catch {
     return; // can't read the transcript -> defer, never guess
   }
-  const corrected = reconciledStatus(stored, turn);
+  // Only pay the whole-file open-task scan when the verdict depends on it: a
+  // correction landing on idle (might really be waiting), or a stored waiting
+  // (might have drained back to idle / woken to working). The scan is
+  // size-cached, so heartbeats on an unchanged transcript stay cheap.
+  const needsTaskScan = file.agentType === "claude" &&
+    (stored === "waiting" || reconciledStatus(stored, turn) === "idle");
+  const hasOpenTasks = needsTaskScan && openBackgroundTaskIds(file.path, sessionId).length > 0;
+  const corrected = reconciledStatusWithTasks(stored, turn, hasOpenTasks);
   if (!corrected) return;
   // Only now (a correction is warranted) pay the conversation-cache read.
   const conversationId = readConversationCache()[sessionId];
@@ -16483,6 +16618,15 @@ async function main(): Promise<void> {
         syncService.cancelPendingPermissions(sessionId, Date.now())
           .then((n) => { if (n > 0) log(`Swept ${n} pre-existing pending permission(s) for bypass-mode session ${sessionId.slice(0, 8)}`); })
           .catch((err) => log(`Bypass-mode permission sweep failed: ${err instanceof Error ? err.message : String(err)}`));
+      }
+
+      // A finished turn with open background work (run_in_background command,
+      // Monitor) is "waiting", not "idle": the harness will re-invoke the agent
+      // when the task ends, so the ball is not in the user's court and the
+      // session must not route into needs-input.
+      if (data.status === "idle") {
+        const settled = resolveTurnEndStatus(sessionId, data.transcript_path);
+        if (settled !== "idle") data = { ...data, status: settled };
       }
 
       const statusChanged = !prev || prev.status !== data.status;

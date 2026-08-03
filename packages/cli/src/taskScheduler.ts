@@ -419,6 +419,12 @@ export class TaskScheduler {
   private buildPrompt(task: any): string {
     const parts: string[] = [];
 
+    // The handle the agent should type and quote. `Task ID:` below stays the
+    // Convex id — it is wire format that sessionMessage.ts parses into the run
+    // chip — but every instruction the agent might echo into its own prose uses
+    // the short id, so a summary reads "tr-42", not a 32-char blob.
+    const handle = task.short_id || task._id;
+
     parts.push(`[Codecast Task: ${task.title}]`);
     parts.push(`Task ID: ${task._id}`);
     // Wire format: sessionMessage.ts parses `Mode: <propose|apply>` into the
@@ -435,7 +441,9 @@ export class TaskScheduler {
 
     if (task.context_summary) {
       const convId = task.originating_conversation_id;
-      parts.push(`Context from originating session${convId ? ` (${convId.toString().slice(-8)})` : ""}:`);
+      // A session's short id is the first 7 chars of its Convex id — the handle
+      // that resolves in `cast read` and renders as a session reference.
+      parts.push(`Context from originating session${convId ? ` (${convId.toString().slice(0, 7)})` : ""}:`);
       parts.push(task.context_summary);
     }
 
@@ -459,15 +467,16 @@ export class TaskScheduler {
     }
     if (task.target_conversation_id) {
       parts.push(`- Your summary will be posted as a message in the originating conversation thread.`);
-      parts.push(`- When done, run: cast trigger complete ${task._id} --summary "your full response to post in the thread"`);
+      parts.push(`- When done, run: cast trigger complete ${handle} --summary "your full response to post in the thread"`);
       parts.push(`- Write the summary as if you are replying directly to the user in their conversation.`);
     } else {
-      parts.push(`- When done, run: cast trigger complete ${task._id} --summary "brief description of what was done"`);
+      parts.push(`- When done, run: cast trigger complete ${handle} --summary "brief description of what was done"`);
     }
+    parts.push(`- Refer to this trigger as ${handle} in anything you write — that renders as a rich trigger reference. Never paste its 32-char id into prose.`);
     parts.push(`- A clean completion folds this run out of the user's inbox (the summary carries the outcome). If you found something the user must read or act on, add --needs-attention to keep this run in their inbox.`);
     parts.push('- To set a follow-up trigger: cast trigger add "..." --in <time>');
     if (task.originating_conversation_id) {
-      parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);
+      parts.push(`- Run \`cast read ${task.originating_conversation_id.toString().slice(0, 7)}\` for full original context`);
     }
 
     return parts.join("\n");

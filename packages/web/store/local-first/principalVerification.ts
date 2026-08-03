@@ -1,9 +1,8 @@
 import {
-  accessTokensShareAuthSession,
   credentialEvidenceMatchesServerIdentity,
   type CredentialEvidence,
 } from "./credentialBinding";
-import { asPrincipalId, type PrincipalLifecycle } from "./types";
+import { asPrincipalId } from "./types";
 
 export type PrincipalVerificationOutcome =
   | { kind: "stale" }
@@ -18,40 +17,6 @@ export type ServerPrincipalResult = {
   _id?: { toString(): string } | string | null;
 } | null;
 
-export type CredentialResolution = {
-  token: string | null;
-  status: "none" | "ready" | "unverified" | "error";
-};
-
-/**
- * Render policy for the principal provider subtree. Routine JWT rotation must
- * not tear down the rendered subtree: the durable credential binding that
- * authorized this render derives from the stable auth-session id, which
- * rotation preserves — so a new token for the SAME principal and session keeps
- * rendering while the effect re-verifies it in the background. A token for a
- * different principal or session (sign-out, account switch, fresh sign-in)
- * still collapses the gate synchronously.
- */
-export function canRenderPrincipalProviderSubtree(input: {
-  state: PrincipalLifecycle;
-  token: string | null;
-  authorizedToken: string | null;
-  credentialResolution: CredentialResolution | null;
-}): boolean {
-  const { state, token, authorizedToken, credentialResolution } = input;
-  const authorized = token !== null &&
-    (authorizedToken === token || accessTokensShareAuthSession(authorizedToken, token));
-  const credentialCurrent = credentialResolution !== null &&
-    (credentialResolution.token === token ||
-      accessTokensShareAuthSession(credentialResolution.token, token));
-  if ((state.phase === "offline-ready" || state.phase === "server-verified") &&
-    authorized && credentialCurrent && credentialResolution.status === "ready") {
-    return true;
-  }
-  return state.phase === "locked" &&
-    credentialResolution?.token === token &&
-    credentialResolution.status !== "ready";
-}
 
 /**
  * React auth state settles across several renders on a fresh tab. Coalesce the

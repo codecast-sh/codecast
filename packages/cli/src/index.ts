@@ -38,7 +38,7 @@ import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
-import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory } from "./snippets.js";
+import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END } from "./snippets.js";
 import { installStableHook, removeStableHook, runStableContextHook } from "./stableContext.js";
 import { prepareSessionSendBody } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -99,7 +99,23 @@ import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt,
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { type Config, getAgentArgs } from "./config/types.js";
 import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
-import { addVault, listVaults, removeVault, setVaultMirroring } from "./vault/vaultRegistry.js";
+import { addVault, findVault, listVaults, removeVault, setVaultMirroring } from "./vault/vaultRegistry.js";
+import {
+  VaultCliError,
+  applyEdit,
+  joinBody,
+  linkReport,
+  moveNote,
+  openVault,
+  pathGlobMatcher,
+  readNote,
+  resolveNote,
+  searchNotes,
+  targetNote,
+  trashNote,
+  writeNote,
+} from "./vault/vaultCli.js";
+import { buildMatcher, contextWindow, matchingLines, resolveLineRange } from "./textView.js";
 
 const program = new Command();
 const isStableContextFastPath =
@@ -2165,15 +2181,15 @@ Escalate only strategic decisions to the founder.
 EOF
 
 # Report completion (when running inside a triggered run)
-cast trigger complete <trigger_id> --summary "what was done"
+cast trigger complete tr-42 --summary "what was done"
 
 # Manage triggers
 cast trigger ls                       # list active triggers
 cast trigger ls --all                 # include completed/failed
-cast trigger pause <id>               # pause a trigger
-cast trigger run <id>                 # fire immediately
-cast trigger cancel <id>              # cancel a trigger
-cast trigger log <id>                 # show last run conversation
+cast trigger pause tr-42              # pause a trigger
+cast trigger run tr-42                # fire immediately
+cast trigger cancel tr-42             # cancel a trigger
+cast trigger log tr-42                # show last run conversation
 \`\`\`
 
 Options:
@@ -2186,7 +2202,7 @@ Options:
 - \`--project <path>\`: set working directory (defaults to current)
 - \`--max-runtime <duration>\`: override max runtime (default: 10m)
 
-When a trigger fires, the run receives your prompt and the trigger ID. The agent should call \`cast trigger complete <trigger_id> --summary "..."\` when done to report results back.
+Every trigger has a short ID (\`tr-42\`) — printed when you create one and listed by \`cast trigger ls\`. Use it for every command, and write it when you mention a trigger in prose; see "Referencing objects". When a trigger fires, its run receives your prompt and its short ID, and should call \`cast trigger complete tr-42 --summary "..."\` when done to report results back.
 ${TASK_SNIPPET_END}
 `;
 
@@ -2224,10 +2240,6 @@ If blocked, say so explicitly:
 - **BLOCKED: <reason>** — flags for human intervention
 - **NEEDS_CONTEXT: <what>** — escalates to the user
 - **DONE_WITH_CONCERNS: <concern>** — completed but flagged for review
-
-### Referencing sessions
-
-When you reference another session in your messages, include its short ID (e.g. \`jx7c6zk\`). These render as interactive cards in the UI showing title, status, message count, and project. Find session IDs via \`cast search\`, \`cast feed\`, or \`cast context\`. Use bare IDs for inline references or \`@[Session Title jx7c6zk]\` for explicit mentions.
 
 ### After compaction
 
@@ -2386,8 +2398,23 @@ function installMarkedSnippet(
   return { installed: anyInstalled, updated: anyUpdated };
 }
 
+// Every feature below introduces an object the agent will want to name in prose
+// (a session, a task, a plan, a trigger, a doc), so each one also ensures the
+// single shared "Referencing objects" section exists. It is written once per
+// file and refreshed in place, so enabling several features never duplicates it.
+function withReferences(
+  result: { installed: boolean; updated: boolean },
+  update: boolean,
+): { installed: boolean; updated: boolean } {
+  installReferencesSnippet(update);
+  return result;
+}
+
 function installForksSnippet(update = false): { installed: boolean; updated: boolean } {
-  return installMarkedSnippet("## Forks & Sessions", FORKS_SNIPPET_END, FORKS_SNIPPET, update);
+  return withReferences(
+    installMarkedSnippet("## Forks & Sessions", FORKS_SNIPPET_END, FORKS_SNIPPET, update),
+    update,
+  );
 }
 
 // MESSAGING_SNIPPET + MESSAGING_SNIPPET_END live in ./snippets.ts (shared with the daemon).
@@ -2446,7 +2473,7 @@ function installMemorySnippet(update = false): { installed: boolean; updated: bo
     if (result.updated) anyUpdated = true;
   }
 
-  return { installed: anyInstalled, updated: anyUpdated };
+  return withReferences({ installed: anyInstalled, updated: anyUpdated }, update);
 }
 
 function installTaskSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
@@ -2506,7 +2533,7 @@ function installTaskSnippet(update = false): { installed: boolean; updated: bool
     if (result.updated) anyUpdated = true;
   }
 
-  return { installed: anyInstalled, updated: anyUpdated };
+  return withReferences({ installed: anyInstalled, updated: anyUpdated }, update);
 }
 
 function installWorkSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
@@ -2559,7 +2586,7 @@ function installWorkSnippet(update = false): { installed: boolean; updated: bool
     if (result.updated) anyUpdated = true;
   }
 
-  return { installed: anyInstalled, updated: anyUpdated };
+  return withReferences({ installed: anyInstalled, updated: anyUpdated }, update);
 }
 
 
@@ -3555,10 +3582,15 @@ vaultCmd
     }
   });
 
+// `rm` deletes a NOTE, the way it does everywhere else — so unregistering a
+// vault, which used to be `rm`, is `forget`. The old spelling still resolves
+// (below) but refuses rather than guessing: one of these two throws away a
+// config line and the other throws away the user's writing, and a destructive
+// command must never disambiguate silently.
 vaultCmd
-  .command("rm")
-  .alias("remove")
-  .description("Unregister a vault (the directory itself is untouched)")
+  .command("forget")
+  .alias("unregister")
+  .description("Unregister a vault (the directory and its notes are untouched)")
   .argument("<dirOrId>", "Vault directory or id")
   .action((dirOrId: string) => {
     const removed = removeVault(CONFIG_DIR, dirOrId);
@@ -3568,6 +3600,514 @@ vaultCmd
     }
     console.log(`${c.green}ok${c.reset} unregistered ${c.cyan}${removed.name}${c.reset} ${c.dim}${removed.root}${c.reset}`);
   });
+
+// ── cast vault: the notes themselves ─────────────────────────────────────────
+// Everything above manages the LIST of vaults. Everything below reads and
+// writes what is inside one, because the caller these exist for is an agent in
+// a Claude Code session that needs a note the same way it needs a `cast doc` —
+// and it gets there through the vault's own modules (vaultScope for path rules,
+// vaultFs for writing and trashing, the shared VaultIndex for names), so a note
+// touched from a terminal is indistinguishable from one touched in the browser.
+// The daemon's watcher sees the change on disk and streams it to open editors
+// and the Convex mirror; nothing here needs the daemon to be running.
+
+/** Print a VaultCliError the way its exit code says, then leave. */
+function failVault(err: unknown): never {
+  if (err instanceof VaultCliError) {
+    console.error(`${c.red}${err.message}${c.reset}`);
+    for (const candidate of err.candidates) console.error(`  ${c.dim}${candidate}${c.reset}`);
+    process.exit(err.exitCode);
+  }
+  console.error(`${c.red}${(err as Error)?.message ?? err}${c.reset}`);
+  process.exit(1);
+}
+
+/** Every vault note command runs inside this: one place that turns a thrown
+ *  VaultCliError into the documented exit code. */
+async function runVault(fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    failVault(err);
+  }
+}
+
+const withVaultOption = (cmd: Command): Command =>
+  cmd.option("--vault <idOrNameOrDir>", "Which vault (defaults to the only registered one)");
+
+/** Body from --content, --content-file, or stdin. An agent piping a heredoc is
+ *  the common case, so stdin is the default rather than an opt-in. */
+async function bodyFromOptions(options: any): Promise<string> {
+  if (options.contentFile) return fs.readFileSync(options.contentFile, "utf-8");
+  if (options.content !== undefined) {
+    return options.content.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+  }
+  if (process.stdin.isTTY) {
+    throw new VaultCliError("Nothing to write. Pass --content, --content-file, or pipe the body in.");
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** Deep link to a note in the web app. */
+function vaultNoteUrl(path: string, line?: number): string {
+  const at = line ? `&l=${line}` : "";
+  return `${WEB_URL}/vault?f=${encodeURIComponent(path)}${at}`;
+}
+
+withVaultOption(
+  vaultCmd
+    .command("cat")
+    .alias("show")
+    .description(
+      "Print a note (paginated for long ones)\n\n" +
+      "The path may be vault-relative or the bare name a [[wiki link]] would\n" +
+      "use — `Sleep`, `Health/Sleep`, `Areas/Health/Sleep.md` all find the same\n" +
+      "note. A name matching several notes lists them and exits 2.\n\n" +
+      "Examples:\n" +
+      "  cast vault cat Sleep                 # first page (200 lines)\n" +
+      "  cast vault cat Sleep 100:250         # an explicit line range\n" +
+      "  cast vault cat Sleep :50             # the first 50 lines\n" +
+      "  cast vault cat Sleep -p 2 -n         # next page, with line numbers\n" +
+      "  cast vault cat Sleep --full --json   # whole note, machine-readable"
+    )
+    .argument("<path>", "Note path or name")
+    .argument("[range]", "Line range (100:250, 100:, :50, 42) — overrides --page")
+    .option("-p, --page <n>", "Page number (1-based)", "1")
+    .option("-L, --lines <n>", "Lines per page", "200")
+    .option("-n, --line-numbers", "Prefix each line with its number")
+    .option("--full", "Print the entire note without paging")
+    .option("--json", "Output as JSON"),
+).action(async (notePath: string, range: string | undefined, options: any) =>
+  runVault(async () => {
+    const ctx = await openVault(CONFIG_DIR, options.vault);
+    const ref = await resolveNote(ctx, notePath);
+    const content = await readNote(ctx, ref);
+    const lines = content.split("\n");
+    const view = resolveLineRange(lines.length, {
+      range,
+      full: options.full,
+      page: parseInt(options.page, 10) || 1,
+      pageSize: parseInt(options.lines, 10) || 200,
+    });
+    const slice = lines.slice(view.start - 1, view.end);
+
+    if (options.json) {
+      console.log(JSON.stringify({
+        vault: ctx.vault.id,
+        path: ref.path,
+        total_lines: lines.length,
+        start: view.start,
+        end: view.end,
+        content: slice.join("\n"),
+        url: vaultNoteUrl(ref.path),
+      }));
+      return;
+    }
+
+    console.log(`${c.bold}${ref.path}${c.reset} ${c.dim}[${ctx.vault.name}] · ${lines.length} lines${c.reset}\n`);
+    if (!content) {
+      console.log("(empty)");
+    } else if (options.lineNumbers) {
+      slice.forEach((ln, i) => console.log(`${c.dim}${String(view.start + i).padStart(5)}${c.reset}  ${ln}`));
+    } else {
+      console.log(slice.join("\n"));
+    }
+
+    if (view.start > 1 || view.end < lines.length) {
+      const next = view.page < view.pages
+        ? `${c.dim} · next: ${c.reset}${c.cyan}cast vault cat ${ref.path} -p ${view.page + 1}${c.reset}`
+        : "";
+      console.log(`\n${c.dim}─ lines ${view.start}-${view.end} of ${lines.length}${c.reset}${next}`);
+    }
+  }),
+);
+
+withVaultOption(
+  vaultCmd
+    .command("grep")
+    .description(
+      "Search note bodies across the whole vault\n\n" +
+      "Prints every matching line under the note it came from, so a hit reads\n" +
+      "as `path` then `line  text`. The pattern is a regex; one that doesn't\n" +
+      "compile is searched for literally.\n\n" +
+      "Examples:\n" +
+      "  cast vault grep 'deadline'\n" +
+      "  cast vault grep 'TODO' --path 'Projects/**' -C 1\n" +
+      "  cast vault grep 'p0\\\\.' -i --json"
+    )
+    .argument("<pattern>", "Text or regex to find")
+    .option("--path <glob>", "Only notes whose path matches this glob")
+    .option("-i, --ignore-case", "Case-insensitive match")
+    .option("-C, --context <n>", "Lines of context around each match", "0")
+    .option("-n, --limit <n>", "Max matching lines to show", "60")
+    .option("--json", "Output as JSON"),
+).action(async (pattern: string, options: any) =>
+  runVault(async () => {
+    const ctx = await openVault(CONFIG_DIR, options.vault, { content: true });
+    const matcher = buildMatcher(pattern, !!options.ignoreCase);
+    const inPath = options.path ? pathGlobMatcher(options.path) : () => true;
+    const ctxLines = Math.max(0, parseInt(options.context, 10) || 0);
+    const limit = Math.max(1, parseInt(options.limit, 10) || 60);
+
+    const found: { path: string; lines: string[]; hits: number[] }[] = [];
+    let total = 0;
+    for (const [notePath, text] of [...ctx.contents].sort()) {
+      if (!inPath(notePath)) continue;
+      const lines = text.split("\n");
+      const hits = matchingLines(lines, matcher);
+      if (!hits.length) continue;
+      total += hits.length;
+      found.push({ path: notePath, lines, hits });
+    }
+
+    if (options.json) {
+      const matches: unknown[] = [];
+      for (const file of found) {
+        for (const hit of file.hits) {
+          if (matches.length >= limit) break;
+          matches.push({ path: file.path, line: hit + 1, text: file.lines[hit] });
+        }
+      }
+      console.log(JSON.stringify({ vault: ctx.vault.id, total, matches }));
+      return;
+    }
+
+    console.log(
+      `${c.dim}${total} line${total === 1 ? "" : "s"} in ${found.length} note${found.length === 1 ? "" : "s"} match ` +
+      `/${pattern}/${options.ignoreCase ? "i" : ""}${matcher.literal ? " (literal)" : ""}${c.reset}`,
+    );
+    if (!total) return;
+
+    let shown = 0;
+    for (const file of found) {
+      if (shown >= limit) break;
+      const take = file.hits.slice(0, limit - shown);
+      shown += take.length;
+      console.log(`\n${c.bold}${file.path}${c.reset}`);
+      for (const i of contextWindow(take, ctxLines, file.lines.length)) {
+        if (i === null) {
+          console.log(`${c.dim}  ⋮${c.reset}`);
+          continue;
+        }
+        const isHit = take.includes(i);
+        const num = String(i + 1).padStart(5);
+        const text = isHit
+          ? file.lines[i].replace(matcher.all, (m) => `${c.yellow}${m}${c.reset}`)
+          : file.lines[i];
+        console.log(`${isHit ? c.cyan : c.dim}${num}${c.reset}  ${text}`);
+      }
+    }
+    if (total > shown) {
+      console.log(`\n${c.dim}… ${total - shown} more (raise --limit)${c.reset}`);
+    }
+    console.log(`\n${c.dim}Read around a hit: ${c.reset}${c.cyan}cast vault cat <path> <start>:<end>${c.reset}`);
+  }),
+);
+
+withVaultOption(
+  vaultCmd
+    .command("search")
+    .description(
+      "Find notes by title, tag, path and prose\n\n" +
+      "Takes the same operators the vault's search pane does, so a query that\n" +
+      "works in the app works here:\n" +
+      "  tag:health      note carries this tag, or one nested under it\n" +
+      "  path:areas      vault-relative path contains this\n" +
+      "  file:sleep      filename (without extension) contains this\n" +
+      "  \"exact words\"   this phrase, contiguous\n" +
+      "  -draft          drop notes mentioning this\n\n" +
+      "Searches titles, tags and prose. To search line by line, use\n" +
+      "cast vault grep.\n\n" +
+      "Examples:\n" +
+      "  cast vault search 'tag:health sleep'\n" +
+      "  cast vault search 'path:projects \"ship it\"' --json"
+    )
+    .argument("<query...>", "Query, with optional operators")
+    .option("-n, --limit <n>", "Max results", "20")
+    .option("--json", "Output as JSON"),
+).action(async (queryWords: string[], options: any) =>
+  runVault(async () => {
+    const ctx = await openVault(CONFIG_DIR, options.vault, { content: true });
+    const hits = searchNotes(ctx, queryWords.join(" "), Math.max(1, parseInt(options.limit, 10) || 20));
+
+    if (options.json) {
+      console.log(JSON.stringify({
+        vault: ctx.vault.id,
+        results: hits.map((h) => ({ ...h, url: vaultNoteUrl(h.path) })),
+      }));
+      return;
+    }
+    if (!hits.length) {
+      console.log(`${c.dim}No notes match.${c.reset}`);
+      return;
+    }
+    for (const hit of hits) {
+      const tags = hit.tags.length ? ` ${c.dim}${hit.tags.map((t) => `#${t}`).join(" ")}${c.reset}` : "";
+      console.log(`  ${c.cyan}${hit.path}${c.reset} ${hit.title}${tags}`);
+      if (hit.excerpt) console.log(`    ${c.dim}${hit.excerpt}${c.reset}`);
+    }
+  }),
+);
+
+withVaultOption(
+  vaultCmd
+    .command("write")
+    .description(
+      "Create a note, or replace one wholesale\n\n" +
+      "A name that matches no note becomes a new file (gaining `.md` when you\n" +
+      "leave the extension off); a name that matches an existing note needs\n" +
+      "--force, so a create can never silently eat someone's writing. The body\n" +
+      "comes from --content, --content-file, or standard input.\n\n" +
+      "Examples:\n" +
+      "  cast vault write 'Inbox/Idea' -c '# Idea\\n\\nTry the thing.'\n" +
+      "  cast vault write Sleep --content-file draft.md --force\n" +
+      "  cast vault write 'Daily/2026-08-03' <<'EOF'\n" +
+      "  # Today\n" +
+      "  EOF"
+    )
+    .argument("<path>", "Note path or name")
+    .option("-c, --content <text>", "Note body (\\n and \\t are unescaped)")
+    .option("--content-file <path>", "Read the body from a file")
+    .option("--force", "Overwrite an existing note")
+    .option("--json", "Output as JSON"),
+).action(async (notePath: string, options: any) =>
+  runVault(async () => {
+    const ctx = await openVault(CONFIG_DIR, options.vault);
+    const target = await targetNote(ctx, notePath);
+    if (target.exists && !options.force) {
+      throw new VaultCliError(
+        `${target.path} already exists. Pass --force to replace it, or use: cast vault edit ${target.path} --old … --new …`,
+      );
+    }
+    const body = await bodyFromOptions(options);
+    const size = await writeNote(target, body);
+
+    if (options.json) {
+      console.log(JSON.stringify({
+        vault: ctx.vault.id,
+        path: target.path,
+        created: !target.exists,
+        bytes: size,
+        url: vaultNoteUrl(target.path),
+      }));
+      return;
+    }
+    const verb = target.exists ? "replaced" : "created";
+    console.log(`${c.green}ok${c.reset} ${verb} ${c.cyan}${target.path}${c.reset} ${c.dim}${size} bytes${c.reset}`);
+  }),
+);
+
+withVaultOption(
+  vaultCmd
+    .command("edit")
+    .description(
+      "Change part of a note: find & replace, append, or prepend\n\n" +
+      "--old must appear EXACTLY once. Absent exits 1 and repeated exits 2,\n" +
+      "both without touching the file — include more surrounding text to make\n" +
+      "the match unique rather than letting a guess corrupt the note.\n\n" +
+      "Examples:\n" +
+      "  cast vault edit Sleep --old 'bed at 11' --new 'bed at 10'\n" +
+      "  cast vault edit Sleep --append '## Tonight\\n\\n- lights out early'\n" +
+      "  cast vault edit Sleep --prepend '> Reviewed 2026-08-03'"
+    )
+    .argument("<path>", "Note path or name")
+    .option("--old <text>", "Text to find (must be unique in the note)")
+    .option("--new <text>", "Replacement text")
+    .option("--append <text>", "Add to the end, after a blank line")
+    .option("--prepend <text>", "Add to the start, before a blank line")
+    .option("--json", "Output as JSON"),
+).action(async (notePath: string, options: any) =>
+  runVault(async () => {
+    const unescape = (s: string) => s.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+    const ctx = await openVault(CONFIG_DIR, options.vault);
+    const ref = await resolveNote(ctx, notePath);
+    const before = await readNote(ctx, ref);
+
+    let after = before;
+    let what: string;
+    if (options.old !== undefined) {
+      if (options.new === undefined) throw new VaultCliError("--old needs a --new.");
+      after = applyEdit(before, unescape(options.old), unescape(options.new));
+      what = "patched";
+    } else if (options.append !== undefined) {
+      after = joinBody(before, unescape(options.append), "append");
+      what = "appended to";
+    } else if (options.prepend !== undefined) {
+      after = joinBody(before, unescape(options.prepend), "prepend");
+      what = "prepended to";
+    } else {
+      throw new VaultCliError("Pass --old/--new, --append, or --prepend.");
+    }
+
+    const size = await writeNote(ref, after);
+    if (options.json) {
+      console.log(JSON.stringify({
+        vault: ctx.vault.id,
+        path: ref.path,
+        bytes: size,
+        url: vaultNoteUrl(ref.path),
+      }));
+      return;
+    }
+    console.log(`${c.green}ok${c.reset} ${what} ${c.cyan}${ref.path}${c.reset} ${c.dim}${size} bytes${c.reset}`);
+  }),
+);
+
+withVaultOption(
+  vaultCmd
+    .command("rm")
+    .alias("delete")
+    .description(
+      "Move a note to the trash\n\n" +
+      "The note goes to the OS trash (or the vault's own .trash when that is on\n" +
+      "another volume), never an unlink — exactly what deleting from the app\n" +
+      "does. To unregister a whole vault instead, use: cast vault forget\n\n" +
+      "Examples:\n" +
+      "  cast vault rm 'Inbox/Old Idea'"
+    )
+    .argument("<path>", "Note path or name")
+    .option("--json", "Output as JSON"),
+).action(async (notePath: string, options: any) =>
+  runVault(async () => {
+    // The old spelling of `cast vault forget`. Refuse rather than reinterpret:
+    // someone typing a vault root here meant to unregister, not to delete.
+    if (findVault(CONFIG_DIR, notePath)) {
+      throw new VaultCliError(`"${notePath}" is a registered vault. To unregister it: cast vault forget ${notePath}`);
+    }
+    const ctx = await openVault(CONFIG_DIR, options.vault);
+    const ref = await resolveNote(ctx, notePath);
+    const dest = trashNote(ctx, ref);
+    if (options.json) {
+      console.log(JSON.stringify({ vault: ctx.vault.id, path: ref.path, trashed_to: dest }));
+      return;
+    }
+    console.log(`${c.green}ok${c.reset} trashed ${c.cyan}${ref.path}${c.reset}\n  ${c.dim}${dest}${c.reset}`);
+  }),
+);
+
+withVaultOption(
+  vaultCmd
+    .command("mv")
+    .alias("move")
+    .description(
+      "Rename or move a note, repointing the links that pointed at it\n\n" +
+      "Every [[wiki link]] resolving to the note is rewritten to its new name,\n" +
+      "keeping the author's spelling style and any |alias — the same plan the\n" +
+      "app's rename builds. A link whose text no longer matches the file on\n" +
+      "disk is skipped rather than rewritten blind, and reported.\n\n" +
+      "Examples:\n" +
+      "  cast vault mv Sleep 'Areas/Health/Sleep'\n" +
+      "  cast vault mv Sleep Rest --no-rewrite-links"
+    )
+    .argument("<from>", "Note path or name")
+    .argument("<to>", "New path or name")
+    .option("--no-rewrite-links", "Leave inbound links pointing at the old name")
+    .option("--json", "Output as JSON"),
+).action(async (from: string, to: string, options: any) =>
+  runVault(async () => {
+    const ctx = await openVault(CONFIG_DIR, options.vault);
+    const source = await resolveNote(ctx, from);
+    const dest = await targetNote(ctx, to);
+    const result = await moveNote(ctx, source, dest, { rewriteLinks: options.rewriteLinks });
+
+    if (options.json) {
+      console.log(JSON.stringify({ vault: ctx.vault.id, ...result, url: vaultNoteUrl(result.to) }));
+      return;
+    }
+    console.log(`${c.green}ok${c.reset} ${c.cyan}${result.from}${c.reset} ${c.dim}→${c.reset} ${c.cyan}${result.to}${c.reset}`);
+    if (result.rewritten.length) {
+      console.log(`  ${c.dim}links rewritten in ${result.rewritten.length} note${result.rewritten.length === 1 ? "" : "s"}: ${result.rewritten.join(", ")}${c.reset}`);
+    }
+    if (result.skipped) {
+      console.log(`  ${c.yellow}${result.skipped} link${result.skipped === 1 ? "" : "s"} left alone (the note changed since it was indexed)${c.reset}`);
+    }
+  }),
+);
+
+withVaultOption(
+  vaultCmd
+    .command("links")
+    .description(
+      "Show what a note links to, what links back, and what resolves to nothing\n\n" +
+      "Backlinks are found by reading every note in the vault — a link INTO\n" +
+      "this note lives in some other file, and nothing short of reading them\n" +
+      "all can know which. A few thousand notes takes tens of milliseconds.\n\n" +
+      "Examples:\n" +
+      "  cast vault links Sleep\n" +
+      "  cast vault links Sleep --json"
+    )
+    .argument("<path>", "Note path or name")
+    .option("--json", "Output as JSON"),
+).action(async (notePath: string, options: any) =>
+  runVault(async () => {
+    const ctx = await openVault(CONFIG_DIR, options.vault, { content: true });
+    const ref = await resolveNote(ctx, notePath);
+    const report = linkReport(ctx, ref.path);
+
+    if (options.json) {
+      console.log(JSON.stringify({
+        vault: ctx.vault.id,
+        path: report.path,
+        outgoing: report.outgoing.map((l) => ({
+          target: l.link.target,
+          resolved: l.resolved,
+          line: l.link.line,
+          embed: l.link.isEmbed,
+          ambiguous: l.isAmbiguous,
+        })),
+        backlinks: report.backlinks.map((b) => ({ source: b.source, line: b.link.line, raw: b.link.raw })),
+        unresolved: report.unresolved,
+      }));
+      return;
+    }
+
+    console.log(`${c.bold}${report.path}${c.reset}\n`);
+    const resolved = report.outgoing.filter((l) => l.resolved);
+    console.log(`${c.dim}outgoing (${resolved.length})${c.reset}`);
+    if (!resolved.length) console.log(`  ${c.dim}none${c.reset}`);
+    for (const link of resolved) {
+      const amb = link.isAmbiguous ? ` ${c.yellow}(ambiguous)${c.reset}` : "";
+      console.log(`  ${c.dim}${String(link.link.line).padStart(5)}${c.reset}  ${c.cyan}${link.resolved}${c.reset}${amb}`);
+    }
+
+    console.log(`\n${c.dim}backlinks (${report.backlinks.length})${c.reset}`);
+    if (!report.backlinks.length) console.log(`  ${c.dim}none${c.reset}`);
+    for (const back of report.backlinks) {
+      console.log(`  ${c.dim}${String(back.link.line).padStart(5)}${c.reset}  ${c.cyan}${back.source}${c.reset} ${c.dim}${back.link.raw}${c.reset}`);
+    }
+
+    console.log(`\n${c.dim}unresolved (${report.unresolved.length})${c.reset}`);
+    if (!report.unresolved.length) console.log(`  ${c.dim}none${c.reset}`);
+    for (const target of report.unresolved) console.log(`  ${c.yellow}${target}${c.reset}`);
+  }),
+);
+
+withVaultOption(
+  vaultCmd
+    .command("open")
+    .description(
+      "Print the codecast link to a note, to hand a human something clickable\n\n" +
+      "Examples:\n" +
+      "  cast vault open Sleep\n" +
+      "  cast vault open Sleep --line 42"
+    )
+    .argument("<path>", "Note path or name")
+    .option("--line <n>", "Anchor the link at a line")
+    .option("--json", "Output as JSON"),
+).action(async (notePath: string, options: any) =>
+  runVault(async () => {
+    const ctx = await openVault(CONFIG_DIR, options.vault);
+    const ref = await resolveNote(ctx, notePath);
+    const url = vaultNoteUrl(ref.path, options.line ? parseInt(options.line, 10) : undefined);
+    if (options.json) {
+      console.log(JSON.stringify({ vault: ctx.vault.id, path: ref.path, url }));
+      return;
+    }
+    console.log(url);
+  }),
+);
 
 program
   .command("rename")
@@ -8097,6 +8637,16 @@ program
         changed = true;
       }
 
+      // Remove the shared object-reference snippet
+      const refStart = content.indexOf("## Referencing objects");
+      if (refStart !== -1 && content.includes(REFERENCES_SNIPPET_END)) {
+        const refEndMarker = content.indexOf(REFERENCES_SNIPPET_END, refStart);
+        let refEnd = refEndMarker !== -1 ? refEndMarker + REFERENCES_SNIPPET_END.length : content.length;
+        if (content[refEnd] === "\n") refEnd++;
+        content = content.slice(0, refStart) + content.slice(refEnd);
+        changed = true;
+      }
+
       // Remove messaging snippet
       const msgStart = content.indexOf("## Messaging");
       if (msgStart !== -1 && content.includes(MESSAGING_SNIPPET_END)) {
@@ -11137,7 +11687,9 @@ trigger
       }
 
       const taskId = result.task_id;
-      const shortId = taskId.slice(-8);
+      // Real short id ("tr-42") when the backend allocates one; the last-8
+      // suffix is the pre-short-id fallback and still resolves via resolveTaskId.
+      const shortId = result.short_id || taskId.slice(-8);
 
       if (schedule_type === "recurring") {
         console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} every ${options.every}: ${c.bold}${title}${c.reset}`);
@@ -11207,7 +11759,7 @@ trigger
       };
 
       for (const t of filtered) {
-        const shortId = t._id.slice(-8);
+        const shortId = t.short_id || t._id.slice(-8);
         const color = statusColorMap[t.status] || "";
         const statusStr = `${color}${t.status.padEnd(10)}${c.reset}`;
         const scheduleInfo = t.schedule_type === "recurring"
@@ -11426,11 +11978,19 @@ async function taskAction(action: string, id: string, successMsg: string): Promi
   }
 }
 
+/**
+ * Turn whatever the user (or an agent) typed into a trigger's Convex id.
+ * Accepts, in order: the short id ("tr-42" — what we print and what agents
+ * quote), a full Convex id, or a trailing chunk of one (the pre-short-id
+ * handle, still in old prompts and scrollback).
+ */
 async function resolveTaskId(config: any, siteUrl: string, idInput: string): Promise<string | null> {
-  // If it looks like a full Convex ID, use as-is
-  if (idInput.length > 16) return idInput;
+  const input = idInput.trim();
+  // A full Convex id needs no lookup — but a short id is short, so check that
+  // shape first rather than by length alone.
+  const isShortId = /^tr-\w+$/i.test(input);
+  if (!isShortId && input.length > 16) return input;
 
-  // Otherwise, search by suffix
   try {
     const response = await cliFetchRead(`${siteUrl}/cli/tasks/list`, {
       method: "POST",
@@ -11442,9 +12002,15 @@ async function resolveTaskId(config: any, siteUrl: string, idInput: string): Pro
       console.error("Failed to fetch tasks");
       return null;
     }
-    const matches = tasks.filter((t: any) => t._id.endsWith(idInput));
+    const exact = tasks.find((t: any) => t.short_id && t.short_id.toLowerCase() === input.toLowerCase());
+    if (exact) return exact._id;
+    if (isShortId) {
+      console.error(`No trigger found matching: ${input}`);
+      return null;
+    }
+    const matches = tasks.filter((t: any) => t._id.endsWith(input));
     if (matches.length === 0) {
-      console.error(`No task found matching: ${idInput}`);
+      console.error(`No task found matching: ${input}`);
       return null;
     }
     if (matches.length > 1) {

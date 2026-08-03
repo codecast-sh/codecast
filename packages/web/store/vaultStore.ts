@@ -324,6 +324,12 @@ let bookmarkSeq = 0;
 // Last-opened vault id, so the IDB cache can paint on a boot where the daemon
 // is unreachable (discovery failing must not blank a vault we've already seen).
 const LAST_VAULT_KEY = "cast_vault_last";
+// The roots list itself, cached so the PICKER paints too. localStorage rather
+// than IDB deliberately: it reads synchronously, so the list is in the store's
+// initial state and the first render already has it. Discovering the machine's
+// projects costs the daemon a readdir per project, and first paint must never
+// wait on that.
+const VAULT_ROOTS_KEY = "cast_vault_roots";
 
 function readLastVaultId(): string | null {
   try {
@@ -336,6 +342,50 @@ function readLastVaultId(): string | null {
 function writeLastVaultId(id: string): void {
   try {
     localStorage.setItem(LAST_VAULT_KEY, id);
+  } catch {}
+}
+
+function readCachedVaults(): VaultInfo[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(VAULT_ROOTS_KEY) ?? "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (v): v is VaultInfo =>
+        !!v && typeof v === "object" && typeof v.id === "string" && typeof v.root === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedVaults(vaults: VaultInfo[]): void {
+  try {
+    localStorage.setItem(VAULT_ROOTS_KEY, JSON.stringify(vaults));
+  } catch {}
+}
+
+// The vault LIST lives in localStorage rather than in the IndexedDB cache
+// beside the file tables, and deliberately: the picker has to be populated on
+// the very first render, and an IDB read — however fast — is a frame of empty
+// list first. The whole list is a few hundred short records.
+const VAULT_LIST_KEY = "cast_vault_list";
+
+function readCachedVaults(): VaultInfo[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(VAULT_LIST_KEY) ?? "null");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (v): v is VaultInfo =>
+        !!v && typeof v === "object" && typeof v.id === "string" && typeof v.root === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedVaults(vaults: VaultInfo[]): void {
+  try {
+    localStorage.setItem(VAULT_LIST_KEY, JSON.stringify(vaults));
   } catch {}
 }
 
@@ -603,7 +653,7 @@ async function syncActiveVault(ep: VaultEndpoint, vaultId: string): Promise<void
 export const useVaultStore = create<VaultState>((set, get) => ({
   connection: "idle",
   endpoint: null,
-  vaults: [],
+  vaults: readCachedVaults(),
   remoteVaults: [],
   isRemote: false,
   unreachableReason: "none",
@@ -737,6 +787,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     convexRef = convex;
     const st = get();
     if (st.connection === "discovering") return;
+    // The picker before anything else: this is synchronous, so the list of
+    // vaults and projects is on screen in the first frame rather than after
+    // discovery, the roots call and a relay round-trip.
+    if (!st.vaults.length) {
+      const cached = readCachedVaults();
+      if (cached.length) set({ vaults: cached });
+    }
     set({ connection: st.scannedAt ? st.connection : "discovering" });
 
     // Local-first boot: paint the last vault's IDB cache NOW, in parallel with
@@ -800,6 +857,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       return;
     }
     set({ endpoint: ep, vaults, unreachableReason: "none", unreachableDetail: null });
+    // Seeds the picker on the next cold boot, before discovery answers.
+    writeCachedVaults(vaults);
 
     // Remote mirrors are additive: they list alongside local vaults so a vault
     // from another machine is reachable without leaving the surface.

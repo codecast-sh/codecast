@@ -277,21 +277,48 @@ export const getConversationOwner = query({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
     const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id.toString() !== userId.toString()) return null;
-    const owner = (conv as any).owner_device_id ?? null;
-    let owner_is_remote = false;
-    let owner_online = false;
-    if (owner) {
-      const ownerDevice = await ctx.db
-        .query("devices")
-        .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", owner))
-        .first();
-      owner_is_remote = !!ownerDevice?.is_remote;
-      owner_online = !!ownerDevice && Date.now() - ownerDevice.last_seen < DEVICE_ONLINE_MS;
-    }
-    return { owner_device_id: owner, owner_is_remote, owner_online };
+    if (!conv) return null;
+    // Access, not identity. A session you OWN but did not author — one assigned
+    // to you from another account — is still yours to resolve. The bare user_id
+    // comparison this replaced returned null for those, and every caller reads
+    // null as "unowned" and carries on, so the guard that stops one machine from
+    // running a session another machine already owns failed open on exactly the
+    // sessions two accounts share.
+    if ((await checkConversationAccess(ctx, userId, conv as any)) === "denied") return null;
+    return await resolveOwnerDeviceView(ctx, conv as any);
   },
 });
+
+/**
+ * Owner device id of a conversation plus whether that device is a remote box and
+ * currently online. Split out from the query so the scoping rule is testable.
+ *
+ * The device row is looked up under the conversation's AUTHOR, never the caller.
+ * owner_device_id is always claimed by the account that runs the session, so for
+ * a session one account runs and another owns, a lookup scoped to the caller
+ * finds nothing — and a missing row reads as offline, reporting a live owner as
+ * dead. Callers treat that as "unowned" and proceed, which is the opposite of
+ * what the guard is for.
+ */
+export async function resolveOwnerDeviceView(
+  ctx: { db: any },
+  conv: { user_id: any; owner_device_id?: string | null },
+  now: number = Date.now(),
+): Promise<{ owner_device_id: string | null; owner_is_remote: boolean; owner_online: boolean }> {
+  const owner = conv.owner_device_id ?? null;
+  if (!owner) return { owner_device_id: null, owner_is_remote: false, owner_online: false };
+  const ownerDevice = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) =>
+      q.eq("user_id", conv.user_id).eq("device_id", owner),
+    )
+    .first();
+  return {
+    owner_device_id: owner,
+    owner_is_remote: !!ownerDevice?.is_remote,
+    owner_online: !!ownerDevice && now - ownerDevice.last_seen < DEVICE_ONLINE_MS,
+  };
+}
 
 /** Resolve a session_id to its conversation (api_token authed) for the move flow. */
 export const resolveConversationBySession = query({

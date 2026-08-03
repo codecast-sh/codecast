@@ -1,9 +1,8 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useAuthToken } from "@convex-dev/auth/react";
 import { useConvex, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { AUTH_STORAGE_NAMESPACE } from "@/lib/localAuth";
-import { AppLoader } from "@/components/AppLoader";
 import {
   bindPrincipalCache,
   discardConversationMessageWrites,
@@ -23,15 +22,10 @@ import { DexiePrincipalStoreFactory } from "@/store/local-first/persistence/dexi
 import { DexieLauncherStore } from "@/store/local-first/persistence/launcher";
 import { PrincipalRuntime } from "@/store/local-first/principalRuntime";
 import {
-  canRenderPrincipalProviderSubtree,
   PrincipalOfflineResolutionCoordinator,
   resolvePrincipalBoot,
-  type CredentialResolution,
 } from "@/store/local-first/principalVerification";
-import {
-  registerPrincipalDispatchRuntime,
-  updatePrincipalDispatchCorrelation,
-} from "@/store/local-first/dispatchGate";
+import { registerPrincipalDispatchRuntime } from "@/store/local-first/dispatchGate";
 import { requestPersistentStorage } from "@/store/local-first/storagePersistence";
 import { asPrincipalId, type PrincipalLifecycle } from "@/store/local-first/types";
 
@@ -109,27 +103,12 @@ const PrincipalLocalStateContext = createContext<{
   state: PrincipalLifecycle;
 } | null>(null);
 
-export type { CredentialResolution } from "@/store/local-first/principalVerification";
-
-function PrincipalLocalStateFailure() {
-  return (
-    <main className="min-h-screen bg-sol-bg text-sol-text flex items-center justify-center p-6">
-      <section className="max-w-md rounded-xl border border-sol-border bg-sol-card p-6 shadow-xl">
-        <h1 className="text-base font-semibold">Local state is unavailable</h1>
-        <p className="mt-2 text-sm text-sol-text-muted">
-          CodeCast could not safely verify the account bound to this browser. No cached account data was opened.
-        </p>
-        <button
-          className="mt-5 rounded-md border border-sol-border px-3 py-2 text-sm hover:border-sol-cyan"
-          onClick={() => window.location.reload()}
-        >
-          Retry
-        </button>
-      </section>
-    </main>
-  );
-}
-
+/**
+ * Rendering is never gated on this provider: children paint immediately from
+ * whatever the store holds, and the resolution effect below opens the durable
+ * namespace and hydrates it in the background. Server verification upgrades
+ * the open store for authoritative apply; it does not sit in front of the UI.
+ */
 export function PrincipalLocalStateProvider({ children }: { children: React.ReactNode }) {
   const runtime = useMemo(getRuntime, []);
   const offlineResolution = useMemo(() => getOfflineResolution(runtime), [runtime]);
@@ -137,11 +116,6 @@ export function PrincipalLocalStateProvider({ children }: { children: React.Reac
   const token = useAuthToken();
   const convex = useConvex();
   const { isAuthenticated } = useConvexAuth();
-  // Exact access-token correlation is deliberately kept in memory. A token
-  // change invalidates render permission synchronously, before the effect that
-  // resolves/opens/clears any principal store gets a chance to run.
-  const [authorizedToken, setAuthorizedToken] = useState<string | null>(null);
-  const [credentialResolution, setCredentialResolution] = useState<CredentialResolution | null>(null);
   const verificationCaptureRef = useRef({ token, isAuthenticated, generation: 0 });
   if (verificationCaptureRef.current.token !== token ||
     verificationCaptureRef.current.isAuthenticated !== isAuthenticated) {
@@ -166,35 +140,25 @@ export function PrincipalLocalStateProvider({ children }: { children: React.Reac
       } catch (error) {
         if (!isCurrentCapture()) return;
         try { await runtime.failClosed("credential-evidence-read-failed"); } catch {}
-        setAuthorizedToken(null);
-        setCredentialResolution({ token: capture.token, status: "error" });
         return;
       }
       if (!isCurrentCapture()) return;
       if (!evidence) {
         await runtime.resolveOffline(null);
-        if (isCurrentCapture()) {
-          setAuthorizedToken(null);
-          setCredentialResolution({ token: capture.token, status: "none" });
-        }
         return;
       }
 
       // Cached rendering and server verification are two phases, not competing
       // auth branches. Open the exact previously verified credential namespace
       // first; the unique server probe upgrades it in place for apply/dispatch.
-      const outcome = await resolvePrincipalBoot({
+      await resolvePrincipalBoot({
         token: capture.token,
         evidence,
         serverAuthenticated: capture.isAuthenticated,
         isCurrent: isCurrentCapture,
         resolveOffline: async (credentialBinding) =>
           await offlineResolution.resolve(credentialBinding),
-        onOfflineReady: () => {
-          if (!isCurrentCapture()) return;
-          setAuthorizedToken(capture.token);
-          setCredentialResolution({ token: capture.token, status: "ready" });
-        },
+        onOfflineReady: () => {},
         // A reactive useQuery value may briefly belong to the previous access
         // token. This unique one-shot query always round-trips, while the local
         // store opens in parallel. Late A responses remain observation-only.
@@ -222,22 +186,9 @@ export function PrincipalLocalStateProvider({ children }: { children: React.Reac
           console.warn("[local-first] principal verification unavailable; using cached state", error);
         },
       });
-      if (!isCurrentCapture() || outcome.kind === "stale" || outcome.kind === "offline-ready") {
-        return;
-      }
-      const ready = outcome.kind === "ready";
-      setAuthorizedToken(ready ? capture.token : null);
-      setCredentialResolution({
-        token: capture.token,
-        status: ready ? "ready" : "unverified",
-      });
     })().catch(async (error) => {
       if (!isCurrentCapture()) return;
       try { await runtime.failClosed("principal-runtime-failed"); } catch {}
-      if (isCurrentCapture()) {
-        setAuthorizedToken(null);
-        setCredentialResolution({ token: capture.token, status: "error" });
-      }
       console.error("[local-first] principal runtime failed", error);
     });
     return () => { cancelled = true; };
@@ -264,22 +215,9 @@ export function PrincipalLocalStateProvider({ children }: { children: React.Reac
   }, [runtime]);
 
   const value = useMemo(() => ({ runtime, state }), [runtime, state]);
-  const mayRender = canRenderPrincipalProviderSubtree({
-    state,
-    token,
-    authorizedToken,
-    credentialResolution,
-  });
-  updatePrincipalDispatchCorrelation(
-    mayRender && state.phase === "server-verified" ? state.principalEpoch : null,
-  );
-  useEffect(() => () => updatePrincipalDispatchCorrelation(null), []);
   return (
     <PrincipalLocalStateContext.Provider value={value}>
-      {state.phase === "failed" ||
-        (credentialResolution?.token === token && credentialResolution.status === "error")
-        ? <PrincipalLocalStateFailure />
-        : mayRender ? children : <AppLoader />}
+      {children}
     </PrincipalLocalStateContext.Provider>
   );
 }
