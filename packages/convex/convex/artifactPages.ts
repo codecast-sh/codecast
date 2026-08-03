@@ -73,7 +73,6 @@ function barHtml(o: BrandOpts): string {
   const interactive = !!o.metaUrl;
   const chevronSvg = `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`;
   const bubbleSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
-  const linkSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`;
   const verChip = interactive
     ? `<button id="__cc_ver" type="button" title="Version history"${viewingOld ? ' class="__cc_old"' : ""}>v${version}${viewingOld ? " (old)" : ""} ${chevronSvg}</button>`
     : "";
@@ -85,10 +84,10 @@ function barHtml(o: BrandOpts): string {
     ? `<button id="__cc_cbtn" type="button" title="Comment on this page">${bubbleSvg}<span id="__cc_ccount">${o.commentCount || ""}</span></button>`
     : "";
   const menuBtn = interactive ? `<button id="__cc_menu" type="button" title="More">⋯</button>` : "";
-  const copyBtn = `<button id="__cc_copy" type="button" data-url="${escAttr(o.shareUrl)}">${linkSvg}<span id="__cc_copyt">Copy link</span></button>`;
   const cfg = {
     metaUrl: o.metaUrl ?? "",
     apiBase: o.apiBase ?? "",
+    shareUrl: o.shareUrl,
     slug: o.slug ?? "",
     version,
     currentVersion,
@@ -265,7 +264,6 @@ function barHtml(o: BrandOpts): string {
      and the media query alone would never fire there. */
   @media (max-width: 640px) {
     #__cc_bar .__cc_when { display: none; }
-    #__cc_bar #__cc_copyt { display: none; }
     .__cc_panel { left: 0; right: 0; top: auto; bottom: 0; max-width: none; min-width: 0; max-height: 78vh;
       border-radius: 16px 16px 0 0; padding: 8px 10px calc(14px + env(safe-area-inset-bottom));
       box-shadow: 0 -8px 32px var(--cc-shadow); transform: translateY(24px); }
@@ -302,7 +300,6 @@ function barHtml(o: BrandOpts): string {
   <span class="__cc_when" id="__cc_when" data-ts="${o.updatedAt}">updated ${escAttr(when)}</span>
   ${verChip}
   ${commentsBtn}
-  ${copyBtn}
   ${menuBtn}
 </div>
 <div id="__cc_hist" class="__cc_panel" hidden></div>
@@ -346,18 +343,12 @@ function barHtml(o: BrandOpts): string {
     return s<=0?"expired":s<3600?"in "+Math.ceil(s/60)+"m":s<86400?"in "+Math.ceil(s/3600)+"h":"in "+Math.ceil(s/86400)+"d";};
   var w=document.getElementById("__cc_when");
   if(w){var ts=+w.getAttribute("data-ts");var tick=function(){w.textContent="updated "+rel(ts);};tick();setInterval(tick,6e4);}
-  var copyBtn=document.getElementById("__cc_copy");
   var copyText=function(u,done){
     var fallback=function(){var t=document.createElement("textarea");t.value=u;t.style.position="fixed";t.style.opacity="0";
       host().appendChild(t);t.select();try{document.execCommand("copy");done();}catch(e){window.prompt("Copy:",u);}t.remove();};
     if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(u).then(done,fallback);}else{fallback();}
   };
   var flashLabel=function(btn,label,back){btn.textContent=label;setTimeout(function(){btn.textContent=back;},1400);};
-  if(copyBtn)copyBtn.addEventListener("click",function(){
-    // Flash the label span, not the button — the button also holds the icon.
-    var t=document.getElementById("__cc_copyt");
-    copyText(copyBtn.getAttribute("data-url"),function(){if(t)flashLabel(t,"Copied","Copy link");});
-  });
   if(!CC.metaUrl)return;
   var api=function(path,body){return fetch(CC.apiBase+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});};
   // View beacon — one per page load; carries the gate email when present.
@@ -782,7 +773,7 @@ function barHtml(o: BrandOpts): string {
 
     mgr.appendChild(el("div","__cc_h2","Links"));
     var lr=el("div","__cc_chips");
-    var base=copyBtn?copyBtn.getAttribute("data-url"):location.href.split("#")[0];
+    var base=CC.shareUrl||location.href.split("#")[0];
     var cm=el("button","__cc_btn","Copy manage link");cm.type="button";
     cm.addEventListener("click",function(){copyText(base+"#o="+ownerKey,function(){flashLabel(cm,"Copied","Copy manage link");});});
     lr.appendChild(cm);
@@ -832,6 +823,12 @@ function barHtml(o: BrandOpts): string {
       var add=function(label,fn){var a=document.createElement("a");a.className="__cc_row";a.href="#";
         var s=document.createElement("span");s.textContent=label;a.appendChild(s);
         a.addEventListener("click",function(ev){ev.preventDefault();fn();});menu.appendChild(a);return a;};
+      // Copy moved off the bar into this menu; the row flashes in place.
+      var cp=add("Copy link",function(){});
+      cp.addEventListener("click",function(){
+        var s=cp.querySelector("span");
+        copyText(CC.shareUrl||location.href.split("#")[0],function(){if(s)flashLabel(s,"Copied","Copy link");setTimeout(closeAll,900);});
+      });
       add("View source",function(){var x={src:1};if(CC.version!==CC.currentVersion)x.v=CC.version;location.href=withQ(x);});
       if(ownerKey||editKey||CC.editMode==="link"){
         add("Edit this page",function(){location.href=withQ({edit:1});});
