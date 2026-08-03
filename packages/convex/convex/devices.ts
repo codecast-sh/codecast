@@ -13,6 +13,7 @@ import {
   type RoutableDevice,
 } from "./deviceRouting";
 import { normalizeProjectPath } from "./projectPaths";
+import { checkConversationAccess } from "./privacy";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
 
 async function getAuthenticatedUserId(
@@ -1036,5 +1037,50 @@ export const setConversationOwner = mutation({
     if (conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
     await ctx.db.patch(args.conversation_id, { owner_device_id: args.owner_device_id });
     return { ok: true, owner_device_id: args.owner_device_id ?? null };
+  },
+});
+
+/**
+ * Resolve the device a conversation RUNS ON for display, across account
+ * boundaries. `listDevices` is strictly per-user, so a session owned by
+ * another account's machine (e.g. the shared agent box: its daemon
+ * authenticates as the bot account while the session is assigned to a
+ * founder) rendered as "Unassigned" in the web pill even though it has an
+ * owner device. Access is gated on the CONVERSATION (checkConversationAccess)
+ * — never on device ownership — and only display fields are returned. The
+ * device row is looked up under the conversation's RUNNER account
+ * (conv.user_id): the daemon that stamped owner_device_id authenticates as
+ * that account, so legacy shared/cloned device ids under other users can't
+ * shadow the real machine.
+ */
+export const ownerDeviceDisplay = query({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return null;
+    if ((await checkConversationAccess(ctx, userId, conv as any)) === "denied") return null;
+    const ownerDeviceId = (conv as any).owner_device_id as string | undefined;
+    if (!ownerDeviceId) return null;
+    const row = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) =>
+        q.eq("user_id", (conv as any).user_id).eq("device_id", ownerDeviceId),
+      )
+      .first();
+    if (!row) return null;
+    return {
+      device_id: row.device_id,
+      label: row.label,
+      platform: row.platform,
+      is_remote: row.is_remote ?? false,
+      last_seen: row.last_seen,
+      online: Date.now() - row.last_seen < DEVICE_ONLINE_MS,
+      is_mine: row.user_id.toString() === userId.toString(),
+    };
   },
 });

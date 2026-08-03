@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
@@ -40,8 +41,12 @@ export type Device = {
 export function deviceDisplayName(d: Device | undefined | null): string {
   if (!d) return "Unknown device";
   if (d.is_remote) return "Remote Mac";
-  // "macOS - MacBook-Pro-4.local" → "MacBook-Pro-4"
-  const stripped = d.label.replace(/^(macOS|Linux|Windows)\s*-\s*/i, "").replace(/\.local$/i, "");
+  // "macOS - MacBook-Pro-4.local" → "MacBook-Pro-4";
+  // "macOS - ip-172-31-29-96.us-east-2.compute.internal" → "ip-172-31-29-96"
+  const stripped = d.label
+    .replace(/^(macOS|Linux|Windows)\s*-\s*/i, "")
+    .replace(/\.local$/i, "")
+    .replace(/\.([a-z0-9-]+\.)*(compute\.)?internal$/i, "");
   return stripped || d.label;
 }
 
@@ -138,6 +143,31 @@ export function useDevices() {
 }
 
 /**
+ * Resolve a session's owner device when it isn't one of the viewer's own — a
+ * session can run on a teammate's or a shared bot machine (its daemon
+ * authenticates as another account) while being assigned to the viewer, and
+ * `listDevices` is strictly per-user. Server-side access is checked on the
+ * conversation, so this only fires when the viewer's own list missed and a
+ * conversation id is available. Returns undefined while loading, null when
+ * there is nothing to resolve.
+ */
+export function useForeignOwnerDevice(
+  conversationId: string | null | undefined,
+  needed: boolean,
+): (Device & { is_mine?: boolean }) | null | undefined {
+  const res = useQuery(
+    api.devices.ownerDeviceDisplay,
+    needed && conversationId
+      ? { conversation_id: conversationId as Id<"conversations"> }
+      : "skip",
+  );
+  if (!needed || !conversationId) return null;
+  if (res === undefined) return undefined; // loading
+  if (!res) return null;
+  return { ...res, local_project_roots: [] };
+}
+
+/**
  * Compact chip showing which device a session runs on + its online state. Clicking
  * is handled by the parent (usually opens the actions menu). Renders nothing until
  * devices load or when there's no owner (auto-routing will pick one on next send).
@@ -193,7 +223,11 @@ export function RunOnDeviceItems({
   conversationId: string;
   ownerDeviceId?: string | null;
 }) {
-  const { locals, remotes } = useDevices();
+  const { byId, locals, remotes, loaded } = useDevices();
+  const foreignOwner = useForeignOwnerDevice(
+    conversationId,
+    loaded && !!ownerDeviceId && !byId.get(ownerDeviceId),
+  );
   const move = useMoveSessionToDevice();
   const runHere = (d: Device) => move(conversationId, { device_id: d.device_id, is_remote: false, label: deviceDisplayName(d) });
   const toRemote = (d: Device) => move(conversationId, { device_id: d.device_id, is_remote: true, label: deviceDisplayName(d) });
@@ -201,6 +235,16 @@ export function RunOnDeviceItems({
   return (
     <>
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Run on device · which machine</DropdownMenuLabel>
+      {foreignOwner && (
+        <DropdownMenuItem disabled>
+          <DeviceIcon d={foreignOwner} className="w-3 h-3 mr-1.5" />
+          <span className="flex-1 truncate">{deviceDisplayName(foreignOwner)}</span>
+          <span className="ml-2 flex items-center gap-1 text-[10px] text-gray-400">
+            running here · shared
+            <DeviceDot online={foreignOwner.online} />
+          </span>
+        </DropdownMenuItem>
+      )}
       {locals.map((d) => {
         const isOwner = d.device_id === ownerDeviceId;
         return (
