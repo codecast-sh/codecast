@@ -435,9 +435,16 @@ describe("classifyWorkState", () => {
   }
 
   test("active agent statuses → working", () => {
-    for (const agentStatus of ["working", "thinking", "compacting", "connected", "starting", "resuming"]) {
+    for (const agentStatus of ["working", "thinking", "compacting", "connected", "starting", "resuming", "waiting"]) {
       expect(classifyWorkState(wsi({ agentStatus }))).toBe("working");
     }
+  });
+
+  test("waiting (turn ended, background task open) files as working even when settled", () => {
+    // The daemon reports "waiting" when a turn ended with a live run_in_background
+    // command or Monitor — the harness will re-invoke the agent, so the ball is
+    // NOT in the user's court and the session must not land in NEEDS INPUT.
+    expect(classifyWorkState(wsi({ agentStatus: "waiting", isIdle: true }))).toBe("working");
   });
 
   test("deliverable pending work on a live daemon → working", () => {

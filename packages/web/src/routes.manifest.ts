@@ -89,6 +89,7 @@ const Support = lazy(() => import("@/app/(marketing)/support/page"));
 const Terms = lazy(() => import("@/app/(marketing)/terms/page"));
 const Changelog = lazy(() => import("@/app/(marketing)/changelog/page"));
 const Pricing = lazy(() => import("@/app/(marketing)/pricing/page"));
+const Download = lazy(() => import("@/app/(marketing)/download/page"));
 const BlogIndex = lazy(() => import("@/app/(marketing)/blog/page"));
 const BlogGitBlame = lazy(() => import("@/app/(marketing)/blog/git-blame-for-ai-agents/page"));
 
@@ -190,6 +191,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "terms", component: cast(Terms), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "changelog", component: cast(Changelog), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "pricing", component: cast(Pricing), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "download", component: cast(Download), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog", component: cast(BlogIndex), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/git-blame-for-ai-agents", component: cast(BlogGitBlame), layout: "marketing", guestOk: true, guestKind: "public" },
 
