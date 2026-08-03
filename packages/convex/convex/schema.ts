@@ -1374,8 +1374,17 @@ export default defineSchema({
       branch: v.optional(v.string()),
       fetched_at: v.optional(v.number()),
       repaired_from: v.optional(v.string()),
+      // Fetch fails with an auth error even via the device key: the machine
+      // needs to be granted repo access (the devices page renders the grant card).
+      needs_access: v.optional(v.boolean()),
+      // "device" when the per-device fallback git key is the identity in use.
+      identity: v.optional(v.string()),
       error: v.optional(v.string()),
     }))),
+    // The device's PUBLIC git key (ed25519), heartbeat-reported. Not a secret —
+    // it exists precisely to be pasted into GitHub/GitLab to grant this machine
+    // repo access. The private half never leaves the device.
+    git_pubkey: v.optional(v.string()),
     // Saved CC account profiles on this machine (names/emails/tiers only,
     // never tokens) — heartbeat-reported, drives the web account switcher.
     cc_accounts: v.optional(ccAccountsValidator),

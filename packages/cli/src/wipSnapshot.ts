@@ -163,7 +163,14 @@ export async function createWipSnapshot(cwd: string): Promise<WipSnapshot | null
  */
 export async function pushWipSnapshot(
   cwd: string,
-  opts: { remote: string; conversationIds: string[]; sha: string },
+  opts: {
+    remote: string;
+    conversationIds: string[];
+    sha: string;
+    /** Identity override — the device fallback key when it is the credential
+     * that works for this repo (gitIdentity.gitEnvFor). */
+    env?: NodeJS.ProcessEnv;
+  },
 ): Promise<{ ok: boolean; error?: string; permanent?: boolean }> {
   if (!opts.conversationIds.length) return { ok: true };
   try {
@@ -177,7 +184,7 @@ export async function pushWipSnapshot(
       "--force",
       opts.remote,
       ...opts.conversationIds.map((id) => `${opts.sha}:${wipRef(id)}`),
-    ]);
+    ], opts.env);
     return { ok: true };
   } catch (e) {
     const err = e as { stderr?: string | Buffer; message?: string };

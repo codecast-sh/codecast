@@ -32,6 +32,14 @@
 
 import { execFile } from "./proc.js";
 import { promisify } from "node:util";
+import {
+  deviceKeyEnv,
+  gitEnvFor,
+  identityFor,
+  isGitAuthError,
+  isSshRemote,
+  recordIdentity,
+} from "./gitIdentity.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,6 +65,13 @@ export interface RepoPlaneState {
   fetched_at?: number;
   /** Previous origin value when this sweep rewrote it. */
   repaired_from?: string;
+  /** True when fetch fails with an AUTH error even after trying the device
+   * key: the machine needs to be granted access to the remote. The web
+   * devices page turns this into a guided grant card. */
+  needs_access?: boolean;
+  /** "device" when the per-device fallback key is the identity that works
+   * for this repo (gitIdentity.ts); absent = the user's own credentials. */
+  identity?: "device";
   error?: string;
 }
 
@@ -72,6 +87,10 @@ export interface GitPlaneDeps {
   /** Origin was repaired, or a failing fetch recovered: the repo's remote is
    * usable again, so retired per-conversation push state should be dropped. */
   onRemoteUsable: (root: string, conversationIds: string[]) => void;
+  /** Mint (or return) the device's fallback git key when a fetch hits an auth
+   * wall (gitIdentity.ensureDeviceGitKey bound to the device label). Absent =
+   * no fallback identity; auth failures surface as needs_access directly. */
+  mintDeviceKey?: () => Promise<string | undefined>;
   log: (line: string) => void;
 }
 
@@ -81,11 +100,12 @@ export function isRendezvousUrl(url: string | undefined): url is string {
   return !url.startsWith("/") && !url.startsWith("file://") && !url.startsWith(".");
 }
 
-async function git(cwd: string, args: string[]): Promise<string> {
+async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
     encoding: "utf-8",
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: 8 * 1024 * 1024,
+    ...(env ? { env } : {}),
   });
   return stdout.trim();
 }
@@ -96,6 +116,11 @@ async function gitTry(cwd: string, args: string[]): Promise<string | undefined> 
   } catch {
     return undefined;
   }
+}
+
+function stderrOf(e: unknown): string {
+  const err = e as { stderr?: string | Buffer; message?: string };
+  return (err.stderr?.toString() || err.message || String(e)).slice(0, 300);
 }
 
 /** cwd -> repo toplevel (or null for non-repos). Session cwds are stable, so
@@ -115,11 +140,14 @@ export async function repoRootFor(cwd: string): Promise<string | null> {
 const lastFetchAt = new Map<string, number>();
 /** root -> whether the last attempted fetch succeeded (recovery detection). */
 const lastFetchOk = new Map<string, boolean>();
+/** root -> last known needs_access, so cadence-skipped passes keep reporting it. */
+const needsAccess = new Map<string, boolean>();
 
 /** Test hook: forget cadence/recovery/root-cache state. */
 export function resetGitPlaneState(): void {
   lastFetchAt.clear();
   lastFetchOk.clear();
+  needsAccess.clear();
   repoRootCache.clear();
 }
 
@@ -152,29 +180,61 @@ async function sweepRepo(repo: GitPlaneRepo, deps: GitPlaneDeps, now: number): P
   if (!state.origin_ok) return state;
 
   // FRESHNESS: fetch on the cadence (or immediately after a repair, whose
-  // lastFetchAt entry is necessarily stale or absent).
+  // lastFetchAt entry is necessarily stale or absent). Identity ladder: the
+  // user's own credentials first (or whichever identity already proved itself
+  // for this repo), then — only on an AUTH wall, and only for SSH remotes —
+  // the device fallback key. A device-key success is remembered so pushes ride
+  // the same identity; a device-key failure means the machine simply hasn't
+  // been granted access yet, which is the web card's job, not an error loop's.
+  if (identityFor(repo.root) === "device") state.identity = "device";
   const last = lastFetchAt.get(repo.root) ?? 0;
   if (now - last >= FETCH_INTERVAL_MS) {
-    try {
-      await git(repo.root, ["fetch", "origin", "--quiet", "--prune"]);
+    const fetchOk = () => {
       lastFetchAt.set(repo.root, now);
       state.fetched_at = now;
       state.fetch_ok = true;
+      state.needs_access = undefined;
       if (lastFetchOk.get(repo.root) === false) {
         deps.log(`[GITPLANE] fetch recovered for ${repo.root}`);
         deps.onRemoteUsable(repo.root, repo.conversationIds);
       }
       lastFetchOk.set(repo.root, true);
+    };
+    try {
+      await git(repo.root, ["fetch", "origin", "--quiet", "--prune"], gitEnvFor(repo.root));
+      fetchOk();
     } catch (e) {
-      const err = e as { stderr?: string | Buffer; message?: string };
+      const stderr = stderrOf(e);
       state.fetch_ok = false;
-      state.error = (err.stderr?.toString() || err.message || String(e)).slice(0, 200);
+      state.error = stderr.slice(0, 200);
       lastFetchOk.set(repo.root, false);
+      if (isGitAuthError(stderr)) {
+        // Mint the key even when it can't help this remote (https): the web
+        // card needs a pubkey to offer, and the user may switch the remote.
+        const pubkey = deps.mintDeviceKey ? await deps.mintDeviceKey() : undefined;
+        if (pubkey && isSshRemote(origin) && identityFor(repo.root) !== "device") {
+          try {
+            await git(repo.root, ["fetch", "origin", "--quiet", "--prune"], deviceKeyEnv());
+            recordIdentity(repo.root, "device");
+            state.identity = "device";
+            state.error = undefined;
+            deps.log(`[GITPLANE] device key is the working identity for ${repo.root}`);
+            fetchOk();
+          } catch (retryErr) {
+            state.needs_access = true;
+            state.error = stderrOf(retryErr).slice(0, 200);
+          }
+        } else {
+          state.needs_access = true;
+        }
+      }
     }
   } else {
     state.fetched_at = last;
     state.fetch_ok = lastFetchOk.get(repo.root);
+    state.needs_access = needsAccess.get(repo.root) || undefined;
   }
+  needsAccess.set(repo.root, state.needs_access === true);
 
   // MEASURE: ahead/behind vs the branch's upstream, falling back to the
   // remote's default branch. Absent counts mean "not measurable", not zero.
