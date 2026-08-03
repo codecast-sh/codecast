@@ -3312,18 +3312,20 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           ))}
         </ScrollView>
       )}
-      {managedSession?.managed && (managedSession.agent_status === "working" || managedSession.agent_status === "thinking" || managedSession.agent_status === "compacting" || managedSession.agent_status === "permission_blocked" || managedSession.agent_status === "connected") && (
+      {managedSession?.managed && (managedSession.agent_status === "working" || managedSession.agent_status === "thinking" || managedSession.agent_status === "compacting" || managedSession.agent_status === "waiting" || managedSession.agent_status === "permission_blocked" || managedSession.agent_status === "connected") && (
         // Floats over the bottom of the message list so it costs zero
         // conversation height; the footer is just the input row.
         <RNView style={styles.agentStatusFloat} pointerEvents="none">
         <RNView style={[styles.agentStatusBar, {
           backgroundColor: managedSession.agent_status === "thinking" ? 'rgba(108,113,196,0.12)' :
             managedSession.agent_status === "compacting" ? 'rgba(245,158,11,0.12)' :
+            managedSession.agent_status === "waiting" ? 'rgba(38,139,210,0.12)' :
             managedSession.agent_status === "permission_blocked" ? 'rgba(203,75,22,0.12)' :
             managedSession.agent_status === "connected" ? 'rgba(42,161,152,0.12)' :
             'rgba(16,185,129,0.12)',
           borderColor: managedSession.agent_status === "thinking" ? 'rgba(108,113,196,0.3)' :
             managedSession.agent_status === "compacting" ? 'rgba(245,158,11,0.3)' :
+            managedSession.agent_status === "waiting" ? 'rgba(38,139,210,0.3)' :
             managedSession.agent_status === "permission_blocked" ? 'rgba(203,75,22,0.3)' :
             managedSession.agent_status === "connected" ? 'rgba(42,161,152,0.3)' :
             'rgba(16,185,129,0.3)',
@@ -3331,6 +3333,7 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           <RNView style={[styles.agentStatusDot, {
             backgroundColor: managedSession.agent_status === "thinking" ? Theme.violet :
               managedSession.agent_status === "compacting" ? '#f59e0b' :
+              managedSession.agent_status === "waiting" ? Theme.blue :
               managedSession.agent_status === "permission_blocked" ? Theme.orange :
               managedSession.agent_status === "connected" ? Theme.cyan :
               Theme.greenBright,
@@ -3338,12 +3341,14 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.agentStatusText, {
             color: managedSession.agent_status === "thinking" ? Theme.violet :
               managedSession.agent_status === "compacting" ? '#f59e0b' :
+              managedSession.agent_status === "waiting" ? Theme.blue :
               managedSession.agent_status === "permission_blocked" ? Theme.orange :
               managedSession.agent_status === "connected" ? Theme.cyan :
               Theme.greenBright,
           }]}>
             {managedSession.agent_status === "thinking" ? "Thinking" :
              managedSession.agent_status === "compacting" ? "Compacting" :
+             managedSession.agent_status === "waiting" ? "Waiting" :
              managedSession.agent_status === "permission_blocked" ? "Needs Input" :
              managedSession.agent_status === "connected" ? "Connected" :
              "Working"}

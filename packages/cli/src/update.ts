@@ -5,14 +5,14 @@ import { execSync } from "./proc.js";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
-const MEMORY_VERSION = "11"; // bumped: cast label set/clear/ls/rename/rm (manage session labels)
-const TASK_VERSION = "4"; // bumped: --spawn (fresh session per run, linked to the trigger) + inject-vs-spawn binding model
-const WORK_VERSION = "6"; // bumped: messaging docs split out into MESSAGING_SNIPPET
+const MEMORY_VERSION = "12"; // bumped: shared "Referencing objects" section
+const TASK_VERSION = "5"; // bumped: triggers have short ids (tr-42) + shared "Referencing objects" section
+const WORK_VERSION = "7"; // bumped: per-type "Referencing sessions" replaced by the shared "Referencing objects" section
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "6"; // bumped: send with judgment — interruptions aren't free
 const VISUAL_VERSION = "4"; // bumped: concise rewrite + widgets (tabs/sortable table/tooltip), CSS motion, wide hint, data:-only images
-const FORKS_VERSION = "2"; // bumped: --label flag on cast fork / cast spawn + default label inheritance on fork
+const FORKS_VERSION = "3"; // bumped: shared "Referencing objects" section
 const PUBLISH_VERSION = "3"; // bumped: management subcommands (versions/comments/viewers/links/set) usable without the source file
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
