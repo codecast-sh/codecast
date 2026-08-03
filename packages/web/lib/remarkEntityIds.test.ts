@@ -95,3 +95,36 @@ describe("entityRemarkPlugins bare convex ids", () => {
     expect(render(`x ${CONVEX_ID}0 y`)).not.toContain("<a");
   });
 });
+
+describe("entityRemarkPlugins trigger references", () => {
+  // Regression for the screenshot: an agent wrote
+  //   Trigger `rx72qtvpbmmrmwcjqmhzawejsx8bq9gm` marked complete
+  // and it rendered as that raw blob in monospace. Two things were wrong: the
+  // trigger table was unregistered, and the id itself was a 32-char Convex id
+  // rather than a quotable handle. Both are fixed — a trigger's short id now
+  // becomes an entity link, exactly like a task or a session.
+  test("a bare tr- short id becomes an entity link", () => {
+    // react-markdown's url sanitizer drops the entity:// href, so the link TEXT
+    // is the carrier EntityAwareLink reads — same contract as doc references.
+    const html = render("Trigger tr-42 marked complete.");
+    expect(html).toContain(">tr-42</a>");
+  });
+
+  test("a trigger short id inside an @[Title id] mention keeps its id", () => {
+    const html = render("see @[Growth audit tr-42] for the cadence");
+    expect(html).toContain(">tr-42</a>");
+    expect(html).not.toContain("@Growth audit");
+  });
+
+  test("prose words starting with a registered prefix are left alone", () => {
+    const html = render("the transaction triggered a plan and a task");
+    expect(html).not.toContain("<a");
+  });
+
+  test("task, plan and session references still resolve alongside triggers", () => {
+    const html = render("ct-4102 under pl-88, fired by tr-42, discussed in jx7c6zk");
+    for (const id of ["ct-4102", "pl-88", "tr-42", "jx7c6zk"]) {
+      expect(html).toContain(`>${id}</a>`);
+    }
+  });
+});

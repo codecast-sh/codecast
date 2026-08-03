@@ -176,6 +176,10 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "meta", key: "recentProjects" },
     hydration: { phase: "deferred" },
   },
+  recentProjectsByDevice: {
+    persistence: { kind: "meta", key: "recentProjectsByDevice" },
+    hydration: { phase: "deferred" },
+  },
   collapsedSections: {
     persistence: { kind: "meta", key: "collapsedSections" },
     hydration: { phase: "deferred" },

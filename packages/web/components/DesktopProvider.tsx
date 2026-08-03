@@ -45,6 +45,7 @@ export function DesktopProvider() {
   // percentage, so it falls back to the indeterminate bar below.
   const [ipc, setIpc] = useState<{ status: string; version?: string; percent?: number } | null>(null);
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+  const [minimized, setMinimized] = useState(false);
   const requestDesktopUpdate = useMutation(api.users.requestDesktopUpdate);
 
   const startUpdate = () => {
