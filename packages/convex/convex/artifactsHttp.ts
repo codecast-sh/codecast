@@ -850,7 +850,7 @@ export const serve = httpAction(async (ctx, request) => {
         views: art.views,
         comment_count: artifact.comment_count,
         comments: artifact.open_comments,
-        session: art.session_short_id ? { short_id: art.session_short_id } : null,
+        session: art.session_short_id ? { short_id: art.session_short_id, title: artifact.session_title } : null,
         gated: { password: !!art.password_hash, email: !!art.email_gate },
         versions: art.versions.map((x) => ({
           version: x.version,
@@ -1045,6 +1045,7 @@ export const serve = httpAction(async (ctx, request) => {
     slug: artifact.slug,
     kind,
     sessionShortId: artifact.session_short_id ?? null,
+    sessionTitle: artifact.session_title,
     views: artifact.views,
     commentCount: artifact.comment_count,
     gated: { password: !!artifact.password_hash, email: !!artifact.email_gate },
