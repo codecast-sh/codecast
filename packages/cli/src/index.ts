@@ -3316,20 +3316,27 @@ program
   .argument("<session>", "Session short ID (e.g. jx7c6zk)")
   .action(async (session: string) => {
     const result = await cliPost("/cli/sessions/kill", { session });
-    if (result.outcome === "none") {
-      console.log(`${c.dim}${result.short_id} was already dismissed — nothing to tear down${c.reset}`);
-      return;
-    }
     const canceled = result.canceled_schedules
       ? `, canceled ${result.canceled_schedules} trigger${result.canceled_schedules === 1 ? "" : "s"}`
       : "";
     const grouped = result.cascaded_children
       ? ` with ${result.cascaded_children} nested worker${result.cascaded_children === 1 ? "" : "s"}`
       : "";
+    // Queued messages die with the session (they would otherwise land later and
+    // revive it), so say so — that's the user's content being dropped.
+    const dropped = result.canceled_messages
+      ? `, canceled ${result.canceled_messages} queued message${result.canceled_messages === 1 ? "" : "s"}`
+      : "";
+    // Kill is a desired state, not an event: an already-killed session gets its
+    // teardown re-enqueued (the server forces past the hide-flag transition), so
+    // say what happened instead of the old "nothing to tear down" dead end.
     const note = result.outcome === "reap"
       ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
-      : ` ${c.dim}— agent torn down${grouped}${canceled} (cast undismiss ${result.short_id} to resurface)${c.reset}`;
-    console.log(`${c.green}ok${c.reset} killed ${c.cyan}${result.short_id}${c.reset}${note}`);
+      : result.was_hidden
+        ? ` ${c.dim}— ${result.teardown_enqueued ? "teardown re-enqueued" : "teardown already queued for the daemon"}${grouped}${canceled}${dropped}${c.reset}`
+        : ` ${c.dim}— agent torn down${grouped}${canceled}${dropped} (cast undismiss ${result.short_id} to resurface)${c.reset}`;
+    const verb = result.was_hidden && result.outcome !== "reap" ? "re-killed" : "killed";
+    console.log(`${c.green}ok${c.reset} ${verb} ${c.cyan}${result.short_id}${c.reset}${note}`);
   });
 
 // ── cast keys ─────────────────────────────────────────────────────────────────

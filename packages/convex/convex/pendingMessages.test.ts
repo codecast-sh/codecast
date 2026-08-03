@@ -9,7 +9,9 @@ import {
   planStuckMessageHeal,
   resetConversationPendingMessages,
   updatePendingMessageStatusForDaemon,
+  cancelQueuedMessagesOnKill,
 } from "./pendingMessages";
+import { makeFakeDb } from "./testDb";
 
 describe("collectOldLegacyPendingMessages", () => {
   test("reads only by_status and excludes recent and fenced rows", async () => {
@@ -515,5 +517,58 @@ describe("planStuckMessageHeal", () => {
     expect(recent("failed", "hi", old).kind).toBe("repend");
     expect(recent("injected", "real text", old).kind).toBe("repend");
     expect(recent("pending", "real text", old).kind).toBe("repend");
+  });
+});
+
+// Kill is TERMINAL for the messages already queued. The retry loop is otherwise
+// indefinite, so a retained message could land long after the kill and revive a
+// session still stamped inbox_killed_at (observed live), or — once its retries
+// were exhausted — strand the row as completed + has_pending_messages forever.
+describe("cancelQueuedMessagesOnKill", () => {
+  const CONV = "c1";
+  const mkDb = (rows: Array<Record<string, any>>, convExtra: Record<string, any> = {}) =>
+    makeFakeDb({
+      conversations: [{ _id: CONV, user_id: "u1", has_pending_messages: true, ...convExtra }],
+      pending_messages: rows.map((r) => ({ conversation_id: CONV, retry_count: 0, ...r })),
+    });
+
+  test("cancels every non-terminal queued message and clears the conversation flag", async () => {
+    const db = mkDb([
+      { _id: "m_pending", status: "pending" },
+      { _id: "m_injected", status: "injected" },
+      { _id: "m_failed", status: "failed" },
+      { _id: "m_undeliverable", status: "undeliverable" },
+      { _id: "m_delivered", status: "delivered" },
+      { _id: "m_cancelled", status: "cancelled" },
+    ]);
+
+    expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(4);
+    const row = (id: string) => db._tables.pending_messages.find((r: any) => r._id === id)!;
+    for (const id of ["m_pending", "m_injected", "m_failed", "m_undeliverable"]) {
+      expect(row(id).status).toBe("cancelled");
+    }
+    expect(row("m_delivered").status).toBe("delivered");
+    expect(db._tables.conversations[0].has_pending_messages).toBe(false);
+  });
+
+  // The stranded-row repair: a kill whose queue already went terminal still has
+  // to clear the flag, or the row sits "completed + has pending work" forever.
+  test("clears a stale has_pending_messages flag even with nothing left to cancel", async () => {
+    const db = mkDb([{ _id: "m_delivered", status: "delivered" }]);
+    expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(0);
+    expect(db._tables.conversations[0].has_pending_messages).toBe(false);
+  });
+
+  // Fenced (delivery-protocol v2) rows belong to the execution-binding epoch
+  // machinery — cancelling one here would strand its delivery attempt. Leaving
+  // the flag set is then the HONEST answer (classifyWorkState keeps the killed
+  // row out of the Working bucket regardless).
+  test("leaves fenced rows to the epoch machinery and does not lie about the flag", async () => {
+    const db = mkDb([
+      { _id: "m_fenced", status: "pending", delivery_protocol_version: 2, delivery_status: "pending" },
+    ]);
+    expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(0);
+    expect(db._tables.pending_messages[0].status).toBe("pending");
+    expect(db._tables.conversations[0].has_pending_messages).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { requireSessionCommandTarget } from "./conversations";
+import { requireSessionCommandTarget, getConversationLifecycle } from "./conversations";
 import { makeFakeDb } from "./testDb";
 
 // Session commands (send keys/escape, rewind, model switch, project/agent
@@ -53,5 +53,63 @@ describe("requireSessionCommandTarget", () => {
   test("a deleted/ghost conversation is refused (kill/restart keep their own recovery)", async () => {
     const ctx = ctxWith({ conversations: [] });
     await expect(requireSessionCommandTarget(ctx, RUNNER, "conversations_gone" as any)).rejects.toThrow("Not authorized");
+  });
+});
+
+// The daemon's LIFECYCLE read (api_token auth — no session cookie on a CLI/daemon
+// caller). It gates the daemon's reap on the user's intent: a session the human
+// killed or stashed must not be resurrected by a recovery path. No other
+// daemon-facing query exposes the hide stamps, so this is the whole contract:
+// five fields, or null when the caller doesn't run the conversation.
+describe("getConversationLifecycle", () => {
+  const CONV = "conversations_1";
+  const call = (tables: Record<string, any[]>, subjectUser: string | null, args: any) =>
+    (getConversationLifecycle as any)._handler(
+      {
+        db: makeFakeDb(tables),
+        auth: { getUserIdentity: async () => (subjectUser ? { subject: `${subjectUser}|session` } : null) },
+      },
+      args,
+    );
+
+  const killedRow = {
+    _id: CONV,
+    user_id: RUNNER,
+    session_id: "s1",
+    status: "completed",
+    inbox_killed_at: 222,
+    inbox_dismissed_at: 222,
+    inbox_stashed_at: 111,
+    inbox_pinned_at: undefined,
+  };
+
+  test("returns the five lifecycle fields for a conversation the caller runs", async () => {
+    expect(await call({ conversations: [killedRow] }, RUNNER, { conversation_id: CONV })).toEqual({
+      status: "completed",
+      inbox_killed_at: 222,
+      inbox_dismissed_at: 222,
+      inbox_stashed_at: 111,
+      inbox_pinned_at: null, // absent stamps normalize to null, never undefined
+    });
+  });
+
+  test("a live, never-hidden session reports every stamp as null", async () => {
+    const tables = { conversations: [{ _id: CONV, user_id: RUNNER, status: "active" }] };
+    expect(await call(tables, RUNNER, { conversation_id: CONV })).toEqual({
+      status: "active",
+      inbox_killed_at: null,
+      inbox_dismissed_at: null,
+      inbox_stashed_at: null,
+      inbox_pinned_at: null,
+    });
+  });
+
+  test("someone else's conversation is null, not a leak", async () => {
+    expect(await call({ conversations: [killedRow] }, STRANGER, { conversation_id: CONV })).toBeNull();
+  });
+
+  test("unauthenticated and missing conversations are null too", async () => {
+    expect(await call({ conversations: [killedRow] }, null, { conversation_id: CONV })).toBeNull();
+    expect(await call({ conversations: [] }, RUNNER, { conversation_id: CONV })).toBeNull();
   });
 });
