@@ -3,7 +3,6 @@ import { readFile, stat } from "node:fs/promises";
 import { redactSecrets } from "./redact.js";
 import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
-import { nextTranscriptSourceRevision } from "./transcriptRevision.js";
 
 const MAX_CONTENT_SIZE = 100_000;
 const MAX_TOOL_RESULT_SIZE = 50_000;
@@ -201,10 +200,6 @@ export interface SyncConfig {
   userId?: string;
 }
 
-export interface SyncDependencies {
-  nextTranscriptSourceRevision?: () => number;
-}
-
 export interface PendingMessageForDelivery {
   _id: string;
   conversation_id: string;
@@ -372,15 +367,12 @@ export class SyncService {
   // permanent "sync stalled". Different conversations write different docs and stay
   // fully parallel; only same-conversation writes are chained.
   private conversationWriteChains = new Map<string, Promise<unknown>>();
-  private nextTranscriptSourceRevision: () => number;
 
-  constructor(config: SyncConfig, dependencies: SyncDependencies = {}) {
+  constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl);
     this.convexUrl = config.convexUrl;
     this.userId = config.userId;
     this.apiToken = config.authToken;
-    this.nextTranscriptSourceRevision =
-      dependencies.nextTranscriptSourceRevision ?? nextTranscriptSourceRevision;
   }
 
   // Every daemon mutation must bypass ConvexHttpClient's built-in mutation
@@ -515,6 +507,27 @@ export class SyncService {
       api_token: this.apiToken,
     });
     return res?.continued ?? 0;
+  }
+
+  private async existingMessageUuids(conversationId: string, messageUuids: string[]): Promise<Set<string> | null> {
+    if (messageUuids.length === 0) return new Set();
+    await this.throttle();
+    try {
+      const existing = await this.client.query(
+        "messages:existingMessageUuids" as any,
+        {
+          conversation_id: conversationId,
+          message_uuids: messageUuids,
+          api_token: this.apiToken,
+        }
+      );
+      return new Set(Array.isArray(existing) ? existing : []);
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      return null;
+    }
   }
 
   // Offload large inline images to Convex storage *before* the messages enter
@@ -1038,15 +1051,13 @@ export class SyncService {
       images?: Array<{ mediaType: string; data?: string; localPath?: string; storageId?: string; toolUseId?: string }>;
       subtype?: string;
       model?: string;
-      sourceDeviceId?: string;
-      sourceRevision?: number;
     }>;
+    reconcileRemoteExisting?: boolean;
   }): Promise<{ inserted: number; ids: string[] }> {
     if (params.messages.length === 0) {
       return { inserted: 0, ids: [] };
     }
     await this.offloadImages(params.messages);
-    this.stampTranscriptMessages(params.messages);
 
     const roleMap: Record<string, "user" | "assistant" | "system" | "tool"> = {
       human: "user",
@@ -1110,10 +1121,24 @@ export class SyncService {
         images: images.length > 0 ? images : undefined,
         subtype: msg.subtype,
         model: msg.model,
-        source_device_id: msg.sourceDeviceId,
-        source_revision: msg.sourceRevision,
         timestamp: msg.timestamp,
       });
+    }
+
+    let sendMessages = preparedMessages;
+    if (params.reconcileRemoteExisting) {
+      const uuids = sendMessages
+        .map((msg) => msg.message_uuid)
+        .filter((uuid): uuid is string => typeof uuid === "string" && uuid.length > 0);
+      if (uuids.length > 0) {
+        const existing = await this.existingMessageUuids(params.conversationId, uuids);
+        if (existing && existing.size > 0) {
+          sendMessages = sendMessages.filter((msg) => !msg.message_uuid || !existing.has(msg.message_uuid));
+          if (sendMessages.length === 0) {
+            return { inserted: 0, ids: [] };
+          }
+        }
+      }
     }
 
     // Batch by bytes, not just count. A single message can carry a large
@@ -1124,7 +1149,7 @@ export class SyncService {
     // every retry identically, and because sync advances the file position only
     // after a batch lands, the whole tail behind it stays stuck forever. An
     // oversized single message still goes out alone (one message can't split).
-    const batches = chunkMessagesBySize(preparedMessages);
+    const batches = chunkMessagesBySize(sendMessages);
 
     // Serialize the actual writes per conversation so concurrent sync triggers
     // don't stampede the one conversation doc (see conversationWriteChains).
@@ -1160,21 +1185,6 @@ export class SyncService {
 
       return { inserted: totalInserted, ids: allIds };
     });
-  }
-
-  /**
-   * Stamp caller-owned prepared messages before either their direct write or
-   * durable enqueue. Existing stamps are preserved, so every retry of one
-   * payload keeps the same version while a later projection gets a new one.
-   */
-  stampTranscriptMessages(
-    messages: Array<{ sourceDeviceId?: string; sourceRevision?: number }>,
-  ): void {
-    const sourceDeviceId = deviceId();
-    for (const message of messages) {
-      message.sourceDeviceId ??= sourceDeviceId;
-      message.sourceRevision ??= this.nextTranscriptSourceRevision();
-    }
   }
 
   // Delete specific messages by uuid — the daemon's pi branch-switch cleanup removes

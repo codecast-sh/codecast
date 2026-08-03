@@ -4870,20 +4870,7 @@ async function flushPendingMessagesBatch(
   }
 }
 
-export type RawMessage = {
-  uuid?: string;
-  role: string;
-  content: string;
-  timestamp: number;
-  thinking?: string;
-  toolCalls?: any;
-  toolResults?: any;
-  images?: any;
-  subtype?: string;
-  model?: string;
-  sourceDeviceId?: string;
-  sourceRevision?: number;
-};
+export type RawMessage = { uuid?: string; role: string; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string };
 
 // A cached conversation_id can become invalid against the current api_token in two ways:
 // the conversation was deleted (Convex returns "Conversation not found") or the auth token
@@ -4899,20 +4886,7 @@ function mapRole(role: string): "human" | "assistant" | "system" {
   return role === "user" ? "human" : role === "system" ? "system" : "assistant";
 }
 
-function prepMessageForSync(msg: RawMessage): {
-  messageUuid?: string;
-  role: "human" | "assistant" | "system";
-  content: string;
-  timestamp: number;
-  thinking?: string;
-  toolCalls?: any;
-  toolResults?: any;
-  images?: any;
-  subtype?: string;
-  model?: string;
-  sourceDeviceId?: string;
-  sourceRevision?: number;
-} {
+function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string } {
   return {
     messageUuid: msg.uuid,
     role: mapRole(msg.role),
@@ -4924,8 +4898,6 @@ function prepMessageForSync(msg: RawMessage): {
     images: msg.images,
     subtype: msg.subtype,
     model: msg.model,
-    sourceDeviceId: msg.sourceDeviceId,
-    sourceRevision: msg.sourceRevision,
   };
 }
 
@@ -4958,10 +4930,6 @@ async function syncMessagesBatch(
   // persisted the full raw base64 and every retry re-uploaded the same image.
   const prepared = messages.map(prepMessageForSync);
   await syncService.offloadImages(prepared);
-  // Stamp before the backlog branch: queued projections need versions just as
-  // much as direct writes, otherwise same-UUID partial/final states collapse
-  // back to presence-only dedupe while the network is degraded.
-  syncService.stampTranscriptMessages(prepared);
   if (retryQueue.hasPendingConversation(conversationId)) {
     log(`Conversation ${conversationId.slice(0, 12)} already has retry backlog; buffering ${messages.length} new msgs into retry queue`);
     retryQueue.add("addMessages", {
@@ -10681,7 +10649,7 @@ type AppServerPartialMessage = AppServerStreamingPartial;
 type AppServerTurnProgress = {
   threadId: string;
   items: ThreadItem[];
-  lastSyncedSignatures: Map<string, string>;
+  lastSyncedSignature?: string;
   partials: Map<string, AppServerPartialMessage>;
   partialOrder: string[];
   partialFlushTimer?: ReturnType<typeof setTimeout>;
@@ -10873,7 +10841,6 @@ function makeAppServerTurnProgress(threadId: string): AppServerTurnProgress {
   return {
     threadId,
     items: [],
-    lastSyncedSignatures: new Map(),
     partials: new Map(),
     partialOrder: [],
   };
@@ -10895,8 +10862,9 @@ function clearLiveAppServerThreadRegistrations(): void {
   }
 }
 
-function buildAppServerMessageSignature(message: RawMessage): string {
-  return JSON.stringify({
+function buildAppServerProgressSignature(messages: RawMessage[]): string {
+  return JSON.stringify(messages.map((message) => ({
+    uuid: message.uuid,
     role: message.role,
     content: message.content,
     thinking: message.thinking,
@@ -10904,29 +10872,7 @@ function buildAppServerMessageSignature(message: RawMessage): string {
     toolResults: message.toolResults,
     images: message.images,
     subtype: message.subtype,
-    model: message.model,
-  });
-}
-
-/**
- * Diff a rebuilt app-server turn against the projections already handed to the
- * durable sync path. Codex emits the whole growing turn after each completed
- * item; only changed logical messages should become writes.
- */
-export function selectChangedAppServerMessages(
-  messages: RawMessage[],
-  syncedSignatures: ReadonlyMap<string, string>,
-): Array<{ key: string; signature: string; message: RawMessage }> {
-  const changed: Array<{ key: string; signature: string; message: RawMessage }> = [];
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index];
-    const key = message.uuid ? `uuid:${message.uuid}` : `position:${index}:${message.role}`;
-    const signature = buildAppServerMessageSignature(message);
-    if (syncedSignatures.get(key) !== signature) {
-      changed.push({ key, signature, message });
-    }
-  }
-  return changed;
+  })));
 }
 
 export function buildAppServerStreamingTailMessages(
@@ -11052,20 +10998,14 @@ async function syncAppServerTurnMessagesIfChanged(
   const run = previous.catch(() => {}).then(async () => {
     const current = appServerTurnProgress.get(turnId);
     if (!current) return;
-    const changed = selectChangedAppServerMessages(
-      messages,
-      current.lastSyncedSignatures,
-    );
-    if (changed.length === 0) return;
-    const changedMessages = changed.map(({ message }) => message);
-    const batchResult = await syncMessagesBatch(changedMessages, conversationId, syncService, retryQueue);
+    const signature = buildAppServerProgressSignature(messages);
+    if (current.lastSyncedSignature === signature) return;
+    const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
     if (!batchResult.authExpired && !batchResult.conversationNotFound) {
-      for (const { key, signature } of changed) {
-        current.lastSyncedSignatures.set(key, signature);
-      }
-      syncStats.messagesSynced += changedMessages.length;
+      current.lastSyncedSignature = signature;
+      syncStats.messagesSynced += messages.length;
       syncStats.sessionsActive.add(threadIdForLog);
-      log(`[codex-app-server] live synced ${changedMessages.length} changed messages for thread ${threadIdForLog}`);
+      log(`[codex-app-server] live synced ${messages.length} messages for thread ${threadIdForLog}`);
     }
   });
   const marker = run.then(() => undefined, () => undefined);
@@ -16752,8 +16692,6 @@ async function main(): Promise<void> {
           toolResults?: any;
           images?: any;
           subtype?: string;
-          sourceDeviceId?: string;
-          sourceRevision?: number;
         }>;
       };
       // Offload any still-inline images to file storage before re-sending, then
@@ -16770,10 +16708,7 @@ async function main(): Promise<void> {
         await syncService.offloadImages(params.messages as any);
         retryQueue.persistNow();
       }
-      // Revisioned conditional upserts are the reconciliation contract. A UUID
-      // already existing remotely may still be an older streaming projection,
-      // so presence alone must never suppress the queued final state.
-      await syncService.addMessages(params);
+      await syncService.addMessages({ ...params, reconcileRemoteExisting: true });
       updateState();
       log(`Retry: Batch synced ${params.messages.length} messages for ${params.conversationId.slice(0, 12)}`);
       return true;

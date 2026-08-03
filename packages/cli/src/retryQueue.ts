@@ -72,33 +72,6 @@ const RETRY_BATCH_MAX_BYTES = 900_000;
 // HEALTHY backend, and no real brownout has approached this length.
 const OVERLOAD_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 
-type RetryMessageVersion = {
-  messageUuid?: string;
-  sourceDeviceId?: string;
-  sourceRevision?: number;
-};
-
-function retryMessageUuid(message: unknown): string | undefined {
-  return message && typeof message === "object"
-    ? (message as RetryMessageVersion).messageUuid
-    : undefined;
-}
-
-function isNewerRetryMessage(existing: unknown, incoming: unknown): boolean {
-  const oldVersion = existing as RetryMessageVersion | null;
-  const newVersion = incoming as RetryMessageVersion | null;
-  if (typeof newVersion?.sourceRevision !== "number") return false;
-  if (typeof oldVersion?.sourceRevision !== "number") return true;
-  if (
-    newVersion.sourceDeviceId &&
-    oldVersion.sourceDeviceId &&
-    newVersion.sourceDeviceId !== oldVersion.sourceDeviceId
-  ) {
-    return true;
-  }
-  return newVersion.sourceRevision > oldVersion.sourceRevision;
-}
-
 function chunkRetryMessages<T>(
   messages: T[],
   maxCount: number = RETRY_BATCH_CHUNK,
@@ -164,16 +137,31 @@ export class RetryQueue {
           let splitFrom = 0;
           let dedupedMsgs = 0;
           let compactedOps = 0;
-          const addMessageConversations = new Set<string>();
-          let messagesBeforeCompact = 0;
+          // Per-conversation set of message_uuids already restored. A queue that
+          // jammed (e.g. an image batch stuck under OCC contention) accumulates the
+          // SAME messages many times over as the live path re-enqueues the backlog
+          // each poll — heal it here so a 16MB, 283-op file collapses to its distinct
+          // messages on restart instead of draining the duplicates one slow op at a time.
+          const seenByConv = new Map<string, Set<string>>();
           for (const op of data) {
             if (!op.id || !op.type || !op.params) continue;
 
             if (op.type === "addMessages" && Array.isArray(op.params?.messages)) {
               const convId = typeof op.params.conversationId === "string" ? op.params.conversationId : null;
               if (convId) {
-                addMessageConversations.add(convId);
-                messagesBeforeCompact += op.params.messages.length;
+                let seen = seenByConv.get(convId);
+                if (!seen) { seen = new Set(); seenByConv.set(convId, seen); }
+                const before = op.params.messages.length;
+                const kept = op.params.messages.filter((m: unknown) => {
+                  const uuid = m && typeof m === "object" ? (m as { messageUuid?: string }).messageUuid : undefined;
+                  if (!uuid) return true; // can't dedup without a uuid — keep it
+                  if (seen!.has(uuid)) return false;
+                  seen!.add(uuid);
+                  return true;
+                });
+                dedupedMsgs += before - kept.length;
+                if (kept.length === 0) continue; // every message already restored elsewhere
+                op.params = { ...op.params, messages: kept };
               }
 
               // Heal oversized addMessages ops so they fit a single mutation budget
@@ -202,20 +190,9 @@ export class RetryQueue {
             this.queue.set(op.id, op);
           }
           const preCompactSize = this.queue.size;
-          for (const convId of addMessageConversations) {
+          for (const convId of seenByConv.keys()) {
             this.compactAddMessagesConversation(convId);
           }
-          const messagesAfterCompact = [...this.queue.values()].reduce(
-            (count, op) =>
-              count +
-              (op.type === "addMessages" &&
-              addMessageConversations.has(String(op.params.conversationId)) &&
-              Array.isArray(op.params.messages)
-                ? op.params.messages.length
-                : 0),
-            0,
-          );
-          dedupedMsgs = Math.max(0, messagesBeforeCompact - messagesAfterCompact);
           compactedOps = preCompactSize - this.queue.size;
           if (this.queue.size > 0) {
             const heals = [
@@ -345,19 +322,24 @@ export class RetryQueue {
       let msgs = (params as { messages?: unknown[] }).messages;
       const conversationId = (params as { conversationId?: string }).conversationId;
 
-      // Coalesce by logical identity, but retain the newest revision. A UUID is
-      // identity, not payload equality: Codex grows one same-UUID projection
-      // from partial to final while an older retry may still be in flight.
+      // Coalesce: drop messages already waiting in the queue for this conversation.
+      // The live sync path re-reads and re-enqueues the same backlog every poll
+      // while a batch is stuck, so without this the queue piles up the same
+      // messages 12x. Server-side addMessages dedups by message_uuid anyway, so
+      // dropping already-queued uuids here is purely a queue-size guard.
       if (Array.isArray(msgs) && typeof conversationId === "string") {
-        const coalesced = this.coalesceQueuedMessages(conversationId, msgs);
-        msgs = coalesced.remaining;
-        if (coalesced.replaced > 0) this.schedulePersist();
-        if (coalesced.dropped > 0 || coalesced.replaced > 0) {
+        const pending = this.pendingMessageUuids(conversationId);
+        if (pending.size > 0) {
+          const before = msgs.length;
+          msgs = msgs.filter(
+            (m) => !(m && typeof m === "object" && pending.has((m as { messageUuid?: string }).messageUuid ?? ""))
+          );
           if (msgs.length === 0) {
-            this.log(
-              `Coalesced addMessages: retained ${coalesced.replaced} newer revision(s), dropped ${coalesced.dropped} duplicate/stale message(s) for ${conversationId}`,
-            );
+            this.log(`Coalesced addMessages: all ${before} msgs already queued for ${conversationId}, skipping`);
             return "";
+          }
+          if (msgs.length < before) {
+            this.log(`Coalesced addMessages: dropped ${before - msgs.length}/${before} already-queued msgs for ${conversationId}`);
           }
           params = { ...params, messages: msgs };
         }
@@ -399,61 +381,6 @@ export class RetryQueue {
     return false;
   }
 
-  private coalesceQueuedMessages(
-    conversationId: string,
-    incomingMessages: unknown[],
-  ): { remaining: unknown[]; replaced: number; dropped: number } {
-    const remaining: unknown[] = [];
-    let replaced = 0;
-    let dropped = 0;
-
-    for (const incoming of incomingMessages) {
-      const uuid = retryMessageUuid(incoming);
-      if (!uuid) {
-        remaining.push(incoming);
-        continue;
-      }
-
-      let waitingMatch:
-        | { op: RetryOperation; messages: unknown[]; index: number }
-        | undefined;
-      let activeMatch: unknown;
-      for (const op of this.queue.values()) {
-        if (op.type !== "addMessages" || op.params.conversationId !== conversationId) continue;
-        const messages = Array.isArray(op.params.messages) ? op.params.messages : [];
-        const index = messages.findIndex((message) => retryMessageUuid(message) === uuid);
-        if (index < 0) continue;
-        if (this.activeOpIds.has(op.id)) {
-          activeMatch = messages[index];
-        } else if (!waitingMatch) {
-          waitingMatch = { op, messages, index };
-        }
-      }
-
-      if (waitingMatch) {
-        if (isNewerRetryMessage(waitingMatch.messages[waitingMatch.index], incoming)) {
-          waitingMatch.messages[waitingMatch.index] = incoming;
-          waitingMatch.op.params = {
-            ...waitingMatch.op.params,
-            messages: waitingMatch.messages,
-          };
-          replaced++;
-        } else {
-          dropped++;
-        }
-        continue;
-      }
-      if (activeMatch && !isNewerRetryMessage(activeMatch, incoming)) {
-        dropped++;
-        continue;
-      }
-      // A newer version behind an active older write becomes its successor.
-      remaining.push(incoming);
-    }
-
-    return { remaining, replaced, dropped };
-  }
-
   private compactQueuedAddMessagesConversation(conversationId: string): void {
     this.compactAddMessagesConversation(
       conversationId,
@@ -475,7 +402,7 @@ export class RetryQueue {
 
     const ordered = matching.sort((a, b) => a.createdAt - b.createdAt);
     const mergedMessages: unknown[] = [];
-    const indexByUuid = new Map<string, number>();
+    const seen = new Set<string>();
     let attempts = 0;
     let createdAt = Date.now();
     let nextRetryAt = Date.now() + 1000;
@@ -488,16 +415,10 @@ export class RetryQueue {
       if (op.lastError) lastError = op.lastError;
       const msgs = Array.isArray(op.params.messages) ? op.params.messages : [];
       for (const msg of msgs) {
-        const uuid = retryMessageUuid(msg);
+        const uuid = msg && typeof msg === "object" ? (msg as { messageUuid?: string }).messageUuid : undefined;
         if (uuid) {
-          const priorIndex = indexByUuid.get(uuid);
-          if (priorIndex !== undefined) {
-            if (isNewerRetryMessage(mergedMessages[priorIndex], msg)) {
-              mergedMessages[priorIndex] = msg;
-            }
-            continue;
-          }
-          indexByUuid.set(uuid, mergedMessages.length);
+          if (seen.has(uuid)) continue;
+          seen.add(uuid);
         }
         mergedMessages.push(msg);
       }
@@ -526,6 +447,23 @@ export class RetryQueue {
         lastError,
       });
     }
+  }
+
+  // All message_uuids currently queued (pending or in-flight — failed in-flight
+  // ops stay in the queue until they succeed) for a conversation.
+  private pendingMessageUuids(conversationId: string): Set<string> {
+    const uuids = new Set<string>();
+    for (const op of this.queue.values()) {
+      if (op.type !== "addMessages") continue;
+      if (op.params.conversationId !== conversationId) continue;
+      const msgs = op.params.messages;
+      if (!Array.isArray(msgs)) continue;
+      for (const m of msgs) {
+        const uuid = m && typeof m === "object" ? (m as { messageUuid?: string }).messageUuid : undefined;
+        if (uuid) uuids.add(uuid);
+      }
+    }
+    return uuids;
   }
 
   private splitTimedOutAddMessagesOperation(op: RetryOperation): boolean {
