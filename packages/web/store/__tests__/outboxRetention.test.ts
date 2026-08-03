@@ -1130,11 +1130,10 @@ describe("principal-bound dispatch ownership", () => {
     await accountAStarted;
     expect(accountAOutbox.size).toBe(1);
 
-    // The render-time correlation update is the synchronous security gate.
-    // Persistence and dispatch are then rebound to B's independent namespace.
-    updatePrincipalDispatchCorrelation(2);
+    // Dispatch authorization is unconditional; the account switch invalidates
+    // A's in-flight work by REPLACING the binding when B mounts its own.
     const authorizationB = capturePrincipalDispatchAuthorization();
-    expect(authorizationB?.principalEpoch).toBe(2);
+    expect(authorizationB).not.toBeNull();
     const accountBOutbox = new Map<string, Entry>();
     wrapped._setOutbox(
       (entry: Entry) => accountBOutbox.set(entry.id, entry),
@@ -1237,52 +1236,26 @@ describe("unwired/stale-binding sends are parked, never lost", () => {
     expect(outbox.size).toBe(0);
   });
 
-  it("parks a send fired on a stale-authorization binding; a fresh binding delivers it", async () => {
-    registerPrincipalDispatchRuntime({
-      canDispatch: true,
-      dispatchPrincipalEpoch: 1,
-      subscribe: () => () => {},
-    });
-    updatePrincipalDispatchCorrelation(1);
-    try {
-      const { wrapped, outbox } = makeHarness();
-      const owner = {};
-      const authorization = capturePrincipalDispatchAuthorization();
-      let staleDispatches = 0;
-      wrapped._setDispatch(async () => { staleDispatches++; return "ok"; }, { owner, authorization });
+  it("correlation churn cannot strand a send — a wired binding always delivers", async () => {
+    const { wrapped, outbox } = makeHarness();
+    const owner = {};
+    const delivered: string[] = [];
+    wrapped._setDispatch(async (actionName: string) => {
+      delivered.push(actionName);
+      return "ok";
+    }, { owner, authorization: capturePrincipalDispatchAuthorization() });
 
-      // The correlation moves (token re-verification, principal epoch bump)
-      // without the binding ever being reinstalled — the stranded state.
-      updatePrincipalDispatchCorrelation(2);
-      wrapped.poke("stranded");
-      await settle();
-      expect(staleDispatches).toBe(0);
-      expect(outbox.size).toBe(1);
-
-      // The ensure-wired heal re-binds with current authorization; the boot
-      // drain of the new binding delivers the parked send.
-      const delivered: string[] = [];
-      wrapped._setDispatch(async (actionName: string) => {
-        delivered.push(actionName);
-        return "ok";
-      }, { owner, authorization: capturePrincipalDispatchAuthorization() });
-      await settle();
-      expect(delivered).toEqual(["poke"]);
-      expect(outbox.size).toBe(0);
-      wrapped._clearDispatch(owner);
-    } finally {
-      updatePrincipalDispatchCorrelation(null);
-      registerPrincipalDispatchRuntime(null);
-    }
+    // Token re-verification churn moves the correlation; the binding stays
+    // authorized and the send goes straight through instead of parking.
+    updatePrincipalDispatchCorrelation(2);
+    wrapped.poke("kept-live");
+    await settle();
+    expect(delivered).toEqual(["poke"]);
+    expect(outbox.size).toBe(0);
+    wrapped._clearDispatch(owner);
   });
 
-  it("_isDispatchWired tracks binding presence and authorization currency", () => {
-    registerPrincipalDispatchRuntime({
-      canDispatch: true,
-      dispatchPrincipalEpoch: 1,
-      subscribe: () => () => {},
-    });
-    updatePrincipalDispatchCorrelation(1);
+  it("_isDispatchWired tracks binding presence", () => {
     try {
       const { wrapped } = makeHarness();
       expect(wrapped._isDispatchWired()).toBe(false);
@@ -1291,10 +1264,8 @@ describe("unwired/stale-binding sends are parked, never lost", () => {
       wrapped._setDispatch(async () => "ok", { owner, authorization: capturePrincipalDispatchAuthorization() });
       expect(wrapped._isDispatchWired()).toBe(true);
 
+      // Correlation churn does not unwire a live binding.
       updatePrincipalDispatchCorrelation(2);
-      expect(wrapped._isDispatchWired()).toBe(false);
-
-      wrapped._setDispatch(async () => "ok", { owner, authorization: capturePrincipalDispatchAuthorization() });
       expect(wrapped._isDispatchWired()).toBe(true);
 
       wrapped._clearDispatch(owner);
