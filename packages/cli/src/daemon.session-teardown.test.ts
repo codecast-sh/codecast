@@ -551,7 +551,6 @@ describe("getConversationLifecycle routing", () => {
     const calls: Array<{ name: string; selector: string }> = [];
     const svc = new SyncService(
       { convexUrl: "http://localhost:0", userId: "u", authToken: "t" },
-      { nextTranscriptSourceRevision: () => 1 },
     );
     (svc as any).client = {
       query: async (name: string, args: any) => {
