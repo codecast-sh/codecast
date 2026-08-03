@@ -13,7 +13,13 @@
 import * as fs from "fs";
 import { RecursiveWatcher } from "../recursiveWatcher.js";
 import type { VaultInfo, VaultWsEvent } from "@codecast/shared/contracts";
-import { isVaultServablePath, normalizeVaultPath, scanVault, vaultRelativePath } from "./vaultScope.js";
+import {
+  isVaultPathIgnored,
+  isVaultServablePath,
+  normalizeVaultPath,
+  scanVault,
+  vaultRelativePath,
+} from "./vaultScope.js";
 
 const DEBOUNCE_MS = 100;
 const RECONCILE_MS = 60_000;
@@ -100,10 +106,18 @@ export class VaultWatchHub {
 
     const watcher = new RecursiveWatcher({
       path: vault.root,
-      // RecursiveWatcher hands the filter a platform-separator relative path.
+      // RecursiveWatcher hands both filters a platform-separator relative path.
+      // Scope is checked here, not just servability: a .md inside node_modules
+      // is servable by extension, so without the ignore check the watcher
+      // announced an add for a file the scan never lists — and the next
+      // reconcile then announced it removed, forever.
       filter: (rel) => {
         const norm = normalizeVaultPath(rel);
-        return norm !== null && isVaultServablePath(norm);
+        return norm !== null && isVaultServablePath(norm) && !isVaultPathIgnored(vault.root, norm);
+      },
+      dirFilter: (rel) => {
+        const norm = normalizeVaultPath(rel);
+        return norm !== null && !isVaultPathIgnored(vault.root, norm);
       },
       callback: (absPath) => this.onFsEvent(vault.id, absPath),
       debounceMs: DEBOUNCE_MS,
@@ -151,6 +165,7 @@ export class VaultWatchHub {
     if (!entry) return;
     const rel = vaultRelativePath(entry.vault.root, absPath);
     if (!rel || !isVaultServablePath(rel)) return;
+    if (isVaultPathIgnored(entry.vault.root, rel)) return;
     let stat: fs.Stats;
     try {
       stat = fs.statSync(absPath);

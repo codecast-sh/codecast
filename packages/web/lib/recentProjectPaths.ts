@@ -82,3 +82,29 @@ export function mergeRecentProjectPaths(
   const seen = new Set(server.map((project) => project.path));
   return server.concat(local.filter((project) => !seen.has(project.path)));
 }
+
+/**
+ * The resting chip row next to the current project: the few folders the user
+ * actually uses most, capped tight. Machine-root suggestions (count 0, never
+ * used through codecast) never appear here — they live behind the full picker.
+ */
+export function frequentProjectChips<T extends { path: string; count: number; suggested?: boolean }>(
+  projects: T[],
+  max = 4,
+): T[] {
+  return projects
+    .filter((p) => !p.suggested)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, max);
+}
+
+/**
+ * Browse order for the full picker: folders with real usage first, then the
+ * machine-root suggestions as one trailing block (the UI draws its divider at
+ * the first `suggested` entry).
+ */
+export function browseProjectOrder<T extends { path: string; suggested?: boolean }>(
+  projects: T[],
+): T[] {
+  return [...projects.filter((p) => !p.suggested), ...projects.filter((p) => p.suggested)];
+}

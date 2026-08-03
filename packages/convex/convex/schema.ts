@@ -1907,6 +1907,12 @@ export default defineSchema({
 
   agent_tasks: defineTable({
     user_id: v.id("users"),
+    // Human-quotable handle ("tr-42"), same counter-allocated shape as tasks
+    // (ct-) and plans (pl-). Optional only for rows created before triggers had
+    // one; `backfillShortIds` fills those, and every new row gets one at insert.
+    // This is what agents quote in prose and what the web renders as a pill —
+    // never the 32-char Convex id.
+    short_id: v.optional(v.string()),
     title: v.string(),
     prompt: v.string(),
     context_summary: v.optional(v.string()),
@@ -1988,6 +1994,7 @@ export default defineSchema({
     .index("by_user_status", ["user_id", "status"])
     .index("by_user_run_at", ["user_id", "run_at"])
     .index("by_status_run_at", ["status", "run_at"])
+    .index("by_short_id", ["short_id"])
     .index("by_event_filter", ["status"]),
 
   // --- Task Layer: Projects, Tasks, Docs ---
