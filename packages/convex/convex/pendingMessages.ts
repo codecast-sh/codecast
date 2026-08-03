@@ -825,6 +825,45 @@ export async function resetConversationPendingMessages(
   return resetCount;
 }
 
+// Kill is TERMINAL for messages already queued. The retry loop is otherwise indefinite, so a
+// message queued before a kill kept retrying afterwards and could still land — reviving a
+// conversation that carries kill metadata (observed live: a killed session woke up and ran 193
+// more messages while still stamped inbox_killed_at), or, once its retries were exhausted,
+// stranding the row as status "completed" + has_pending_messages true forever.
+//
+// This does NOT violate the cardinal rule (the system never drops a user message on its own):
+// killing a session is the user's own explicit stop gesture, and `cancelled` is exactly the
+// terminal state the per-message cancel button writes. Only messages queued BEFORE the kill are
+// touched — a LATER send re-enqueues and revives the session normally, because enqueue clears the
+// dismissed/stashed/killed flags (see the wake-up rules above).
+//
+// Fenced (delivery-protocol v2) rows are deliberately left alone: their cancellation is governed
+// by the execution-binding epoch machinery (supersession, delivery-attempt invariants), and
+// patchPendingMessageStatus already refuses them. clearHasPendingIfQuiet therefore leaves the flag
+// set when one is genuinely still in flight — an honest flag, and classifyWorkState no longer
+// reads a killed row as "working" regardless.
+export async function cancelQueuedMessagesOnKill(
+  ctx: { db: any },
+  conversationId: Id<"conversations">
+): Promise<number> {
+  let cancelled = 0;
+  for (const status of NON_TERMINAL_PENDING_STATUSES) {
+    const rows = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) =>
+        q.eq("conversation_id", conversationId).eq("status", status)
+      )
+      .take(200);
+    for (const row of rows) {
+      if (await patchPendingMessageStatus(ctx, row, { status: "cancelled" as const })) cancelled++;
+    }
+  }
+  // Also the repair for an ALREADY-stranded row: a kill whose queue has since gone terminal
+  // (undeliverable → cancelled here, or nothing left at all) still clears the stale flag.
+  await clearHasPendingIfQuiet(ctx, conversationId);
+  return cancelled;
+}
+
 // Clear a conversation's has_pending_messages flag once nothing is still in flight — no
 // `pending` and no `injected` message remains. Every terminal transition (delivered, cancelled)
 // funnels through here so the flag, and therefore the inbox "Working" bucket, can never drift

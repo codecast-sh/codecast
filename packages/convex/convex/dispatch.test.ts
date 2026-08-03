@@ -112,6 +112,66 @@ describe("applyPatches conversation owner gate", () => {
   });
 });
 
+// Kill is a DESIRED STATE, not an event. A kill patch is indistinguishable at
+// the FIELD level from a quiet re-assert of the same flag (a stub-rekey flush,
+// an undo replay), so the dispatched ACTION NAME is the only signal of intent
+// the server gets. Regression: a killed session whose worker a daemon bug
+// revived still carried inbox_dismissed_at, so the hide transition classified
+// "none" and no teardown was ever enqueued — the worker was unkillable.
+describe("explicit kill actions force teardown", () => {
+  const RUNNER = "users_runner";
+  const CONV = "conversations_killed";
+
+  function fixtures() {
+    return makeFakeDb({
+      // Already in the Killed bucket, with real work (so the empty-reap path
+      // can't fire) — the resurrection case.
+      conversations: [{
+        _id: CONV, user_id: RUNNER, session_id: "s-1", status: "completed",
+        message_count: 12, inbox_dismissed_at: 111, inbox_killed_at: 111,
+      }],
+      messages: [],
+      pending_messages: [],
+      client_state: [],
+      managed_sessions: [],
+      agent_tasks: [],
+      daemon_commands: [],
+      session_owners: [],
+    });
+  }
+
+  const run = (db: any, action: string) => (dispatch as any)._handler({
+    auth: { getUserIdentity: async () => ({ subject: `${RUNNER}|session` }) },
+    db,
+  }, {
+    action,
+    args: [],
+    patches: { conversations: { [CONV]: { inbox_dismissed_at: 222 } } },
+  });
+
+  const teardowns = (db: any) =>
+    db._tables.daemon_commands.filter((c: any) => c.command === "kill_session");
+
+  test("killSession re-enqueues teardown on an already-killed session", async () => {
+    const db = fixtures();
+    await run(db, "killSession");
+    expect(teardowns(db)).toHaveLength(1);
+    expect(JSON.parse(teardowns(db)[0].args)).toMatchObject({ conversation_id: CONV, session_id: "s-1" });
+  });
+
+  test("killSessions (the bulk gesture) forces the same way", async () => {
+    const db = fixtures();
+    await run(db, "killSessions");
+    expect(teardowns(db)).toHaveLength(1);
+  });
+
+  test("a quiet re-assert of the flag by any other action does NOT re-kill", async () => {
+    const db = fixtures();
+    await run(db, "patchConversation");
+    expect(teardowns(db)).toHaveLength(0);
+  });
+});
+
 describe("applyPatches bucket coverage", () => {
   test("a legacy generic bucket patch advances the v2 complete-view head once", async () => {
     const userId = "users_owner";

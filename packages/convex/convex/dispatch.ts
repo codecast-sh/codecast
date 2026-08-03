@@ -107,7 +107,7 @@ export const dispatch = mutation({
       typeof patches === "object" &&
       !(hasReceiptCommandId(result) && RECEIPT_OWNS_SERVER_WRITE.has(action))
     ) {
-      await applyPatches(ctx, userId, patches);
+      await applyPatches(ctx, userId, patches, { forceKill: EXPLICIT_KILL_ACTIONS.has(action) });
     }
 
     const sideEffect = SIDE_EFFECTS[action];
@@ -269,11 +269,21 @@ function deepMergeField(existing: any, incoming: any): any {
 // visibility mutation. Re-exported here for the existing tests.
 export { classifyHideTransition } from "./cleanup";
 
+// The web's explicit kill gestures (inboxStore killSession / killSessions). A
+// kill patch is indistinguishable at the FIELD level from a quiet re-assert of
+// the same flag — a stub-rekey flushResolvedSessionFields, an applyUndoPatches
+// replay — so the dispatched ACTION NAME is the only signal of intent the
+// server gets, and a kill must tear down again even when the flag is already
+// set (see applyHideTransition's forceKill). Every other action patching
+// inbox_dismissed_at stays transition-gated.
+const EXPLICIT_KILL_ACTIONS = new Set(["killSession", "killSessions"]);
+
 // Exported for tests (the dispatch mutation is the only runtime caller).
 export async function applyPatches(
   ctx: HandlerCtx,
   userId: Id<"users">,
-  patches: Record<string, Record<string, Record<string, any>>>
+  patches: Record<string, Record<string, Record<string, any>>>,
+  opts?: { forceKill?: boolean }
 ) {
   let bucketViewChanged = false;
   for (const [table, docs] of Object.entries(patches)) {
@@ -331,7 +341,7 @@ export async function applyPatches(
         // dismiss/stash path funnels through here — the inbox shortcuts, the
         // palette, the /sessions toggle (patchConversation), and any future one.
         if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
-          await applyHideTransition(ctx, doc, finalSafe as any);
+          await applyHideTransition(ctx, doc, finalSafe as any, { forceKill: opts?.forceKill });
         }
         // The un-kill mirror: a patch CLEARING inbox_dismissed_at on a row that
         // had it is the restore/undo gesture (web restoreSession, undo of a

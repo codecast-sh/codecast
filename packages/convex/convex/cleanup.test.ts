@@ -8,6 +8,7 @@ import {
   cascadeHideToNestedChildren,
   applyHideTransition,
 } from "./cleanup";
+import { enqueuePendingMessage } from "./pendingMessages";
 
 // Minimal in-memory ctx.db honoring the .withIndex(name, q => q.eq(field,val))
 // chains the cleanup helpers use, so the reap logic is testable without the full
@@ -269,6 +270,28 @@ describe("cascadeHideToNestedChildren", () => {
     expect(row("conv_fork").inbox_dismissed_at).toBeUndefined();
   });
 
+  // A FORCED kill takes the group down again: the lead's teardown is only as
+  // good as its children's, and a resurrected teammate is exactly the bug
+  // forcing exists to fix. Their hide stamps stay put — only teardown re-runs.
+  test("a FORCED kill re-tears-down already-hidden children (group comes down as one unit)", async () => {
+    const tables = mkTables();
+    const db = makeFakeDb(tables);
+    const lead = tables.conversations[0];
+    const kills = () => db._inserted.filter((i: any) => i.table === "daemon_commands");
+
+    await cascadeHideToNestedChildren({ db }, lead, { inbox_dismissed_at: 111 });
+    expect(kills()).toHaveLength(2);
+    // The daemon executed those kills; a resurrection bug brought the workers
+    // back. Executed commands leave nothing pending, so the re-kill enqueues.
+    for (const cmd of tables.daemon_commands) cmd.executed_at = 1;
+
+    const again = await cascadeHideToNestedChildren({ db }, lead, { inbox_dismissed_at: 222 }, { forceKill: true });
+    expect(again).toBe(2);
+    expect(kills()).toHaveLength(4);
+    // Already-hidden children keep their original stamp — no timestamp churn.
+    expect(tables.conversations.find((r: any) => r._id === "conv_sub")!.inbox_dismissed_at).toBe(111);
+  });
+
   test("already-hidden children are skipped — a re-asserted hide never re-kills", async () => {
     const tables = mkTables();
     const db = makeFakeDb(tables);
@@ -337,5 +360,206 @@ describe("cascadeHideToNestedChildren", () => {
     const { cascaded } = await applyHideTransition({ db }, lead, patch, { cascade: false });
     expect(cascaded).toBe(0);
     expect(tables.conversations.find((r: any) => r._id === "conv_sub")!.inbox_dismissed_at).toBeUndefined();
+  });
+});
+
+// Kill is a DESIRED STATE, not an event. classifyHideTransition gates on the
+// hide flag's transition, which is right for a quiet re-assert (the web's
+// optimistic re-patch, a stub-rekey flush) and wrong for a deliberate re-kill:
+// a killed session whose worker a daemon bug revived was still flagged, so
+// `cast kill` classified "none" and never enqueued teardown — the worker was
+// unkillable through the supported path. forceKill is how an EXPLICIT kill
+// gesture says "make it so" regardless of the flags.
+describe("applyHideTransition — explicit kill forces teardown", () => {
+  const CONV = "conv_killed";
+  // Already killed (dismissed + completed), with real work so the empty-reap
+  // path can't fire — the resurrection case. `extra` overrides the row (e.g.
+  // back to a live, never-killed session for the fresh-kill cases).
+  const mkTables = (extra: Record<string, any> = {}): Record<string, any[]> => ({
+    conversations: [{
+      _id: CONV, user_id: "u1", session_id: "s-1", message_count: 12,
+      inbox_dismissed_at: 111, inbox_killed_at: 111, status: "completed", ...extra,
+    }],
+    daemon_commands: [],
+    messages: [],
+    pending_messages: [],
+    managed_sessions: [],
+    client_state: [],
+    agent_tasks: [],
+  });
+  const prePatch = (tables: Record<string, any[]>) => ({ ...tables.conversations[0] });
+  const kills = (db: any) => db._inserted.filter((i: any) => i.table === "daemon_commands");
+
+  test("a re-asserted EXPLICIT kill enqueues teardown again", async () => {
+    const tables = mkTables();
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_dismissed_at: 222 };
+    await db.patch(CONV, patch);
+
+    const { action, teardownEnqueued } = await applyHideTransition({ db }, doc, patch, { forceKill: true });
+    expect(action).toBe("kill");
+    expect(teardownEnqueued).toBe(true);
+    expect(kills(db)).toHaveLength(1);
+    expect(kills(db)[0].doc.command).toBe("kill_session");
+    expect(JSON.parse(kills(db)[0].doc.args)).toMatchObject({ conversation_id: CONV, session_id: "s-1" });
+    expect(tables.conversations[0].inbox_killed_at).toBeGreaterThan(111);
+  });
+
+  test("a re-asserted quiet DISMISS still does not re-kill", async () => {
+    const tables = mkTables();
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_dismissed_at: 222 };
+    await db.patch(CONV, patch);
+
+    const { action, teardownEnqueued } = await applyHideTransition({ db }, doc, patch);
+    expect(action).toBe("none");
+    expect(teardownEnqueued).toBe(false);
+    expect(kills(db)).toHaveLength(0);
+  });
+
+  test("forceKill never turns a STASH into a kill", async () => {
+    const tables = mkTables({ inbox_dismissed_at: undefined, inbox_killed_at: undefined, status: "active" });
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_stashed_at: 333 };
+    await db.patch(CONV, patch);
+
+    const { action } = await applyHideTransition({ db }, doc, patch, { forceKill: true });
+    expect(action).toBe("none");
+    expect(kills(db)).toHaveLength(0);
+    expect(tables.conversations[0].status).toBe("active");
+  });
+
+  test("a kill still queued for the daemon reports no new command, but the state holds", async () => {
+    const tables = mkTables();
+    // An UNEXECUTED kill_session for this conversation is already on the queue.
+    tables.daemon_commands.push({
+      _id: "cmdPending", user_id: "u1", command: "kill_session",
+      args: JSON.stringify({ conversation_id: CONV }), created_at: 111,
+    });
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_dismissed_at: 222 };
+    await db.patch(CONV, patch);
+
+    const { action, teardownEnqueued } = await applyHideTransition({ db }, doc, patch, { forceKill: true });
+    expect(action).toBe("kill");
+    expect(teardownEnqueued).toBe(false);
+    expect(kills(db)).toHaveLength(0);
+  });
+
+  // A persistent anchor goes dormant on a kill, it is never retired — only
+  // decommissionAnchor clears `persistent`. Forcing must not change that.
+  test("a forced kill on a persistent anchor keeps anchor semantics", async () => {
+    const tables = mkTables({ persistent: true, status: "active" });
+    tables.agent_tasks.push({
+      _id: "t1", user_id: "u1", status: "scheduled", originating_conversation_id: CONV,
+    });
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_dismissed_at: 222 };
+    await db.patch(CONV, patch);
+
+    const { action, canceledSchedules, teardownEnqueued } = await applyHideTransition({ db }, doc, patch, { forceKill: true });
+    expect(action).toBe("kill");
+    expect(teardownEnqueued).toBe(true);
+    expect(canceledSchedules).toBe(0);
+    expect(tables.agent_tasks[0].status).toBe("scheduled");
+    expect(tables.conversations[0].status).toBe("active");
+    expect(tables.conversations[0].inbox_killed_at).toBeGreaterThan(111);
+  });
+
+  // Kill is TERMINAL for messages already queued. Retained ones kept retrying:
+  // one could land later and revive a session still stamped inbox_killed_at
+  // (observed live — 193 messages after the kill), and an exhausted one left the
+  // row completed + has_pending_messages forever.
+  test("a kill cancels the messages already queued and clears has_pending_messages", async () => {
+    const tables = mkTables({
+      inbox_dismissed_at: undefined, inbox_killed_at: undefined,
+      status: "active", has_pending_messages: true,
+    });
+    tables.pending_messages.push(
+      { _id: "pm_pending", conversation_id: CONV, status: "pending", retry_count: 0 },
+      { _id: "pm_undeliverable", conversation_id: CONV, status: "undeliverable", retry_count: 9 },
+      { _id: "pm_delivered", conversation_id: CONV, status: "delivered", retry_count: 1 },
+    );
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_dismissed_at: 222 };
+    await db.patch(CONV, patch);
+
+    // A FRESH kill (no force needed) — the flag transitions here.
+    const { action, canceledMessages } = await applyHideTransition({ db }, doc, patch);
+    expect(action).toBe("kill");
+    expect(canceledMessages).toBe(2);
+    const msg = (id: string) => tables.pending_messages.find((r: any) => r._id === id)!;
+    expect(msg("pm_pending").status).toBe("cancelled");
+    expect(msg("pm_undeliverable").status).toBe("cancelled");
+    expect(msg("pm_delivered").status).toBe("delivered"); // terminal, untouched
+    expect(tables.conversations[0].has_pending_messages).toBe(false);
+  });
+
+  test("a forced re-kill cancels what was queued since the first kill", async () => {
+    const tables = mkTables({ has_pending_messages: true });
+    tables.pending_messages.push(
+      { _id: "pm_since", conversation_id: CONV, status: "pending", retry_count: 0 },
+    );
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_dismissed_at: 222 };
+    await db.patch(CONV, patch);
+
+    const { canceledMessages } = await applyHideTransition({ db }, doc, patch, { forceKill: true });
+    expect(canceledMessages).toBe(1);
+    expect(tables.pending_messages[0].status).toBe("cancelled");
+    expect(tables.conversations[0].has_pending_messages).toBe(false);
+  });
+
+  // The other half of the contract: only the PRE-kill queue dies. A human send
+  // afterwards re-enqueues and resurfaces the session — enqueuePendingMessage's
+  // wake-up rules clear the dismissed/killed flags and flip completed → active.
+  test("a later send still revives the killed session; the pre-kill queue stays dead", async () => {
+    const tables = mkTables({ has_pending_messages: true });
+    tables.pending_messages.push(
+      { _id: "pm_before", conversation_id: CONV, status: "pending", retry_count: 0 },
+    );
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_dismissed_at: 222 };
+    await db.patch(CONV, patch);
+    await applyHideTransition({ db }, doc, patch, { forceKill: true });
+    expect(tables.pending_messages[0].status).toBe("cancelled");
+
+    const conv = await db.get(CONV);
+    const newId = await enqueuePendingMessage({ db }, conv, "u1" as any, { content: "back to work" });
+
+    expect(tables.pending_messages.find((r: any) => r._id === newId)!.status).toBe("pending");
+    expect(conv.inbox_dismissed_at).toBeUndefined();
+    expect(conv.inbox_killed_at).toBeUndefined();
+    expect(conv.status).toBe("active");
+    expect(conv.has_pending_messages).toBe(true);
+    // The message queued before the kill is terminal — it must not ride along.
+    expect(tables.pending_messages.find((r: any) => r._id === "pm_before")!.status).toBe("cancelled");
+  });
+
+  // Re-running the schedule sweep is safe: it only touches
+  // scheduled/running/paused tasks, so already-canceled ones stay put — and a
+  // trigger re-armed since the first kill dies again with the session.
+  test("a forced kill re-cancels a schedule re-armed since the first kill", async () => {
+    const tables = mkTables();
+    tables.agent_tasks.push({
+      _id: "t1", user_id: "u1", status: "scheduled", originating_conversation_id: CONV,
+    });
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_dismissed_at: 222 };
+    await db.patch(CONV, patch);
+
+    const { canceledSchedules } = await applyHideTransition({ db }, doc, patch, { forceKill: true });
+    expect(canceledSchedules).toBe(1);
+    expect(tables.agent_tasks[0].status).toBe("completed");
+    expect(tables.agent_tasks[0].canceled_on_kill_at).toBeGreaterThan(0);
   });
 });

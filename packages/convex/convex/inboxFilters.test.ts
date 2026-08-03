@@ -459,7 +459,7 @@ describe("classifyWorkState", () => {
   test("THE RULE: a settled session with content → needs_input (matches the web inbox)", () => {
     // The web inbox has no "idle with content" bucket — a finished turn waiting
     // to be read is the user's ball, so it files under NEEDS INPUT. The CLI
-    // matches; "idle" is reserved for blank sessions.
+    // matches; "idle" is reserved for blank (or killed) sessions.
     expect(classifyWorkState(wsi({ isIdle: true }))).toBe("needs_input");
   });
 
@@ -480,6 +480,22 @@ describe("classifyWorkState", () => {
     expect(classifyWorkState(wsi({ messageCount: 0, isIdle: false }))).toBe("idle");
     // ...but an actively-working empty session (just spawned) is still working.
     expect(classifyWorkState(wsi({ messageCount: 0, agentStatus: "starting" }))).toBe("working");
+  });
+
+  // A killed row is triaged — the user retired it. It used to read as "working"
+  // off a stale has_pending_messages flag (a message queued before the kill that
+  // outlived it) or off an agent_status from a worker a daemon bug revived, so
+  // the inbox showed a dead session busily working. Kill outranks all of it.
+  test("a KILLED row never classifies as working, whatever stale flags it carries", () => {
+    expect(classifyWorkState(wsi({ killed: true, hasPending: true }))).toBe("idle");
+    expect(classifyWorkState(wsi({ killed: true, agentStatus: "working" }))).toBe("idle");
+    expect(classifyWorkState(wsi({ killed: true, isIdle: false }))).toBe("idle");
+    // …and it stops demanding attention too: the user already dealt with it.
+    expect(classifyWorkState(wsi({ killed: true, isIdle: true }))).toBe("idle");
+    expect(classifyWorkState(wsi({ killed: true, awaitingInput: true }))).toBe("idle");
+    // A revived session clears inbox_killed_at (pendingMessages.enqueue), so an
+    // un-killed row classifies normally again.
+    expect(classifyWorkState(wsi({ killed: false, hasPending: true }))).toBe("working");
   });
 
   test("an unresponsive (dead-daemon) session with queued work does NOT count as working", () => {

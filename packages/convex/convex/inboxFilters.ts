@@ -335,7 +335,9 @@ export function subagentKeepsParentWorking(input: {
 //                    session with output. This is the web's NEEDS INPUT bucket:
 //                    a settled session with content always lands here (pinned
 //                    included — a pin means "ping me when this is free").
-//   - "idle":        nothing to act on: blank sessions (no messages yet).
+//   - "idle":        nothing to act on: blank sessions (no messages yet), and
+//                    KILLED sessions — the user retired those, so they never
+//                    read as working or needs-input again (see `killed` below).
 // This is the server-side mirror of the web store's isSessionWaitingForInput,
 // minus the client-only queued-message signal, and is the ONE place the rule
 // lives — the CLI only ever string-matches the resulting work_state.
@@ -349,6 +351,8 @@ export interface WorkStateInput {
   hasPending: boolean;
   isUnresponsive: boolean;
   messageCount: number;
+  /** conversations.inbox_killed_at — the user retired this row. Outranks everything below. */
+  killed?: boolean;
 }
 
 // Accepted `--state` filter values for CLI discovery, normalized to a canonical
@@ -424,10 +428,22 @@ export const NEEDS_INPUT_AUQ_CHECK_DELAY_MS = 2_000;
 export const HEARTBEAT_ALIVE_MS = 90 * 1000;
 
 export function classifyWorkState(input: WorkStateInput): WorkState {
-  const { agentStatus, isIdle, awaitingInput, hasPending, isUnresponsive, messageCount } = input;
+  const { agentStatus, isIdle, awaitingInput, hasPending, isUnresponsive, messageCount, killed } = input;
   const dead = !!agentStatus && DEAD_AGENT_STATUSES.has(agentStatus);
   const canDeliver = !isUnresponsive && !dead;
   const hasMsgs = messageCount > 0;
+
+  // A KILLED row is triaged and outranks every signal below it: the user retired
+  // it, so nothing about it is actionable and it must never read as "working".
+  // Kill now cancels the messages queued before it, but a has_pending flag can
+  // still be stale (an in-flight fenced row, an older kill), and an agent_status
+  // can come from a worker a daemon bug revived — both used to park the dead row
+  // back in the Working bucket. inbox_killed_at is the right signal precisely
+  // because ANY new send clears it (pendingMessages.enqueue's wake-up rules), so
+  // a genuinely revived session classifies normally again. `status: "completed"`
+  // alone deliberately does NOT qualify — an ordinary finished session with a
+  // queued message really is about to work on it.
+  if (killed) return "idle";
 
   // Blocked on the user right now (open AskUserQuestion poll, or a tool-use
   // awaiting approve/deny) → needs input. A poll/permission on an empty session
