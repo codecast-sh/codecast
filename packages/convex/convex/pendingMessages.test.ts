@@ -9,7 +9,10 @@ import {
   planStuckMessageHeal,
   resetConversationPendingMessages,
   updatePendingMessageStatusForDaemon,
+  cancelQueuedMessagesOnKill,
+  updateMessageStatus,
 } from "./pendingMessages";
+import { makeFakeDb } from "./testDb";
 
 describe("collectOldLegacyPendingMessages", () => {
   test("reads only by_status and excludes recent and fenced rows", async () => {
@@ -515,5 +518,197 @@ describe("planStuckMessageHeal", () => {
     expect(recent("failed", "hi", old).kind).toBe("repend");
     expect(recent("injected", "real text", old).kind).toBe("repend");
     expect(recent("pending", "real text", old).kind).toBe("repend");
+  });
+});
+
+// Kill is TERMINAL for the messages already queued. The retry loop is otherwise
+// indefinite, so a retained message could land long after the kill and revive a
+// session still stamped inbox_killed_at (observed live), or — once its retries
+// were exhausted — strand the row as completed + has_pending_messages forever.
+describe("cancelQueuedMessagesOnKill", () => {
+  const CONV = "c1";
+  const mkDb = (rows: Array<Record<string, any>>, convExtra: Record<string, any> = {}) =>
+    makeFakeDb({
+      conversations: [{ _id: CONV, user_id: "u1", has_pending_messages: true, ...convExtra }],
+      pending_messages: rows.map((r) => ({ conversation_id: CONV, retry_count: 0, ...r })),
+    });
+
+  test("cancels every non-terminal queued message and clears the conversation flag", async () => {
+    const db = mkDb([
+      { _id: "m_pending", status: "pending" },
+      { _id: "m_injected", status: "injected" },
+      { _id: "m_failed", status: "failed" },
+      { _id: "m_undeliverable", status: "undeliverable" },
+      { _id: "m_delivered", status: "delivered" },
+      { _id: "m_cancelled", status: "cancelled" },
+    ]);
+
+    expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(4);
+    const row = (id: string) => db._tables.pending_messages.find((r: any) => r._id === id)!;
+    for (const id of ["m_pending", "m_injected", "m_failed", "m_undeliverable"]) {
+      expect(row(id).status).toBe("cancelled");
+    }
+    expect(row("m_delivered").status).toBe("delivered");
+    expect(db._tables.conversations[0].has_pending_messages).toBe(false);
+  });
+
+  // The stranded-row repair: a kill whose queue already went terminal still has
+  // to clear the flag, or the row sits "completed + has pending work" forever.
+  test("clears a stale has_pending_messages flag even with nothing left to cancel", async () => {
+    const db = mkDb([{ _id: "m_delivered", status: "delivered" }]);
+    expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(0);
+    expect(db._tables.conversations[0].has_pending_messages).toBe(false);
+  });
+
+  // A queue deeper than one page must not survive a kill — the cancel drains,
+  // it doesn't sample.
+  test("drains a queue larger than one page", async () => {
+    const many = Array.from({ length: 250 }, (_, i) => ({ _id: `m${i}`, status: "pending" }));
+    const db = mkDb(many);
+    expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(250);
+    expect(db._tables.pending_messages.every((r: any) => r.status === "cancelled")).toBe(true);
+    expect(db._tables.conversations[0].has_pending_messages).toBe(false);
+  });
+
+  // Fenced (delivery-protocol v2) rows can't be patched to "cancelled" behind
+  // the epoch machinery's back — kill routes them through its sanctioned cancel
+  // instead, so kill is terminal on a fenced conversation too.
+  test("cancels UNSTARTED fenced deliveries through the epoch machinery", async () => {
+    const db = mkDb([
+      { _id: "m_fenced", status: "pending", delivery_protocol_version: 2, delivery_status: "pending" },
+    ], { execution_protocol_state: "fenced" });
+    expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(1);
+    expect(db._tables.pending_messages[0].status).toBe("cancelled");
+    expect(db._tables.pending_messages[0].delivery_status).toBe("cancelled-by-supersession");
+    expect(db._tables.conversations[0].has_pending_messages).toBe(false);
+  });
+
+  // Kill must never be the gesture that fails on exactly the sessions it exists
+  // for. A runaway session's history is dominated by TERMINAL delivered rows, so
+  // the sweep reads only the status-scoped index — collecting by_conversation_id
+  // (the documented anti-pattern) is what blows the transaction's read limit.
+  test("never reads the conversation's whole history — status-scoped indexes only", async () => {
+    const history = Array.from({ length: 2000 }, (_, i) => ({ _id: `d${i}`, status: "delivered" }));
+    const db = mkDb([...history, { _id: "m_live", status: "pending" }], { execution_protocol_state: "fenced" });
+    const indexes: string[] = [];
+    const rawQuery = db.query.bind(db);
+    db.query = (table: string) => {
+      const builder = rawQuery(table);
+      const rawWithIndex = builder.withIndex.bind(builder);
+      builder.withIndex = (name: string, fn?: any) => {
+        if (table === "pending_messages") indexes.push(name);
+        return rawWithIndex(name, fn);
+      };
+      return builder;
+    };
+
+    expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(1);
+    expect(indexes.length).toBeGreaterThan(0);
+    expect(indexes.every((i) => i === "by_conversation_status")).toBe(true);
+    expect(db._tables.pending_messages.filter((r: any) => r.status === "delivered")).toHaveLength(2000);
+  });
+
+  // The fenced sweep is the expensive one; an ordinary conversation must not pay
+  // for it. (Its rows are legacy by construction, so there is nothing to find.)
+  test("skips the fenced sweep entirely on a conversation that isn't fenced", async () => {
+    const db = mkDb([{ _id: "m_pending", status: "pending" }]);
+    const heads: string[] = [];
+    const rawQuery = db.query.bind(db);
+    db.query = (table: string) => { heads.push(table); return rawQuery(table); };
+    await cancelQueuedMessagesOnKill({ db } as any, CONV as any);
+    expect(heads).not.toContain("conversation_execution_heads");
+  });
+
+  // Overflow: one transaction cancels at most the budget and hands the rest to a
+  // scheduled continuation, so the kill mutation itself always lands fast.
+  test("caps one transaction at the budget and schedules the remainder", async () => {
+    const db = mkDb(Array.from({ length: 350 }, (_, i) => ({ _id: `m${i}`, status: "pending" })));
+    const scheduled: any[] = [];
+    const ctx = { db, scheduler: { runAfter: async (_d: number, fn: any, a: any) => { scheduled.push([fn, a]); } } };
+
+    expect(await cancelQueuedMessagesOnKill(ctx as any, CONV as any)).toBe(300);
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0][1]).toEqual({ conversation_id: CONV });
+    expect(db._tables.pending_messages.filter((r: any) => r.status === "pending")).toHaveLength(50);
+
+    // The continuation finishes the job (and doesn't need another).
+    scheduled.length = 0;
+    expect(await cancelQueuedMessagesOnKill(ctx as any, CONV as any)).toBe(50);
+    expect(db._tables.pending_messages.every((r: any) => r.status === "cancelled")).toBe(true);
+    expect(scheduled).toHaveLength(0);
+  });
+
+  // A delivery already landing in the pane is the one thing kill may not
+  // rewrite — only the delivery machinery resolves it. The flag stays true,
+  // which is the honest answer (classifyWorkState keeps the killed row out of
+  // the Working bucket regardless).
+  test("leaves an in-flight fenced delivery alone and does not lie about the flag", async () => {
+    const db = mkDb([
+      { _id: "m_started", status: "pending", delivery_protocol_version: 2, delivery_status: "delivery-started" },
+    ], { execution_protocol_state: "fenced" });
+    expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(0);
+    expect(db._tables.pending_messages[0].status).toBe("pending");
+    expect(db._tables.pending_messages[0].delivery_status).toBe("delivery-started");
+    expect(db._tables.conversations[0].has_pending_messages).toBe(true);
+  });
+});
+
+// The delivery-side twin of the enqueue wake-up rules: if the system injects a
+// message into a conversation, that conversation is alive whatever its inbox
+// flags say. Without this, a message that outlived a kill runs the session while
+// the row still reads killed — and classifyWorkState now files that as "idle",
+// so the contradiction is invisible.
+describe("delivery revives a killed conversation", () => {
+  const CONV = "c1";
+  const killedDb = () =>
+    makeFakeDb({
+      conversations: [{
+        _id: CONV, user_id: "u1", status: "completed",
+        inbox_killed_at: 111, inbox_dismissed_at: 111, inbox_stashed_at: 111,
+      }],
+      pending_messages: [{ _id: "m1", conversation_id: CONV, status: "pending", retry_count: 0 }],
+    });
+
+  test("an injection clears the kill/dismiss stamps and re-activates the row", async () => {
+    const db = killedDb();
+    await updatePendingMessageStatusForDaemon({ db } as any, "m1" as any, "u1" as any, "dev1", { status: "injected" });
+    const conv = db._tables.conversations[0];
+    expect(conv.inbox_killed_at).toBeUndefined();
+    expect(conv.inbox_dismissed_at).toBeUndefined();
+    expect(conv.status).toBe("active");
+    // Stash survives on purpose: "keep working out of my sight" is exactly what
+    // a delivering-but-hidden session is doing (mirrors enqueue's machine wake).
+    expect(conv.inbox_stashed_at).toBe(111);
+  });
+
+  // The PUBLIC status mutation is not proof of delivery. With device_id omitted
+  // it writes through the same helper but its authorization passes on
+  // message.from_user_id alone — no conversation ownership — so a teammate who
+  // sent into my session (or a replay of their client) could post
+  // status:"injected" and un-retire a session I killed with nothing delivered.
+  // "injected" is self-reported and reversible; only the owning daemon's word counts.
+  test("the PUBLIC status mutation cannot revive a killed session", async () => {
+    const db = killedDb();
+    // The sender is a teammate — the conversation is mine.
+    db._tables.pending_messages[0].from_user_id = "u_teammate";
+    await (updateMessageStatus as any)._handler(
+      {
+        db,
+        auth: { getUserIdentity: async () => ({ subject: "u_teammate|session" }) },
+      },
+      { message_id: "m1", status: "injected" },
+    );
+    const conv = db._tables.conversations[0];
+    expect(db._tables.pending_messages[0].status).toBe("injected"); // the write itself still lands
+    expect(conv.inbox_killed_at).toBe(111); // …but the session stays retired
+    expect(conv.status).toBe("completed");
+  });
+
+  test("a CANCEL is not a delivery and revives nothing", async () => {
+    const db = killedDb();
+    await cancelQueuedMessagesOnKill({ db } as any, CONV as any);
+    const conv = db._tables.conversations[0];
+    expect(conv.inbox_killed_at).toBe(111);
+    expect(conv.status).toBe("completed");
   });
 });

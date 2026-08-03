@@ -685,6 +685,7 @@ export async function performNeedsInputCheck(
     hasPending,
     isUnresponsive: activity.isUnresponsive,
     messageCount: conv.message_count || 0,
+    killed: !!conv.inbox_killed_at,
   });
   if (state !== "needs_input") return { notified: false, reason: "not_needs_input" };
 

@@ -78,7 +78,7 @@ import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { getMachineKey } from "./machineKey.js";
 import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
-import { SyncService, AuthExpiredError, type CreateConversationParams } from "./syncService.js";
+import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
 import { InvalidateSync, type InvalidateSyncOptions } from "./invalidateSync.js";
@@ -2291,6 +2291,155 @@ function ownedByAnotherLiveDevice(
   return !!info?.ownerDeviceId && info.ownerDeviceId !== deviceId() && !!info.ownerOnline;
 }
 
+// Every resume driven by a resume_session / fork_session command — i.e. a human
+// pressing Restart/Resume/Fork. See ResumeOptions.userInitiated.
+const USER_RESUME = { userInitiated: true } as const;
+
+export type OwnerInfo = { ownerDeviceId?: string | null; ownerIsRemote?: boolean; ownerOnline?: boolean } | null | undefined;
+
+export type ResumeOwnerVerdict = "proceed" | "owned_by_live_device" | "remote_unowned" | "remote_no_conversation";
+
+/**
+ * Whether THIS daemon may resume a conversation, given who owns it. Two rules,
+ * one owner lookup:
+ *   - EVERY device: never resume a conversation owned by a DIFFERENT device that
+ *     is currently live — that daemon is the one running it. The command queue
+ *     has always enforced this (see the ownedByAnotherLiveDevice skip in
+ *     executeRemoteCommand), but resume itself only gated remotes, so a
+ *     conversation owned by a live peer got resumed on both machines at once.
+ *   - REMOTE devices only: a remote daemon (the cloud Mac) manages ONLY sessions
+ *     explicitly OWNED by it. Unlike the primary local daemon it must not adopt
+ *     unowned sessions — doing so reconstitutes the user's real sessions from
+ *     Convex and double-manages them (cross-device stomp).
+ * A DEAD/unresponsive owner, or an unowned conversation, proceeds on a local
+ * daemon: that failover (adopt and keep serving) is deliberate.
+ */
+export function resumeOwnerVerdict(input: {
+  conversationId: string | undefined;
+  localDeviceId: string;
+  isRemote: boolean;
+  owner: OwnerInfo;
+}): ResumeOwnerVerdict {
+  if (!!input.owner?.ownerDeviceId && input.owner.ownerDeviceId !== input.localDeviceId && !!input.owner.ownerOnline) {
+    return "owned_by_live_device";
+  }
+  if (!input.isRemote) return "proceed";
+  if (!input.conversationId) return "remote_no_conversation";
+  if (input.owner?.ownerDeviceId !== input.localDeviceId) return "remote_unowned";
+  return "proceed";
+}
+
+// Every tmux name start_session could have minted for a conversation
+// (cc-<agent>-<convId.slice(-12)>), for EVERY launchable agent — sourced from the
+// shared registry, because the old hardcoded ["claude","codex","cursor","gemini"]
+// silently leaked opencode and pi panes, and this sweep is the ONLY teardown on
+// the owner-defer path: a missing id there means a permanently unkillable pane.
+export function derivedPaneNamesForConversation(conversationId: string): string[] {
+  const convSuffix = conversationId.slice(-12);
+  return Object.keys(AGENT_CLIENTS).map((agent) => `cc-${agent}-${convSuffix}`);
+}
+
+// Everything killConversationBackends clears per session, in one place so the
+// owner-defer sweep can't drift from it. resumeInFlight matters most: a resume
+// that passed the lifecycle/owner gates BEFORE the kill is still holding a
+// promise, and leaving its entry behind lets the next delivery join that stale
+// promise and adopt the pane it recreates. (This narrows the window; it cannot
+// cancel a resume already in flight — one that lands after the sweep is caught by
+// the next health check or reaper pass.)
+export function clearSessionTrackingForKill(sessionId: string | null | undefined): void {
+  if (!sessionId) return;
+  // NOTE on restartingSessionIds: killConversationBackends never cleared it, and
+  // this does. Harmless today because Restart enqueues kill and resume as two
+  // separate daemon commands, so the guard is not yet set when the kill runs. It
+  // stops being harmless if those ever land together or in-process: the guard is
+  // what tells the watchdog "a restart is in progress, don't mark this
+  // completed", so clearing it mid-restart would make Restart complete the
+  // session instead of restarting it. If you couple them, drop this line.
+  stopManagedSessionHeartbeat(sessionId);
+  stopCodexPermissionPoller(sessionId);
+  resumeSessionCache.delete(sessionId);
+  sessionProcessCache.delete(sessionId);
+  resumeInFlight.delete(sessionId);
+  resumeInFlightStarted.delete(sessionId);
+  restartingSessionIds.delete(sessionId);
+}
+
+// Test/inspection seam: which per-session kill-teardown maps still hold an entry.
+export function sessionKillTrackingSnapshot(sessionId: string): Record<string, boolean> {
+  return {
+    pane: resumeSessionCache.has(sessionId),
+    resumeInFlight: resumeInFlight.has(sessionId),
+    resumeInFlightStarted: resumeInFlightStarted.has(sessionId),
+    restarting: restartingSessionIds.has(sessionId),
+    process: sessionProcessCache.has(sessionId),
+  };
+}
+
+/**
+ * Kill every tmux pane for a conversation that is PHYSICALLY on this machine,
+ * regardless of who the conversation records as its owner. A pane in this
+ * daemon's own tmux server is always safe to tear down, and an owner-mismatched
+ * one is otherwise unkillable from anywhere: the owner device has no pane to
+ * kill and this device refuses the command (2026-08-03 — pane on the laptop,
+ * owner_device_id=nose, both daemons declined, the agent ran on untouched).
+ *
+ * Two ownership-independent sweeps, both keyed off ids alone (no lookup tables,
+ * so they reach a pane that outlived every in-memory map — e.g. across a daemon
+ * restart):
+ *   1. any pane stamped with this session id (@codecast_session_id)
+ *   2. the deterministic cc-<agent>-<convId.slice(-12)> name start_session mints
+ * Each stops tracking BEFORE the kill, or heartbeatHealthCheck sees the vanished
+ * tmux and RECONSTITUTES the agent. Returns how many panes were killed.
+ */
+export async function killLocalPanesForConversation(
+  conversationId: string,
+  sessionIdHint: string | undefined,
+  context: string,
+): Promise<number> {
+  let killed = 0;
+  const stopTracking = (id: string | null | undefined) => clearSessionTrackingForKill(id);
+
+  const sessionId = sessionIdHint ?? buildReverseConversationCache(readConversationCache())[conversationId];
+  // UNCONDITIONALLY, before any pane lookup — finding no pane is not the same as
+  // having nothing to clear, and is in fact THE race this exists for: a resume
+  // that passed the gates is mid-flight and its pane does not exist YET, so a
+  // sweep that only cleared state next to a kill would leave resumeInFlight set
+  // and let that resume complete into a killed conversation. (The loops below
+  // still call it for the id stamped on a pane, which can differ from this one.)
+  clearSessionTrackingForKill(sessionId);
+  if (sessionId) {
+    try {
+      const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
+      for (const tmuxName of tmuxList.trim().split("\n")) {
+        if (!tmuxName || !(await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))) continue;
+        if (!validateTmuxTarget(tmuxName)) continue;
+        stopTracking(sessionId);
+        await killTmuxSessionAndTree(tmuxName);
+        log(`[${context}] Killed local tmux ${tmuxName} (+process tree) for session ${sessionId.slice(0, 8)}`);
+        killed++;
+      }
+    } catch {}
+  }
+
+  // agentType isn't in the kill args, so try every prefix; has-session guards
+  // each (cheap, idempotent). The session id lives on the tmux itself, so we can
+  // stop the right heartbeat even when no lookup table maps this conversation.
+  for (const derivedName of derivedPaneNamesForConversation(conversationId)) {
+    if (!validateTmuxTarget(derivedName)) continue;
+    try {
+      await tmuxExec(["has-session", "-t", derivedName], { timeout: 3000 });
+    } catch {
+      continue; // no such session
+    }
+    const derivedSessionId = (await getTmuxSessionOption(derivedName, "@codecast_session_id"))?.trim() || null;
+    stopTracking(derivedSessionId);
+    await killTmuxSessionAndTree(derivedName);
+    log(`[${context}] Killed tmux ${derivedName} by derived name (session ${derivedSessionId?.slice(0, 8) ?? "?"}) for conversation ${conversationId.slice(0, 12)}`);
+    killed++;
+  }
+  return killed;
+}
+
 // Tear down every backend bound to a conversation (app-server thread and/or
 // tmux pane + process tree), stopping heartbeats BEFORE each kill (or
 // heartbeatHealthCheck sees the vanished tmux and RECONSTITUTES the agent),
@@ -2364,53 +2513,16 @@ async function killConversationBackends(
     sessionProcessCache.delete(sessionId);
     resumeInFlight.delete(sessionId);
     resumeInFlightStarted.delete(sessionId);
-
-    try {
-      const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
-      for (const tmuxName of tmuxList.trim().split("\n")) {
-        if (!tmuxName || !(await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))) continue;
-        if (!validateTmuxTarget(tmuxName)) continue;
-        const alive = await isTmuxAgentAlive(tmuxName);
-        if (!alive) {
-          await killTmuxSessionAndTree(tmuxName);
-          log(`[REMOTE] Killed zombie tmux session ${tmuxName} (+process tree) for session ${sessionId}`);
-          if (!result) result = "killed_zombie";
-        }
-      }
-    } catch {}
   }
 
-  // Deterministic last-resort kill. The tmux session name is keyed by
-  // conversation_id (cc-<agent>-<convId.slice(-12)>, see start_session), so a
-  // session is killable from the id ALONE — no lookup tables. This catches an
-  // idle pre-warmed agent that outlived the daemon's in-memory startedSessionTmux
-  // map (e.g. across a daemon restart) and has no live process for findSessionProcess
-  // to match: the lookups above all miss it, yet its tmux is right there under the
-  // derived name. Without this, reaping a dismissed empty pre-warm can't reach such
-  // an agent and it leaks forever (idle, still heartbeating). agentType isn't in the
-  // kill args, so try every prefix; has-session guards each (cheap, idempotent).
-  const convSuffix = conversationId.slice(-12);
-  for (const derivedName of ["claude", "codex", "cursor", "gemini"].map((a) => `cc-${a}-${convSuffix}`)) {
-    if (!validateTmuxTarget(derivedName)) continue;
-    try {
-      await tmuxExec(["has-session", "-t", derivedName], { timeout: 3000 });
-    } catch {
-      continue; // no such session
-    }
-    // CRITICAL: stop tracking the session BEFORE the kill, or heartbeatHealthCheck
-    // sees the vanished tmux and RECONSTITUTES the agent (the daemon keeps managed
-    // sessions warm). The session id lives on the tmux itself (@codecast_session_id),
-    // so we can stop the right heartbeat even when no lookup table maps this
-    // conversation. Mirrors reapOneTerminal's stop-then-kill ordering.
-    const derivedSessionId = (await getTmuxSessionOption(derivedName, "@codecast_session_id"))?.trim() || null;
-    if (derivedSessionId) {
-      stopManagedSessionHeartbeat(derivedSessionId);
-      stopCodexPermissionPoller(derivedSessionId);
-      resumeSessionCache.delete(derivedSessionId);
-    }
-    await killTmuxSessionAndTree(derivedName);
-    log(`[REMOTE] Killed tmux ${derivedName} by derived name (session ${derivedSessionId?.slice(0, 8) ?? "?"}) for conversation ${conversationId.slice(0, 12)}`);
-    if (!result) result = "killed_tmux";
+  // Last-resort sweep of anything still standing locally: a second pane for this
+  // session, or an idle pre-warmed agent that outlived the in-memory
+  // startedSessionTmux map (e.g. across a daemon restart) and has no live process
+  // for findSessionProcess to match — the lookups above all miss it, yet its tmux
+  // is right there under the derived name. Ownership-independent, so it is also
+  // what the owner-skip path in executeRemoteCommand runs on its own.
+  if (await killLocalPanesForConversation(conversationId, sessionId, "REMOTE") > 0 && !result) {
+    result = "killed_tmux";
   }
 
   // A kill is a clean slate. Wipe per-session/per-conversation caches that
@@ -2444,12 +2556,32 @@ async function executeRemoteCommand(
   const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "escape", "rewind", "set_model"]);
   if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
     try {
-      const convId = JSON.parse(commandArgs)?.conversation_id;
+      const parsedArgs = JSON.parse(commandArgs);
+      const convId = parsedArgs?.conversation_id;
       if (convId) {
         const info = await syncServiceRef.getConversationOwnerInfo(convId);
         if (ownedByAnotherLiveDevice(info)) {
           log(`[OWNER] skipping ${command} for ${String(convId).slice(0, 12)} — owned by live device ${info?.ownerDeviceId.slice(0, 8)}${info?.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
-          return; // leave the command for the owner device
+          // …except a kill, which ALWAYS sweeps this machine's own panes first.
+          // Routing the command to the owner is still right (it holds the rest of
+          // the backends), but a pane physically here is only reachable from here:
+          // deferring to the owner left owner-mismatched panes unkillable from
+          // every device. The sweep is safe to run twice — it is has-session
+          // guarded and idempotent — and the owner==local case never reaches it.
+          if (command === "kill_session") {
+            const sessionIdHint = typeof parsedArgs?.session_id === "string" && parsedArgs.session_id ? parsedArgs.session_id : undefined;
+            const swept = await killLocalPanesForConversation(convId, sessionIdHint, "OWNER");
+            // The owner runs the real teardown, but the local delivery/resume
+            // caches are OURS and would otherwise survive the kill and suppress
+            // (or resurrect) the next message. Always clear them — and always say
+            // so: a silent swept-0 is indistinguishable from the command never
+            // arriving, which is how this path stayed invisible.
+            await clearConversationDeliveryAndResumeState(convId, sessionIdHint, "OWNER");
+            log(swept > 0
+              ? `[OWNER] kill_session for ${String(convId).slice(0, 12)} swept ${swept} local pane(s) and cleared in-flight resume state before deferring to the owner`
+              : `[OWNER] kill_session for ${String(convId).slice(0, 12)} — no local panes; cleared in-flight resume state`);
+          }
+          return; // leave the rest of the command for the owner device
         }
       }
     } catch { /* on any error, fall through and execute (fail-open) */ }
@@ -3559,7 +3691,7 @@ async function executeRemoteCommand(
 
           if (realForkId) {
             restartingSessionIds.set(realForkId, Date.now());
-            const resumed = await autoResumeSession(realForkId, "", readTitleCache(), projectPath, conversationId, "opencode");
+            const resumed = await autoResumeSession(realForkId, "", readTitleCache(), projectPath, conversationId, "opencode", USER_RESUME);
             restartingSessionIds.delete(realForkId);
             if (resumed) {
               syncServiceRef?.markSessionActive(conversationId).catch(logConvexFailure);
@@ -3636,13 +3768,13 @@ async function executeRemoteCommand(
         let resumed = false;
         if (forceReconstitute) {
           log(`[REMOTE] Force-reconstituting session ${sessionId.slice(0, 8)} from DB${projectPath ? ` in ${projectPath}` : ""}`);
-          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType);
+          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, USER_RESUME);
         } else {
           log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
-          resumed = await autoResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType);
+          resumed = await autoResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, USER_RESUME);
           if (!resumed) {
             log(`[REMOTE] Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
-            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType);
+            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, USER_RESUME);
           }
         }
         if (resumed) {
@@ -3710,7 +3842,7 @@ async function executeRemoteCommand(
                 setPosition(reconFilePath, fs.statSync(reconFilePath).size);
                 log(`[REMOTE] Reconstituted ${reconAgent} JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs)`);
 
-                const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId, resumeAgentType);
+                const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId, resumeAgentType, USER_RESUME);
                 if (reconResumed) {
                   const cache = readConversationCache();
                   cache[newSessionId] = conversationId;
@@ -9226,6 +9358,35 @@ export function transcriptTailLastRealRole(tailContent: string): "user" | "assis
   return null;
 }
 
+// The wall-clock timestamp of the most recent *real* message in a Claude JSONL
+// tail (epoch ms), or null when none parses or carries one. Same scan as
+// transcriptTailLastRealRole, reading the `timestamp` field real turns carry and
+// meta lines don't.
+//
+// This is the honest "when did anything actually happen" clock, and file mtime is
+// NOT: metadata touches rewrite mtime with no new content (2026-08-03 — two
+// transcripts whose last real message was 13 days old carried an mtime from that
+// morning). Any gate measured in days must use this, not fs.statSync.
+export function transcriptTailLastRealTimestamp(tailContent: string): number | null {
+  const lines = tailContent.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let d: { type?: string; timestamp?: unknown; message?: { role?: string } };
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue; // partial/corrupt line (mid-write tail) -> skip
+    }
+    const role = d.message?.role ?? (d.type === "user" || d.type === "assistant" ? d.type : undefined);
+    if (role !== "user" && role !== "assistant") continue; // system/meta -> keep scanning
+    if (typeof d.timestamp !== "string") return null;
+    const ms = Date.parse(d.timestamp);
+    return Number.isFinite(ms) ? ms : null;
+  }
+  return null;
+}
+
 // permission_blocked is a latch with no other recovery path: the daemon doesn't
 // drive AskUserQuestion resolution, reconciledStatus deliberately skips it, and the
 // pane reconcile can't tell an answered poll from a pending one. So a lost resume
@@ -11689,8 +11850,18 @@ async function sweepGitPlaneFleet(sessionIds: string[]): Promise<void> {
 // ─── Orphan terminal reaper ────────────────────────────────────────────────
 // The daemon keeps a warm tmux terminal per managed session and (deliberately)
 // never auto-kills idle ones, so every conversation ever resumed leaves a
-// cc-resume-* / cx-resume-* terminal behind. They accumulate without bound and,
-// once re-adopted on a restart, re-float a stale "working" into the inbox.
+// cc-resume-* / cx-resume-* terminal behind, and every started one a
+// cc-<agent>-<conv> pane. They accumulate without bound and, once re-adopted on
+// a restart, re-float a stale "working" into the inbox.
+//
+// Two candidate classes, differing ONLY in the extra hide-state gate:
+//   - cc-resume-* / cx-resume-*: a warm re-resume shell. Reaped on the idle
+//     signals alone — clicking the session cold-resumes it, so nothing is lost.
+//   - any other codecast-stamped pane (@codecast_session_id /
+//     @codecast_conversation_id): the session's PRIMARY terminal. Reaped only
+//     when its conversation is already out of the inbox — stashed, dismissed or
+//     killed. A conversation VISIBLE in the inbox is never auto-reaped, however
+//     long it has been idle, because the user is still holding it.
 //
 // This reaps a terminal ONLY when multiple independent ground-truth signals agree
 // it is finished, and writes every kill to a dedicated reaper.log so the action is
@@ -11706,16 +11877,193 @@ async function sweepGitPlaneFleet(sessionIds: string[]): Promise<void> {
 // so it cold-resumes on click. The kill first removes the session from the
 // heartbeat / pane-tracking sets so heartbeatHealthCheck can't reconstitute it.
 const REAPER_LOG_FILE = path.join(CONFIG_DIR, "reaper.log");
+const REAPER_LOG_MAX_BYTES = 1_000_000;
 const REAP_IDLE_MS = 5 * 60 * 60 * 1000;    // 5h of no transcript activity
+// The higher bar a DANGLING USER TURN must clear (measured from the last real
+// message, never mtime). See danglingUserTurnIsReapable.
+const REAP_DANGLING_TURN_IDLE_MS = 24 * 60 * 60 * 1000;
 const REAP_MAX_PER_PASS = 3;                 // gentle drain; first kills stay observable
 const REAP_EVERY_N_FLUSHES = 10;             // ~5 min between passes (flush = 30s)
 const REAP_TMUX_PREFIXES = ["cc-resume-", "cx-resume-"];
+// Name + both codecast stamps in ONE tmux call, so identifying every candidate
+// costs one exec per pass instead of one show-options per pane.
+const REAP_LIST_FORMAT = "#{session_name}\t#{@codecast_session_id}\t#{@codecast_conversation_id}";
 
-function reaperLog(message: string): void {
+function reaperLog(message: string, mirror = true): void {
   const line = `[${new Date().toISOString()}] ${message}\n`;
+  try {
+    // Nothing rotates this file, and the per-pass summary appends every ~5 min
+    // forever — keep the tail, drop the oldest half once it gets large.
+    if (fs.statSync(REAPER_LOG_FILE).size > REAPER_LOG_MAX_BYTES) {
+      const kept = fs.readFileSync(REAPER_LOG_FILE, "utf8").slice(-REAPER_LOG_MAX_BYTES / 2);
+      fs.writeFileSync(REAPER_LOG_FILE, kept.slice(kept.indexOf("\n") + 1));
+    }
+  } catch {}
   try { fs.appendFileSync(REAPER_LOG_FILE, line); } catch {}
   // Mirror to daemon.log (and the server log feed) at warn — a kill is notable.
-  log(`[REAPER] ${message}`, "warn");
+  // The per-pass summary passes mirror=false: it fires every ~5 min and would
+  // swamp the feed, but belongs in reaper.log where the kills are.
+  if (mirror) log(`[REAPER] ${message}`, "warn");
+}
+
+export type ReapCandidate = {
+  tmux: string;
+  /** From @codecast_session_id, when the pane carries it. */
+  sessionId: string | null;
+  /** From @codecast_conversation_id, when the pane carries it. */
+  convId: string | null;
+  /** "resume" panes reap on idle alone; "stamped" panes also need a hide state. */
+  kind: "resume" | "stamped";
+};
+
+// One `tmux list-sessions` row: name + the two codecast stamps, tab-separated
+// (see REAP_LIST_FORMAT). Returns null for a pane this daemon has no business
+// touching — neither a resume shell nor codecast-stamped. Unset user options
+// expand to the empty string, and an ancient tmux that doesn't expand `#{@opt}`
+// at all just yields no stamps, so a pane goes uncollected rather than
+// misidentified.
+export function parseReapCandidateRow(row: string): ReapCandidate | null {
+  const [name, sessionId, convId] = row.split("\t");
+  const tmux = (name ?? "").trim();
+  if (!tmux) return null;
+  const stampedSession = (sessionId ?? "").trim() || null;
+  const stampedConv = (convId ?? "").trim() || null;
+  if (REAP_TMUX_PREFIXES.some((p) => tmux.startsWith(p))) {
+    return { tmux, sessionId: stampedSession, convId: stampedConv, kind: "resume" };
+  }
+  if (stampedSession || stampedConv) {
+    return { tmux, sessionId: stampedSession, convId: stampedConv, kind: "stamped" };
+  }
+  return null;
+}
+
+// Whether a stamped (primary-terminal) pane's conversation is hidden enough to
+// reap. Killed, stashed and dismissed all mean the user has taken the card out
+// of their inbox; anything still visible there is off limits regardless of idle
+// time, and a PINNED card is visible even when killed (see shouldShowInInbox).
+// Unknown lifecycle fails CLOSED — the opposite of the resurrection gate,
+// because here the cautious move is to leave the agent running.
+export function stampedPaneReapEligibility(
+  lifecycle: ConversationLifecycle | null | undefined,
+): { eligible: boolean; reason: string | null } {
+  // "Absent hide fields" is NOT "not hidden". The status-only fallback carries no
+  // hide state at all, and reading its silence as "inbox-visible" would put a lie
+  // in the audit log (killed conversations reported as visible-and-skipped) while
+  // the stamped reaper silently no-ops against an undeployed backend. Demand that
+  // the state was actually fetched.
+  if (!lifecycle || !lifecycle.hideStateKnown) return { eligible: false, reason: "hide-state-unknown" };
+  if (lifecycle.inboxPinnedAt) return { eligible: false, reason: "pinned" };
+  const hidden = !!(lifecycle.inboxKilledAt || lifecycle.inboxStashedAt || lifecycle.inboxDismissedAt);
+  if (!hidden) return { eligible: false, reason: "inbox-visible" };
+  return { eligible: true, reason: null };
+}
+
+/**
+ * Rescues the ONE case where `transcript=active` blocks a reap forever.
+ *
+ * classifyTranscriptTail reads a trailing user turn as "active" — it is the
+ * agent's move — with no staleness dimension. When an agent dies or wedges
+ * mid-turn, the transcript is frozen with the user's unanswered prompt last, so
+ * the tail reads "active" for all eternity and the pane is permanently
+ * un-reapable. That is the unbounded accumulator: 25 of this machine's 267 idle
+ * Claude transcripts (~9%) are stuck exactly this way, some 682h old.
+ *
+ * A dead agent is not mid-turn. So a DANGLING user turn reaps once every
+ * independent signal agrees it is abandoned: the live pane already reads idle
+ * (guaranteed by reapBlockReason's ordering, passed explicitly so this decision
+ * is complete on its own), and the last real message is older than the raised
+ * REAP_DANGLING_TURN_IDLE_MS bar — measured from the MESSAGE timestamp, because
+ * mtime lies (see transcriptTailLastRealTimestamp).
+ *
+ * A pending tool_use still blocks at any age: that is real in-flight work. No
+ * timestamp → no honest clock → keep blocking. The fix lives here rather than in
+ * classifyTranscriptTail because the status-reconcile path depends on the
+ * classifier's current semantics.
+ *
+ * A PENDING AskUserQuestion looks EXACTLY like a dangling user turn and must be
+ * excluded separately. Claude Code buffers the AUQ tool_use out of the JSONL
+ * until it is answered (see extractPendingToolUseFromTail), so while a question
+ * waits, the newest message physically in the transcript is the previous,
+ * already-resolved tool_result — a `user` turn. lastRealRole cannot see the
+ * question, and the pane classifier's modal detection is regex on footer copy,
+ * one release away from letting a live question-blocked session be killed. So we
+ * consult the ask-input sidecar directly — see askUserQuestionStillPending.
+ */
+export function danglingUserTurnIsReapable(input: {
+  turn: TranscriptTurnState;
+  lastRealRole: "user" | "assistant" | null;
+  lastRealTimestampMs: number | null;
+  /** mtime of ~/.codecast/ask-input/<session>.json, or null when absent. */
+  askSidecarMtimeMs: number | null;
+  paneIdle: boolean;
+  now: number;
+}): boolean {
+  if (input.turn !== "active") return false;
+  if (input.lastRealRole !== "user") return false;
+  if (!input.paneIdle) return false;
+  if (input.lastRealTimestampMs === null) return false;
+  if (askUserQuestionStillPending(input.askSidecarMtimeMs, input.lastRealTimestampMs)) return false;
+  return input.now - input.lastRealTimestampMs >= REAP_DANGLING_TURN_IDLE_MS;
+}
+
+/**
+ * Whether an AskUserQuestion is still waiting on the user, judged by ORDERING
+ * rather than existence.
+ *
+ * The sidecar is written when the question is asked and is NEVER deleted —
+ * readAskUserQuestionInput copes via a 5-minute mtime window, and this machine
+ * has 123 of them going back to June. So "a sidecar exists" is nearly meaningless
+ * (it blocked 5 of 23 stuck panes here, 3 of whose questions were answered weeks
+ * ago) and gets monotonically worse as sessions accumulate one each — it would
+ * quietly retire this escape hatch altogether.
+ *
+ * Ordering is the honest signal: answering a question flushes the buffered turn
+ * AND appends the user's answer, so the transcript gains a message NEWER than the
+ * sidecar. A sidecar newer than the last real message therefore means the
+ * question was asked and nothing has happened since — still pending. On the same
+ * 23 panes this correctly protects exactly 2, both genuinely abandoned mid-question.
+ *
+ * KNOWN INERT SHAPES — strictly better than the pane regex alone, but not total:
+ *   - a stale sidecar from an ANSWERED earlier question masks a LATER pending one
+ *     whose own write never happened: codecast-status.sh skips the write when the
+ *     tool_input carries an empty `questions` array (statusHook.ts), and the hook
+ *     can also lose it to its own timeout. The mask reads as "pending" — the SAFE
+ *     direction (we decline to reap), so it costs a leaked pane, not a killed
+ *     question.
+ *   - a session running WITHOUT the codecast status hook writes no sidecar at all,
+ *     so it has no protection here beyond the pane classifier.
+ * Closing either needs a signal the agent emits unconditionally while blocked;
+ * the sidecar is the best one that exists today.
+ */
+export function askUserQuestionStillPending(
+  sidecarMtimeMs: number | null,
+  lastRealTimestampMs: number | null,
+): boolean {
+  if (sidecarMtimeMs === null) return false;
+  if (lastRealTimestampMs === null) return true; // can't order them → assume pending
+  return sidecarMtimeMs > lastRealTimestampMs;
+}
+
+// Collapse a skip reason into a stable bucket for the per-pass summary — the raw
+// reasons embed the exact idle age ("active-37min"), which would give every pane
+// its own tally line.
+export function reapSkipBucket(reason: string): string {
+  return reason.startsWith("active-") ? "active" : reason;
+}
+
+// "pane=busy×3, no-transcript×8" — commonest first, so the reason the reaper is
+// doing nothing is the first thing on the line.
+export function summarizeReapSkips(reasons: string[]): string {
+  if (reasons.length === 0) return "none";
+  const counts = new Map<string, number>();
+  for (const r of reasons) {
+    const bucket = reapSkipBucket(r);
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([bucket, n]) => `${bucket}×${n}`)
+    .join(", ");
 }
 
 // Resolve the full session id for a cc-resume-* terminal. The tmux name carries
@@ -11739,13 +12087,69 @@ async function resolveReapSessionId(tmux: string): Promise<string | null> {
   return null;
 }
 
+// findSessionFile walks every ~/.claude/projects dir with sync readdir (~4.5ms on
+// a miss) and the reaper now calls it per candidate per pass. Cache the resolved
+// transcript across passes, revalidated with a single statSync; a moved/deleted
+// file falls back to the full walk. Reaper-local on purpose — findSessionFile has
+// many other callers whose freshness assumptions we're not touching.
+const reapTranscriptCache = new Map<string, SessionFileInfo>();
+// Misses need caching more than hits do: "no-transcript" is the DOMINANT skip
+// bucket, and each one paid the full walk every pass forever. TTL'd rather than
+// permanent so a transcript that shows up later (a resume materializing one) is
+// still found within half an hour.
+const reapTranscriptMisses = new Map<string, number>();
+const REAP_TRANSCRIPT_MISS_TTL_MS = 30 * 60 * 1000;
+
+function findReapTranscript(sessionId: string, now: number = Date.now()): SessionFileInfo | null {
+  const cached = reapTranscriptCache.get(sessionId);
+  if (cached) {
+    try {
+      fs.statSync(cached.path);
+      return cached;
+    } catch {
+      reapTranscriptCache.delete(sessionId);
+    }
+  }
+  const missedAt = reapTranscriptMisses.get(sessionId);
+  if (missedAt !== undefined && now - missedAt < REAP_TRANSCRIPT_MISS_TTL_MS) return null;
+  const found = findSessionFile(sessionId);
+  if (found) {
+    reapTranscriptCache.set(sessionId, found);
+    reapTranscriptMisses.delete(sessionId);
+  } else {
+    reapTranscriptMisses.set(sessionId, now);
+  }
+  return found;
+}
+
+// mtime of the pending-AskUserQuestion sidecar, or null when the session never
+// asked one. See askUserQuestionStillPending for why mtime and not existence.
+function askInputSidecarMtimeMs(sessionId: string): number | null {
+  try {
+    return fs.statSync(path.join(ASK_INPUT_DIR, `${sessionId}.json`)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+// `tmux list-panes -s -t <sess>` emits one line per pane across ALL windows.
+// killTmuxSessionAndTree takes the whole tmux SESSION, while every reap gate only
+// inspects :0.0 — so a second window or a split (the user's own shell, or another
+// live agent) would die on the strength of one idle pane's evidence. Exactly one
+// pane means what we inspected is all there is. Unparseable output → not single
+// (fail closed).
+export function tmuxSessionIsSinglePane(listPanesStdout: string): boolean {
+  const panes = listPanesStdout.split("\n").map((l) => l.trim()).filter(Boolean);
+  return panes.length === 1;
+}
+
 // The reason a terminal is NOT safe to reap, or null if it passed every gate.
 // On success returns the resolved transcript path + idle age so the caller need
 // not re-scan. Cheapest gates first (idle-age before the pane/tail reads).
 async function reapBlockReason(
   sessionId: string, tmux: string, now: number,
 ): Promise<{ reason: string } | { reason: null; idleHours: number }> {
-  const file = findSessionFile(sessionId);
+  const file = findReapTranscript(sessionId, now);
   if (!file) return { reason: "no-transcript" };
   const classifyTail = classifyTranscriptTailFor(file.agentType);
   if (!classifyTail) return { reason: `agent=${file.agentType}` };
@@ -11760,8 +12164,31 @@ async function reapBlockReason(
   let tail: string;
   try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
   const turn = classifyTail(tail);
-  if (turn !== "idle") return { reason: `transcript=${turn}` };
-  return { reason: null, idleHours: Math.round(idleMs / 3600000) };
+  let idleHours = Math.round(idleMs / 3600000);
+  if (turn !== "idle") {
+    const lastRealTimestampMs = transcriptTailLastRealTimestamp(tail);
+    const askSidecarMtimeMs = askInputSidecarMtimeMs(sessionId);
+    const reapable = danglingUserTurnIsReapable({
+      turn,
+      lastRealRole: transcriptTailLastRealRole(tail),
+      lastRealTimestampMs,
+      askSidecarMtimeMs,
+      paneIdle: true, // established above — we only reach here when live === "idle"
+      now,
+    });
+    if (!reapable) {
+      // Name the AUQ case separately: "transcript=active" on a session that is
+      // actually waiting on a question is the misleading log line that hid this.
+      return askUserQuestionStillPending(askSidecarMtimeMs, lastRealTimestampMs)
+        ? { reason: "pending-question" }
+        : { reason: `transcript=${turn}` };
+    }
+    // Report the age the DECISION used. mtime can be far younger than the content
+    // (metadata touches), and logging "idle=16h" for a 325h-dead turn would make
+    // the reap look reckless in the audit log.
+    idleHours = Math.max(idleHours, Math.round((now - lastRealTimestampMs!) / 3600000));
+  }
+  return { reason: null, idleHours };
 }
 
 async function reapOneTerminal(sessionId: string, tmux: string, convId: string | undefined, idleHours: number): Promise<void> {
@@ -11789,25 +12216,47 @@ async function reapOneTerminal(sessionId: string, tmux: string, convId: string |
 
 async function reapIdleOrphanTerminals(): Promise<void> {
   const now = Date.now();
-  let names: string[];
+  let candidates: ReapCandidate[];
   try {
-    const { stdout } = await tmuxExec(["list-sessions", "-F", "#{session_name}"], { timeout: 5000 });
-    names = stdout.split("\n").map((s) => s.trim()).filter((s) => REAP_TMUX_PREFIXES.some((p) => s.startsWith(p)));
+    const { stdout } = await tmuxExec(["list-sessions", "-F", REAP_LIST_FORMAT], { timeout: 5000 });
+    candidates = stdout.split("\n")
+      .map(parseReapCandidateRow)
+      .filter((c): c is ReapCandidate => c !== null);
   } catch { return; }
-  if (names.length === 0) return;
+  if (candidates.length === 0) return;
 
   const convCache = readConversationCache();
+  const skips: string[] = [];
   let reaped = 0;
-  for (const tmux of names) {
-    if (reaped >= REAP_MAX_PER_PASS) break;
-    const sessionId = await resolveReapSessionId(tmux);
-    if (!sessionId) continue; // unidentifiable → never kill
-    const verdict = await reapBlockReason(sessionId, tmux, now);
-    if (verdict.reason !== null) continue; // ineligible (don't spam the log with skips)
-    await reapOneTerminal(sessionId, tmux, convCache[sessionId], verdict.idleHours);
+  for (const cand of candidates) {
+    if (reaped >= REAP_MAX_PER_PASS) { skips.push("pass-cap"); continue; }
+    const sessionId = cand.sessionId ?? await resolveReapSessionId(cand.tmux);
+    if (!sessionId) { skips.push("unidentified"); continue; } // never kill what we can't name
+    const verdict = await reapBlockReason(sessionId, cand.tmux, now);
+    if (verdict.reason !== null) { skips.push(verdict.reason); continue; }
+    const convId = cand.convId ?? convCache[sessionId];
+    // A stamped pane is the session's PRIMARY terminal — the one a human may be
+    // attached to. Two extra gates, cheapest first: the whole tmux session must
+    // be the single pane we actually inspected, and its conversation must already
+    // be out of the inbox. (cc-resume-* shells skip both: nobody attaches to them.)
+    if (cand.kind === "stamped") {
+      let panes: string;
+      try { ({ stdout: panes } = await tmuxExec(["list-panes", "-s", "-t", cand.tmux, "-F", "#{window_index}.#{pane_index}"], { timeout: 4000 })); }
+      catch { skips.push("pane-list-failed"); continue; }
+      if (!tmuxSessionIsSinglePane(panes)) { skips.push("multi-pane"); continue; }
+      const lifecycle = convId && syncServiceRef
+        ? await syncServiceRef.getConversationLifecycle(convId, sessionId).catch(() => null)
+        : null;
+      const eligibility = stampedPaneReapEligibility(lifecycle);
+      if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
+    }
+    await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours);
     reaped++;
   }
-  if (reaped > 0) reaperLog(`pass complete: reaped ${reaped} terminal(s) (cap ${REAP_MAX_PER_PASS}, idle≥${REAP_IDLE_MS / 3600000}h)`);
+  // Every pass leaves a line: without it the skip reasons were invisible and a
+  // reaper that had quietly stopped reaping looked identical to one with nothing
+  // to do. File-only (mirror=false) — this fires every ~5 min.
+  reaperLog(`pass: ${candidates.length} candidates, reaped ${reaped}, skipped: ${summarizeReapSkips(skips)}`, false);
 }
 
 // Reads the last ~64KB of a file as UTF-8 without loading the whole thing --
@@ -11944,6 +12393,65 @@ async function heartbeatHealthCheck(sessionId: string): Promise<void> {
   }
 }
 
+// ─── Kill-state gate for resurrection ──────────────────────────────────────
+// The daemon keeps managed sessions warm and reconstitutes any whose tmux
+// vanished, which is right for a crash and wrong for a KILL — a kill tears the
+// pane down, the health sweep sees the vanished tmux, and the agent the user
+// just retired comes straight back (2026-08-03: five conversations, all
+// status=completed with inbox_killed_at stamped, resurrected on every pass).
+// The verdict is this pure function; "killed" and "completed" are equivalent
+// here, since killSession stamps both and a completed conversation is finished
+// either way.
+export function isConversationRetired(
+  lifecycle: ConversationLifecycle | null | undefined,
+  opts: { trustStatusFallback: boolean },
+): boolean {
+  // Unknown lifecycle fails OPEN: a Convex blip must not strand a genuinely
+  // crashed live session that the user still wants running.
+  if (!lifecycle) return false;
+  // The status-only fallback resolves by session id via `.first()` — the OLDEST
+  // twin (ct-36973). With twins it can report the wrong row's status in EITHER
+  // direction, and a false "completed" here refuses to resume a LIVE session,
+  // silently stranding it. So only the caller that can absorb a wrong refusal may
+  // act on it: heartbeat reconstitution, where the worst case is a crashed
+  // session staying down — the pre-fix status quo, recoverable with Restart.
+  // Every other path (delivery, warm pool, resume repair) requires the real
+  // conversation-id-resolved query and otherwise proceeds.
+  if (!lifecycle.hideStateKnown && !opts.trustStatusFallback) return false;
+  return !!lifecycle.inboxKilledAt || lifecycle.status === "completed";
+}
+
+export type ResumeOptions = {
+  /**
+   * This resume is an explicit human gesture (the resume_session / fork_session
+   * command), not the daemon reviving something on its own — so it bypasses the
+   * retired-conversation gate. It has to: restartSession leaves an existing row's
+   * status/inbox_killed_at untouched when it enqueues the kill→resume pair, so a
+   * "Restart" on a killed card reaches the daemon still looking killed, and
+   * refusing it would break the one gesture that is meant to bring a session back.
+   * Only the gate reads this; nothing downstream does.
+   */
+  userInitiated?: boolean;
+};
+
+// Convex side of the gate. Runs only on resurrection paths (rare), never per
+// heartbeat, and swallows lookup failures into "not retired" (fail open).
+export async function conversationForbidsResurrection(
+  conversationId: string,
+  sessionId: string,
+  context: string,
+  opts: { trustStatusFallback: boolean },
+  // Injectable so the wired gate — including its fail-open on a throwing lookup —
+  // is testable without a live Convex client. Production always uses the default.
+  fetchLifecycle: (c: string, s: string) => Promise<ConversationLifecycle | null> = (c, sid) =>
+    syncServiceRef ? syncServiceRef.getConversationLifecycle(c, sid) : Promise.resolve(null),
+): Promise<boolean> {
+  const lifecycle = await fetchLifecycle(conversationId, sessionId).catch(() => null);
+  if (!isConversationRetired(lifecycle, opts)) return false;
+  log(`[${context}] not reconstituting ${sessionId.slice(0, 8)} — conversation killed (conv=${conversationId.slice(0, 12)} status=${lifecycle?.status ?? "?"}${lifecycle?.inboxKilledAt ? " killed_at=set" : ""} via=${lifecycle?.source})`);
+  return true;
+}
+
 async function handleDeadSession(sessionId: string, tmuxSession: string): Promise<void> {
   try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
   resumeSessionCache.delete(sessionId);
@@ -11952,6 +12460,18 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
 
   const cache = readConversationCache();
   const conversationId = cache[sessionId];
+
+  // A retired conversation is not a crash. Tracking is already fully torn down
+  // above (the same set reapOneTerminal clears), so stamp the tidy "idle" and
+  // stop — before the transcript regeneration inside repairAndResumeSession and
+  // before the "Session crashed" banner, neither of which belongs on a session
+  // the user deliberately killed. autoResumeSession gates on this too (it is the
+  // chokepoint for every other resume path); this earlier check is what keeps
+  // the crash-recovery side effects from running at all.
+  if (conversationId && await conversationForbidsResurrection(conversationId, sessionId, "HEARTBEAT-HEALTH", { trustStatusFallback: true })) {
+    if (syncServiceRef) await syncServiceRef.updateSessionAgentStatus(conversationId, "idle").catch(() => {});
+    return;
+  }
 
   // Crash recovery shares the kill_session lifecycle contract: the tmux pane has
   // been torn down, any "injected" messages on Convex were lost with it, and the
@@ -12608,22 +13128,34 @@ async function resolveLiveTmuxTarget(
   return { tmuxTarget: null, source: null, proc: null, cachedStillValid };
 }
 
-async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId): Promise<boolean> {
-  // Remote-device safety gate: a remote daemon (the cloud Mac) ONLY manages
-  // sessions explicitly OWNED by it. Unlike the primary local daemon, it must
-  // NOT adopt/reconstitute/resume unowned sessions — doing so reconstitutes the
-  // user's real sessions from Convex and double-manages them (cross-device
-  // stomp). The local primary daemon keeps its legacy adopt-unowned behavior.
-  if (isRemoteDevice()) {
-    if (!conversationId) {
-      log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
-      return false;
-    }
-    const owner = syncServiceRef ? await syncServiceRef.getConversationOwner(conversationId) : null;
-    if (owner !== deviceId()) {
-      log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — owner=${owner ? owner.slice(0, 8) : "unowned"} (this device ${deviceId().slice(0, 8)})`);
-      return false;
-    }
+async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId, opts?: ResumeOptions): Promise<boolean> {
+  // Lifecycle gate: a killed/completed conversation must never come back on its
+  // own. This is the chokepoint every AUTOMATIC resurrection path funnels through
+  // (the health check's reconstitution, message-delivery resume, the warm pool,
+  // repairAndResumeSession), so the check lives here rather than at each caller.
+  // Fails OPEN on a lookup error.
+  if (!opts?.userInitiated && conversationId && await conversationForbidsResurrection(conversationId, sessionId, "RESUME", { trustStatusFallback: false })) {
+    return false;
+  }
+
+  // Single-owner resume gate — see resumeOwnerVerdict for the two rules it folds
+  // together. One owner lookup serves both.
+  const ownerInfo = conversationId && syncServiceRef
+    ? await syncServiceRef.getConversationOwnerInfo(conversationId)
+    : null;
+  const verdict = resumeOwnerVerdict({ conversationId, localDeviceId: deviceId(), isRemote: isRemoteDevice(), owner: ownerInfo });
+  if (verdict === "owned_by_live_device") {
+    log(`[OWNER] skipping resume of ${sessionId.slice(0, 8)} — owned by live device ${ownerInfo!.ownerDeviceId.slice(0, 8)}${ownerInfo!.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
+    return false;
+  }
+  if (verdict === "remote_no_conversation") {
+    log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
+    return false;
+  }
+  if (verdict === "remote_unowned") {
+    const owner = ownerInfo?.ownerDeviceId;
+    log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — owner=${owner ? owner.slice(0, 8) : "unowned"} (this device ${deviceId().slice(0, 8)})`);
+    return false;
   }
   // Deduplicate concurrent resume attempts on the same session
   const existing = resumeInFlight.get(sessionId);
@@ -13099,7 +13631,8 @@ async function repairAndResumeSession(
   titleCache: TitleCache,
   cwdOverride?: string,
   conversationId?: string,
-  agentTypeHint?: AgentClientId
+  agentTypeHint?: AgentClientId,
+  opts?: ResumeOptions
 ): Promise<boolean> {
   const existing = repairInFlight.get(sessionId);
   if (existing) return existing;
@@ -13121,7 +13654,7 @@ async function repairAndResumeSession(
   const repairType = agentTypeHint ?? findSessionFile(sessionId)?.agentType ?? "claude";
   if (clientOwnsSessionStore(repairType)) {
     log(`Repairing ${repairType} session ${sessionId.slice(0, 8)} = re-resume (${repairType} owns its session store; no Claude/Codex JSONL to regenerate)`);
-    return autoResumeSession(sessionId, content, titleCache, cwdOverride, conversationId, repairType);
+    return autoResumeSession(sessionId, content, titleCache, cwdOverride, conversationId, repairType, opts);
   }
 
   const promise = (async (): Promise<boolean> => {
@@ -13190,7 +13723,7 @@ async function repairAndResumeSession(
           }
           log(`Materialized fresh Claude session ${targetSessionId.slice(0, 8)} from stale ${sessionId.slice(0, 8)} (${exportData.messages.length} messages, tail=${tailMessages})`);
 
-          const resumed = await autoResumeSession(targetSessionId, content, titleCache, cwdOverride || projectPath, convId, agentTypeHint);
+          const resumed = await autoResumeSession(targetSessionId, content, titleCache, cwdOverride || projectPath, convId, agentTypeHint, opts);
           if (resumed) {
             log(`Repair + resume succeeded for ${sessionId.slice(0, 8)} via fresh session ${targetSessionId.slice(0, 8)}`);
             success = true;
@@ -13216,7 +13749,7 @@ async function repairAndResumeSession(
           log(`Wrote new session file for ${sessionId.slice(0, 8)}`);
         }
 
-        const resumed = await autoResumeSession(sessionId, content, titleCache, cwdOverride || projectPath, convId, agentTypeHint);
+        const resumed = await autoResumeSession(sessionId, content, titleCache, cwdOverride || projectPath, convId, agentTypeHint, opts);
         if (resumed) {
           log(`Repair + resume succeeded for ${sessionId.slice(0, 8)}`);
           success = true;
@@ -13263,7 +13796,7 @@ async function repairAndResumeSession(
           fs.writeFileSync(sessionFile.path, cleanLines.join("\n") + "\n");
           log(`Surgical cleanup: removed ${removed} corrupt entries from ${sessionId.slice(0, 8)}`);
 
-          const resumed = await autoResumeSession(sessionId, content, titleCache, cwdOverride, convId, agentTypeHint);
+          const resumed = await autoResumeSession(sessionId, content, titleCache, cwdOverride, convId, agentTypeHint, opts);
           if (resumed) {
             log(`Surgical repair + resume succeeded for ${sessionId.slice(0, 8)}`);
             success = true;

@@ -107,7 +107,7 @@ export const dispatch = mutation({
       typeof patches === "object" &&
       !(hasReceiptCommandId(result) && RECEIPT_OWNS_SERVER_WRITE.has(action))
     ) {
-      await applyPatches(ctx, userId, patches);
+      await applyPatches(ctx, userId, patches, { forceKill: EXPLICIT_KILL_ACTIONS.has(action) });
     }
 
     const sideEffect = SIDE_EFFECTS[action];
@@ -269,11 +269,21 @@ function deepMergeField(existing: any, incoming: any): any {
 // visibility mutation. Re-exported here for the existing tests.
 export { classifyHideTransition } from "./cleanup";
 
+// The web's explicit kill gestures (inboxStore killSession / killSessions). A
+// kill patch is indistinguishable at the FIELD level from a quiet re-assert of
+// the same flag — a stub-rekey flushResolvedSessionFields, an applyUndoPatches
+// replay — so the dispatched ACTION NAME is the only signal of intent the
+// server gets, and a kill must tear down again even when the flag is already
+// set (see applyHideTransition's forceKill). Every other action patching
+// inbox_dismissed_at stays transition-gated.
+const EXPLICIT_KILL_ACTIONS = new Set(["killSession", "killSessions"]);
+
 // Exported for tests (the dispatch mutation is the only runtime caller).
 export async function applyPatches(
   ctx: HandlerCtx,
   userId: Id<"users">,
-  patches: Record<string, Record<string, Record<string, any>>>
+  patches: Record<string, Record<string, Record<string, any>>>,
+  opts?: { forceKill?: boolean }
 ) {
   let bucketViewChanged = false;
   for (const [table, docs] of Object.entries(patches)) {
@@ -315,7 +325,34 @@ export async function applyPatches(
         ) {
           delete finalSafe.is_favorite;
         }
+        // inbox_killed_at is the retired marker: the daemon's reap/resurrection
+        // gate and classifyWorkState both read it, and a killed persistent
+        // anchor stays daemon-proof only while it's set. This generic rail
+        // carries whatever fields an action's draft happened to touch, so a
+        // gesture with nothing to do with revival can wipe it — the web's pin
+        // nulls it in its draft (see ct-41083), which deleted the marker on the
+        // very rows it matters most for (a killed row is only visible while
+        // pinned, per shouldShowInInbox). Guard by FIELD, not by action name, so
+        // an old client shipping the same patch is caught too: a CLEAR is
+        // honored only when the patch is itself an un-kill (it clears
+        // inbox_dismissed_at as well). The other sanctioned revivals — a human
+        // send (pendingMessages.enqueue), delivery, Restart — are mutations and
+        // never ride this rail. SETTING it is untouched.
+        if (
+          table === "conversations"
+          && "inbox_killed_at" in finalSafe
+          && !(finalSafe as any).inbox_killed_at
+          && !("inbox_dismissed_at" in finalSafe && !(finalSafe as any).inbox_dismissed_at)
+        ) {
+          delete (finalSafe as any).inbox_killed_at;
+        }
         if (Object.keys(finalSafe).length === 0) continue;
+        // Capture the PRE-patch hide state. The un-kill mirror below decides on
+        // what the row looked like BEFORE this write, and reading it afterwards
+        // would depend on ctx.db.get having handed back a snapshot rather than
+        // the row the patch mutates.
+        const wasDismissed = table === "conversations" && !!(doc as any).inbox_dismissed_at;
+        const wasKilled = table === "conversations" && !!(doc as any).inbox_killed_at;
         if (table === "comments") {
           const conversation = await ctx.db.get(doc.conversation_id as Id<"conversations">);
           if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) continue;
@@ -331,7 +368,7 @@ export async function applyPatches(
         // dismiss/stash path funnels through here — the inbox shortcuts, the
         // palette, the /sessions toggle (patchConversation), and any future one.
         if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
-          await applyHideTransition(ctx, doc, finalSafe as any);
+          await applyHideTransition(ctx, doc, finalSafe as any, { forceKill: opts?.forceKill });
         }
         // The un-kill mirror: a patch CLEARING inbox_dismissed_at on a row that
         // had it is the restore/undo gesture (web restoreSession, undo of a
@@ -344,8 +381,18 @@ export async function applyPatches(
           table === "conversations" &&
           "inbox_dismissed_at" in (finalSafe as any) &&
           !(finalSafe as any).inbox_dismissed_at &&
-          (doc as any).inbox_dismissed_at
+          wasDismissed
         ) {
+          // Un-kill the row server-side. The web's restore gesture only nulls
+          // the two hide stamps, but shouldShowInInbox hides a row on
+          // inbox_killed_at alone — so without this the restored session stays
+          // invisible unless it happens to be pinned. Doing it here (rather than
+          // trusting a client to send the field) also keeps old clients working
+          // and matches `cast undismiss`. `status` is left alone: restore brings
+          // the CARD back, Restart brings the agent back.
+          if (wasKilled) {
+            await ctx.db.patch(doc._id as Id<"conversations">, { inbox_killed_at: undefined });
+          }
           await reactivateTasksCanceledOnKill(ctx, (doc as any).user_id, doc._id as Id<"conversations">);
           if ((doc as any).user_id?.toString() !== userId.toString()) {
             await reactivateTasksCanceledOnKill(ctx, userId, doc._id as Id<"conversations">);

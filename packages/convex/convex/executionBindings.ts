@@ -15,7 +15,7 @@ import {
 } from "@codecast/shared/contracts";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
-import { insertRiskResendPendingMessage } from "./pendingMessageWrites";
+import { insertRiskResendPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
 
 export const EXECUTION_PROTOCOL_VERSION = 1 as const;
 
@@ -1761,6 +1761,11 @@ export async function startDeliveryInDb(
     active_delivery_state: "delivery-started" as const,
     updated_at: fence.now,
   });
+  // The effect is now landing in the pane, so the conversation is alive by
+  // definition — clear any kill/dismiss stamps it still carries (the fenced
+  // twin of the legacy status path's revival). A fenced delivery that outlived
+  // a kill otherwise runs a session the record still calls retired.
+  await reviveConversationOnDelivery(ctx, head.conversation_id);
   return startedPermitWire({ ...attempt, state: "delivery-started" });
 }
 
@@ -2217,6 +2222,99 @@ async function cancelUnstartedOldEpoch(
     });
   }
   return { cancelled, remaining: messages.length - batch.length };
+}
+
+/**
+ * Kill teardown for a FENCED conversation: cancel every delivery that has not
+ * started, preserving the delivery-slot invariants.
+ *
+ * The legacy cancel path (pendingMessages.cancelQueuedMessagesOnKill) refuses
+ * fenced rows on purpose — patching one to "cancelled" behind the epoch
+ * machinery's back would strand its delivery_attempts row and the head's active
+ * slot. So on a fenced conversation a kill used to cancel NOTHING, and the
+ * queue simply outlived it. This is the sanctioned version of that cancel,
+ * modeled on cancelUnstartedOldEpoch: a `pending` message is terminalized
+ * outright; a `claimed` one also cancels its attempt and releases the head slot
+ * it holds.
+ *
+ * A `delivery-started` or `ambiguous` message is LEFT ALONE and only counted:
+ * its effect may already be in the pane, and only the delivery machinery may
+ * resolve it. Unlike the epoch path this never throws — a kill must not be
+ * abortable by whatever the delivery state happens to be.
+ */
+export async function cancelFencedDeliveriesOnKill(
+  ctx: DbCtx,
+  conversationId: Id<"conversations">,
+  now: number = Date.now(),
+  limit: number = 300,
+): Promise<{ cancelled: number; inFlight: number }> {
+  const head = await executionHead(ctx, conversationId);
+  // Read the NON-TERMINAL queue through the status index, never the whole
+  // by_conversation_id history: pending_messages is dominated by terminal
+  // delivered rows, and collecting them all is what turns a kill on a busy
+  // session into a transaction that throws (the documented anti-pattern behind
+  // collectOldLegacyPendingMessages). Capped for the same reason — the caller
+  // schedules a continuation for anything left over.
+  const messages: any[] = [];
+  for (const status of ["pending", "injected", "failed", "undeliverable"] as const) {
+    if (messages.length >= limit) break;
+    const rows = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) =>
+        q.eq("conversation_id", conversationId).eq("status", status),
+      )
+      .take(limit - messages.length);
+    for (const row of rows) {
+      if (row.delivery_protocol_version !== undefined) messages.push(row);
+    }
+  }
+  let cancelled = 0;
+  let inFlight = 0;
+  let releasedHeadSlot = false;
+  for (const message of messages) {
+    if (isTerminalDeliveryState(message.delivery_status)) continue;
+    if (
+      message.delivery_status === "delivery-started" ||
+      message.delivery_status === "ambiguous"
+    ) {
+      inFlight += 1;
+      continue;
+    }
+    if (message.delivery_status === "claimed") {
+      const attempt = message.active_delivery_attempt_id
+        ? await ctx.db.get(message.active_delivery_attempt_id)
+        : null;
+      // A claimed message whose attempt disagrees is not ours to unwind.
+      if (!attempt || attempt.state !== "claimed") {
+        inFlight += 1;
+        continue;
+      }
+      await ctx.db.patch(attempt._id, {
+        state: "cancelled-by-supersession" as const,
+        completed_at: now,
+      });
+      if (head && String(head.active_delivery_attempt_id) === String(attempt._id)) {
+        releasedHeadSlot = true;
+      }
+    } else if (message.delivery_status !== "pending") {
+      inFlight += 1;
+      continue;
+    }
+    await ctx.db.patch(message._id, {
+      delivery_status: "cancelled-by-supersession" as const,
+      active_delivery_attempt_id: undefined,
+      status: "cancelled" as const,
+    });
+    cancelled += 1;
+  }
+  if (releasedHeadSlot && head) {
+    await ctx.db.patch(head._id, {
+      active_delivery_attempt_id: undefined,
+      active_delivery_state: undefined,
+      updated_at: now,
+    });
+  }
+  return { cancelled, inFlight };
 }
 
 export async function activateExecutionSuccessorInDb(
