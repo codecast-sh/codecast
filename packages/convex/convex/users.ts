@@ -196,6 +196,10 @@ export const daemonHeartbeat = mutation({
     device_id: v.optional(v.string()),
     device_label: v.optional(v.string()),
     is_remote_device: v.optional(v.boolean()),
+    // Time since the last keyboard/mouse event on that machine (macOS-only;
+    // absent elsewhere and from pre-presence daemons). Anchored to the SERVER
+    // clock below so a skewed daemon clock can't manufacture presence.
+    input_idle_ms: v.optional(v.number()),
     // Git-plane health per repo (gitPlane.ts) — metadata only, mirrors the
     // devices.git_plane schema field.
     git_plane: v.optional(v.array(v.object({
@@ -312,6 +316,19 @@ export const daemonHeartbeat = mutation({
         platform: args.platform,
         last_seen: now,
         status: "online" as const,
+        // Absolute time of this machine's last HID event, on the server clock.
+        // Left untouched when the daemon doesn't report idle (Linux, or a daemon
+        // predating this): a frozen last_input_at simply goes stale, which reads
+        // as away — never as falsely present.
+        // Reject rather than clamp a nonsensical duration: clamping a negative to
+        // 0 would read as "input RIGHT NOW", i.e. the one direction that silently
+        // swallows the user's notifications. Everything uncertain must degrade to
+        // "away", so a bad value just leaves last_input_at to go stale.
+        ...(args.input_idle_ms !== undefined &&
+        Number.isFinite(args.input_idle_ms) &&
+        args.input_idle_ms >= 0
+          ? { last_input_at: now - Math.min(args.input_idle_ms, 7 * 24 * 3600_000) }
+          : {}),
         ...(args.is_remote_device !== undefined ? { is_remote: args.is_remote_device } : {}),
         ...(args.local_project_roots !== undefined
           ? { local_project_roots: args.local_project_roots }
@@ -820,6 +837,7 @@ export const updateNotificationPreferences = mutation({
       plan_activity: v.optional(v.boolean()),
     })),
     muted_members: v.optional(v.array(v.id("users"))),
+    machine_wide_presence: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -829,6 +847,9 @@ export const updateNotificationPreferences = mutation({
     const updateData: any = {};
     if (args.notifications_enabled !== undefined) {
       updateData.notifications_enabled = args.notifications_enabled;
+    }
+    if (args.machine_wide_presence !== undefined) {
+      updateData.machine_wide_presence = args.machine_wide_presence;
     }
     if (args.notification_preferences !== undefined) {
       updateData.notification_preferences = args.notification_preferences;

@@ -10,6 +10,7 @@ import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
+import { readInputIdleMs } from "./inputIdle.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
@@ -2102,6 +2103,11 @@ async function sendHeartbeat(): Promise<void> {
         device_id: deviceId(),
         device_label: deviceLabel(),
         is_remote_device: isRemoteDevice(),
+        // Time since the last keyboard/mouse event anywhere on this machine
+        // (macOS only; omitted elsewhere). Sent as a DURATION so the server can
+        // anchor it to its own clock — daemon clock skew can't fake presence.
+        // Powers the opt-in machine_wide_presence push routing.
+        input_idle_ms: (await readInputIdleMs()) ?? undefined,
         // Saved CC account profiles (names/emails/tiers only, never tokens) so
         // the web can render the account switcher. Recomputed when the
         // backing files change (mtime-keyed cache), so CLI-side saves and

@@ -57,6 +57,13 @@ export default defineSchema({
     github_access_token: v.optional(v.string()),
     push_token: v.optional(v.string()),
     notifications_enabled: v.optional(v.boolean()),
+    // Opt-in: widen push presence from "active in Codecast" to "active anywhere
+    // on this Mac". Off, only the web/Electron client reports presence, so
+    // working in an editor with no Codecast window reads as away and the phone
+    // buzzes. On, the daemon's machine-wide input idle also counts as present
+    // (devices.last_input_at), so pushes hold until you leave the computer.
+    // Read in pushRouter.readPresence.
+    machine_wide_presence: v.optional(v.boolean()),
     notification_preferences: v.optional(v.object({
       team_session_start: v.boolean(),
       mention: v.boolean(),
@@ -1343,6 +1350,12 @@ export default defineSchema({
     label: v.string(),
     platform: v.string(),
     last_seen: v.number(),
+    // When a human last touched THIS machine's keyboard/mouse — computed
+    // server-side as (heartbeat arrival − the daemon's reported input idle), so
+    // daemon clock skew can't fake it. macOS-only (cli/inputIdle.ts); absent on
+    // Linux/headless boxes, which therefore never read as "the user is here".
+    // Consumed by pushRouter only for users who opted into machine_wide_presence.
+    last_input_at: v.optional(v.number()),
     status: v.optional(v.union(v.literal("online"), v.literal("offline"))),
     is_remote: v.optional(v.boolean()),
     local_project_roots: v.optional(v.array(v.string())),

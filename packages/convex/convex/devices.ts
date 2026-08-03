@@ -1073,6 +1073,12 @@ export const ownerDeviceDisplay = query({
       )
       .first();
     if (!row) return null;
+    // This projection CROSSES ACCOUNTS — it reads the conversation owner's device
+    // row, and its gate (checkConversationAccess) admits share-token viewers, not
+    // just teammates. Never add `last_input_at` or anything derived from it here:
+    // that field is when a HUMAN last touched the keyboard, a different category
+    // from the machine liveness this returns, and it is currently readable only
+    // by its own owner (pushRouter.readPresence).
     return {
       device_id: row.device_id,
       label: row.label,
