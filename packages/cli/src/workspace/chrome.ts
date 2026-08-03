@@ -18,7 +18,7 @@
  *     allocatePorts uses) and pass it explicitly.
  */
 
-import { spawn } from "node:child_process";
+import { spawn } from "../proc.js";
 import * as fs from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isPortFree } from "./ports.js";

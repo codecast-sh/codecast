@@ -11,7 +11,7 @@
  * The caller's error includes the failing phase + command for triage.
  */
 
-import { spawn } from "node:child_process";
+import { spawn } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WorkspaceManifest } from "./types.js";

@@ -8,7 +8,8 @@ import open from "open";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { spawn, spawnSync, execSync } from "child_process";
+import { spawn, spawnSync, execSync } from "./proc.js";
+import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
@@ -1093,6 +1094,7 @@ function ensureDaemonRunning(): void {
 }
 
 function startDaemonQuiet(): void {
+  if (!daemonSupportedOnPlatform()) return;
   ensureConfigDir();
   if (isDaemonRunning()) return;
 
@@ -1544,6 +1546,10 @@ function stopDaemon(): void {
 }
 
 function startDaemon(): void {
+  if (!daemonSupportedOnPlatform()) {
+    console.error(WINDOWS_DAEMON_UNSUPPORTED_MESSAGE);
+    return;
+  }
   ensureConfigDir();
 
   if (!ensureTmux()) {
@@ -7825,31 +7831,10 @@ function setupWindows(disable: boolean): void {
     return;
   }
 
-  const { executablePath, args } = getExecutableInfo();
-  const fullCommand = [executablePath, ...args].join(" ");
-
-  const result = spawnSync("schtasks", [
-    "/Create",
-    "/TN", taskName,
-    "/TR", fullCommand,
-    "/SC", "ONLOGON",
-    "/RL", "LIMITED",
-    "/F"
-  ], { stdio: "inherit" });
-
-  if (result.status === 0) {
-    console.log("Auto-start enabled");
-    console.log(`Task Scheduler task created: ${taskName}`);
-    console.log(`Command: ${fullCommand}`);
-    console.log("\nThe daemon will start automatically on login");
-    console.log("To start now, run: cast start");
-  } else {
-    console.error("Failed to create scheduled task");
-    console.log("\nManual setup:");
-    console.log("1. Open Task Scheduler (taskschd.msc)");
-    console.log("2. Create a new task that runs on login");
-    console.log(`3. Set the action to: ${fullCommand}`);
-  }
+  // Never create the auto-start task: the daemon refuses to run on native
+  // Windows (see windowsSupport.ts). The --disable path above stays working so
+  // machines with a task from an older CLI can remove it.
+  console.error(WINDOWS_DAEMON_UNSUPPORTED_MESSAGE);
 }
 
 program
@@ -7859,7 +7844,7 @@ program
     "Supported platforms:\n" +
     "  - macOS: LaunchAgent\n" +
     "  - Linux: systemd user service\n" +
-    "  - Windows: Task Scheduler\n\n" +
+    "  - Windows: not supported (use WSL); --disable removes an old task\n\n" +
     "Examples:\n" +
     "  cast setup             # Enable auto-start\n" +
     "  cast setup --disable   # Disable auto-start"

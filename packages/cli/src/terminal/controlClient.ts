@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "../proc.js";
 import { ControlModeParser, toSendKeysHex, type ControlEvent } from "./controlProtocol.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
@@ -135,7 +135,9 @@ export class TmuxControlClient {
   private async captureSeed(paneRows: number): Promise<Buffer> {
     if (!this.paneId) return Buffer.alloc(0);
     const target = this.paneId;
-    const cap = await this.command(`capture-pane -peqJ -t ${target} -S -2000`);
+    // `-S -` = from the very start of the pane's history: the pane's own
+    // history-limit is the real cap, and xterm's scrollback holds the rest.
+    const cap = await this.command(`capture-pane -peqJ -t ${target} -S -`);
     const cur = await this.command(`display-message -p -t ${target} -F '#{cursor_x}|#{cursor_y}'`);
     if (!cap.ok) return Buffer.alloc(0);
 

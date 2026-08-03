@@ -24,7 +24,7 @@
  * a requirement.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "./proc.js";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";

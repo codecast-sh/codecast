@@ -9513,6 +9513,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       setComposeHasContent(false);
       requestAnimationFrame(() => textareaRef.current?.focus());
     } else {
+      // Seed from the text carried in: TipTap's onUpdate only fires on edits, so
+      // without this the send/fork controls stay disabled until the first keystroke.
+      setComposeHasContent(messageRef.current.trim().length > 0);
       setComposeMode(true);
     }
   }, [composeMode, setMessage]);

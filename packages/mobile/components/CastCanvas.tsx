@@ -52,8 +52,11 @@ export const canvasAvailable = !!WebViewComp;
 // allowlist (it can pull external content); we re-allow it and the shell script
 // below strips any <use> whose href isn't a same-document "#id" reference.
 const PURIFY_CONFIG = JSON.stringify({
+  // Body-context parse: without it a LEADING <style> is hoisted into <head> and
+  // dropped, since only <body> is serialized back. See canvasSanitize.ts.
+  FORCE_BODY: true,
   FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'base', 'form', 'meta', 'link'],
-  FORBID_ATTR: ['ping', 'formaction', 'onclick'],
+  FORBID_ATTR: ['ping', 'formaction', 'onclick', 'srcset'],
   ADD_TAGS: ['use'],
   ADD_ATTR: ['target'],
 });

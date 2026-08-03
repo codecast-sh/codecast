@@ -17,7 +17,7 @@
  * need a file-based lock; out of scope for v1.
  */
 
-import { execSync } from "node:child_process";
+import { execSync } from "../../proc.js";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";

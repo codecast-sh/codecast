@@ -9,7 +9,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
-import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
+import { DetailSplitLayout, PeekLayoutControls } from "../../../components/DetailSplitLayout";
 import { AppLoader } from "../../../components/AppLoader";
 import { TaskListContent } from "../page";
 import { useMentionQuery } from "../../../hooks/useMentionQuery";
@@ -650,6 +650,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                 </svg>
               </button>
+              <PeekLayoutControls />
               <button
                 onClick={() => { if (isInline && onClose) onClose(); else router.push("/tasks"); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"

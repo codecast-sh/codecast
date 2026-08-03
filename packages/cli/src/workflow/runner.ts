@@ -1,5 +1,5 @@
 import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
-import { spawnSync } from "child_process";
+import { spawnSync } from "../proc.js";
 import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";

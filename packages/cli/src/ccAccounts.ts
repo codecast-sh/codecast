@@ -19,7 +19,7 @@
 //     their token in memory, so blocked sessions must be killed + resumed to
 //     adopt the new account (the daemon's switch_account command does this).
 
-import { execFileSync } from "child_process";
+import { execFileSync } from "./proc.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";

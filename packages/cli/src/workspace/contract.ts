@@ -13,7 +13,7 @@
  * CLI (`cast workspace status`) and the daemon (for crash recovery).
  */
 
-import { execSync } from "node:child_process";
+import { execSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isPortFree } from "./ports.js";

@@ -19,7 +19,7 @@
  *     refreshToken, but copy a FRESH credential at move time.
  */
 
-import { execFileSync, execSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
