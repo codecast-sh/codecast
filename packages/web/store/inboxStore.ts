@@ -2677,6 +2677,14 @@ interface InboxStoreState {
   recentProjects: Array<{ path: string; count: number; lastActive: number }>;
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => void;
 
+  // Per-machine folder lists (the device-scoped getRecentProjectPaths results),
+  // so the new-session picker paints a machine's folders from cache instantly
+  // instead of waiting on the scoped query round-trip. Safe to serve stale: a
+  // device's cache only ever holds that same device's prior answer, so it can
+  // never offer a path the target machine lacks.
+  recentProjectsByDevice: Record<string, Array<{ path: string; count: number; lastActive: number; suggested?: boolean }>>;
+  setRecentProjectsForDevice: (deviceId: string, projects: Array<{ path: string; count: number; lastActive: number; suggested?: boolean }>) => void;
+
   // -- Machine roster (non-persisted; mirrors the live devices query) --
   // Only exists so the create path can re-check, at the moment it fires, whether
   // a picked machine is still the one routing would choose anyway. Deliberately
@@ -4337,6 +4345,10 @@ export const useInboxStore = create<InboxStoreState>(
   recentProjects: [],
   setRecentProjects: action(function (this: Draft, projects: Array<{ path: string; count: number; lastActive: number }>) {
     this.recentProjects = projects;
+  }),
+  recentProjectsByDevice: {},
+  setRecentProjectsForDevice: sync(function (this: Draft, deviceId: string, projects: Array<{ path: string; count: number; lastActive: number; suggested?: boolean }>) {
+    this.recentProjectsByDevice[deviceId] = projects;
   }),
   machineRoster: [],
   setMachineRoster: sync(function (this: Draft, devices: MachineCandidate[]) {

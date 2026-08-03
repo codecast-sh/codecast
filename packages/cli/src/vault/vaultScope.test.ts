@@ -7,6 +7,7 @@ import {
   normalizeVaultPath,
   realVaultRoot,
   resolveVaultPath,
+  revealCommand,
   scanVault,
   vaultContentType,
   vaultRelativePath,
@@ -142,5 +143,47 @@ describe("scanVault", () => {
     const paths = (await scanVault(root)).map((f) => f.path);
     expect(paths).not.toContain("link.md");
     expect(paths).not.toContain("linked");
+  });
+});
+
+describe("revealCommand", () => {
+  test("macOS selects the file, or opens it with the default app", () => {
+    expect(revealCommand("darwin", "/v/a note.md", "reveal")).toEqual({
+      cmd: "open",
+      args: ["-R", "/v/a note.md"],
+    });
+    expect(revealCommand("darwin", "/v/a note.md", "open")).toEqual({
+      cmd: "open",
+      args: ["/v/a note.md"],
+    });
+  });
+
+  test("Windows joins the selection flag to the path with no space", () => {
+    // A space after the comma makes explorer open Documents instead — silent
+    // and wrong, which is exactly why this is pinned.
+    const { cmd, args } = revealCommand("win32", "C:\\v\\note.md", "reveal");
+    expect(cmd).toBe("explorer");
+    expect(args).toEqual(["/select,C:\\v\\note.md"]);
+    expect(args[0]).not.toContain(", ");
+  });
+
+  test("Linux falls back to the containing folder, since there is no select verb", () => {
+    expect(revealCommand("linux", "/v/sub/note.md", "reveal")).toEqual({
+      cmd: "xdg-open",
+      args: ["/v/sub"],
+    });
+    expect(revealCommand("linux", "/v/sub/note.md", "open")).toEqual({
+      cmd: "xdg-open",
+      args: ["/v/sub/note.md"],
+    });
+  });
+
+  test("the path is always its own argv entry, so a filename cannot inject", () => {
+    const nasty = '/v/note; rm -rf ~.md';
+    for (const p of ["darwin", "win32", "linux"] as NodeJS.Platform[]) {
+      const { args } = revealCommand(p, nasty, "open");
+      expect(args.some((a) => a.includes(nasty))).toBe(true);
+      expect(args.length).toBeLessThanOrEqual(2);
+    }
   });
 });

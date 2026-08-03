@@ -1315,7 +1315,7 @@ export class SyncService {
 
   async heartbeatManagedSession(
     sessionId: string,
-    agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming",
+    agentStatus?: AgentStatus,
   ): Promise<{ found: boolean; dismissed?: boolean } | undefined> {
     try {
       return await this.mutate("managedSessions:heartbeat" as any, {
@@ -1333,7 +1333,7 @@ export class SyncService {
   async heartbeatManagedSessionsBatch(
     sessions: Array<{
       session_id: string;
-      agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming";
+      agent_status?: AgentStatus;
       client_ts?: number;
     }>,
   ): Promise<{ updated: number } | undefined> {
@@ -1599,7 +1599,7 @@ export class SyncService {
     } catch {}
   }
 
-  async updateSessionAgentStatus(conversationId: string, status: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming", clientTs?: number, permissionMode?: string): Promise<void> {
+  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string): Promise<void> {
     if (!this.apiToken) return;
     try {
       await this.mutate(

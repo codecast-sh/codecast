@@ -21,6 +21,15 @@ export interface VaultInfo {
   note_count?: number;
   /** Epoch ms when the vault was registered. */
   added_at: number;
+  /** "project" = one of the user's own code projects, discovered rather than
+   *  registered by hand (vaultRegistry.projectVaults). Absent means someone ran
+   *  `cast vault add`. The only difference downstream is how it is presented:
+   *  once opened, a project vault scans, watches and edits identically. */
+  kind?: "project";
+  /** Vault-relative directory to land in — "docs" for a repo that has one.
+   *  Empty/absent means the root. A repo root is mostly source directories, so
+   *  opening there is a poor first impression; see vaultProjectHome. */
+  home?: string;
   /** Opt-in one-way remote mirror (vaultMirror.ts) for cross-device reading.
    *  Absent/false means the vault is local-only — nothing about it ever leaves
    *  this machine. */
@@ -70,7 +79,11 @@ export type VaultOpRequest =
   | { op: "mkdir"; path: string }
   | { op: "rename"; path: string; to: string }
   | { op: "delete"; path: string }
-  | { op: "create"; path: string; content?: string };
+  | { op: "create"; path: string; content?: string }
+  /** Show the file in the OS file manager (Finder, Explorer, the Linux
+   *  desktop's handler). `mode: "open"` hands it to the default application
+   *  instead — the user's editor for a markdown file. */
+  | { op: "reveal"; path: string; mode?: "reveal" | "open" };
 
 export interface VaultOpResponse {
   ok: true;
@@ -106,6 +119,27 @@ export const VAULT_IGNORED_SEGMENTS = [
   ".git", ".obsidian", ".trash", "node_modules", ".DS_Store",
 ] as const;
 
+/** Build output and vendored dependencies, ignored ON TOP of the list above
+ *  when the vault root is a code repository. Kept off plain note vaults: a
+ *  folder called "build" in someone's notes is a topic, not a target dir. */
+export const VAULT_REPO_IGNORED_SEGMENTS = [
+  "dist", "build", "out", "target", "coverage",
+  "vendor", "bower_components", "Pods", "DerivedData",
+  "__pycache__", "venv",
+] as const;
+
+/** Inside a repo, a dot-directory is tooling by convention, so the whole class
+ *  is ignored rather than enumerated — that way next year's `.somecache` is
+ *  handled too. These are the exceptions: dot-directories people actually
+ *  write markdown into. */
+export const VAULT_REPO_ALLOWED_DOT_DIRS = [
+  ".github", ".claude", ".cursor", ".codex",
+] as const;
+
+/** Directories a repo keeps its prose in. First match wins; see
+ *  vaultScope.vaultProjectHome. */
+export const VAULT_DOC_DIRS = ["docs", "doc", "wiki", "notes"] as const;
+
 export function isVaultMarkdownPath(p: string): boolean {
   const lower = p.toLowerCase();
   return VAULT_MARKDOWN_EXTENSIONS.some((ext) => lower.endsWith(ext));
@@ -118,4 +152,11 @@ export function isVaultAssetPath(p: string): boolean {
 
 export function isVaultIgnoredPath(p: string): boolean {
   return p.split("/").some((seg) => (VAULT_IGNORED_SEGMENTS as readonly string[]).includes(seg));
+}
+
+/** The repo-only half of the rule, on ONE path segment. Callers walk segments
+ *  themselves; vaultScope.isVaultPathIgnored is the predicate to use. */
+export function isRepoIgnoredSegment(seg: string): boolean {
+  if ((VAULT_REPO_IGNORED_SEGMENTS as readonly string[]).includes(seg)) return true;
+  return seg.startsWith(".") && !(VAULT_REPO_ALLOWED_DOT_DIRS as readonly string[]).includes(seg);
 }

@@ -328,15 +328,20 @@ function RowIndicator({ task }: { task: any }) {
 }
 
 function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boolean }) {
-  // ?task=<id> deep-links here from an inbox schedule row's gear verb: that
-  // row arrives expanded and scrolled into view. Read once at mount — after
-  // that the page behaves normally.
-  const [expanded, setExpanded] = useState(
-    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("task") === task._id,
-  );
+  // ?task=<id> deep-links here from an inbox schedule row's gear verb and from
+  // an inline trigger pill: that row arrives expanded and scrolled into view.
+  // Either handle addresses the row — the pill links by short id ("tr-42")
+  // whenever its own lookup hasn't resolved to a Convex id yet.
+  const isDeepLinked = () => {
+    if (typeof window === "undefined") return false;
+    const ref = new URLSearchParams(window.location.search).get("task");
+    return !!ref && (ref === task._id || ref.toLowerCase() === task.short_id);
+  };
+  // Read once at mount — after that the page behaves normally.
+  const [expanded, setExpanded] = useState(isDeepLinked);
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (rowRef.current && new URLSearchParams(window.location.search).get("task") === task._id) {
+    if (rowRef.current && isDeepLinked()) {
       rowRef.current.scrollIntoView({ block: "center" });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

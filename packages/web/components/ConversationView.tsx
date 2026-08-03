@@ -136,6 +136,8 @@ function followRestoredConversation(res: any, ghostId: string): boolean {
 import { getLabelColor } from "../lib/labelColors";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import {
+  browseProjectOrder,
+  frequentProjectChips,
   mergeRecentProjectPaths,
   recentProjectPathsFromSessionKeys,
   recentProjectSessionKey,
@@ -152,7 +154,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2 } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search } from "lucide-react";
 import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
 import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
@@ -937,16 +939,30 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     api.users.getRecentProjectPaths,
     scopedDeviceId ? { limit: 50, device_id: scopedDeviceId } : "skip",
   );
+  // Per-device cache so the picker paints instantly on every open instead of
+  // waiting out the scoped round-trip. The cached list is that same machine's
+  // prior answer, so — unlike the union — it can never offer a path the target
+  // machine lacks; only cache-vs-cache staleness, which the live echo corrects.
+  const cachedScopedProjects = useInboxStore((s) => s.recentProjectsByDevice);
+  const setRecentProjectsForDevice = useInboxStore((s) => s.setRecentProjectsForDevice);
+  const syncScopedProjects = useCallback(
+    (projects: RecentProject[]) => {
+      if (scopedDeviceId) setRecentProjectsForDevice(scopedDeviceId, projects);
+    },
+    [scopedDeviceId, setRecentProjectsForDevice],
+  );
+  useConvexSync(scopedProjects, syncScopedProjects);
 
   // Memoized because five downstream useMemos take it as a dep — an identity
   // that churned every render would defeat all of them. While the scoped query is
-  // in flight we show nothing rather than the union: an empty list for a beat is
-  // recoverable, a path the target machine lacks is not.
+  // in flight we show that machine's cached list (or nothing) rather than the
+  // union: a stale own-machine folder for a beat is recoverable, a path the
+  // target machine lacks is not.
   const recentProjects = useMemo<RecentProject[]>(
     () => scopedDeviceId
-      ? (scopedProjects ?? [])
+      ? (scopedProjects ?? cachedScopedProjects[scopedDeviceId] ?? [])
       : mergeRecentProjectPaths(freshProjects ?? cachedProjects, ownSessionProjects),
-    [scopedDeviceId, scopedProjects, freshProjects, cachedProjects, ownSessionProjects],
+    [scopedDeviceId, scopedProjects, cachedScopedProjects, freshProjects, cachedProjects, ownSessionProjects],
   );
   const suggestedPaths = useMemo(
     () => new Set(recentProjects.filter((p) => p.suggested).map((p) => p.path)),
@@ -971,7 +987,10 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     return dedupedRecents.filter((p) => p.path !== currentPath && (!currentName || repoName(p.path) !== currentName));
   }, [dedupedRecents, currentPath]);
 
-  const visibleProjects = otherProjects.slice(0, 6);
+  // Resting row: the current project plus at most 4 you actually use most.
+  // Machine-root suggestions (never-used folders, shown grayed) stay out of
+  // this row entirely — they're reachable through "other".
+  const visibleProjects = useMemo(() => frequentProjectChips(otherProjects), [otherProjects]);
 
   // --- keyboard picker ---------------------------------------------------
   // The chip row doubles as a keyboard listbox. It is dormant for mouse users
@@ -1008,7 +1027,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // (so plain filtering — "co" → codecast — stays clean). The daemon's
   // start_session takes the cwd verbatim, so the fully-resolved path is all it
   // needs, and the chip shows that path so a wrong base guess is visible first.
-  const pickList = useMemo<{ path: string; custom?: boolean }[]>(() => {
+  const pickList = useMemo<{ path: string; custom?: boolean; suggested?: boolean }[]>(() => {
     if (filter.trim()) {
       return buildProjectPathOptions({
         query: filter,
@@ -1018,9 +1037,15 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
         currentPath,
       });
     }
-    const base: { path: string }[] = currentPath ? [{ path: currentPath }] : [];
-    return base.concat(otherProjects);
+    // Unfiltered browse: folders you've actually used first, then the machine's
+    // never-used roots as a visually separate trailing section (see the divider
+    // in the render — its position is this list's first `suggested` index).
+    const base: { path: string; suggested?: boolean }[] = currentPath ? [{ path: currentPath }] : [];
+    return base.concat(browseProjectOrder(otherProjects).map((p) => ({ path: p.path, suggested: p.suggested })));
   }, [filter, dedupedRecents, currentPath, otherProjects, homeDir, projectBase]);
+
+  // Where the "more folders on this machine" divider renders (-1 → no divider).
+  const firstSuggestedIdx = useMemo(() => pickList.findIndex((p) => p.suggested), [pickList]);
 
   // Distinguish "you typed the folder you're already in" from a real miss.
   const filterIsCurrent = !!currentPath && resolveCustomPath(filter, homeDir, projectBase) === currentPath;
@@ -1230,8 +1255,31 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       )}
 
       <div
-        className={`flex flex-wrap justify-center gap-1.5 rounded-lg transition-all ${picking ? "ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-1.5" : ""}`}
+        className={`rounded-lg transition-all ${picking ? "w-full max-w-3xl ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-2" : ""}`}
       >
+        {picking && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 pb-2 mb-2 border-b border-sol-cyan/20">
+            <Search className="w-3.5 h-3.5 shrink-0 text-sol-cyan/70" />
+            <input
+              ref={pickerRef}
+              value={filter}
+              onChange={(e) => { setFilter(e.target.value); setHi(0); }}
+              onKeyDown={handlePickerKeyDown}
+              onBlur={() => exitPicker(false)}
+              placeholder="search or paste a path"
+              spellCheck={false}
+              autoComplete="off"
+              className="flex-1 min-w-[12rem] bg-transparent text-xs font-mono text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
+            />
+            <span className="inline-flex items-center gap-2 text-[11px] font-mono">
+              <HintKeys keys={["←", "→"]} label="move" />
+              <HintKeys keys={["↵"]} label={pickList[clampedHi]?.custom ? "open" : "select"} />
+              <HintKeys keys={[ALT_CAP, "↓"]} label="agent" />
+              <HintKeys keys={["Esc"]} label="back" />
+            </span>
+          </div>
+        )}
+        <div className="flex flex-wrap justify-center gap-1.5">
         {picking ? (
           pickList.length === 0 ? (
             <span className="text-xs text-sol-text-dim px-2.5 py-1">
@@ -1242,33 +1290,41 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
               const isHi = i === clampedHi;
               const isCurrent = p.path === currentPath;
               return (
-                <button
-                  key={p.path}
-                  // onMouseDown (not onClick) + preventDefault keeps the filter
-                  // input focused so the click isn't lost to an onBlur teardown.
-                  onMouseDown={(e) => { e.preventDefault(); handleSwitch(p.path); exitPicker(); }}
-                  onMouseEnter={() => setHi(i)}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all max-w-[min(100%,22rem)] ${
-                    isHi
-                      ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"
-                      : p.custom
-                        ? "border-dashed border-sol-cyan/40 text-sol-cyan/80"
-                        : isCurrent
-                          ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
-                          : "border-sol-border/40 text-sol-text-dim"
-                  } ${!isHi && suggestedPaths.has(p.path) ? "opacity-60" : ""}`}
-                  title={p.path}
-                >
-                  {p.custom ? <FolderPlusGlyph className="w-3 h-3 shrink-0" /> : <FolderGlyph />}
-                  {p.custom ? (
-                    <span className="truncate">
-                      <span className="opacity-60">open </span>
-                      <span className="font-mono">{displayPath(p.path, homeDir)}</span>
+                <Fragment key={p.path}>
+                  {i === firstSuggestedIdx && (
+                    <span className="w-full mt-1.5 mb-0.5 flex items-center gap-2 text-[10px] text-sol-text-dim/80">
+                      <span className="flex-1 border-t border-sol-border/40" />
+                      more folders on {routedDevice ? deviceDisplayName(routedDevice) : "this machine"}
+                      <span className="flex-1 border-t border-sol-border/40" />
                     </span>
-                  ) : (
-                    <span>{p.path.split("/").filter(Boolean).pop()}</span>
                   )}
-                </button>
+                  <button
+                    // onMouseDown (not onClick) + preventDefault keeps the filter
+                    // input focused so the click isn't lost to an onBlur teardown.
+                    onMouseDown={(e) => { e.preventDefault(); handleSwitch(p.path); exitPicker(); }}
+                    onMouseEnter={() => setHi(i)}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all max-w-[min(100%,22rem)] ${
+                      isHi
+                        ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"
+                        : p.custom
+                          ? "border-dashed border-sol-cyan/40 text-sol-cyan/80"
+                          : isCurrent
+                            ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
+                            : "border-sol-border/40 text-sol-text-dim"
+                    } ${!isHi && suggestedPaths.has(p.path) ? "opacity-60" : ""}`}
+                    title={p.path}
+                  >
+                    {p.custom ? <FolderPlusGlyph className="w-3 h-3 shrink-0" /> : <FolderGlyph />}
+                    {p.custom ? (
+                      <span className="truncate">
+                        <span className="opacity-60">open </span>
+                        <span className="font-mono">{displayPath(p.path, homeDir)}</span>
+                      </span>
+                    ) : (
+                      <span>{p.path.split("/").filter(Boolean).pop()}</span>
+                    )}
+                  </button>
+                </Fragment>
               );
             })
           )
@@ -1290,9 +1346,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
                 <button
                   key={p.path}
                   onClick={() => handleSwitch(p.path)}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all ${
-                    suggestedPaths.has(p.path) ? "opacity-60" : ""
-                  }`}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
                   title={p.path}
                 >
                   <FolderGlyph />
@@ -1312,11 +1366,12 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
             </button>
           </>
         )}
+        </div>
       </div>
 
       {/* One quiet meta row instead of three stacked ones: label, worktree
-          toggle, keyboard hints. The picker's filter input still takes its own
-          row while active — it replaces the hints, not the whole row. */}
+          toggle, keyboard hints. While picking, the search input rides the top
+          of the picker box and these hints hide. */}
       <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
         <NewSessionBucketPill conversation={conversation} />
 
@@ -1347,28 +1402,6 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
           </button>
         )}
       </div>
-
-      {picking && (
-        <div className="flex items-center gap-2 text-[11px] font-mono">
-          <input
-            ref={pickerRef}
-            value={filter}
-            onChange={(e) => { setFilter(e.target.value); setHi(0); }}
-            onKeyDown={handlePickerKeyDown}
-            onBlur={() => exitPicker(false)}
-            placeholder="filter or paste a path…"
-            spellCheck={false}
-            autoComplete="off"
-            className="w-44 bg-transparent text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
-          />
-          <span className="inline-flex items-center gap-2">
-            <HintKeys keys={["←", "→"]} label="move" />
-            <HintKeys keys={["↵"]} label={pickList[clampedHi]?.custom ? "open" : "select"} />
-            <HintKeys keys={[ALT_CAP, "↓"]} label="agent" />
-            <HintKeys keys={["Esc"]} label="back" />
-          </span>
-        </div>
-      )}
 
     </div>
   );
@@ -14862,6 +14895,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         />
       )}
 
+      {/* Live terminal view of this session's tmux pane (opened from the tmux
+          pill), docked under the header ACROSS THE TOP — deliberately not next
+          to the composer, so typing at the agent and typing to the agent never
+          fight over the same corner of the screen. */}
+      {conversation && (
+        <ErrorBoundary name="ConversationTerminal" level="inline" fallback={null}>
+          <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
+        </ErrorBoundary>
+      )}
+
       <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>
       {(isJumpingToTarget || (targetMessageId && timeline.length === 0)) && (
         <div
@@ -15094,15 +15137,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       </div>
-
-      {/* Live terminal view of this session's tmux pane (opened from the tmux
-          pill), docked between the feed and the composer — a per-conversation
-          split, not the global bottom panel. */}
-      {conversation && (
-        <ErrorBoundary name="ConversationTerminal" level="inline" fallback={null}>
-          <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
-        </ErrorBoundary>
-      )}
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">

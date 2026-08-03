@@ -28,7 +28,7 @@ import { CachedJsonStore } from "../cachedJsonStore.js";
 import { chunkMessagesBySize } from "../syncService.js";
 import { cliFetch } from "../cliHttp.js";
 import { parseNote } from "@codecast/shared/vault";
-import { listVaults } from "./vaultRegistry.js";
+import { registeredVaults } from "./vaultRegistry.js";
 import {
   VAULT_MIRROR_MAX_BODY_BYTES,
   VAULT_MIRROR_MAX_STAMP_BATCH,
@@ -264,7 +264,7 @@ export class VaultMirror {
   /** Registered vaults with mirroring explicitly turned on. Read fresh every
    *  time: `cast vault mirror --on` edits config.json under a running daemon. */
   private mirroredVaults(): VaultInfo[] {
-    return listVaults(this.opts.configDir).filter((v) => v.mirror === true);
+    return registeredVaults(this.opts.configDir).filter((v) => v.mirror === true);
   }
 
   /** Start the periodic full scan. Nothing is pushed for a vault whose mirror
@@ -338,7 +338,7 @@ export class VaultMirror {
    */
   private async reconcileDisabled(): Promise<void> {
     const live = new Set(this.mirroredVaults().map((v) => v.id));
-    const known = listVaults(this.opts.configDir);
+    const known = registeredVaults(this.opts.configDir);
     for (const vaultId of Object.keys(this.store.getAll())) {
       if (this.stopped) return;
       if (live.has(vaultId)) continue;

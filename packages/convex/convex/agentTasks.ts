@@ -8,6 +8,7 @@ import { extractTitleJson } from "./titleGeneration";
 import { isRefusalProse } from "./idleSummary";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { enqueuePush } from "./pushRouter";
+import { nextShortId } from "./counters";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -184,8 +185,11 @@ async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) 
   const now = Date.now();
   const run_at = args.schedule_type === "event" ? undefined : (args.run_at || now);
 
+  const short_id = await nextShortId(ctx.db, "tr");
+
   const taskId = await ctx.db.insert("agent_tasks", {
     user_id: userId,
+    short_id,
     title: args.title,
     prompt: args.prompt,
     context_summary: args.context_summary,
@@ -219,7 +223,7 @@ async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) 
   // Distill a readable display_title/display_summary from the prompt (the
   // summarizer section below) — the stored title is usually prompt.slice(0,60).
   await ctx.scheduler?.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: taskId });
-  return taskId;
+  return { id: taskId, short_id };
 }
 
 // Single-task action exposed under both auth schemes.
@@ -846,6 +850,57 @@ export const webList = query({
       .collect();
 
     return await withResolvedRunConversations(ctx, userId, tasks);
+  },
+});
+
+/**
+ * One trigger by short id ("tr-42") or Convex id — the getter behind the
+ * inline trigger pill, matching tasks.webGet / plans.webGet / conversations.
+ * webGet so every entity pill resolves the same way. Returns null rather than
+ * throwing for a foreign or missing row: a pill degrades to plain text.
+ */
+export const webGet = query({
+  args: { short_id: v.optional(v.string()), id: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    let task: Doc<"agent_tasks"> | null = null;
+    if (args.id) {
+      const normalized = ctx.db.normalizeId("agent_tasks", args.id);
+      task = normalized ? await ctx.db.get(normalized) : null;
+    } else if (args.short_id) {
+      task = await ctx.db
+        .query("agent_tasks")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!.toLowerCase()))
+        .unique();
+    }
+    if (!task || task.user_id.toString() !== userId.toString()) return null;
+
+    const [enriched] = await withResolvedRunConversations(ctx, userId, [task]);
+    return enriched ?? task;
+  },
+});
+
+/**
+ * One-shot: give every pre-existing trigger a short id. Paged (the caller
+ * re-runs until `remaining` is 0) so a large account can't blow the mutation
+ * budget. Allocation goes through the same counter as new rows, so backfilled
+ * and fresh ids share one sequence and can never collide.
+ */
+export const backfillShortIds = internalMutation({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 200;
+    const missing = await ctx.db
+      .query("agent_tasks")
+      .withIndex("by_short_id", (q) => q.eq("short_id", undefined))
+      .take(limit + 1);
+    const batch = missing.slice(0, limit);
+    for (const task of batch) {
+      await ctx.db.patch(task._id, { short_id: await nextShortId(ctx.db, "tr") });
+    }
+    return { filled: batch.length, more: missing.length > limit };
   },
 });
 

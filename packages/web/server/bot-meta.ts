@@ -104,6 +104,7 @@ const STATIC_META: Record<string, { title: string; description: string }> = {
   "/about": { title: "About - codecast", description: "About codecast" },
   "/features": { title: "CLI Features - codecast", description: "codecast CLI features and commands" },
   "/documentation": { title: "Documentation - codecast", description: "codecast documentation" },
+  "/download": { title: "Download - codecast", description: "Download the Codecast desktop app for macOS" },
   "/security": { title: "Security - codecast", description: "How codecast protects your data" },
   "/privacy": { title: "Privacy Policy - codecast", description: "codecast privacy policy" },
   "/terms": { title: "Terms of Service - codecast", description: "codecast terms of service" },

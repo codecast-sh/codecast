@@ -18,6 +18,7 @@ export class RecursiveWatcher extends EventEmitter {
   private knownMtime = new Map<string, number>();
   private watchPath: string;
   private filter: (relativePath: string) => boolean;
+  private dirFilter: (relativeDirPath: string) => boolean;
   private callback: WatcherCallback;
   private maxDepth: number;
   private debounceMs: number;
@@ -25,6 +26,16 @@ export class RecursiveWatcher extends EventEmitter {
   constructor(opts: {
     path: string;
     filter: (relativePath: string) => boolean;
+    /**
+     * Whether to descend into a directory. `filter` only ever sees FILES, so
+     * without this the walk recurses through every directory under the root and
+     * merely discards what it finds — on a code repository that means walking
+     * node_modules on priming and again on every debounced rescan, forever.
+     *
+     * Defaults to descending everywhere, so callers that don't set it behave
+     * exactly as before.
+     */
+    dirFilter?: (relativeDirPath: string) => boolean;
     callback: WatcherCallback;
     maxDepth?: number;
     debounceMs?: number;
@@ -32,6 +43,7 @@ export class RecursiveWatcher extends EventEmitter {
     super();
     this.watchPath = opts.path;
     this.filter = opts.filter;
+    this.dirFilter = opts.dirFilter ?? (() => true);
     this.callback = opts.callback;
     this.maxDepth = opts.maxDepth ?? Infinity;
     this.debounceMs = opts.debounceMs ?? 100;
@@ -91,6 +103,11 @@ export class RecursiveWatcher extends EventEmitter {
   // walk. Keyed by directory so activity in unrelated subtrees doesn't reset each
   // other's timers.
   private scheduleScan(dir: string): void {
+    // The OS-level recursive watch can't be pruned, so events still arrive from
+    // directories we don't care about. Drop them here rather than paying a
+    // readdir to discover there was nothing to report.
+    const rel = path.relative(this.watchPath, dir);
+    if (rel && !this.dirFilter(rel)) return;
     const existing = this.scanTimers.get(dir);
     if (existing) clearTimeout(existing);
     this.scanTimers.set(dir, setTimeout(() => {
@@ -112,6 +129,7 @@ export class RecursiveWatcher extends EventEmitter {
       const rel = path.relative(this.watchPath, full);
       const depth = rel.split(path.sep).length;
       if (entry.isDirectory()) {
+        if (!this.dirFilter(rel)) continue;
         // Descend only while a file one level deeper would still be within
         // maxDepth (a file in a dir at depth D sits at depth D+1).
         if (depth < this.maxDepth) this.walk(full, emit);
@@ -134,6 +152,18 @@ export class RecursiveWatcher extends EventEmitter {
       persistent: true,
       ignoreInitial: true,
       depth: this.maxDepth,
+      // Unlike the native path, chokidar CAN be told not to descend — which
+      // matters more here, since it opens a real watch per directory.
+      ignored: (target: string) => {
+        const rel = path.relative(this.watchPath, target);
+        if (!rel || rel.startsWith("..")) return false;
+        let prefix = "";
+        for (const seg of rel.split(path.sep)) {
+          prefix = prefix ? `${prefix}${path.sep}${seg}` : seg;
+          if (!this.dirFilter(prefix)) return true;
+        }
+        return false;
+      },
       awaitWriteFinish: {
         stabilityThreshold: this.debounceMs,
         pollInterval: Math.max(20, this.debounceMs / 2),

@@ -19,20 +19,27 @@ import {
   FolderOpen,
   FileText,
   Folder,
+  Zap,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { stripMarkdown, docContentPreview } from "../lib/notificationText";
-import { parseEntityUrl, entityRoute, isConvexId, type EntityType } from "../lib/entityLinks";
+import {
+  parseEntityUrl,
+  entityRoute,
+  isConvexId,
+  isEntityId,
+  entityTypeFromId,
+  entityMentionRegex,
+  type EntityType,
+} from "../lib/entityLinks";
 import { DocEmbed } from "./DocEmbed";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
+import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 
 const api = _api as any;
 
-// Short ids (ct-/pl-/jx prefixes) plus a bare 32-char Convex id — the latter
-// has no type prefix (docs have no short id at all), so EntityIdPill resolves
-// its table server-side before rendering.
-const ENTITY_ID_RE = /^(?:(?:ct|pl|st|si|sp)-[a-z0-9]+|jx[a-z0-9]{5,}|[a-z0-9]{32})$/i;
+export { isEntityId };
 
 const STATUS_ICON: Record<string, any> = {
   draft: CircleDotDashed,
@@ -77,26 +84,14 @@ const PRIORITY_CONFIG: Record<string, { icon: any; color: string; label: string 
   low: { icon: ArrowDown, color: "text-sol-blue", label: "Low" },
 };
 
-export function isEntityId(text: string): boolean {
-  return ENTITY_ID_RE.test(text.trim());
-}
-
 const TYPE_LABEL: Record<EntityType, string> = {
   task: "Task",
   plan: "Plan",
   session: "Session",
   doc: "Doc",
   project: "Project",
+  trigger: "Trigger",
 };
-
-/** Infer an entity type from a bare id by its prefix (back-compat path). */
-function detectEntityType(id: string): EntityType | null {
-  const lower = id.toLowerCase();
-  if (lower.startsWith("ct-")) return "task";
-  if (lower.startsWith("pl-")) return "plan";
-  if (/^jx[a-z0-9]/i.test(id)) return "session";
-  return null;
-}
 
 /**
  * Pick the right `webGet` argument for an id: a full Convex id resolves by
@@ -110,7 +105,7 @@ function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?
   // through the by_short_id index instead just resolves to null.
   if (isConvexId(id)) return { id };
   if (type === "session") return { short_id: id.slice(0, 7).toLowerCase() };
-  if (type === "task" || type === "plan") return { short_id: id.toLowerCase() };
+  if (type === "task" || type === "plan" || type === "trigger") return { short_id: id.toLowerCase() };
   return { id };
 }
 
@@ -398,7 +393,63 @@ export function SessionHoverContent({ session }: { session: any }) {
   );
 }
 
-const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+|label:\w+|[a-z0-9]{32}))?\](?:\s*\([^)]*\))?/g;
+// What a trigger reference has to answer at a glance: what it does, when it
+// fires next, and whether its last run went badly. Cadence and state wording
+// come from triggerCadence — the same helpers the /triggers rows and the
+// conversation strip use, so one trigger reads identically everywhere.
+function TriggerHoverContent({ trigger }: { trigger: any }) {
+  const cadence = describeTaskCadence(trigger);
+  const state = taskStateLabel(trigger, Date.now());
+  const failing = trigger.last_run_failed || trigger.last_run_needs_attention;
+  const stateColor =
+    trigger.status === "paused"
+      ? "text-sol-yellow"
+      : failing
+        ? "text-sol-red"
+        : "text-sol-orange";
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <Zap className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${stateColor}`} />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug">
+            {trigger.display_title || trigger.title || trigger.short_id}
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <span className={`text-[10px] font-medium ${stateColor}`}>{cadence}</span>
+            <span className="text-gray-600">·</span>
+            <span className="text-[10px] text-gray-400">{state}</span>
+          </div>
+        </div>
+      </div>
+
+      {(trigger.display_summary || trigger.prompt) && (
+        <p className="text-[11px] text-gray-400 line-clamp-3 leading-relaxed pl-[22px]">
+          {stripMarkdown(trigger.display_summary || trigger.prompt).slice(0, 220)}
+        </p>
+      )}
+
+      {trigger.last_run_at && (
+        <div className="pl-[22px] text-[10px] text-gray-500">
+          <span className={failing ? "text-sol-red" : ""}>
+            {failing ? "Last run failed" : "Last run"} {relativeTime(trigger.last_run_at)}
+          </span>
+          {trigger.run_count > 0 && <span className="text-gray-600"> · {trigger.run_count} runs</span>}
+        </div>
+      )}
+
+      <div className="flex items-center justify-between pt-1 border-t border-white/5">
+        <span className="text-[10px] text-gray-500 font-mono">{trigger.short_id}</span>
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+const MENTION_RE = entityMentionRegex();
 
 function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
   if (entityId?.startsWith("doc:") && entityId.length > 4) {
@@ -577,7 +628,10 @@ function GenericHoverContent({ entity, type }: { entity: any; type: EntityType }
 export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: { shortId?: string; type?: EntityType; id?: string; fallback?: React.ReactNode }) {
   // `id` keeps its original case (Convex ids are case-sensitive); short-id and
   // prefix matching lowercase internally.
-  const rawId = (idProp ?? shortId ?? "").trim();
+  const rawRef = (idProp ?? shortId ?? "").trim();
+  // A `doc:<convexId>` reference carries its type in the string itself.
+  const isDocRef = !typeProp && /^doc:/i.test(rawRef);
+  const rawId = isDocRef ? rawRef.slice(4) : rawRef;
   const looksConvex = isConvexId(rawId);
   // A full Convex id carries no type prefix (and can even start with "jx", so
   // prefix sniffing misclassifies it) — resolve its table server-side instead.
@@ -585,11 +639,13 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
   // No-throw: this resolver gates every other query in the pill, and a pill
   // must degrade to plain text — not crash the conversation view — when the
   // backend doesn't have the function yet (client/deploy skew).
-  const { data: resolvedType } = useQueryNoThrow(api.entities.resolveIdType, !typeProp && looksConvex ? { id: rawId } : "skip");
-  const type: EntityType | null = typeProp ?? (looksConvex ? resolvedType ?? null : detectEntityType(rawId));
+  const { data: resolvedType } = useQueryNoThrow(api.entities.resolveIdType, !typeProp && !isDocRef && looksConvex ? { id: rawId } : "skip");
+  const type: EntityType | null =
+    typeProp ?? (isDocRef ? "doc" : looksConvex ? resolvedType ?? null : entityTypeFromId(rawId));
   const isTask = type === "task";
   const isPlan = type === "plan";
   const isSession = type === "session";
+  const isTrigger = type === "trigger";
 
   const [hoverOpen, setHoverOpen] = useState(false);
   const hoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -598,42 +654,49 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
   const task = useQuery(api.tasks.webGet, isTask && queryArgs ? queryArgs : "skip");
   const plan = useQuery(api.plans.webGet, isPlan && queryArgs ? queryArgs : "skip");
   const session = useQuery(api.conversations.webGet, isSession && queryArgs ? queryArgs : "skip");
+  const trigger = useQuery(api.agentTasks.webGet, isTrigger && queryArgs ? queryArgs : "skip");
   // docs/projects are only ever addressed by a full Convex id.
   const doc = useQuery(api.docs.webGet, type === "doc" && looksConvex ? { id: rawId } : "skip");
   const project = useQuery(api.projects.webGet, type === "project" && looksConvex ? { id: rawId } : "skip");
-  const entity = isTask ? task : isPlan ? plan : isSession ? session : type === "doc" ? doc : type === "project" ? project : undefined;
+  const entity = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : undefined;
   const status = entity?.status;
 
   const Icon = isSession
     ? MessageSquare
     : isPlan
       ? Target
-      : type === "doc"
-        ? FileText
-        : type === "project"
-          ? Folder
-          : STATUS_ICON[status || "open"] || Circle;
+      : isTrigger
+        ? Zap
+        : type === "doc"
+          ? FileText
+          : type === "project"
+            ? Folder
+            : STATUS_ICON[status || "open"] || Circle;
 
   const colors = isSession
     ? "bg-sol-blue/10 text-sol-blue border-sol-blue/20 hover:bg-sol-blue/20"
     : isPlan
       ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/20 hover:bg-sol-cyan/20"
-      : type === "doc"
-        ? "bg-sol-green/10 text-sol-green border-sol-green/20 hover:bg-sol-green/20"
-        : type === "project"
-          ? "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20"
-          : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
+      : isTrigger
+        ? "bg-sol-orange/10 text-sol-orange border-sol-orange/20 hover:bg-sol-orange/20"
+        : type === "doc"
+          ? "bg-sol-green/10 text-sol-green border-sol-green/20 hover:bg-sol-green/20"
+          : type === "project"
+            ? "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20"
+            : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
 
   // Label rules, preserving existing inline behavior:
   //  • full-Convex-id links (pasted URLs, docs, projects): show the resolved
   //    title — never the 32-char id; fall back to short_id / type while loading.
-  //  • session short id (jx…): title once known, else the short id.
+  //  • session / trigger short id: title once known, else the short id. Both
+  //    name a thing whose id says nothing about it ("tr-42" vs "Growth audit").
   //  • ct-/pl- short ids: stay compact, always show the id.
-  const resolvedTitle: string | undefined = entity?.title || entity?.display_title || entity?.name;
+  const resolvedTitle: string | undefined =
+    (isTrigger ? entity?.display_title : undefined) || entity?.title || entity?.display_title || entity?.name;
   const truncated = resolvedTitle && resolvedTitle.length > 30 ? resolvedTitle.slice(0, 30) + "…" : resolvedTitle;
   const pillLabel = looksConvex
     ? truncated || entity?.short_id || (type ? TYPE_LABEL[type] : rawId)
-    : isSession
+    : isSession || isTrigger
       ? truncated || rawId
       : rawId;
 
@@ -693,7 +756,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
             ) : (
               <Icon className="w-3 h-3" />
             )}
-            {isSession && status === "active" && (
+            {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
             )}
           </span>
@@ -722,6 +785,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
             isTask ? <TaskHoverContent task={entity} />
             : isPlan ? <PlanHoverContent plan={entity} />
             : isSession ? <SessionHoverContent session={entity} />
+            : isTrigger ? <TriggerHoverContent trigger={entity} />
             : type === "doc" ? <DocHoverContent doc={entity} />
             : <GenericHoverContent entity={entity} type={type} />
           ) : (

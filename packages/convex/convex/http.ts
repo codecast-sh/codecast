@@ -2797,8 +2797,11 @@ http.route({
     };
     try {
       const body = await request.json();
-      const result = await ctx.runMutation(api.agentTasks.createTask, body);
-      return new Response(JSON.stringify({ task_id: result }), {
+      const result: any = await ctx.runMutation(api.agentTasks.createTask, body);
+      // `task_id` stays a bare string on the wire — older CLIs read it directly.
+      // `short_id` ("tr-42") is additive: the handle newer CLIs print and the
+      // agent quotes.
+      return new Response(JSON.stringify({ task_id: result?.id ?? result, short_id: result?.short_id }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
       });
