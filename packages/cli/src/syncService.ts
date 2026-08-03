@@ -1357,15 +1357,15 @@ export class SyncService {
    * "may I bring this session back?" and "may I reap its pane?". A killed or
    * hidden conversation is exactly the one no automation may resurrect.
    *
-   * The hide flags need a server query that does not exist yet
-   * (conversations:getConversationLifecycle — api_token authed, conversation_id
-   * in, {status, inbox_killed_at, inbox_stashed_at, inbox_dismissed_at,
-   * inbox_pinned_at} out). Until it ships this falls back to the existing
-   * api_token-authed devices:resolveConversationBySession, which carries
-   * `status` — enough to catch the completed/killed conversations the health
-   * check was resurrecting, but not the hide flags, which stay undefined so
-   * every caller that needs them fails closed. Returns null when nothing
-   * resolves, which callers read as "unknown".
+   * Three routes, best first — see the body for why each exists:
+   *   A. conversations:getConversationLifecycle by conversation_id (exact row)
+   *   B. the same query by session_id (NEWEST twin) when the id is a ghost
+   *   C. devices:resolveConversationBySession — status only, OLDEST twin — only
+   *      when the query itself is unavailable (undeployed backend / transient
+   *      error), never when it answered "no such conversation"
+   * A and B return `hideStateKnown: true`; C is marked degraded so callers can
+   * refuse to act on it. Returns null when nothing resolves, which callers read
+   * as "unknown" and handle per their own fail-open/fail-closed policy.
    */
   async getConversationLifecycle(
     conversationId: string,
@@ -1373,10 +1373,27 @@ export class SyncService {
   ): Promise<ConversationLifecycle | null> {
     if (shouldProbeLifecycleQuery(lifecycleQueryMissingSince, Date.now())) {
       try {
-        const res: any = await this.client.query("conversations:getConversationLifecycle" as any, {
+        // The query takes EXACTLY ONE selector (it returns null when both or
+        // neither are set), so the two routes are separate calls.
+        //
+        // Route A — the conversation id, an exact ctx.db.get. Always tried first:
+        // when the row exists this is unambiguous, with no twin reduction at all.
+        let res: any = await this.client.query("conversations:getConversationLifecycle" as any, {
           api_token: this.apiToken,
           conversation_id: conversationId,
         });
+        // Route B — the GHOST case, which is the whole reason a fallback exists:
+        // the id we were handed no longer resolves (deleted/remapped row, a
+        // client's cached copy), but the session is alive under a twin. The
+        // query's session route picks the NEWEST twin by updated_at, so it beats
+        // devices:resolveConversationBySession on both counts — right row, and
+        // full hide state instead of status only.
+        if (!res && sessionId) {
+          res = await this.client.query("conversations:getConversationLifecycle" as any, {
+            api_token: this.apiToken,
+            session_id: sessionId,
+          });
+        }
         lifecycleQueryMissingSince = 0; // the probe answered — clear any stale latch
         if (res) {
           return {
@@ -1389,8 +1406,10 @@ export class SyncService {
             source: "lifecycle",
           };
         }
-        // Reached the query and it found nothing (deleted row / not ours). That
-        // is an answer, not an outage — don't paper over it with the fallback.
+        // Both routes reached the query and it found nothing. That is an answer,
+        // not an outage — and the devices fallback reads the same by_session_id
+        // index under the same user filter, so it cannot do better. Don't paper
+        // over a real "no such conversation" with a second miss.
         return null;
       } catch (err) {
         // ONLY an undeployed function latches. Anything else (network, 5xx,
@@ -1399,8 +1418,10 @@ export class SyncService {
         if (isMissingFunctionError(err)) lifecycleQueryMissingSince = Date.now();
       }
     }
-    // Degraded path: status only, resolved by session id (oldest twin). Marked
-    // as such so callers can decide whether that is good enough for them.
+    // Legacy-backend path only — reached when the query above is undeployed or
+    // errored, never when it simply found nothing. Status only, resolved by
+    // session id through `.first()` (the OLDEST twin), so it is marked degraded
+    // and most callers refuse to act on it.
     if (!sessionId) return null;
     try {
       const res: any = await this.client.query("devices:resolveConversationBySession" as any, {
