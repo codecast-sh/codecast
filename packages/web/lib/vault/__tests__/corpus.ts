@@ -401,4 +401,48 @@ export const CORPUS: CorpusCase[] = [
       plainTextExcludes: ["key-claim", "^id"],
     },
   },
+
+  // -- codecast object references -----------------------------------------
+  // These are ORDINARY MARKDOWN LINKS, deliberately: the file is read in
+  // Obsidian, on GitHub and in plain editors, where a bespoke token would be a
+  // broken link or literal noise. So every reader below must treat them as the
+  // links they are — only codecast recognizes the host and draws a pill.
+  {
+    name: "entity refs: object links are plain markdown links",
+    rule: "a link to a codecast object parses as a link, not as vault syntax; its display text is the prose",
+    markdown: [
+      "# Session notes",
+      "",
+      "Figured out in [the debug run](https://codecast.sh/conversation/jx7dnj1),",
+      "under [Fix the sync clog](https://codecast.sh/tasks/ct-40561).",
+      "",
+      "Owner: [@ashot](https://codecast.sh/team/ashot). Plan: [Vault links](/plans/pl-264).",
+      "",
+      "Bare form works too: https://codecast.sh/tasks/ct-9",
+    ].join("\n"),
+    expect: {
+      // No `[[…]]` anywhere: object references never claim the vault's own syntax.
+      links: [],
+      plainTextIncludes: ["the debug run", "Fix the sync clog", "@ashot", "Vault links"],
+      plainTextExcludes: ["](https://codecast.sh", "conversation/jx7dnj1"],
+    },
+  },
+  {
+    name: "entity refs: beside wiki links, tags and code",
+    rule: "object links coexist with vault syntax on one line and stay literal inside code",
+    markdown: [
+      "See [[Sleep]] and [ct-40561](https://codecast.sh/tasks/ct-40561) #status/draft",
+      "",
+      "An example, not a reference: `https://codecast.sh/tasks/ct-1`",
+      "",
+      "```md",
+      "[nope](https://codecast.sh/tasks/ct-2)",
+      "```",
+    ].join("\n"),
+    expect: {
+      links: [{ target: "Sleep", line: 1 }],
+      inlineTags: ["status/draft"],
+      plainTextIncludes: ["Sleep", "ct-40561"],
+    },
+  },
 ];

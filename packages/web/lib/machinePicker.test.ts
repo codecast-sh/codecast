@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { dedupeProjectsByRepoName, defaultMachineId, pathOnMyMachines, resolveMachineSelection, type MachineCandidate } from "./machinePicker";
+import { dedupeProjectsByRepoName, defaultMachineId, pathOnMyMachines, resolveMachineSelection, resolveScopedProjects, type MachineCandidate } from "./machinePicker";
 
 const dev = (id: string, over: Partial<MachineCandidate> = {}): MachineCandidate => ({
   device_id: id,
@@ -272,5 +272,42 @@ describe("resolveMachineSelection — a transient empty roster", () => {
     const r = resolveMachineSelection([], {});
     expect(r.stampDeviceId).toBeNull();
     expect(r.scopeProjectsToDeviceId).toBeNull();
+  });
+});
+
+describe("resolveScopedProjects (folder-chip flicker)", () => {
+  const union = [
+    { path: "/Users/me/src/codecast" },
+    { path: "/Users/me/src/union-mobile" },
+    { path: "/Users/m1/work/elsewhere" },
+  ];
+  const mac = { local_project_roots: ["/Users/me/src"] };
+
+  it("narrows the union to the routed machine while the scoped query is in flight", () => {
+    expect(resolveScopedProjects({
+      scopedDeviceId: "mac", scoped: undefined, cached: undefined, union, routedDevice: mac,
+    }).map((p) => p.path)).toEqual(["/Users/me/src/codecast", "/Users/me/src/union-mobile"]);
+  });
+
+  it("prefers the live scoped answer, then that machine's cache", () => {
+    const scoped = [{ path: "/Users/me/src/only-scoped" }];
+    const cached = [{ path: "/Users/me/src/only-cached" }];
+    expect(resolveScopedProjects({ scopedDeviceId: "mac", scoped, cached, union, routedDevice: mac })).toBe(scoped);
+    expect(resolveScopedProjects({ scopedDeviceId: "mac", scoped: undefined, cached, union, routedDevice: mac })).toBe(cached);
+  });
+
+  it("shows nothing rather than a foreign path when the roster hasn't loaded", () => {
+    expect(resolveScopedProjects({
+      scopedDeviceId: "mac", scoped: undefined, cached: undefined, union, routedDevice: null,
+    })).toEqual([]);
+    expect(resolveScopedProjects({
+      scopedDeviceId: "mac", scoped: undefined, cached: undefined, union, routedDevice: { local_project_roots: [] },
+    })).toEqual([]);
+  });
+
+  it("uses the whole union when nothing is scoped", () => {
+    expect(resolveScopedProjects({
+      scopedDeviceId: null, scoped: undefined, cached: undefined, union, routedDevice: mac,
+    })).toBe(union);
   });
 });

@@ -13,6 +13,7 @@ import fuzzysort from "fuzzysort";
 import { CornerDownLeft, FilePlus2, FileText, Clock } from "lucide-react";
 import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { useVaultStore } from "../../store/vaultStore";
+import { filesHref } from "../../lib/vault/vaultHref";
 import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import { useInboxStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -161,7 +162,7 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
   const openPath = (path: string, newTab: boolean) => {
     setOpen(false);
     noteOpened(path);
-    const url = `/vault?f=${encodeURIComponent(path)}`;
+    const url = filesHref({ path });
     if (newTab) {
       useInboxStore.getState().openTab({ path: url, title: noteDisplayName(path.split("/").pop()!) });
     } else {
@@ -175,7 +176,7 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
     setOpen(false);
     void createFile(path, `# ${name}\n\n`).then(() => {
       noteOpened(path);
-      router.push(`/vault?f=${encodeURIComponent(path)}`);
+      router.push(filesHref({ path }));
     });
   };
 
@@ -212,7 +213,7 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Open vault note"
+      aria-label="Open a note"
       className="fixed inset-0 z-[70] flex items-start justify-center pt-[18vh]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) setOpen(false);

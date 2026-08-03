@@ -342,6 +342,12 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions): void {
         ws.close(1000);
         cleanup();
       },
+      onReseed({ cols, rows, seed }) {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        // JSON first so the client resets + resizes before the seed bytes land.
+        sendJson({ type: "reseed", cols, rows });
+        if (seed.length > 0) ws.send(seed);
+      },
     });
 
     client

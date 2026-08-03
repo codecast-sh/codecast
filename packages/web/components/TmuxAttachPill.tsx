@@ -54,7 +54,13 @@ export function TmuxAttachPill({
       .then(() => toast.success("tmux attach copied"))
       .catch(() => toast.error("Failed to copy"));
   };
-  const canSplit = !!conversationKey && isLive;
+  // Attachability is NOT is_connected: that flag is a liveness heuristic
+  // (agent heartbeat + 10-minute recency) that goes false on any quiet
+  // session while its tmux pane is still perfectly alive. If we know a pane
+  // name, offer the split — the daemon verifies has-session on connect and
+  // the split shows a clean reconnect state if the pane is truly gone. The
+  // dot keeps showing the liveness hint.
+  const canSplit = !!conversationKey && !!tmuxSession;
   const splitOpen = !!conversationKey && isConversationTerminalOpen(conversationKey);
 
   const pillColors = isLive
@@ -70,9 +76,7 @@ export function TmuxAttachPill({
             ? splitOpen
               ? "Hide this agent's terminal"
               : "Watch this agent's terminal (read-only, opens below the conversation)"
-            : isLive
-              ? `Copy ${attach}`
-              : `Copy ${attach} — session not connected`
+            : `Copy ${attach}`
         }
         side="bottom"
       >
@@ -93,6 +97,7 @@ export function TmuxAttachPill({
       {canSplit && (
         <ShortcutTooltip label={`Copy ${attach}`} side="bottom">
           <button
+            data-simple-hide
             onClick={copyAttach}
             className={`inline-flex items-center px-1 py-0.5 text-[10px] transition-colors border-0 border-l ${borderColor.replace("border-", "border-l-")} ${pillColors}`}
             aria-label="Copy tmux attach command"

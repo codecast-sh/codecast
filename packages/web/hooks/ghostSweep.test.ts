@@ -84,6 +84,14 @@ describe("collectGhostSweepCandidates", () => {
   // the row, so unpin/kill patches are dropped) — making it an immortal ghost
   // that resurrected from IDB on every launch. Pinned stubs must sweep; the
   // pin exemption is only meaningful for real (Convex-id) rows.
+  it("never sweeps a kept draft (compose 'save draft' stub outlives every janitor)", () => {
+    const draftStub = blank("draftstub12345678901xx", STUB_SWEEP_MIN_AGE_MS + 60_000, { _hasDraft: true });
+    const draftBlank = blank(convexId("draftblank"), GHOST_SWEEP_MIN_AGE_MS + 60_000, { _hasDraft: true });
+    const { stubs, candidates } = collectGhostSweepCandidates(storeWith([draftStub, draftBlank]), NOW);
+    expect(stubs).toEqual([]);
+    expect(candidates).toEqual([]);
+  });
+
   it("sweeps a pinned orphaned stub (pin can't protect a row the server never had)", () => {
     const pinnedStub = blank("local-stub-pinned", STUB_SWEEP_MIN_AGE_MS + 60_000, {
       is_pinned: true,

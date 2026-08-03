@@ -283,6 +283,14 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
             ws.send(JSON.stringify({ type: "resize", cols, rows }));
           }
           bump();
+        } else if (msg.type === "reseed") {
+          // The pane changed size under an attach view (another client, a
+          // daemon refresh): reset and repaint at the new geometry — stale
+          // columns are how spliced, garbled rows happen. The seed bytes
+          // follow this frame on the wire.
+          inst.term.reset();
+          if (msg.cols && msg.rows) inst.term.resize(msg.cols, msg.rows);
+          bump();
         } else if (msg.type === "exit") {
           inst.state.status = "exited";
           inst.state.statusDetail = msg.reason;
@@ -374,11 +382,50 @@ export function attachToContainer(id: string, el: HTMLElement): void {
   } else if (inst.term.element.parentElement !== el) {
     el.appendChild(inst.term.element);
   }
+  let pinned = true;
+
+  // ONE scroll surface for attach views. Two scrollable layers exist (the
+  // container sliding over the fixed-size pane, and xterm's buffer history)
+  // and raw wheel events pick one arbitrarily. Instead: while the app in the
+  // pane captures the mouse (CC actively tracking), the wheel is the app's —
+  // the universal terminal rule. Otherwise scroll continuously: up moves
+  // through the visible screen, then on into history; down reverses back to
+  // the live bottom.
+  const onWheel = (e: WheelEvent) => {
+    if (inst.state.kind !== "attach") return; // fitted shells: xterm default
+    if ((inst.term.modes as { mouseTrackingMode?: string }).mouseTrackingMode !== "none") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const buf = inst.term.buffer.active;
+    const scrolledIntoHistory = buf.viewportY < buf.baseY;
+    if (e.deltaY < 0) {
+      if (el.scrollTop > 0) {
+        el.scrollTop = Math.max(0, el.scrollTop + e.deltaY);
+      } else {
+        inst.term.scrollLines(Math.min(-1, Math.round(e.deltaY / 16)));
+      }
+    } else if (e.deltaY > 0) {
+      if (scrolledIntoHistory) {
+        inst.term.scrollLines(Math.max(1, Math.round(e.deltaY / 16)));
+      } else {
+        el.scrollTop = el.scrollTop + e.deltaY;
+      }
+    }
+  };
+  el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+
   inst.resizeObserver?.disconnect();
   let raf = 0;
   inst.resizeObserver = new ResizeObserver(() => {
     cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => fitInstance(inst));
+    raf = requestAnimationFrame(() => {
+      fitInstance(inst);
+      // Re-pin on container RESIZE too: shrinking the split grows the
+      // scrollable overflow with no accompanying write, which used to leave
+      // scrollTop where it was — showing the pane's middle instead of its
+      // bottom until the next output arrived.
+      if (pinned) el.scrollTop = el.scrollHeight;
+    });
   });
   inst.resizeObserver.observe(el);
   fitInstance(inst);
@@ -390,7 +437,6 @@ export function attachToContainer(id: string, el: HTMLElement): void {
   // be; scrolling back near the bottom re-engages the pin). No-op for fitted
   // shells, whose xterm exactly fills the container.
   inst.pinDispose?.dispose();
-  let pinned = true;
   const onScroll = () => {
     pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
   };
@@ -401,6 +447,7 @@ export function attachToContainer(id: string, el: HTMLElement): void {
   inst.pinDispose = {
     dispose() {
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onWheel, { capture: true } as EventListenerOptions);
       writeDisposable.dispose();
     },
   };

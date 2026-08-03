@@ -9,6 +9,7 @@ import * as os from "os";
 import * as path from "path";
 import type { AddressInfo } from "net";
 import { WebSocket } from "ws";
+import { VAULT_MAX_SERVE_BYTES } from "@codecast/shared/contracts";
 import type { VaultScanResponse, VaultWriteResponse, VaultWsEvent } from "@codecast/shared/contracts";
 import { attachTerminalServer } from "../terminal/terminalServer.js";
 import { addVault } from "./vaultRegistry.js";
@@ -187,8 +188,9 @@ describe("GET /vault/roots and /vault/scan", () => {
     expect(paths).toContain("notes/sub/two.md");
     expect(paths).toContain("notes/pic.png");
     expect(paths).toContain("notes/sub");
-    expect(paths).not.toContain("notes/ignore.txt");
-    expect(body.vault.note_count).toBe(4);
+    expect(paths).toContain("notes/ignore.txt");
+    // Markdown only — the scan lists .txt and .png, but "notes" means notes.
+    expect(body.vault.note_count).toBe(3);
     expect(body.scanned_at).toBeGreaterThan(0);
   });
 
@@ -214,9 +216,26 @@ describe("GET /vault/file", () => {
     expect(res.headers.get("content-type")).toBe("image/png");
   });
 
-  test("refuses traversal, out-of-scope extensions and missing files", async () => {
+  test("serves a code file as read-only text", async () => {
+    const res = await api(filePath("notes/ignore.txt"));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("txt\n");
+  });
+
+  test("refuses a file too large to read into memory", async () => {
+    // Sparse: stat reports 33MB, the disk holds nothing. The route stats before
+    // it reads, so this is the exact path a real multi-gigabyte file takes —
+    // the one that could take the daemon down now that every file is readable.
+    const big = path.join(root, "notes", "huge.bin");
+    fs.writeFileSync(big, "");
+    fs.truncateSync(big, VAULT_MAX_SERVE_BYTES + 1);
+    const res = await api(filePath("notes/huge.bin"));
+    expect(res.status).toBe(413);
+    expect((await res.json()).error).toBe("too large");
+  });
+
+  test("refuses traversal, ignored paths and missing files", async () => {
     expect((await api(filePath("../../etc/passwd"))).status).toBe(400);
-    expect((await api(filePath("notes/ignore.txt"))).status).toBe(400);
     expect((await api(filePath(".git/config"))).status).toBe(400);
     expect((await api(filePath("notes/missing.md"))).status).toBe(404);
   });
@@ -298,6 +317,38 @@ describe("POST /vault/op", () => {
     expect(fs.statSync(path.join(root, "notes/fresh")).isDirectory()).toBe(true);
   });
 
+  test("a code file cannot be written, renamed or trashed", async () => {
+    // Code became visible so the tree tells the truth about the folder. Every
+    // write path stays shut: read-only has to mean read-only, or the surface
+    // trashes source files from a notes browser.
+    const before = fs.readFileSync(path.join(root, "notes/ignore.txt"), "utf-8");
+
+    expect((await postOp({ op: "create", path: "notes/new.ts", content: "x" })).status).toBe(400);
+    expect(fs.existsSync(path.join(root, "notes/new.ts"))).toBe(false);
+
+    const put = await api(filePath("notes/ignore.txt"), { method: "PUT", body: "clobbered" });
+    expect(put.status).toBe(400);
+
+    const renamed = await postOp({ op: "rename", path: "notes/ignore.txt", to: "notes/moved.txt" });
+    expect(renamed.status).toBe(400);
+    expect((await renamed.json()).error).toBe("read-only");
+
+    const deleted = await postOp({ op: "delete", path: "notes/ignore.txt" });
+    expect(deleted.status).toBe(400);
+
+    expect(fs.readFileSync(path.join(root, "notes/ignore.txt"), "utf-8")).toBe(before);
+  });
+
+  test("a folder still renames, whatever it holds", async () => {
+    // The read-only rule is about code FILES. Reorganising folders is an
+    // ordinary vault operation, and blocking it would regress notes.
+    fs.mkdirSync(path.join(root, "notes/src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "notes/src/a.ts"), "export {}\n");
+    const res = await postOp({ op: "rename", path: "notes/src", to: "notes/source" });
+    expect(res.status).toBe(200);
+    expect(fs.existsSync(path.join(root, "notes/source/a.ts"))).toBe(true);
+  });
+
   test("create writes a new note and refuses to overwrite", async () => {
     const res = await postOp({ op: "create", path: "notes/new.md", content: "# new\n" });
     expect(res.status).toBe(200);
@@ -307,6 +358,24 @@ describe("POST /vault/op", () => {
     const again = await postOp({ op: "create", path: "notes/new.md", content: "clobber" });
     expect(again.status).toBe(409);
     expect(fs.readFileSync(path.join(root, "notes/new.md"), "utf-8")).toBe("# new\n");
+  });
+
+  test("reveal is wired and refuses a path that isn't there", async () => {
+    // The spawn itself is deliberately NOT exercised here — launching Finder
+    // from a test is a side effect on the developer's desktop, and the argv
+    // decision (the part with real logic) is covered in vaultScope.test.ts.
+    // What this pins is the WIRING: that the op reaches its own branch, and
+    // that a missing file is reported rather than handed to the OS.
+    const missing = await postOp({ op: "reveal", path: "notes/nope.md" });
+    expect(missing.status).toBe(404);
+
+    // A path escaping the vault is refused before anything else looks at it.
+    const escape = await postOp({ op: "reveal", path: "../../etc/passwd" });
+    expect(escape.status).toBe(400);
+
+    // An unknown mode is not a way to smuggle a different verb through.
+    const badMode = await postOp({ op: "reveal", path: "notes/nope.md", mode: "rm" });
+    expect(badMode.status).toBe(404);
   });
 
   test("rename moves a note and refuses an occupied target", async () => {

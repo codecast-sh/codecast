@@ -16,6 +16,8 @@ import {
   Bookmark,
   BookmarkX,
   ChevronRight,
+  ClipboardCopy,
+  ExternalLink,
   FilePlus2,
   FileText,
   Folder,
@@ -28,6 +30,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { isVaultMarkdownPath, isVaultAssetPath } from "@codecast/shared/contracts";
+import { canRevealLocally, fileManagerName, revealVaultPath } from "../../lib/vault/reveal";
 import {
   ancestorDirs,
   baseName,
@@ -39,6 +42,7 @@ import {
   renameError,
   siblingNames,
   splitEntryName,
+  visibleVaultFiles,
   type FlatRow,
   type TreeNode,
 } from "../../lib/vault/explorerModel";
@@ -153,13 +157,19 @@ export const VaultExplorer = memo(function VaultExplorer({
   const toggleBookmark = useVaultStore((s) => s.toggleBookmark);
   const bookmarks = useVaultBookmarks();
 
-  const tree = useMemo(() => buildVaultTree(files, sortMode), [files, sortMode]);
+  const showAllFiles = useVaultStore((s) => s.showAllFiles);
+  const visible = useMemo(() => visibleVaultFiles(files, showAllFiles), [files, showAllFiles]);
+  const tree = useMemo(() => buildVaultTree(visible, sortMode), [visible, sortMode]);
   const rows = useMemo(() => flattenTree(tree, expandedDirs), [tree, expandedDirs]);
 
   const [focusIndex, setFocusIndex] = useState(-1);
   // `node: null` is the vault root — the menu you get right-clicking empty space.
   const [menu, setMenu] = useState<{ x: number; y: number; node: TreeNode | null } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  // Reveal only makes sense for files physically on this machine; a mirrored
+  // vault has nothing local to point Finder at.
+  const localFiles = useVaultStore((s) => !!s.endpoint && !s.isRemote) && canRevealLocally();
+  const fileManager = useMemo(() => fileManagerName(), []);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -322,6 +332,11 @@ export const VaultExplorer = memo(function VaultExplorer({
     ? { kind: menuNode.dir ? "folder" : "note", path: menuNode.path }
     : null;
   const menuBookmarked = !!menuBookmark && isBookmarked(bookmarks, menuBookmark);
+  // Notes, their attachments, and folders can be renamed or trashed. Code is
+  // read-only — see the menu items below.
+  const menuEditable =
+    !!menuNode &&
+    (menuNode.dir || isVaultMarkdownPath(menuNode.path) || isVaultAssetPath(menuNode.path));
 
   return (
     <div
@@ -329,7 +344,7 @@ export const VaultExplorer = memo(function VaultExplorer({
       data-owns-keys
       tabIndex={0}
       role="tree"
-      aria-label="Vault files"
+      aria-label="Files"
       onKeyDown={onKeyDown}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -339,7 +354,7 @@ export const VaultExplorer = memo(function VaultExplorer({
     >
       {rows.length === 0 ? (
         <div className="px-3 py-6 text-xs leading-5 text-sol-text-muted text-center">
-          No files in this vault yet.
+          No files here yet.
           <div className="mt-1 text-sol-text-dim">
             Right-click here, or use the new note button above, to write the first one.
           </div>
@@ -447,9 +462,45 @@ export const VaultExplorer = memo(function VaultExplorer({
                 </DropdownMenuItem>
               </>
             )}
-            {menuNode && (
+            {menuNode && localFiles && (
               <>
                 {menuNode.dir && <DropdownMenuSeparator />}
+                <DropdownMenuItem
+                  onSelect={() => {
+                    closeMenu();
+                    void revealVaultPath(menuNode.path, "reveal").then((err) => {
+                      if (err) useVaultStore.setState({ opError: err });
+                    });
+                  }}
+                >
+                  <FolderOpen className="w-3.5 h-3.5 mr-2" /> Show in {fileManager}
+                </DropdownMenuItem>
+                {!menuNode.dir && (
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      closeMenu();
+                      void revealVaultPath(menuNode.path, "open").then((err) => {
+                        if (err) useVaultStore.setState({ opError: err });
+                      });
+                    }}
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 mr-2" /> Open in default app
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem
+                  onSelect={() => {
+                    closeMenu();
+                    void navigator.clipboard?.writeText(menuNode.path).catch(() => {});
+                  }}
+                >
+                  <ClipboardCopy className="w-3.5 h-3.5 mr-2" /> Copy path
+                </DropdownMenuItem>
+              </>
+            )}
+            {menuNode && (
+              <>
+                {menuNode.dir && !localFiles && <DropdownMenuSeparator />}
+                {localFiles && <DropdownMenuSeparator />}
                 <DropdownMenuItem
                   onSelect={() => {
                     closeMenu();
@@ -466,32 +517,40 @@ export const VaultExplorer = memo(function VaultExplorer({
                     </>
                   )}
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    closeMenu();
-                    setRenameTarget(menuNode.path);
-                  }}
-                >
-                  <Pencil className="w-3.5 h-3.5 mr-2" /> Rename
-                </DropdownMenuItem>
-                {/* Two-step in place of a browser confirm(): the item itself
-                    becomes the confirmation, and disarms after a moment. */}
-                <DropdownMenuItem
-                  className="text-sol-red focus:text-sol-red"
-                  onSelect={(e) => {
-                    if (confirmDelete !== menuNode.path) {
-                      e.preventDefault();
-                      setConfirmDelete(menuNode.path);
-                      if (confirmTimer.current) clearTimeout(confirmTimer.current);
-                      confirmTimer.current = setTimeout(() => setConfirmDelete(null), CONFIRM_DELETE_MS);
-                      return;
-                    }
-                    void remove(menuNode);
-                  }}
-                >
-                  <Trash2 className="w-3.5 h-3.5 mr-2" />
-                  {confirmDelete === menuNode.path ? "Really delete?" : "Delete"}
-                </DropdownMenuItem>
+                {/* Code files are read-only: a rename or a trash is a write,
+                    and the daemon refuses both (vaultServer.handleOp). Not
+                    offering them beats offering them and failing. Folders keep
+                    theirs — a folder is not a code file. */}
+                {menuEditable && (
+                  <>
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        closeMenu();
+                        setRenameTarget(menuNode.path);
+                      }}
+                    >
+                      <Pencil className="w-3.5 h-3.5 mr-2" /> Rename
+                    </DropdownMenuItem>
+                    {/* Two-step in place of a browser confirm(): the item itself
+                        becomes the confirmation, and disarms after a moment. */}
+                    <DropdownMenuItem
+                      className="text-sol-red focus:text-sol-red"
+                      onSelect={(e) => {
+                        if (confirmDelete !== menuNode.path) {
+                          e.preventDefault();
+                          setConfirmDelete(menuNode.path);
+                          if (confirmTimer.current) clearTimeout(confirmTimer.current);
+                          confirmTimer.current = setTimeout(() => setConfirmDelete(null), CONFIRM_DELETE_MS);
+                          return;
+                        }
+                        void remove(menuNode);
+                      }}
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-2" />
+                      {confirmDelete === menuNode.path ? "Really delete?" : "Delete"}
+                    </DropdownMenuItem>
+                  </>
+                )}
               </>
             )}
           </DropdownMenuContent>

@@ -7,6 +7,7 @@
 // evolves (a new note can turn a dangling link live without a re-parse).
 
 import { createContext, memo, useContext } from "react";
+import Link from "next/link";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -22,7 +23,11 @@ import {
   TAG_SCHEME,
   type WikiLinkParts,
 } from "../../lib/vault/remarkWikiLink";
+import { parseEntityRefHref, type VaultEntityRef } from "@codecast/shared/vault";
+import { EntityIdPill } from "../EntityIdPill";
+import { useInboxStore } from "../../store/inboxStore";
 import { slugifyHeading } from "../../lib/vault/parseNote";
+import { filesHref } from "../../lib/vault/vaultHref";
 // Render-time-only cycle with VaultHoverPreview (it renders VaultMarkdown
 // inside the card); safe because neither module touches the other at eval.
 import { useHoverPreview } from "./VaultHoverPreview";
@@ -80,7 +85,11 @@ function WikiLinkAnchor({ href, children }: { href: string; children: React.Reac
   if (res.path) {
     return (
       <a
-        href={`/vault?f=${encodeURIComponent(res.path)}`}
+        href={filesHref({ path: res.path })}
+        // Real href so middle-click and "copy link" behave, but the click is
+        // handled here and moves the view through the store — no router
+        // transition follows, so the navigation bar must not start.
+        data-no-progress=""
         className={`wiki-link ${res.ambiguous ? "wiki-link-ambiguous" : ""}`}
         title={res.ambiguous ? `${res.path} (ambiguous — multiple matches)` : res.path}
         onClick={(e) => {
@@ -113,6 +122,43 @@ function WikiLinkAnchor({ href, children }: { href: string; children: React.Reac
   );
 }
 
+/** A person reference. People have no `EntityType` and no id-addressed page, so
+ *  EntityIdPill can't draw them; this is the same pill its `@name` mentions get
+ *  (MentionPill in EntityIdPill.tsx, which isn't exported), resolved against the
+ *  local team roster so it costs no query. An unknown username still renders —
+ *  the handle is readable on its own. */
+function PersonPill({ username }: { username: string }) {
+  const member = useInboxStore((s) =>
+    (s.teamMembers || []).find(
+      (m: any) => (m.github_username || "").toLowerCase() === username.toLowerCase(),
+    ),
+  );
+  return (
+    <Link
+      href={`/team/${encodeURIComponent(username)}`}
+      className="not-prose inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-blue/10 text-sol-blue border border-sol-blue/20 align-baseline no-underline"
+    >
+      @{member?.github_username || username}
+    </Link>
+  );
+}
+
+/** The pill a codecast object reference renders as — the same one a task id
+ *  gets in a conversation, so a note and a message describe the object the same
+ *  way. An id that resolves to nothing shows its own handle rather than an
+ *  empty pill; a URL whose id could never name an object of that type never
+ *  reaches here (parseEntityRefHref rejects it) and stays a plain link. */
+export function EntityRefPill({
+  refr,
+  children,
+}: {
+  refr: VaultEntityRef;
+  children?: React.ReactNode;
+}) {
+  if (refr.type === "person") return <PersonPill username={refr.id} />;
+  return <EntityIdPill type={refr.type} id={refr.id} fallback={<span>{children ?? refr.id}</span>} />;
+}
+
 function VaultLink({ href, children, node: _node, ...props }: any) {
   const ctx = useContext(VaultLinkContext);
   const url: string = href ?? "";
@@ -134,6 +180,12 @@ function VaultLink({ href, children, node: _node, ...props }: any) {
   if (url.startsWith(WIKI_SCHEME) || url.startsWith(WIKI_EMBED_SCHEME)) {
     return <WikiLinkAnchor href={url}>{children}</WikiLinkAnchor>;
   }
+  // An ordinary markdown link to a codecast object URL. It stays a working link
+  // in Obsidian, on GitHub and in any plain editor; here it becomes the pill.
+  const entityRef = parseEntityRefHref(url);
+  if (entityRef) {
+    return <EntityRefPill refr={entityRef}>{children}</EntityRefPill>;
+  }
   if (/^https?:\/\//i.test(url)) {
     return (
       <a href={url} target="_blank" rel="noopener noreferrer" className="text-sol-blue hover:underline">
@@ -147,7 +199,7 @@ function VaultLink({ href, children, node: _node, ...props }: any) {
     const clean = decodeURIComponent(url.split("#")[0]);
     return (
       <a
-        href={`/vault?f=${encodeURIComponent(clean)}`}
+        href={filesHref({ path: clean })}
         className="wiki-link"
         onClick={(e) => {
           e.preventDefault();
