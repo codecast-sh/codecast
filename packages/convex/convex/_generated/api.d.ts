@@ -93,6 +93,7 @@ import type * as pendingMessageWrites from "../pendingMessageWrites.js";
 import type * as pendingMessages from "../pendingMessages.js";
 import type * as permissions from "../permissions.js";
 import type * as plans from "../plans.js";
+import type * as presence from "../presence.js";
 import type * as principalViewRevisions from "../principalViewRevisions.js";
 import type * as privacy from "../privacy.js";
 import type * as progressEvents from "../progressEvents.js";
@@ -225,6 +226,7 @@ declare const fullApi: ApiFromModules<{
   pendingMessages: typeof pendingMessages;
   permissions: typeof permissions;
   plans: typeof plans;
+  presence: typeof presence;
   principalViewRevisions: typeof principalViewRevisions;
   privacy: typeof privacy;
   progressEvents: typeof progressEvents;
