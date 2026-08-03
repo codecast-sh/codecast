@@ -212,7 +212,7 @@ function UserProfileContent() {
               <div className="space-y-2">
                 {groups.map((group: SessionGroupData | EventItem, gi: number) =>
                   group.type === "session" ? (
-                    <SessionGroup key={`sg-${group.sessionId}-${gi}`} group={group} router={router} avatarUrl={profileUser.github_avatar_url} displayName={profileUser.name} />
+                    <SessionGroup key={`sg-${group.sessionId}-${gi}`} group={group} router={router} avatarUrl={profileUser.github_avatar_url ?? undefined} displayName={profileUser.name} />
                   ) : (
                     <EventRow key={`ev-${group.item.timestamp}-${gi}`} item={group.item} router={router} />
                   )

@@ -8,6 +8,7 @@ import { ContextChatInput } from "./ContextChatInput";
 import { MessageReview } from "./MessageReview";
 import { MarkdownBlocks } from "./tools/MarkdownRenderer";
 import { DocReviewBar } from "./DocReviewBar";
+import { PeekLayoutControls } from "./DetailSplitLayout";
 import { ArrowLeft, Edit3, Eye, MessageSquareQuote, MoreHorizontal, Copy, Check, X } from "lucide-react";
 import Link from "next/link";
 import { copyToClipboard } from "../lib/utils";
