@@ -22,7 +22,6 @@ import {
   type TerminalSessionInfo,
 } from "../../lib/terminal/endpoint";
 import {
-  applyTerminalTheme,
   attachToContainer,
   closeTab,
   getActiveTabId,
@@ -34,7 +33,6 @@ import {
   subscribeTerminals,
   type TermTabState,
 } from "../../lib/terminal/termSessions";
-import { buildTerminalTheme, observeTheme } from "../../lib/terminal/theme";
 import "@xterm/xterm/css/xterm.css";
 
 const MIN_HEIGHT = 110;
@@ -62,13 +60,6 @@ export function TerminalPanel() {
   const activeId = getActiveTabId();
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   void tabsVersion;
-
-  // Theme: build once + follow light/dark flips live.
-  useEffect(() => {
-    const apply = () => applyTerminalTheme(buildTerminalTheme());
-    apply();
-    return observeTheme(apply);
-  }, []);
 
   const defaultCwd = useCallback((): string | undefined => {
     const st = useInboxStore.getState();
@@ -404,9 +395,13 @@ function TermContainer({ tab, active }: { tab: TermTabState; active: boolean }) 
   useEffect(() => {
     if (ref.current) attachToContainer(tab.id, ref.current);
   }, [tab.id]);
+  // overflow-auto matters for ATTACH tabs: they render at the agent pane's
+  // fixed size, which usually exceeds the panel — the container scrolls and
+  // attachToContainer keeps it pinned to the pane's bottom. Fitted shells
+  // exactly fill the container, so it never scrolls for them.
   return (
-    <div className={`absolute inset-0 pl-3 pt-1.5 ${active ? "" : "invisible"}`}>
-      <div ref={ref} className="w-full h-full" />
+    <div className={`absolute inset-0 ${active ? "" : "invisible"}`}>
+      <div ref={ref} className="w-full h-full overflow-auto pl-3 pt-1.5" />
     </div>
   );
 }
