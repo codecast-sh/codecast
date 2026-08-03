@@ -13,7 +13,7 @@ import { sessionCardSummary } from "../lib/sessionSummary";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, filterInboxScope, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, filterInboxScope, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig, resolveShowOld } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -388,7 +388,6 @@ function BlockedSessionsBanner({
   const [expanded, setExpanded] = useState(false);
   const [includeSubs, setIncludeSubs] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const continueAll = useMutation(api.accountSwitch.continueAllBlocked);
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const acknowledgeMutation = useMutation(api.accountSwitch.acknowledgeBlocked);
   const router = useRouter();
@@ -444,54 +443,84 @@ function BlockedSessionsBanner({
     onClearForced?.();
   };
 
-  const handleContinueAll = async () => {
-    setBusy("continue");
-    try {
-      const res = await continueAll({ include_subagents: effectiveInclude });
-      toast.success(`Queued "continue" to ${res.continued} blocked session${res.continued === 1 ? "" : "s"}`);
-      closeBanner();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to queue continues");
-    } finally {
-      setBusy(null);
+  // Local-first: queue "continue" through the store's own send path (optimistic
+  // bubble + outbox-durable sendMessage), the exact machinery a hand-typed
+  // "continue" in each composer would use. The sessions flip to WORKING with
+  // the amber pending pill synchronously — no server round trip gates the UI —
+  // and delivery/retry/failure honesty is inherited from the outbox. Same
+  // selection and same minute-bucketed client id as the server's
+  // continueAllBlocked (the CLI path), so a racing CLI run or double-click
+  // dedups server-side into a single send.
+  const handleContinueAll = () => {
+    const store = useInboxStore.getState();
+    const targets = acted.filter(
+      (sess) => sess.pending_api_error_kind === "limit" || sess.pending_api_error_kind === "connection",
+    );
+    const bucket = Math.floor(Date.now() / 60_000);
+    for (const sess of targets) {
+      const clientId = `continue-blocked-${sess._id}-${bucket}`;
+      store.addOptimisticMessage(sess._id, "continue", undefined, clientId);
+      store.sendMessage(sess._id, "continue", undefined, clientId);
     }
+    // Stamp so the banner/pill drop these instantly too (their server blocked
+    // flag stays set until the agent actually resumes).
+    store.markBlockedReviveRequested(targets.map((sess) => sess._id));
+    toast.success(`Queued "continue" to ${targets.length} blocked session${targets.length === 1 ? "" : "s"}`);
+    closeBanner();
   };
 
   // Revive on the account the machine is signed into NOW: no swap — the
   // no-profile switch command degrades to kill (the blocked processes hold
   // the dead token in memory) + continue, so a re-login on the same account
   // doesn't force a switch to a different one.
-  const handleReviveCurrent = async () => {
-    setBusy("revive");
+  // The daemon work (keychain swap, kill, restart, re-queue) is inherently
+  // remote, but the user's gesture renders instantly: stamp the acted sessions
+  // as revive-in-flight (classification moves them to WORKING, the pill count
+  // drops) and close the banner before awaiting anything. The await only
+  // powers the outcome toast. If the mutation itself fails, revert the stamps
+  // and un-snooze so the banner resurfaces for a retry; if a daemon is merely
+  // unreachable, the stamps age out (BLOCKED_REVIVE_TTL_MS) and those sessions
+  // honestly return to blocked.
+  const runRevive = async (
+    profile: string | undefined,
+    busyKey: string,
+    successToast: (res: { conversations: number; unreachable: number }) => string,
+    failToast: string,
+  ) => {
+    const ids = acted.map((sess) => sess._id);
+    const store = useInboxStore.getState();
+    store.markBlockedReviveRequested(ids);
+    closeBanner();
+    setBusy(busyKey);
     try {
-      const res = await requestSwitch({ include_subagents: effectiveInclude });
+      const res = await requestSwitch({ profile, include_subagents: effectiveInclude });
       toast.success(
-        `Restarting ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} on the current account` +
-          (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : ""),
+        successToast(res) + (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : ""),
       );
-      closeBanner();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to restart blocked sessions");
+      store.clearBlockedReviveRequested(ids);
+      updateDismissed("blocked_sessions_banner", 0);
+      toast.error(err instanceof Error ? err.message : failToast);
     } finally {
       setBusy(null);
     }
   };
 
-  const handleSwitch = async (profile: string) => {
-    setBusy(profile);
-    try {
-      const res = await requestSwitch({ profile, include_subagents: effectiveInclude });
-      toast.success(
-        `Switching to "${profile}" — ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} will restart on it` +
-          (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : ""),
-      );
-      closeBanner();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Account switch failed");
-    } finally {
-      setBusy(null);
-    }
-  };
+  const handleReviveCurrent = () =>
+    runRevive(
+      undefined,
+      "revive",
+      (res) => `Restarting ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} on the current account`,
+      "Failed to restart blocked sessions",
+    );
+
+  const handleSwitch = (profile: string) =>
+    runRevive(
+      profile,
+      profile,
+      (res) => `Switching to "${profile}" — ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} will restart on it`,
+      "Account switch failed",
+    );
 
   // Plain "continue" — no account change. For dropped connections this is THE
   // right action (the turn just resumes), so it leads the row in amber; for
@@ -508,7 +537,7 @@ function BlockedSessionsBanner({
           : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
       }`}
     >
-      {busy === "continue" ? "Queueing…" : nudgeCount === 1 ? "Continue it" : `Continue all ${nudgeCount}`}
+      {nudgeCount === 1 ? "Continue it" : `Continue all ${nudgeCount}`}
     </button>
   );
 
@@ -1467,6 +1496,12 @@ export const SessionCard = memo(function SessionCard({
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
+  // A kept compose draft (see ComposeView) is a blank session the user chose to
+  // save. Preview its unsent text instead of the pre-warm "Waiting for
+  // connection" line — the draft IS the card's content.
+  const draftPreview = useInboxStore((st) => (
+    session._hasDraft ? (st.drafts[session._id]?.draft_message as string | undefined) ?? "" : ""
+  ));
   const cardSummary = sessionCardSummary(session);
   // "Working" = the agent is actively running right now (mirrors
   // sessionLivenessState's "active"). The green pulse keys off this ACTUAL state
@@ -1820,7 +1855,17 @@ export const SessionCard = memo(function SessionCard({
             {cleanedUserMsg}
           </div>
         )}
-        {session.message_count === 0 && !session.last_user_message && (() => {
+        {session._hasDraft && (
+          <div className="mt-0.5 flex items-start gap-1.5">
+            <span className="shrink-0 mt-[1px] px-1 py-[1px] rounded text-[9px] font-medium uppercase tracking-wide bg-sol-yellow/15 text-sol-yellow border border-sol-yellow/30">
+              Draft
+            </span>
+            {draftPreview && (
+              <span className="text-[11px] text-sol-text-dim truncate leading-snug">{draftPreview}</span>
+            )}
+          </div>
+        )}
+        {session.message_count === 0 && !session.last_user_message && !session._hasDraft && (() => {
           // Mirror the composer's "Starting… → Ready" lifecycle (see sessionLifecycle).
           // A blank session often has no daemon heartbeat until its first message, so
           // we trust elapsed time as the fallback rather than spin forever.
@@ -2297,6 +2342,7 @@ export function SessionListPanel({
     // the coarseNow dep on the categorize memo below. See store/wakeSig.ts.
     s => sessionsWakeSig(s.sessions),
     s => s.sessionsWithQueuedMessages,
+    s => s.blockedReviveRequestedAt,
     s => s.pendingMessages,
     s => s.activeProjectFilter,
     s => s.activeBucketFilter,
@@ -2346,8 +2392,8 @@ export function SessionListPanel({
   // The blank you're viewing (or one mid-create) stays visible in NEW; all
   // other never-engaged pre-warm blanks are hidden by categorizeSessions.
   const blankOpts = useMemo(
-    () => ({ currentSessionId: activeSessionId ?? s.currentSessionId, pendingCreateIds: new Set(Object.keys(s.pendingSessionCreates)) }),
-    [activeSessionId, s.currentSessionId, s.pendingSessionCreates],
+    () => ({ currentSessionId: activeSessionId ?? s.currentSessionId, pendingCreateIds: new Set(Object.keys(s.pendingSessionCreates)), reviveRequestedAt: s.blockedReviveRequestedAt }),
+    [activeSessionId, s.currentSessionId, s.pendingSessionCreates, s.blockedReviveRequestedAt],
   );
   // "Show old sessions" — a sticky per-user view preference (clientState.ui.
   // inbox_show_old, stamped LWW so the newest toggle on any device wins
@@ -2646,14 +2692,22 @@ export function SessionListPanel({
   // never count — claude only, dismissed excluded), plus the same 48h window,
   // so the count shown always matches what a revive would act on.
   const blockedSessions = useMemo(() => {
-    const since = Date.now() - 48 * 60 * 60 * 1000;
+    const now = Date.now();
+    const since = now - 48 * 60 * 60 * 1000;
+    // A session the user just told to continue/switch (fresh revive stamp) is
+    // out of the blocked set immediately — the pill count drops and the banner
+    // clears on the click, not on the daemon round trip. The server flag only
+    // resets once the agent resumes; if that never happens the stamp expires
+    // and the session re-enters here (coarseNow keeps the TTL live).
+    const reviving = freshReviveRequestIds(s.blockedReviveRequestedAt, now);
     return (Object.values(s.sessions) as InboxSession[]).filter(
       (sess) =>
         isBlockedConversation({ ...sess, agent_type: sess.agent_type ?? "claude_code" }) &&
         !isSessionHidden(sess) &&
+        !reviving.has(sess._id) &&
         (sess.updated_at ?? 0) > since,
     );
-  }, [s.sessions]);
+  }, [s.sessions, s.blockedReviveRequestedAt, coarseNow]);
   // The banner is transient (snoozes on X and after acting); the header pill is
   // the permanent trigger. Clicking it force-opens the banner — past the snooze
   // and even for a single blocked session — and scrolls it into view.

@@ -89,6 +89,7 @@ const Support = lazy(() => import("@/app/(marketing)/support/page"));
 const Terms = lazy(() => import("@/app/(marketing)/terms/page"));
 const Changelog = lazy(() => import("@/app/(marketing)/changelog/page"));
 const Pricing = lazy(() => import("@/app/(marketing)/pricing/page"));
+const Download = lazy(() => import("@/app/(marketing)/download/page"));
 const BlogIndex = lazy(() => import("@/app/(marketing)/blog/page"));
 const BlogGitBlame = lazy(() => import("@/app/(marketing)/blog/git-blame-for-ai-agents/page"));
 
@@ -190,6 +191,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "terms", component: cast(Terms), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "changelog", component: cast(Changelog), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "pricing", component: cast(Pricing), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "download", component: cast(Download), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog", component: cast(BlogIndex), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/git-blame-for-ai-agents", component: cast(BlogGitBlame), layout: "marketing", guestOk: true, guestKind: "public" },
 
@@ -210,7 +212,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "conversation/:id", component: cast(Conversation), layout: "dashboardShell", tab: "/conversation/:id", fullWidth: true, guestOk: true, guestKind: "shell" },
   { path: "conversation/:id/diff", component: cast(ConversationDiff), layout: "dashboardShell", tab: "/conversation/:id/diff", fullWidth: true, guestOk: true, guestKind: "shell" },
   { path: "docs", component: cast(Docs), layout: "dashboardShell", tab: "/docs", fullWidth: true },
-  { path: "vault", component: cast(Vault), layout: "dashboardShell", tab: "/vault", fullWidth: true },
+  { path: "files", component: cast(Vault), layout: "dashboardShell", tab: "/files", fullWidth: true },
+  { path: "vault", component: cast(Vault), layout: "dashboardShell", tab: "/vault", fullWidth: true }, // permanent pre-rename alias for /files
   { path: "pages", component: cast(Artifacts), layout: "dashboardShell", tab: "/pages" },
   { path: "artifacts", component: cast(Artifacts), layout: "dashboardShell", tab: "/artifacts" }, // pre-rename alias for /pages
   { path: "docs/:id", component: cast(DocDetail), layout: "dashboardShell", tab: "/docs/:id", fullWidth: true },

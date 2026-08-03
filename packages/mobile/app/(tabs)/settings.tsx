@@ -161,7 +161,7 @@ export default function SettingsScreen() {
   const handleToggleMachinePresence = async () => {
     try {
       await updateNotificationPreferences({
-        machine_wide_presence: !(currentUser as any)?.machine_wide_presence,
+        machine_wide_presence: !((currentUser as any)?.machine_wide_presence ?? true),
       });
     } catch (error) {
       Alert.alert('Error', 'Failed to update notification settings');
@@ -402,7 +402,7 @@ export default function SettingsScreen() {
                   </RNText>
                 </RNView>
                 <Switch
-                  value={(currentUser as any)?.machine_wide_presence ?? false}
+                  value={(currentUser as any)?.machine_wide_presence ?? true}
                   onValueChange={handleToggleMachinePresence}
                   trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
                   thumbColor="#fff"

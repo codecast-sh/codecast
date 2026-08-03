@@ -31,6 +31,7 @@
 
 import type { EditorState } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
+import { ENTITY_REF_ACCENT, parseEntityRefHref } from "@codecast/shared/vault";
 import {
   blockIdPattern,
   inlineTagPattern,
@@ -78,6 +79,7 @@ export interface LiveScanDeps {
 /** The slice of a lezer SyntaxNode this module uses. Declared structurally so
  *  the scanner needs no @lezer/common dependency of its own. */
 interface NodeLike {
+  name: string;
   getChild(name: string): { from: number; to: number } | null;
   getChildren(name: string): { from: number; to: number }[];
   parent: NodeLike | null;
@@ -105,6 +107,16 @@ const LITERAL_NODES = new Set([
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|svg|webp|avif|bmp|ico)$/i;
 const ABSOLUTE_URL = /^([a-z][a-z0-9+.-]*:|\/\/)/i;
+
+/** An entity link's class. The pill SHAPE is one CSS rule (globals.css); the
+ *  per-type color rides in as a custom property, so the palette stays the one
+ *  table both views read (ENTITY_REF_ACCENT) rather than seven CSS rules that
+ *  could drift from the reading view's pills. */
+const ENTITY_LINK_CLASS = "cm-live-link cm-live-entity";
+
+const entityAccentStyle = (type: keyof typeof ENTITY_REF_ACCENT) => ({
+  style: `--entity-accent: var(${ENTITY_REF_ACCENT[type]})`,
+});
 
 /** Deliberately a full scan rather than a sorted early-exit: `claimed` grows in
  *  three passes that interleave (a tag before an earlier wiki link, a block
@@ -345,10 +357,35 @@ export function scanLivePreview(
             if (textTo <= textFrom) return;
             const url = node.node.getChild("URL");
             const href = url ? doc.sliceString(url.from, url.to) : "";
-            mark(textFrom, textTo, "cm-live-link", href ? { "data-live-href": href } : undefined);
+            // The one question both views ask of a link, answered in one place
+            // (parseEntityRefHref) so a reference cannot be a pill here and
+            // plain text in the reading view.
+            const entity = parseEntityRefHref(href);
+            const attrs = href
+              ? { ...(entity ? entityAccentStyle(entity.type) : {}), "data-live-href": href }
+              : undefined;
+            mark(textFrom, textTo, entity ? ENTITY_LINK_CLASS : "cm-live-link", attrs);
             if (revealed(node.from, node.to)) return;
             hide(node.from, textFrom);
             hide(textTo, node.to);
+            return;
+          }
+
+          case "URL": {
+            // A bare URL that GFM autolinked. It is its own node here, NOT a
+            // Link — the same text inside `[text](…)` arrives as a URL child of
+            // a Link, and that one is already hidden by the branch above, so
+            // marking it again would draw a pill inside the hidden destination.
+            const parent = node.node.parent?.name;
+            if (parent === "Link" || parent === "Image") return;
+            if (isClaimed(node.from, node.to)) return;
+            const bare = doc.sliceString(node.from, node.to);
+            const bareRef = parseEntityRefHref(bare);
+            if (!bareRef) return;
+            mark(node.from, node.to, ENTITY_LINK_CLASS, {
+              ...entityAccentStyle(bareRef.type),
+              "data-live-href": bare,
+            });
             return;
           }
 

@@ -10,7 +10,7 @@
 import { create } from "zustand";
 import type { ConvexReactClient } from "convex/react";
 import type { VaultFileEntry, VaultInfo, VaultWsEvent } from "@codecast/shared/contracts";
-import { isVaultMarkdownPath } from "@codecast/shared/contracts";
+import { isVaultMarkdownPath, VAULT_MAX_PREVIEW_BYTES } from "@codecast/shared/contracts";
 import { lastDiscoveryFailure, type DiscoveryFailure } from "../lib/terminal/endpoint";
 import {
   fetchRemoteBody,
@@ -140,6 +140,13 @@ interface VaultState {
   /** Explorer row order — ephemeral, like the panel tabs below. */
   sortMode: VaultSortMode;
   setSortMode: (mode: VaultSortMode) => void;
+  /** Show every file on disk, not just notes and their attachments. Persisted
+   *  per vault; the default follows the vault's kind (see readShowAllFiles). */
+  showAllFiles: boolean;
+  setShowAllFiles: (value: boolean) => void;
+  /** Pull a non-markdown file's text on demand. Markdown bodies all arrive with
+   *  the scan; code is fetched only when someone opens it. */
+  loadTextBody: (path: string) => Promise<void>;
   /** Path whose explorer row should be in inline-rename mode. Set by the store
    *  so a freshly created note lands in rename regardless of which surface
    *  (header button, row context menu) created it. */
@@ -339,9 +346,71 @@ function writeLastVaultId(id: string): void {
   } catch {}
 }
 
-/** Fetch a set of markdown bodies with bounded concurrency, patching the store
- *  as each lands so the UI streams in rather than waiting for the batch. */
-async function fetchBodies(ep: VaultEndpoint, vaultId: string, paths: string[]): Promise<void> {
+// The vault LIST lives in localStorage rather than in the IndexedDB cache
+// beside the file tables, and deliberately: the picker has to be populated on
+// the very first render, and an IDB read — however fast — is a frame of empty
+// list first. It matters more now that the list includes every project on the
+// machine: discovering those costs the daemon a readdir per project, and first
+// paint must never wait on that. The whole list is a few hundred short records.
+const VAULT_LIST_KEY = "cast_vault_list";
+
+function readCachedVaults(): VaultInfo[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(VAULT_LIST_KEY) ?? "null");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (v): v is VaultInfo =>
+        !!v && typeof v === "object" && typeof v.id === "string" && typeof v.root === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedVaults(vaults: VaultInfo[]): void {
+  try {
+    localStorage.setItem(VAULT_LIST_KEY, JSON.stringify(vaults));
+  } catch {}
+}
+
+// "Show all files", per vault. localStorage and not the IDB prefs table for the
+// same reason the vault list lives here: the tree paints on the first frame,
+// and an async read would render the wrong file set and then flip.
+const SHOW_ALL_KEY = "cast_vault_show_all";
+
+/**
+ * Whether a vault opens showing everything on disk. The default follows what
+ * the folder IS: a code project whose tree hides its own source is the wrong
+ * first impression, and a notes folder full of dotfiles is too. An explicit
+ * choice, once made, outranks both.
+ */
+function readShowAllFiles(vaultId: string, vaults: VaultInfo[]): boolean {
+  try {
+    const stored = localStorage.getItem(`${SHOW_ALL_KEY}:${vaultId}`);
+    if (stored === "1") return true;
+    if (stored === "0") return false;
+  } catch {}
+  return vaults.find((v) => v.id === vaultId)?.kind === "project";
+}
+
+function writeShowAllFiles(vaultId: string, value: boolean): void {
+  try {
+    localStorage.setItem(`${SHOW_ALL_KEY}:${vaultId}`, value ? "1" : "0");
+  } catch {}
+}
+
+/** Fetch a set of file bodies with bounded concurrency, patching the store as
+ *  each lands so the UI streams in rather than waiting for the batch.
+ *
+ *  `persist` is off for code: notes are cached to IDB so the vault reads
+ *  offline, but a repo's source is megabytes of text nobody edits here, and
+ *  refetching it on demand costs one local round trip. */
+async function fetchBodies(
+  ep: VaultEndpoint,
+  vaultId: string,
+  paths: string[],
+  { persist = true }: { persist?: boolean } = {},
+): Promise<void> {
   const queue = [...paths];
   const workers = Array.from({ length: Math.min(BODY_FETCH_CONCURRENCY, queue.length) }, async () => {
     while (queue.length) {
@@ -357,7 +426,7 @@ async function fetchBodies(ep: VaultEndpoint, vaultId: string, paths: string[]):
             bodies: { ...st.bodies, [path]: body },
             loadingPaths: omit(st.loadingPaths, path),
           }));
-          stageBody(vaultId, path, body);
+          if (persist) stageBody(vaultId, path, body);
         } else {
           useVaultStore.setState((st) => ({ loadingPaths: omit(st.loadingPaths, path) }));
         }
@@ -552,11 +621,15 @@ function applyWsEvent(ev: VaultWsEvent) {
       [ev.path]: { path: ev.path, mtime: ev.mtime, size: ev.size },
     },
   }));
-  if (isVaultMarkdownPath(ev.path) && s.endpoint) {
+  // Markdown is always held, so it always refetches. A code file refetches only
+  // when we already have its body — i.e. someone has it open — which keeps a
+  // repo's build output from pulling megabytes through here.
+  const isMarkdown = isVaultMarkdownPath(ev.path);
+  const known = s.bodies[ev.path];
+  if (s.endpoint && (isMarkdown || known)) {
     // Skip refetch when the change is our own write echo (same mtime already stored).
-    const known = s.bodies[ev.path];
     if (!known || known.mtime !== ev.mtime) {
-      void fetchBodies(s.endpoint, vaultId, [ev.path]);
+      void fetchBodies(s.endpoint, vaultId, [ev.path], { persist: isMarkdown });
     }
   }
 }
@@ -603,7 +676,7 @@ async function syncActiveVault(ep: VaultEndpoint, vaultId: string): Promise<void
 export const useVaultStore = create<VaultState>((set, get) => ({
   connection: "idle",
   endpoint: null,
-  vaults: [],
+  vaults: readCachedVaults(),
   remoteVaults: [],
   isRemote: false,
   unreachableReason: "none",
@@ -617,6 +690,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   expandedDirs: {},
   recentPaths: [],
   sortMode: "name-asc" as const,
+  showAllFiles: false,
   renameTarget: null,
   quickSwitchOpen: false,
   leftPaneTab: "files" as const,
@@ -696,6 +770,23 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   },
 
   setSortMode: (mode) => set({ sortMode: mode }),
+
+  setShowAllFiles: (value) => {
+    const vaultId = get().activeVaultId;
+    if (vaultId) writeShowAllFiles(vaultId, value);
+    set({ showAllFiles: value });
+  },
+
+  loadTextBody: async (path) => {
+    const { endpoint, activeVaultId, bodies, files, loadingPaths } = get();
+    if (!endpoint || !activeVaultId) return;
+    if (bodies[path] || loadingPaths[path]) return;
+    // Decline BEFORE the round trip: the scan already told us how big it is, so
+    // a 40MB bundle never crosses the wire, let alone reaches the highlighter.
+    if ((files[path]?.size ?? 0) > VAULT_MAX_PREVIEW_BYTES) return;
+    set((s) => ({ loadingPaths: { ...s.loadingPaths, [path]: true } }));
+    await fetchBodies(endpoint, activeVaultId, [path], { persist: false });
+  },
   setRenameTarget: (path) => set({ renameTarget: path }),
 
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
@@ -737,6 +828,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     convexRef = convex;
     const st = get();
     if (st.connection === "discovering") return;
+    // The picker before anything else: this is synchronous, so the list of
+    // vaults and projects is on screen in the first frame rather than after
+    // discovery, the roots call and a relay round-trip.
+    if (!st.vaults.length) {
+      const cached = readCachedVaults();
+      if (cached.length) set({ vaults: cached });
+    }
     set({ connection: st.scannedAt ? st.connection : "discovering" });
 
     // Local-first boot: paint the last vault's IDB cache NOW, in parallel with
@@ -800,6 +898,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       return;
     }
     set({ endpoint: ep, vaults, unreachableReason: "none", unreachableDetail: null });
+    // Seeds the picker on the next cold boot, before discovery answers.
+    writeCachedVaults(vaults);
 
     // Remote mirrors are additive: they list alongside local vaults so a vault
     // from another machine is reachable without leaving the surface.
@@ -822,6 +922,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     if (prev !== vaultId) {
       set({
         activeVaultId: vaultId,
+        showAllFiles: readShowAllFiles(vaultId, get().vaults),
         files: {},
         bodies: {},
         scannedAt: null,

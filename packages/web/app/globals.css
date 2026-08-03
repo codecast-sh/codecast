@@ -2214,6 +2214,20 @@ pre[class*="language-"] {
   border-bottom-color: var(--sol-blue);
   background: color-mix(in srgb, var(--sol-blue) 10%, transparent);
 }
+/* A link to a codecast object (task, session, plan, doc, person): the reading
+   view draws the app's entity pill there, so the editor draws the same shape.
+   The accent arrives per span as --entity-accent, from the one palette both
+   views read (ENTITY_REF_ACCENT). */
+.cm-live .cm-live-entity {
+  color: var(--entity-accent, var(--sol-blue));
+  background: color-mix(in srgb, var(--entity-accent, var(--sol-blue)) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--entity-accent, var(--sol-blue)) 22%, transparent);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.cm-live .cm-live-entity:hover {
+  background: color-mix(in srgb, var(--entity-accent, var(--sol-blue)) 20%, transparent);
+}
 .cm-live .cm-live-listmark { color: var(--sol-blue); }
 .cm-live .cm-live-bullet {
   color: var(--sol-blue);

@@ -3,12 +3,18 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import {
-  isVaultServablePath,
+  clearRepoScopeCache,
+  isRepoVaultRoot,
+  isVaultPathIgnored,
+  isVaultDocumentPath,
   normalizeVaultPath,
+  probeProjectVault,
   realVaultRoot,
   resolveVaultPath,
+  revealCommand,
   scanVault,
   vaultContentType,
+  vaultProjectHome,
   vaultRelativePath,
 } from "./vaultScope.js";
 
@@ -100,12 +106,18 @@ describe("vaultRelativePath", () => {
 });
 
 describe("scope predicates", () => {
-  test("serves markdown and assets only", () => {
-    expect(isVaultServablePath("a.md")).toBe(true);
-    expect(isVaultServablePath("a.MARKDOWN")).toBe(true);
-    expect(isVaultServablePath("a.png")).toBe(true);
-    expect(isVaultServablePath("a.txt")).toBe(false);
-    expect(isVaultServablePath("a.sh")).toBe(false);
+  test("writes stay narrow even though reads see every file", () => {
+    // The read side has no extension list at all — the ignore rules are the
+    // only scope gate (see the scanVault tests below). Writes did NOT widen
+    // with it: code is served read-only on purpose, so PUT and the create op
+    // still accept only markdown and the attachment set.
+    expect(isVaultDocumentPath("a.md")).toBe(true);
+    expect(isVaultDocumentPath("a.MARKDOWN")).toBe(true);
+    expect(isVaultDocumentPath("a.png")).toBe(true);
+    expect(isVaultDocumentPath("a.txt")).toBe(false);
+    expect(isVaultDocumentPath("a.sh")).toBe(false);
+    expect(isVaultDocumentPath("src/index.ts")).toBe(false);
+    expect(isVaultDocumentPath("bun.lock")).toBe(false);
   });
 
   test("content types let the browser render attachments", () => {
@@ -126,7 +138,9 @@ describe("scanVault", () => {
     expect(paths).toContain("notes/pic.png");
     expect(paths).toContain("notes");
     expect(paths).toContain("notes/sub");
-    expect(paths).not.toContain("notes/ignore.txt");
+    // Code and plain text now list: a tree that showed docs/ and hid src/
+    // told the user something false about the folder they opened.
+    expect(paths).toContain("notes/ignore.txt");
     expect(paths.some((p) => p.startsWith(".obsidian"))).toBe(false);
 
     const dir = files.find((f) => f.path === "notes");
@@ -142,5 +156,277 @@ describe("scanVault", () => {
     const paths = (await scanVault(root)).map((f) => f.path);
     expect(paths).not.toContain("link.md");
     expect(paths).not.toContain("linked");
+  });
+});
+
+describe("revealCommand", () => {
+  test("macOS selects the file, or opens it with the default app", () => {
+    expect(revealCommand("darwin", "/v/a note.md", "reveal")).toEqual({
+      cmd: "open",
+      args: ["-R", "/v/a note.md"],
+    });
+    expect(revealCommand("darwin", "/v/a note.md", "open")).toEqual({
+      cmd: "open",
+      args: ["/v/a note.md"],
+    });
+  });
+
+  test("Windows joins the selection flag to the path with no space", () => {
+    // A space after the comma makes explorer open Documents instead — silent
+    // and wrong, which is exactly why this is pinned.
+    const { cmd, args } = revealCommand("win32", "C:\\v\\note.md", "reveal");
+    expect(cmd).toBe("explorer");
+    expect(args).toEqual(["/select,C:\\v\\note.md"]);
+    expect(args[0]).not.toContain(", ");
+  });
+
+  test("Linux falls back to the containing folder, since there is no select verb", () => {
+    expect(revealCommand("linux", "/v/sub/note.md", "reveal")).toEqual({
+      cmd: "xdg-open",
+      args: ["/v/sub"],
+    });
+    expect(revealCommand("linux", "/v/sub/note.md", "open")).toEqual({
+      cmd: "xdg-open",
+      args: ["/v/sub/note.md"],
+    });
+  });
+
+  test("the path is always its own argv entry, so a filename cannot inject", () => {
+    const nasty = '/v/note; rm -rf ~.md';
+    for (const p of ["darwin", "win32", "linux"] as NodeJS.Platform[]) {
+      const { args } = revealCommand(p, nasty, "open");
+      expect(args.some((a) => a.includes(nasty))).toBe(true);
+      expect(args.length).toBeLessThanOrEqual(2);
+    }
+  });
+});
+
+// --- Repo scope ------------------------------------------------------------
+// A vault whose root is a git repo hides build output, tool directories and
+// whatever .gitignore names. A plain notes vault must keep showing all of it:
+// a folder called "build" in someone's writing is a topic, not a target dir.
+
+describe("repo scope", () => {
+  let repo = "";
+  let plain = "";
+
+  beforeEach(() => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "vault-repo-"));
+    repo = path.join(base, "repo");
+    plain = path.join(base, "plain");
+    for (const dir of [repo, plain]) {
+      fs.mkdirSync(path.join(dir, "dist"), { recursive: true });
+      fs.mkdirSync(path.join(dir, "docs"), { recursive: true });
+      fs.mkdirSync(path.join(dir, ".next"), { recursive: true });
+      fs.mkdirSync(path.join(dir, ".github"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "README.md"), "# readme");
+      fs.writeFileSync(path.join(dir, "dist", "bundle.md"), "generated");
+      fs.writeFileSync(path.join(dir, "docs", "guide.md"), "guide");
+      fs.writeFileSync(path.join(dir, ".next", "page.md"), "built");
+      fs.writeFileSync(path.join(dir, ".github", "CONTRIBUTING.md"), "contributing");
+    }
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    clearRepoScopeCache();
+  });
+
+  afterEach(() => {
+    try { fs.rmSync(path.dirname(repo), { recursive: true, force: true }); } catch {}
+    clearRepoScopeCache();
+  });
+
+  test("build output and tool dot-directories are hidden in a repo", () => {
+    expect(isRepoVaultRoot(repo)).toBe(true);
+    expect(isVaultPathIgnored(repo, "dist/bundle.md")).toBe(true);
+    expect(isVaultPathIgnored(repo, ".next/page.md")).toBe(true);
+    // Dot-directories people actually write markdown into are the exception.
+    expect(isVaultPathIgnored(repo, ".github/CONTRIBUTING.md")).toBe(false);
+    expect(isVaultPathIgnored(repo, "docs/guide.md")).toBe(false);
+    expect(isVaultPathIgnored(repo, "README.md")).toBe(false);
+  });
+
+  test("the same names stay visible in a plain vault", () => {
+    expect(isRepoVaultRoot(plain)).toBe(false);
+    expect(isVaultPathIgnored(plain, "dist/bundle.md")).toBe(false);
+    expect(isVaultPathIgnored(plain, ".next/page.md")).toBe(false);
+    // The always-ignored set still applies to every vault.
+    expect(isVaultPathIgnored(plain, "node_modules/pkg/readme.md")).toBe(true);
+    expect(isVaultPathIgnored(plain, ".obsidian/app.json")).toBe(true);
+  });
+
+  test("scanVault hides what the repo rules hide", async () => {
+    const paths = (await scanVault(repo)).map((f) => f.path);
+    expect(paths).toContain("README.md");
+    expect(paths).toContain("docs/guide.md");
+    expect(paths).toContain(".github/CONTRIBUTING.md");
+    expect(paths).not.toContain("dist/bundle.md");
+    expect(paths).not.toContain(".next/page.md");
+    // The directories themselves are gone too, not just their contents.
+    expect(paths).not.toContain("dist");
+    expect(paths).not.toContain(".next");
+  });
+
+  test("resolveVaultPath refuses a path the scan would not list", () => {
+    expect(resolveVaultPath(repo, "dist/bundle.md")).toBeNull();
+    expect(resolveVaultPath(plain, "dist/bundle.md")).not.toBeNull();
+  });
+
+  test("root .gitignore names are honored, negations are not guessed at", () => {
+    fs.writeFileSync(
+      path.join(repo, ".gitignore"),
+      ["# comment", "generated/", "/public/built", "secret.md", "keep-me", "!keep-me", "*.log"].join("\n"),
+    );
+    clearRepoScopeCache();
+    expect(isVaultPathIgnored(repo, "generated/notes.md")).toBe(true);
+    // A name with no slash matches at any depth, as git itself does.
+    expect(isVaultPathIgnored(repo, "docs/generated/notes.md")).toBe(true);
+    expect(isVaultPathIgnored(repo, "secret.md")).toBe(true);
+    // Anchored patterns match from the root only.
+    expect(isVaultPathIgnored(repo, "public/built/index.md")).toBe(true);
+    expect(isVaultPathIgnored(repo, "docs/public/built/index.md")).toBe(false);
+    // A re-included name is left visible rather than modelled by guesswork.
+    expect(isVaultPathIgnored(repo, "keep-me/notes.md")).toBe(false);
+    // Globs are skipped entirely — hiding too much loses a note.
+    expect(isVaultPathIgnored(repo, "notes.log.md")).toBe(false);
+  });
+
+  test("prose dot-directories survive being gitignored", () => {
+    // .claude/ is gitignored in most repos that have one, and holds design docs
+    // somebody wrote by hand. Untracked is not uninteresting.
+    fs.writeFileSync(path.join(repo, ".gitignore"), ".claude/\n.github/\n");
+    clearRepoScopeCache();
+    expect(isVaultPathIgnored(repo, ".claude/design.md")).toBe(false);
+    expect(isVaultPathIgnored(repo, ".github/CONTRIBUTING.md")).toBe(false);
+    // The ordinary rules still apply INSIDE one.
+    expect(isVaultPathIgnored(repo, ".claude/node_modules/x.md")).toBe(true);
+    expect(isVaultPathIgnored(repo, ".claude/dist/x.md")).toBe(true);
+  });
+
+  test("worktree checkouts are hidden, whole-tree duplicates that they are", () => {
+    // Measured on codecast: 19 worktrees held 796 of its 843 markdown files.
+    // Admitting them means search returns twenty copies of every note.
+    expect(isVaultPathIgnored(repo, ".codecast/worktrees/fix/docs/a.md")).toBe(true);
+    expect(isVaultPathIgnored(repo, "worktrees/fix/docs/a.md")).toBe(true);
+  });
+
+  test("a .gitignore in a plain vault is not read at all", () => {
+    fs.writeFileSync(path.join(plain, ".gitignore"), "docs/\n");
+    clearRepoScopeCache();
+    expect(isVaultPathIgnored(plain, "docs/guide.md")).toBe(false);
+  });
+});
+
+describe("probeProjectVault", () => {
+  let base = "";
+
+  beforeEach(() => {
+    base = fs.mkdtempSync(path.join(os.tmpdir(), "vault-probe-"));
+  });
+
+  afterEach(() => {
+    try { fs.rmSync(base, { recursive: true, force: true }); } catch {}
+  });
+
+  function project(name: string, build: (dir: string) => void): string {
+    const dir = path.join(base, name);
+    fs.mkdirSync(dir, { recursive: true });
+    build(dir);
+    return dir;
+  }
+
+  test("a docs directory becomes the home", () => {
+    const dir = project("with-docs", (d) => {
+      fs.mkdirSync(path.join(d, "docs"));
+      fs.writeFileSync(path.join(d, "README.md"), "readme");
+      fs.writeFileSync(path.join(d, "docs", "guide.md"), "guide");
+    });
+    expect(probeProjectVault(dir)).toEqual({ hasNotes: true, home: "docs" });
+    expect(vaultProjectHome(dir)).toBe("docs");
+  });
+
+  test("an empty docs directory is a worse landing than the root", () => {
+    const dir = project("empty-docs", (d) => {
+      fs.mkdirSync(path.join(d, "docs"));
+      fs.writeFileSync(path.join(d, "README.md"), "readme");
+    });
+    expect(probeProjectVault(dir)).toEqual({ hasNotes: true, home: "" });
+  });
+
+  test("a root README alone is enough to offer the project", () => {
+    const dir = project("bare", (d) => fs.writeFileSync(path.join(d, "README.md"), "readme"));
+    expect(probeProjectVault(dir)).toEqual({ hasNotes: true, home: "" });
+  });
+
+  test("a project with no markdown the probe can see is not offered", () => {
+    const dir = project("code-only", (d) => {
+      fs.mkdirSync(path.join(d, "src"));
+      fs.writeFileSync(path.join(d, "src", "index.ts"), "export {}");
+      // Markdown buried in src is a known, documented blind spot: finding it
+      // would cost a full walk of every project on the machine.
+      fs.writeFileSync(path.join(d, "src", "notes.md"), "buried");
+    });
+    expect(probeProjectVault(dir).hasNotes).toBe(false);
+  });
+
+  test("a directory that cannot be read is not offered", () => {
+    expect(probeProjectVault(path.join(base, "nope"))).toEqual({ hasNotes: false, home: "" });
+  });
+});
+
+// Two rules that only bite on a real repository, and that a synthetic fixture
+// makes look academic. Both were found by scanning codecast itself: the old
+// rules admitted 12,173 entries and 843 markdown files, of which 796 were
+// duplicate copies living in worktrees.
+describe("repo scope: worktrees and gitignored prose", () => {
+  let repo = "";
+
+  beforeEach(() => {
+    repo = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vault-wt-")), "repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(repo, ".claude", "vault-drive"), { recursive: true });
+    fs.mkdirSync(path.join(repo, ".claude", "worktrees", "agent-a1", "docs"), { recursive: true });
+    fs.mkdirSync(path.join(repo, "docs"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "README.md"), "# readme");
+    fs.writeFileSync(path.join(repo, "docs", "guide.md"), "guide");
+    fs.writeFileSync(path.join(repo, ".claude", "vault-drive", "DESIGN.md"), "design");
+    fs.writeFileSync(path.join(repo, ".claude", "worktrees", "agent-a1", "docs", "guide.md"), "copy");
+    // The shape that matters: the repo gitignores the very directory its
+    // design docs live in. This is codecast's own .gitignore.
+    fs.writeFileSync(path.join(repo, ".gitignore"), ".claude/\n");
+    clearRepoScopeCache();
+  });
+
+  afterEach(() => {
+    try { fs.rmSync(path.dirname(repo), { recursive: true, force: true }); } catch {}
+    clearRepoScopeCache();
+  });
+
+  test("a worktree's duplicate checkout never appears", async () => {
+    expect(isVaultPathIgnored(repo, ".claude/worktrees/agent-a1/docs/guide.md")).toBe(true);
+    const paths = (await scanVault(repo)).map((f) => f.path);
+    // One guide.md, not two: search, backlinks and the graph all break when
+    // the same note is present once per checkout.
+    expect(paths.filter((p) => p.endsWith("docs/guide.md"))).toEqual(["docs/guide.md"]);
+  });
+
+  test("a gitignored .claude keeps its hand-written design docs", async () => {
+    // Untracked is not uninteresting. Without this the feature hides the notes
+    // someone wrote about the feature.
+    expect(isVaultPathIgnored(repo, ".claude/vault-drive/DESIGN.md")).toBe(false);
+    const paths = (await scanVault(repo)).map((f) => f.path);
+    expect(paths).toContain(".claude/vault-drive/DESIGN.md");
+  });
+
+  test("the allowlist exempts the directory, not everything under it", () => {
+    // .claude survives .gitignore; the ordinary segment rules still run inside.
+    expect(isVaultPathIgnored(repo, ".claude/dist/bundle.md")).toBe(true);
+    expect(isVaultPathIgnored(repo, ".claude/.venv/notes.md")).toBe(true);
+  });
+
+  test("worktrees is a repo rule, so a notes vault may still have one", () => {
+    const plain = path.join(path.dirname(repo), "plain");
+    fs.mkdirSync(path.join(plain, "worktrees"), { recursive: true });
+    fs.writeFileSync(path.join(plain, "worktrees", "note.md"), "mine");
+    clearRepoScopeCache();
+    expect(isVaultPathIgnored(plain, "worktrees/note.md")).toBe(false);
   });
 });

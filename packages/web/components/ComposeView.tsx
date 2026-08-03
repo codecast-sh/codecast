@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -10,6 +10,19 @@ import { formatShortcutParts } from "../shortcuts";
 import { isElectron, bridge } from "../lib/desktop";
 import { resolveSessionSkills } from "../lib/sessionSkills";
 import { broadcastComposeOptimistic } from "../lib/composeBridge";
+import { AGENT_LAUNCH_OPTIONS } from "@codecast/shared/contracts";
+import type { DraftImageRow } from "../lib/draftImages";
+
+// The draft content held for a compose stub, or null when there is none worth
+// keeping. Read straight from the store — MessageInput persists text and pasted
+// images (blob previews included) into drafts[id] synchronously as they change.
+function draftContentFor(id: string | null): { text: string; images: DraftImageRow[] } | null {
+  if (!id) return null;
+  const d = useInboxStore.getState().drafts[id];
+  const text = typeof d?.draft_message === "string" ? d.draft_message.trim() : "";
+  const images = Array.isArray(d?.draft_image_storage_ids) ? (d.draft_image_storage_ids as DraftImageRow[]) : [];
+  return text || images.length > 0 ? { text, images } : null;
+}
 
 /**
  * The floating new-session popup, shown in the palette window when summoned by
@@ -28,7 +41,7 @@ import { broadcastComposeOptimistic } from "../lib/composeBridge";
  * the in-app overlay (onClose set) and the standalone palette window (Electron) —
  * differ only in how they dismiss, never in this commit/abandon contract.
  */
-export function ComposeView({ initialQuery, context, onClose }: { initialQuery?: string; context?: { projectPath?: string; gitRoot?: string }; onClose?: () => void }) {
+export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: { initialQuery?: string; context?: { projectPath?: string; gitRoot?: string }; onClose?: () => void; closeGuardRef?: React.MutableRefObject<(() => void) | null> }) {
   const router = useRouter();
   const { user: currentUser } = useCurrentUser();
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -47,8 +60,11 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
   const stubIdRef = useRef<string | null>(null);
   const sentRef = useRef(false);
 
-  // A ComposeView instance owns ONE deferred stub and ends one of two ways:
+  // A ComposeView instance owns ONE deferred stub and ends one of three ways:
   //   • committed — the first send fires materialize() and sets sentRef.
+  //   • kept — the user chose "Keep draft" (or a dismissal we couldn't intercept
+  //     happened over typed content): the stub stays, flagged _hasDraft, and
+  //     renders as a draft new-session card in the inbox.
   //   • abandoned — abandonStub() prunes the un-sent, server-less stub (and plants
   //     an IDB exclude so it can't resurrect as a ghost "New session").
   // abandonStub is the SINGLE un-commit path, run from the only two moments the
@@ -56,6 +72,13 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
   // mounted. Idempotent — pruneGhostSessions no-ops once the stub has been sent.
   const abandonStub = useCallback(() => {
     if (sentRef.current || !stubIdRef.current) return;
+    // Typed content must survive dismissals that never passed through the
+    // confirm dialog (host unmounted us, the palette window hid on blur):
+    // auto-keep the draft instead of destroying it.
+    if (draftContentFor(stubIdRef.current)) {
+      useInboxStore.getState().setSessionHasDraft(stubIdRef.current, true);
+      return;
+    }
     useInboxStore.getState().pruneGhostSessions([stubIdRef.current]);
   }, []);
 
@@ -176,22 +199,92 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
     }
   }, []);
 
-  // Escape only DISMISSES the popup — abandoning the un-sent stub is NOT done here;
-  // it falls out of the dismissal (the overlay unmounts → cleanup abandons; the
-  // palette window hides → the visibilitychange effect below abandons). Listen in
-  // the CAPTURE phase because MessageInput preventDefaults + stops Escape (its
-  // 250ms double-tap-to-clear gesture), so a bubble-phase listener never sees it.
+  // --- guarded dismissal ----------------------------------------------------
+  // Raw dismissal. In-app overlay: the host owns it. Standalone palette window:
+  // hide the window (Electron) or step back in history (browser).
+  const dismiss = useCallback(() => {
+    if (onClose) { onClose(); return; }
+    const hide = bridge("paletteHide");
+    if (hide) hide();
+    else router.back();
+  }, [onClose, router]);
+
+  // Draft guard: an explicit dismissal (Escape, backdrop click) over typed
+  // content routes through a confirm dialog instead of silently dropping it.
+  const [confirmClose, setConfirmClose] = useState(false);
+  const confirmCloseRef = useRef(false);
+  useEffect(() => { confirmCloseRef.current = confirmClose; }, [confirmClose]);
+  // MessageInput reports when Escape belongs to UI inside it (lightbox, image /
+  // queued-message selection, slash menu) — see escapeOwnedRef prop.
+  const escapeOwnedRef = useRef(false);
+
+  const refocusComposer = useCallback(() => {
+    rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+  }, []);
+
+  const requestClose = useCallback(() => {
+    if (!sentRef.current && draftContentFor(stubIdRef.current)) {
+      setConfirmClose(true);
+      return;
+    }
+    dismiss();
+  }, [dismiss]);
+
+  // Keep: the stub graduates from pre-warm infrastructure to deliberate state —
+  // a draft new-session card in the inbox. sentRef blocks every abandon path.
+  const keepDraftAndClose = useCallback(() => {
+    const id = stubIdRef.current;
+    if (id) {
+      sentRef.current = true;
+      useInboxStore.getState().setSessionHasDraft(id, true);
+      toast.success("Draft saved to your inbox");
+    }
+    setConfirmClose(false);
+    dismiss();
+  }, [dismiss]);
+
+  // Discard: clear the draft FIRST so the unmount abandon sees no content and
+  // prunes the stub as usual.
+  const discardDraftAndClose = useCallback(() => {
+    const id = stubIdRef.current;
+    if (id) useInboxStore.getState().clearDraft(id);
+    setConfirmClose(false);
+    dismiss();
+  }, [dismiss]);
+
+  // Hand the guarded close to the host so its backdrop click gets the same
+  // draft confirm as Escape (the backdrop lives outside this component).
+  useEffect(() => {
+    if (!closeGuardRef) return;
+    closeGuardRef.current = requestClose;
+    return () => { closeGuardRef.current = null; };
+  }, [closeGuardRef, requestClose]);
+
+  // Escape DISMISSES the popup (via the draft guard) — abandoning the un-sent
+  // stub is NOT done here; it falls out of the dismissal (the overlay unmounts →
+  // cleanup abandons; the palette window hides → the visibilitychange effect
+  // below abandons). Listen in the CAPTURE phase because MessageInput
+  // preventDefaults + stops Escape (its 250ms double-tap-to-clear gesture), so a
+  // bubble-phase listener never sees it. Capture also means we fire BEFORE the
+  // inner UI's own Escape handling — so stand down whenever an inner layer owns
+  // the key: the confirm dialog, the image lightbox/selection, the slash menu,
+  // or a focused picker input (folder/label) that unwinds itself on Escape.
   useMountEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (confirmCloseRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        setConfirmClose(false);
+        refocusComposer();
+        return;
+      }
+      if (escapeOwnedRef.current) return;
+      const ae = document.activeElement as HTMLElement | null;
+      if (ae && ae.tagName === "INPUT" && rootRef.current?.contains(ae)) return;
       e.preventDefault();
       e.stopPropagation();
-      // In-app overlay: the host owns dismissal. Standalone palette window: hide
-      // the window (Electron) or step back in history (browser).
-      if (onClose) { onClose(); return; }
-      const hide = bridge("paletteHide");
-      if (hide) hide();
-      else router.back();
+      requestClose();
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
@@ -269,7 +362,23 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
     : null;
 
   return (
-    <div ref={rootRef} className="relative w-[94vw] h-[88vh] max-w-[960px] max-h-[680px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <div
+      ref={rootRef}
+      // aria-modal is what makes the global shortcut dispatcher stand down
+      // (hasOpenModal) — without it, any keystroke after focus slips out of the
+      // composer acts on the app BEHIND this dialog.
+      role="dialog"
+      aria-modal="true"
+      // Clicking dead space inside the dialog must not blur the composer (a
+      // blurred dialog leaks keyboard focus to the app). preventDefault on
+      // mousedown keeps focus where it is; interactive targets keep native
+      // focus behavior.
+      onMouseDownCapture={(e) => {
+        const t = e.target as HTMLElement;
+        if (!t.closest("button, a, input, textarea, select, [contenteditable=true], [role=option]")) e.preventDefault();
+      }}
+      className="relative w-[94vw] h-[88vh] max-w-[960px] max-h-[680px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
+      onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
@@ -292,6 +401,15 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
           onDropFiles={dropFilesRef}
           onSubmitWithIntent={handleSubmit}
           onDidSend={(info) => { if (navIntentRef.current) broadcastComposeOptimistic(info); }}
+          escapeOwnedRef={escapeOwnedRef}
+        />
+      )}
+      {confirmClose && (
+        <DiscardDraftConfirm
+          stubId={stubIdRef.current}
+          onKeep={keepDraftAndClose}
+          onDiscard={discardDraftAndClose}
+          onCancel={() => { setConfirmClose(false); refocusComposer(); }}
         />
       )}
       <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40 shrink-0">
@@ -300,6 +418,81 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
           <span className="flex items-center gap-1.5"><FooterKeys combo="meta+enter" /> send &amp; open</span>
         </span>
         <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> close</span>
+      </div>
+    </div>
+  );
+}
+
+// The "keep or discard this draft?" confirm shown when a dismissal would drop
+// typed content. Renders the draft itself as context — text snippet, pasted
+// image thumbnails, target project + agent — so the decision is informed, not
+// blind. Enter (autofocused button) keeps; Escape and the backdrop cancel back
+// into the draft; only the explicit Discard button destroys it.
+function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
+  stubId: string | null;
+  onKeep: () => void;
+  onDiscard: () => void;
+  onCancel: () => void;
+}) {
+  // Snapshot once on open — the composer is inert behind this dialog, so the
+  // draft can't change while it shows.
+  const { text, images, projectName, agentLabel } = useMemo(() => {
+    const store = useInboxStore.getState();
+    const content = draftContentFor(stubId);
+    const row = stubId ? store.sessions[stubId] : undefined;
+    return {
+      text: content?.text ?? "",
+      images: content?.images ?? [],
+      projectName: (row?.project_path || row?.git_root)?.split("/").filter(Boolean).pop(),
+      agentLabel: AGENT_LAUNCH_OPTIONS.find((a) => a.convexType === row?.agent_type)?.label,
+    };
+  }, [stubId]);
+
+  return (
+    <div
+      className="absolute inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-[2px]"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); onCancel(); } }}
+    >
+      <div role="alertdialog" aria-modal="true" className="w-[26rem] max-w-[85%] rounded-xl border border-sol-border bg-sol-bg shadow-2xl p-4 animate-in fade-in-0 zoom-in-95 duration-150">
+        <div className="text-sm font-medium text-sol-text mb-1">Keep this draft?</div>
+        <div className="text-xs text-sol-text-dim mb-3">A kept draft stays in your inbox as a new session, ready to send later.</div>
+        <div className="rounded-lg border border-sol-border/60 bg-sol-bg-alt/50 p-2.5 mb-3">
+          {(projectName || agentLabel) && (
+            <div className="text-[10px] text-sol-text-dim mb-1.5">
+              {[projectName, agentLabel].filter(Boolean).join(" · ")}
+            </div>
+          )}
+          {text && <div className="text-xs text-sol-text whitespace-pre-wrap break-words line-clamp-4">{text}</div>}
+          {images.length > 0 && (
+            <div className="flex items-center gap-1.5 mt-2">
+              {images.slice(0, 5).map((img, i) => (
+                img.previewUrl
+                  ? <img key={i} src={img.previewUrl} alt="" className="h-10 w-10 rounded object-cover border border-sol-border/60" />
+                  : <span key={i} className="h-10 w-10 rounded border border-sol-border/60 bg-sol-bg-alt" />
+              ))}
+              {images.length > 5 && <span className="text-[10px] text-sol-text-dim">+{images.length - 5}</span>}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={onDiscard}
+            className="px-3 py-1.5 text-xs rounded-md border border-sol-red/40 text-sol-red hover:bg-sol-red/10 transition-colors"
+          >
+            Discard
+          </button>
+          <button
+            autoFocus
+            onClick={onKeep}
+            className="px-3 py-1.5 text-xs rounded-md bg-sol-cyan text-white font-medium hover:bg-sol-cyan/90 transition-colors"
+          >
+            Keep draft
+          </button>
+        </div>
+        <div className="mt-2.5 flex items-center justify-end gap-3 text-[10px] text-sol-text-dim">
+          <span className="flex items-center gap-1.5"><FooterKeys combo="enter" /> keep</span>
+          <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> back to draft</span>
+        </div>
       </div>
     </div>
   );
