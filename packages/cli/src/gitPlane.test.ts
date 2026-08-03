@@ -169,6 +169,61 @@ describe("sweepGitPlane measurement", () => {
   });
 });
 
+describe("sweepGitPlane access grants", () => {
+  // An ext:: origin whose command prints an auth refusal: rendezvous-shaped
+  // (passes isRendezvousUrl), but every fetch fails like a denied remote.
+  // A script FILE, not inline `sh -c`: the ext transport splits its command on
+  // whitespace, so inline quoting mangles into a shell syntax error whose
+  // stderr (git's generic "access rights" hint) is deliberately NOT classified
+  // as an auth failure.
+  function denyOrigin(repo: string): void {
+    const script = path.join(repo, "deny.sh");
+    fs.writeFileSync(script, '#!/bin/sh\necho "ERROR: Repository not found." >&2\nexit 1\n', { mode: 0o755 });
+    git(repo, "remote", "add", "origin", `ext::${script}`);
+    git(repo, "config", "protocol.ext.allow", "always");
+  }
+
+  test("an auth-refused fetch mints the device key and reports needs_access", async () => {
+    const repo = makeRepo("denied");
+    denyOrigin(repo);
+    let minted = 0;
+    const d = deps({ mintDeviceKey: async () => { minted++; return "ssh-ed25519 AAAA test"; } });
+
+    const [state] = await sweepGitPlane([{ root: repo, conversationIds: ["c1"] }], d, Date.now());
+
+    expect(state.fetch_ok).toBe(false);
+    expect(state.needs_access).toBe(true);
+    expect(minted).toBe(1);
+    // Not usable — the resurrect signal must NOT fire on a denied repo.
+    expect(d.usable).toEqual([]);
+  });
+
+  test("needs_access persists through cadence-skipped passes", async () => {
+    const repo = makeRepo("denied-sticky");
+    denyOrigin(repo);
+    const d = deps({ mintDeviceKey: async () => "ssh-ed25519 AAAA test" });
+    const now = Date.now();
+    await sweepGitPlane([{ root: repo, conversationIds: ["c1"] }], d, now);
+    // Second pass inside the fetch interval: no fetch happens, flag must survive.
+    const [state] = await sweepGitPlane([{ root: repo, conversationIds: ["c1"] }], d, now + 60_000);
+    expect(state.fetch_ok).toBe(false);
+    expect(state.needs_access).toBe(true);
+  });
+
+  test("a network failure does not mint a key or claim needs_access", async () => {
+    const repo = makeRepo("net-down");
+    git(repo, "remote", "add", "origin", "https://invalid.invalid/org/repo.git");
+    let minted = 0;
+    const d = deps({ mintDeviceKey: async () => { minted++; return "ssh-ed25519 AAAA test"; } });
+
+    const [state] = await sweepGitPlane([{ root: repo, conversationIds: ["c1"] }], d, Date.now());
+
+    expect(state.fetch_ok).toBe(false);
+    expect(state.needs_access).toBeUndefined();
+    expect(minted).toBe(0);
+  });
+});
+
 describe("repoRootFor", () => {
   test("resolves subdirectories to the toplevel and caches non-repos as null", async () => {
     const repo = makeRepo("rooted");
