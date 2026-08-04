@@ -72,8 +72,8 @@ export type MachineDevice = {
 };
 
 // Pure policy: is a human touching one of this user's own Macs right now —
-// anywhere, not just in Codecast? Opt-in widening of the presence signal
-// (users.machine_wide_presence).
+// anywhere, not just in Codecast? On-by-default widening of the presence
+// signal (users.machine_wide_presence, opt-out).
 //
 // A device only counts when it is (a) not a remote box — nose and the hosted
 // agent Macs are servers, never where the user is sitting — (b) still
@@ -120,9 +120,9 @@ async function readPresence(
   // have every push held while no surface anywhere could display it.
   const clientAlive = !!presence && now - presence.last_seen < PRESENCE_FRESH_MS;
   let machineActive = false;
-  // Opted out (the default): client presence is the whole story, and we skip the
-  // devices read entirely.
-  if (user.machine_wide_presence && clientAlive) {
+  // Opted out: client presence is the whole story, and we skip the devices
+  // read entirely. On by default — an absent flag means opted in.
+  if ((user.machine_wide_presence ?? true) && clientAlive) {
     const devices = await ctx.db
       .query("devices")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))

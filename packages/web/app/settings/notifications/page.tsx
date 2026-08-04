@@ -64,7 +64,7 @@ export default function NotificationsSettingsPage() {
   const prefs = user?.notification_preferences;
   const enabled = user?.notifications_enabled ?? false;
   const mutedMembers: Id<"users">[] = (user as any)?.muted_members ?? [];
-  const machineWidePresence = (user as any)?.machine_wide_presence ?? false;
+  const machineWidePresence = (user as any)?.machine_wide_presence ?? true;
 
   const getPref = useCallback((key: NotifType) => {
     return (prefs as any)?.[key] ?? true;
@@ -148,21 +148,15 @@ export default function NotificationsSettingsPage() {
           <Card className="p-6 bg-sol-bg border-sol-border">
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <Laptop className="w-5 h-5 text-sol-base1" />
+                <Laptop className="w-5 h-5 shrink-0 text-sol-base1" />
                 <div>
                   <span className="text-sm font-medium text-sol-text">
-                    Wait until I&apos;m away from the whole computer
+                    Wait until I&apos;m away from my computer
                   </span>
                   <p className="text-xs text-sol-base1 mt-0.5">
-                    Phone notifications are already held for a few minutes while
-                    you&apos;re active in Codecast, then sent if you still haven&apos;t
-                    opened them. Turn this on and any keyboard or mouse activity on
-                    your Mac counts as being present — editor, browser, terminal — so
-                    pushes keep waiting, and arrive within a few minutes of you
-                    stepping away. Requires an up-to-date Codecast daemon on a Mac,
-                    with Codecast itself open somewhere to show you the notification;
-                    Linux machines and Macs not reporting input don&apos;t hold
-                    anything. Anything still waiting an hour later is sent regardless.
+                    Hold phone pushes while your Mac sees any keyboard or mouse
+                    activity, not just activity in Codecast. Pushes arrive a few
+                    minutes after you step away, and always within an hour.
                   </p>
                 </div>
               </div>

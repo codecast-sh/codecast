@@ -357,12 +357,13 @@ describe("summarizePushBatch", () => {
   });
 });
 
-// ── Machine-wide presence (opt-in) ───────────────────────────────────────────
+// ── Machine-wide presence (on by default, opt-out) ───────────────────────────
 // Widens "the user is here" from "active in Codecast" to "touching this Mac at
 // all", and — unlike client presence — keeps holding rather than escalating on
 // a timer. Opted-out users must be completely unaffected.
 
 const MACHINE_USER = { ...USER, machine_wide_presence: true };
+const OPTED_OUT_USER = { ...USER, machine_wide_presence: false };
 
 function machineDevice(now: number, over: Rec = {}): Rec {
   return {
@@ -438,14 +439,31 @@ describe("machine presence routing", () => {
 
   test("opted OUT with the same active Mac: unchanged away debounce", async () => {
     freezeTime(NOW);
-    const ctx = createCtx({ users: [USER], devices: [machineDevice(NOW)] });
-    await enqueuePush(ctx, { user: USER, type: "session_idle", title: "t", body: "b" });
+    const ctx = createCtx({
+      users: [OPTED_OUT_USER],
+      user_presence: [idleClientPresence(NOW)],
+      devices: [machineDevice(NOW)],
+    });
+    await enqueuePush(ctx, { user: OPTED_OUT_USER, type: "session_idle", title: "t", body: "b" });
     const row = ctx.tables.push_outbox[0];
     expect(row.due_at).toBe(NOW + AWAY_DEBOUNCE_MS);
     expect(row.deferred).toBe(false);
   });
 
-  // The point of the opt-in: a held push must NOT escalate to the phone just
+  test("flag absent (the default) behaves as opted in: held", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({
+      users: [USER],
+      user_presence: [idleClientPresence(NOW)],
+      devices: [machineDevice(NOW)],
+    });
+    await enqueuePush(ctx, { user: USER, type: "session_idle", title: "t", body: "b" });
+    const row = ctx.tables.push_outbox[0];
+    expect(row.due_at).toBe(NOW + HOLD_WHILE_ACTIVE_MS);
+    expect(row.deferred).toBe(true);
+  });
+
+  // The point of machine presence: a held push must NOT escalate to the phone just
   // because a timer expired while the user is demonstrably still at the machine.
   test("still at the Mac when the hold expires: re-deferred, no push", async () => {
     const later = NOW + HOLD_WHILE_ACTIVE_MS;
