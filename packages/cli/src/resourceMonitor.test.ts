@@ -11,6 +11,7 @@ import {
   IDLE_METRICS_REFRESH_MS,
   type ProcessInfo,
   type ReportedMetrics,
+  type SessionResources,
 } from "./resourceMonitor.js";
 
 describe("resourceMonitor", () => {
@@ -103,7 +104,7 @@ describe("resourceMonitor", () => {
       const sessionPids = new Map<string, number>([
         ["test-session-self", process.pid],
       ]);
-      const result = await collectSessionResources(sessionPids);
+      const result = await collectSessionResources(sessionPids, new Set());
       expect(result.size).toBe(1);
       const r = result.get("test-session-self")!;
       expect(r.sessionId).toBe("test-session-self");
@@ -117,8 +118,100 @@ describe("resourceMonitor", () => {
       const sessionPids = new Map<string, number>([
         ["dead-session", 999999999],
       ]);
-      const result = await collectSessionResources(sessionPids);
+      const result = await collectSessionResources(sessionPids, new Set());
       expect(result.size).toBe(0);
+    });
+
+    // Real Codex ids from ~/.codex/sessions/2026/08/02: UUIDv7, so a parent and
+    // the subagents it spawns share the leading millisecond timestamp.
+    const PARENT = "019fb73a-a85c-7d31-b0a2-3f9c5e2d8a41";
+    const SUBAGENT = "019fb73a-a740-7c02-9e11-6b4d0a7f3c88";
+
+    it("credits a shared root pid to exactly one session", async () => {
+      if (process.platform !== "darwin") return;
+      // The live defect: 15 distinct Codex session ids all resolved to pid 55521
+      // and each reported the SAME subtree, summed 15x into the fleet total.
+      const sessionPids = new Map<string, number>([
+        [PARENT, process.pid],
+        [SUBAGENT, process.pid],
+      ]);
+      const result = await collectSessionResources(sessionPids, new Set());
+
+      expect(result.size).toBe(2);
+      const credited = [...result.values()].filter((r) => r.pidCount > 0);
+      expect(credited.length).toBe(1);
+      // Lexicographically smallest wins, so the winner does not depend on the
+      // caller's (unstable) map iteration order.
+      expect(credited[0].sessionId).toBe(SUBAGENT);
+      const loser = result.get(PARENT)!;
+      expect(loser.sharesRootPid).toBe(true);
+      expect(loser.cpu).toBe(0);
+      expect(loser.memory).toBe(0);
+      expect(loser.pidCount).toBe(0);
+    });
+
+    it("never credits a session that shares another's process, even when it sorts first", async () => {
+      if (process.platform !== "darwin") return;
+      // SUBAGENT sorts BEFORE parent, so it would win the tie-break — being a
+      // known borrower must override that entirely.
+      const sessionPids = new Map<string, number>([
+        [SUBAGENT, process.pid],
+        [PARENT, process.pid],
+      ]);
+      const result = await collectSessionResources(sessionPids, new Set([SUBAGENT]));
+
+      const parent = result.get(PARENT)!;
+      expect(parent.pidCount).toBeGreaterThanOrEqual(1);
+      expect(parent.memory).toBeGreaterThan(0);
+      expect(parent.sharesRootPid).toBeUndefined();
+
+      const sub = result.get(SUBAGENT)!;
+      expect(sub.sharesRootPid).toBe(true);
+      expect(sub.cpu).toBe(0);
+      expect(sub.memory).toBe(0);
+      expect(sub.pidCount).toBe(0);
+    });
+
+    it("leaves a subtree uncounted when every claimant is a borrower", async () => {
+      if (process.platform !== "darwin") return;
+      // Two subagents of a parent that isn't tracked: nobody owns the tree, so
+      // nobody is credited. Uncounted beats attributed to the wrong session.
+      const sessionPids = new Map<string, number>([
+        [SUBAGENT, process.pid],
+        [PARENT, process.pid],
+      ]);
+      const result = await collectSessionResources(sessionPids, new Set([SUBAGENT, PARENT]));
+      expect([...result.values()].every((r) => r.sharesRootPid === true && r.pidCount === 0)).toBe(true);
+    });
+
+    it("picks the same winner regardless of insertion order", async () => {
+      if (process.platform !== "darwin") return;
+      // The process cache is evicted and refilled between ticks. If the winner
+      // followed iteration order, the credited session would alternate and both
+      // sessions' graphs would flicker.
+      const forward = await collectSessionResources(
+        new Map([[PARENT, process.pid], [SUBAGENT, process.pid]]), new Set(),
+      );
+      const reverse = await collectSessionResources(
+        new Map([[SUBAGENT, process.pid], [PARENT, process.pid]]), new Set(),
+      );
+      const winner = (m: Map<string, SessionResources>) =>
+        [...m.values()].find((r) => r.pidCount > 0)!.sessionId;
+      expect(winner(forward)).toBe(winner(reverse));
+    });
+
+    // CONTROL (passes pre-fix by construction): guards against the dedupe
+    // OVER-firing and starving ordinary, non-colliding sessions of metrics.
+    it("still counts distinct root pids independently", async () => {
+      if (process.platform !== "darwin") return;
+      const sessionPids = new Map<string, number>([
+        [PARENT, process.pid],
+        [SUBAGENT, process.ppid],
+      ]);
+      const result = await collectSessionResources(sessionPids, new Set());
+      expect([...result.values()].every((r) => !r.sharesRootPid)).toBe(true);
+      expect(result.get(PARENT)!.pidCount).toBeGreaterThanOrEqual(1);
+      expect(result.get(SUBAGENT)!.pidCount).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -140,6 +233,38 @@ describe("resourceMonitor", () => {
     it("resets to 0 on a working status even at near-zero CPU (blocked on a tool/network call)", () => {
       const idle = nextAwakeIdleMs({ prevIdleMs: 5 * TICK, cpu: 0.0, status: "working", elapsedMs: TICK, sleepSkip: false });
       expect(idle).toBe(0);
+    });
+
+    it("does NOT accrue idle time on a cpu=0 we zeroed ourselves", () => {
+      // A shared-root-pid row reports cpu=0 because its subtree was credited to
+      // the session that OWNS the pid. Accruing on that fiction would march the
+      // counter toward the Sessions page's 2h "idle" bucket, which feeds the bulk
+      // "Kill all" selection — manufacturing a kill candidate from our own zero.
+      // Pre-dedupe a borrower inherited the parent's real CPU, so a busy parent
+      // kept resetting it; nothing would now.
+      const banked = 90 * 60 * 1000;
+      const after = nextAwakeIdleMs({
+        prevIdleMs: banked, cpu: 0, status: undefined, elapsedMs: TICK,
+        sleepSkip: false, sharesRootPid: true,
+      });
+      expect(after).toBe(banked);
+    });
+
+    it("a borrower that is actually WORKING still resets to 0", () => {
+      // Order matters: the activity test runs before the carry-forward, so a
+      // stale total can't survive on a session the agent says is working.
+      const after = nextAwakeIdleMs({
+        prevIdleMs: 90 * 60 * 1000, cpu: 0, status: "working", elapsedMs: TICK,
+        sleepSkip: false, sharesRootPid: true,
+      });
+      expect(after).toBe(0);
+    });
+
+    it("an ordinary session still accrues normally (sharesRootPid absent)", () => {
+      const after = nextAwakeIdleMs({
+        prevIdleMs: TICK, cpu: 0, status: "idle", elapsedMs: TICK, sleepSkip: false,
+      });
+      expect(after).toBe(2 * TICK);
     });
 
     it("does NOT count a sleep gap as idle (laptop closed for 2h)", () => {
@@ -178,6 +303,26 @@ describe("resourceMonitor", () => {
       expect(result).toContain("cpu=15.5%");
       expect(result).toContain("mem=100.0MB");
       expect(result).toContain("procs=5");
+    });
+
+    it("distinguishes a Codex parent from its subagent (UUIDv7 prefixes collide)", () => {
+      // Both ids start "019fb73a" — the shared UUIDv7 millisecond timestamp — so
+      // an 8-char log prefix rendered a parent and its subagent as the same
+      // session, which is exactly what made the live misattribution unreadable.
+      const parent = "019fb73a-a85c-7d31-b0a2-3f9c5e2d8a41";
+      const subagent = "019fb73a-a740-7c02-9e11-6b4d0a7f3c88";
+      const result = formatResourcesLog(new Map([
+        [parent, { sessionId: parent, cpu: 12, memory: 104857600, pidCount: 10, collectedAt: 1 }],
+        [subagent, { sessionId: subagent, cpu: 0, memory: 0, pidCount: 0, collectedAt: 1, sharesRootPid: true }],
+      ]));
+
+      expect(result).toContain("019fb73a-a85c");
+      expect(result).toContain("019fb73a-a740");
+      // The two rendered ids must actually differ — the whole point.
+      const ids = [...result.matchAll(/019fb73a-[0-9a-f]+/g)].map((m) => m[0]);
+      expect(new Set(ids).size).toBe(2);
+      // And the borrower is reported as not counted, not as a real 0% session.
+      expect(result).toContain("shares another session's pid (not counted)");
     });
   });
 
