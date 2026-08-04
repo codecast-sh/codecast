@@ -315,17 +315,27 @@ describe("VaultMirror push cycle", () => {
     expect(unsubscribed).toHaveLength(1);
   });
 
-  test("the scan the mirror pushes is the scan the loopback routes serve", async () => {
+  test("the mirror pushes the document set, not everything the local tree lists", async () => {
     registerMirrored();
     write("a.md", "# A\n");
+    write("pic.png", "x");
     write(".obsidian/workspace.json", "{}");
     write("secrets.env", "TOKEN=1");
+    write("build.sh", "#!/bin/sh\n");
     const { transport, pushes } = recordingTransport();
     await mirrorFor(transport).syncAll();
 
     const pushed = pushes.flatMap((p) => p.notes.map((n) => n.path)).sort();
-    const served = (await scanVault(notesDir)).map((f) => f.path).sort();
-    expect(pushed).toEqual(served);
+    const served = (await scanVault(notesDir)).map((f) => f.path);
+    // The local scan is deliberately wider than this channel: it lists code so
+    // the tree tells the truth about the folder. The mirror leaves the machine,
+    // so it must stay narrow — a metadata row still carries a filename.
+    expect(served).toContain("secrets.env");
+    expect(served).toContain("build.sh");
+    expect(pushed).toEqual(["a.md", "pic.png"]);
     expect(pushed).not.toContain("secrets.env");
+    expect(pushed).not.toContain("build.sh");
+    // Anything the ignore rules drop is invisible to both.
+    expect(served.some((p) => p.startsWith(".obsidian"))).toBe(false);
   });
 });

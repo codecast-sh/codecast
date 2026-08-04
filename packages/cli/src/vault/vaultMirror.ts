@@ -7,8 +7,10 @@
 // loop skips it before it reads a single file.
 //
 // Shape of a cycle, and why:
-//  - A FULL SCAN reuses vaultScope.scanVault, so the mirror can never see a
-//    different file set than the routes serve or the watcher watches.
+//  - A FULL SCAN reuses vaultScope.scanVault, then narrows it to the document
+//    set (isVaultDocumentPath). The local tree lists source code too; this
+//    channel leaves the machine, so it carries notes and their attachments and
+//    nothing else — mirroring a repo must not enumerate its filenames.
 //  - Files whose mtime and size match the local ledger are not re-read. They
 //    still have to be mentioned, because the server deletes rows an incomplete
 //    scan never touched — but they go out as bare paths in `stamp_paths`
@@ -28,7 +30,7 @@ import { CachedJsonStore } from "../cachedJsonStore.js";
 import { chunkMessagesBySize } from "../syncService.js";
 import { cliFetch } from "../cliHttp.js";
 import { parseNote } from "@codecast/shared/vault";
-import { listVaults } from "./vaultRegistry.js";
+import { registeredVaults } from "./vaultRegistry.js";
 import {
   VAULT_MIRROR_MAX_BODY_BYTES,
   VAULT_MIRROR_MAX_STAMP_BATCH,
@@ -39,7 +41,7 @@ import {
   type VaultMirrorUpsertRequest,
   type VaultMirrorUpsertResponse,
 } from "@codecast/shared/contracts";
-import { resolveVaultPath, scanVault, vaultContentHash } from "./vaultScope.js";
+import { isVaultDocumentPath, resolveVaultPath, scanVault, vaultContentHash } from "./vaultScope.js";
 
 /** Notes per push. Well under the server's 500 cap; the byte bound below is
  *  what actually decides most batches. */
@@ -262,9 +264,11 @@ export class VaultMirror {
   }
 
   /** Registered vaults with mirroring explicitly turned on. Read fresh every
-   *  time: `cast vault mirror --on` edits config.json under a running daemon. */
+   *  time: `cast vault mirror --on` edits config.json under a running daemon.
+   *  Registered, not discovered: a project vault the user merely browsed has
+   *  not opted into leaving this machine, and mirroring is opt-in by design. */
   private mirroredVaults(): VaultInfo[] {
-    return listVaults(this.opts.configDir).filter((v) => v.mirror === true);
+    return registeredVaults(this.opts.configDir).filter((v) => v.mirror === true);
   }
 
   /** Start the periodic full scan. Nothing is pushed for a vault whose mirror
@@ -338,7 +342,7 @@ export class VaultMirror {
    */
   private async reconcileDisabled(): Promise<void> {
     const live = new Set(this.mirroredVaults().map((v) => v.id));
-    const known = listVaults(this.opts.configDir);
+    const known = registeredVaults(this.opts.configDir);
     for (const vaultId of Object.keys(this.store.getAll())) {
       if (this.stopped) return;
       if (live.has(vaultId)) continue;
@@ -403,7 +407,14 @@ export class VaultMirror {
     // costs nothing. What the two differ in is what they send: an incremental
     // cycle pushes only the changes, a full one also re-stamps everything else
     // and licenses the server to sweep.
-    const scanned = await scanVault(vault.root);
+    // The local scan lists every file the ignore rules allow, including source
+    // code — that width is for the local tree only. The mirror pushes a
+    // metadata row (path, size, hash) per file OFF this machine, so it takes
+    // just the document set: mirroring notes must not enumerate a private
+    // repo's filenames. Directories ride along so a remote tree renders.
+    const scanned = (await scanVault(vault.root)).filter(
+      (f) => f.dir || isVaultDocumentPath(f.path),
+    );
     const ledger = this.store.get(vault.id);
     const { changed, unchanged, removed } = diffScanAgainstLedger(scanned, ledger);
     // A scan id must be unique even when two scans start in the same

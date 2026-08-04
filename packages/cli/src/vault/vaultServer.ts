@@ -8,10 +8,10 @@
 // Every path the browser sends goes through vaultScope.resolveVaultPath. Nothing
 // in this file may construct a filesystem path any other way.
 
+import { spawn } from "child_process";
 import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as http from "http";
-import * as os from "os";
 import * as path from "path";
 import { WebSocketServer, WebSocket } from "ws";
 import {
@@ -22,6 +22,7 @@ import {
   tokenMatches,
   type TerminalServerOptions,
 } from "../terminal/terminalServer.js";
+import { isVaultMarkdownPath, VAULT_MAX_SERVE_BYTES } from "@codecast/shared/contracts";
 import type {
   VaultFileEntry,
   VaultInfo,
@@ -31,12 +32,13 @@ import type {
   VaultWsEvent,
   VaultWsHello,
 } from "@codecast/shared/contracts";
+import { moveToTrash, writeVaultFile } from "./vaultFs.js";
 import { findVault, listVaults, setVaultNoteCount } from "./vaultRegistry.js";
 import {
-  isVaultServablePath,
+  isVaultDocumentPath,
   normalizeVaultPath,
-  realVaultRoot,
   resolveVaultPath,
+  revealCommand,
   scanVault,
   vaultContentHash,
   vaultContentType,
@@ -78,16 +80,16 @@ async function readBody(req: http.IncomingMessage, limit: number): Promise<Buffe
 }
 
 /** Resolve a request's vault + path together: both must check out before any
- *  filesystem call happens. `servableOnly` is off for op routes, which address
- *  directories too. */
+ *  filesystem call happens. Reads take any in-scope path; `writableOnly` is the
+ *  narrower markdown+attachment set that PUT and the create op insist on. */
 function scoped(
   vault: VaultInfo,
   rawPath: string | null,
-  opts: { servableOnly?: boolean } = {},
+  opts: { writableOnly?: boolean } = {},
 ): { rel: string; abs: string } | null {
   const rel = normalizeVaultPath(rawPath ?? "");
   if (rel === null || rel === "") return null;
-  if (opts.servableOnly && !isVaultServablePath(rel)) return null;
+  if (opts.writableOnly && !isVaultDocumentPath(rel)) return null;
   const abs = resolveVaultPath(vault.root, rel);
   if (!abs) return null;
   return { rel, abs };
@@ -99,47 +101,6 @@ function entryFor(rel: string, stat: fs.Stats): VaultFileEntry {
     : { path: rel, mtime: Math.round(stat.mtimeMs), size: stat.size };
 }
 
-/**
- * Move a path out of the vault instead of deleting it. A vault is the user's
- * writing; an unlink here is unrecoverable data loss from a stray click in a
- * browser tab. Preference order: the OS trash, then a `.trash` folder inside the
- * vault itself (which the scan ignores) when the trash is on another volume.
- */
-function moveToTrash(vaultRoot: string, abs: string): string {
-  const base = path.basename(abs);
-  // $HOME, not os.homedir(): the rest of the CLI resolves the home directory the
-  // same way, and bun's os.homedir() is fixed at process start regardless of it.
-  const home = process.env.HOME || os.homedir();
-  const osTrash =
-    process.platform === "darwin"
-      ? path.join(home, ".Trash")
-      : process.platform === "linux"
-        ? path.join(home, ".local", "share", "Trash", "files")
-        : null;
-
-  const attempt = (dir: string): string | null => {
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-      let dest = path.join(dir, base);
-      for (let n = 2; fs.existsSync(dest); n++) {
-        const ext = path.extname(base);
-        dest = path.join(dir, `${base.slice(0, base.length - ext.length)} ${n}${ext}`);
-      }
-      fs.renameSync(abs, dest);
-      return dest;
-    } catch {
-      return null;
-    }
-  };
-
-  const viaOs = osTrash ? attempt(osTrash) : null;
-  if (viaOs) return viaOs;
-  // Cross-device rename (EXDEV) or no OS trash: keep it on the same volume.
-  const local = attempt(path.join(realVaultRoot(vaultRoot), ".trash"));
-  if (local) return local;
-  throw new Error("could not move to trash");
-}
-
 async function handleScan(
   res: http.ServerResponse,
   headers: Record<string, string>,
@@ -147,7 +108,10 @@ async function handleScan(
   configDir: string,
 ): Promise<void> {
   const files = await scanVault(vault.root);
-  const noteCount = files.filter((f) => !f.dir).length;
+  // Markdown only. The scan lists code and attachments too now, and "312 notes"
+  // next to a vault has to mean notes — counting every file in a repo would
+  // turn the picker's one number into noise.
+  const noteCount = files.filter((f) => !f.dir && isVaultMarkdownPath(f.path)).length;
   try {
     setVaultNoteCount(configDir, vault.id, noteCount);
   } catch {}
@@ -166,7 +130,7 @@ async function handleGetFile(
   vault: VaultInfo,
   rawPath: string | null,
 ): Promise<void> {
-  const target = scoped(vault, rawPath, { servableOnly: true });
+  const target = scoped(vault, rawPath);
   if (!target) return sendJson(res, 400, headers, { error: "bad path" });
   let stat: fs.Stats;
   try {
@@ -175,6 +139,12 @@ async function handleGetFile(
     return sendJson(res, 404, headers, { error: "not found" });
   }
   if (!stat.isFile()) return sendJson(res, 404, headers, { error: "not found" });
+  // Every non-ignored file is readable now, so a repo can point this at a
+  // multi-gigabyte database or a core dump. readFile on one would take the
+  // daemon down; the cap sits well above any real attachment.
+  if (stat.size > VAULT_MAX_SERVE_BYTES) {
+    return sendJson(res, 413, headers, { error: "too large", size: stat.size });
+  }
   const data = await fsp.readFile(target.abs);
   res.writeHead(200, {
     ...headers,
@@ -195,7 +165,7 @@ async function handlePutFile(
   vault: VaultInfo,
   rawPath: string | null,
 ): Promise<void> {
-  const target = scoped(vault, rawPath, { servableOnly: true });
+  const target = scoped(vault, rawPath, { writableOnly: true });
   if (!target) return sendJson(res, 400, headers, { error: "bad path" });
   const body = await readBody(req, MAX_WRITE_BYTES);
   if (!body) return sendJson(res, 413, headers, { error: "too large" });
@@ -232,12 +202,7 @@ async function handlePutFile(
     }
   }
 
-  await fsp.mkdir(path.dirname(target.abs), { recursive: true });
-  // Write-then-rename: a reader (or a crash) never sees a half-written note.
-  const tmp = path.join(path.dirname(target.abs), `.${path.basename(target.abs)}.${process.pid}.tmp`);
-  await fsp.writeFile(tmp, body);
-  await fsp.rename(tmp, target.abs);
-  const stat = await fsp.stat(target.abs);
+  const stat = await writeVaultFile(target.abs, body);
   const written: VaultWriteResponse = {
     path: target.rel,
     mtime: Math.round(stat.mtimeMs),
@@ -265,13 +230,40 @@ async function handleOp(
   const target = scoped(vault, op?.path ?? null);
   if (!target) return sendJson(res, 400, headers, { error: "bad path" });
 
+  // Code files are READ-ONLY, and a rename or a trash is a write. They became
+  // visible so the tree tells the truth about the folder; nothing here may
+  // move or destroy them. Directories are exempt: a folder is not a code file,
+  // and reorganising folders is an ordinary vault operation whatever they hold.
+  if (op.op === "rename" || op.op === "delete") {
+    const stat = fs.existsSync(target.abs) ? fs.statSync(target.abs) : null;
+    if (stat?.isFile() && !isVaultDocumentPath(target.rel)) {
+      return sendJson(res, 400, headers, { error: "read-only" });
+    }
+  }
+
+  if (op.op === "reveal") {
+    // Hand the path to the platform's file manager (or its default app). The
+    // path is already confined to the vault by scoped(); argv is passed as an
+    // ARRAY with no shell, so a filename can never be read as a command.
+    if (!fs.existsSync(target.abs)) return sendJson(res, 404, headers, { error: "not found" });
+    const { cmd, args } = revealCommand(process.platform, target.abs, op.mode ?? "reveal");
+    try {
+      const child = spawn(cmd, args, { stdio: "ignore", detached: true });
+      child.unref();
+      child.on("error", () => {});
+    } catch {
+      return sendJson(res, 500, headers, { error: "could not open" });
+    }
+    return sendJson(res, 200, headers, { ok: true });
+  }
+
   if (op.op === "mkdir") {
     await fsp.mkdir(target.abs, { recursive: true });
     return sendJson(res, 200, headers, { ok: true });
   }
 
   if (op.op === "create") {
-    if (!isVaultServablePath(target.rel)) return sendJson(res, 400, headers, { error: "bad path" });
+    if (!isVaultDocumentPath(target.rel)) return sendJson(res, 400, headers, { error: "bad path" });
     if (fs.existsSync(target.abs)) return sendJson(res, 409, headers, { error: "exists" });
     await fsp.mkdir(path.dirname(target.abs), { recursive: true });
     await fsp.writeFile(target.abs, op.content ?? "");

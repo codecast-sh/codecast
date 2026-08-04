@@ -140,6 +140,10 @@ export interface Config {
   // bridge. Managed through vault/vaultRegistry.ts — never hand-edited elsewhere,
   // since the id is derived from the root path.
   vaults?: VaultInfo[];
+  /** Project roots the user removed from the vault picker. Discovery would
+   *  otherwise re-offer them on the next listing — `cast vault rm` has to mean
+   *  something for a vault nobody added by hand. */
+  vaults_hidden?: string[];
 
   // --- Server-stamped bookkeeping (index.ts) ---
   created_at?: string;
