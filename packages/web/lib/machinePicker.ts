@@ -211,3 +211,31 @@ export function defaultMachineId(
   // Cloud-only user: an online remote is the only machine that can serve.
   return stable(devices.filter((d) => d.is_remote && d.online));
 }
+
+/**
+ * The folder list to show while the machine-scoped recents query is in flight.
+ *
+ * Falling back to the raw union is unsafe (it offers folders the target machine
+ * lacks, and the stamp would send the session to a machine that can't cd there),
+ * but painting nothing is a visible flicker: the chip row opened empty and the
+ * folders popped in a beat later. The union filtered by that machine's OWN
+ * local_project_roots is exactly the predicate the server applies, computed from
+ * the device roster already in memory — safe AND instant.
+ *
+ * Ladder: live scoped answer → that machine's cached answer → the union narrowed
+ * to that machine → nothing (roster hasn't loaded, so we can't narrow safely).
+ */
+export function resolveScopedProjects<T extends { path: string }>(opts: {
+  scopedDeviceId: string | null | undefined;
+  scoped: T[] | undefined;
+  cached: T[] | undefined;
+  union: T[];
+  routedDevice?: Pick<MachineCandidate, "local_project_roots"> | null;
+}): T[] {
+  const { scopedDeviceId, scoped, cached, union, routedDevice } = opts;
+  if (!scopedDeviceId) return union;
+  if (scoped) return scoped;
+  if (cached?.length) return cached;
+  if (!routedDevice?.local_project_roots?.length) return [];
+  return union.filter((p) => deviceSeesPath(routedDevice, p.path));
+}
