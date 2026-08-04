@@ -1,5 +1,6 @@
 import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { usePathname, useRouter } from "next/navigation";
@@ -27,6 +28,7 @@ import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { ConnectionBanner } from "./ConnectionBanner";
+import { StorageHealthBanner } from "./StorageHealthBanner";
 import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
 import { SyncStatusChip } from "./SyncStatusChip";
@@ -643,12 +645,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     requestAnimationFrame(recalcHeight);
   }, [recalcHeight]));
 
-  // Persist user-driven resizes only. Imperative collapse fires onLayoutChange too —
-  // ignore those so a collapsed sidebar doesn't stick as a 0-size layout for next mount.
-  const handleLayoutChange = (newLayout: { [key: string]: number }) => {
+  // Persist user-driven resizes only, once, at drag end (useDragGatedLayoutPersist).
+  // Imperative collapse and synced-in layout echoes fire onLayoutChange too —
+  // ignoring those keeps a collapsed sidebar from sticking as a 0-size layout
+  // and keeps two windows from rewriting each other's clamped values forever.
+  const handleLayoutChange = useDragGatedLayoutPersist((newLayout) => {
     if ((newLayout.sidebar ?? 0) < 5) return;
     s.updateClientLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
-  };
+  });
 
   // Stable layout shell: panels stay mounted across zen/sidebar/sidePanel toggles to
   // avoid remounting ConversationView and its Convex subscriptions (which flash a
@@ -943,6 +947,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
       <ErrorBoundary name="Banners" level="inline">
         <ConnectionBanner />
+        <StorageHealthBanner />
         <DesktopAppBanner />
         <SetupPromptBanner />
         <CliOfflineBanner />

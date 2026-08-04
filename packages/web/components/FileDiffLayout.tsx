@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { Panel, Group, Separator } from "react-resizable-panels";
@@ -779,9 +780,9 @@ export function FileDiffLayout({
     }
   });
 
-  const handleLayoutChange = (newLayout: Layout) => {
+  const handleLayoutChange = useDragGatedLayoutPersist((newLayout) => {
     s.updateClientLayout("file_diff", { tree: newLayout["file-tree"] || 25, content: newLayout["diff-content"] || 75 });
-  };
+  });
 
   const handleSelectFile = (filename: string) => {
     setSelectedFile(filename);

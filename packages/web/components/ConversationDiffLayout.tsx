@@ -1,5 +1,6 @@
 import { useState, useRef, useMemo } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { Panel, Group, Separator } from "react-resizable-panels";
@@ -157,9 +158,9 @@ export function ConversationDiffLayout({
     }
   });
 
-  const handleLayoutChange = (newLayout: Layout) => {
+  const handleLayoutChange = useDragGatedLayoutPersist((newLayout) => {
     updateLayout("conversation_diff", { content: newLayout["content-panel"] || 40, diff: newLayout["diff-panel"] || 60 });
-  };
+  });
 
   const changesOverlay = changes.length > 0 && !diffPanelOpen ? <ChangesBar changes={changes} /> : null;
   const combinedHeaderExtra = changesOverlay ? (
