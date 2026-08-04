@@ -45,6 +45,7 @@ export function DesktopProvider() {
   // percentage, so it falls back to the indeterminate bar below.
   const [ipc, setIpc] = useState<{ status: string; version?: string; percent?: number } | null>(null);
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+  const [minimized, setMinimized] = useState(false);
   const requestDesktopUpdate = useMutation(api.users.requestDesktopUpdate);
 
   const startUpdate = () => {
@@ -234,14 +235,60 @@ export function DesktopProvider() {
   // button always does real work now.
   const showStalled = stalled || (errored && (updating || update != null));
 
+  // The banner sits over the composer, so it must never demand permanent
+  // screen space: a download auto-collapses to a small pill after a few
+  // seconds ("keep working" shouldn't cover where you work), while ready /
+  // stalled re-expand once because they need a click. Manual expand during a
+  // download sticks — the timer only arms on the download's state change.
+  useEffect(() => {
+    if (ready || showStalled) {
+      setMinimized(false);
+      return;
+    }
+    if (!inProgress) return;
+    const id = window.setTimeout(() => setMinimized(true), 6_000);
+    return () => window.clearTimeout(id);
+  }, [inProgress, ready, showStalled]);
+
   // Nothing to surface: no known update (and not mid-update or failed), or
   // this version was dismissed while idle.
   if (!ready && !inProgress && !showStalled && (!update || update.latest === dismissedVersion)) return null;
   if (!latest) return null;
 
+  if (minimized) {
+    return (
+      <div className="fixed bottom-4 left-4 z-[9998]">
+        <button
+          onClick={() => setMinimized(false)}
+          aria-label="Show update status"
+          className="relative flex items-center gap-2 overflow-hidden rounded-full border border-sol-cyan/30 bg-[color-mix(in_srgb,var(--sol-bg-alt)_95%,transparent)] px-3 py-1.5 shadow-lg shadow-sol-cyan/5 backdrop-blur-md transition-colors hover:border-sol-cyan/60"
+        >
+          {downloading && (
+            <span
+              className="absolute bottom-0 left-0 h-[2px] bg-sol-cyan transition-all duration-300"
+              style={{ width: `${ipc?.percent ?? 0}%` }}
+            />
+          )}
+          <span
+            className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${
+              showStalled ? "bg-sol-orange" : "animate-pulse bg-sol-cyan"
+            }`}
+          />
+          <span className="text-[11px] text-sol-text-dim">
+            {ready
+              ? `v${latest} ready`
+              : downloading && ipc?.percent != null
+                ? `${ipc.percent}%`
+                : `v${latest}`}
+          </span>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed bottom-4 left-4 z-[9998] w-80 max-w-[calc(100vw-2rem)]">
-      <div className="relative overflow-hidden rounded-lg border border-sol-cyan/30 bg-sol-bg-alt/95 backdrop-blur-md shadow-lg shadow-sol-cyan/5">
+      <div className="relative overflow-hidden rounded-lg border border-sol-cyan/30 bg-[color-mix(in_srgb,var(--sol-bg-alt)_95%,transparent)] backdrop-blur-md shadow-lg shadow-sol-cyan/5">
         {/* Progress: real % when Electron's updater reports one, else an
             indeterminate sweep while the daemon works in the background. */}
         {downloading && (
@@ -326,6 +373,18 @@ export function DesktopProvider() {
                   Later
                 </button>
               </>
+            )}
+            {(inProgress || ready || showStalled) && (
+              <button
+                onClick={() => setMinimized(true)}
+                aria-label="Minimize update status"
+                title="Minimize"
+                className="-mr-1 flex h-5 w-5 items-center justify-center rounded text-sol-text-dim transition-colors hover:bg-sol-bg hover:text-sol-text"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M2 5h6" />
+                </svg>
+              </button>
             )}
           </div>
         </div>
