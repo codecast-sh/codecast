@@ -65,7 +65,16 @@ export function shouldPlayWaitingSound(
   const nextWaiting = new Map<string, boolean>();
 
   for (const session of sessions) {
-    if (session.inbox_dismissed_at) continue;
+    // Stand down on every TRIAGED row — the full set the server stands down on.
+    // This sound and the needs-input push (convex/notifications.ts
+    // checkNeedsInput) are deliberate mirrors: the server bails on
+    // `inbox_dismissed_at || inbox_stashed_at` outright, and on a killed row via
+    // classifyWorkState's `killed` precedence. Setting a session aside is the
+    // user saying "not now" whichever gesture they used, so all three belong
+    // here. `continue` rather than a falsy key on purpose: leaving the id out of
+    // nextWaiting makes a later revival re-observe the session fresh, so no
+    // chime fires for a waiting episode that began while it was set aside.
+    if (session.inbox_dismissed_at || session.inbox_stashed_at || session.inbox_killed_at) continue;
     const id = session._id.toString();
     const key = isSub(session) ? null : waitingSoundKey(session, queued);
     nextWaiting.set(id, !!key);

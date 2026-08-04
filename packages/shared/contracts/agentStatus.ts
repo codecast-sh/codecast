@@ -101,6 +101,17 @@ export const AGENT_IDLE_GRACE_MS = 45 * 1000;
 // rows, unmanaged imports — see shouldShowInInbox) escape the WORKING bucket:
 // their liveness fields freeze at the last synced value, but updated_at stays
 // honestly quiet.
+//
+// Killed rows stay on that list, and the two arms divide by whether the client
+// ever RECEIVES the marker. shouldShowInInbox drops `inbox_killed_at &&
+// !inbox_pinned_at` from every query that projects the field, so an UNPINNED
+// killed row never arrives carrying it — the client holds a stale pre-kill copy
+// and these time-based arms remain its only compensation (see the overlay note
+// in convex/conversations.ts). A PINNED killed row does arrive with the marker,
+// and isLivenessStale short-circuits on it there — which this branch could not
+// do anyway: it returns early on any ACTIVE agent_status, and kill never
+// touches updated_at, so a session killed mid-turn would wait out the full
+// trust TTL here.
 export function isQuietSettled(
   s: {
     agent_status?: string | null;
@@ -121,8 +132,17 @@ export function isQuietSettled(
 // is_idle:false) must apply — the inbox bucket, the pulsing dot, the status
 // pill. One predicate so they can never disagree (a needs-input card with a
 // green "working" dot is the historical failure mode). True when the row's
-// liveness can no longer be believed: an active status gone quiet past the 1h
-// trust TTL, or a statusless row quiet past the 45s idle grace.
+// liveness can no longer be believed: the row was RETIRED, an active status has
+// gone quiet past the 1h trust TTL, or a statusless row is quiet past the 45s
+// idle grace.
+//
+// inbox_killed_at is checked first and needs no clock at all: the agent was torn
+// down, so whatever live-looking fields the row still carries are by definition
+// no longer believable. Neither time-based arm catches the common case on its
+// own — killing a session that was mid-turn leaves an ACTIVE agent_status
+// (isQuietSettled bails immediately) and kill never touches updated_at
+// (isStatusTrustStale needs a full hour) — so a torn-down session went on
+// pulsing green for up to an hour.
 export function isLivenessStale(
   s: {
     agent_status?: string | null;
@@ -130,8 +150,10 @@ export function isLivenessStale(
     has_pending?: boolean | null;
     message_count?: number;
     updated_at?: number;
+    inbox_killed_at?: number | null;
   },
   now: number,
 ): boolean {
+  if (s.inbox_killed_at) return true;
   return isStatusTrustStale(s, now) || isQuietSettled(s, now);
 }

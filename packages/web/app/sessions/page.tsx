@@ -11,10 +11,9 @@ import { toast } from "sonner";
 import {
   isSessionWaitingForInput,
   isSessionEffectivelyIdle,
-  isSessionDismissed,
-  isSessionHidden,
   type InboxSession,
 } from "../../store/inboxStore";
+import { deriveTriageFlags } from "./triageFlags";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 
 type Session = FunctionReturnType<typeof api.managedSessions.listActiveSessions>[number];
@@ -36,8 +35,15 @@ type ClassifiedSession = Session & {
   lastActiveMs: number;
   // Triage state, joined from listInboxSessions (the same data the inbox uses).
   pinned: boolean;
-  // Hidden from the active inbox for either reason; `killed` narrows to the
-  // destructive flavor (inbox_dismissed_at — agent torn down).
+  // Out of the active inbox for ANY reason — stashed, dismissed, or killed
+  // (the server hides a killed row from listInboxSessions unless it is pinned,
+  // so all three belong to the same "not in the inbox" axis). `killed` narrows
+  // to the destructive flavor, read from the row's own is_killed — projected
+  // off inbox_killed_at, the retired marker every kill surface writes, and NOT
+  // from inbox_dismissed_at, which the killSession mutation behind this page's
+  // own kill button never sets. It comes off the ROW because the inbox join
+  // structurally cannot carry it for an unpinned killed session (see
+  // deriveTriageFlags).
   dismissed: boolean;
   killed: boolean;
   needsInput: boolean;
@@ -355,8 +361,7 @@ function SessionsView() {
 
       const inbox = s.conversation_id ? inboxById.get(String(s.conversation_id)) : undefined;
       const pinned = !!inbox?.is_pinned;
-      const dismissed = inbox ? isSessionHidden(inbox) : false;
-      const killed = inbox ? isSessionDismissed(inbox) : false;
+      const { killed, dismissed } = deriveTriageFlags(inbox, s.is_killed);
       let needsInput = false;
       let workState: WorkState | null = null;
       if (inbox) {
@@ -481,8 +486,14 @@ function SessionsView() {
     (s: ClassifiedSession) => {
       if (!s.conversation_id) return;
       markBusy(s.session_id);
+      // Restore clears the retired marker too, or a row killed by THIS page's
+      // kill button (convCommand("killSession"), the one surface that stamps
+      // inbox_killed_at without inbox_dismissed_at) would keep its "restore"
+      // button forever while shouldShowInInbox went on hiding it. Nulling all
+      // three is what `cast undismiss` does, and it is the un-kill SHAPE the
+      // dispatch rail requires before it will honor a kill-clear (dispatch.ts).
       patchConversation(s.conversation_id, s.dismissed
-        ? { inbox_dismissed_at: null, inbox_stashed_at: null }
+        ? { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_killed_at: null }
         : { inbox_stashed_at: Date.now() });
     },
     [patchConversation, markBusy]

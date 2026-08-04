@@ -10,12 +10,17 @@ export type PendingEntry = {
 
 // Convex omits optional conversation inbox timestamps when they are clear,
 // while optimistic bridge transitions retain the local `null` spelling.  That
-// is the same server acknowledgement for these three fields only; all other
-// fields keep strict null/undefined semantics.
+// is the same server acknowledgement for these four fields only; all other
+// fields keep strict null/undefined semantics.  inbox_killed_at belongs here
+// for the same reason as the rest: the /sessions restore gesture nulls it
+// (an un-kill patch clears all three stamps), and the server acknowledges by
+// dropping the field — without the equivalence that pending lock would never
+// retire and would keep re-asserting the clear.
 const OPTIONAL_INBOX_TIMESTAMPS = new Set([
   "inbox_dismissed_at",
   "inbox_stashed_at",
   "inbox_pinned_at",
+  "inbox_killed_at",
 ]);
 
 function fieldEchoesPending(field: string, incoming: unknown, pending: unknown): boolean {
