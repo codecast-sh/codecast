@@ -23,7 +23,12 @@ Write-Host ""
 
 # --- 1. Remove a legacy native install (harmful: it spawned console windows) ---
 
-& schtasks.exe /Delete /TN CodecastDaemon /F 2>$null | Out-Null
+# Native commands run through cmd /c with redirection inside cmd: under Windows
+# PowerShell 5.1 (what `irm | iex` usually runs in), a PS-level 2> redirect of
+# native stderr creates error records, and $ErrorActionPreference = "Stop"
+# turns them into a script-killing throw (e.g. schtasks complaining the task
+# doesn't exist — the normal case for a fresh install).
+& cmd.exe /c "schtasks /Delete /TN CodecastDaemon /F >nul 2>&1"
 Get-Process codecast -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 $legacyDir = "$env:LOCALAPPDATA\codecast"
@@ -50,9 +55,11 @@ if (-not $wsl) {
     exit 1
 }
 
-# `wsl -- true` boots the default distro if one exists; a nonzero exit means
+# `wsl true` boots the default distro if one exists; a nonzero exit means
 # no distro is installed yet (or WSL itself needs the one-time install).
-& wsl.exe -- true 2>$null | Out-Null
+# cmd /c handles the output redirection (see the 5.1 stderr note above), and
+# $LASTEXITCODE propagates through cmd.
+& cmd.exe /c "wsl true >nul 2>&1"
 $hasDistro = ($LASTEXITCODE -eq 0)
 
 if (-not $hasDistro) {
@@ -87,11 +94,12 @@ if (-not $hasDistro) {
 
 # Ubuntu ships curl; for a minimal distro without curl or wget, try to add
 # curl via apt as root. Best effort — install.sh gives a clear error if a
-# download tool is still missing.
+# download tool is still missing. All quieting happens inside sh, never as a
+# PS-level redirect (see the 5.1 stderr note above).
 & wsl.exe -- sh -c "command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Installing curl inside WSL..."
-    & wsl.exe -u root -- sh -c "apt-get update -qq && apt-get install -y -qq curl" 2>$null
+    & wsl.exe -u root -- sh -c "apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq curl >/dev/null 2>&1"
 }
 
 Write-Host "Installing codecast inside WSL..."
