@@ -243,6 +243,90 @@ describe("inbox_killed_at survives patches that are not a revival", () => {
   });
 });
 
+// The un-kill mirror re-arms the schedules a kill canceled. It used to gate on
+// the dismissed stamp alone, but the two kill surfaces write different fields:
+// applyHideTransition (cast kill, dismiss→kill) stamps inbox_dismissed_at AND
+// inbox_killed_at, while the killSession command stamps the marker ALONE. So
+// restoring a command-killed row cleared its marker and brought the card back
+// while its standing loop stayed silently dead — reachable from the UI for the
+// first time via the /sessions restore button.
+describe("un-kill re-arms schedules for BOTH kill surfaces", () => {
+  const RUNNER = "users_runner";
+  const CONV = "conversations_killed";
+
+  // `killed` carries the kill stamp; `natural` completed on its own and must
+  // never come back. Both are the runner's, both bound to this conversation.
+  const fixtures = (conv: Record<string, any>) =>
+    makeFakeDb({
+      conversations: [{
+        _id: CONV, user_id: RUNNER, status: "completed", message_count: 12, ...conv,
+      }],
+      agent_tasks: [
+        {
+          _id: "task_killed", user_id: RUNNER, status: "completed",
+          canceled_on_kill_at: 111, originating_conversation_id: CONV,
+          schedule_type: "recurring", interval_ms: 60 * 60 * 1000,
+        },
+        {
+          _id: "task_natural", user_id: RUNNER, status: "completed",
+          originating_conversation_id: CONV,
+          schedule_type: "recurring", interval_ms: 60 * 60 * 1000,
+        },
+      ],
+      messages: [], pending_messages: [], client_state: [], managed_sessions: [],
+      daemon_commands: [], session_owners: [],
+    });
+
+  const task = (db: any, id: string) =>
+    db._tables.agent_tasks.find((t: any) => t._id === id);
+
+  // The regression. A killSession-killed row has NO inbox_dismissed_at, so the
+  // old wasDismissed gate never fired for it.
+  test("restoring a COMMAND-killed row (marker alone) re-arms its schedules", async () => {
+    const db = fixtures({ inbox_killed_at: 111 });
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_killed_at: null } },
+    });
+    expect(db._tables.conversations[0].inbox_killed_at).toBeUndefined();
+    expect(task(db, "task_killed").status).toBe("scheduled");
+    expect(task(db, "task_killed").canceled_on_kill_at).toBeUndefined();
+    // Only the stamped one — a natural completion stays done.
+    expect(task(db, "task_natural").status).toBe("completed");
+  });
+
+  test("restoring a cast-kill-killed row (both stamps) still re-arms", async () => {
+    const db = fixtures({ inbox_dismissed_at: 111, inbox_killed_at: 111 });
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_killed_at: null } },
+    });
+    expect(db._tables.conversations[0].inbox_killed_at).toBeUndefined();
+    expect(task(db, "task_killed").status).toBe("scheduled");
+  });
+
+  // Widening the trigger must NOT widen who can un-retire a row. A pin-shaped
+  // patch is not un-kill-shaped, so the guard strips inbox_killed_at before the
+  // mirror ever sees it — no clear, and no re-arm.
+  test("a pin-shaped patch on a command-killed row neither un-kills nor re-arms", async () => {
+    const db = fixtures({ inbox_killed_at: 111 });
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_pinned_at: 555, is_pinned: true, inbox_killed_at: null } },
+    });
+    expect(db._tables.conversations[0].inbox_killed_at).toBe(111);
+    expect(db._tables.conversations[0].inbox_pinned_at).toBe(555);
+    expect(task(db, "task_killed").status).toBe("completed");
+  });
+
+  // A row that was never killed or dismissed has nothing to revive: a patch
+  // nulling stamps it never had must not resurrect stale stamped schedules.
+  test("clearing stamps on a row that was never hidden re-arms nothing", async () => {
+    const db = fixtures({});
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_killed_at: null } },
+    });
+    expect(task(db, "task_killed").status).toBe("completed");
+  });
+});
+
 describe("applyPatches bucket coverage", () => {
   test("a legacy generic bucket patch advances the v2 complete-view head once", async () => {
     const userId = "users_owner";

@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+// The REAL web helpers, imported so the cross-check below enforces the
+// convex/web agreement instead of restating it.
+import { isSessionStashed, isSessionKilled, isSessionDismissed } from "../../web/store/inboxStore";
 import {
   isNoiseTitle,
   isOrphanOrSubagent,
@@ -11,6 +14,7 @@ import {
   CLIENT_ERROR_BANNER_PREFIX,
   apiErrorBatchAction,
   classifyWorkState,
+  classifyRetirement,
   normalizeWorkStateFilter,
   trustedAgentStatus,
   subagentKeepsParentWorking,
@@ -125,6 +129,112 @@ describe("isViableInboxParent", () => {
 
 // Inbox visibility is now a single filter. Dismissed conversations stay in the
 // inbox — clients categorize them via the `inbox_dismissed_at` field.
+// stashed / dismissed / killed were reported to `cast sessions` as one
+// "dismissed" figure, hiding the difference that matters operationally: a
+// stashed agent is still RUNNING, a dismissed one was torn down.
+describe("classifyRetirement", () => {
+  test("a live session is not retired", () => {
+    expect(classifyRetirement(conv())).toBe(null);
+  });
+
+  test("stashed (agent alive) is its own state", () => {
+    expect(classifyRetirement(conv({ inbox_stashed_at: 100 }))).toBe("stashed");
+  });
+
+  test("dismissed (agent torn down) is its own state", () => {
+    expect(classifyRetirement(conv({ inbox_dismissed_at: 100 }))).toBe("dismissed");
+  });
+
+  test("killed is its own state", () => {
+    expect(classifyRetirement(conv({ inbox_killed_at: 100 }))).toBe("killed");
+  });
+
+  // The precedence that makes the two kill surfaces agree. applyHideTransition
+  // (cast kill, dismiss→kill) stamps BOTH fields; the killSession command stamps
+  // the marker alone. Without killed-first, one user-visible state would be
+  // reported under two different names depending on which surface did the kill.
+  test("cast kill's two stamps still classify as killed, not dismissed", () => {
+    expect(classifyRetirement(conv({ inbox_dismissed_at: 100, inbox_killed_at: 100 })))
+      .toBe("killed");
+  });
+
+  test("the killSession command's lone marker classifies the same way", () => {
+    expect(classifyRetirement(conv({ inbox_killed_at: 100 }))).toBe("killed");
+  });
+
+  test("killed outranks stashed too", () => {
+    expect(classifyRetirement(conv({ inbox_stashed_at: 100, inbox_killed_at: 100 })))
+      .toBe("killed");
+  });
+
+  // Dismiss outranks stash, matching isSessionStashed in the web's inboxStore
+  // ("Dismiss wins: a stashed session that later gets dismissed renders in the
+  // Dismissed bucket, never both"). The ordering is not arbitrary taste — a row
+  // reported as "stashed" here and "dismissed" there would be exactly the
+  // two-surfaces-disagree defect this classifier exists to remove. Dismiss is
+  // also the stronger claim: the agent was torn down, so a surviving stash stamp
+  // is stale history and "stashed" would assert a live agent there isn't one.
+  test("a stashed row that was later dismissed is dismissed, matching the web", () => {
+    expect(classifyRetirement(conv({ inbox_stashed_at: 100, inbox_dismissed_at: 200 })))
+      .toBe("dismissed");
+  });
+
+  // Exactly one bucket per row is what keeps the three counts from double-counting.
+  test("a row is never in two states at once", () => {
+    const both = conv({ inbox_dismissed_at: 100, inbox_stashed_at: 100, inbox_killed_at: 100 });
+    const state = classifyRetirement(both);
+    expect(["killed", "dismissed", "stashed"]).toContain(state!);
+    expect(state).toBe("killed");
+  });
+});
+
+// Enforces the scope of the web-agreement claim in classifyRetirement's comment
+// rather than leaving it asserted. Imports the REAL web helpers, so a change to
+// either side's rule breaks this instead of drifting silently.
+//
+// The two models differ by construction: the web carries a bucket
+// (active | dismissed | stashed) PLUS an orthogonal isSessionKilled flag, while
+// classifyRetirement is a single-axis partition because it feeds counts. They
+// agree on every UNKILLED combination — that is the part that must not drift —
+// and diverge on every killed one, which is intended and pinned below so a
+// future reader meets it as a documented design choice, not a surprise.
+describe("classifyRetirement vs the web's bucketing", () => {
+  // Every rule here comes from the web helpers — none is re-implemented, or the
+  // cross-check would silently stop covering whichever one was copied.
+  const webBucket = (c: any): "dismissed" | "stashed" | null =>
+    isSessionStashed(c) ? "stashed" : isSessionDismissed(c) ? "dismissed" : null;
+
+  const STAMPS = [
+    { inbox_dismissed_at: undefined, inbox_stashed_at: undefined },
+    { inbox_dismissed_at: 100, inbox_stashed_at: undefined },
+    { inbox_dismissed_at: undefined, inbox_stashed_at: 100 },
+    { inbox_dismissed_at: 100, inbox_stashed_at: 100 },
+  ];
+
+  test("agrees with the web bucket for every UNKILLED stamp combination", () => {
+    for (const stamps of STAMPS) {
+      const row = conv(stamps as any);
+      expect(isSessionKilled(row as any)).toBe(false);
+      expect(classifyRetirement(row)).toBe(webBucket(row) as any);
+    }
+  });
+
+  test("diverges on killed rows BY DESIGN — single axis here, two axes there", () => {
+    for (const stamps of STAMPS) {
+      const row = conv({ ...stamps, inbox_killed_at: 100 } as any);
+      // Here: one answer, killed wins.
+      expect(classifyRetirement(row)).toBe("killed");
+      // There: the kill flag is orthogonal, so the bucket survives underneath.
+      expect(isSessionKilled(row as any)).toBe(true);
+    }
+    // The concrete reachable case: stash a session, then kill it — killSession
+    // stamps the marker alone and never clears inbox_stashed_at.
+    const stashedThenKilled = conv({ inbox_stashed_at: 100, inbox_killed_at: 200 });
+    expect(classifyRetirement(stashedThenKilled)).toBe("killed");
+    expect(webBucket(stashedThenKilled)).toBe("stashed");
+  });
+});
+
 describe("shouldShowInInbox", () => {
   test("active session with messages → show", () => {
     expect(shouldShowInInbox(conv())).toBe(true);

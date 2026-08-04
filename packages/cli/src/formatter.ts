@@ -220,16 +220,29 @@ function colorForState(ws: string): string {
 }
 
 // Compact one-token status badge: a liveness dot (● live / ○ not live), the
-// work-state word, the raw agent_status when it adds detail, and a pinned tag.
-function formatStateBadge(s: { work_state?: string; is_live?: boolean; is_pinned?: boolean; agent_status?: string }): string {
+// work-state word, the raw agent_status when it adds detail, and killed/pinned
+// tags. The killed tag is not cosmetic: classifyWorkState collapses a retired
+// row to "idle" (kill outranks every other signal), so without it a killed
+// session is indistinguishable from an ordinary idle one — while its tmux and
+// process may still be alive. Both surfaces that render this badge ship
+// is_killed from the server (inboxForCLI and the feed).
+//
+// WHERE IT ACTUALLY SHOWS, so nobody expects more than it does: because a
+// killed row classifies as idle, the DEFAULT `cast sessions` view (NEEDS INPUT
+// + WORKING only, idle collapsed to a "+ N idle" line) renders no card for it
+// at all. The tag appears under -a, --state idle/pinned, and --by-label. Pinning
+// affects sort order, not grouping, so a pinned killed row is still collapsed in
+// the default view. formatter.test.ts pins this rather than the docs alone.
+function formatStateBadge(s: { work_state?: string; is_live?: boolean; is_pinned?: boolean; is_killed?: boolean; agent_status?: string }): string {
   const ws = s.work_state || "idle";
   const liveGlyph = s.is_live ? `${c.green}●${c.reset}` : `${c.gray}○${c.reset}`;
   const label = WORK_STATE_LABEL[ws] ?? ws;
   const detail = s.is_live && s.agent_status && s.agent_status !== ws && WORK_STATE_LABEL[s.agent_status] === undefined
     ? `${c.dim}:${s.agent_status}${c.reset}`
     : "";
+  const kill = s.is_killed ? ` ${c.red}killed${c.reset}` : "";
   const pin = s.is_pinned ? ` ${c.magenta}pinned${c.reset}` : "";
-  return `${liveGlyph} ${colorForState(ws)}${label}${c.reset}${detail}${pin}`;
+  return `${liveGlyph} ${colorForState(ws)}${label}${c.reset}${detail}${kill}${pin}`;
 }
 
 function wrapText(text: string, indent: string, maxWidth: number = 72): string {
@@ -853,6 +866,9 @@ interface MonitorSession {
   agent_type?: string;
   agent_status?: string;
   work_state: string;
+  /** Retired (inbox_killed_at). Shipped by inboxForCLI; the watch stream reads
+   * it to emit a kill as a departure, and the snapshot badges it. */
+  is_killed?: boolean;
   is_pinned: boolean;
   is_live: boolean;
   awaiting_input: boolean;
@@ -869,7 +885,10 @@ interface MonitorSession {
 
 interface MonitorResult {
   sessions: MonitorSession[];
-  counts: { working: number; needs_input: number; idle: number; pinned: number; live: number; dismissed?: number; total: number };
+  // stashed / dismissed / killed are three distinct retirement states, not one
+  // "hidden" figure: stashed = hidden but agent ALIVE, dismissed = hidden and
+  // agent torn down, killed = retired (outranks both, so they never double-count).
+  counts: { working: number; needs_input: number; idle: number; pinned: number; live: number; stashed?: number; dismissed?: number; killed?: number; total: number };
   labels?: Array<{ name: string; count: number }>;
   scope: string;
 }
@@ -941,7 +960,24 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
   const extra: string[] = [];
   if (counts.pinned) extra.push(`${c.magenta}pinned ${counts.pinned}${c.reset}`);
   if (counts.live) extra.push(`${c.green}live ${counts.live}${c.reset}`);
+  // Stashed keeps an agent ALIVE while dismissed does not, so merging them into
+  // one figure hid how many processes were still running. All three are TALLIES
+  // like `pinned` and `live` above — NOT a partition of the work-state buckets
+  // to their left. A row carries at most one retirement state (classifyRetirement
+  // picks one), but a LISTED one is also in its work_state figure and in
+  // `total`: a pinned killed session shows up in `idle 1 (pinned 1, killed 1)`.
+  // That is the intended reading of this line, not double-counting.
+  //
+  // EXPECTED, not a bug: this `stashed` figure and the web's Stashed group count
+  // different SETS for a stashed-then-killed row. The web tracks a bucket plus an
+  // orthogonal killed flag, so that row stays in its Stashed group; here killed
+  // wins the single tally, so it lands in `killed` instead. Both are right for
+  // their surface, and this one is the more useful answer where they differ —
+  // `stashed` advertises "agents still running", and a killed agent isn't one.
+  // See classifyRetirement (convex/inboxFilters.ts) for the full scope.
+  if (counts.stashed) extra.push(`${c.dim}stashed ${counts.stashed}${c.reset}`);
   if (counts.dismissed) extra.push(`${c.dim}dismissed ${counts.dismissed}${c.reset}`);
+  if (counts.killed) extra.push(`${c.red}killed ${counts.killed}${c.reset}`);
   lines.push(
     summary.join(`  ${c.dim}·${c.reset}  `) +
     (extra.length ? `   ${c.dim}(${extra.join(", ")})${c.reset}` : "")
