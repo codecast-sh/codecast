@@ -163,6 +163,12 @@ export const CLIENT_SYNC_REGISTRY = {
   pendingMessages: {
     persistence: { kind: "meta", key: "pendingMessages" },
   },
+  // Blocked-banner revive stamps (session id → requested-at). Persisted so a
+  // reload mid-revive doesn't flash the fleet back to "blocked" while the
+  // daemon is still restarting it; entries expire by TTL, never synced.
+  blockedReviveRequestedAt: {
+    persistence: { kind: "meta", key: "blockedReviveRequestedAt" },
+  },
   pending: {
     persistence: { kind: "meta", key: "pending" },
   },
@@ -174,6 +180,10 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   recentProjects: {
     persistence: { kind: "meta", key: "recentProjects" },
+    hydration: { phase: "deferred" },
+  },
+  recentProjectsByDevice: {
+    persistence: { kind: "meta", key: "recentProjectsByDevice" },
     hydration: { phase: "deferred" },
   },
   collapsedSections: {
