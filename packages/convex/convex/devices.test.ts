@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
-import { enqueueStartSession, planConversationOwnershipClaim } from "./devices";
+import { enqueueStartSession, planConversationOwnershipClaim, resolveOwnerDeviceView } from "./devices";
 import { makeFakeDb } from "./testDb";
 
 const NOW = 1_000_000_000;
@@ -121,5 +121,61 @@ describe("enqueueStartSession execution-protocol gate", () => {
     });
     expect(db._tables.daemon_commands).toHaveLength(1);
     expect(db._tables.daemon_commands[0].command).toBe("start_session");
+  });
+});
+
+describe("resolveOwnerDeviceView", () => {
+  // A session Mr Bot's account RUNS (conv.user_id) but Ashot OWNS. The device
+  // row lives under the runner, so a lookup scoped to the viewer finds nothing
+  // and reports the live owner as offline — which every caller reads as
+  // "unowned" and proceeds past the guard.
+  const RUNNER = "user-mrbot";
+  const VIEWER = "user-ashot";
+  const secondPartyDb = (lastSeen: number) =>
+    makeFakeDb({
+      devices: [
+        { user_id: RUNNER, device_id: "ec2-mac", is_remote: true, last_seen: lastSeen },
+        { user_id: VIEWER, device_id: "laptop", is_remote: false, last_seen: fresh },
+      ],
+    });
+
+  test("finds the owner device under the runner, not the viewer", async () => {
+    const db = secondPartyDb(fresh);
+    expect(
+      await resolveOwnerDeviceView(
+        { db } as any,
+        { user_id: RUNNER, owner_device_id: "ec2-mac" },
+        NOW,
+      ),
+    ).toEqual({ owner_device_id: "ec2-mac", owner_is_remote: true, owner_online: true });
+  });
+
+  test("a stale owner still resolves, just offline", async () => {
+    const db = secondPartyDb(stale);
+    expect(
+      await resolveOwnerDeviceView(
+        { db } as any,
+        { user_id: RUNNER, owner_device_id: "ec2-mac" },
+        NOW,
+      ),
+    ).toEqual({ owner_device_id: "ec2-mac", owner_is_remote: true, owner_online: false });
+  });
+
+  test("an unowned conversation reports no device", async () => {
+    const db = secondPartyDb(fresh);
+    expect(
+      await resolveOwnerDeviceView({ db } as any, { user_id: RUNNER }, NOW),
+    ).toEqual({ owner_device_id: null, owner_is_remote: false, owner_online: false });
+  });
+
+  test("keeps the owner id when the device row is missing entirely", async () => {
+    const db = makeFakeDb({ devices: [] });
+    expect(
+      await resolveOwnerDeviceView(
+        { db } as any,
+        { user_id: RUNNER, owner_device_id: "ec2-mac" },
+        NOW,
+      ),
+    ).toEqual({ owner_device_id: "ec2-mac", owner_is_remote: false, owner_online: false });
   });
 });
