@@ -59,6 +59,11 @@ export function sessionLivenessState(session: {
   updated_at?: number;
   agent_status?: string | null;
   has_pending?: boolean;
+  // Declared because isLivenessStale reads it: a retired row's live-looking
+  // fields are never believable. Callers pass whole rows, so it already arrived
+  // at runtime — spelling it out keeps the dependency from resting on
+  // structural typing, and stops a hand-built literal from silently omitting it.
+  inbox_killed_at?: number | null;
 }): LivenessState {
   if (session.session_error) return "error";
   if (session.is_unresponsive) return "unresponsive";

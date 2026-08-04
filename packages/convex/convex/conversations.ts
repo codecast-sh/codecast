@@ -14,7 +14,7 @@ import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from ".
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, findModelOption, fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
@@ -2942,93 +2942,105 @@ export const getConversationPublic = query({
   },
 });
 
+// The command palette's row set. Split from the query wrapper (like
+// performListActiveSessions) so the projection is testable without auth.
+export async function performListRecentSessions(ctx: { db: QueryCtx["db"] }, userId: Id<"users">) {
+  const user = await ctx.db.get(userId);
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+  const own = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_updated", (q) =>
+      q.eq("user_id", userId).gte("updated_at", thirtyDaysAgo)
+    )
+    .order("desc")
+    .filter((q) =>
+      q.and(
+        q.neq(q.field("is_subagent"), true),
+        q.or(
+          q.eq(q.field("status"), "active"),
+          q.eq(q.field("status"), "completed")
+        )
+      )
+    )
+    .take(100);
+
+  type ConvRow = typeof own[number];
+  const isSessionRow = (c: ConvRow) =>
+    c.is_subagent !== true && (c.status === "active" || c.status === "completed");
+
+  const byId = new Map<string, { conv: ConvRow; isOwn: boolean }>();
+  for (const c of own) byId.set(c._id.toString(), { conv: c, isOwn: true });
+
+  // Merge in team-visible sessions so teammates' work shows in the palette too.
+  const effectiveTeamId = user?.active_team_id;
+  const authorById = new Map<string, { name: string; avatar: string | null }>();
+  if (effectiveTeamId) {
+    const feedFilter = await createTeamFeedFilter(ctx, effectiveTeamId);
+    const visibleMembers = feedFilter.memberships.filter((m) => {
+      if (m.user_id.toString() === userId.toString()) return false;
+      return ((m as any).visibility || "summary") !== "hidden";
+    });
+    const perMember = await Promise.all(
+      visibleMembers.map(async (m) => {
+        const convs = await ctx.db
+          .query("conversations")
+          .withIndex("by_team_user_updated", (q) =>
+            q.eq("team_id", effectiveTeamId).eq("user_id", m.user_id).gte("updated_at", thirtyDaysAgo)
+          )
+          .order("desc")
+          .take(10);
+        return convs.filter((c) => isSessionRow(c) && feedFilter.isVisible(c));
+      })
+    );
+    const memberUsers = await Promise.all(visibleMembers.map((m) => ctx.db.get(m.user_id)));
+    for (const u of memberUsers) {
+      if (u) authorById.set(u._id.toString(), {
+        name: (u as any).name || (u as any).email?.split("@")[0] || "Unknown",
+        avatar: (u as any).image || (u as any).github_avatar_url || null,
+      });
+    }
+    for (const c of perMember.flat()) {
+      const id = c._id.toString();
+      if (!byId.has(id)) byId.set(id, { conv: c, isOwn: false });
+    }
+  }
+
+  return Array.from(byId.values())
+    .sort((a, b) => b.conv.updated_at - a.conv.updated_at)
+    .slice(0, 100)
+    .map(({ conv: c, isOwn }) => {
+      const author = isOwn ? null : authorById.get(c.user_id.toString());
+      return {
+        _id: c._id,
+        session_id: c.session_id,
+        title: c.title,
+        subtitle: c.subtitle,
+        idle_summary: c.idle_summary,
+        updated_at: c.updated_at,
+        project_path: c.project_path,
+        git_root: c.git_root,
+        agent_type: c.agent_type,
+        message_count: c.message_count,
+        // The command palette builds its list from two sources: favorites
+        // carry whole store rows (so the marker arrives), while recents come
+        // from THIS projection. Omitting it left inbox_killed_at permanently
+        // undefined on half the rows, so killed-awareness silently could not
+        // work there. The conversation doc is already in hand — no extra read.
+        inbox_killed_at: c.inbox_killed_at,
+        isOwn,
+        authorName: author?.name ?? null,
+        authorAvatar: author?.avatar ?? null,
+      };
+    });
+}
+
 export const listRecentSessions = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    const user = await ctx.db.get(userId);
-    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-
-    const own = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q) =>
-        q.eq("user_id", userId).gte("updated_at", thirtyDaysAgo)
-      )
-      .order("desc")
-      .filter((q) =>
-        q.and(
-          q.neq(q.field("is_subagent"), true),
-          q.or(
-            q.eq(q.field("status"), "active"),
-            q.eq(q.field("status"), "completed")
-          )
-        )
-      )
-      .take(100);
-
-    type ConvRow = typeof own[number];
-    const isSessionRow = (c: ConvRow) =>
-      c.is_subagent !== true && (c.status === "active" || c.status === "completed");
-
-    const byId = new Map<string, { conv: ConvRow; isOwn: boolean }>();
-    for (const c of own) byId.set(c._id.toString(), { conv: c, isOwn: true });
-
-    // Merge in team-visible sessions so teammates' work shows in the palette too.
-    const effectiveTeamId = user?.active_team_id;
-    const authorById = new Map<string, { name: string; avatar: string | null }>();
-    if (effectiveTeamId) {
-      const feedFilter = await createTeamFeedFilter(ctx, effectiveTeamId);
-      const visibleMembers = feedFilter.memberships.filter((m) => {
-        if (m.user_id.toString() === userId.toString()) return false;
-        return ((m as any).visibility || "summary") !== "hidden";
-      });
-      const perMember = await Promise.all(
-        visibleMembers.map(async (m) => {
-          const convs = await ctx.db
-            .query("conversations")
-            .withIndex("by_team_user_updated", (q) =>
-              q.eq("team_id", effectiveTeamId).eq("user_id", m.user_id).gte("updated_at", thirtyDaysAgo)
-            )
-            .order("desc")
-            .take(10);
-          return convs.filter((c) => isSessionRow(c) && feedFilter.isVisible(c));
-        })
-      );
-      const memberUsers = await Promise.all(visibleMembers.map((m) => ctx.db.get(m.user_id)));
-      for (const u of memberUsers) {
-        if (u) authorById.set(u._id.toString(), {
-          name: (u as any).name || (u as any).email?.split("@")[0] || "Unknown",
-          avatar: (u as any).image || (u as any).github_avatar_url || null,
-        });
-      }
-      for (const c of perMember.flat()) {
-        const id = c._id.toString();
-        if (!byId.has(id)) byId.set(id, { conv: c, isOwn: false });
-      }
-    }
-
-    return Array.from(byId.values())
-      .sort((a, b) => b.conv.updated_at - a.conv.updated_at)
-      .slice(0, 100)
-      .map(({ conv: c, isOwn }) => {
-        const author = isOwn ? null : authorById.get(c.user_id.toString());
-        return {
-          _id: c._id,
-          session_id: c.session_id,
-          title: c.title,
-          subtitle: c.subtitle,
-          idle_summary: c.idle_summary,
-          updated_at: c.updated_at,
-          project_path: c.project_path,
-          git_root: c.git_root,
-          agent_type: c.agent_type,
-          message_count: c.message_count,
-          isOwn,
-          authorName: author?.name ?? null,
-          authorAvatar: author?.avatar ?? null,
-        };
-      });
+    return performListRecentSessions(ctx, userId);
   },
 });
 
@@ -8262,6 +8274,117 @@ export const teamSessionsLiveness = query({
   },
 });
 
+// The `cast sessions` tally + row filter, split out of inboxForCLI as a PURE
+// function over already-enriched rows. This logic has been wrong twice — a
+// killed row double-counted under a comment denying it, then `-a` zeroing the
+// retirement figures while listing the rows — and both times a test would have
+// caught it, so it gets a seam rather than living inside a db-heavy query.
+export function tallyInboxRows(
+  sessions: any[],
+  opts: { showAll?: boolean; stateFilter?: string | null; labelByConv: Map<string, string> },
+) {
+  const counts = { working: 0, needs_input: 0, idle: 0, pinned: 0, live: 0, stashed: 0, dismissed: 0, killed: 0, total: 0 };
+  const rows: Array<{
+    id: string;
+    session_id: string;
+    title: string;
+    project_path: string | null;
+    updated_at: string;
+    ts: number;
+    message_count: number;
+    agent_type?: string;
+    agent_status?: string;
+    work_state: WorkState;
+    is_killed: boolean;
+    is_pinned: boolean;
+    is_live: boolean;
+    is_unresponsive: boolean;
+    awaiting_input: boolean;
+    idle_summary: string | null;
+    last_user_message: string | null;
+    label: string | null;
+    active_plan: { short_id: string; title: string } | null;
+    active_task: { short_id: string; title: string } | null;
+    // Second-party ownership: run_by = the member whose account runs the
+    // session when that isn't the caller; owner = the assigned owner if any.
+    run_by: string | null;
+    owner: { name: string | null; email: string | null } | null;
+    owned_by_me: boolean;
+  }> = [];
+
+  for (const s of sessions) {
+    if (s.is_subagent) continue; // keep the monitor to top-level sessions
+    // The three retirement states are TALLIES, not buckets — the same shape as
+    // `pinned` and `live`, and deliberately NOT mutually exclusive with the
+    // work-state counts. A rendered row lands in both its work_state figure
+    // and its retirement figure (a pinned killed session is counted in `idle`,
+    // `pinned`, `killed` and `total`); a collapsed row appears only in its
+    // retirement figure. Counting is therefore unconditional — gating it on
+    // !show_all left every figure at 0 under `-a` while the rows were listed,
+    // which made `stashed` useless for its whole purpose (how many agents are
+    // still running). See classifyRetirement for why killed outranks the rest.
+    //
+    // Only the COLLAPSE is conditional. A killed row renders through: it only
+    // reaches here while pinned (shouldShowInInbox drops killed-and-unpinned),
+    // and pinning is how you hold onto a killed row — swallowing it was the
+    // CLI overriding a decision the server already made. Stashed and dismissed
+    // keep collapsing, mirroring the web's separate parked group, so
+    // already-triaged sessions don't inflate the active buckets; `-a` lists them.
+    const retired = classifyRetirement(s);
+    if (retired) counts[retired]++;
+    if (retired && retired !== "killed" && !opts.showAll) continue;
+    const work_state = classifyWorkState({
+      agentStatus: s.agent_status,
+      isIdle: s.is_idle,
+      awaitingInput: s.awaiting_input,
+      hasPending: s.has_pending,
+      isUnresponsive: s.is_unresponsive,
+      messageCount: s.message_count || 0,
+      killed: !!s.inbox_killed_at,
+    });
+    const is_live = !!s.is_connected;
+
+    counts.total++;
+    counts[work_state]++;
+    if (s.is_pinned) counts.pinned++;
+    if (is_live) counts.live++;
+    const rowLabel = opts.labelByConv.get(s._id.toString()) ?? null;
+
+    if (opts.stateFilter === "pinned" && !s.is_pinned) continue;
+    if (opts.stateFilter === "live" && !is_live) continue;
+    if (opts.stateFilter && opts.stateFilter !== "pinned" && opts.stateFilter !== "live" && work_state !== opts.stateFilter) continue;
+
+    rows.push({
+      id: s._id,
+      session_id: s.session_id,
+      title: s.title || s.last_user_message || "New Session",
+      project_path: s.project_path || null,
+      updated_at: new Date(s.updated_at).toISOString(),
+      ts: s.updated_at,
+      message_count: s.message_count || 0,
+      agent_type: s.agent_type,
+      agent_status: s.agent_status,
+      work_state,
+      // A retired row (still listed while pinned, or under --all). The watch
+      // stream reads it to emit a kill as a departure, not a transition.
+      is_killed: !!s.inbox_killed_at,
+      is_pinned: !!s.is_pinned,
+      is_live,
+      is_unresponsive: !!s.is_unresponsive,
+      awaiting_input: !!s.awaiting_input,
+      idle_summary: s.idle_summary || null,
+      last_user_message: s.last_user_message || null,
+      label: rowLabel,
+      active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
+      active_task: s.active_task ? { short_id: s.active_task.short_id, title: s.active_task.title } : null,
+      run_by: s.author_name ?? null,
+      owner: s.owner_user_id ? { name: s.owner_name ?? null, email: s.owner_email ?? null } : null,
+      owned_by_me: !!s.owned_by_me,
+    });
+  }
+  return { counts, rows };
+}
+
 // CLI-facing inbox: the same fully-enriched, per-user session set the web inbox
 // renders (computeInboxSessions), collapsed to a single `work_state` per row via
 // the shared classifier and sorted most-actionable-first. Powers `cast monitor`
@@ -8342,91 +8465,11 @@ export const inboxForCLI = query({
     const stateFilter = normalizeWorkStateFilter(args.state);
     const ORDER: Record<WorkState, number> = { needs_input: 0, working: 1, idle: 2 };
 
-    const counts = { working: 0, needs_input: 0, idle: 0, pinned: 0, live: 0, dismissed: 0, total: 0 };
-    const rows: Array<{
-      id: string;
-      session_id: string;
-      title: string;
-      project_path: string | null;
-      updated_at: string;
-      ts: number;
-      message_count: number;
-      agent_type?: string;
-      agent_status?: string;
-      work_state: WorkState;
-      is_killed: boolean;
-      is_pinned: boolean;
-      is_live: boolean;
-      is_unresponsive: boolean;
-      awaiting_input: boolean;
-      idle_summary: string | null;
-      last_user_message: string | null;
-      label: string | null;
-      active_plan: { short_id: string; title: string } | null;
-      active_task: { short_id: string; title: string } | null;
-      // Second-party ownership: run_by = the member whose account runs the
-      // session when that isn't the caller; owner = the assigned owner if any.
-      run_by: string | null;
-      owner: { name: string | null; email: string | null } | null;
-      owned_by_me: boolean;
-    }> = [];
-
-    for (const s of sessions) {
-      if (s.is_subagent) continue; // keep the monitor to top-level sessions
-      // Dismissed sessions are returned by computeInboxSessions but the web parks
-      // them in a separate collapsed group, out of the active buckets. Mirror that
-      // so cast monitor counts match the web inbox (don't inflate idle with
-      // already-triaged sessions). `cast monitor -a` includes them.
-      if ((s.inbox_dismissed_at || s.inbox_stashed_at) && !args.show_all) { counts.dismissed++; continue; }
-      const work_state = classifyWorkState({
-        agentStatus: s.agent_status,
-        isIdle: s.is_idle,
-        awaitingInput: s.awaiting_input,
-        hasPending: s.has_pending,
-        isUnresponsive: s.is_unresponsive,
-        messageCount: s.message_count || 0,
-        killed: !!s.inbox_killed_at,
-      });
-      const is_live = !!s.is_connected;
-
-      counts.total++;
-      counts[work_state]++;
-      if (s.is_pinned) counts.pinned++;
-      if (is_live) counts.live++;
-      const rowLabel = labelByConv.get(s._id.toString()) ?? null;
-
-      if (stateFilter === "pinned" && !s.is_pinned) continue;
-      if (stateFilter === "live" && !is_live) continue;
-      if (stateFilter && stateFilter !== "pinned" && stateFilter !== "live" && work_state !== stateFilter) continue;
-
-      rows.push({
-        id: s._id,
-        session_id: s.session_id,
-        title: s.title || s.last_user_message || "New Session",
-        project_path: s.project_path || null,
-        updated_at: new Date(s.updated_at).toISOString(),
-        ts: s.updated_at,
-        message_count: s.message_count || 0,
-        agent_type: s.agent_type,
-        agent_status: s.agent_status,
-        work_state,
-        // A retired row (still listed while pinned, or under --all). The watch
-        // stream reads it to emit a kill as a departure, not a transition.
-        is_killed: !!s.inbox_killed_at,
-        is_pinned: !!s.is_pinned,
-        is_live,
-        is_unresponsive: !!s.is_unresponsive,
-        awaiting_input: !!s.awaiting_input,
-        idle_summary: s.idle_summary || null,
-        last_user_message: s.last_user_message || null,
-        label: rowLabel,
-        active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
-        active_task: s.active_task ? { short_id: s.active_task.short_id, title: s.active_task.title } : null,
-        run_by: s.author_name ?? null,
-        owner: s.owner_user_id ? { name: s.owner_name ?? null, email: s.owner_email ?? null } : null,
-        owned_by_me: !!s.owned_by_me,
-      });
-    }
+    const { counts, rows } = tallyInboxRows(sessions, {
+      showAll: args.show_all,
+      stateFilter,
+      labelByConv,
+    });
 
     // Most-actionable first: pinned, then needs_input → working → idle, recent first.
     rows.sort((a, b) => {

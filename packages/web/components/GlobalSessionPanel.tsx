@@ -2987,7 +2987,8 @@ export function SessionListPanel({
 
   // Shared renderer for the two hidden buckets at the bottom of the list —
   // Stashed (set aside, agent alive) above Killed (retired, agent torn down;
-  // the persisted flag keeps its historical name inbox_dismissed_at).
+  // the persisted flag keeps its historical name inbox_dismissed_at, and the
+  // server's kill transition additionally stamps inbox_killed_at).
   // Identical chrome; they differ only in the destructive slot: a stashed card
   // kills (moves down a bucket), a killed card's X removes the row outright.
   // Both hide entirely when empty and render COLLAPSED by default — the
@@ -3651,6 +3652,19 @@ export function SessionListPanel({
           ),
         })}
         {renderHiddenBucket({
+          // "Killed" is honest for what dominates this bucket. It is keyed on
+          // inbox_dismissed_at, and both real kill surfaces write that stamp:
+          // the web's kill action optimistically (hideSessionInDraft mode
+          // "kill"), and `cast kill` durably (cliSetSessionVisibility, which
+          // patches inbox_dismissed_at and then stamps inbox_killed_at via
+          // applyHideTransition). The dismissed reconcile crawl
+          // (collectHiddenSessionsLite) has no shouldShowInInbox filter, so a
+          // `cast kill`ed row keeps arriving here. The non-kill dismissals that
+          // also land here (agentTasks' auto-tidy, dismissStaleInboxSessions)
+          // are the minority — and renaming this to "Dismissed" would mean
+          // pressing Kill, reading a "Killed" toast, and watching the row drop
+          // into "Dismissed". See inboxFilters.ts on why conflating the two
+          // loses the one difference that matters operationally.
           label: "Killed",
           items: filteredDismissed,
           expanded: s.clientState.show_dismissed === true,

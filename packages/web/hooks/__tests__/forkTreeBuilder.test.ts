@@ -165,3 +165,36 @@ describe("buildForkFamily — labels & counts", () => {
     expect(branchDisplayCount(a)).toBe(12); // 50 - 38
   });
 });
+
+// A retired branch owes no attention. liveOf reads awaiting_input /
+// permission_blocked / pending_api_error RAW, so without a killed guard a
+// torn-down branch went on glowing amber for blockers that died with its agent.
+// Exercised through buildForkFamily (liveOf is private) — the real path. ct-41083.
+describe("buildForkFamily — killed branches never glow needs_input", () => {
+  const conv: ForkConversationLike = { _id: "root", forked_from: null, message_count: 10, started_at: 1 };
+
+  function liveFor(extra: Record<string, any>) {
+    const sessions = {
+      root: sess("root", null, { started_at: 1 }),
+      kid: sess("kid", "root", { started_at: 2, ...extra }),
+    };
+    return buildForkFamily(conv, sessions).find((n) => n.id === "kid")!.live;
+  }
+
+  test("a killed branch with a frozen open poll reads idle, not needs_input", () => {
+    expect(liveFor({ awaiting_input: true, inbox_killed_at: 1_000 })).toBe("idle");
+    expect(liveFor({ awaiting_input: true })).toBe("needs_input");
+  });
+
+  test("likewise for a frozen permission prompt and an auth banner", () => {
+    expect(liveFor({ agent_status: "permission_blocked", inbox_killed_at: 1_000 })).toBe("idle");
+    expect(liveFor({ pending_api_error: true, inbox_killed_at: 1_000 })).toBe("idle");
+    expect(liveFor({ agent_status: "permission_blocked" })).toBe("needs_input");
+    expect(liveFor({ pending_api_error: true })).toBe("needs_input");
+  });
+
+  test("a killed branch that still claims to be working reads idle", () => {
+    expect(liveFor({ is_idle: false, agent_status: "working", inbox_killed_at: 1_000 })).toBe("idle");
+    expect(liveFor({ is_idle: false, agent_status: "working" })).toBe("working");
+  });
+});
