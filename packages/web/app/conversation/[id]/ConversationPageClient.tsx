@@ -9,7 +9,6 @@ import { ConversationData } from "../../../components/ConversationView";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useInboxStore } from "../../../store/inboxStore";
-import { usePrincipalLocalState } from "../../../components/PrincipalLocalStateProvider";
 import { PREFILL_PARAM, buildPrefillText } from "../../../lib/composerPrefill";
 
 /**
@@ -238,10 +237,7 @@ export default function ConversationPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
-  const { state: principalState } = usePrincipalLocalState();
-  const treatAsAuthed = isAuthenticated ||
-    principalState.phase === "offline-ready" ||
-    principalState.phase === "server-verified";
+  const treatAsAuthed = isAuthenticated;
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
   const prefill = searchParams.get(PREFILL_PARAM) || undefined;
@@ -275,7 +271,7 @@ export default function ConversationPage() {
   // Wait for auth to settle before committing to a render path: while loading,
   // resolveConversation may have answered with the anonymous identity, and we
   // don't want to flash the guest view at a signed-in owner (or vice versa).
-  if (isAuthLoading && principalState.phase !== "offline-ready") return <ConversationLoadingSkeleton />;
+  if (isAuthLoading) return <ConversationLoadingSkeleton />;
 
   // Unauthenticated visitor on a shared link: the inbox is behind AuthGuard
   // (it would bounce them to the marketing root), so render read-only in place.

@@ -72,14 +72,6 @@ export function _resetPersistedShadow() {
 // in-memory instead of crashing. Every Storage access below is also individually
 // null-guarded as defense in depth.
 export const PERSISTENCE_AVAILABLE = Storage != null;
-// The KV/blob bridge cannot satisfy atomic principal-store transactions. The
-// mobile app is deliberately memory-only for protected state until a direct
-// expo-sqlite adapter passes the shared v2 contract.
-export const PRINCIPAL_SCOPED_PERSISTENCE = false;
-
-export function getBoundPrincipalEpoch(): 0 {
-  return 0;
-}
 
 // A top-level store key is durable iff it maps to a dedicated collection or is
 // whitelisted as a meta blob. Keys that satisfy neither are silently dropped on
@@ -246,3 +238,11 @@ export async function loadOutbox(): Promise<OutboxEntry[]> {
     return [];
   }
 }
+
+// Web-only surfaces, stubbed for Metro: the retired browser v2 databases never
+// existed on native, and sign-out purge has its own native path.
+export async function salvageLocalFirstV2Data(): Promise<number> {
+  return 0;
+}
+
+export async function purgeLocalCache(): Promise<void> {}

@@ -11,11 +11,6 @@ import {
   sync,
   MAX_OUTBOX_BOOT_ATTEMPTS,
 } from "../mutativeMiddleware";
-import {
-  capturePrincipalDispatchAuthorization,
-  registerPrincipalDispatchRuntime,
-  updatePrincipalDispatchCorrelation,
-} from "../local-first/dispatchGate";
 
 // The dispatch outbox is the only durable copy of a server-bound write that
 // failed in-session (e.g. the network died mid-outage). The original drain
@@ -37,10 +32,7 @@ type Entry = {
   operationSchemaVersion?: number;
 };
 
-function makeHarness(
-  retryDelays: number[] = [],
-  options: { localFirstWritesEnabled?: boolean; online?: boolean } = {},
-) {
+function makeHarness(retryDelays: number[] = []) {
   const outbox = new Map<string, Entry>();
   const receiptRejections: Array<{ action: string; localResult: unknown }> = [];
   const receiptAcknowledgements: Array<{
@@ -68,8 +60,6 @@ function makeHarness(
         this.items[id] = { _id: id };
         return { id };
       }),
-      // Promoted BY final mode — demotes to action() semantics when the
-      // write master is off (see FLAG_PROMOTED_RECEIPT_ACTIONS).
       updateBucket: receiptAsyncAction(function (this: any, id: string) {
         this.items[id] = { _id: id };
         return { id };
@@ -100,11 +90,7 @@ function makeHarness(
         });
       }),
     }),
-    {
-      retryDelays,
-      localFirstWritesEnabled: () => options.localFirstWritesEnabled ?? false,
-      online: () => options.online ?? true,
-    }, // default [] — fail fast, no real-time sleeps in tests
+    { retryDelays }, // default [] — fail fast, no real-time sleeps in tests
   )(set, get, {});
   state = wrapped;
   wrapped._setOutbox(
@@ -129,7 +115,7 @@ const seedEntry = (overrides: Partial<Entry> = {}): Entry => ({
   args: ["a"],
   patches: undefined,
   result: null,
-  ts: 1,
+  ts: Date.now(),
   ...overrides,
 });
 
@@ -147,54 +133,16 @@ describe("outboxFailureDisposition", () => {
 });
 
 describe("drainOutbox retention", () => {
-  it("keeps shipped receipt actions envelope-backed in BOTH write postures", () => {
-    // addComment shipped receipt-backed before final mode; a rollback must
-    // return to that proven prod behavior, not to the pre-receipt era.
-    for (const writesEnabled of [false, true]) {
-      const harness = makeHarness([], { localFirstWritesEnabled: writesEnabled });
-      void harness.wrapped.addComment("c1").catch(() => {});
-      const entry = [...harness.outbox.values()][0]!;
-      expect(entry.operationSchemaVersion).toBe(1);
-      expect(entry.result).toMatchObject({
-        receiptActionVersion: 1,
-        commandId: entry.id,
-        localResult: { id: "c1" },
-      });
-    }
-  });
-
-  it("promotes flag-gated actions to receipts only behind the write master", () => {
-    // updateBucket is promoted BY final mode: flag off = its pre-release
-    // fire-and-forget action() semantics (no envelope, no caller promise).
-    const legacy = makeHarness([], { localFirstWritesEnabled: false });
-    const legacyReturn = legacy.wrapped.updateBucket("legacy");
-    expect(legacyReturn).toEqual({ id: "legacy" });
-    expect([...legacy.outbox.values()][0]).toMatchObject({
-      operationSchemaVersion: 1,
-      result: { id: "legacy" },
-    });
-
-    const finalMode = makeHarness([], { localFirstWritesEnabled: true });
-    void (finalMode.wrapped.updateBucket("final") as Promise<unknown>).catch(() => {});
-    const entry = [...finalMode.outbox.values()][0]!;
+  it("keeps receipt actions envelope-backed", () => {
+    const harness = makeHarness([]);
+    void harness.wrapped.addComment("c1").catch(() => {});
+    const entry = [...harness.outbox.values()][0]!;
     expect(entry.operationSchemaVersion).toBe(1);
     expect(entry.result).toMatchObject({
       receiptActionVersion: 1,
       commandId: entry.id,
-      localResult: { id: "final" },
+      localResult: { id: "c1" },
     });
-  });
-
-  it("rejects a final-mode offline write before optimistic paint when persistence is reduced", () => {
-    const { wrapped, outbox, getState } = makeHarness([], {
-      localFirstWritesEnabled: true,
-      online: false,
-    });
-    expect(() => wrapped.addComment("offline")).toThrow(
-      "Offline edits are unavailable",
-    );
-    expect(getState().items).toEqual({});
-    expect(outbox.size).toBe(0);
   });
 
   it("parks an unknown operation schema without dispatching or deleting it", async () => {
@@ -1102,19 +1050,10 @@ describe("boot outbox drain signal (_hasBootOutboxDrained)", () => {
   });
 });
 
-describe("principal-bound dispatch ownership", () => {
+describe("dispatch binding ownership", () => {
   it("A→B invalidates an in-flight A dispatch without letting A cleanup clear B", async () => {
-    registerPrincipalDispatchRuntime({
-      canDispatch: true,
-      dispatchPrincipalEpoch: 1,
-      subscribe: () => () => {},
-    });
-    updatePrincipalDispatchCorrelation(1);
-
     const { wrapped, outbox: accountAOutbox } = makeHarness();
     const ownerA = {};
-    const authorizationA = capturePrincipalDispatchAuthorization();
-    expect(authorizationA).not.toBeNull();
     let releaseAccountA!: () => void;
     let markAccountAStarted!: () => void;
     const accountAStarted = new Promise<void>((resolve) => { markAccountAStarted = resolve; });
@@ -1124,16 +1063,14 @@ describe("principal-bound dispatch ownership", () => {
     wrapped._setDispatch(async () => {
       markAccountAStarted();
       return await accountAResponse;
-    }, { owner: ownerA, authorization: authorizationA });
+    }, { owner: ownerA });
 
     const actionPromise = wrapped.pokeAsync("account-a-item") as Promise<unknown>;
     await accountAStarted;
     expect(accountAOutbox.size).toBe(1);
 
-    // Dispatch authorization is unconditional; the account switch invalidates
-    // A's in-flight work by REPLACING the binding when B mounts its own.
-    const authorizationB = capturePrincipalDispatchAuthorization();
-    expect(authorizationB).not.toBeNull();
+    // The account switch invalidates A's in-flight work by REPLACING the
+    // binding when B mounts its own.
     const accountBOutbox = new Map<string, Entry>();
     wrapped._setOutbox(
       (entry: Entry) => accountBOutbox.set(entry.id, entry),
@@ -1145,7 +1082,7 @@ describe("principal-bound dispatch ownership", () => {
     wrapped._setDispatch(async (actionName: string) => {
       deliveredByB.push(actionName);
       return "account-b-response";
-    }, { owner: ownerB, authorization: authorizationB });
+    }, { owner: ownerB });
 
     releaseAccountA();
     await expect(actionPromise).rejects.toBeInstanceOf(StaleDispatchBindingError);
@@ -1162,8 +1099,6 @@ describe("principal-bound dispatch ownership", () => {
     expect(deliveredByB).toEqual(["probe-b"]);
 
     wrapped._clearDispatch(ownerB);
-    updatePrincipalDispatchCorrelation(null);
-    registerPrincipalDispatchRuntime(null);
   });
 
   it("a drain superseded mid-load exits quietly and the successor delivers", async () => {
@@ -1236,18 +1171,15 @@ describe("unwired/stale-binding sends are parked, never lost", () => {
     expect(outbox.size).toBe(0);
   });
 
-  it("correlation churn cannot strand a send — a wired binding always delivers", async () => {
+  it("a wired binding always delivers without parking", async () => {
     const { wrapped, outbox } = makeHarness();
     const owner = {};
     const delivered: string[] = [];
     wrapped._setDispatch(async (actionName: string) => {
       delivered.push(actionName);
       return "ok";
-    }, { owner, authorization: capturePrincipalDispatchAuthorization() });
+    }, { owner });
 
-    // Token re-verification churn moves the correlation; the binding stays
-    // authorized and the send goes straight through instead of parking.
-    updatePrincipalDispatchCorrelation(2);
     wrapped.poke("kept-live");
     await settle();
     expect(delivered).toEqual(["poke"]);
@@ -1256,23 +1188,167 @@ describe("unwired/stale-binding sends are parked, never lost", () => {
   });
 
   it("_isDispatchWired tracks binding presence", () => {
-    try {
-      const { wrapped } = makeHarness();
-      expect(wrapped._isDispatchWired()).toBe(false);
+    const { wrapped } = makeHarness();
+    expect(wrapped._isDispatchWired()).toBe(false);
 
-      const owner = {};
-      wrapped._setDispatch(async () => "ok", { owner, authorization: capturePrincipalDispatchAuthorization() });
-      expect(wrapped._isDispatchWired()).toBe(true);
+    const owner = {};
+    wrapped._setDispatch(async () => "ok", { owner });
+    expect(wrapped._isDispatchWired()).toBe(true);
 
-      // Correlation churn does not unwire a live binding.
-      updatePrincipalDispatchCorrelation(2);
-      expect(wrapped._isDispatchWired()).toBe(true);
+    wrapped._clearDispatch(owner);
+    expect(wrapped._isDispatchWired()).toBe(false);
+  });
+});
 
-      wrapped._clearDispatch(owner);
-      expect(wrapped._isDispatchWired()).toBe(false);
-    } finally {
-      updatePrincipalDispatchCorrelation(null);
-      registerPrincipalDispatchRuntime(null);
+// The incident that motivated parallel dispatch: a wedged IndexedDB held the
+// durable enqueue open forever, and because dispatch was chained behind it,
+// every send silently never left the client (no error, no retry, healthy
+// server). Dispatch must not wait on storage; storage failure degrades
+// durability only, and the watchdog reports it.
+describe("parallel dispatch (storage is never a delivery gate)", () => {
+  it("delivers even when the durable enqueue never settles", async () => {
+    const { wrapped } = makeHarness();
+    // Wedge storage: the enqueue promise never resolves.
+    wrapped._setOutbox(
+      () => new Promise<void>(() => {}),
+      async () => {},
+      async () => [],
+    );
+    const delivered: string[] = [];
+    wrapped._setDispatch(async (actionName: string) => {
+      delivered.push(actionName);
+      return "ok";
+    });
+    await settle();
+    wrapped.poke("wedged-storage");
+    await settle();
+    expect(delivered).toContain("poke");
+  });
+
+  it("reports storage unhealthy via the watchdog and recovery on a prompt commit", async () => {
+    const { wrapped } = makeHarness();
+    const reports: boolean[] = [];
+    wrapped._setStorageHealth((healthy: boolean) => reports.push(healthy));
+    wrapped._setDispatch(async () => "ok");
+    // Prompt commit → healthy report.
+    wrapped.poke("fast");
+    await settle();
+    expect(reports).toContain(true);
+  });
+
+  it("removes the outbox row when the ack wins the race with the enqueue commit", async () => {
+    const { wrapped } = makeHarness();
+    const outbox = new Map<string, Entry>();
+    let commitEnqueue!: () => void;
+    const gate = new Promise<void>((resolve) => { commitEnqueue = resolve; });
+    wrapped._setOutbox(
+      async (entry: Entry) => {
+        await gate;
+        outbox.set(entry.id, entry);
+      },
+      async (id: string) => { outbox.delete(id); },
+      async () => [...outbox.values()],
+    );
+    // Dispatch acks immediately — before the enqueue has committed.
+    wrapped._setDispatch(async () => "ok");
+    await settle();
+    wrapped.poke("ack-first");
+    await settle();
+    // Row not yet committed; ack already happened. Now the commit lands…
+    commitEnqueue();
+    await settle();
+    // …and retirement (which waits for the enqueue) deletes it: nothing is
+    // left parked for a pointless replay.
+    expect(outbox.size).toBe(0);
+  });
+});
+
+describe("outbox coalescing (repeated writes keep one row per key)", () => {
+  const makeCoalesceHarness = () => {
+    const outbox = new Map<string, Entry>();
+    let state: any;
+    const set = (next: any) => { state = next; };
+    const get = () => state;
+    const wrapped = mutativeMiddleware(
+      () => ({
+        layouts: {} as Record<string, any>,
+        updateClientLayout: action(function (this: any, key: string, value: any) {
+          this.layouts[key] = value;
+        }),
+      }),
+      { retryDelays: [] },
+    )(set, get, {});
+    state = wrapped;
+    wrapped._setOutbox(
+      (e: Entry) => outbox.set(e.id, e),
+      (id: string) => outbox.delete(id),
+      async () => [...outbox.values()],
+    );
+    return { wrapped, outbox };
+  };
+
+  it("a flood of updateClientLayout writes parks at most one row per key", async () => {
+    const { wrapped, outbox } = makeCoalesceHarness();
+    // No dispatch binding — everything parks.
+    for (let i = 0; i < 50; i++) {
+      wrapped.updateClientLayout("dashboard", { sidebar: 10 + i, main: 90 - i });
     }
+    await settle();
+    const rows = [...outbox.values()];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.args).toEqual(["dashboard", { sidebar: 59, main: 41 }]);
+    expect(rows[0]!.coalesceKey).toBe("updateClientLayout:dashboard");
+  });
+
+  it("keys are per layout — different keys keep separate rows", async () => {
+    const { wrapped, outbox } = makeCoalesceHarness();
+    wrapped.updateClientLayout("dashboard", { sidebar: 20 });
+    wrapped.updateClientLayout("file_diff", { tree: 30 });
+    await settle();
+    expect(outbox.size).toBe(2);
+  });
+
+  it("drain dedupes stale generations from a previous page load", async () => {
+    const { wrapped, outbox } = makeCoalesceHarness();
+    const now = Date.now();
+    for (let i = 0; i < 3; i++) {
+      outbox.set(`old-${i}`, {
+        id: `old-${i}`,
+        action: "updateClientLayout",
+        args: ["dashboard", { sidebar: i }],
+        patches: undefined,
+        result: null,
+        ts: now - 1000 + i,
+        coalesceKey: "updateClientLayout:dashboard",
+      });
+    }
+    const delivered: any[] = [];
+    wrapped._setDispatch(async (_a: string, args: any) => {
+      delivered.push(args);
+      return "ok";
+    });
+    await settle();
+    // Only the newest generation dispatched; the rest were deleted un-sent.
+    expect(delivered).toEqual([["dashboard", { sidebar: 2 }]]);
+    expect(outbox.size).toBe(0);
+  });
+});
+
+describe("stale replay age gate", () => {
+  it("drops a parked row older than the replay ceiling instead of redelivering it", async () => {
+    const { wrapped, outbox } = makeHarness();
+    outbox.set("ancient", seedEntry({
+      id: "ancient",
+      action: "sendMessage",
+      ts: Date.now() - 8 * 24 * 60 * 60 * 1000,
+    }));
+    const delivered: string[] = [];
+    wrapped._setDispatch(async (actionName: string) => {
+      delivered.push(actionName);
+      return "ok";
+    });
+    await settle();
+    expect(delivered).toEqual([]);
+    expect(outbox.size).toBe(0);
   });
 });

@@ -18,7 +18,6 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { identifyUser, resetUser } from "@/lib/analytics";
 import { durableAuthStorage } from "@/lib/durableAuthStorage";
 import { CONVEX_URL } from "@/lib/localAuth";
-import { PrincipalLocalStateProvider } from "@/components/PrincipalLocalStateProvider";
 
 function PrefsMigration() {
   useLocalStorageMigration();
@@ -122,7 +121,6 @@ if (import.meta.hot) {
 export function Providers({ children }: { children: ReactNode }) {
   return (
     <ConvexAuthProvider client={convex} storage={durableAuthStorage}>
-      <PrincipalLocalStateProvider>
       <ThemeProvider>
         <ShortcutProvider>
         <TipProvider>
@@ -142,7 +140,6 @@ export function Providers({ children }: { children: ReactNode }) {
         </TipProvider>
         </ShortcutProvider>
       </ThemeProvider>
-      </PrincipalLocalStateProvider>
     </ConvexAuthProvider>
   );
 }

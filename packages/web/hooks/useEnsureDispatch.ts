@@ -4,10 +4,6 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { useWatchEffect } from "./useWatchEffect";
-import {
-  capturePrincipalDispatchAuthorization,
-  usePrincipalDispatchCorrelationEpoch,
-} from "../store/local-first/dispatchGate";
 import { installBrowserDispatchSelfHeal } from "./dispatchRecovery";
 
 function deepMerge(target: any, source: any): any {
@@ -31,8 +27,6 @@ function deepMerge(target: any, source: any): any {
 // deep-link into a session before the inbox tab has mounted) WITHOUT also
 // spinning up the inbox subscriptions/recovery polling/soundIdle that hook owns.
 export function useEnsureDispatch() {
-  const dispatchCorrelationEpoch = usePrincipalDispatchCorrelationEpoch();
-  const canDispatch = dispatchCorrelationEpoch !== null;
   const _setDispatch = useInboxStore((s) => s._setDispatch);
   const _clearDispatch = useInboxStore((s) => s._clearDispatch);
   const _setDispatchError = useInboxStore((s) => s._setDispatchError);
@@ -52,10 +46,6 @@ export function useEnsureDispatch() {
   dispatchRef.current = dispatchMutation;
 
   useWatchEffect(() => {
-    if (!canDispatch) {
-      _clearDispatch(ownerRef.current);
-      return;
-    }
     _setDispatchError((action, error, args) => {
       console.error(`[sync] dispatch failed after retries: ${action}`, error);
       // COMMAND_ID_REUSED on a send means the server already holds a receipt
@@ -93,14 +83,9 @@ export function useEnsureDispatch() {
       }
     });
     const bindDispatch = () => {
-      const authorization = capturePrincipalDispatchAuthorization();
-      if (!authorization) {
-        _clearDispatch(ownerRef.current);
-        return false;
-      }
       _setDispatch(
         (action, args, patches, result) => dispatchRef.current({ action, args, patches, result }),
-        { owner: ownerRef.current, authorization },
+        { owner: ownerRef.current },
       );
       return true;
     };
@@ -120,9 +105,8 @@ export function useEnsureDispatch() {
       return store;
     };
     // _drainOutbox / _isDispatchWired are injected onto the store by
-    // mutativeMiddleware (siblings of _setDispatch). The correlation epoch is
-    // an effect dependency, so authorization changes rebind immediately; these
-    // browser signals remain the recovery path for socket/connectivity stalls.
+    // mutativeMiddleware (siblings of _setDispatch). These browser signals are
+    // the recovery path for socket/connectivity stalls.
     return installBrowserDispatchSelfHeal({
       bindDispatch,
       isDispatchWired: () => getDispatchRecoveryStore()._isDispatchWired(),
@@ -134,5 +118,5 @@ export function useEnsureDispatch() {
           : null,
       browserDocument: typeof document !== "undefined" ? document : null,
     });
-  }, [canDispatch, dispatchCorrelationEpoch, _setDispatch, _clearDispatch, _setDispatchError]);
+  }, [_setDispatch, _clearDispatch, _setDispatchError]);
 }
