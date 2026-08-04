@@ -289,3 +289,78 @@ describe("RecursiveWatcher", () => {
     expect(events.some(e => e.includes("session.jsonl"))).toBe(true);
   });
 });
+
+// dirFilter exists because the walk applied `filter` to files only, so it
+// recursed through every directory under the root and merely discarded what it
+// found. On a code repository that means walking node_modules on priming and
+// again on every debounced rescan — a permanent tax that scales with dependency
+// count, and one that breaks nothing visible when it regresses. Hence these.
+describe("RecursiveWatcher dirFilter", () => {
+  function scaffold(prefix: string): string {
+    const root = tmpDir(prefix);
+    fs.mkdirSync(path.join(root, "notes"), { recursive: true });
+    fs.mkdirSync(path.join(root, "node_modules", "pkg", "deep"), { recursive: true });
+    fs.writeFileSync(path.join(root, "notes", "one.md"), "one");
+    fs.writeFileSync(path.join(root, "node_modules", "pkg", "readme.md"), "dep");
+    fs.writeFileSync(path.join(root, "node_modules", "pkg", "deep", "nested.md"), "deep");
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    return root;
+  }
+
+  /** Directories the priming walk actually opened. `filter` only ever sees
+   *  files, so the directory a file sits in is one the walk had to read. */
+  function visitedDirs(root: string, dirFilter?: (rel: string) => boolean): string[] {
+    const visited: string[] = [];
+    const watcher = new RecursiveWatcher({
+      path: root,
+      filter: (rel) => {
+        visited.push(path.dirname(rel));
+        return rel.endsWith(".md");
+      },
+      ...(dirFilter ? { dirFilter } : {}),
+      callback: () => {},
+    });
+    cleanups.push(() => watcher.stop());
+    watcher.start();
+    watcher.stop();
+    return visited;
+  }
+
+  test("without one, the walk descends into every directory", () => {
+    const visited = visitedDirs(scaffold("rw-nofilter"));
+    expect(visited).toContain(path.join("node_modules", "pkg"));
+    expect(visited).toContain(path.join("node_modules", "pkg", "deep"));
+  });
+
+  test("a rejected directory is never opened, at any depth", () => {
+    const visited = visitedDirs(scaffold("rw-dirfilter"), (rel) =>
+      !rel.split(path.sep).includes("node_modules"),
+    );
+    expect(visited).toContain("notes");
+    // Not merely "no events from node_modules" — the directory is never read,
+    // which is the whole point of the option.
+    expect(visited.some((d) => d.split(path.sep).includes("node_modules"))).toBe(false);
+  });
+
+  test("events from a rejected directory cost no rescan", async () => {
+    const root = scaffold("rw-dirfilter-event");
+    const events: string[] = [];
+    const watcher = new RecursiveWatcher({
+      path: root,
+      filter: (rel) => rel.endsWith(".md"),
+      dirFilter: (rel) => !rel.split(path.sep).includes("node_modules"),
+      callback: (filePath) => events.push(filePath),
+      debounceMs: 50,
+    });
+    cleanups.push(() => watcher.stop());
+    watcher.start();
+    await new Promise((r) => setTimeout(r, 200));
+
+    fs.writeFileSync(path.join(root, "node_modules", "pkg", "new.md"), "noise");
+    fs.writeFileSync(path.join(root, "notes", "two.md"), "signal");
+    await new Promise((r) => setTimeout(r, 600));
+
+    expect(events.some((p) => p.endsWith(path.join("notes", "two.md")))).toBe(true);
+    expect(events.some((p) => p.includes("node_modules"))).toBe(false);
+  });
+});
