@@ -24,6 +24,14 @@ export const AGENT_STATUSES = [
   "stopped",
   "starting",
   "resuming",
+  // Turn ended but the harness holds live background work (a run_in_background
+  // command, a Monitor) that will re-invoke the agent when it finishes. The ball
+  // is NOT in the user's court, so this is an active substate, not idle. The
+  // daemon derives it from the transcript (open task starts minus terminal
+  // task-notifications); it decays through the normal STATUS_TRUST_TTL_MS path,
+  // so a task that never exits (e.g. a dev server) cannot pin a session in the
+  // working bucket forever.
+  "waiting",
 ] as const;
 
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
@@ -52,6 +60,7 @@ export const ACTIVE_AGENT_STATUSES: ReadonlySet<string> = new Set<string>([
   "connected",
   "starting",
   "resuming",
+  "waiting",
 ]);
 
 // How long a daemon-reported ACTIVE status is trusted with no fresh activity on
