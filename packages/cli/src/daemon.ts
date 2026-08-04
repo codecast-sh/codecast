@@ -72,7 +72,11 @@ import {
   matchStartedConversation,
   parseLsofPidPaths,
   parsePidPpidMap,
+  planSessionTeardown,
   resolveSpawnerSessionId,
+  classifyProcessOwnership,
+  shortId,
+  type ProcessOwnership,
 } from "./sessionProcessMatcher.js";
 import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractGeminiProjectHash, extractPiCwd, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
@@ -2488,7 +2492,36 @@ async function killConversationBackends(
   // client's cached copy of a deleted row) — fall back to it when the local
   // conversation cache has no mapping (remapped or ghost conversations).
   const sessionId = reverse[conversationId] ?? sessionIdHint;
-  if (sessionId && !result) {
+  // A Codex subagent thread has NO process of its own — it runs inside its parent
+  // TUI's process, so findSessionProcess resolves it to the PARENT's pid and tty
+  // (see sessionProcessOwnership). Destroying that on one nested card's behalf
+  // SIGKILLs the parent agent and every sibling thread. Reachable from three user
+  // gestures today, including a plain `cast dismiss`.
+  //
+  // The plan covers BOTH process-destroying actions here, not just the reap.
+  // resumeSessionCache is keyed by session id but its VALUE can be the PARENT's
+  // tmux name: resolveLiveTmuxTarget resolves a subagent through the borrowed pid
+  // to the parent's pane and caches that. So "resume a subagent card, then kill or
+  // dismiss it" would kill the parent's tmux even with the reap guarded. Guarding
+  // only the reap is not enough — see killCachedResumeTmux below.
+  //
+  // Only PROCESS teardown is skipped. Everything else still runs, so the card
+  // retires exactly like any other kill: heartbeats stop, caches clear,
+  // delivery/resume state is wiped, and the caller acks with no error. The honest
+  // residual is that the thread keeps running inside the parent until it finishes
+  // — a subagent genuinely cannot be killed independently of its parent.
+  //
+  // This deliberately no-ops the per-child kill_session that
+  // cascadeHideToNestedChildren enqueues when a PARENT is killed: the parent's own
+  // kill_session reaps the shared process once, so the children have nothing left
+  // to do. Do not "restore" their reaps — they would each re-kill the same
+  // already-dead tree, and the guard is what makes killing a child alone safe. The
+  // parent's own kill is unaffected: it owns its process, so it takes the branch
+  // below and tears its tree down normally.
+  const teardownPlan = planSessionTeardown(sessionId ? sessionProcessOwnership(sessionId) : "owned");
+  if (sessionId && !result && !teardownPlan.reapPidTree) {
+    log(`[REMOTE] Skipping process teardown for ${shortId(sessionId)}: does not own its process (conversation ${conversationId.slice(0, 12)})`);
+  } else if (sessionId && !result) {
     const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
     if (proc) {
       const tmuxTarget = await findTmuxPaneForTty(proc.tty);
@@ -2512,9 +2545,14 @@ async function killConversationBackends(
 
   if (sessionId) {
     const cachedTmux = resumeSessionCache.get(sessionId);
-    if (cachedTmux && validateTmuxTarget(cachedTmux)) {
+    if (cachedTmux && validateTmuxTarget(cachedTmux) && !teardownPlan.killCachedResumeTmux) {
+      // The cached name is the PARENT's tmux, reached through the borrowed pid.
+      // Forget the mapping without killing anything — the parent owns that pane.
+      resumeSessionCache.delete(sessionId);
+      log(`[REMOTE] Dropped cached resume tmux ${cachedTmux} for ${shortId(sessionId)} without killing it (session does not own that pane)`);
+    } else if (cachedTmux && validateTmuxTarget(cachedTmux)) {
       await killTmuxSessionAndTree(cachedTmux);
-      log(`[REMOTE] Killed cached resume tmux ${cachedTmux} (+process tree) for session ${sessionId.slice(0, 8)}`);
+      log(`[REMOTE] Killed cached resume tmux ${cachedTmux} (+process tree) for session ${shortId(sessionId)}`);
       resumeSessionCache.delete(sessionId);
       if (!result) result = "killed_tmux";
     }
@@ -5088,6 +5126,75 @@ function resolveCodexForkRoot(filePath: string): string | undefined {
   }
   codexForkRootCache.set(filePath, root);
   return root;
+}
+
+// Does this session OWN the process that findSessionProcess resolves for it?
+//
+// "borrowed" for a Codex subagent THREAD, which has no process of its own: it runs
+// inside the parent TUI's process, and the parent is what holds the subagent's
+// rollout open — precisely what Strategy A2 matches on, so the lookup returns the
+// PARENT's pid and tty.
+//
+// That answer is CORRECT for reaching the agent (they share a terminal, and the
+// subagent's permission prompt renders in the parent's pane), so the injection
+// paths deliberately do not consult this. It is wrong for the two things that
+// treat a pid as property: attributing the subtree to the subagent double-counts
+// it in fleet metrics, and reaping the tree on its behalf SIGKILLs the parent TUI
+// and every sibling thread.
+//
+// Three-valued on purpose. "unknown" is not "owned": a rollout can exist on disk
+// with its leading session_meta only PARTIALLY written — that record is ~37KB
+// because base_instructions embeds the whole system prompt, while Strategy A2
+// matches on the path, which exists the instant the file is created. Reading it
+// mid-write yields no metadata, and collapsing that to "owned" would authorize a
+// SIGKILL during the exact race the guard exists for. Callers choose the safe
+// direction for their side: destructive paths fail closed, metrics fail open.
+//
+// Memoized only once DECIDED. The leading session_meta is immutable after it is
+// fully written (same reasoning as codexForkRootCache), so a decided answer never
+// changes; an undecided one must not be cached or the race becomes permanent.
+// Note the cost asymmetry this leaves: an undecidable id re-walks findSessionFile
+// on every call (~3.5ms), which is deliberate — correctness over a cached guess.
+const sessionOwnershipCache = new Map<string, ProcessOwnership>();
+export function sessionProcessOwnership(sessionId: string): ProcessOwnership {
+  const memo = sessionOwnershipCache.get(sessionId);
+  if (memo !== undefined) return memo;
+
+  // Ask the Codex rollout store DIRECTLY. Routing this through findSessionFile
+  // was a live hole: that helper searches ~/.claude/projects first, and
+  // materializeSession writes a CLAUDE-shaped JSONL under a Codex session id
+  // (clientOwnsSessionStore excludes codex, so its regeneration skip never fires).
+  // A materialized Codex subagent therefore resolved as agentType "claude" →
+  // "owned" → memoized, silently restoring the full SIGKILL-the-parent defect and
+  // keeping it until daemon restart. The rollout is the authority on what a Codex
+  // session is; a materialized mirror is a copy, and must never answer this.
+  const rolloutPath = findCodexRolloutPath(sessionId);
+  if (!rolloutPath) {
+    // No rollout: either a genuinely non-Codex session (only Codex threads can
+    // borrow, so it owns its process) or an id we know nothing about yet.
+    if (!findSessionFile(sessionId)) return "unknown";
+    sessionOwnershipCache.set(sessionId, "owned");
+    return "owned";
+  }
+
+  let meta: ReturnType<typeof extractCodexSessionMetadata>;
+  try {
+    meta = extractCodexSessionMetadata(readCodexSessionMetaHead(rolloutPath));
+  } catch {
+    return "unknown"; // unreadable this pass
+  }
+  if (!meta) return "unknown"; // file exists but session_meta isn't complete yet
+  const ownership = classifyProcessOwnership(meta);
+  if (ownership === "unknown") return "unknown"; // an unrecognized shape may change meaning; don't cache
+  sessionOwnershipCache.set(sessionId, ownership);
+  return ownership;
+}
+
+/** Metrics fail OPEN: only a session we positively know to be a borrower is
+ *  denied credit for its subtree. An undecided session keeps reporting — the
+ *  worst case is a transiently double-counted tree, not a lost signal. */
+function sessionBorrowsProcess(sessionId: string): boolean {
+  return sessionProcessOwnership(sessionId) === "borrowed";
 }
 
 // ── Agent-team "spawned by" linking ──────────────────────────────────────────
@@ -8012,7 +8119,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
   // Check process cache first
   const cached = await getCachedSessionProcess(sessionId);
   if (cached) {
-    log(`Process cache hit for session ${sessionId.slice(0, 8)}: pid=${cached.pid}`);
+    log(`Process cache hit for session ${shortId(sessionId)}: pid=${cached.pid}`);
     return cached;
   }
 
@@ -8032,11 +8139,11 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
         const { stdout: checkPs } = await execAsync(`ps -o comm= -p ${pid} 2>/dev/null`);
         if (checkPs.trim()) {
           if (agentType === "codex") {
-            log(`Ignoring registry candidate for codex session ${sessionId.slice(0, 8)} (pid=${pid})`);
+            log(`Ignoring registry candidate for codex session ${shortId(sessionId)} (pid=${pid})`);
           } else {
           const result = { pid, tty, sessionId, termProgram };
           cacheSessionProcess(sessionId, result);
-          log(`Found session ${sessionId.slice(0, 8)} via registry: pid=${pid}, tty=${tty}, term=${termProgram ?? "unknown"}`);
+          log(`Found session ${shortId(sessionId)} via registry: pid=${pid}, tty=${tty}, term=${termProgram ?? "unknown"}`);
           return result;
           }
         } else {
@@ -8068,7 +8175,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
           }
           const result = { pid, tty: normalizedTty, sessionId };
           cacheSessionProcess(sessionId, result);
-          log(`Found session ${sessionId.slice(0, 8)} via resume process match: pid=${pid}`);
+          log(`Found session ${shortId(sessionId)} via resume process match: pid=${pid}`);
           return result;
         }
         if (agentType === "gemini") {
@@ -8081,7 +8188,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
           const only = geminiCandidates[0];
           const result = { pid: only.pid, tty: only.tty, sessionId };
           cacheSessionProcess(sessionId, result);
-          log(`Found Gemini session ${sessionId.slice(0, 8)} via single process candidate: pid=${only.pid}`);
+          log(`Found Gemini session ${shortId(sessionId)} via single process candidate: pid=${only.pid}`);
           return result;
         }
 
@@ -8100,14 +8207,14 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
         if (newest) {
           const result = { pid: newest.pid, tty: newest.tty, sessionId };
           cacheSessionProcess(sessionId, result);
-          log(`Found Gemini session ${sessionId.slice(0, 8)} via newest process heuristic: pid=${newest.pid}`);
+          log(`Found Gemini session ${shortId(sessionId)} via newest process heuristic: pid=${newest.pid}`);
           return result;
         }
 
         const fallback = geminiCandidates[0];
         const result = { pid: fallback.pid, tty: fallback.tty, sessionId };
         cacheSessionProcess(sessionId, result);
-        log(`Found Gemini session ${sessionId.slice(0, 8)} via fallback process candidate: pid=${fallback.pid}`);
+        log(`Found Gemini session ${shortId(sessionId)} via fallback process candidate: pid=${fallback.pid}`);
         return result;
       }
     } catch {}
@@ -8144,9 +8251,9 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
           const result = { pid: preferred.pid, tty: preferred.tty, sessionId };
           cacheSessionProcess(sessionId, result, preferred.tmuxTarget || undefined);
           if (preferred.tmuxTarget) {
-            log(`Found codex session ${sessionId.slice(0, 8)} via lsof session file match (tmux): pid=${preferred.pid}`);
+            log(`Found codex session ${shortId(sessionId)} via lsof session file match (tmux): pid=${preferred.pid}`);
           } else {
-            log(`Found codex session ${sessionId.slice(0, 8)} via lsof session file match (non-tmux preferred): pid=${preferred.pid}`);
+            log(`Found codex session ${shortId(sessionId)} via lsof session file match (non-tmux preferred): pid=${preferred.pid}`);
           }
           return result;
         }
@@ -8155,7 +8262,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
           const candidate = codexResumeCandidates[0];
           const result = { pid: candidate.pid, tty: candidate.tty, sessionId };
           cacheSessionProcess(sessionId, result);
-          log(`Found codex session ${sessionId.slice(0, 8)} via resume process fallback: pid=${candidate.pid}`);
+          log(`Found codex session ${shortId(sessionId)} via resume process fallback: pid=${candidate.pid}`);
           return result;
         }
       } catch {}
@@ -8180,14 +8287,14 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
                 if (!isNaN(childPid)) {
                   const result = { pid: childPid, tty: normalizeTty(paneTty), sessionId };
                   cacheSessionProcess(sessionId, result, `${tmuxName}:0.0`);
-                  log(`Found session ${sessionId.slice(0, 8)} via tmux session ${tmuxName}: pid=${childPid}`);
+                  log(`Found session ${shortId(sessionId)} via tmux session ${tmuxName}: pid=${childPid}`);
                   return result;
                 }
                 // No agent child process found - check if pane shell itself is an agent
                 if (isAgentProcess(panePid)) {
                   const result = { pid: panePid, tty: normalizeTty(paneTty), sessionId };
                   cacheSessionProcess(sessionId, result, `${tmuxName}:0.0`);
-                  log(`Found session ${sessionId.slice(0, 8)} via tmux session ${tmuxName}: pid=${panePid} (direct)`);
+                  log(`Found session ${shortId(sessionId)} via tmux session ${tmuxName}: pid=${panePid} (direct)`);
                   return result;
                 }
                 log(`Tmux session ${tmuxName} has no active agent (shell pid=${panePid}), skipping`);
@@ -8248,7 +8355,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
             if (unclaimed.length === 1) {
               const result = { pid: unclaimed[0].pid, tty: unclaimed[0].tty, sessionId };
               cacheSessionProcess(sessionId, result);
-              log(`Found session ${sessionId.slice(0, 8)} via CWD match: pid=${unclaimed[0].pid}, cwd=${projectCwd}`);
+              log(`Found session ${shortId(sessionId)} via CWD match: pid=${unclaimed[0].pid}, cwd=${projectCwd}`);
               return result;
             } else if (unclaimed.length > 1) {
               // Disambiguate using JSONL birth time vs process start time
@@ -8271,12 +8378,12 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
               if (bestCandidate && bestDelta < 300_000) {
                 const result = { pid: bestCandidate.pid, tty: bestCandidate.tty, sessionId };
                 cacheSessionProcess(sessionId, result);
-                log(`Found session ${sessionId.slice(0, 8)} via CWD+timing match: pid=${bestCandidate.pid}, delta=${Math.round(bestDelta / 1000)}s`);
+                log(`Found session ${shortId(sessionId)} via CWD+timing match: pid=${bestCandidate.pid}, delta=${Math.round(bestDelta / 1000)}s`);
                 return result;
               }
-              log(`CWD match found ${unclaimed.length} unclaimed candidates for ${sessionId.slice(0, 8)}, could not disambiguate`);
+              log(`CWD match found ${unclaimed.length} unclaimed candidates for ${shortId(sessionId)}, could not disambiguate`);
             } else {
-              log(`CWD match found ${candidates.length} candidates for ${sessionId.slice(0, 8)} but all claimed by other sessions`);
+              log(`CWD match found ${candidates.length} candidates for ${shortId(sessionId)} but all claimed by other sessions`);
             }
           } catch {}
         }
@@ -10495,6 +10602,39 @@ async function injectViaTerminal(
 
 type SessionFileInfo = { path: string; agentType: AgentClientId };
 
+/** The Codex rollout for a session id, if one exists:
+ *  ~/.codex/sessions/YYYY/MM/DD/<name>-<timestamp>-<sessionId>.jsonl
+ *
+ *  Separate from findSessionFile because the rollout is the AUTHORITY on whether
+ *  a session is a Codex thread, while findSessionFile answers a different
+ *  question — "which transcript should I read?" — and searches ~/.claude/projects
+ *  first. Those diverge whenever materializeSession has written a Claude-shaped
+ *  mirror under a Codex session id (it does: clientOwnsSessionStore excludes
+ *  codex, so the regeneration skip never fires for it). See
+ *  sessionProcessOwnership, which must never be answered by the mirror. */
+function findCodexRolloutPath(sessionId: string): string | null {
+  const codexSessionsDir = path.join(process.env.HOME || "", ".codex", "sessions");
+  if (!fs.existsSync(codexSessionsDir)) return null;
+  try {
+    const findCodex = (dir: string): string | null => {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          const found = findCodex(fullPath);
+          if (found) return found;
+        } else if (entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(sessionId)) {
+          return fullPath;
+        }
+      }
+      return null;
+    };
+    return findCodex(codexSessionsDir);
+  } catch {
+    return null;
+  }
+}
+
 function findSessionJsonlPath(sessionId: string): string | null {
   return findSessionFile(sessionId)?.path ?? null;
 }
@@ -10535,27 +10675,8 @@ export function findSessionFile(sessionId: string): SessionFileInfo | null {
     }
   }
 
-  // Codex sessions: ~/.codex/sessions/YYYY/MM/DD/<name>-<timestamp>-<sessionId>.jsonl
-  const codexSessionsDir = path.join(process.env.HOME || "", ".codex", "sessions");
-  if (fs.existsSync(codexSessionsDir)) {
-    try {
-      const findCodex = (dir: string): string | null => {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            const found = findCodex(fullPath);
-            if (found) return found;
-          } else if (entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(sessionId)) {
-            return fullPath;
-          }
-        }
-        return null;
-      };
-      const codexPath = findCodex(codexSessionsDir);
-      if (codexPath) return { path: codexPath, agentType: "codex" };
-    } catch {}
-  }
+  const codexPath = findCodexRolloutPath(sessionId);
+  if (codexPath) return { path: codexPath, agentType: "codex" };
 
   // Gemini sessions: ~/.gemini/tmp/<hash>/chats/<sessionId>.json
   const geminiTmpDir = path.join(process.env.HOME || "", ".gemini", "tmp");
@@ -10807,19 +10928,36 @@ function teardownConversationBackendsLive(
 async function stopLocalSessionBackends(conversationId: string, sessionId: string | undefined): Promise<void> {
   await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true }).catch(() => {});
   if (!sessionId) return;
+  // Same borrowed-pid hazard as killConversationBackends, and the same TWO unsafe
+  // actions: reaping the resolved pid tree, and killing the tmux in
+  // resumeSessionCache. Both can belong to the PARENT — the cache is keyed by
+  // session id, but resolveLiveTmuxTarget fills it by resolving a subagent through
+  // the borrowed pid to the parent's PANE, so the value is the parent's tmux name.
+  // The session id being ours says nothing about who owns what it points at.
+  // This is what keeps move_to_device / release_session from stranding a user's
+  // running parent TUI. The tmux-name sweep further down is genuinely safe
+  // unguarded: it matches names derived from THIS session's id, which a parent's
+  // tmux never carries.
+  const teardownPlan = planSessionTeardown(sessionProcessOwnership(sessionId));
   try {
-    const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
-    if (proc) {
-      const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-      if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
-        await killTmuxSessionAndTree(tmuxTarget.split(":")[0]).catch(() => {});
+    if (teardownPlan.reapPidTree) {
+      const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
+      if (proc) {
+        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+        if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
+          await killTmuxSessionAndTree(tmuxTarget.split(":")[0]).catch(() => {});
+        }
+        await reapPidTree(proc.pid).catch(() => 0);
       }
-      await reapPidTree(proc.pid).catch(() => 0);
     }
   } catch { /* best-effort */ }
   const cachedTmux = resumeSessionCache.get(sessionId);
   if (cachedTmux && validateTmuxTarget(cachedTmux)) {
-    await killTmuxSessionAndTree(cachedTmux).catch(() => {});
+    if (teardownPlan.killCachedResumeTmux) {
+      await killTmuxSessionAndTree(cachedTmux).catch(() => {});
+    } else {
+      log(`Dropped cached resume tmux ${cachedTmux} for ${shortId(sessionId)} without killing it (session does not own that pane)`);
+    }
     resumeSessionCache.delete(sessionId);
   }
   stopManagedSessionHeartbeat(sessionId);
@@ -12767,12 +12905,19 @@ async function collectResourceSnapshot(): Promise<void> {
   if (sessionProcessCache.size === 0) return;
 
   const sessionPids = new Map<string, number>();
+  // Sessions whose cached pid is borrowed rather than owned (a Codex subagent
+  // thread shares its parent's process): they must not be credited with a subtree
+  // that isn't theirs, or the parent's usage lands in the fleet total once per
+  // child. Fails OPEN — an undecided session keeps reporting, since the cost is a
+  // transiently double-counted tree rather than a lost liveness signal.
+  const sharedPidSessions = new Set<string>();
   for (const [sessionId, info] of sessionProcessCache) {
     sessionPids.set(sessionId, info.pid);
+    if (sessionBorrowsProcess(sessionId)) sharedPidSessions.add(sessionId);
   }
 
   try {
-    const resources = await collectSessionResources(sessionPids);
+    const resources = await collectSessionResources(sessionPids, sharedPidSessions);
     latestSessionResources.clear();
     for (const [sessionId, r] of resources) {
       latestSessionResources.set(sessionId, r);
@@ -12792,6 +12937,11 @@ async function collectResourceSnapshot(): Promise<void> {
         status: lastSentAgentStatus.get(sessionId),
         elapsedMs: elapsed,
         sleepSkip,
+        // Never accrue idle time on a cpu=0 we zeroed ourselves — see
+        // nextAwakeIdleMs. Before the dedupe a borrower inherited the parent's
+        // real CPU, so a busy parent kept resetting this; now nothing would, and
+        // the row would drift into the Sessions page's bulk-kill bucket.
+        sharesRootPid: r.sharesRootPid,
       }));
     }
     // Drop counters for sessions whose process tree is gone (no longer collected).

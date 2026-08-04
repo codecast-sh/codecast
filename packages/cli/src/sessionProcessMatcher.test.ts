@@ -9,7 +9,10 @@ import {
   matchStartedConversation,
   parseLsofPidPaths,
   parsePidPpidMap,
+  planSessionTeardown,
   resolveSpawnerSessionId,
+  classifyProcessOwnership,
+  shortId,
 } from "./sessionProcessMatcher.js";
 
 describe("isRecognizedAgentComm", () => {
@@ -109,6 +112,114 @@ describe("isResumeInvocation", () => {
       { pid: 22222, tty: "/dev/ttys011", tmuxTarget: "cx-resume-b:0.0" },
     ]);
     expect(chosen?.pid).toBe(11111);
+  });
+
+  test("an lsof match alone does NOT mean the process is the session's own", () => {
+    // The parent TUI appends its subagent's rollout, so it holds BOTH files open.
+    // hasCodexSessionFileOpen says yes to both ids for the same pid — which is why
+    // ownership needs a second question rather than a stricter fd rule (a parent
+    // with live subagents legitimately holds several rollouts open).
+    const lsofOutput = [
+      "codex 55521 jason 20w REG ... /Users/jason/.codex/sessions/2026/08/02/rollout-2026-08-02T09-15-01-019fb73a-a85c-7d31-b0a2-3f9c5e2d8a41.jsonl",
+      "codex 55521 jason 21w REG ... /Users/jason/.codex/sessions/2026/08/02/rollout-2026-08-02T09-15-01-019fb73a-a740-7c02-9e11-6b4d0a7f3c88.jsonl",
+    ].join("\n");
+    expect(hasCodexSessionFileOpen(lsofOutput, "019fb73a-a85c-7d31-b0a2-3f9c5e2d8a41")).toBe(true);
+    expect(hasCodexSessionFileOpen(lsofOutput, "019fb73a-a740-7c02-9e11-6b4d0a7f3c88")).toBe(true);
+  });
+});
+
+describe("classifyProcessOwnership", () => {
+  const PARENT = "019fc25f-ea9d-7f22-b8ae-8d232737fc7b";
+
+  test("an in-process subagent THREAD borrows its parent's process", () => {
+    // source.subagent is an OBJECT carrying thread_spawn — the only shape that
+    // actually runs inside the parent TUI's process.
+    expect(classifyProcessOwnership({
+      parentThreadId: PARENT,
+      source: { subagent: { thread_spawn: { parent_thread_id: PARENT, depth: 1 } } },
+    })).toBe("borrowed");
+  });
+
+  test("thread_spawn alone is enough — the top-level parent id is redundant", () => {
+    // thread_spawn.parent_thread_id carries the same value in all 31 real
+    // rollouts, so requiring BOTH created a fail-open direction: drop the
+    // top-level field and a genuine borrower read as "owned".
+    expect(classifyProcessOwnership({
+      source: { subagent: { thread_spawn: { parent_thread_id: PARENT } } },
+    })).toBe("borrowed");
+  });
+
+  test("a `codex exec` review child OWNS its process, despite carrying a parent", () => {
+    // The over-fire that `parent_thread_id` alone would cause. A census of 214
+    // local rollouts found 28 of these against 31 thread_spawn — nearly half of
+    // all parent-carrying sessions. They are separate OS processes (originator
+    // codex_exec, spawned via another session's Bash tool), so calling them
+    // borrowers would leave a review running after the user killed its card.
+    expect(classifyProcessOwnership({
+      parentThreadId: PARENT,
+      originator: "codex_exec",
+      source: { subagent: "review" },
+    })).toBe("owned");
+  });
+
+  test("a root session owns its own process", () => {
+    // 019fc268 is a distinct root (originator codex_cli_rs, no parent) that the
+    // daemon still matched to another root's pid. Root-to-root collisions are a
+    // separate defect; this classifier must not paper over them.
+    expect(classifyProcessOwnership({ originator: "codex_cli_rs", source: "cli" })).toBe("owned");
+    expect(classifyProcessOwnership({ source: "exec" })).toBe("owned");
+    expect(classifyProcessOwnership({})).toBe("owned");
+    expect(classifyProcessOwnership(undefined)).toBe("owned");
+  });
+
+  test("a parent with an UNRECOGNIZED shape is unknown, never owned", () => {
+    // Fails CLOSED. Every unrecognized shape that resolved to "owned" re-opened
+    // the SIGKILL hole; "unknown" costs only a card that retires without reaping,
+    // since planSessionTeardown treats unknown and borrowed identically.
+    expect(classifyProcessOwnership({ parentThreadId: PARENT })).toBe("unknown");
+    expect(classifyProcessOwnership({ parentThreadId: PARENT, source: { custom: "x" } })).toBe("unknown");
+    // A renamed/unseen nesting under subagent — e.g. a future Codex spawn kind.
+    expect(classifyProcessOwnership({
+      parentThreadId: PARENT,
+      source: { subagent: { process_spawn: { parent_thread_id: PARENT } } },
+    })).toBe("unknown");
+  });
+});
+
+describe("planSessionTeardown", () => {
+  // The seam. Both destructive sites do TWO process-destroying things — reap the
+  // resolved pid tree, and kill the tmux recorded in resumeSessionCache. An
+  // earlier revision guarded only the reap, leaving the cached-tmux kill as a live
+  // bypass: that cache is keyed by session id but its VALUE can be the PARENT's
+  // tmux, since resolveLiveTmuxTarget fills it through the borrowed pid.
+
+  test("a borrower may destroy nothing", () => {
+    expect(planSessionTeardown("borrowed")).toEqual({ reapPidTree: false, killCachedResumeTmux: false });
+  });
+
+  test("unknown ownership fails CLOSED", () => {
+    // An unreadable or half-written rollout must never authorize a SIGKILL.
+    expect(planSessionTeardown("unknown")).toEqual({ reapPidTree: false, killCachedResumeTmux: false });
+  });
+
+  test("an owner may destroy both", () => {
+    expect(planSessionTeardown("owned")).toEqual({ reapPidTree: true, killCachedResumeTmux: true });
+  });
+});
+
+describe("shortId", () => {
+  test("distinguishes a Codex parent from a subagent spawned in the same millisecond", () => {
+    // UUIDv7: the first 48 bits are a ms timestamp, so a parent and the subagents
+    // it spawns collide on 8 chars BY CONSTRUCTION. These two are 150ms apart.
+    const parent = "019fb73a-a740-7c02-9e11-6b4d0a7f3c88";
+    const subagent = "019fb73a-a85c-7d31-b0a2-3f9c5e2d8a41";
+    expect(parent.slice(0, 8)).toBe(subagent.slice(0, 8)); // the old prefix: identical
+    expect(shortId(parent)).not.toBe(shortId(subagent));
+    expect(shortId(parent)).toBe("019fb73a-a740");
+  });
+
+  test("leaves ids shorter than the cutoff intact", () => {
+    expect(shortId("abc")).toBe("abc");
   });
 });
 

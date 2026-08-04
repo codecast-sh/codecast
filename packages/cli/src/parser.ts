@@ -786,11 +786,22 @@ export function extractCodexSessionId(content: string): string | undefined {
   return undefined;
 }
 
+/** A Codex subagent spawned IN-PROCESS as a thread of its parent TUI. The nested
+ *  `thread_spawn` object is what distinguishes it from a `codex exec` child, which
+ *  is a separate OS process and writes `subagent: "review"` (a bare string). Only
+ *  the thread shape shares its parent's pid — see classifyProcessOwnership. */
+export interface CodexThreadSpawn {
+  parent_thread_id?: string;
+  depth?: number;
+  agent_path?: string;
+  agent_nickname?: string;
+}
+
 export interface CodexSessionMetadata {
   id?: string;
   parentThreadId?: string;
   originator?: string;
-  source?: string | { subagent?: string; custom?: string };
+  source?: string | { subagent?: string | { thread_spawn?: CodexThreadSpawn }; custom?: string };
 }
 
 export function extractCodexSessionMetadata(content: string): CodexSessionMetadata | undefined {
