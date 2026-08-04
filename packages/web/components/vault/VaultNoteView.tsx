@@ -5,10 +5,10 @@
 
 import { lazy, memo, Suspense, useMemo } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { BookOpen, ChevronRight, FileText, Pencil } from "lucide-react";
+import { BookOpen, FileText, Pencil } from "lucide-react";
 import { noteDisplayName } from "./VaultExplorer";
 import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
-import { BookmarkToggle } from "./VaultBookmarksPane";
+import { VaultFileHeader } from "./VaultFileHeader";
 import { VaultLinkContext, VaultMarkdown, FoldScopeContext } from "./VaultMarkdown";
 import { useVaultLinkCtx } from "./useVaultLinkCtx";
 import { splitFrontmatter } from "../../lib/vault/frontmatter";
@@ -55,9 +55,7 @@ export const VaultNoteView = memo(function VaultNoteView({
   const loading = useVaultStore((s) => !!s.loadingPaths[path]);
   const exists = useVaultStore((s) => !!s.files[path]);
 
-  const segments = path.split("/");
-  const fileName = segments[segments.length - 1];
-  const title = noteDisplayName(fileName);
+  const title = noteDisplayName(path.slice(path.lastIndexOf("/") + 1));
 
   const [frontmatter, markdown] = useMemo(
     () => splitFrontmatter(body?.content ?? ""),
@@ -134,37 +132,11 @@ export const VaultNoteView = memo(function VaultNoteView({
   return (
     <div className="h-full overflow-y-auto" data-vault-note-scroll>
       <div className="max-w-3xl mx-auto px-8 py-6">
-        <nav className="flex items-center gap-1 text-[11px] text-sol-text-dim mb-1 flex-wrap">
-          {segments.slice(0, -1).map((seg, i) => (
-            <span key={i} className="flex items-center gap-1">
-              <button
-                type="button"
-                className="hover:text-sol-text-muted transition-colors"
-                title="Reveal in explorer"
-                onClick={() => useVaultStore.getState().requestReveal(segments.slice(0, i + 1).join("/"))}
-              >
-                {seg}
-              </button>
-              <ChevronRight className="w-3 h-3" />
-            </span>
-          ))}
-          <button
-            type="button"
-            className="text-sol-text-muted hover:text-sol-text transition-colors"
-            title="Reveal in explorer"
-            onClick={() => useVaultStore.getState().requestReveal(path)}
-          >
-            {title}
-          </button>
-        </nav>
-        <div className="flex items-start gap-3 mb-3">
-          <h1 className="flex-1 text-2xl font-semibold text-sol-text break-words">{title}</h1>
-          <BookmarkToggle
-            target={{ kind: "note", path }}
-            label="Bookmark this note"
-            className="mt-1.5 flex-shrink-0"
-          />
-          {onToggleEdit && (
+        <VaultFileHeader
+          path={path}
+          title={title}
+          actions={
+            onToggleEdit ? (
             <button
               type="button"
               onClick={onToggleEdit}
@@ -180,8 +152,9 @@ export const VaultNoteView = memo(function VaultNoteView({
             >
               {mode === "reading" ? <Pencil className="w-4 h-4" /> : <BookOpen className="w-4 h-4" />}
             </button>
-          )}
-        </div>
+            ) : null
+          }
+        />
 
         {mode !== "reading" ? (
           <Suspense

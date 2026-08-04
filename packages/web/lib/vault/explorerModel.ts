@@ -3,7 +3,12 @@
 // here, so the rules are unit-testable and so the header buttons and the row
 // context menu share one implementation instead of two that drift.
 
-import { isVaultIgnoredPath, isVaultMarkdownPath, type VaultFileEntry } from "@codecast/shared/contracts";
+import {
+  isVaultAssetPath,
+  isVaultIgnoredPath,
+  isVaultMarkdownPath,
+  type VaultFileEntry,
+} from "@codecast/shared/contracts";
 
 export type VaultSortMode = "name-asc" | "name-desc" | "mtime-desc" | "mtime-asc";
 
@@ -39,6 +44,24 @@ function comparator(mode: VaultSortMode): (a: TreeNode, b: TreeNode) => number {
       default: return byName(a, b);
     }
   };
+}
+
+/**
+ * The rows the tree shows. With "Show all files" on, that is everything the
+ * daemon listed. With it off, it is notes and their attachments — plus every
+ * directory, unconditionally: a folder the user just made is empty by
+ * definition, and pruning empty ones would make "New folder" appear to fail.
+ */
+export function visibleVaultFiles(
+  files: Record<string, VaultFileEntry>,
+  showAll: boolean,
+): Record<string, VaultFileEntry> {
+  if (showAll) return files;
+  const out: Record<string, VaultFileEntry> = {};
+  for (const [path, entry] of Object.entries(files)) {
+    if (entry.dir || isVaultMarkdownPath(path) || isVaultAssetPath(path)) out[path] = entry;
+  }
+  return out;
 }
 
 export function buildVaultTree(

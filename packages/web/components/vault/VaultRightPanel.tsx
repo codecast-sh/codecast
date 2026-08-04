@@ -7,7 +7,8 @@ import { memo, useMemo, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { ArrowUpRight, Bookmark, ChevronRight, Hash, Link2, List } from "lucide-react";
 import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
-import type { TagTreeNode } from "../../lib/vault/vaultIndex";
+import type { TagTreeNode, VaultEntityRef } from "../../lib/vault/vaultIndex";
+import { EntityRefPill } from "./VaultMarkdown";
 import { headingSlugs } from "../../lib/vault/parseNote";
 import { useVaultStore, type VaultRightPanelTab } from "../../store/vaultStore";
 import { noteDisplayName } from "./VaultExplorer";
@@ -46,6 +47,17 @@ function findUnlinkedMentions(
   return out.sort((a, b) => a.source.localeCompare(b.source));
 }
 
+/** The distinct codecast objects a note references, in document order. Read off
+ *  the vault index, which recorded them when the file was parsed — no server
+ *  call, and none per note. */
+function distinctEntityRefs(path: string): VaultEntityRef[] {
+  const seen = new Map<string, VaultEntityRef>();
+  for (const occurrence of vaultIndex.entityRefs(path)) {
+    if (!seen.has(occurrence.ref.key)) seen.set(occurrence.ref.key, occurrence.ref);
+  }
+  return [...seen.values()];
+}
+
 const BacklinksPane = memo(function BacklinksPane({
   path,
   onNavigate,
@@ -72,6 +84,22 @@ const BacklinksPane = memo(function BacklinksPane({
     () => (showUnlinked ? findUnlinkedMentions(path, new Set(backlinks.map((b) => b.source))) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [showUnlinked, path, version],
+  );
+
+  // Notes reached through a shared codecast object: this note links task ct-X,
+  // and so do these others. The vault's own index answers it, so it costs
+  // nothing. The other direction — a task whose description links THIS note —
+  // is server data the vault does not hold, and is deliberately not guessed at.
+  const throughObjects = useMemo(
+    () =>
+      distinctEntityRefs(path)
+        .map((ref) => ({
+          ref,
+          notes: vaultIndex.notesReferencingEntity(ref.key).filter((p) => p !== path),
+        }))
+        .filter((entry) => entry.notes.length > 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [path, version],
   );
 
   return (
@@ -111,6 +139,32 @@ const BacklinksPane = memo(function BacklinksPane({
             </div>
           ))}
         </>
+      )}
+
+      {throughObjects.length > 0 && (
+        <div className="mt-1 border-t border-sol-border/20 pt-1">
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-sol-text-dim">
+            Through shared objects
+          </div>
+          {throughObjects.map(({ ref, notes }) => (
+            <div key={ref.key} className="mb-1">
+              <div className="px-3 py-1">
+                <EntityRefPill refr={ref} />
+              </div>
+              {notes.map((source) => (
+                <button
+                  key={source}
+                  type="button"
+                  onClick={() => onNavigate(source)}
+                  className="w-full text-left px-3 py-1 pl-6 text-[12px] text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text truncate"
+                  title={source}
+                >
+                  {noteDisplayName(source.split("/").pop()!)}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
       )}
 
       <button
@@ -334,8 +388,9 @@ const OutgoingPane = memo(function OutgoingPane({
   const outgoing = vaultIndex.outgoing(path);
   const resolved = outgoing.filter((l) => l.resolved);
   const unresolved = outgoing.filter((l) => !l.resolved);
+  const objects = distinctEntityRefs(path);
 
-  if (outgoing.length === 0) {
+  if (outgoing.length === 0 && objects.length === 0) {
     return (
       <div className="px-3 py-6 text-xs text-sol-text-dim text-center">
         No links in this note yet. Write <code className="text-sol-text-muted">[[wiki links]]</code>{" "}
@@ -375,6 +430,18 @@ const OutgoingPane = memo(function OutgoingPane({
               <span className="wiki-link wiki-link-unresolved">{l.link.target || l.link.raw}</span>
             </div>
           ))}
+        </>
+      )}
+      {objects.length > 0 && (
+        <>
+          <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-wide text-sol-text-dim border-t border-sol-border/20">
+            {objects.length} codecast object{objects.length === 1 ? "" : "s"}
+          </div>
+          <div className="px-3 py-1 flex flex-wrap gap-1.5">
+            {objects.map((ref) => (
+              <EntityRefPill key={ref.key} refr={ref} />
+            ))}
+          </div>
         </>
       )}
     </div>

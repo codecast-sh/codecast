@@ -156,7 +156,11 @@ export function App() {
               <Route path="conversation/:id" element={<E name="Conversation"><Conversation /></E>} />
               <Route path="conversation/:id/diff" element={<E name="ConversationDiff"><ConversationDiff /></E>} />
               <Route path="docs" element={<E name="Docs"><Docs /></E>} />
-              <Route path="vault" element={<E name="Vault"><Vault /></E>} />
+              <Route path="files" element={<E name="Files"><Vault /></E>} />
+              {/* /vault = pre-rename alias for /files. Permanent: `cast vault open`
+                  has printed /vault?f=… deep links into sessions, notes and users'
+                  markdown files since before the rename. Never remove it. */}
+              <Route path="vault" element={<E name="Files"><Vault /></E>} />
               <Route path="pages" element={<E name="Pages"><Artifacts /></E>} />
               {/* /artifacts = pre-rename alias for /pages */}
               <Route path="artifacts" element={<E name="Pages"><Artifacts /></E>} />
