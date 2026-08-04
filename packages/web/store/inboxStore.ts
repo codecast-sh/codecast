@@ -274,6 +274,14 @@ export type InboxSession = {
   // buckets into the Stashed group (above Dismissed) while the agent keeps
   // running. Same absolute-flag semantics as dismiss; a dismiss clears it.
   inbox_stashed_at?: number | null;
+  // The RETIRED marker — the user tore this session down. Set by every kill
+  // surface (`cast kill`, the web killSession command, applyHideTransition's
+  // kill branch) and outranks every other state signal: a killed row is never
+  // "working" and never "waiting for input", however stale its has_pending /
+  // agent_status still are. Cleared only by a sanctioned revival (an explicit
+  // send, Restart, undismiss) — see classifyWorkState in convex/inboxFilters.ts,
+  // whose precedence the client predicates below mirror.
+  inbox_killed_at?: number | null;
   last_user_message?: string | null;
   session_error?: string;
   // True when the session's latest turn is an unresolved Claude Code auth/API
@@ -820,6 +828,19 @@ export function isSessionDismissed(s: Pick<InboxSession, "inbox_dismissed_at">):
   return !!s.inbox_dismissed_at;
 }
 
+// Retired: the agent was torn down. A distinct field from inbox_dismissed_at,
+// not a synonym. Most kills write both — a hide patch carries
+// inbox_dismissed_at and applyHideTransition stamps the marker on top, which
+// covers the web's kill action AND `cast kill` (cliSetSessionVisibility patches
+// inbox_dismissed_at, then forces the kill transition). The exception is the
+// killSession MUTATION (conversations.ts), which stamps inbox_killed_at ALONE:
+// that's the path behind the web's convCommand("killSession") — the /sessions
+// kill button and the panel's kill-and-complete. Anything asking "is this
+// killed?" must read this field or it silently misses those.
+export function isSessionKilled(s: Pick<InboxSession, "inbox_killed_at">): boolean {
+  return !!s.inbox_killed_at;
+}
+
 export function isSessionStashed(
   s: Pick<InboxSession, "inbox_dismissed_at" | "inbox_stashed_at">,
 ): boolean {
@@ -1146,8 +1167,15 @@ export function reconcilePendingSendForSession(
 }
 
 export function isSessionEffectivelyIdle(
-  session: Pick<InboxSession, "is_idle" | "agent_status">,
+  session: Pick<InboxSession, "is_idle" | "agent_status" | "inbox_killed_at">,
 ): boolean {
+  // A KILLED row is retired and outranks every signal below — same precedence
+  // classifyWorkState applies server-side (convex/inboxFilters.ts), which is
+  // what keeps this surface and `cast sessions` telling the same story. It has
+  // to win over the agent_status short-circuit too: a daemon that resurrected
+  // the worker (or simply never cleared its last "working") would otherwise
+  // render the retired row alive.
+  if (session.inbox_killed_at) return true;
   // Daemon-reported ACTIVE statuses are a definitive "working" signal —
   // short-circuit to non-idle for fast UI response when status flips.
   if (isAgentActive(session)) {
@@ -1160,9 +1188,14 @@ export function isSessionEffectivelyIdle(
 }
 
 export function isSessionWaitingForInput(
-  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned" | "has_pending" | "awaiting_input" | "is_unresponsive" | "pending_api_error">,
+  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned" | "has_pending" | "awaiting_input" | "is_unresponsive" | "pending_api_error" | "inbox_killed_at">,
   sessionsWithQueuedMessages?: Set<string>,
 ): boolean {
+  // Retired: the user already triaged this row, so nothing about it is a claim
+  // on their attention — not a poll left open when the agent was torn down, not
+  // a permission prompt, not a stale has_pending. First, exactly as
+  // classifyWorkState puts `killed` above every other branch.
+  if (session.inbox_killed_at) return false;
   const dead = !!session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status);
   const canDeliver = !session.is_unresponsive && !dead;
   // A message the user just sent/queued from the client (the durable
@@ -1219,10 +1252,16 @@ export function isSessionWaitingForInput(
 // count as blocked here. No pinned exemption either: placement of pinned rows
 // is the caller's concern (they never leave the Pinned group).
 export function isSessionHardBlocked(
-  session: Pick<InboxSession, "_id" | "agent_status" | "message_count" | "has_pending" | "awaiting_input" | "is_unresponsive" | "pending_api_error">,
+  session: Pick<InboxSession, "_id" | "agent_status" | "message_count" | "has_pending" | "awaiting_input" | "is_unresponsive" | "pending_api_error" | "inbox_killed_at">,
   sessionsWithQueuedMessages?: Set<string>,
 ): boolean {
   if (sessionsWithQueuedMessages?.has(session._id)) return false;
+  // Retired outranks every blocker below, same as in isSessionWaitingForInput
+  // and classifyWorkState. It matters most here because this predicate is what
+  // pulls an ANCHOR out of its own space and into the inbox (categorizeSessions'
+  // hiddenAnchor gate): a killed anchor keeps its frozen awaiting_input /
+  // permission_blocked, so without this it re-escalated forever after teardown.
+  if (session.inbox_killed_at) return false;
   if (session.awaiting_input) return true;
   if (session.pending_api_error && session.message_count > 0) return true;
   if (session.agent_status === "permission_blocked") return session.message_count > 0;
@@ -4048,13 +4087,16 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   }
 
   if (msg.kind === "restore") {
-    // Un-hiding is un-hiding: both flags clear, but only if this window's value
-    // is no newer than the restore (a re-kill here must survive).
+    // Un-hiding is un-hiding: all three flags clear, but only if this window's
+    // value is no newer than the restore (a re-kill here must survive).
+    // inbox_killed_at rides along for the same reason the sender clears it
+    // (restoreSession): a command-killed row carries the marker alone, and a
+    // sibling that cleared only the two hide stamps would go on hiding it.
     for (const sid of msg.ids) {
       // A no-op restore still carries a newer causal tombstone. Without these
-      // locks, a delayed older kill sees two visible nulls and re-applies.
-      acceptTransition(sid, ["inbox_dismissed_at", "inbox_stashed_at"], {
-        shared: { inbox_dismissed_at: null, inbox_stashed_at: null },
+      // locks, a delayed older kill sees visible nulls and re-applies.
+      acceptTransition(sid, ["inbox_dismissed_at", "inbox_stashed_at", "inbox_killed_at"], {
+        shared: { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_killed_at: null },
       });
     }
     return;
@@ -4083,10 +4125,11 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   // undo restores the ORIGINAL pin time, so it cannot be re-derived from ts).
   // Repeated pin messages leave matching rows untouched; an unpin deliberately
   // plants a null tombstone even when the row already appears unpinned.
+  // Touches pin state ONLY: pin is not an un-kill on the sender (pinSession),
+  // so a sibling window must not become one either.
   acceptTransition(msg.id, ["inbox_pinned_at"], {
     shared: { inbox_pinned_at: msg.pinnedAt },
     sessions: { is_pinned: msg.pinned },
-    ...(msg.pinned ? { conversations: { inbox_killed_at: undefined } } : {}),
   });
 }
 
@@ -4378,7 +4421,9 @@ export const useInboxStore = create<InboxStoreState>(
   // transition (dispatch.applyPatches sees inbox_dismissed_at flip), so this
   // action only has to move the rows; every kill path gets the teardown
   // without remembering to ask for it. (The persisted field keeps its
-  // historical name inbox_dismissed_at; the UI calls the bucket "Killed".)
+  // historical name inbox_dismissed_at and the UI calls the bucket "Killed";
+  // the server's kill transition additionally stamps inbox_killed_at, which is
+  // what actually marks the row retired.)
   killSession: action(function (this: Draft, id: string) {
     soundKill();
     announceHide(this, "kill", hideSessionInDraft(this, id, "kill"));
@@ -4631,7 +4676,21 @@ export const useInboxStore = create<InboxStoreState>(
 
 
   // Bring a stashed/dismissed session (and its hidden children) back into the
-  // active inbox. Clears BOTH hide flags — un-hiding is un-hiding.
+  // active inbox. Clears ALL THREE hide flags — un-hiding is un-hiding.
+  //
+  // inbox_killed_at has to go with them. Restore is one of the three sanctioned
+  // revivals (with an explicit send and Restart), and it is the only one that
+  // reaches a row killed through the killSession MUTATION (the web's
+  // convCommand("killSession") — the /sessions kill button and the panel's
+  // kill-and-complete), which stamps the marker WITHOUT inbox_dismissed_at.
+  // (`cast kill` and the web's own kill action both write inbox_dismissed_at
+  // too, so those rows were already covered.) The server's un-kill mirror can't
+  // cover a marker-only row for us: it fires only when the patch clears
+  // inbox_dismissed_at on a row that already had it (dispatch.ts
+  // `wasDismissed`), so it would keep being hidden by shouldShowInInbox no
+  // matter how often the user pressed restore. Clearing all three is also
+  // exactly the un-kill SHAPE the dispatch guard demands before it will honor a
+  // kill-clear at all, and what `cast undismiss` writes.
   restoreSession: action(function (this: Draft, id: string) {
     const now = Date.now();
     const childIds = Object.values(this.sessions as Record<string, InboxSession>)
@@ -4642,11 +4701,13 @@ export const useInboxStore = create<InboxStoreState>(
       if (this.sessions[sid]) {
         this.sessions[sid].inbox_dismissed_at = null;
         this.sessions[sid].inbox_stashed_at = null;
+        this.sessions[sid].inbox_killed_at = null;
       }
       const conv = this.conversations[sid] as any;
       if (conv) {
         conv.inbox_dismissed_at = null;
         conv.inbox_stashed_at = null;
+        conv.inbox_killed_at = null;
       }
     }
     declareViewNav("gesture");
@@ -4678,9 +4739,17 @@ export const useInboxStore = create<InboxStoreState>(
       this.sessions[id].is_pinned = newPinned;
       this.sessions[id].inbox_pinned_at = pinnedAt;
     }
+    // Pin is a pure ORDERING gesture, never a revival: it leaves
+    // inbox_killed_at (as it already leaves inbox_dismissed_at/inbox_stashed_at)
+    // exactly where it is. The sanctioned revivals are an explicit send,
+    // Restart, and undismiss — and the server's dispatch rail now DROPS a
+    // kill-clear that isn't itself an un-kill, so clearing it optimistically
+    // only bought a flicker of a retired row rendering alive until the
+    // round-trip put it back. A killed row stays reachable while pinned:
+    // shouldShowInInbox keeps `inbox_killed_at && inbox_pinned_at` in the inbox
+    // precisely so pinning is how you hold onto one.
     if (this.conversations[id]) {
       (this.conversations[id] as any).inbox_pinned_at = pinnedAt;
-      if (newPinned) (this.conversations[id] as any).inbox_killed_at = undefined;
     }
     // Pin is a TOGGLE read off this window's row, so a sibling that never saw
     // the flip computes the opposite value from its stale row on the next

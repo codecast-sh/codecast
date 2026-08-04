@@ -119,6 +119,11 @@ function localBranchLabel(
 // session counts as needs_input, but a map where every done branch glows amber
 // says nothing. Amber here = the agent is actually blocked on you.
 function liveOf(s: InboxSession): BranchLive {
+  // A retired branch is done, whatever its frozen blockers still say. Without
+  // this the raw reads below light a killed branch amber for a poll or
+  // permission prompt that died with the agent — the map's whole job is to show
+  // where attention is owed, and a torn-down branch owes none.
+  if (s.inbox_killed_at) return "idle";
   if (!isSessionEffectivelyIdle(s)) return "working";
   if (s.awaiting_input || s.agent_status === "permission_blocked" || s.pending_api_error) {
     return "needs_input";

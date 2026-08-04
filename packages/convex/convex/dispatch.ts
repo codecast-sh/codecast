@@ -370,18 +370,37 @@ export async function applyPatches(
         if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
           await applyHideTransition(ctx, doc, finalSafe as any, { forceKill: opts?.forceKill });
         }
-        // The un-kill mirror: a patch CLEARING inbox_dismissed_at on a row that
-        // had it is the restore/undo gesture (web restoreSession, undo of a
-        // kill) — re-arm the schedules the kill canceled, or the user gets
-        // their session back with its standing loop silently dead. Only tasks
-        // stamped canceled_on_kill_at re-arm; natural completions stay done.
-        // Same two scans as the kill: the runner's schedules, plus the caller's
-        // when a second-party owner is restoring.
+        // The un-kill mirror: a patch CLEARING either hide stamp on a row that
+        // had it is the restore/undo gesture (web restoreSession, the /sessions
+        // restore, undo of a kill) — re-arm the schedules the kill canceled, or
+        // the user gets their session back with its standing loop silently dead.
+        // Only tasks stamped canceled_on_kill_at re-arm; natural completions
+        // stay done. Same two scans as the kill: the runner's schedules, plus
+        // the caller's when a second-party owner is restoring.
+        //
+        // BOTH stamps have to count, because the two kill surfaces do not write
+        // the same fields: applyHideTransition (cast kill, dismiss→kill) stamps
+        // inbox_dismissed_at AND inbox_killed_at, but the killSession command
+        // stamps the marker ALONE. Keying on the dismissed stamp only meant
+        // restoring a command-killed row cleared its marker and brought the card
+        // back while its schedules stayed dead. This does not widen WHO may
+        // un-kill: the guard above already stripped inbox_killed_at from the
+        // patch unless it is un-kill-shaped, so a clear reaching here passed it.
+        //
+        // It does widen WHAT an un-kill does, on one path: a command-killed row
+        // restored by a second-party OWNER now re-arms the RUNNER's schedules
+        // (the first reactivate call below scans doc.user_id, not the caller).
+        // That is deliberate and symmetric — the owner already had exactly this
+        // effect on the dismissed path, and the schedules a kill canceled are
+        // the runner's by construction, so restoring without them would hand
+        // back a session whose standing loop is silently dead.
+        const clearsDismissed =
+          "inbox_dismissed_at" in (finalSafe as any) && !(finalSafe as any).inbox_dismissed_at;
+        const clearsKilled =
+          "inbox_killed_at" in (finalSafe as any) && !(finalSafe as any).inbox_killed_at;
         if (
           table === "conversations" &&
-          "inbox_dismissed_at" in (finalSafe as any) &&
-          !(finalSafe as any).inbox_dismissed_at &&
-          wasDismissed
+          ((clearsDismissed && wasDismissed) || (clearsKilled && wasKilled))
         ) {
           // Un-kill the row server-side. The web's restore gesture only nulls
           // the two hide stamps, but shouldShowInInbox hides a row on

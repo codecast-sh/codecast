@@ -402,6 +402,26 @@ describe("loop and subagent pseudo rows", () => {
     expect(stashed.absorbedIds.has("home")).toBe(false);
   });
 
+  // The killSession mutation (the web's convCommand path) stamps
+  // inbox_killed_at WITHOUT inbox_dismissed_at, so a home killed that way kept
+  // a loop row for a harness that no longer exists. Stash must still keep its
+  // row — it is the standing-loop home, which is why this gate deliberately
+  // isn't isSessionHidden. ct-41083.
+  it("killing the home retires its loop row too, while stash still keeps it", () => {
+    const killed = partitionTriggerInbox(
+      undefined,
+      { home: session("home", { loop_state: loop(), inbox_killed_at: NOW }) },
+      { now: NOW },
+    );
+    expect(killed.rows).toHaveLength(0);
+    const stashed = partitionTriggerInbox(
+      undefined,
+      { home: session("home", { loop_state: loop(), inbox_stashed_at: NOW }) },
+      { now: NOW },
+    );
+    expect(stashed.rows).toHaveLength(1);
+  });
+
   it("the focused home is never absorbed", () => {
     const p = partitionTriggerInbox(undefined, { home: session("home", { loop_state: loop() }) }, { now: NOW, focusedId: "home" });
     expect(p.rows).toHaveLength(1);

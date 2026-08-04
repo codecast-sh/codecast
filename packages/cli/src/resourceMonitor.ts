@@ -1,4 +1,5 @@
 import { execFile } from "./proc.js";
+import { shortId } from "./sessionProcessMatcher.js";
 import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
@@ -16,6 +17,11 @@ export interface SessionResources {
   memory: number;
   pidCount: number;
   collectedAt: number;
+  /** This session's root pid belongs to ANOTHER session, which was credited with
+   *  the subtree instead. cpu/memory/pidCount are zero so a fleet total counts
+   *  each process tree exactly once; the session still reports, so it keeps a
+   *  liveness signal rather than going dark. */
+  sharesRootPid?: boolean;
 }
 
 // Below this CPU% (and not in a working status) a tick counts as idle.
@@ -76,6 +82,14 @@ export function shouldReportMetrics(args: {
  * oversized gap from suspend/stall) carries the previous value forward unchanged,
  * so a closed-lid period never inflates idle time. Any sign of activity — CPU at
  * or above the floor, or a working status — resets the counter to 0.
+ *
+ * `sharesRootPid` is the same carry-forward, for a different lie: that session's
+ * cpu is 0 because its subtree was credited to the session that OWNS the pid, not
+ * because it is idle. Accruing on it would march the counter past the threshold
+ * the Sessions page buckets as "idle" and offers up to bulk kill — a kill
+ * candidate manufactured from a number we zeroed ourselves. Checked AFTER the
+ * activity test on purpose: a borrower whose agent_status says it's working must
+ * still reset to 0 rather than carry a stale total forward.
  */
 export function nextAwakeIdleMs(params: {
   prevIdleMs: number;
@@ -83,9 +97,10 @@ export function nextAwakeIdleMs(params: {
   status: string | undefined;
   elapsedMs: number;
   sleepSkip: boolean;
+  sharesRootPid?: boolean;
 }): number {
   if (isSessionActive(params.cpu, params.status)) return 0;
-  if (params.sleepSkip) return params.prevIdleMs;
+  if (params.sharesRootPid || params.sleepSkip) return params.prevIdleMs;
   return params.prevIdleMs + params.elapsedMs;
 }
 
@@ -161,18 +176,58 @@ export function getSubtreeResources(
   return { cpu: Math.round(cpu * 100) / 100, memory, pidCount };
 }
 
+/**
+ * Per-session resource usage, with each process tree credited EXACTLY ONCE.
+ *
+ * Two sessions can map to the same root pid. A Codex subagent thread shares its
+ * parent TUI's process by design, and process discovery can also collide two
+ * unrelated roots. Walking the subtree per session with no collision awareness
+ * reported the same tree N times — observed live on 2026-08-02, 15 distinct Codex
+ * session ids all resolved to pid 55521 and each reported the byte-identical
+ * cpu=0.1% mem=265.0MB procs=10, summed 15x into the fleet total.
+ *
+ * `sharedPidSessions` names sessions already KNOWN not to own their root pid
+ * (see the daemon's sessionProcessOwnership); they are never credited, so the
+ * tree goes to the real owner. If no owner is tracked, the tree is simply not
+ * counted — better uncounted than attributed to a session that doesn't own it.
+ *
+ * Among sessions with equal claim, the lexicographically smallest id wins. That
+ * tie-break is deliberate: iteration order follows the caller's process cache,
+ * which is evicted and refilled between ticks, so ordering by it would hand the
+ * subtree to a different session on alternating ticks and make both sessions'
+ * graphs flicker.
+ */
 export async function collectSessionResources(
   sessionPids: Map<string, number>,
+  sharedPidSessions: ReadonlySet<string>,
 ): Promise<Map<string, SessionResources>> {
   if (process.platform !== "darwin") return new Map();
 
   const snapshot = await captureProcessSnapshot();
   if (snapshot.size === 0) return new Map();
 
+  const ownerByRootPid = new Map<number, string>();
+  for (const [sessionId, rootPid] of sessionPids) {
+    if (sharedPidSessions.has(sessionId)) continue;
+    const incumbent = ownerByRootPid.get(rootPid);
+    if (incumbent === undefined || sessionId < incumbent) ownerByRootPid.set(rootPid, sessionId);
+  }
+
   const result = new Map<string, SessionResources>();
   const now = Date.now();
   for (const [sessionId, rootPid] of sessionPids) {
     if (!snapshot.has(rootPid)) continue;
+    if (ownerByRootPid.get(rootPid) !== sessionId) {
+      result.set(sessionId, {
+        sessionId,
+        cpu: 0,
+        memory: 0,
+        pidCount: 0,
+        collectedAt: now,
+        sharesRootPid: true,
+      });
+      continue;
+    }
     const resources = getSubtreeResources(snapshot, rootPid);
     if (resources.pidCount === 0) continue;
     result.set(sessionId, {
@@ -188,8 +243,12 @@ export function formatResourcesLog(resources: Map<string, SessionResources>): st
   if (resources.size === 0) return "No active sessions with resource data";
   const lines: string[] = [];
   for (const [sessionId, r] of resources) {
+    if (r.sharesRootPid) {
+      lines.push(`${shortId(sessionId)}: shares another session's pid (not counted)`);
+      continue;
+    }
     const memMB = (r.memory / (1024 * 1024)).toFixed(1);
-    lines.push(`${sessionId.slice(0, 8)}: cpu=${r.cpu}% mem=${memMB}MB procs=${r.pidCount}`);
+    lines.push(`${shortId(sessionId)}: cpu=${r.cpu}% mem=${memMB}MB procs=${r.pidCount}`);
   }
   return `Resource snapshot (${resources.size} sessions): ${lines.join(", ")}`;
 }

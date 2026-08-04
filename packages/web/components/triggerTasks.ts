@@ -374,7 +374,12 @@ export function partitionTriggerInbox(
     if (!loop || !isLoopFresh(loop, now)) continue;
     // Dismiss/kill retires the session AND its loop (the harness dies with the
     // tmux); a stashed home keeps its row — stash is the standing-loop home.
-    if (sess.inbox_dismissed_at) continue;
+    // Deliberately NOT isSessionHidden: that folds in stashed, which this loop
+    // must keep. inbox_killed_at is the other half of "retired" — the
+    // killSession mutation (the web's convCommand path) stamps it WITHOUT
+    // inbox_dismissed_at, so a session killed that way kept a loop row for a
+    // harness that no longer exists.
+    if (sess.inbox_dismissed_at || sess.inbox_killed_at) continue;
     loopRowIds.add(sess._id);
     rows.push({ task: loopTaskRow(sess, loop), openId: sess._id, unread: false, kind: "loop" });
     if (loop.status === "armed" && (nextRunAt === undefined || loop.wakeup_at < nextRunAt)) {

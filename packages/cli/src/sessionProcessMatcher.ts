@@ -74,6 +74,116 @@ export function choosePreferredCodexCandidate(
   return candidates.find((c) => !c.tmuxTarget) || candidates[0];
 }
 
+// ── Borrowed pids: a session that does not own the process we resolve for it ──
+// hasCodexSessionFileOpen above asks only "does this process hold session X's
+// rollout open?" — never "does it hold ONLY X?". For a Codex subagent THREAD the
+// honest answer is that no process is exclusively its own: it runs INSIDE its
+// parent TUI's process, and the parent is what holds its rollout open. So the
+// lookup returns the PARENT's pid.
+//
+// That pid is the right answer for REACHING the agent — parent and subagent share
+// a terminal, and the subagent's permission prompt renders in the parent's pane —
+// and the wrong answer for OWNING it. Callers that attribute resources or destroy
+// processes must ask this first; callers that only inject keystrokes must not.
+//
+// CRITICAL: `parent_thread_id` alone is the WRONG discriminator. A census of 214
+// local rollouts found two different parent-carrying shapes, and they have
+// opposite process semantics:
+//
+//   28  originator=codex_exec  source={"subagent":"review"}          ← own process
+//   31  originator=codex-tui   source={"subagent":{"thread_spawn"…}} ← shared
+//
+// `codex exec` review children are spawned by another session's Bash tool as a
+// separate OS process (see the daemon's own note where it nests them under their
+// spawner). They own their pid, so treating them as borrowers would silently
+// leave a review running after the user killed its card — an over-fire on nearly
+// half of all parent-carrying sessions. Key POSITIVELY on the in-process shape:
+// a nested `thread_spawn` object, never the mere presence of a parent.
+// `originator` is deliberately NOT the discriminator even though it correlates:
+// the census found thread_spawn under BOTH "codex-tui" (27) and "codecast" (4),
+// so a new front-end shipping a third originator would silently be misclassified.
+// The structural shape is the invariant; the originator is branding.
+//
+// Returns "unknown", not "owned", for a session that clearly has a parent but
+// whose shape we do not recognize. That direction matters: every unrecognized
+// shape that resolves to "owned" re-opens the SIGKILL hole, while "unknown" costs
+// only a card that retires without reaping (planSessionTeardown treats the two
+// identically). A renamed `thread_spawn` key, or a future nesting we've never
+// seen, must not be read as permission to destroy a process.
+export function classifyProcessOwnership(
+  meta: { parentThreadId?: string; originator?: string; source?: unknown } | undefined,
+): ProcessOwnership {
+  const source = meta?.source;
+  const subagent =
+    source && typeof source === "object" ? (source as { subagent?: unknown }).subagent : undefined;
+
+  if (subagent !== undefined && subagent !== null) {
+    // An OBJECT carrying thread_spawn is the in-process thread — the borrower.
+    // Checked without requiring the top-level parent_thread_id, which is
+    // redundant (thread_spawn.parent_thread_id carries the same value in all 31
+    // real rollouts) and whose absence must not downgrade this to "owned".
+    if (typeof subagent === "object") {
+      return (subagent as { thread_spawn?: unknown }).thread_spawn !== undefined
+        ? "borrowed"
+        : "unknown"; // an object shape we don't recognize — fail closed
+    }
+    // A bare string ("review") is the `codex exec` child: a separate OS process
+    // spawned via another session's Bash tool, so it owns its pid.
+    if (typeof subagent === "string") return "owned";
+    return "unknown";
+  }
+
+  // No subagent marker at all. A parent id with nothing to explain it is a shape
+  // we can't classify; anything else is a plain root session.
+  return meta?.parentThreadId ? "unknown" : "owned";
+}
+
+// ── What a teardown may touch for a given session ───────────────────────────
+// Both destructive call sites (killConversationBackends, stopLocalSessionBackends)
+// do TWO process-destroying things: reap the resolved pid tree, and kill the tmux
+// cached in resumeSessionCache. Both are unsafe for a borrower, and for the same
+// reason — resumeSessionCache is keyed by session id but its VALUE can be the
+// PARENT's tmux name, because resolveLiveTmuxTarget resolves a subagent through
+// the borrowed pid to the parent's pane and caches that. Guarding only the reap
+// leaves the tmux kill as a live bypass that SIGKILLs the parent anyway.
+//
+// Expressed as one pure decision so both sites branch identically and a test can
+// assert the policy without dependency-injecting a kill path.
+export type ProcessOwnership = "owned" | "borrowed" | "unknown";
+
+export interface SessionTeardownPlan {
+  /** May we SIGKILL the resolved pid and its descendants? */
+  reapPidTree: boolean;
+  /** May we kill the tmux recorded in resumeSessionCache for this session? */
+  killCachedResumeTmux: boolean;
+}
+
+/** Destructive teardown fails CLOSED: only a session we positively know owns its
+ *  process may have it destroyed. "unknown" (an unreadable or half-written
+ *  rollout) must not authorize a SIGKILL — the cost of skipping is a card that
+ *  retires without reaping, the cost of guessing wrong is a dead parent TUI. */
+export function planSessionTeardown(ownership: ProcessOwnership): SessionTeardownPlan {
+  const owned = ownership === "owned";
+  return { reapPidTree: owned, killCachedResumeTmux: owned };
+}
+
+// ── Session ids in logs ──────────────────────────────────────────────────────
+// Codex mints session ids as UUIDv7, whose leading 48 bits are a millisecond
+// timestamp. A parent TUI and the subagents it spawns are minted inside the same
+// timestamp window BY CONSTRUCTION, so they collide on an 8-char prefix
+// systematically — observed live: 019fb73a-a740-… and 019fb73a-a85c-…, 150ms
+// apart, are both "019fb73a". Truncating logs there collapsed a parent and its
+// subagents into one indistinguishable id in exactly the lines you need to
+// untangle a misattribution. Print through the second group so the
+// sub-millisecond bits survive.
+const LOG_SESSION_ID_LEN = 13;
+
+/** A session id truncated for log lines, short enough to skim and long enough
+ *  to tell a Codex parent apart from its subagents. */
+export function shortId(sessionId: string): string {
+  return sessionId.slice(0, LOG_SESSION_ID_LEN);
+}
+
 export function matchStartedConversation(
   entries: Iterable<[string, StartedSessionEntry]>,
   {

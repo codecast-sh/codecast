@@ -38,6 +38,47 @@ export function shouldShowInInbox(conv: ConversationDoc): boolean {
   return true;
 }
 
+// The three DISTINCT ways a session leaves the active inbox. They were reported
+// as a single "dismissed" figure back when kill was an event rather than a
+// state, which hid the one difference that matters operationally — whether the
+// agent is still running:
+//   stashed   — hidden from the inbox, agent still ALIVE
+//   dismissed — hidden from the inbox, agent TORN DOWN
+//   killed    — retired; the authoritative marker, and it outranks both
+// Killed takes precedence because the two kill surfaces write different fields:
+// applyHideTransition (cast kill, dismiss→kill) stamps inbox_dismissed_at
+// ALONGSIDE inbox_killed_at, while the killSession command stamps the marker
+// alone. Checking dismissed first would file one user-visible state under two
+// different names depending on which surface did the killing.
+//
+// Dismissed then outranks stashed, matching isSessionStashed in the web's
+// inboxStore ("Dismiss wins: a stashed session that later gets dismissed
+// renders in the Dismissed bucket, never both"). Dismiss is also the stronger
+// claim: it means the agent was torn down, so a stash stamp that survives it is
+// stale history, and calling such a row "stashed" would assert a live agent
+// there isn't one.
+//
+// SCOPE OF THAT AGREEMENT — it holds for UNKILLED rows only, and the difference
+// is deliberate. The web models this as two ORTHOGONAL axes: a bucket
+// (active | dismissed | stashed) plus an independent isSessionKilled flag, so a
+// killed row still carries whichever bucket its hide stamps imply. This is a
+// SINGLE-AXIS partition, because its job is counting: every row must land in
+// exactly one tally or the figures overlap. The two therefore agree on every
+// combination with no kill marker and diverge on every one with it — e.g. a
+// stashed-then-killed row (killSession stamps the marker alone and never clears
+// inbox_stashed_at) is "killed" here and bucket=stashed + killed=true there.
+// Same facts, different projection; neither is wrong, and inboxFilters.test.ts
+// cross-checks the unkilled rows against the real web helpers so this stays
+// true rather than merely asserted.
+export type RetirementState = "killed" | "dismissed" | "stashed";
+
+export function classifyRetirement(conv: ConversationDoc): RetirementState | null {
+  if (conv.inbox_killed_at) return "killed";
+  if (conv.inbox_dismissed_at) return "dismissed";
+  if (conv.inbox_stashed_at) return "stashed";
+  return null;
+}
+
 // Whether `parent` is a conversation an orchestration worker can safely be
 // nested under at spawn time. We only stamp a worker's parent_conversation_id
 // when this holds, because listInboxSessions surfaces a child *only* under a
