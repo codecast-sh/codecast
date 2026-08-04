@@ -1034,7 +1034,7 @@ $ cast trigger add "Check for broken tests" --on push`}</Code>
             and a dedicated window. Everything in the web app works identically in the desktop app.
           </p>
           <a
-            href="https://codecast.sh/download/mac"
+            href="/download"
             className="inline-flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-colors"
             style={{ backgroundColor: SOL.base03, color: SOL.base3 }}
           >

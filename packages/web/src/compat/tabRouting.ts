@@ -19,6 +19,7 @@ const NON_TAB_EXACT = new Set([
   "/support",
   "/terms",
   "/pricing",
+  "/download",
   "/login",
   "/signup",
   "/forgot-password",
