@@ -5,7 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
-import { AGENT_STATUSES } from "@codecast/shared/contracts";
+import { AGENT_STATUSES, ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { internal } from "./_generated/api";
 import {
   NEEDS_INPUT_IDLE_CHECK_DELAY_MS,
@@ -728,8 +728,7 @@ export const updateAgentStatus = mutation({
     // Active status updates prove the daemon is alive — refresh heartbeat too.
     // This prevents stale-heartbeat inference from overriding a valid status update
     // (e.g. after daemon restart before the heartbeat interval kicks in).
-    const ACTIVE_STATUSES = new Set(["working", "compacting", "thinking", "connected", "starting", "resuming"]);
-    if (ACTIVE_STATUSES.has(args.agent_status)) {
+    if (ACTIVE_AGENT_STATUSES.has(args.agent_status)) {
       patch.last_heartbeat = Date.now();
     }
 

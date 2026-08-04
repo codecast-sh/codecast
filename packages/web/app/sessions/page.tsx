@@ -15,6 +15,7 @@ import {
 } from "../../store/inboxStore";
 import { deriveTriageFlags } from "./triageFlags";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
+import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
 
 type Session = FunctionReturnType<typeof api.managedSessions.listActiveSessions>[number];
 // Cleanup-oriented buckets, computed from liveness + sleep-aware idle — NOT from
@@ -61,10 +62,6 @@ const WORK_STATE_STYLES: Record<WorkState, { label: string; cls: string }> = {
   working:     { label: "working",     cls: "text-emerald-300 bg-emerald-950/30 border-emerald-900/40" },
   idle:        { label: "idle",        cls: "text-zinc-400 bg-zinc-800/50 border-zinc-700/40" },
 };
-
-// Daemon statuses that mean "actively doing work" — used only as a fallback for
-// rows with no inbox join (the inbox predicates are authoritative when present).
-const ACTIVE_AGENT_STATUSES = new Set(["working", "thinking", "compacting", "connected", "starting", "resuming"]);
 
 type TriageFilter = "all" | "needs_input" | "working" | "pinned" | "dismissed";
 

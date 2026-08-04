@@ -408,6 +408,9 @@ export function normalizeWorkStateFilter(raw: string | undefined | null): WorkSt
     case "working":
     case "active":
     case "busy":
+    // "waiting" is the agent_status of a finished turn parked on live background
+    // work — an active substate, so the filter alias follows it to working.
+    case "waiting":
       return "working";
     case "needs-input":
     case "needs":
@@ -418,7 +421,6 @@ export function normalizeWorkStateFilter(raw: string | undefined | null): WorkSt
       return "needs_input";
     case "idle":
     case "done":
-    case "waiting":
       return "idle";
     case "pinned":
     case "pin":
