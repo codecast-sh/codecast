@@ -212,7 +212,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "conversation/:id", component: cast(Conversation), layout: "dashboardShell", tab: "/conversation/:id", fullWidth: true, guestOk: true, guestKind: "shell" },
   { path: "conversation/:id/diff", component: cast(ConversationDiff), layout: "dashboardShell", tab: "/conversation/:id/diff", fullWidth: true, guestOk: true, guestKind: "shell" },
   { path: "docs", component: cast(Docs), layout: "dashboardShell", tab: "/docs", fullWidth: true },
-  { path: "vault", component: cast(Vault), layout: "dashboardShell", tab: "/vault", fullWidth: true },
+  { path: "files", component: cast(Vault), layout: "dashboardShell", tab: "/files", fullWidth: true },
+  { path: "vault", component: cast(Vault), layout: "dashboardShell", tab: "/vault", fullWidth: true }, // permanent pre-rename alias for /files
   { path: "pages", component: cast(Artifacts), layout: "dashboardShell", tab: "/pages" },
   { path: "artifacts", component: cast(Artifacts), layout: "dashboardShell", tab: "/artifacts" }, // pre-rename alias for /pages
   { path: "docs/:id", component: cast(DocDetail), layout: "dashboardShell", tab: "/docs/:id", fullWidth: true },

@@ -169,7 +169,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
-  const isVault = pathname === "/vault" || pathname?.startsWith("/vault/");
+  const isVault = pathname === "/files" || pathname?.startsWith("/files/") ||
+    pathname === "/vault" || pathname?.startsWith("/vault/"); // /vault = pre-rename alias
   const isPages = pathname === "/pages" || pathname?.startsWith("/pages/") ||
     pathname === "/artifacts" || pathname?.startsWith("/artifacts/"); // /artifacts = pre-rename alias
   const isWorkflows = pathname === "/workflows" || pathname?.startsWith("/workflows/");
@@ -389,7 +390,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               <TeamIcon icon={activeTeam.icon} color={activeTeam.icon_color} className="w-5 h-5 flex-shrink-0" />
               {!isNarrow && (
                 <>
-                  <span>{activeTeam.name}</span>
+                  <span>Feed</span>
                   {teamUnreadCount !== undefined && teamUnreadCount > 0 && !isTeamActivity && (
                     <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-xs font-semibold bg-sol-cyan text-sol-bg rounded-full">
                       {teamUnreadCount}
@@ -442,8 +443,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             }
           />
           <NavSection
-            label="Vault"
-            href="/vault"
+            label="Files"
+            href="/files"
             isActive={isVault}
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}

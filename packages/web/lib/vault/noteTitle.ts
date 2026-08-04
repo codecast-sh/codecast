@@ -4,12 +4,13 @@
 // actually open.
 
 import { vaultIndex } from "./indexSingleton";
+import { isFilesPath } from "./vaultHref";
 
 /** Title for a `/vault?f=<path>` tab path, or null when it isn't one (or the
  *  note isn't indexed yet, in which case the caller's filename fallback is
  *  still the honest answer). */
 export function vaultNoteTitle(tabPath: string): string | null {
-  if (!tabPath.startsWith("/vault?") && !tabPath.startsWith("/vault/")) return null;
+  if (!isFilesPath(tabPath)) return null;
   const query = tabPath.split("?")[1];
   if (!query) return null;
   let notePath: string | null = null;

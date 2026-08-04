@@ -12,6 +12,7 @@ import {
   renameMoves,
   siblingNames,
   splitEntryName,
+  visibleVaultFiles,
 } from "../explorerModel";
 
 /** `path: mtime` (a trailing "/" marks a directory) → the store's file table. */
@@ -27,6 +28,48 @@ const table = (spec: Record<string, number>): Record<string, VaultFileEntry> => 
 
 const order = (files: Record<string, VaultFileEntry>, mode: Parameters<typeof buildVaultTree>[1]) =>
   flattenTree(buildVaultTree(files, mode), {}).map((r) => r.node.path);
+
+describe("visibleVaultFiles", () => {
+  const mixed = table({
+    "docs/": 1,
+    "docs/guide.md": 2,
+    "docs/diagram.png": 3,
+    "src/": 4,
+    "src/index.ts": 5,
+    "bun.lock": 6,
+    "empty/": 7,
+  });
+
+  test("show-all hands back the table untouched, with no copy", () => {
+    // Identity matters: the explorer memoizes on this value, and a fresh object
+    // every render would rebuild the tree on every watcher heartbeat.
+    expect(visibleVaultFiles(mixed, true)).toBe(mixed);
+  });
+
+  test("off, it keeps notes and their attachments and drops the rest", () => {
+    const visible = visibleVaultFiles(mixed, false);
+    expect(Object.keys(visible).sort()).toEqual([
+      "docs", "docs/diagram.png", "docs/guide.md", "empty", "src",
+    ]);
+    expect(visible["src/index.ts"]).toBeUndefined();
+    expect(visible["bun.lock"]).toBeUndefined();
+  });
+
+  test("every directory survives the filter, including empty ones", () => {
+    // Pruning empty folders would make "New folder" look like it silently
+    // failed — a fresh folder is empty by definition. src/ stays for the same
+    // reason even though everything inside it is hidden.
+    const visible = visibleVaultFiles(mixed, false);
+    expect(visible["empty"]?.dir).toBe(true);
+    expect(visible["src"]?.dir).toBe(true);
+  });
+
+  test("the toggle only changes what is listed, never what a row means", () => {
+    const shown = Object.keys(visibleVaultFiles(mixed, true));
+    const hidden = Object.keys(visibleVaultFiles(mixed, false));
+    expect(hidden.every((p) => shown.includes(p))).toBe(true);
+  });
+});
 
 describe("sort order", () => {
   const files = table({ "notes/": 10, "Zed.md": 300, "apple.md": 100, "beta.md": 200 });
