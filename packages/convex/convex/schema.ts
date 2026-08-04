@@ -1984,11 +1984,19 @@ export default defineSchema({
     // that from a natural completion, so restoring the session can re-arm
     // exactly the schedules its kill took down. Cleared on reactivation.
     canceled_on_kill_at: v.optional(v.number()),
+    // COEXISTENCE with prod-ahead-of-git work (2026-08-04): prod carries a
+    // by_short_id index this repo has no commit for — someone deployed from an
+    // unpushed tree (same pattern as bf072ec8 / bd43fbb7). Declaring the field
+    // all-optional plus the index under its exact prod name keeps the deploy
+    // additive: their data and index survive, only their functions pause until
+    // they redeploy. Remove this block when the owning work merges.
+    short_id: v.optional(v.string()),
   })
     .index("by_user_status", ["user_id", "status"])
     .index("by_user_run_at", ["user_id", "run_at"])
     .index("by_status_run_at", ["status", "run_at"])
-    .index("by_event_filter", ["status"]),
+    .index("by_event_filter", ["status"])
+    .index("by_short_id", ["short_id"]),
 
   // --- Task Layer: Projects, Tasks, Docs ---
 
