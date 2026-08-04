@@ -1,13 +1,19 @@
 /**
- * Shared mapping between codecast object types, their in-app routes, and the
- * public URLs that address them. The single source of truth for "what URL
- * addresses this object" — used by the web entity pills (to turn a pasted link
- * into a rich, in-app pill), by navigation, and by the `cast link` CLI command
- * (to mint those links). Keep route knowledge here, not scattered across
- * components or duplicated in the CLI.
+ * Shared mapping between codecast object types, their identifiers, their
+ * in-app routes, and the public URLs that address them. The single source of
+ * truth for "how do I name and address this object" — used by the web entity
+ * pills (to turn a bare id, an `@[Title id]` mention, or a pasted link into a
+ * rich in-app pill), by navigation, and by the `cast link` CLI command.
+ *
+ * ADDING A NEW REFERENCEABLE OBJECT TYPE: add it to `EntityType`, give it a
+ * `SHORT_ID_PREFIX` entry (or teach `entityTypeFromId` its id shape), add its
+ * route to `ENTITY_ROUTE` and its url segment(s) to `SEGMENT_TYPE`. Every
+ * mention surface derives its matching from those tables, so nothing else in
+ * web/CLI needs a regex of its own. That is why triggers used to render as raw
+ * 32-char ids: their table was simply never registered here.
  */
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "trigger";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -30,6 +36,20 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   session: "/conversation",
   doc: "/docs",
   project: "/projects",
+  trigger: "/triggers",
+};
+
+/**
+ * Short-id prefix → entity type. A short id is the human-quotable handle for an
+ * object (`ct-4102`, `pl-88`, `tr-17`); the registry is what makes one
+ * recognizable everywhere at once, so a new prefixed type needs one line here
+ * and nothing else. Sessions and docs are absent on purpose: a session's handle
+ * is the 7-char `jx…` head of its Convex id, and a doc has no short id at all.
+ */
+export const SHORT_ID_PREFIX: Record<string, EntityType> = {
+  ct: "task",
+  pl: "plan",
+  tr: "trigger",
 };
 
 /**
@@ -50,7 +70,18 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
   doc: "doc",
   projects: "project",
   project: "project",
+  triggers: "trigger",
+  trigger: "trigger",
+  // Pre-rename alias, still live in old links.
+  schedules: "trigger",
 };
+
+/**
+ * Triggers have no detail page of their own: the list page opens one row via
+ * `?task=<id>`. Kept as an explicit exception so `entityRoute` stays the single
+ * answer to "where does this object live" for every caller.
+ */
+const QUERY_PARAM_ROUTE: Partial<Record<EntityType, string>> = { trigger: "task" };
 
 /** Normalize a canonical type or a url-segment alias to a canonical EntityType. */
 export function normalizeEntityType(type: string): EntityType | null {
@@ -67,6 +98,8 @@ export function normalizeEntityType(type: string): EntityType | null {
 export function entityRoute(type: string, id: string): string | null {
   const norm = normalizeEntityType(type);
   if (!norm) return null;
+  const param = QUERY_PARAM_ROUTE[norm];
+  if (param) return `${ENTITY_ROUTE[norm]}?${param}=${encodeURIComponent(id)}`;
   return `${ENTITY_ROUTE[norm]}/${id}`;
 }
 
@@ -83,16 +116,76 @@ export function buildEntityUrl(type: string, id: string, base: string = CODECAST
 }
 
 /**
- * Infer an entity type from a bare short id by its prefix: `ct-…` → task,
- * `pl-…` → plan. Returns null for everything else (full Convex ids, 7-char `jx…`
- * session ids, docs) — those have no distinguishing prefix, so the caller must
- * supply the type (or default to session, the historical `cast link` behavior).
+ * Infer an entity type from a bare short id by its prefix (`ct-…` → task,
+ * `pl-…` → plan, `tr-…` → trigger). Returns null for everything else (full
+ * Convex ids, 7-char `jx…` session ids, docs) — those have no distinguishing
+ * prefix, so the caller must supply the type (or default to session, the
+ * historical `cast link` behavior).
  */
 export function inferEntityTypeFromShortId(id: string): EntityType | null {
+  const prefix = (id || "").trim().toLowerCase().split("-")[0];
+  return SHORT_ID_PREFIX[prefix] ?? null;
+}
+
+/**
+ * Infer an entity type from any bare id: a prefixed short id, a `jx…` session
+ * short id, or a `doc:<convexId>` reference. Returns null for a full 32-char
+ * Convex id — those carry no type at all and must be resolved server-side
+ * (`entities.resolveIdType`), which is what the web pill does.
+ */
+export function entityTypeFromId(id: string): EntityType | null {
   const s = (id || "").trim();
-  if (/^ct-/.test(s)) return "task";
-  if (/^pl-/.test(s)) return "plan";
-  return null;
+  if (/^doc:/i.test(s)) return "doc";
+  if (isConvexId(s.toLowerCase())) return null;
+  if (/^jx[a-z0-9]{5,}$/i.test(s)) return "session";
+  return inferEntityTypeFromShortId(s);
+}
+
+// ---------------------------------------------------------------------------
+// The mention vocabulary
+//
+// Every surface that turns agent prose into rich object references matches the
+// same two shapes, so they are built here from one alternation instead of being
+// retyped (and drifting) in each component:
+//
+//   • a bare id     — `ct-4102`, `pl-88`, `tr-17`, `jx7c6zk`, `doc:<32 chars>`,
+//                     or a raw 32-char Convex id
+//   • a named mention — `@[Some Title ct-4102]`, optionally trailed by a `(…)`
+//
+// Each accessor returns a FRESH RegExp: these are used with the `g` flag, whose
+// `lastIndex` is mutable state, and a module-level shared instance silently
+// skips matches when two callers interleave.
+// ---------------------------------------------------------------------------
+
+/** `ct|pl|tr` — the registered short-id prefixes, as a regex alternation. */
+const PREFIX_ALT = Object.keys(SHORT_ID_PREFIX).join("|");
+
+/** Bare ids as they appear in prose, widest form first. */
+const BARE_ID_SOURCE = `(?:${PREFIX_ALT})-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
+
+/** Ids as they appear inside an `@[Title id]` mention (a label is not an object). */
+const MENTION_ID_SOURCE = `(?:${PREFIX_ALT})-\\w+|jx\\w+|doc:\\w+|label:\\w+|[a-z0-9]{32}`;
+
+/** Scans prose for bare object ids. Word-bounded so it can't split a longer token. */
+export function bareEntityIdRegex(): RegExp {
+  return new RegExp(`\\b(?:${BARE_ID_SOURCE})\\b`, "gi");
+}
+
+/**
+ * Matches `@[Title id]` mentions. Group 1 is the display title, group 2 the id
+ * (absent for a bare `@[Name]` person mention). `requireId` is for the send-time
+ * expander, which only enriches mentions that actually name an object.
+ */
+export function entityMentionRegex(opts: { requireId?: boolean } = {}): RegExp {
+  const idGroup = opts.requireId
+    ? `\\s+(${MENTION_ID_SOURCE})`
+    : `(?:\\s+(${MENTION_ID_SOURCE}))?`;
+  return new RegExp(`@\\[([^\\]]*?)${idGroup}\\](?:\\s*\\([^)]*\\))?`, "g");
+}
+
+/** True when a whole string is an object id (not a scan — an exact test). */
+export function isEntityId(text: string): boolean {
+  return new RegExp(`^(?:${BARE_ID_SOURCE})$`, "i").test((text || "").trim());
 }
 
 /**
@@ -120,6 +213,7 @@ export function parseEntityUrl(
 ): { type: EntityType; id: string } | null {
   if (!href || typeof href !== "string") return null;
   let path = href.trim();
+  let search = "";
 
   if (/^https?:\/\//i.test(path)) {
     let u: URL;
@@ -130,19 +224,34 @@ export function parseEntityUrl(
     }
     if (!isAppHost(u.host)) return null;
     path = u.pathname;
+    search = u.search;
   } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) {
     // Some other protocol (mailto:, entity://, mention://, codecast://, …).
     // Those are handled elsewhere or are genuinely external — not ours.
     return null;
   } else {
-    // Path-only href: drop any query string / hash.
-    path = path.split(/[?#]/)[0];
+    // Path-only href: split the query string / hash off the path, but keep the
+    // query — a trigger is addressed by it (/triggers?task=<id>).
+    const qIdx = path.search(/[?#]/);
+    if (qIdx !== -1) {
+      search = path[qIdx] === "?" ? path.slice(qIdx).split("#")[0] : "";
+      path = path.slice(0, qIdx);
+    }
   }
 
   const segs = path.split("/").filter(Boolean);
-  if (segs.length < 2) return null;
+  if (segs.length < 1) return null;
   const type = SEGMENT_TYPE[segs[0].toLowerCase()];
   if (!type) return null;
+
+  // Query-addressed types (triggers) carry their id in a param, not a segment.
+  const param = QUERY_PARAM_ROUTE[type];
+  if (param) {
+    const qId = search ? new URLSearchParams(search).get(param)?.trim() : null;
+    return qId ? { type, id: qId } : null;
+  }
+
+  if (segs.length < 2) return null;
   let id: string;
   try {
     id = decodeURIComponent(segs[1]).trim();

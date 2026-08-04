@@ -1,3 +1,5 @@
+import { entityMentionRegex } from "./entityLinks";
+
 export function stripMarkdown(text: string, opts?: { keepNewlines?: boolean }): string {
   const stripped = text
     .replace(/^#{1,6}\s+/gm, "")
@@ -34,7 +36,8 @@ export function cleanNotificationBody(text: string, maxLen = 180): string {
 
 const FRONTMATTER_RE = /^---\n[\s\S]*?\n---\n?/;
 const LEADING_H1_RE = /^#\s+.+\n+/;
-const ENTITY_MENTION_RE = /@\[([^\]]*?)(?:\s+(?:ct-\w+|pl-\w+|jx\w+|doc:\w+))?\](?:\s*\([^)]*\))?/g;
+// Shared mention shape: strips `@[Title id]` down to its display text.
+const ENTITY_MENTION_RE = entityMentionRegex();
 
 /**
  * Multi-line plain-text peek at a doc body for hover cards: drops frontmatter,

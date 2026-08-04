@@ -1,13 +1,15 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
-import { isConvexId } from "./entityLinks";
+import { isConvexId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId } from "./entityLinks";
 
-// The bare 32-char alternative catches full Convex ids — the only handle docs
-// have (no short id). EntityIdPill resolves their table server-side; ids that
-// resolve to nothing render back as plain text.
-const ENTITY_ID_RE = /\b(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32})\b/gi;
-const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+|[a-z0-9]{32}))?\](?:\s*\([^)]*\))?/g;
+// Both shapes come from the shared mention vocabulary (@codecast/shared/
+// entities), so registering a new object type there lights it up in prose
+// everywhere at once. The bare 32-char alternative catches full Convex ids —
+// the only handle docs have (no short id). EntityIdPill resolves their table
+// server-side; ids that resolve to nothing render back as plain text.
+const ENTITY_ID_RE = bareEntityIdRegex();
+const MENTION_RE = entityMentionRegex();
 // Obsidian-style transclusion: ![[doc:<convex id>]]. Only docs are embeddable —
 // they're the entity whose body IS markdown meant to be read in place.
 const EMBED_RE = /!\[\[(doc:[a-z0-9]{32})\]\]/g;
@@ -63,7 +65,7 @@ export function remarkEntityIds() {
       [
         MENTION_RE,
         (_match: string, name: string, entityId?: string) => {
-          if (entityId && (/^(ct|pl)-/.test(entityId) || /^jx[a-z0-9]/i.test(entityId) || isConvexId(entityId))) {
+          if (entityId && !/^doc:/i.test(entityId) && (entityTypeFromId(entityId) || isConvexId(entityId))) {
             return {
               type: "link",
               url: `entity://${entityId.toLowerCase()}`,

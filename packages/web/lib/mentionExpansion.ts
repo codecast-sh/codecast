@@ -18,6 +18,8 @@
 // injected context block is skipped. Delivered-with-less-context beats
 // never-delivered, every time.
 
+import { entityMentionRegex, entityTypeFromId } from "./entityLinks";
+
 export interface ParsedMention {
   type: string;
   shortId?: string;
@@ -44,7 +46,7 @@ export type RunExpandQuery = (
 export const MENTION_EXPAND_TIMEOUT_MS = 4000;
 
 export function parseEntityMentions(text: string): ParsedMention[] {
-  const mentionRegex = /@\[([^\]]*?)\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+|label:\w+)\](?:\s*\([^)]*\))?/g;
+  const mentionRegex = entityMentionRegex({ requireId: true });
   const docMentionLegacyRegex = /@\[([^\]]*?)\](?:\s*\(cast doc read (\w+)\))/g;
   const mentions: ParsedMention[] = [];
   let match: RegExpExecArray | null;
@@ -57,8 +59,12 @@ export function parseEntityMentions(text: string): ParsedMention[] {
     } else if (id.startsWith("label:")) {
       mentions.push({ type: "label", id: id.slice(6), fullMatch: match[0] });
     } else {
-      const type = id.startsWith("ct-") ? "task" : id.startsWith("pl-") ? "plan" : "session";
-      mentions.push({ type, shortId: id, fullMatch: match[0] });
+      // Prefix registry first (task/plan/trigger), then `jx…` sessions. A bare
+      // 32-char Convex id carries no type, and enrichment has no way to guess
+      // one — skip it rather than probe the wrong table. It still RENDERS as a
+      // pill; only the injected context block is skipped.
+      const type = entityTypeFromId(id);
+      if (type) mentions.push({ type, shortId: id, fullMatch: match[0] });
     }
   }
 

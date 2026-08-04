@@ -2003,6 +2003,29 @@ export const expandMentions = query({
             results.push({ type: "session", shortId: mention.shortId, markdown: md });
           }
 
+        } else if (mention.type === "trigger" && mention.shortId) {
+          // A trigger expands to what it runs and how it last went, so the
+          // agent can reason about (or amend) standing work without a lookup.
+          const trig = await ctx.db.query("agent_tasks")
+            .withIndex("by_short_id", (q: any) => q.eq("short_id", mention.shortId!.toLowerCase()))
+            .unique();
+          if (trig && String(trig.user_id) === String(userId)) {
+            const cadence = trig.schedule_type === "recurring" && trig.interval_ms
+              ? `every ${Math.round(trig.interval_ms / 60000)}m`
+              : trig.schedule_type === "event"
+                ? `on ${trig.event_filter?.event_type || "event"}`
+                : "one-time";
+            let md = `\n\n---\n### Trigger: ${trig.display_title || trig.title}\n`;
+            md += `\`${trig.short_id}\` | ${cadence} | Status: **${trig.status}**`;
+            if (trig.run_count) md += ` | ${trig.run_count} run${trig.run_count === 1 ? "" : "s"}`;
+            md += `\n\n#### Prompt\n\n${trig.prompt.slice(0, 2000)}${trig.prompt.length > 2000 ? "\n\n… (truncated)" : ""}\n\n`;
+            if (trig.last_run_summary) {
+              md += `#### Last run${trig.last_run_failed ? " (FAILED)" : ""}\n\n${trig.last_run_summary.slice(0, 1000)}\n\n`;
+            }
+            md += `> \`cast trigger log ${trig.short_id}\` for the last run's conversation\n---\n`;
+            results.push({ type: "trigger", shortId: mention.shortId, markdown: md });
+          }
+
         } else if (mention.type === "doc" && mention.id) {
           const doc = await ctx.db.get(mention.id as Id<"docs">);
           if (doc && (await canAccessDoc(ctx, userId, doc))) {

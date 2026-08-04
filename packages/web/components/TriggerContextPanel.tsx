@@ -281,6 +281,31 @@ export function TriggerContextPanel({
             </span>
           </ShortcutTooltip>
         )}
+        {/* Provenance: the session that armed this trigger — visible without
+            expanding, since on a run's page "where did this come from" is the
+            first question. Hidden on the creator itself (the strip's presence
+            already says it). A span, not a button: the row is a <button> and
+            nested buttons are invalid HTML. */}
+        {primary.created_by_conversation_id &&
+          primary.created_by_conversation_id !== conversationId && (
+            <ShortcutTooltip label="Open the session that created this trigger">
+              <span
+                role="link"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useInboxStore
+                    .getState()
+                    .requestNavigate(primary.created_by_conversation_id!);
+                }}
+                className="inline-flex items-center gap-0.5 min-w-0 flex-shrink text-sol-cyan hover:underline"
+              >
+                <span className="truncate">
+                  from {primary.created_by_conversation_title || "session"}
+                </span>
+                <ArrowUpRight className="w-3 h-3 flex-shrink-0" />
+              </span>
+            </ShortcutTooltip>
+          )}
         <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
           {rightStatus}
           {expanded ? (
@@ -403,25 +428,8 @@ export function TriggerContextPanel({
                 </span>
               </ShortcutTooltip>
             )}
-            {/* Provenance: the session that armed this trigger. Only shown when
-                it's a different conversation than the one being viewed — on the
-                creator itself the strip's presence already says it. */}
-            {primary.created_by_conversation_id &&
-              primary.created_by_conversation_id !== conversationId && (
-                <ShortcutTooltip label="Open the session that created this trigger">
-                  <button
-                    onClick={() =>
-                      useInboxStore
-                        .getState()
-                        .requestNavigate(primary.created_by_conversation_id!)
-                    }
-                    className="inline-flex items-center gap-0.5 text-sol-cyan hover:underline"
-                  >
-                    from {primary.created_by_conversation_title || "session"}
-                    <ArrowUpRight className="w-3 h-3" />
-                  </button>
-                </ShortcutTooltip>
-              )}
+            {/* Provenance ("from <session>") lives in the always-visible strip
+                row above — repeating it here would show it twice. */}
           </div>
 
           {(primary.last_run_at || primary.last_run_summary) && (
