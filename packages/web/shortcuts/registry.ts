@@ -95,9 +95,17 @@ export interface ShortcutDef {
 // force-mounted dialog's exit animation from counting as open. While a modal
 // is open it owns keyboard and focus: the shortcut dispatcher stands down and
 // background focus-stealers (composer refocus, mode-cycle chords) must not run.
-export function hasOpenModal(): boolean {
+//
+// `host`: for a keyboard handler that itself lives INSIDE a modal (e.g. the
+// new-session pickers hosted by the compose dialog). A modal that contains the
+// host doesn't block it — only a modal stacked elsewhere (a confirm dialog, the
+// settings modal) does. Without `host`, any open modal counts.
+export function hasOpenModal(host?: Element | null): boolean {
   if (typeof document === 'undefined') return false;
-  return !!document.querySelector('[aria-modal="true"]:not([data-state="closed"])');
+  const modals = document.querySelectorAll('[aria-modal="true"]:not([data-state="closed"])');
+  if (!host) return modals.length > 0;
+  for (const m of modals) if (!m.contains(host)) return true;
+  return false;
 }
 
 // Decides whether a binding bypasses the in-input guard for the focused element.
@@ -201,7 +209,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   // context active while the vault tab is visible, so favorite would otherwise
   // always win. The vault handler declines (returns false) unless the vault is
   // the visible tab, and the dispatcher then falls through to favorite.
-  { key: 'ctrl+shift+f', mac: 'meta+shift+f', action: 'vault.search', skipInputCheck: true, description: 'Search vault' },
+  { key: 'ctrl+shift+f', mac: 'meta+shift+f', action: 'vault.search', skipInputCheck: true, description: 'Search files' },
   { key: 'ctrl+shift+f', mac: 'meta+shift+f', action: 'conv.favorite', when: 'conversation', skipInputCheck: true, description: 'Toggle favorite' },
   { key: 'r', action: 'conv.review', when: 'conversation', description: 'Review / comment on a reply' },
   { key: 'meta+shift+l', action: 'conv.copyLink', when: 'conversation', skipInputCheck: true, description: 'Copy conversation link' },
@@ -224,14 +232,14 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+`', action: 'terminal.toggle', skipInputCheck: true, description: 'Toggle terminal' },
   // Cmd+O mirrors Obsidian's quick switcher. The handler declines when no
   // vault is connected, so the chord costs nothing in vault-less workspaces.
-  { key: 'ctrl+o', mac: 'meta+o', action: 'vault.quickSwitch', skipInputCheck: true, description: 'Open vault note' },
+  { key: 'ctrl+o', mac: 'meta+o', action: 'vault.quickSwitch', skipInputCheck: true, description: 'Open a note' },
   // Obsidian's edit/read chord. skipInputCheck because the editor it toggles IS
   // an input; the handler declines unless the vault is the visible tab with a
   // note open, so the chord costs nothing anywhere else.
-  { key: 'ctrl+e', mac: 'meta+e', action: 'vault.toggleEdit', skipInputCheck: true, description: 'Toggle vault edit / read mode' },
+  { key: 'ctrl+e', mac: 'meta+e', action: 'vault.toggleEdit', skipInputCheck: true, description: 'Toggle note edit / read mode' },
   // Live preview is the editing mode Cmd+E lands on; this jumps past it to the
   // raw file, and back to live preview when you're done looking.
-  { key: 'ctrl+shift+e', mac: 'meta+shift+e', action: 'vault.sourceMode', skipInputCheck: true, description: 'Toggle vault source mode' },
+  { key: 'ctrl+shift+e', mac: 'meta+shift+e', action: 'vault.sourceMode', skipInputCheck: true, description: 'Toggle note source mode' },
   { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
 
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },

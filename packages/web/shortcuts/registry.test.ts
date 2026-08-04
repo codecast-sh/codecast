@@ -100,18 +100,58 @@ describe("hasOpenModal", () => {
     expect(hasOpenModal()).toBe(false);
   });
 
+  const stub = (modals: { contains: (el: unknown) => boolean }[]) => ({
+    querySelectorAll: (sel: string) => {
+      expect(sel).toBe('[aria-modal="true"]:not([data-state="closed"])');
+      return modals;
+    },
+  });
+
   test("reflects an aria-modal element that is not mid exit animation", () => {
-    const stub = (found: boolean) => ({
-      querySelector: (sel: string) => {
-        expect(sel).toBe('[aria-modal="true"]:not([data-state="closed"])');
-        return found ? {} : null;
-      },
-    });
-    (globalThis as any).document = stub(true);
+    (globalThis as any).document = stub([{ contains: () => false }]);
     try {
       expect(hasOpenModal()).toBe(true);
-      (globalThis as any).document = stub(false);
+      (globalThis as any).document = stub([]);
       expect(hasOpenModal()).toBe(false);
+    } finally {
+      delete (globalThis as any).document;
+    }
+  });
+
+  // Regression: the compose dialog hosts NewSessionView inside its own
+  // aria-modal container — the pickers' ⌥-chords must keep working there. A
+  // modal that CONTAINS the handler's root doesn't block it; any modal stacked
+  // elsewhere (draft confirm, settings) still does.
+  test("a modal containing the host does not block it", () => {
+    const host = {};
+    (globalThis as any).document = stub([{ contains: (el: unknown) => el === host }]);
+    try {
+      expect(hasOpenModal(host as Element)).toBe(false);
+      expect(hasOpenModal()).toBe(true);
+    } finally {
+      delete (globalThis as any).document;
+    }
+  });
+
+  test("a modal elsewhere blocks a hosted handler", () => {
+    const host = {};
+    (globalThis as any).document = stub([
+      { contains: (el: unknown) => el === host },
+      { contains: () => false },
+    ]);
+    try {
+      expect(hasOpenModal(host as Element)).toBe(true);
+    } finally {
+      delete (globalThis as any).document;
+    }
+  });
+
+  test("null host falls back to any-open-modal", () => {
+    (globalThis as any).document = stub([{ contains: () => true }]);
+    try {
+      // rootRef.current can be null for a beat before the surface mounts —
+      // fail safe: stand down as if unhosted.
+      expect(hasOpenModal(null)).toBe(true);
     } finally {
       delete (globalThis as any).document;
     }
