@@ -12,15 +12,17 @@ const MOBILE_MAX_WIDTH = 768;
  * What a click on a linked session should do, given which surface is mounted.
  * A conversation always opens on the STAGE — never in a side column (that
  * surface is retired; the right rail is only ever the session list).
+ *  - "companion": open it beside the task/doc already on the stage
  *  - "select": make it the current inbox conversation (instant, same path fork
  *    chips and parent links use)
  *  - "route": go to /conversation/<id> -- the universal target: an authenticated
  *    owner is redirected into the inbox with the session selected, a guest gets
  *    the read-only viewer
  */
-export function resolveLinkedSessionOpen(kind: SessionSelectKind, narrow: boolean): "select" | "route" {
+export function resolveLinkedSessionOpen(kind: SessionSelectKind, narrow: boolean): "select" | "route" | "companion" {
   if (narrow) return "route";
   if (kind === "inboxInPlace") return "select";
+  if (kind === "companion") return "companion";
   return "route";
 }
 
@@ -67,10 +69,13 @@ export function useOpenLinkedSession() {
       isOnSettingsPage: routerLocation.pathname.startsWith("/settings"),
       isOnInboxPage: isInboxSessionView(pathname, store.currentConversation?.source),
       isOnConversationPage: pathname?.includes("/conversation/") ?? false,
+      isOnWorkingPage: /^\/(tasks|docs|plans)(\/|$)/.test(pathname ?? ""),
     });
     const open = resolveLinkedSessionOpen(kind, narrow);
     if (open === "route") {
       router.push(`/conversation/${sid}`);
+    } else if (open === "companion") {
+      store.openCompanion(sid);
     } else {
       store.navigateToSession(sid);
     }

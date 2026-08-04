@@ -16,10 +16,25 @@ describe("inboxRouting", () => {
 });
 
 describe("resolveSessionSelectKind", () => {
-  it("promotes to the stage (leave) on plain working pages", () => {
+  it("promotes to the stage (leave) on plain pages with no working surface", () => {
     expect(resolveSessionSelectKind({
       isOnSettingsPage: false, isOnInboxPage: false, isOnConversationPage: false,
     })).toBe("leave");
+  });
+
+  // The stage's second pane: a task/doc already owns the stage, so a clicked
+  // session opens BESIDE it rather than replacing the page.
+  it("opens beside the page on a working surface (tasks/docs/plans)", () => {
+    expect(resolveSessionSelectKind({
+      isOnSettingsPage: false, isOnInboxPage: false, isOnConversationPage: false, isOnWorkingPage: true,
+    })).toBe("companion");
+  });
+
+  // Precedence: the inbox IS conversations — never open a companion there.
+  it("keeps in-place selection on the inbox even if a working flag leaks in", () => {
+    expect(resolveSessionSelectKind({
+      isOnSettingsPage: false, isOnInboxPage: true, isOnConversationPage: false, isOnWorkingPage: true,
+    })).toBe("inboxInPlace");
   });
 
   it("selects in place on the inbox", () => {
