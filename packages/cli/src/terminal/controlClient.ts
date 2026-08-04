@@ -9,6 +9,12 @@ const INPUT_CHUNK_BYTES = 256;
 export interface ControlClientEvents {
   onOutput(data: Buffer): void;
   onExit(reason?: string): void;
+  /** Attach mode: the pane's geometry changed under us (another client
+   *  resized it, the daemon refreshed it). Carries a fresh full-screen seed
+   *  so the viewer can reset + repaint at the new size — without this, xterm
+   *  keeps stale columns and every later repaint wraps wrong, splicing
+   *  fragments of different frames into the same row. */
+  onReseed?(info: { cols: number; rows: number; seed: Buffer }): void;
 }
 
 export type ControlClientMode =
@@ -33,6 +39,7 @@ export class TmuxControlClient {
   private paneId: string | null = null;
   private seeded = false;
   private closed = false;
+  private reseedTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private mode: ControlClientMode,
@@ -64,10 +71,14 @@ export class TmuxControlClient {
       // started by the launchd daemon has no locale at all — every multibyte
       // program in the shell then misbehaves (vim E1511, broken box drawing).
       args.push("-e", `LANG=${process.env.LC_ALL || process.env.LANG || "en_US.UTF-8"}`);
+    } else if (this.mode.readOnly) {
+      // A watcher must never reshape the pane out from under the agent.
+      args.push("attach-session", "-t", this.mode.target, "-f", "ignore-size,read-only");
     } else {
-      const flags = ["ignore-size"];
-      if (this.mode.readOnly) flags.push("read-only");
-      args.push("attach-session", "-t", this.mode.target, "-f", flags.join(","));
+      // Interactive attach is a REAL attach: it sizes the pane to the viewer,
+      // exactly like `tmux attach` from iTerm — the sanctioned manual flow,
+      // which the daemon's screen-scraping already tolerates daily.
+      args.push("attach-session", "-t", this.mode.target);
     }
 
     const env: Record<string, string | undefined> = { ...process.env, PATH: ENRICHED_PATH };
@@ -111,6 +122,10 @@ export class TmuxControlClient {
       // No status line for panel terminals: control clients never render it,
       // and without this the window reserves a row for a bar nobody sees.
       await this.command(`set-option -q -t ${shellSafe(this.mode.sessionName)} status off`);
+      await this.command(`refresh-client -C ${cols}x${rows}`);
+    } else if (!this.mode.readOnly) {
+      // Interactive attach: adopt the viewer's geometry up front, so the seed
+      // is captured at the size the panel will actually render.
       await this.command(`refresh-client -C ${cols}x${rows}`);
     }
 
@@ -188,9 +203,42 @@ export class TmuxControlClient {
           this.destroyChild();
         }
         break;
+      case "notification":
+        // Pane geometry changed (another client resized, daemon refresh).
+        // Debounced: tmux fires layout-change repeatedly during a drag.
+        if (
+          ev.name === "layout-change" &&
+          this.mode.kind === "attach" &&
+          this.seeded &&
+          this.events.onReseed
+        ) {
+          if (this.reseedTimer) clearTimeout(this.reseedTimer);
+          this.reseedTimer = setTimeout(() => {
+            this.reseedTimer = null;
+            void this.reseed();
+          }, 300);
+          this.reseedTimer.unref?.();
+        }
+        break;
       default:
         break;
     }
+  }
+
+  /** Re-measure the pane and hand the caller a fresh full-screen seed. */
+  private async reseed(): Promise<void> {
+    if (this.closed || !this.events.onReseed) return;
+    const info = await this.command(
+      "display-message -p -F '#{pane_id}|#{pane_width}|#{pane_height}'",
+    );
+    const parts = (info.lines[0] ?? "").split("|");
+    this.paneId = parts[0] || this.paneId;
+    const cols = parseInt(parts[1] ?? "", 10);
+    const rows = parseInt(parts[2] ?? "", 10);
+    if (!cols || !rows) return;
+    const seed = await this.captureSeed(rows);
+    if (this.closed) return;
+    this.events.onReseed({ cols, rows, seed });
   }
 
   /** Write raw input bytes to the pane (hex-encoded send-keys, binary-safe). */
@@ -203,7 +251,9 @@ export class TmuxControlClient {
   }
 
   resize(cols: number, rows: number): void {
-    if (this.closed || this.mode.kind === "attach") return; // never resize someone else's pane
+    // Only read-only viewers are barred from reshaping the pane; interactive
+    // clients (created shells AND real attaches) size it like any terminal.
+    if (this.closed || this.isReadOnly) return;
     void this.command(`refresh-client -C ${Math.max(2, cols)}x${Math.max(2, rows)}`);
   }
 
