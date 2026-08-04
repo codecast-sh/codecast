@@ -48,6 +48,10 @@ export function collectGhostSweepCandidates(
   const blankAndIdle = (s: InboxSession, cutoff: number) =>
     (s.message_count ?? 0) === 0
     && !s.has_pending
+    // A kept draft (compose popup's "save draft") is deliberate user state, not
+    // cruft — it renders as an inbox card and must outlive every janitor until
+    // sent or dismissed.
+    && !s._hasDraft
     && !store.pendingMessages[s._id]?.length
     && !store.pendingSessionCreates[s._id]
     && s._id !== store.currentSessionId
