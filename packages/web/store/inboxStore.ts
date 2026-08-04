@@ -13,9 +13,7 @@ import {
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
-import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, PERSISTENCE_AVAILABLE, PRINCIPAL_SCOPED_PERSISTENCE, getBoundPrincipalEpoch } from "./idbCache";
-import type { PrincipalEpoch } from "./local-first/types";
-import type { DispatchAuthorizationCapture } from "./local-first/dispatchGate";
+import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, PERSISTENCE_AVAILABLE } from "./idbCache";
 import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrategy } from "./clientSyncRegistry";
 import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
@@ -26,8 +24,8 @@ import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/
 
 export type { PendingEntry } from "./syncProtocol";
 
-// A tracked create can outlive the UI's bounded resolver window while its
-// principal outbox remains the durable owner of the command. Subclass the
+// A tracked create can outlive the UI's bounded resolver window while the
+// durable outbox remains the owner of the command. Subclass the
 // existing parked error so every send caller keeps the optimistic message
 // pending and the normal rekey continuation can redrive it later.
 export class SessionCreatePendingError extends DispatchNotWiredError {
@@ -2498,10 +2496,11 @@ interface InboxStoreState {
   // -- Dispatch (provided by middleware) --
   _setDispatch: (
     fn: ((action: string, args: any, patches?: any, result?: any) => Promise<any>) | null,
-    options?: { owner?: object; authorization?: DispatchAuthorizationCapture },
+    options?: { owner?: object },
   ) => void;
   _clearDispatch: (owner: object) => void;
   _setDispatchError: (fn: (action: string, error: unknown, args?: unknown) => void) => void;
+  _setStorageHealth: (fn: ((healthy: boolean, elapsedMs: number) => void) | null) => void;
   _dispatch: (action: string, args: any, patches?: any, result?: any) => Promise<any>;
   _handleReceiptRejection: (
     actionName: string,
@@ -2515,6 +2514,9 @@ interface InboxStoreState {
   ) => void;
   _clearPostCreateBucketIntent: (conversationId: string, bucketId: string) => void;
   dispatchErrors: number;
+  // True while durable IndexedDB writes exceed the enqueue watchdog. Delivery
+  // is unaffected; the banner tells the user durability is degraded.
+  storageDegraded: boolean;
   // Last PERMANENT dispatch rejection (server ran the write and refused it) —
   // ephemeral, raw-set by the dispatch error handler; a platform-specific
   // surface (web: toast bridge in providers.tsx) turns it into user feedback.
@@ -4204,6 +4206,7 @@ export const useInboxStore = create<InboxStoreState>(
   sessions: {},
   pending: {},
   dispatchErrors: 0,
+  storageDegraded: false,
   lastDispatchFailure: null,
   currentSessionId: null,
   lastFocusedConversationId: null,
@@ -5008,7 +5011,7 @@ export const useInboxStore = create<InboxStoreState>(
   // server echoes it back. Fire-and-forget — status is read back from the
   // synced pending_messages row, not a return value. Args mirror the server
   // handler: [conversation_id, content, image_storage_ids, client_id].
-  sendMessage: receiptAsyncAction(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
+  sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
     notePendingMessageSendRequested(_clientId);
     // No local mutation here: durability for the visible message comes from the
     // persisted pendingMessages map. This body exists only so the middleware
@@ -5927,7 +5930,7 @@ export const useInboxStore = create<InboxStoreState>(
     this.messages[convId] = merged;
     const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
     this.pagination[convId] = pag;
-    if (PRINCIPAL_SCOPED_PERSISTENCE) writeConversationMessages(convId, merged, pag);
+    writeConversationMessages(convId, merged, pag);
     evictInactiveMessages(this, convId);
   }),
 
@@ -5951,7 +5954,7 @@ export const useInboxStore = create<InboxStoreState>(
     this.messages[convId] = merged;
     const pag = meta ? { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta } : this.pagination[convId];
     if (meta) this.pagination[convId] = pag;
-    if (PRINCIPAL_SCOPED_PERSISTENCE) writeConversationMessages(convId, merged, pag);
+    writeConversationMessages(convId, merged, pag);
     evictInactiveMessages(this, convId);
   }),
 
@@ -6583,7 +6586,7 @@ export const useInboxStore = create<InboxStoreState>(
 
   // Rename / color / sort / archive ride the generic patch path (inbox_buckets
   // is in dispatch TABLE_CONFIG); fields are auto-protected until server echo.
-  updateBucket: receiptAsyncAction(function (this: Draft, id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) {
+  updateBucket: action(function (this: Draft, id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) {
     const bucket = this.buckets[id] as any;
     if (!bucket) return;
     const previous: Record<string, unknown> = {};
@@ -6602,7 +6605,7 @@ export const useInboxStore = create<InboxStoreState>(
   // effect performs the durable upsert. A stub conversation id is allowed when
   // the server reaches the same assignment on its own (fork label inheritance):
   // the dispatch no-ops there, and rekeyId carries the local row to the real id.
-  assignSessionToBucket: receiptAsyncAction(function (this: Draft, conversationId: string, bucketId: string | null) {
+  assignSessionToBucket: action(function (this: Draft, conversationId: string, bucketId: string | null) {
     const now = Date.now();
     // A create-time focused-bucket marker is only a fallback until the first
     // authoritative filing. A later explicit move/unfile is newer user intent
@@ -7282,8 +7285,6 @@ export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): Inbox
 // can be re-hydrated from IDB when the user switches back to them.
 const _idbHydratingSet = new Set<string>();
 export function ensureHydrated(convId: string) {
-  const capturedEpoch = getBoundPrincipalEpoch();
-  if (capturedEpoch == null) return;
   const store = useInboxStore.getState();
   // Already in memory — nothing to hydrate
   if (store.messages[convId]?.length > 0) return;
@@ -7292,15 +7293,13 @@ export function ensureHydrated(convId: string) {
   _idbHydratingSet.add(convId);
   loadConversationMessages(convId).then((cached) => {
     _idbHydratingSet.delete(convId);
-    if (getBoundPrincipalEpoch() !== capturedEpoch) return;
     if (!cached || cached.messages.length === 0) return;
     const current = useInboxStore.getState().messages[convId];
     if (current?.length > 0) return;
     useInboxStore.getState().setMessages(convId, cached.messages, cached.pagination);
   }).catch(() => {
     _idbHydratingSet.delete(convId);
-    // idbCache reports the failure to the principal runtime; never reinterpret
-    // a storage/fence error as an authoritative empty conversation.
+    // Never reinterpret a storage error as an authoritative empty conversation.
   });
 }
 
@@ -7394,20 +7393,26 @@ export function seedLiveInboxIdsFromCache(cachedList: unknown) {
   useInboxStore.setState({ liveInboxIds: new Set(ids), liveInboxIdList: ids });
 }
 
-export async function hydratePrincipalInboxCache(options: {
-  principalEpoch: PrincipalEpoch;
-  isCurrent: () => boolean;
-}): Promise<boolean> {
-  const isCurrent = () =>
-    options.isCurrent() && getBoundPrincipalEpoch() === options.principalEpoch;
-  if (!PERSISTENCE_AVAILABLE || !isCurrent()) return false;
+// -- IndexedDB cache: wire patch-driven writes + hydrate on load --
+async function hydrateInboxCacheFromIDB(): Promise<boolean> {
+  if (!PERSISTENCE_AVAILABLE) return false;
 
   (useInboxStore.getState() as any)._setIDBWrite(writePatchesToIDB);
   (useInboxStore.getState() as any)._setOutbox(enqueueDispatch, removeDispatch, loadOutbox);
+  (useInboxStore.getState() as any)._setStorageHealth?.((healthy: boolean) => {
+    if (useInboxStore.getState().storageDegraded === !healthy) return;
+    useInboxStore.setState({ storageDegraded: !healthy });
+  });
+
+  // Salvage any writes parked in the retired local-first v2 databases, then
+  // delete those databases. Runs before the first drain can matter: the drain
+  // re-fires below once salvage lands rows.
+  void salvageLocalFirstV2Data().then((salvaged) => {
+    if (salvaged > 0) (useInboxStore.getState() as any)._drainOutbox?.();
+  });
 
   setHydrating(true);
   const cached = await loadCache();
-  if (!isCurrent()) return false;
   if (!cached) {
     setHydrating(false);
     useInboxStore.setState({ clientStateInitialized: true });
@@ -7415,7 +7420,6 @@ export async function hydratePrincipalInboxCache(options: {
   }
 
     const apply = (pick: string[]) => {
-      if (!isCurrent()) return;
       const state = useInboxStore.getState();
       const updates: Record<string, any> = {};
       for (const key of pick) {
@@ -7530,7 +7534,6 @@ export async function hydratePrincipalInboxCache(options: {
     // "manual" handling, so a new key can never silently skip hydration (the
     // ct-34920 / buckets-pop-in bug class).
     apply(HYDRATION_CRITICAL_KEYS);
-    if (!isCurrent()) return false;
 
     // Seed the authoritative active set from its persisted twin (manual
     // hydration — see clientSyncRegistry). Same synchronous pass as the
@@ -7588,7 +7591,6 @@ export async function hydratePrincipalInboxCache(options: {
     // the user running many session tabs, most are backgrounded — they must still
     // hydrate and persist. setTimeout fires (throttled) even when hidden.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    if (!isCurrent()) return false;
     apply(HYDRATION_DEFERRED_KEYS);
       // Re-enable IDB write-through only AFTER the deferred collections land.
       // If a live delta arrives while write-through is open but the store still
@@ -7603,9 +7605,15 @@ export async function hydratePrincipalInboxCache(options: {
     return true;
 }
 
-// Native currently has only the legacy non-transactional KV adapter. Keep the
-// UI available with fresh in-memory state, but do not hydrate protected blobs
-// until the direct SQLite principal adapter satisfies the v2 contract.
-if (!PRINCIPAL_SCOPED_PERSISTENCE) {
+// Persistence boots with the module: wire write-through and hydrate
+// immediately. Nothing gates on auth — cached state renders first and live
+// sync reconciles after (local-first is the law).
+if (PERSISTENCE_AVAILABLE) {
+  void hydrateInboxCacheFromIDB().catch((error) => {
+    console.error("[store] IDB hydration failed; continuing with live-only state", error);
+    setHydrating(false);
+    useInboxStore.setState({ clientStateInitialized: true });
+  });
+} else {
   useInboxStore.setState({ clientStateInitialized: true });
 }

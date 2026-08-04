@@ -9,7 +9,6 @@ import { useAuthActions, useAuthToken } from '@convex-dev/auth/react';
 import { useConvexAuth, useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { clearProtectedInboxMemory, useInboxStore } from '@codecast/web/store/inboxStore';
-import { updatePrincipalDispatchCorrelation } from '@codecast/web/store/local-first/dispatchGate';
 import { openPrincipalDispatchOutbox } from './dispatchOutbox';
 
 const TOKEN_KEY = 'convex_auth_token';
@@ -86,9 +85,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     lastVisibleSubject.current = visibleSubject;
     dispatchGeneration.current++;
   }
-  updatePrincipalDispatchCorrelation(
-    durableSubject ? dispatchGeneration.current : null,
-  );
   // Close the old account's enqueue surface in the same render that closes
   // dispatch authorization. The native SQLite rows remain intact and
   // principal-keyed, but no click in the transition window can capture the old
@@ -265,7 +261,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    updatePrincipalDispatchCorrelation(null);
     clearProtectedInboxMemory();
     await convexSignOut();
     await SecureStore.deleteItemAsync(TOKEN_KEY);

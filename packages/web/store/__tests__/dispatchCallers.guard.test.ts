@@ -69,11 +69,14 @@ describe("durable dispatch call-site guards", () => {
       "createPlan",
       "createProject",
       "createBucket",
-      "updateBucket",
-      "assignSessionToBucket",
-      "sendMessage",
     ]) {
       expect(store).toContain(`${action}: receiptAsyncAction(`);
+    }
+    // Fire-and-forget writes ride plain action(): optimistic paint, park-and-
+    // drain delivery, server-side dedup (client id for sends, LWW for the
+    // bucket patches). They are not receipt-backed.
+    for (const action of ["updateBucket", "assignSessionToBucket", "sendMessage"]) {
+      expect(store).toContain(`${action}: action(`);
     }
 
     const palette = await Bun.file(

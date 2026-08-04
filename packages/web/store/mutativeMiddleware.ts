@@ -5,12 +5,6 @@ import {
   isProtectedSyncCollection,
 } from "./clientSyncRegistry";
 import { consumeViewNav, noteViewNavApplied, recordNavEvent } from "./viewNav";
-import {
-  isPrincipalDispatchAuthorizationCurrent,
-  type DispatchAuthorizationCapture,
-} from "./local-first/dispatchGate";
-import { isLocalFirstWriteEnabled } from "./local-first/featureFlags";
-import { assertDurableOfflineWriteCapability } from "./local-first/storagePersistence";
 
 type DispatchFn = (action: string, args: any, patches?: any, result?: any) => Promise<any>;
 type MaybePromise<T> = T | Promise<T>;
@@ -24,6 +18,9 @@ type OutboxEntry = {
   ts: number;
   attempts?: number;
   operationSchemaVersion?: number;
+  // Present on repeated-write actions (see OUTBOX_COALESCE_KEYS): the outbox
+  // keeps at most one row per key, newest wins.
+  coalesceKey?: string;
 };
 type OutboxEnqueueFn = (entry: OutboxEntry) => MaybePromise<void>;
 type OutboxRemoveFn = (id: string) => MaybePromise<void>;
@@ -32,7 +29,6 @@ type DispatchBinding = {
   epoch: number;
   fn: DispatchFn;
   owner?: object;
-  authorization?: DispatchAuthorizationCapture;
 };
 type ReceiptWaiter = {
   promise: Promise<unknown>;
@@ -382,6 +378,12 @@ export const MUST_DELIVER_ACTIONS = new Set([
   "askAgentInThread",
 ]);
 
+// Replay staleness ceiling. "Never drop user content" holds while delivery is
+// still meaningful; replaying a message parked for over a week delivers it
+// into a conversation that has long moved on, which is its own kind of wrong.
+// Dropped rows are logged with their content so nothing disappears silently.
+export const OUTBOX_MAX_REPLAY_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 // Fork creates ride convCommand, so the action name alone can't mark them —
 // but they carry the same "user-authored intent" stakes as a send: giving one
 // up silently strands a fork stub the user is already working in. Safe to
@@ -438,30 +440,35 @@ const LEGACY_RECEIPT_ACTIONS = new Set([
   "askAgentInThread",
 ]);
 
-/** Slices governed by the combined read/write rollback rail. */
-export const LOCAL_FIRST_WRITE_ACTIONS = new Set([
-  "createBucket",
-  "updateBucket",
-  "assignSessionToBucket",
-  "addComment",
-  "editComment",
-  "deleteComment",
-  "askAgentInThread",
-  "sendMessage",
-]);
+// Repeated writes that rewrite the same logical value each time (full-value
+// LWW per key). The outbox keeps at most one row per derived key: a newer
+// enqueue replaces the older row instead of appending. This makes write floods
+// structurally unable to grow the durable queue — a resize loop enqueues one
+// row, not thousands. Only register actions whose args carry the COMPLETE new
+// value for the key; partial-field updates (e.g. updateTab) must never
+// coalesce, since dropping the older row would drop the older fields.
+export const OUTBOX_COALESCE_KEYS: Record<string, (args: any[]) => string | null> = {
+  updateClientLayout: (args) =>
+    typeof args[0] === "string" ? `updateClientLayout:${args[0]}` : null,
+  updateClientDismissed: (args) =>
+    typeof args[0] === "string" ? `updateClientDismissed:${args[0]}` : null,
+};
 
-// Actions promoted to receipt envelopes BY the final-mode release. With the
-// write master off they demote to their pre-release fire-and-forget action()
-// semantics, so the rollback posture is exactly the last shipped prod build.
-// The other receipt actions (comments, createBucket, create*) shipped
-// envelope-backed long before final mode and keep their envelopes in BOTH
-// postures — regressing them on rollback would drop the receipt-rejection
-// reconciliation that is already load-bearing in production.
-export const FLAG_PROMOTED_RECEIPT_ACTIONS = new Set([
-  "updateBucket",
-  "assignSessionToBucket",
-  "sendMessage",
-]);
+export function outboxCoalesceKeyFor(action: string, args: any[]): string | null {
+  const derive = OUTBOX_COALESCE_KEYS[action];
+  if (!derive) return null;
+  try {
+    return derive(args);
+  } catch {
+    return null;
+  }
+}
+
+// How long a durable enqueue may stay uncommitted before storage is reported
+// unhealthy. The dispatch path no longer waits on storage, so a slow or wedged
+// IndexedDB degrades durability only — but silently degraded durability is how
+// wedges go unnoticed for hours, so surface it.
+export const STORAGE_WATCHDOG_MS = 5_000;
 
 export const CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION = 1;
 
@@ -647,13 +654,8 @@ function auditViewWrites(
 
 export function mutativeMiddleware(config: any, opts?: {
   retryDelays?: number[];
-  localFirstWritesEnabled?: () => boolean;
-  online?: () => boolean;
 }): any {
   const retryDelays = opts?.retryDelays ?? RETRY_DELAYS;
-  const localFirstWritesEnabled = opts?.localFirstWritesEnabled ?? isLocalFirstWriteEnabled;
-  const online = opts?.online ?? (() =>
-    typeof navigator === "undefined" ? true : navigator.onLine);
   return (set: any, get: any, api: any) => {
     let dispatchBinding: DispatchBinding | null = null;
     let dispatchEpoch = 0;
@@ -663,7 +665,36 @@ export function mutativeMiddleware(config: any, opts?: {
     let outboxEnqueueFn: OutboxEnqueueFn | null = null;
     let outboxRemoveFn: OutboxRemoveFn | null = null;
     let outboxLoadFn: OutboxLoadFn | null = null;
+    let storageHealthFn: ((healthy: boolean, elapsedMs: number) => void) | null = null;
     const receiptWaiters = new Map<string, ReceiptWaiter>();
+    // Outbox ids whose server dispatch already settled the command (ack or
+    // terminal rejection) — the row is garbage the moment it commits. Dispatch
+    // runs in parallel with the durable enqueue, so the ack can win that race:
+    // retirement waits for the enqueue to settle, then deletes the row. While
+    // an id is in this set, drainOutbox must not re-dispatch it.
+    const retiredOutboxIds = new Set<string>();
+    // coalesceKey → newest enqueued row for that key (by entry ts — enqueue
+    // COMPLETIONS can invert order under slow storage). A newer row retires
+    // the older one; an older row that completes late retires itself.
+    const coalescedOutboxIds = new Map<string, { id: string; ts: number }>();
+
+    const retireOutboxEntry = async (
+      id: string,
+      enqueued: Promise<unknown> | null,
+    ) => {
+      retiredOutboxIds.add(id);
+      try {
+        // Wait for the row to exist (or for its write to have failed) before
+        // deleting it, so the delete can't lose the race with its own commit.
+        if (enqueued) await enqueued.catch(() => {});
+        await outboxRemoveFn?.(id);
+      } catch {
+        // The id stays in retiredOutboxIds; the next drain skips dispatching
+        // it and retries the removal there.
+        return;
+      }
+      retiredOutboxIds.delete(id);
+    };
 
     const receiptWaiterFor = (entryId: string): ReceiptWaiter => {
       const existing = receiptWaiters.get(entryId);
@@ -798,9 +829,7 @@ export function mutativeMiddleware(config: any, opts?: {
     };
 
     const assertDispatchCurrent = (captured: DispatchBinding) => {
-      if (dispatchBinding !== captured || captured.epoch !== dispatchEpoch ||
-        (captured.authorization &&
-          !isPrincipalDispatchAuthorizationCurrent(captured.authorization))) {
+      if (dispatchBinding !== captured || captured.epoch !== dispatchEpoch) {
         throw new StaleDispatchBindingError();
       }
     };
@@ -830,10 +859,36 @@ export function mutativeMiddleware(config: any, opts?: {
     const enqueueOutbox = async (enqueue: OutboxEnqueueFn, entry: OutboxEntry) => {
       markOutboxDirty();
       pendingOutboxEnqueues++;
+      // Storage watchdog: an enqueue that hasn't committed in STORAGE_WATCHDOG_MS
+      // means IndexedDB is slow or wedged. Delivery no longer depends on it, but
+      // durability does — report unhealthy so the UI can say so, and report
+      // recovery when a later enqueue commits promptly.
+      const started = typeof performance !== "undefined" ? performance.now() : Date.now();
+      const elapsed = () =>
+        (typeof performance !== "undefined" ? performance.now() : Date.now()) - started;
+      const watchdog = setTimeout(() => {
+        console.error(
+          `[store] durable enqueue for "${entry.action}" still uncommitted after ${STORAGE_WATCHDOG_MS}ms — IndexedDB is unhealthy; delivery continues, durability is degraded`,
+        );
+        storageHealthFn?.(false, elapsed());
+      }, STORAGE_WATCHDOG_MS);
       try {
         await enqueue(entry);
+        if (elapsed() < STORAGE_WATCHDOG_MS) storageHealthFn?.(true, elapsed());
       } finally {
+        clearTimeout(watchdog);
         pendingOutboxEnqueues--;
+      }
+      // Coalesce: keep only the newest row per key. Compared by entry ts, not
+      // completion order — a stale row that commits late retires itself.
+      if (entry.coalesceKey) {
+        const prev = coalescedOutboxIds.get(entry.coalesceKey);
+        if (prev && prev.id !== entry.id && prev.ts > entry.ts) {
+          void retireOutboxEntry(entry.id, null);
+        } else {
+          coalescedOutboxIds.set(entry.coalesceKey, { id: entry.id, ts: entry.ts });
+          if (prev && prev.id !== entry.id) void retireOutboxEntry(prev.id, null);
+        }
       }
     };
     async function drainOutbox(countAttempts = true) {
@@ -855,8 +910,38 @@ export function mutativeMiddleware(config: any, opts?: {
       draining = true;
       try {
         const drainGeneration = outboxGeneration;
-        const entries = await capturedLoad();
+        const loaded = await capturedLoad();
         assertDispatchCurrent(captured);
+        // Coalesce across reloads: rows written by a previous page load can
+        // hold several generations of the same key. Keep the newest per key,
+        // delete the rest without dispatching them.
+        const newestByKey = new Map<string, OutboxEntry>();
+        for (const entry of loaded) {
+          if (!entry.coalesceKey) continue;
+          const cur = newestByKey.get(entry.coalesceKey);
+          if (!cur || entry.ts > cur.ts) newestByKey.set(entry.coalesceKey, entry);
+        }
+        const entries = loaded.filter((entry) => {
+          // A row whose command already settled (ack raced the enqueue commit)
+          // must not re-dispatch; finish its deferred removal instead.
+          if (retiredOutboxIds.has(entry.id)) {
+            void retireOutboxEntry(entry.id, null);
+            return false;
+          }
+          if (entry.coalesceKey && newestByKey.get(entry.coalesceKey)?.id !== entry.id) {
+            void retireOutboxEntry(entry.id, null);
+            return false;
+          }
+          if (typeof entry.ts === "number" && Date.now() - entry.ts > OUTBOX_MAX_REPLAY_AGE_MS) {
+            console.error(
+              `[store] dropping ${Math.round((Date.now() - entry.ts) / 86_400_000)}d-old parked "${entry.action}" — too stale to replay`,
+              entry.args,
+            );
+            void retireOutboxEntry(entry.id, null);
+            return false;
+          }
+          return true;
+        });
         // The outbox exists to survive a reload that lands in the middle of an
         // in-flight dispatch, AND to re-drive a send the live socket stranded:
         // a flaky connection can exhaust the in-session retry ladder and park
@@ -999,9 +1084,6 @@ export function mutativeMiddleware(config: any, opts?: {
 
       wrapped[key] = (...args: any[]) => {
         const actionArgs = normalizeZeroArgumentEventCall(val as Function, args);
-        const finalWrite = LOCAL_FIRST_WRITE_ACTIONS.has(key) &&
-          localFirstWritesEnabled();
-        if (finalWrite) assertDurableOfflineWriteCapability(online());
         const state = get();
         let returnValue: any;
         const [nextState, patches] = mutativeCreate(
@@ -1052,19 +1134,9 @@ export function mutativeMiddleware(config: any, opts?: {
         if (isAct || isAsyncAct) {
           const grouped =
             patches.length > 0 ? groupPatchesByTable(patches, finalState) : undefined;
-          const callerStableMessageId = key === "sendMessage" &&
-            typeof actionArgs[3] === "string" && actionArgs[3].trim()
-            ? actionArgs[3].trim()
-            : null;
-          const outboxId = finalWrite && callerStableMessageId
-            ? callerStableMessageId
-            : newOutboxId();
-          const usesReceiptEnvelope = isReceiptAsyncAct &&
-            (!FLAG_PROMOTED_RECEIPT_ACTIONS.has(key) || finalWrite);
-          // A demoted promotion behaves exactly like its pre-release action():
-          // fire-and-forget, no caller-facing promise, park-and-drain delivery.
-          const demotedToLegacyAction = isReceiptAsyncAct && !usesReceiptEnvelope;
-          const returnsPromise = isAsyncAct && !demotedToLegacyAction;
+          const outboxId = newOutboxId();
+          const usesReceiptEnvelope = isReceiptAsyncAct;
+          const returnsPromise = isAsyncAct;
           const dispatchResult: unknown = usesReceiptEnvelope
             ? {
                 receiptActionVersion: 1,
@@ -1077,6 +1149,7 @@ export function mutativeMiddleware(config: any, opts?: {
           // dispatches stay queued and re-fire on next hydrate via drainOutbox.
           // Enqueued even when dispatchFn isn't wired yet — drainOutbox picks
           // them up the moment _setDispatch runs.
+          const coalesceKey = outboxCoalesceKeyFor(key, actionArgs);
           const entry = {
             id: outboxId,
             action: key,
@@ -1084,28 +1157,28 @@ export function mutativeMiddleware(config: any, opts?: {
             patches: grouped,
             result: dispatchResult,
             operationSchemaVersion: CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION,
-            // legacyOutbox replays by this index. Strict monotonicity preserves
+            // The outbox replays by this index. Strict monotonicity preserves
             // causal call order even when several dependent actions (create →
             // delete, fork → send) are queued in the same millisecond.
             ts: nextOutboxTimestamp(),
+            ...(coalesceKey ? { coalesceKey } : {}),
           };
-          // The server call is chained behind the durable enqueue. A storage
-          // failure therefore cannot create an effect that has no replayable
-          // local record. (`action()` remains memory-first only as a temporary
-          // compatibility path; v2 materialized commands use LocalFirstEngine.)
           const capturedDispatch = dispatchBinding;
-          const capturedRemove = outboxRemoveFn;
           const capturedError = dispatchErrorFn;
           const receiptWaiter = usesReceiptEnvelope ? receiptWaiterFor(outboxId) : null;
           let enqueueCompleted = false;
-          // Parked unconditionally — a principal-runtime transition can clear
-          // the binding while the page stays interactive, and an un-parked
-          // action fired in that window would vanish with zero trace.
+          // Parked unconditionally — a rewire window (boot, HMR, account
+          // switch) can clear the binding while the page stays interactive,
+          // and an un-parked action fired in that window would vanish with
+          // zero trace.
           const enqueued = outboxEnqueueFn
             ? enqueueOutbox(outboxEnqueueFn, entry).then(() => {
                 enqueueCompleted = true;
               })
             : null;
+          // Mark handled: consumers below attach their own handlers, but none
+          // may exist yet when a storage failure rejects this promise.
+          enqueued?.catch(() => {});
           if (capturedDispatch) {
             const dispatchNow = () => dispatchWithRetry(
               capturedDispatch.fn,
@@ -1117,14 +1190,17 @@ export function mutativeMiddleware(config: any, opts?: {
               retryDelays,
               () => assertDispatchCurrent(capturedDispatch),
             );
-            // The compatibility store historically invokes a wired dispatch
-            // synchronously (up to its first await). Preserve that behavior
-            // when no durable outbox is installed; callers and tests observe
-            // the dispatch in the same turn. Once an outbox is installed,
-            // dispatch stays strictly behind its durable enqueue.
-            const dispatched = enqueued
-              ? enqueued.then(dispatchNow)
-              : dispatchNow();
+            // Dispatch fires IMMEDIATELY — the durable enqueue runs in
+            // parallel. The outbox is a crash-recovery journal, not a gate:
+            // slow or wedged storage degrades durability (surfaced by the
+            // enqueue watchdog) but must never delay or strand delivery. The
+            // ack-vs-commit race is settled by retireOutboxEntry, which waits
+            // for the enqueue before deleting the row; a crash in that window
+            // merely replays a command the server dedups (client id for
+            // sends, commandId for receipt actions, LWW for patches).
+            const dispatched = dispatchNow();
+            const enqueueDurable = () =>
+              enqueued ? enqueued.then(() => true, () => false) : Promise.resolve(false);
             if (usesReceiptEnvelope && receiptWaiter) {
               void dispatched.then(async (response) => {
                 assertDispatchCurrent(capturedDispatch);
@@ -1153,7 +1229,7 @@ export function mutativeMiddleware(config: any, opts?: {
                       completed = true;
                       rejectReceiptWaiter(outboxId, error);
                     }
-                  } else if (!enqueueCompleted) {
+                  } else if (!(await enqueueDurable())) {
                     // Without a committed outbox row there is no future replay
                     // that can resolve an ambiguous response.
                     rejectReceiptWaiter(outboxId, error);
@@ -1164,7 +1240,7 @@ export function mutativeMiddleware(config: any, opts?: {
                 // unavailable navigation runtime is ambiguous, so retain the
                 // deduplicated command for a later replay.
                 if (completed) {
-                  await capturedRemove?.(outboxId);
+                  await retireOutboxEntry(outboxId, enqueued);
                   void drainOutbox(false);
                 }
               }, async (error) => {
@@ -1174,17 +1250,16 @@ export function mutativeMiddleware(config: any, opts?: {
                 } catch {
                   current = false;
                 }
-                // Once enqueue completed, ALL thrown receipt errors are
-                // ambiguous. Only a validated rejected receipt is terminal;
-                // the durable command row owns version-skew, auth-transition,
-                // and transport recovery too.
-                if (enqueueCompleted) {
+                // With a durable row, ALL thrown receipt errors are ambiguous.
+                // Only a validated rejected receipt is terminal; the durable
+                // command row owns version-skew, auth-transition, and
+                // transport recovery too.
+                if (await enqueueDurable()) {
                   if (!current && dispatchBinding) void drainOutbox(false);
                   return;
                 }
-                // Dispatch is chained behind enqueue, so reaching this branch
-                // means durability itself failed (or no outbox was installed).
-                // The command cannot honestly remain pending.
+                // Durability itself failed (or no outbox was installed). The
+                // command cannot honestly remain pending.
                 rejectReceiptWaiter(outboxId, error);
               }).catch((error) => {
                 if (error instanceof StaleDispatchBindingError) {
@@ -1204,7 +1279,7 @@ export function mutativeMiddleware(config: any, opts?: {
             }
             const promise = dispatched.then(async (r) => {
               assertDispatchCurrent(capturedDispatch);
-              await capturedRemove?.(outboxId);
+              await retireOutboxEntry(outboxId, enqueued);
               void drainOutbox(false);
               return r;
             }, async (e) => {
@@ -1213,7 +1288,7 @@ export function mutativeMiddleware(config: any, opts?: {
               // Permanent rejection: the server answered and said no — remove
               // the parked copy so the drain loops don't re-litigate it forever.
               if (isPermanentDispatchError(e)) {
-                await capturedRemove?.(outboxId);
+                await retireOutboxEntry(outboxId, enqueued);
                 void drainOutbox(false);
               }
               throw e;
@@ -1232,8 +1307,6 @@ export function mutativeMiddleware(config: any, opts?: {
             // error handler that way and a fork could vanish with no toast and
             // no discard (ct-40175). Reject honestly instead: the caller's
             // catch runs now; a parked entry still delivers via drainOutbox.
-            // A demoted promotion is not an asyncAction to its callers: it
-            // parks fire-and-forget below, exactly like the action() it was.
             if (returnsPromise) {
               if (usesReceiptEnvelope && receiptWaiter && enqueued) {
                 void enqueued.then(
@@ -1287,11 +1360,11 @@ export function mutativeMiddleware(config: any, opts?: {
 
     wrapped._setDispatch = (
       fn: DispatchFn | null,
-      options?: { owner?: object; authorization?: DispatchAuthorizationCapture },
+      options?: { owner?: object },
     ) => {
       dispatchEpoch++;
       dispatchBinding = fn
-        ? { epoch: dispatchEpoch, fn, owner: options?.owner, authorization: options?.authorization }
+        ? { epoch: dispatchEpoch, fn, owner: options?.owner }
         : null;
       // Drain any persisted outbox entries from a prior session.
       if (fn) {
@@ -1317,15 +1390,11 @@ export function mutativeMiddleware(config: any, opts?: {
     // hides still parked here.
     wrapped._hasBootOutboxDrained = () => bootOutboxDrained;
 
-    // Whether a dispatch fired right now would actually reach the server: a
-    // binding exists and its captured authorization is still current. A false
-    // here is the only visible symptom of a binding stranded by a
-    // principal-runtime transition — useEnsureDispatch's drain ticks poll it
-    // and re-bind.
+    // Whether a dispatch fired right now would actually reach the server.
+    // useEnsureDispatch's drain ticks poll it and re-bind when stranded.
     wrapped._isDispatchWired = () => {
       const b = dispatchBinding;
-      if (!b || b.epoch !== dispatchEpoch) return false;
-      return !b.authorization || isPrincipalDispatchAuthorizationCurrent(b.authorization);
+      return !!b && b.epoch === dispatchEpoch;
     };
 
     wrapped._setIDBWrite = (fn: IDBWriteFn | null) => {
@@ -1364,6 +1433,13 @@ export function mutativeMiddleware(config: any, opts?: {
 
     wrapped._setDispatchError = (fn: (action: string, error: unknown, args?: unknown) => void) => {
       dispatchErrorFn = fn;
+    };
+
+    // Storage-health signal from the enqueue watchdog: healthy=false when a
+    // durable write exceeded STORAGE_WATCHDOG_MS, healthy=true when a later
+    // write commits promptly again. Delivery is unaffected either way.
+    wrapped._setStorageHealth = (fn: ((healthy: boolean, elapsedMs: number) => void) | null) => {
+      storageHealthFn = fn;
     };
 
     wrapped._dispatch = (action: string, args: any, patches?: any, result?: any) => {
