@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  browseProjectOrder,
+  frequentProjectChips,
   mergeRecentProjectPaths,
   recentProjectPathsFromSessionKeys,
   recentProjectPathsFromSessions,
@@ -37,6 +39,44 @@ describe("mergeRecentProjectPaths", () => {
         { path: "/server/a", count: 1, lastActive: 10 },
       ],
     ).map((project) => project.path)).toEqual(["/server/a", "/local/b"]);
+  });
+});
+
+describe("frequentProjectChips", () => {
+  const projects = [
+    { path: "/dev/rarely", count: 1, lastActive: 90 },
+    { path: "/dev/daily", count: 30, lastActive: 80 },
+    { path: "/dev/sometimes", count: 5, lastActive: 70 },
+    { path: "/dev/weekly", count: 12, lastActive: 60 },
+    { path: "/dev/often", count: 20, lastActive: 50 },
+    { path: "/roots/unused", count: 0, lastActive: 0, suggested: true },
+  ];
+
+  test("caps at 4 most-used and never includes suggestions", () => {
+    expect(frequentProjectChips(projects).map((p) => p.path)).toEqual([
+      "/dev/daily",
+      "/dev/often",
+      "/dev/weekly",
+      "/dev/sometimes",
+    ]);
+  });
+
+  test("returns fewer chips when there is less real usage", () => {
+    expect(frequentProjectChips([
+      { path: "/roots/a", count: 0, lastActive: 0, suggested: true },
+      { path: "/dev/one", count: 2, lastActive: 10 },
+    ]).map((p) => p.path)).toEqual(["/dev/one"]);
+  });
+});
+
+describe("browseProjectOrder", () => {
+  test("keeps used folders first and groups suggestions at the tail", () => {
+    expect(browseProjectOrder([
+      { path: "/roots/a", suggested: true },
+      { path: "/dev/x" },
+      { path: "/roots/b", suggested: true },
+      { path: "/dev/y" },
+    ]).map((p) => p.path)).toEqual(["/dev/x", "/dev/y", "/roots/a", "/roots/b"]);
   });
 });
 

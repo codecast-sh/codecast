@@ -17,7 +17,7 @@ import { compressImage } from "../lib/compressImage";
 import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import {
   extractCodexExecActions,
@@ -136,6 +136,8 @@ function followRestoredConversation(res: any, ghostId: string): boolean {
 import { getLabelColor } from "../lib/labelColors";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import {
+  browseProjectOrder,
+  frequentProjectChips,
   mergeRecentProjectPaths,
   recentProjectPathsFromSessionKeys,
   recentProjectSessionKey,
@@ -152,9 +154,9 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2 } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search } from "lucide-react";
 import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
-import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection } from "../lib/machinePicker";
+import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
@@ -937,23 +939,19 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     api.users.getRecentProjectPaths,
     scopedDeviceId ? { limit: 50, device_id: scopedDeviceId } : "skip",
   );
-
-  // Memoized because five downstream useMemos take it as a dep — an identity
-  // that churned every render would defeat all of them. While the scoped query is
-  // in flight we show nothing rather than the union: an empty list for a beat is
-  // recoverable, a path the target machine lacks is not.
-  const recentProjects = useMemo<RecentProject[]>(
-    () => scopedDeviceId
-      ? (scopedProjects ?? [])
-      : mergeRecentProjectPaths(freshProjects ?? cachedProjects, ownSessionProjects),
-    [scopedDeviceId, scopedProjects, freshProjects, cachedProjects, ownSessionProjects],
+  // Per-device cache so the picker paints instantly on every open instead of
+  // waiting out the scoped round-trip. The cached list is that same machine's
+  // prior answer, so — unlike the union — it can never offer a path the target
+  // machine lacks; only cache-vs-cache staleness, which the live echo corrects.
+  const cachedScopedProjects = useInboxStore((s) => s.recentProjectsByDevice);
+  const setRecentProjectsForDevice = useInboxStore((s) => s.setRecentProjectsForDevice);
+  const syncScopedProjects = useCallback(
+    (projects: RecentProject[]) => {
+      if (scopedDeviceId) setRecentProjectsForDevice(scopedDeviceId, projects);
+    },
+    [scopedDeviceId, setRecentProjectsForDevice],
   );
-  const suggestedPaths = useMemo(
-    () => new Set(recentProjects.filter((p) => p.suggested).map((p) => p.path)),
-    [recentProjects],
-  );
-
-  useConvexSync(freshProjects, setRecentProjects);
+  useConvexSync(scopedProjects, syncScopedProjects);
 
   // One chip per repo name: the same project checked out on several machines
   // collapses to the routed machine's variant, and "other" means a different
@@ -962,6 +960,39 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     () => devices.find((d) => d.device_id === selectedDeviceId) ?? null,
     [devices, selectedDeviceId],
   );
+
+  // Memoized because five downstream useMemos take it as a dep — an identity
+  // that churned every render would defeat all of them.
+  //
+  // While the scoped query is in flight we must NOT fall back to the raw union
+  // (it offers folders the target machine lacks), but we must also not paint an
+  // empty row: the chips popped in a beat late on every open — a visible
+  // flicker. The union filtered by the routed machine's OWN local_project_roots
+  // is the same predicate the server applies (deviceSeesPath mirrors
+  // pathUnderRoot), computed from the device roster already in memory. So the
+  // ladder is: live scoped answer → that machine's cached answer → the union
+  // narrowed to that machine → nothing (roster not loaded yet).
+  const unionProjects = useMemo<RecentProject[]>(
+    () => mergeRecentProjectPaths(freshProjects ?? cachedProjects, ownSessionProjects),
+    [freshProjects, cachedProjects, ownSessionProjects],
+  );
+  const recentProjects = useMemo<RecentProject[]>(
+    () => resolveScopedProjects({
+      scopedDeviceId,
+      scoped: scopedProjects,
+      cached: scopedDeviceId ? cachedScopedProjects[scopedDeviceId] : undefined,
+      union: unionProjects,
+      routedDevice,
+    }),
+    [scopedDeviceId, scopedProjects, cachedScopedProjects, unionProjects, routedDevice],
+  );
+  const suggestedPaths = useMemo(
+    () => new Set(recentProjects.filter((p) => p.suggested).map((p) => p.path)),
+    [recentProjects],
+  );
+
+  useConvexSync(freshProjects, setRecentProjects);
+
   const dedupedRecents = useMemo(
     () => dedupeProjectsByRepoName(recentProjects, routedDevice, currentPath),
     [recentProjects, routedDevice, currentPath],
@@ -971,7 +1002,10 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     return dedupedRecents.filter((p) => p.path !== currentPath && (!currentName || repoName(p.path) !== currentName));
   }, [dedupedRecents, currentPath]);
 
-  const visibleProjects = otherProjects.slice(0, 6);
+  // Resting row: the current project plus at most 4 you actually use most.
+  // Machine-root suggestions (never-used folders, shown grayed) stay out of
+  // this row entirely — they're reachable through "other".
+  const visibleProjects = useMemo(() => frequentProjectChips(otherProjects), [otherProjects]);
 
   // --- keyboard picker ---------------------------------------------------
   // The chip row doubles as a keyboard listbox. It is dormant for mouse users
@@ -980,6 +1014,9 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   const [picking, setPicking] = useState(false);
   const [filter, setFilter] = useState("");
   const [hi, setHi] = useState(0);
+  // Machine-root suggestions start collapsed on every picker open; one click
+  // on the "N more folders" row reveals them for that open only.
+  const [showSuggested, setShowSuggested] = useState(false);
   const pickerRef = useRef<HTMLInputElement>(null);
   const prevFocusRef = useRef<HTMLElement | null>(null);
 
@@ -1008,7 +1045,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // (so plain filtering — "co" → codecast — stays clean). The daemon's
   // start_session takes the cwd verbatim, so the fully-resolved path is all it
   // needs, and the chip shows that path so a wrong base guess is visible first.
-  const pickList = useMemo<{ path: string; custom?: boolean }[]>(() => {
+  const pickList = useMemo<{ path: string; custom?: boolean; extra?: boolean }[]>(() => {
     if (filter.trim()) {
       return buildProjectPathOptions({
         query: filter,
@@ -1018,9 +1055,28 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
         currentPath,
       });
     }
-    const base: { path: string }[] = currentPath ? [{ path: currentPath }] : [];
-    return base.concat(otherProjects);
-  }, [filter, dedupedRecents, currentPath, otherProjects, homeDir, projectBase]);
+    // Unfiltered browse opens on EXACTLY the resting row — same chips, same
+    // order (visibleProjects). Opening the picker must not silently grow the
+    // list; everything else (rarely-used folders and the machine's never-used
+    // roots) sits behind the one "N more folders" row until expanded. Typing
+    // still searches all of them regardless.
+    const base: { path: string; extra?: boolean }[] = currentPath ? [{ path: currentPath }] : [];
+    const head = visibleProjects.map((p) => ({ path: p.path }));
+    if (!showSuggested) return base.concat(head);
+    const shown = new Set(head.map((p) => p.path));
+    const rest = browseProjectOrder(otherProjects)
+      .filter((p) => !shown.has(p.path))
+      .map((p) => ({ path: p.path, extra: true }));
+    return base.concat(head, rest);
+  }, [filter, dedupedRecents, currentPath, otherProjects, visibleProjects, homeDir, projectBase, showSuggested]);
+
+  // How many folders the collapsed picker is holding back (rarely-used ones
+  // plus the machine's never-used roots) — the expander's count.
+  const hiddenCount = Math.max(0, otherProjects.length - visibleProjects.length);
+
+  // Where the "more folders on this machine" divider renders once expanded
+  // (-1 → no divider).
+  const firstExtraIdx = useMemo(() => pickList.findIndex((p) => (p as { extra?: boolean }).extra), [pickList]);
 
   // Distinguish "you typed the folder you're already in" from a real miss.
   const filterIsCurrent = !!currentPath && resolveCustomPath(filter, homeDir, projectBase) === currentPath;
@@ -1037,6 +1093,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     prevFocusRef.current = document.activeElement as HTMLElement | null;
     setFilter("");
     setHi(0);
+    setShowSuggested(false);
     setPicking(true);
     return true;
   }, []);
@@ -1230,10 +1287,34 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       )}
 
       <div
-        className={`flex flex-wrap justify-center gap-1.5 rounded-lg transition-all ${picking ? "ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-1.5" : ""}`}
+        className={`rounded-lg transition-all ${picking ? "w-full max-w-3xl ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-2" : ""}`}
       >
+        {picking && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 pb-2 mb-2 border-b border-sol-cyan/20">
+            <Search className="w-3.5 h-3.5 shrink-0 text-sol-cyan/70" />
+            <input
+              ref={pickerRef}
+              value={filter}
+              onChange={(e) => { setFilter(e.target.value); setHi(0); }}
+              onKeyDown={handlePickerKeyDown}
+              onBlur={() => exitPicker(false)}
+              placeholder="search or paste a path"
+              spellCheck={false}
+              autoComplete="off"
+              className="flex-1 min-w-[12rem] bg-transparent text-xs font-mono text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
+            />
+            <span className="inline-flex items-center gap-2 text-[11px] font-mono">
+              <HintKeys keys={["←", "→"]} label="move" />
+              <HintKeys keys={["↵"]} label={pickList[clampedHi]?.custom ? "open" : "select"} />
+              <HintKeys keys={[ALT_CAP, "↓"]} label="agent" />
+              <HintKeys keys={["Esc"]} label="back" />
+            </span>
+          </div>
+        )}
+        <div className="flex flex-wrap justify-center gap-1.5">
         {picking ? (
-          pickList.length === 0 ? (
+          <>
+          {pickList.length === 0 ? (
             <span className="text-xs text-sol-text-dim px-2.5 py-1">
               {filterIsCurrent ? "already in this folder" : <>no match for &ldquo;{filter}&rdquo;</>}
             </span>
@@ -1242,36 +1323,60 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
               const isHi = i === clampedHi;
               const isCurrent = p.path === currentPath;
               return (
-                <button
-                  key={p.path}
-                  // onMouseDown (not onClick) + preventDefault keeps the filter
-                  // input focused so the click isn't lost to an onBlur teardown.
-                  onMouseDown={(e) => { e.preventDefault(); handleSwitch(p.path); exitPicker(); }}
-                  onMouseEnter={() => setHi(i)}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all max-w-[min(100%,22rem)] ${
-                    isHi
-                      ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"
-                      : p.custom
-                        ? "border-dashed border-sol-cyan/40 text-sol-cyan/80"
-                        : isCurrent
-                          ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
-                          : "border-sol-border/40 text-sol-text-dim"
-                  } ${!isHi && suggestedPaths.has(p.path) ? "opacity-60" : ""}`}
-                  title={p.path}
-                >
-                  {p.custom ? <FolderPlusGlyph className="w-3 h-3 shrink-0" /> : <FolderGlyph />}
-                  {p.custom ? (
-                    <span className="truncate">
-                      <span className="opacity-60">open </span>
-                      <span className="font-mono">{displayPath(p.path, homeDir)}</span>
+                <Fragment key={p.path}>
+                  {i === firstExtraIdx && (
+                    <span className="w-full mt-1.5 mb-0.5 flex items-center gap-2 text-[10px] text-sol-text-dim/80">
+                      <span className="flex-1 border-t border-sol-border/40" />
+                      more folders on {routedDevice ? deviceDisplayName(routedDevice) : "this machine"}
+                      <span className="flex-1 border-t border-sol-border/40" />
                     </span>
-                  ) : (
-                    <span>{p.path.split("/").filter(Boolean).pop()}</span>
                   )}
-                </button>
+                  <button
+                    // onMouseDown (not onClick) + preventDefault keeps the filter
+                    // input focused so the click isn't lost to an onBlur teardown.
+                    onMouseDown={(e) => { e.preventDefault(); handleSwitch(p.path); exitPicker(); }}
+                    onMouseEnter={() => setHi(i)}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all max-w-[min(100%,22rem)] ${
+                      isHi
+                        ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"
+                        : p.custom
+                          ? "border-dashed border-sol-cyan/40 text-sol-cyan/80"
+                          : isCurrent
+                            ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
+                            : "border-sol-border/40 text-sol-text-dim"
+                    } ${!isHi && suggestedPaths.has(p.path) ? "opacity-60" : ""}`}
+                    title={p.path}
+                  >
+                    {p.custom ? <FolderPlusGlyph className="w-3 h-3 shrink-0" /> : <FolderGlyph />}
+                    {p.custom ? (
+                      <span className="truncate">
+                        <span className="opacity-60">open </span>
+                        <span className="font-mono">{displayPath(p.path, homeDir)}</span>
+                      </span>
+                    ) : (
+                      <span>{p.path.split("/").filter(Boolean).pop()}</span>
+                    )}
+                  </button>
+                </Fragment>
               );
             })
-          )
+          )}
+          {!filter.trim() && !showSuggested && hiddenCount > 0 && (
+            <button
+              // onMouseDown + preventDefault, same as the chips: keep the
+              // filter input focused so expanding doesn't blur-close the picker.
+              onMouseDown={(e) => { e.preventDefault(); setShowSuggested(true); }}
+              className="w-full mt-1.5 mb-0.5 flex items-center gap-2 text-[10px] text-sol-text-dim/70 hover:text-sol-text transition-colors"
+            >
+              <span className="flex-1 border-t border-sol-border/40" />
+              <span className="inline-flex items-center gap-1">
+                {hiddenCount} more folders on {routedDevice ? deviceDisplayName(routedDevice) : "this machine"}
+                <ChevronDown className="w-3 h-3" />
+              </span>
+              <span className="flex-1 border-t border-sol-border/40" />
+            </button>
+          )}
+          </>
         ) : (
           <>
             {currentPath && (
@@ -1290,9 +1395,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
                 <button
                   key={p.path}
                   onClick={() => handleSwitch(p.path)}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all ${
-                    suggestedPaths.has(p.path) ? "opacity-60" : ""
-                  }`}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
                   title={p.path}
                 >
                   <FolderGlyph />
@@ -1312,11 +1415,12 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
             </button>
           </>
         )}
+        </div>
       </div>
 
       {/* One quiet meta row instead of three stacked ones: label, worktree
-          toggle, keyboard hints. The picker's filter input still takes its own
-          row while active — it replaces the hints, not the whole row. */}
+          toggle, keyboard hints. While picking, the search input rides the top
+          of the picker box and these hints hide. */}
       <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
         <NewSessionBucketPill conversation={conversation} />
 
@@ -1347,28 +1451,6 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
           </button>
         )}
       </div>
-
-      {picking && (
-        <div className="flex items-center gap-2 text-[11px] font-mono">
-          <input
-            ref={pickerRef}
-            value={filter}
-            onChange={(e) => { setFilter(e.target.value); setHi(0); }}
-            onKeyDown={handlePickerKeyDown}
-            onBlur={() => exitPicker(false)}
-            placeholder="filter or paste a path…"
-            spellCheck={false}
-            autoComplete="off"
-            className="w-44 bg-transparent text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
-          />
-          <span className="inline-flex items-center gap-2">
-            <HintKeys keys={["←", "→"]} label="move" />
-            <HintKeys keys={["↵"]} label={pickList[clampedHi]?.custom ? "open" : "select"} />
-            <HintKeys keys={[ALT_CAP, "↓"]} label="agent" />
-            <HintKeys keys={["Esc"]} label="back" />
-          </span>
-        </div>
-      )}
 
     </div>
   );
@@ -1663,6 +1745,7 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   // mac Option+letter composes special characters into e.key.
   const projectsRef = useRef<PickerHandle | null>(null);
   const agentsRef = useRef<PickerHandle | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   // The machine picker's logic lives in ProjectSwitcher (a machine pick scopes
   // the folder list), but it renders down on the Context line — this slot is
   // the portal target StableContextPicker mounts at the end of that line.
@@ -1675,7 +1758,10 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
       const left = e.code === "KeyH" || e.code === "ArrowLeft";
       const right = e.code === "KeyL" || e.code === "ArrowRight";
       if (!up && !down && !left && !right) return;
-      if (hasOpenModal()) return;
+      // The compose dialog hosts this surface inside an aria-modal container —
+      // a modal that CONTAINS us doesn't block the chords, only one stacked
+      // above (draft confirm, settings) does.
+      if (hasOpenModal(rootRef.current)) return;
       e.preventDefault();
       e.stopPropagation();
       if (left || right) {
@@ -1697,7 +1783,7 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   // pins to the bottom, directly above the message input (the host renders the
   // input right after this view). Needs a full-height parent.
   return (
-    <div className="flex flex-col items-center w-full flex-1 min-h-0">
+    <div ref={rootRef} className="flex flex-col items-center w-full flex-1 min-h-0">
       <ErrorBoundary name="ProjectSwitcher" level="inline">
         <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} />
       </ErrorBoundary>
@@ -5510,16 +5596,14 @@ function useSwipeToDismiss(onDismiss: () => void) {
   return { handlers, style, backdropOpacity, swipeY };
 }
 
-function ImageBlock({ image }: { image: ImageData }) {
-  // Batched + cross-mount-cached URL resolution: one query for all visible
-  // images, and a remount (virtualized scroll) reuses the cached URL instead of
-  // re-subscribing and re-flashing "Loading…".
-  const storageUrl = useStorageImageUrl(image.storage_id);
-  const gallery = useImageGallery();
-
+// Batched + cross-mount-cached URL resolution: one query for all visible
+// images, and a remount (virtualized scroll) reuses the cached URL instead of
+// re-subscribing and re-flashing "Loading…".
+function useImageSrc(image: ImageData): { src: string | undefined; storageResolved: boolean; storageMissing: boolean } {
   // storageUrl: undefined = still loading, null = not found, string = URL
+  const storageUrl = useStorageImageUrl(image.storage_id);
   const storageResolved = image.storage_id ? storageUrl !== undefined : true;
-  const storageMissing = image.storage_id && storageUrl === null;
+  const storageMissing = Boolean(image.storage_id) && storageUrl === null;
 
   // While uploading we only have the local blob: preview. After the upload
   // resolves we prefer the real storage URL but fall back to the preview until
@@ -5531,6 +5615,12 @@ function ImageBlock({ image }: { image: ImageData }) {
       : image.data
         ? `data:${image.media_type};base64,${image.data}`
         : image.preview_url || undefined;
+  return { src, storageResolved, storageMissing };
+}
+
+function ImageBlock({ image }: { image: ImageData }) {
+  const { src, storageResolved, storageMissing } = useImageSrc(image);
+  const gallery = useImageGallery();
 
   // Seed "loaded" from the module cache so an already-decoded image skips the
   // overlay on remount instead of flashing it while the HTTP-cached bytes decode.
@@ -7293,35 +7383,72 @@ function describeToolGroup(rawName: string, count: number): string {
   }
 }
 
+// A screenshot captured inside a collapsed tool group, surfaced on the receipt
+// chip as a small thumbnail. Clicking opens the shared lightbox (with arrow-key
+// browsing across every registered image) WITHOUT expanding the tool group.
+function CondensedImageThumb({ image }: { image: ImageData }) {
+  const { src, storageMissing } = useImageSrc(image);
+  const gallery = useImageGallery();
+  useWatchEffect(() => {
+    if (src && gallery) gallery.register(src);
+  }, [src, gallery]);
+  if (storageMissing) return null;
+  if (!src) {
+    return <span className="h-7 w-10 shrink-0 rounded-sm border border-sol-border/50 bg-sol-bg-alt animate-pulse" aria-hidden />;
+  }
+  return (
+    <img
+      src={src}
+      alt="Screenshot"
+      role="button"
+      tabIndex={0}
+      onClick={(e) => { e.stopPropagation(); gallery?.open(src); }}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); gallery?.open(src); } }}
+      className="h-7 w-10 shrink-0 rounded-sm border border-sol-border/60 object-cover object-top cursor-zoom-in hover:border-sol-cyan/60 hover:brightness-110 transition-all"
+      title="View screenshot"
+    />
+  );
+}
+
 // One distinct receipt row standing in for a whole turn's tool activity in the
 // condensed feed: a faint inset chip, clearly NOT prose, e.g.
 // "⚙ read 3 files · ran 2 commands · 1 search". Click to reveal the real tool
-// blocks inline (the chip then reads as a hide toggle).
-const CondensedToolsLine = memo(function CondensedToolsLine({ tools, expanded, onToggle }: { tools: ToolCall[]; expanded: boolean; onToggle: () => void }) {
-  const { summary, total } = useMemo(() => {
+// blocks inline (the chip then reads as a hide toggle). Screenshots taken by
+// the collapsed tools ride along as clickable thumbnails, so images stay
+// reachable without expanding the group — which is why the root is a div, not
+// a button (thumbnails are interactive, and buttons can't nest).
+const CondensedToolsLine = memo(function CondensedToolsLine({ tools, expanded, onToggle, images, globalImageMap }: { tools: ToolCall[]; expanded: boolean; onToggle: () => void; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
+  const { summary, screenshots } = useMemo(() => {
     const counts = new Map<string, number>();
+    const shots: { id: string; image: ImageData }[] = [];
     for (const tc of tools) {
       const nested = extractCodexExecActions(tc);
       const represented = nested.length > 0 ? nested : [tc];
       for (const action of represented) {
         counts.set(action.name, (counts.get(action.name) ?? 0) + 1);
       }
+      const toolImage = images?.find(img => img.tool_use_id === tc.id) || globalImageMap?.[tc.id];
+      if (toolImage) shots.push({ id: tc.id, image: toolImage });
     }
     return {
       summary: [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · "),
-      total: tools.length,
+      screenshots: shots,
     };
-  }, [tools]);
+  }, [tools, images, globalImageMap]);
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onToggle}
-      className="not-prose mt-1 flex items-center gap-2 max-w-full rounded-md border border-dashed border-sol-border/60 bg-sol-bg-alt/40 pl-2 pr-2.5 py-0.5 text-[11px] text-sol-text-dim hover:border-sol-cyan/40 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70 transition-colors"
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+      className="not-prose mt-1 flex items-center flex-wrap gap-x-2 gap-y-1 max-w-full w-fit cursor-pointer rounded-md border border-dashed border-sol-border/60 bg-sol-bg-alt/40 pl-2 pr-2.5 py-0.5 text-[11px] text-sol-text-dim hover:border-sol-cyan/40 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70 transition-colors"
       title={expanded ? "Hide tool activity" : "Show tool activity"}
     >
       <Wrench className="w-3 h-3 shrink-0 opacity-70" />
       <span className="truncate font-medium tracking-tight">{summary}</span>
+      {screenshots.map(({ id, image }) => <CondensedImageThumb key={id} image={image} />)}
       <ChevronRight className={`w-3 h-3 shrink-0 opacity-60 transition-transform ${expanded ? "rotate-90" : ""}`} />
-    </button>
+    </div>
   );
 });
 
@@ -7754,7 +7881,7 @@ function AssistantBlockImpl({
         )}
 
         {condensedReceipt && (
-          <CondensedToolsLine tools={condensedReceipt.tools} expanded={condensedReceipt.expanded} onToggle={condensedReceipt.onToggle} />
+          <CondensedToolsLine tools={condensedReceipt.tools} expanded={condensedReceipt.expanded} onToggle={condensedReceipt.onToggle} images={images} globalImageMap={globalImageMap} />
         )}
 
         {fullscreen && createPortal(
@@ -8638,7 +8765,7 @@ function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolL
   );
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, composerPlaceholder, workingSinceTs, workingTool }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -9494,6 +9621,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     store.setQueuedMessagesFor(conversationId, next);
   }, [conversationId]);
   const [selectedQueueIndex, setSelectedQueueIndex] = useState<number | null>(null);
+  // Tell the host (compose popup) when Escape is spoken for by inner UI — the
+  // lightbox, an image/queue chip selection, or the slash-command menu — so its
+  // document-capture Escape listener stands down and the textarea handler above
+  // gets to unwind that state instead of the whole dialog closing.
+  useWatchEffect(() => {
+    if (escapeOwnedRef) {
+      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null;
+    }
+  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex]);
   const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
   useWatchEffect(() => {
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
@@ -14171,10 +14307,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </span>
             ) : null}
 
-            {!isSessionDisconnected && (managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || (!managedSession?.agent_status && isConversationLive)) && (
+            {!isSessionDisconnected && (managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "waiting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || (!managedSession?.agent_status && isConversationLive)) && (
               <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${
                 managedSession?.agent_status === "thinking" ? "bg-sol-violet/10 text-sol-violet border border-sol-violet/30" :
                 managedSession?.agent_status === "compacting" ? "bg-amber-500/10 text-amber-400 border border-amber-500/30" :
+                managedSession?.agent_status === "waiting" ? "bg-sol-blue/10 text-sol-blue border border-sol-blue/30" :
                 managedSession?.agent_status === "permission_blocked" ? "bg-sol-orange/10 text-sol-orange border border-sol-orange/30" :
                 managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" ? "bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30" :
                 "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
@@ -14182,12 +14319,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
                   managedSession?.agent_status === "thinking" ? "bg-sol-violet" :
                   managedSession?.agent_status === "compacting" ? "bg-amber-400" :
+                  managedSession?.agent_status === "waiting" ? "bg-sol-blue" :
                   managedSession?.agent_status === "permission_blocked" ? "bg-sol-orange" :
                   managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" ? "bg-sol-cyan" :
                   "bg-emerald-400"
                 }`} />
                 <span className="hidden sm:inline">{managedSession?.agent_status === "thinking" ? "Thinking" :
                  managedSession?.agent_status === "compacting" ? "Compacting" :
+                 managedSession?.agent_status === "waiting" ? "Waiting" :
                  managedSession?.agent_status === "permission_blocked" ? "Needs Input" :
                  managedSession?.agent_status === "starting" ? "Starting" :
                  managedSession?.agent_status === "resuming" ? "Resuming" :
@@ -14195,6 +14334,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                  "Working"}</span>
                 <span className="sm:hidden">{managedSession?.agent_status === "thinking" ? "Think" :
                  managedSession?.agent_status === "compacting" ? "Compact" :
+                 managedSession?.agent_status === "waiting" ? "Wait" :
                  managedSession?.agent_status === "permission_blocked" ? "Input" :
                  managedSession?.agent_status === "starting" ? "Start" :
                  managedSession?.agent_status === "resuming" ? "Rsum" :
@@ -14463,7 +14603,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </button>
                 </ShortcutTooltip>
 
-                <span data-simple-hide className="contents">
+                {/* Kept in simple view (dimmed, copy sub-button hidden inside
+                    the pill): the live tmux badge is how you reach the
+                    terminal split, which simple view users still want. */}
+                <span data-simple-dim className="contents [.simple-view_&]:inline-flex [.simple-view_&]:items-center">
                   <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
                 </span>
 
@@ -14490,6 +14633,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
                         </svg>
                         Copy ID ({conversation.short_id})
+                      </DropdownMenuItem>
+                    )}
+                    {/* Simple view strips the header's copy affordances (the
+                        pill's copy sub-button, the branch chip) — resurface
+                        them here so the hamburger stays the full command
+                        surface in that mode. */}
+                    {simpleViewPref && managedSession?.tmux_session && (
+                      <DropdownMenuItem onSelect={() => { setTimeout(() => { const cmd = `tmux attach -t '${managedSession.tmux_session}'`; copyToClipboard(cmd).then(() => toast.success("tmux attach copied")).catch(() => toast.error("Failed to copy")); }); }}>
+                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        Copy tmux attach
+                      </DropdownMenuItem>
+                    )}
+                    {simpleViewPref && conversation?.git_branch && (
+                      <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.git_branch!).then(() => toast.success("Branch copied")).catch(() => toast.error("Failed to copy")); }); }}>
+                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M7 7a2 2 0 100-4 2 2 0 000 4zm0 0v6m0 0a2 2 0 100 4 2 2 0 000-4zm10-6a2 2 0 100-4 2 2 0 000 4zm0 0a5 5 0 01-5 5h-2" />
+                        </svg>
+                        Copy branch ({conversation.git_branch})
                       </DropdownMenuItem>
                     )}
                     {/* Run synchronously (no setTimeout) so handleCopyAll's
@@ -14783,6 +14946,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             ResizeObserver counts it and the sticky-message overlay (anchored at
             top: headerHeight) lands below instead of covering it. */}
         {conversation && <AssignedToYouBanner conversationId={conversation._id.toString()} />}
+        {/* Live tmux view (opened from the tmux pill), docked across the top.
+            INSIDE the header on purpose: headerHeight's ResizeObserver counts
+            it, so the sticky prompt card, files-changed pill and jump toast
+            all anchor below the terminal — including live during a resize
+            drag. */}
+        {conversation && (
+          <ErrorBoundary name="ConversationTerminal" level="inline" fallback={null}>
+            <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
+          </ErrorBoundary>
+        )}
       </header>
 
       {stickyMsgVisible && activeStickyMsg && (
@@ -15094,15 +15267,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       </div>
-
-      {/* Live terminal view of this session's tmux pane (opened from the tmux
-          pill), docked between the feed and the composer — a per-conversation
-          split, not the global bottom panel. */}
-      {conversation && (
-        <ErrorBoundary name="ConversationTerminal" level="inline" fallback={null}>
-          <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
-        </ErrorBoundary>
-      )}
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">
