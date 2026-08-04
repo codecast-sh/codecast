@@ -56,4 +56,50 @@ describe("shouldPlayWaitingSound", () => {
     expect(result.play).toBe(false);
     expect(notified.get("conv1")).toBe("conv1:5:permission_blocked");
   });
+
+  // This sound and the server's needs-input push (convex/notifications.ts
+  // checkNeedsInput) are documented mirrors. The server stands down on a killed
+  // row via classifyWorkState's `killed` precedence; so must this. ct-41083.
+  it("stays silent for a KILLED session that would otherwise chime", () => {
+    const notified = new Map<string, string>();
+
+    let result = apply([{ ...baseSession, agent_status: "working", awaiting_input: false, inbox_killed_at: 900 }], null, notified);
+    result = apply([{ ...baseSession, agent_status: "working", awaiting_input: true, inbox_killed_at: 900 }], result.nextWaiting, notified);
+    expect(result.play).toBe(false);
+    expect(notified.has("conv1")).toBe(false);
+  });
+
+  it("still chimes for the equivalent LIVE session (the killed case isn't silencing everything)", () => {
+    const notified = new Map<string, string>();
+
+    let result = apply([{ ...baseSession, agent_status: "working", awaiting_input: false }], null, notified);
+    result = apply([{ ...baseSession, agent_status: "working", awaiting_input: true }], result.nextWaiting, notified);
+    expect(result.play).toBe(true);
+  });
+
+  // The server bails on `inbox_dismissed_at || inbox_stashed_at` outright
+  // (notifications.ts checkNeedsInput) and these two are documented mirrors, so
+  // a set-aside session must not chime either. Behavior change: stashed
+  // sessions used to chime here.
+  it("stays silent for a STASHED session, matching the server's stand-down", () => {
+    const notified = new Map<string, string>();
+
+    let result = apply([{ ...baseSession, agent_status: "working", awaiting_input: false, inbox_stashed_at: 900 }], null, notified);
+    result = apply([{ ...baseSession, agent_status: "working", awaiting_input: true, inbox_stashed_at: 900 }], result.nextWaiting, notified);
+    expect(result.play).toBe(false);
+    expect(notified.has("conv1")).toBe(false);
+  });
+
+  // Killed rows leave nextWaiting entirely (the `continue`), so a revival is
+  // re-observed from scratch — no chime for a waiting episode that began while
+  // the session was retired. Same shape as the dismiss path.
+  it("does not chime on the sync right after a killed-and-waiting session is revived", () => {
+    const notified = new Map<string, string>();
+
+    let result = apply([{ ...baseSession, agent_status: "working", awaiting_input: true, inbox_killed_at: 900 }], null, notified);
+    expect(result.nextWaiting.has("conv1")).toBe(false);
+
+    result = apply([{ ...baseSession, agent_status: "working", awaiting_input: true }], result.nextWaiting, notified);
+    expect(result.play).toBe(false);
+  });
 });

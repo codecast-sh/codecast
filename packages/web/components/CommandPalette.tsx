@@ -1317,7 +1317,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   const navigateToSession = useCallback(
     (
-      conv: { _id: string; session_id?: string; title?: string; updated_at?: number; project_path?: string; git_root?: string; agent_type?: string; message_count?: number; is_idle?: boolean; user_id?: string; authorName?: string | null; authorAvatar?: string | null },
+      conv: { _id: string; session_id?: string; title?: string; updated_at?: number; project_path?: string; git_root?: string; agent_type?: string; message_count?: number; is_idle?: boolean; user_id?: string; authorName?: string | null; authorAvatar?: string | null; inbox_killed_at?: number | null },
       opts?: { messageId?: string; highlight?: string }
     ) => {
       const hash = opts?.messageId ? `#msg-${opts.messageId}` : "";
@@ -1343,6 +1343,13 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           message_count: conv.message_count || 0,
           is_idle: conv.is_idle ?? true,
           has_pending: false,
+          // Carry the retired marker or an injected killed row renders alive
+          // (working dot, needs-input bucket) until the next sync corrects it.
+          // Both palette sources supply it: favorites pass whole store rows,
+          // and performListRecentSessions projects the field off the
+          // conversation doc. Unlike is_idle just above, which that projection
+          // still omits — so `?? true` there is always the fallback.
+          inbox_killed_at: conv.inbox_killed_at ?? null,
           // Search/recent results null out author for own sessions, so a present
           // authorName means "not mine" — carry it so the card labels whose it is.
           user_id: conv.user_id,

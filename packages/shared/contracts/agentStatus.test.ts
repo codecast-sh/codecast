@@ -88,4 +88,32 @@ describe("isLivenessStale", () => {
     // statusless but fresh → trusted
     expect(isLivenessStale({ message_count: 5, updated_at: NOW - 10_000 }, NOW)).toBe(false);
   });
+
+  // A retired row's live-looking fields are never believable, and neither
+  // time-based arm catches the common case: killing a session mid-turn leaves an
+  // ACTIVE agent_status (isQuietSettled bails at once) and kill never touches
+  // updated_at (isStatusTrustStale needs the full hour). ct-41083.
+  it("is stale immediately for a KILLED session that was working when it died", () => {
+    const justKilled = {
+      agent_status: "working", is_idle: false, message_count: 5,
+      updated_at: NOW - 10_000, inbox_killed_at: NOW - 10_000,
+    };
+    expect(isLivenessStale(justKilled, NOW)).toBe(true);
+    // The same row alive is trusted — the kill marker is doing the work here,
+    // not the clock.
+    expect(isLivenessStale({ ...justKilled, inbox_killed_at: undefined }, NOW)).toBe(false);
+  });
+
+  it("needs no clock: a killed row is stale even with a brand-new updated_at", () => {
+    expect(isLivenessStale(
+      { agent_status: "thinking", is_idle: false, message_count: 5, updated_at: NOW, inbox_killed_at: NOW },
+      NOW,
+    )).toBe(true);
+  });
+
+  it("leaves the two time-based arms alone for unkilled rows", () => {
+    // Regression guard: the killed branch must not swallow the existing logic.
+    expect(isLivenessStale({ message_count: 5, updated_at: NOW - 10 * 60 * 1000, inbox_killed_at: null }, NOW)).toBe(true);
+    expect(isLivenessStale({ agent_status: "working", is_idle: false, message_count: 5, updated_at: NOW - 10 * 60 * 1000, inbox_killed_at: null }, NOW)).toBe(false);
+  });
 });
