@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Card } from "../../../components/ui/card";
 import {
   useDevices,
@@ -10,6 +10,93 @@ import {
   DeviceDot,
   type Device,
 } from "../../../components/DeviceBadge";
+
+type RepoPlane = NonNullable<Device["git_plane"]>[number];
+
+function repoTone(r: RepoPlane): { dot: string; label?: string } {
+  if (r.needs_access) return { dot: "bg-sol-yellow", label: "needs access" };
+  if (!r.origin_ok) return { dot: "bg-sol-red", label: "no usable origin" };
+  if (r.fetch_ok === false) return { dot: "bg-sol-red", label: "fetch failing" };
+  return { dot: "bg-sol-green" };
+}
+
+function repoBase(root: string): string {
+  return root.split("/").filter(Boolean).pop() ?? root;
+}
+
+/** One repo's git health on a device: dot, name, branch, drift, identity. */
+function RepoPlaneRow({ r }: { r: RepoPlane }) {
+  const tone = repoTone(r);
+  return (
+    <li className="flex items-center gap-2 text-[11px] min-w-0">
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tone.dot}`} />
+      <span className="font-mono text-gray-300 truncate">{repoBase(r.root)}</span>
+      {r.branch && <span className="text-gray-500 truncate">{r.branch}</span>}
+      {(r.ahead ?? 0) > 0 && <span className="text-sol-cyan shrink-0">↑{r.ahead}</span>}
+      {(r.behind ?? 0) > 0 && <span className="text-sol-orange shrink-0">↓{r.behind}</span>}
+      {r.identity === "device" && (
+        <span className="px-1 py-px rounded border border-sol-violet/30 bg-sol-violet/10 text-sol-violet shrink-0">
+          device key
+        </span>
+      )}
+      {tone.label && <span className="text-sol-yellow shrink-0">{tone.label}</span>}
+      {r.repaired_from && <span className="text-gray-500 shrink-0" title={`origin was ${r.repaired_from}`}>origin repaired</span>}
+    </li>
+  );
+}
+
+/**
+ * The grant-access flow, productized: when a device cannot fetch a repo for
+ * lack of credentials, its daemon mints a keypair and heartbeats the PUBLIC
+ * half; this card shows it with copy-paste guidance. Recovery needs no further
+ * action — the daemon retries on its cadence and the rows above turn green.
+ */
+function GrantAccessCard({ d, blocked }: { d: Device; blocked: RepoPlane[] }) {
+  const [copied, setCopied] = useState(false);
+  if (!blocked.length) return null;
+  const repoNames = blocked.map((r) => repoBase(r.root)).join(", ");
+  return (
+    <div className="mt-2 rounded-md border border-sol-yellow/30 bg-sol-yellow/5 p-3 space-y-2">
+      <div className="text-[11px] text-sol-yellow font-medium">
+        This machine needs access to {repoNames}
+      </div>
+      {d.git_pubkey ? (
+        <>
+          <p className="text-[11px] text-gray-400">
+            Add its key on GitHub — either your account&apos;s{" "}
+            <a href="https://github.com/settings/ssh/new" target="_blank" rel="noreferrer" className="text-sol-blue hover:underline">
+              SSH keys
+            </a>{" "}
+            (grants everything you can reach) or the repo&apos;s deploy keys with write access
+            (grants just that repo). It starts working within minutes; nothing else to run.
+          </p>
+          <div className="flex items-start gap-2">
+            <code className="flex-1 text-[10px] font-mono text-gray-300 bg-black/20 rounded px-2 py-1.5 break-all select-all">
+              {d.git_pubkey}
+            </code>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(d.git_pubkey!);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              }}
+              className="shrink-0 px-2 py-1 rounded border border-sol-border text-[11px] text-gray-300 hover:bg-sol-card"
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="text-[11px] text-gray-400">
+          Its remotes need credentials this machine doesn&apos;t have (an https remote wants a
+          token, or the machine can&apos;t mint an SSH key). Sign in to git on that machine, or
+          switch the repo&apos;s origin to an SSH URL so a device key can be granted here.
+        </p>
+      )}
+    </div>
+  );
+}
 
 function PlatformGlyph({ d }: { d: Device }) {
   const cls = "w-5 h-5";
@@ -65,6 +152,14 @@ function DeviceRow({ d }: { d: Device }) {
             </span>
             <span className="font-mono opacity-60">{d.device_id.slice(0, 12)}</span>
           </div>
+          {(d.git_plane?.length ?? 0) > 0 && (
+            <ul className="mt-2 space-y-1">
+              {d.git_plane!.map((r) => (
+                <RepoPlaneRow key={r.root} r={r} />
+              ))}
+            </ul>
+          )}
+          <GrantAccessCard d={d} blocked={(d.git_plane ?? []).filter((r) => r.needs_access)} />
           {d.local_project_roots.length > 0 && (
             <details className="mt-2 group">
               <summary className="cursor-pointer text-[11px] text-gray-400 hover:text-gray-200 select-none">
