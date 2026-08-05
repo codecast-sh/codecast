@@ -113,6 +113,14 @@ describe("groupVaultChoices", () => {
     expect(groups[2].items[0].noteCount).toBe(4);
   });
 
+  // The picker badges each row with where its files live, and a mirrored vault
+  // is on this machine AND in codecast — a fact grouping used to drop.
+  test("carries the mirror flag through, so a row can say it is synced", () => {
+    const groups = groupVaultChoices([vault({ mirror: true }), project()], []);
+    expect(groups[0].items[0].mirror).toBe(true);
+    expect(groups[1].items[0].mirror).toBeUndefined();
+  });
+
   test("drops empty groups rather than showing a bare heading", () => {
     const groups = groupVaultChoices([project()], []);
     expect(groups).toHaveLength(1);

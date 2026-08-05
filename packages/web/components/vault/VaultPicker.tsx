@@ -7,7 +7,7 @@
 // from a notes folder until you open it.
 
 import { useMemo, useState } from "react";
-import { Check, ChevronDown, Cloud, FolderGit2, FolderTree } from "lucide-react";
+import { Check, ChevronDown, Cloud, FolderGit2, FolderTree, Laptop, Users } from "lucide-react";
 import type { VaultInfo } from "@codecast/shared/contracts";
 import {
   Command,
@@ -23,12 +23,48 @@ import {
   shortenVaultRoot,
   type VaultSourceKind,
 } from "../../lib/vault/projectVault";
+import {
+  PRESENCE_LABELS,
+  describeVaultScope,
+  teamScopeLabel,
+  vaultPresence,
+  type VaultPresence,
+} from "../../lib/vault/scopeModel";
+import { useVaultTeamResolver } from "./useVaultScope";
 
 const KIND_ICON: Record<VaultSourceKind, React.ComponentType<{ className?: string }>> = {
   vault: FolderTree,
   project: FolderGit2,
   remote: Cloud,
 };
+
+const PRESENCE_ICON: Record<VaultPresence, React.ComponentType<{ className?: string }>> = {
+  "this-machine": Laptop,
+  both: Cloud,
+  "other-machine": Cloud,
+};
+
+// Where the bytes are, as a chip. The plain case stays dim and the two that
+// involve codecast take the accent: the point of the badge is that you can tell
+// them apart without opening anything, not that every row shouts.
+const PRESENCE_TONE: Record<VaultPresence, string> = {
+  "this-machine": "text-sol-text-dim",
+  both: "text-sol-cyan",
+  "other-machine": "text-sol-violet",
+};
+
+function PresenceChip({ presence, title }: { presence: VaultPresence; title: string }) {
+  const Icon = PRESENCE_ICON[presence];
+  return (
+    <span
+      className={`flex items-center gap-1 flex-shrink-0 text-[10px] ${PRESENCE_TONE[presence]}`}
+      title={title}
+    >
+      <Icon className="w-3 h-3" />
+      {PRESENCE_LABELS[presence]}
+    </span>
+  );
+}
 
 export function VaultPicker({
   vaults,
@@ -49,12 +85,23 @@ export function VaultPicker({
     groups.flatMap((g) => g.items).find((c) => c.id === activeVaultId) ?? null;
   const ActiveIcon = KIND_ICON[active?.kind ?? "vault"];
   const total = groups.reduce((n, g) => n + g.items.length, 0);
+  const teamForRoot = useVaultTeamResolver();
+
+  // Both questions a row has to answer, together: where the files are, and who
+  // sees what you sync out of them.
+  const scopeOf = (choice: { kind: VaultSourceKind; root?: string; mirror?: boolean }) => {
+    const presence = vaultPresence({ remote: choice.kind === "remote", mirror: choice.mirror });
+    const team = teamForRoot(choice.root);
+    return { presence, team, sentence: describeVaultScope({ root: choice.root, presence, team }) };
+  };
+
+  const activeSentence = active ? scopeOf(active).sentence : undefined;
 
   if (total <= 1) {
     return (
       <div
         className="flex-1 flex items-center gap-1.5 min-w-0 text-xs font-medium text-sol-text"
-        title={active?.root}
+        title={activeSentence}
       >
         <ActiveIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />
         <span className="truncate">{active?.name ?? "Vault"}</span>
@@ -67,7 +114,7 @@ export function VaultPicker({
       <PopoverTrigger asChild>
         <button
           type="button"
-          title={active?.root ?? "Choose a vault"}
+          title={activeSentence ?? "Choose a project or folder"}
           className="flex-1 flex items-center gap-1.5 min-w-0 text-xs font-medium text-sol-text hover:text-sol-cyan transition-colors"
         >
           <ActiveIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />
@@ -75,7 +122,7 @@ export function VaultPicker({
           <ChevronDown className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="p-0 w-[300px]">
+      <PopoverContent align="start" className="p-0 w-[340px]">
         {/* Filtering, not scrolling: this list is every project on the machine,
             which is hundreds of rows on a working developer's laptop. */}
         <Command
@@ -93,33 +140,47 @@ export function VaultPicker({
                 {group.items.map((choice) => {
                   const Icon = KIND_ICON[choice.kind];
                   const selected = choice.id === activeVaultId;
+                  const scope = scopeOf(choice);
                   return (
                     <CommandItem
                       key={choice.id}
-                      // The path is searchable too: a renamed vault should still
-                      // be findable by the directory it actually points at.
-                      value={`${choice.name} ${choice.root ?? ""}`}
+                      // Path and team are searchable too: a renamed vault should
+                      // still be findable by the directory it points at, and
+                      // "which of these belong to Acme" is a real question.
+                      value={`${choice.name} ${choice.root ?? ""} ${teamScopeLabel(scope.team)}`}
                       onSelect={() => {
                         setOpen(false);
                         if (!selected) onSelect(choice.id, choice.kind);
                       }}
-                      className="gap-2"
+                      className="gap-2 items-start"
                     >
-                      <Icon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />
+                      <Icon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-text-dim" />
                       <span className="flex-1 min-w-0">
                         <span className="block truncate text-[13px] text-sol-text">{choice.name}</span>
-                        {choice.root && (
-                          <span className="block truncate text-[10px] text-sol-text-dim">
-                            {shortenVaultRoot(choice.root)}
+                        {/* One meta line: where on disk, how much, and who can
+                            see what you sync from it. */}
+                        <span className="flex items-center gap-1 min-w-0 text-[10px] text-sol-text-dim">
+                          <span className="truncate">
+                            {[
+                              choice.root && shortenVaultRoot(choice.root),
+                              choice.noteCount !== undefined &&
+                                `${choice.noteCount} ${choice.noteCount === 1 ? "note" : "notes"}`,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
                           </span>
-                        )}
-                      </span>
-                      {choice.noteCount !== undefined && (
-                        <span className="text-[10px] text-sol-text-dim flex-shrink-0">
-                          {choice.noteCount}
+                          <span
+                            className={`flex items-center gap-0.5 flex-shrink-0 ${
+                              scope.team.kind === "team" && scope.team.shared ? "text-sol-green" : ""
+                            }`}
+                          >
+                            {scope.team.kind === "team" && <Users className="w-2.5 h-2.5" />}
+                            {teamScopeLabel(scope.team)}
+                          </span>
                         </span>
-                      )}
-                      {selected && <Check className="w-3 h-3 flex-shrink-0 text-sol-cyan" />}
+                      </span>
+                      <PresenceChip presence={scope.presence} title={scope.sentence} />
+                      {selected && <Check className="w-3 h-3 flex-shrink-0 mt-0.5 text-sol-cyan" />}
                     </CommandItem>
                   );
                 })}

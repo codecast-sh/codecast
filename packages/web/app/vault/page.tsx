@@ -47,8 +47,10 @@ import { VaultFindBar } from "../../components/vault/VaultFindBar";
 import { HoverPreviewProvider } from "../../components/vault/VaultHoverPreview";
 import { VaultSearchPane } from "../../components/vault/VaultSearchPane";
 import { VaultPicker } from "../../components/vault/VaultPicker";
-import { VaultProjectStrip } from "../../components/vault/VaultProjectStrip";
-import { isProjectVault, vaultLandingPath } from "../../lib/vault/projectVault";
+import { VaultScopeLine } from "../../components/vault/VaultScopeLine";
+import { useDocForFile, useVaultTeamResolver } from "../../components/vault/useVaultScope";
+import { vaultPresence } from "../../lib/vault/scopeModel";
+import { vaultLandingPath } from "../../lib/vault/projectVault";
 import { filesHref } from "../../lib/vault/vaultHref";
 import { useVaultStore } from "../../store/vaultStore";
 import {
@@ -347,6 +349,25 @@ function VaultContent() {
     [vaults, activeVaultId],
   );
 
+  // What the current scope MEANS — where these files live and who sees what you
+  // sync out of them. A remote mirror has no local VaultInfo, only a name in the
+  // remote list, so the two are folded into one shape here rather than making
+  // the scope line care which it got.
+  const teamForRoot = useVaultTeamResolver();
+  const docTwin = useDocForFile(activeVault?.root, activePath);
+  const scope = useMemo(() => {
+    const remote = remoteVaults.find((v) => v.id === activeVaultId);
+    const name = activeVault?.name ?? remote?.name;
+    if (!name) return null;
+    return {
+      name,
+      root: activeVault?.root,
+      home: activeVault?.home,
+      presence: vaultPresence({ remote: isRemote, mirror: activeVault?.mirror }),
+      team: teamForRoot(activeVault?.root),
+    };
+  }, [activeVault, activeVaultId, remoteVaults, isRemote, teamForRoot]);
+
   // Land in the project's docs rather than on an empty reading pane. A repo
   // root is mostly source directories, so "pick a vault, then pick a note" puts
   // the one thing worth reading two clicks away.
@@ -538,9 +559,7 @@ function VaultContent() {
                 <Waypoints className="w-3.5 h-3.5" />
               </button>
             </div>
-            {isProjectVault(activeVault) && activeVault && (
-              <VaultProjectStrip vault={activeVault} />
-            )}
+            {scope && <VaultScopeLine {...scope} docTwin={docTwin} />}
             <div className="flex items-center border-b border-sol-border/30">
               {LEFT_TABS.map(({ id, label, icon: Icon }) => (
                 <button
