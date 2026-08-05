@@ -1080,6 +1080,51 @@ export const addDep = mutation({
   },
 });
 
+export const removeDep = mutation({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+    blocks: v.optional(v.string()),
+    blocked_by: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const task = await ctx.db
+      .query("tasks")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
+
+    // Removes the edge from this task, plus the mirror edge on the other task
+    // when it still exists — the other side may be gone, since edges to
+    // dropped/deleted blockers are exactly what removal is for.
+    const removeEdge = async (otherId: string, field: "blocks" | "blocked_by") => {
+      const current: string[] = task[field] || [];
+      if (!current.includes(otherId)) {
+        throw new Error(`${args.short_id} has no ${field === "blocks" ? "blocks" : "blocked-by"} dependency on ${otherId}`);
+      }
+      await ctx.db.patch(task._id, { [field]: current.filter((id) => id !== otherId), updated_at: Date.now() });
+      const other = await ctx.db
+        .query("tasks")
+        .withIndex("by_short_id", (q) => q.eq("short_id", otherId))
+        .first();
+      if (!other || !(await canAccessTask(ctx, auth.userId, other))) return;
+      const mirrorField = field === "blocks" ? "blocked_by" : "blocks";
+      const mirror: string[] = other[mirrorField] || [];
+      if (mirror.includes(args.short_id)) {
+        await ctx.db.patch(other._id, { [mirrorField]: mirror.filter((id) => id !== args.short_id), updated_at: Date.now() });
+      }
+    };
+
+    if (args.blocks) await removeEdge(args.blocks, "blocks");
+    if (args.blocked_by) await removeEdge(args.blocked_by, "blocked_by");
+
+    return { success: true };
+  },
+});
+
 export const context = query({
   args: {
     api_token: v.string(),
