@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
+import { useEventListener } from "./useEventListener";
+
+const CAPTURE = { capture: true } as const;
 
 // Persist panel layouts from real user gestures only, once, at gesture end.
 //
@@ -22,50 +25,36 @@ export function useDragGatedLayoutPersist(
   const persistRef = useRef(persist);
   persistRef.current = persist;
 
-  const flush = useCallback(() => {
+  const isSeparator = (target: EventTarget | null) =>
+    target instanceof Element && !!target.closest('[role="separator"]');
+
+  const endGesture = useCallback(() => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
     const pending = pendingRef.current;
     pendingRef.current = null;
     if (pending) persistRef.current(pending);
   }, []);
 
-  useEffect(() => {
-    const isSeparator = (target: EventTarget | null) =>
-      target instanceof Element && !!target.closest('[role="separator"]');
-    const onPointerDown = (e: PointerEvent) => {
-      if (isSeparator(e.target)) draggingRef.current = true;
-    };
-    const endGesture = () => {
-      if (!draggingRef.current) return;
-      draggingRef.current = false;
-      flush();
-    };
-    // Keyboard resize (arrow keys on a focused separator) has no pointer
-    // bracket; treat each keystroke as a short gesture and flush after a
-    // quiet period.
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (!isSeparator(e.target)) return;
-      if (!/^Arrow(Left|Right|Up|Down)$|^(Home|End)$/.test(e.key)) return;
-      draggingRef.current = true;
-      if (keyboardTimerRef.current) clearTimeout(keyboardTimerRef.current);
-      keyboardTimerRef.current = setTimeout(() => {
-        keyboardTimerRef.current = null;
-        endGesture();
-      }, 500);
-    };
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("pointerup", endGesture, true);
-    window.addEventListener("pointercancel", endGesture, true);
-    window.addEventListener("blur", endGesture);
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("pointerup", endGesture, true);
-      window.removeEventListener("pointercancel", endGesture, true);
-      window.removeEventListener("blur", endGesture);
-      window.removeEventListener("keydown", onKeyDown, true);
-      if (keyboardTimerRef.current) clearTimeout(keyboardTimerRef.current);
-    };
-  }, [flush]);
+  useEventListener("pointerdown", (e) => {
+    if (isSeparator(e.target)) draggingRef.current = true;
+  }, undefined, CAPTURE);
+  useEventListener("pointerup", endGesture, undefined, CAPTURE);
+  useEventListener("pointercancel", endGesture, undefined, CAPTURE);
+  useEventListener("blur", endGesture);
+  // Keyboard resize (arrow keys on a focused separator) has no pointer
+  // bracket; treat each keystroke as a short gesture and flush after a quiet
+  // period.
+  useEventListener("keydown", (e) => {
+    if (!isSeparator(e.target)) return;
+    if (!/^Arrow(Left|Right|Up|Down)$|^(Home|End)$/.test(e.key)) return;
+    draggingRef.current = true;
+    if (keyboardTimerRef.current) clearTimeout(keyboardTimerRef.current);
+    keyboardTimerRef.current = setTimeout(() => {
+      keyboardTimerRef.current = null;
+      endGesture();
+    }, 500);
+  }, undefined, CAPTURE);
 
   return useCallback((layout: { [key: string]: number }) => {
     if (!draggingRef.current) return;
