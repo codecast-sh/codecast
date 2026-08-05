@@ -3415,6 +3415,9 @@ cliRoute("/cli/work/comment", async (ctx, body) => {
 cliRoute("/cli/work/dep", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.addDep, body);
 });
+cliRoute("/cli/work/undep", async (ctx, body) => {
+  return await ctx.runMutation(api.tasks.removeDep, body);
+});
 cliRoute("/cli/work/context", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.context, body);
 });

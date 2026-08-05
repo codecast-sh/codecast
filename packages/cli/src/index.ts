@@ -12015,21 +12015,32 @@ work
 
 work
   .command("dep")
-  .description("Add a dependency between tasks")
+  .description("Add or remove a dependency between tasks")
   .argument("<short_id>", "Task short ID")
   .option("--blocks <id>", "This task blocks <id>")
   .option("--blocked-by <id>", "This task is blocked by <id>")
+  .option("--remove-blocks <id>", "Remove: this task no longer blocks <id>")
+  .option("--remove-blocked-by <id>", "Remove: this task is no longer blocked by <id>")
   .action(async (shortId: string, options: any) => {
-    if (!options.blocks && !options.blockedBy) {
-      console.error("Specify --blocks or --blocked-by");
+    if (!options.blocks && !options.blockedBy && !options.removeBlocks && !options.removeBlockedBy) {
+      console.error("Specify --blocks, --blocked-by, --remove-blocks, or --remove-blocked-by");
       console.error("Usage: cast task dep <id> --blocks <other_id>");
       process.exit(1);
     }
-    const body: Record<string, any> = { short_id: shortId };
-    if (options.blocks) body.blocks = options.blocks;
-    if (options.blockedBy) body.blocked_by = options.blockedBy;
-    await cliPost("/cli/work/dep", body);
-    console.log(`${c.green}ok${c.reset} Dependency added`);
+    if (options.blocks || options.blockedBy) {
+      const body: Record<string, any> = { short_id: shortId };
+      if (options.blocks) body.blocks = options.blocks;
+      if (options.blockedBy) body.blocked_by = options.blockedBy;
+      await cliPost("/cli/work/dep", body);
+      console.log(`${c.green}ok${c.reset} Dependency added`);
+    }
+    if (options.removeBlocks || options.removeBlockedBy) {
+      const body: Record<string, any> = { short_id: shortId };
+      if (options.removeBlocks) body.blocks = options.removeBlocks;
+      if (options.removeBlockedBy) body.blocked_by = options.removeBlockedBy;
+      await cliPost("/cli/work/undep", body);
+      console.log(`${c.green}ok${c.reset} Dependency removed`);
+    }
   });
 
 work
