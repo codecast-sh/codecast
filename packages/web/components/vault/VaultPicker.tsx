@@ -53,6 +53,25 @@ const PRESENCE_TONE: Record<VaultPresence, string> = {
   "other-machine": "text-sol-violet",
 };
 
+// The word is spent on the two answers that surprise. Spelling out "This
+// machine" on every ordinary row cost ~76px of the meta line — enough to eat
+// the note count and the team name, the facts the row exists to show — to
+// restate what the laptop icon and the tooltip already say.
+const PRESENCE_SPELLED_OUT: Record<VaultPresence, boolean> = {
+  "this-machine": false,
+  both: true,
+  "other-machine": true,
+};
+
+/** The plain facts about a row: where it is on disk and how much is in it. */
+function facts(choice: { root?: string; noteCount?: number }): string {
+  const notes =
+    choice.noteCount === undefined
+      ? null
+      : `${choice.noteCount} ${choice.noteCount === 1 ? "note" : "notes"}`;
+  return [choice.root && shortenVaultRoot(choice.root), notes].filter(Boolean).join(" · ");
+}
+
 function PresenceChip({ presence, title }: { presence: VaultPresence; title: string }) {
   const Icon = PRESENCE_ICON[presence];
   return (
@@ -61,7 +80,7 @@ function PresenceChip({ presence, title }: { presence: VaultPresence; title: str
       title={title}
     >
       <Icon className="w-3 h-3" />
-      {PRESENCE_LABELS[presence]}
+      {PRESENCE_SPELLED_OUT[presence] && PRESENCE_LABELS[presence]}
     </span>
   );
 }
@@ -141,6 +160,7 @@ export function VaultPicker({
                   const Icon = KIND_ICON[choice.kind];
                   const selected = choice.id === activeVaultId;
                   const scope = scopeOf(choice);
+                  const meta = facts(choice);
                   return (
                     <CommandItem
                       key={choice.id}
@@ -152,7 +172,12 @@ export function VaultPicker({
                         setOpen(false);
                         if (!selected) onSelect(choice.id, choice.kind);
                       }}
-                      className="gap-2 items-start"
+                      // A row carries four of its own colors — dim path, green
+                      // team, accent presence — and every one of them survives
+                      // the highlight's `text-accent-foreground`, leaving the
+                      // active row unreadable. Under highlight the row IS the
+                      // accent, so its contents defer to it.
+                      className="gap-2 items-start [&[data-selected=true]_*]:text-inherit"
                     >
                       <Icon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-text-dim" />
                       <span className="flex-1 min-w-0">
@@ -160,15 +185,15 @@ export function VaultPicker({
                         {/* One meta line: where on disk, how much, and who can
                             see what you sync from it. */}
                         <span className="flex items-center gap-1 min-w-0 text-[10px] text-sol-text-dim">
-                          <span className="truncate">
-                            {[
-                              choice.root && shortenVaultRoot(choice.root),
-                              choice.noteCount !== undefined &&
-                                `${choice.noteCount} ${choice.noteCount === 1 ? "note" : "notes"}`,
-                            ]
-                              .filter(Boolean)
-                              .join(" · ")}
-                          </span>
+                          {/* A remote mirror has no path on this machine, so
+                              the separator has to earn its place rather than
+                              lead the line. */}
+                          {meta && (
+                            <>
+                              <span className="truncate">{meta}</span>
+                              <span className="flex-shrink-0">·</span>
+                            </>
+                          )}
                           <span
                             className={`flex items-center gap-0.5 flex-shrink-0 ${
                               scope.team.kind === "team" && scope.team.shared ? "text-sol-green" : ""

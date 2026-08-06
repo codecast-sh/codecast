@@ -18,9 +18,9 @@ Code, Codex, Cursor, and Gemini as first-class clients. Triggers run follow-up
 work on a timer or a GitHub event and live in the inbox like sessions do. And
 `cast publish` turns any HTML file into a public page with a stable link.
 
-- **Triggers.** `cast trigger add` schedules follow-up work: once, on an interval, or on a GitHub event. Triggers live in the inbox, each run linked to its conversation, with browseable run history. Markdown prompts; `--safe` makes a run read-only.
+- **Triggers.** `cast trigger add` schedules follow-up work: once, on an interval, or on a GitHub event. Triggers live in the inbox, each run linked to its conversation, with browseable run history. Markdown prompts; `--safe` makes a run read-only. Deep dive: [Triggers](https://codecast.sh/documentation/triggers).
 - **OpenCode, pi, and Cursor.** OpenCode and pi record, resume, and fork as first-class clients; Cursor resumes through its own resume path. A client registry makes the next agent cheap to add.
-- **`cast publish`.** Any HTML file becomes a public page at a stable URL; republishing the same file updates the same link. Branded pages with link previews, cached at the edge.
+- **`cast publish`.** Any HTML file becomes a public page at a stable URL; republishing the same file updates the same link. Branded pages with link previews, cached at the edge. Deep dive: [Published pages](https://codecast.sh/documentation/publish).
 - **Owners, machines, and provider keys.** Sessions have owners separate from who started them; agent-run sessions land in a human's inbox. One control assigns owners and machine; moved sessions carry their uncommitted work. Store a provider API key once and codecast injects it at launch on any device.
 - **The inbox, team-wide.** Team mode shows every team-visible session on one board. Needs-input push notifications now come from the server, so your phone buzzes when a session actually waits on you.
 - **Mobile catches up.** Model and effort switcher, new-session sheet parity with web compose, inbox stash and kill buckets, canvas rendering, JetBrains Mono app-wide.
@@ -33,7 +33,7 @@ This month we built for teams working together. You can message any session
 like a colleague, leave comments on a teammate's work in a side rail, and trace
 any line of code back to the conversation that wrote it with `cast blame`.
 
-- **Message any session.** `cast send` reaches any session by its short id, old or active. It now routes team-wide, so you can reach a teammate's session too.
+- **Message any session.** `cast send` reaches any session by its short id, old or active. The messaging snippet teaches this to your agents, so sessions talk to each other — one session hands another a task and acts on the reply — and it routes team-wide, so a session can reach a teammate's session too. Paired with the stable feed, which injects recent team sessions into every new session at start, sessions have ambient awareness of each other: each one boots knowing which sessions exist, what state they are in, and how to reach them. Deep dives: [Messaging between sessions](https://codecast.sh/documentation/messaging) · [Ambient awareness](https://codecast.sh/documentation/ambient-awareness).
 - **`cast blame`.** A drop-in `git blame` whose author column is the session, and person, that wrote each line. Jump from a line to the conversation that produced it. Editor plugins for VS Code, Cursor, and vim-fugitive.
 - **Review and comments.** Quote and comment on an assistant's reply in a right-hand rail; comments stay visible. Inline comments on diff lines in document review.
 - **Organize the inbox.** A Favorites view, manual labels and buckets, and a stash that sets a session aside without stopping its agent.
@@ -74,8 +74,8 @@ work, workflows to chain agent steps and human approvals, and orchestration
 that runs a plan's tasks in parallel across agents. We rebuilt the web app on
 Vite and shipped a collaborative document editor.
 
-- **Plans, tasks, and orchestration.** Plans with goals and acceptance criteria; tasks with priorities and dependencies; orchestration breaks a plan into tasks and runs them in parallel waves across agents, retrying failures.
-- **Workflows.** Graph-based templates of agent steps, shell commands, conditional branches, and human approval gates; run from the CLI, palette, or an @mention with live progress.
+- **Plans, tasks, and orchestration.** Plans with goals and acceptance criteria; tasks with priorities and dependencies; orchestration breaks a plan into tasks and runs them in parallel waves across agents, retrying failures. Deep dives: [Tasks and plans](https://codecast.sh/documentation/tasks-and-plans) · [Orchestration](https://codecast.sh/documentation/orchestration).
+- **Workflows.** Graph-based templates of agent steps, shell commands, conditional branches, and human approval gates; run from the CLI, palette, or an @mention with live progress. Deep dive: [Workflows](https://codecast.sh/documentation/workflows).
 - **The web app, rebuilt on Vite.** Faster builds; a Cmd+K command palette with full-text search; native desktop notifications that click through to a session.
 - **Collaborative documents.** A rich editor with @mentions, slash commands, images, and real-time sync; promote a plan body into a doc.
 - **Activity, profiles, and subscriptions.** Daily activity feeds with written summaries; profile pages with a 180-day heatmap; watch any entity for notifications.
@@ -90,7 +90,7 @@ added the inbox: one place that gathers every session waiting on you.
 
 - **The inbox.** One view of idle and waiting sessions, with defer/dismiss keyboard shortcuts and pinning.
 - **Mobile parity.** Full chat rendering on iOS including plans, tasks, and tool calls; camera and photo picker; over-the-air updates.
-- **Forking conversations.** Branch a conversation at any message into its own line; a tree panel and branch selector to navigate forks.
+- **Forking conversations.** Branch a conversation at any message into its own line; a tree panel and branch selector to navigate forks. Deep dive: [Forks and spawned sessions](https://codecast.sh/documentation/forks-and-spawn).
 - **Desktop debut and more agents.** The first native desktop build with a self-restarting daemon watchdog; Gemini CLI sessions recorded alongside Claude Code, Codex, and Cursor; remote control from the web.
 
 ## January 2026: Memory, teams, and reliable sync
@@ -100,7 +100,7 @@ This month we made past sessions useful. The CLI can search your history,
 answer questions about it, and pull up relevant prior work before you start
 something new.
 
-- **Agent memory in the CLI.** `cast search` and `cast feed` find past work; `cast ask` answers natural-language questions; `cast context` pulls up relevant prior sessions; `cast handoff` / `summary` / `decisions` carry knowledge forward.
+- **Agent memory in the CLI.** `cast search` and `cast feed` find past work; `cast ask` answers natural-language questions; `cast context` pulls up relevant prior sessions; `cast handoff` / `summary` / `decisions` carry knowledge forward. Deep dives: [Agent memory](https://codecast.sh/documentation/memory) · [How agent snippets work](https://codecast.sh/documentation/agent-snippets).
 - **Teams and sharing.** Belong to multiple teams and switch between them; choose what's visible to teammates down to individual messages; auto-share folders.
 - **GitHub integration.** Commits and pull requests flow in through webhooks; each session collects the files it touched and the PRs it produced.
 - **Reliable sync.** A ledger tracks every message with hourly reconciliation; a health command finds and repairs gaps; the daemon starts on login and restarts itself if it stalls.

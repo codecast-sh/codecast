@@ -73,6 +73,8 @@ export interface ChangeSection {
   icon: SectionIcon;
   /** Plain-language highlights — what changed and what it does. */
   items: string[];
+  /** Deep dive guides for this feature (rendered as footer links on the card). */
+  docs?: { href: string; label: string }[];
 }
 
 export interface Release {
@@ -118,6 +120,7 @@ export const RELEASES: Release[] = [
           "Prompts are markdown, so a trigger can carry a full brief with goals and steps. `--safe` makes a run read-only.",
           "Killing a session cancels its triggers; restoring the session re-arms them.",
         ],
+        docs: [{ href: "/documentation/triggers", label: "Triggers" }],
       },
       {
         title: "OpenCode, pi, and Cursor",
@@ -138,6 +141,7 @@ export const RELEASES: Release[] = [
           "`cast publish report.html` gives any HTML file a public page at a stable URL. Republishing the same file updates the same link.",
           "Pages serve as branded documents with link previews, cached at the edge so they load fast anywhere.",
         ],
+        docs: [{ href: "/documentation/publish", label: "Published pages" }],
       },
       {
         title: "Owners, machines, and provider keys",
@@ -199,8 +203,13 @@ export const RELEASES: Release[] = [
         icon: "Send",
         items: [
           "`cast send` reaches any session by its short id, old or active. A dormant session wakes up with full context and runs what you ask; a live one gets your note as a new turn.",
-          "Messaging now routes team-wide, so you can reach a teammate's session, not only your own.",
-          "A collaborative composer shows who else is typing and lets sessions trade updates on a shared problem.",
+          "The messaging snippet teaches this to your agents, so sessions talk to each other: one session hands another a task, asks it to report back, and acts on the reply.",
+          "Messaging routes team-wide. A session can message a teammate's session, with the sender's name on the message.",
+          "Paired with the stable feed, which injects recent team sessions into every new session at start, sessions have ambient awareness of each other: each one boots knowing which sessions exist, what state they are in, and how to reach them.",
+        ],
+        docs: [
+          { href: "/documentation/messaging", label: "Messaging between sessions" },
+          { href: "/documentation/ambient-awareness", label: "Ambient awareness" },
         ],
       },
       {
@@ -391,6 +400,10 @@ export const RELEASES: Release[] = [
           "Failed tasks retry on their own with escalation logging; a dashboard shows what's in flight, blocked, or done.",
           "The daemon links plans and tasks it sees referenced in conversations, so you don't track them by hand.",
         ],
+        docs: [
+          { href: "/documentation/tasks-and-plans", label: "Tasks and plans" },
+          { href: "/documentation/orchestration", label: "Orchestration" },
+        ],
       },
       {
         title: "Workflows",
@@ -401,6 +414,7 @@ export const RELEASES: Release[] = [
           "Run a workflow from the CLI, the command palette, or an @mention, with live progress in the dashboard.",
           "Human gates pause and notify you; your reply flows into the next step's context.",
         ],
+        docs: [{ href: "/documentation/workflows", label: "Workflows" }],
       },
       {
         title: "The web app, rebuilt on Vite",
@@ -482,6 +496,7 @@ export const RELEASES: Release[] = [
           "A tree panel and branch selector let you navigate between forks.",
           "Resume a branch as a fresh agent run, carrying the history up to the fork point.",
         ],
+        docs: [{ href: "/documentation/forks-and-spawn", label: "Forks and spawned sessions" }],
       },
       {
         title: "Desktop debut and more agents",
@@ -512,6 +527,10 @@ export const RELEASES: Release[] = [
           "`cast search` and `cast feed` find past work; `cast ask` answers natural-language questions over your whole history.",
           "`cast context` pulls up the relevant prior sessions before you start something new.",
           "`cast handoff`, `cast summary`, and `cast decisions` carry knowledge forward between sessions.",
+        ],
+        docs: [
+          { href: "/documentation/memory", label: "Agent memory" },
+          { href: "/documentation/agent-snippets", label: "How agent snippets work" },
         ],
       },
       {
