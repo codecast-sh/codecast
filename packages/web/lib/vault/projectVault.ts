@@ -82,6 +82,10 @@ export interface VaultChoice {
   /** Known only after a real scan — see the note on discovery in
    *  vaultRegistry.projectVaults about why a discovered project has none. */
   noteCount?: number;
+  /** Opt-in one-way mirror to codecast. Carried through grouping because it is
+   *  half of what a row's provenance badge says: a mirrored local vault is on
+   *  this machine AND in codecast, which reads differently from either alone. */
+  mirror?: boolean;
 }
 
 export interface VaultChoiceGroup {
@@ -114,7 +118,14 @@ export function groupVaultChoices(
 
   for (const v of local) {
     const kind: VaultSourceKind = isProjectVault(v) ? "project" : "vault";
-    buckets[kind].push({ id: v.id, name: v.name, kind, root: v.root, noteCount: v.note_count });
+    buckets[kind].push({
+      id: v.id,
+      name: v.name,
+      kind,
+      root: v.root,
+      noteCount: v.note_count,
+      mirror: v.mirror,
+    });
   }
   for (const v of remote) {
     if (localIds.has(v.id)) continue;
