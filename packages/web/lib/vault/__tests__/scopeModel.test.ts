@@ -63,6 +63,16 @@ describe("deriveTeamForRoot", () => {
     });
   });
 
+  // Closeness is directory depth, not string length: /w/api/a/b sits deeper
+  // than /w/api/vendor even though it is the shorter path.
+  test("a shallower directory wins even when its path is the longer string", () => {
+    const evidence = [shared("/w/api/a/b", "t2"), privately("/w/api/vendor", "t1")];
+    expect(deriveTeamForRoot("/w/api", evidence, TEAMS)).toMatchObject({
+      teamName: "Acme",
+      shared: false,
+    });
+  });
+
   test("a sibling directory sharing a name prefix is not evidence", () => {
     const evidence = [shared("/w/api-gateway", "t1")];
     expect(deriveTeamForRoot("/w/api", evidence, TEAMS)).toEqual({ kind: "personal" });
@@ -135,8 +145,16 @@ describe("wording", () => {
 
   test("the words separate sharing from merely being filed under a team", () => {
     expect(teamScopeWords(team)).toBe("shared with Acme");
-    expect(teamScopeWords(routed)).toBe("private to you, filed under Acme");
-    expect(teamScopeWords({ kind: "personal" })).toContain("personal");
+    expect(teamScopeWords(routed)).toBe("private, filed under Acme");
+    expect(teamScopeWords({ kind: "personal" })).toBe("personal");
+  });
+
+  // The clause shares a 180px rail with the directory path, so it has to stay
+  // short enough to survive there — that is why it is one clause, not a lesson.
+  test("the words stay short enough for a narrow rail", () => {
+    for (const scope of [team, routed, { kind: "personal" } as const]) {
+      expect(teamScopeWords(scope).length).toBeLessThanOrEqual(30);
+    }
   });
 
   test("the sentence answers both questions and names the directory", () => {
@@ -152,7 +170,7 @@ describe("wording", () => {
 
   test("a scope with no local path still gets a sentence", () => {
     expect(describeVaultScope({ presence: "other-machine", team: { kind: "personal" } })).toBe(
-      "on another machine, read only, personal — nothing here is shared",
+      "on another machine, read only, personal",
     );
   });
 });

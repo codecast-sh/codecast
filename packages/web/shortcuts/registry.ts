@@ -108,6 +108,37 @@ export function hasOpenModal(host?: Element | null): boolean {
   return false;
 }
 
+// True when the element holds a text caret (input, textarea, contenteditable).
+// Narrower than the dispatcher's in-input guard: no key-owning-region check —
+// use it where the question is "would this key edit or move a caret?".
+export function isEditableTarget(el: EventTarget | null): boolean {
+  const t = el as { tagName?: string; isContentEditable?: boolean } | null;
+  if (!t) return false;
+  return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable === true;
+}
+
+// Resolves a keydown into a spatial ⌥-chord direction for the new-session
+// surface (NewSessionView's window-capture router), or null when the event
+// must be left alone. e.code, not e.key — mac Option+letter composes special
+// characters into e.key. Arrow-key horizontals from a text caret return null:
+// ⌥←/⌥→ inside an input is word jump on macOS and must never be stolen.
+// ⌥H/⌥L still cycle from anywhere, and arrows work once focus is on a picker.
+// ⌥↑/⌥↓ stay intercepted even from the caret — climbing out of the textarea
+// is their whole purpose.
+export function altChordDirection(e: {
+  altKey: boolean; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean;
+  code: string; target: EventTarget | null;
+}): 'up' | 'down' | 'left' | 'right' | null {
+  if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return null;
+  const horizontalArrow = e.code === 'ArrowLeft' || e.code === 'ArrowRight';
+  if (horizontalArrow && isEditableTarget(e.target)) return null;
+  if (e.code === 'KeyK' || e.code === 'ArrowUp') return 'up';
+  if (e.code === 'KeyJ' || e.code === 'ArrowDown') return 'down';
+  if (e.code === 'KeyH' || e.code === 'ArrowLeft') return 'left';
+  if (e.code === 'KeyL' || e.code === 'ArrowRight') return 'right';
+  return null;
+}
+
 // Decides whether a binding bypasses the in-input guard for the focused element.
 // 'whenEmpty' exists for the destructive backspace chords: while the user has
 // text in the composer, backspace+modifier is almost certainly delete-word

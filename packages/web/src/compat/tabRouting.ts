@@ -13,7 +13,6 @@ const NON_TAB_EXACT = new Set([
   "/",
   "/about",
   "/features",
-  "/documentation",
   "/privacy",
   "/security",
   "/support",
@@ -26,7 +25,9 @@ const NON_TAB_EXACT = new Set([
   "/reset-password",
   "/palette",
 ]);
-const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/a"];
+// "/documentation" is a prefix (not exact) so the guide pages under
+// /documentation/<slug> stay outside the tab shell too.
+const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/documentation", "/a"];
 
 // Every single-segment top-level route that lives INSIDE the dashboard (a tab
 // page or a standalone shell page). Public profiles live at the root as a bare
