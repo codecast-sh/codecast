@@ -333,12 +333,7 @@ export function TerminalPanel() {
           }
         }}
       >
-        {ep.phase === "resolving" && (
-          <CenteredNote>
-            <span className="inline-block w-3 h-3 border border-sol-text-dim/40 border-t-sol-cyan rounded-full animate-spin align-middle mr-2" />
-            Connecting to local daemon…
-          </CenteredNote>
-        )}
+        {ep.phase === "resolving" && <ConnectingNote label="Connecting to local daemon…" />}
         {ep.phase === "unavailable" && (
           <CenteredNote>
             <div className="space-y-2">
@@ -387,6 +382,16 @@ function CenteredNote({ children }: { children: React.ReactNode }) {
     <div className="absolute inset-0 flex items-center justify-center text-[12px] font-mono text-sol-text-dim text-center px-6">
       <div>{children}</div>
     </div>
+  );
+}
+
+/** Spinner + label, centered in the terminal body. Shared with the per-conversation split. */
+export function ConnectingNote({ label }: { label: string }) {
+  return (
+    <CenteredNote>
+      <span className="inline-block w-3 h-3 border border-sol-text-dim/40 border-t-sol-cyan rounded-full animate-spin align-middle mr-2" />
+      {label}
+    </CenteredNote>
   );
 }
 

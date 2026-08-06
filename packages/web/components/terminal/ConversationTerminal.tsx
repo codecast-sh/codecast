@@ -22,6 +22,7 @@ import {
   openTerminal,
   subscribeTerminals,
 } from "../../lib/terminal/termSessions";
+import { ConnectingNote } from "./TerminalPanel";
 
 const DEFAULT_HEIGHT = 260;
 const MIN_HEIGHT = 90;
@@ -128,6 +129,8 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
 
   const inst = split.termId ? getInstance(split.termId) : null;
   const status = inst?.state.status;
+  // No instance yet means the endpoint is still resolving — that's loading too.
+  const isConnecting = !failure && (!status || status === "connecting");
 
   useEffect(() => {
     if (split.termId && containerRef.current && status === "open") {
@@ -183,7 +186,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
       <div className="flex items-center h-[24px] px-2 gap-1.5 flex-shrink-0 bg-sol-bg-alt/30 border-b border-sol-border/20 select-none">
         <span
           className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-            status === "open" ? "bg-sol-violet" : status === "connecting" ? "bg-sol-yellow animate-pulse" : "bg-sol-text-dim/40"
+            status === "open" ? "bg-sol-violet" : isConnecting ? "bg-sol-yellow animate-pulse" : "bg-sol-text-dim/40"
           }`}
         />
         <span className="text-[10px] font-mono text-sol-text-muted truncate">{target}</span>
@@ -219,6 +222,8 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
           <div className="absolute inset-0 flex items-center justify-center text-[11px] font-mono text-sol-text-dim text-center px-6">
             {inst?.state.statusDetail ?? "session ended"}
           </div>
+        ) : isConnecting ? (
+          <ConnectingNote label={`Attaching to ${target}…`} />
         ) : null}
         <div
           ref={containerRef}
