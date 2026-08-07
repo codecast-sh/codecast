@@ -142,7 +142,21 @@ export function isPlanFile(filePath: string, content: string): boolean {
 
 const MD_IMAGE_COLLAPSED_HEIGHT = 100;
 
-export function CollapsibleImage({ src: rawSrc, alt }: { src?: string | Blob; alt?: string }) {
+export function CollapsibleImage({
+  src: rawSrc,
+  alt,
+  trusted = false,
+}: {
+  src?: string | Blob;
+  alt?: string;
+  /** The caller already knows this image is not a third party — a vault asset
+   *  resolved to the local daemon's own file endpoint, say. The gate exists to
+   *  stop a note auto-fetching from someone else's server; a file the vault is
+   *  itself serving is not that, and gating it just hides the user's own
+   *  images behind a click. Callers must not set this for anything a note
+   *  author could point at an arbitrary host. */
+  trusted?: boolean;
+}) {
   const src = typeof rawSrc === 'string' ? rawSrc : undefined;
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
@@ -153,7 +167,7 @@ export function CollapsibleImage({ src: rawSrc, alt }: { src?: string | Blob; al
   // A remote http(s) image that the viewer hasn't opted into. Until then we
   // render neither the <img> nor a gallery registration, so the browser issues
   // no request for it (the auto-fetch exfiltration channel stays closed).
-  const blocked = !!src && !revealed && isRemoteImageSrc(src);
+  const blocked = !!src && !revealed && !trusted && isRemoteImageSrc(src);
 
   useWatchEffect(() => {
     if (src && gallery && !blocked) gallery.register(src);
