@@ -8,9 +8,11 @@
 
 import { createContext, memo, useContext } from "react";
 import Link from "next/link";
-import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import "katex/dist/katex.min.css";
 import { ChevronDown, ExternalLink } from "lucide-react";
 import { MD_COMPONENTS, CollapsibleImage } from "../tools/MarkdownRenderer";
@@ -28,6 +30,7 @@ import { EntityIdPill } from "../EntityIdPill";
 import { useInboxStore } from "../../store/inboxStore";
 import { slugifyHeading } from "../../lib/vault/parseNote";
 import { filesHref } from "../../lib/vault/vaultHref";
+import { VAULT_HTML_SCHEMA, isAuthorityRelativeUrl } from "../../lib/vault/htmlPolicy";
 // Render-time-only cycle with VaultHoverPreview (it renders VaultMarkdown
 // inside the card); safe because neither module touches the other at eval.
 import { useHoverPreview } from "./VaultHoverPreview";
@@ -211,7 +214,7 @@ function VaultLink({ href, children, node: _node, ...props }: any) {
     );
   }
   return (
-    <a href={url} {...props}>
+    <a href={url} rel="noopener noreferrer" {...props}>
       {children}
     </a>
   );
@@ -225,7 +228,9 @@ function VaultImage({ src, alt }: { src?: string | Blob; alt?: string }) {
   if (ctx && raw && !/^[a-z][a-z0-9+.-]*:/i.test(raw) && !raw.startsWith("//")) {
     const clean = decodeURIComponent(raw);
     const resolved = ctx.assetUrl(clean);
-    if (resolved) return <CollapsibleImage src={resolved} alt={alt} />;
+    // A path the vault itself resolved: the bytes come from this machine's own
+    // daemon, so it is not the third party the click gate is defending against.
+    if (resolved) return <CollapsibleImage src={resolved} alt={alt} trusted />;
   }
   return <CollapsibleImage src={src} alt={alt} />;
 }
@@ -383,9 +388,12 @@ function VaultBlockquote({ children }: { children?: React.ReactNode }) {
 }
 
 // Preserve wiki:// and wikiembed:// hrefs (the payload carriers); everything
-// else goes through react-markdown's standard sanitizer.
+// else goes through react-markdown's standard sanitizer, plus the vault's own
+// rule against authority-relative references (`//evil.com`), which look
+// relative to a scheme allowlist and so slip past every one of them.
 function vaultUrlTransform(url: string): string {
   if (url.startsWith(WIKI_SCHEME) || url.startsWith(WIKI_EMBED_SCHEME) || url.startsWith(TAG_SCHEME)) return url;
+  if (isAuthorityRelativeUrl(url)) return "";
   return defaultUrlTransform(url);
 }
 
@@ -479,7 +487,26 @@ function anchoredHeading(Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6", className
   };
 }
 
-const VAULT_REHYPE_PLUGINS = [rehypeHighlight, rehypeKatex, rehypeVaultHeadingIds];
+// ORDER IS THE SECURITY PROPERTY. rehypeRaw parses the note's inline HTML —
+// arbitrary bytes from an arbitrary repo — and rehypeSanitize immediately cuts
+// that tree down to lib/vault/htmlPolicy's allowlist. Everything after runs on
+// an already-safe tree, which is also why highlight/KaTeX/heading-id markup
+// (classes and MathML the schema would never admit) survives untouched.
+//
+// Nothing here bypasses the vault's own components: the sanitized `img` and `a`
+// still render through VaultImage/VaultLink, so an HTML `<img>` gets the same
+// vault-relative asset resolution and the same third-party click gate as a
+// markdown one.
+// Not `as const`: react-markdown's prop is a mutable PluggableList, and the
+// referential stability the memo needs comes from this being a module constant,
+// not from deep readonliness.
+const VAULT_REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [
+  rehypeRaw,
+  [rehypeSanitize, VAULT_HTML_SCHEMA],
+  rehypeHighlight,
+  rehypeKatex,
+  rehypeVaultHeadingIds,
+];
 const VAULT_COMPONENTS: Components = {
   ...MD_COMPONENTS,
   a: VaultLink,
