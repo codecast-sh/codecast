@@ -54,6 +54,8 @@ export function initAnalytics() {
       posthog = new PostHogCtor(POSTHOG_KEY, {
         host: POSTHOG_HOST,
         disabled: IS_DEV,
+        // Application Opened / Backgrounded / Updated events.
+        captureAppLifecycleEvents: true,
       });
       posthog.register({ platform: "mobile" });
     } catch {
@@ -78,6 +80,12 @@ export function resetUser() {
 
 export function track(event: string, properties?: Record<string, string | number | boolean>) {
   posthog?.capture(event, properties);
+}
+
+// Screen views. posthog-react-native has no router integration of its own, so
+// the root layout feeds it every expo-router pathname change.
+export function trackScreen(name: string, properties?: Record<string, string | number | boolean>) {
+  posthog?.screen(name, properties);
 }
 
 export function captureError(error: Error, context?: Record<string, unknown>) {

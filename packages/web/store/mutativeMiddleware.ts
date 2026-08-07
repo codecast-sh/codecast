@@ -467,8 +467,19 @@ export function outboxCoalesceKeyFor(action: string, args: any[]): string | null
 // How long a durable enqueue may stay uncommitted before storage is reported
 // unhealthy. The dispatch path no longer waits on storage, so a slow or wedged
 // IndexedDB degrades durability only — but silently degraded durability is how
-// wedges go unnoticed for hours, so surface it.
-export const STORAGE_WATCHDOG_MS = 5_000;
+// wedges go unnoticed for hours, so surface it. The target is multi-minute
+// wedges, not transient contention (boot hydration, a large message flush), so
+// the deadline is generous — a stall that resolves inside it is not worth a
+// banner.
+export const STORAGE_WATCHDOG_MS = 10_000;
+
+// When the watchdog timer fires far past its deadline, the event loop itself
+// was paused (hidden/frozen tab, system sleep) — the measurement is the pause,
+// not IndexedDB. Overshoot beyond this tolerance re-arms a short recheck
+// instead of tripping; a genuinely stuck write still trips once the page is
+// actually running.
+export const STORAGE_WATCHDOG_MAX_TIMER_LAG_MS = 2_000;
+export const STORAGE_WATCHDOG_RECHECK_MS = 1_000;
 
 export const CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION = 1;
 
@@ -654,8 +665,16 @@ function auditViewWrites(
 
 export function mutativeMiddleware(config: any, opts?: {
   retryDelays?: number[];
+  // Test seams for the storage watchdog — production always uses the exported
+  // constants; tests shrink them to avoid real multi-second sleeps.
+  storageWatchdogMs?: number;
+  storageWatchdogMaxLagMs?: number;
+  storageWatchdogRecheckMs?: number;
 }): any {
   const retryDelays = opts?.retryDelays ?? RETRY_DELAYS;
+  const watchdogMs = opts?.storageWatchdogMs ?? STORAGE_WATCHDOG_MS;
+  const watchdogMaxLagMs = opts?.storageWatchdogMaxLagMs ?? STORAGE_WATCHDOG_MAX_TIMER_LAG_MS;
+  const watchdogRecheckMs = opts?.storageWatchdogRecheckMs ?? STORAGE_WATCHDOG_RECHECK_MS;
   return (set: any, get: any, api: any) => {
     let dispatchBinding: DispatchBinding | null = null;
     let dispatchEpoch = 0;
@@ -852,6 +871,12 @@ export function mutativeMiddleware(config: any, opts?: {
     let bootOutboxDrained = false;
     let outboxGeneration = 0;
     let pendingOutboxEnqueues = 0;
+    // Enqueues currently outstanding past the watchdog deadline. The banner
+    // reflects "a durable write is stuck RIGHT NOW": it trips when this rises
+    // above zero and clears when the last overdue write settles — a commit at
+    // any speed proves durability is intact, so a tripped write clears itself
+    // instead of waiting for an unrelated later write to be fast.
+    let overdueEnqueues = 0;
     const markOutboxDirty = () => {
       bootOutboxDrained = false;
       outboxGeneration++;
@@ -859,24 +884,60 @@ export function mutativeMiddleware(config: any, opts?: {
     const enqueueOutbox = async (enqueue: OutboxEnqueueFn, entry: OutboxEntry) => {
       markOutboxDirty();
       pendingOutboxEnqueues++;
-      // Storage watchdog: an enqueue that hasn't committed in STORAGE_WATCHDOG_MS
-      // means IndexedDB is slow or wedged. Delivery no longer depends on it, but
-      // durability does — report unhealthy so the UI can say so, and report
-      // recovery when a later enqueue commits promptly.
-      const started = typeof performance !== "undefined" ? performance.now() : Date.now();
-      const elapsed = () =>
-        (typeof performance !== "undefined" ? performance.now() : Date.now()) - started;
-      const watchdog = setTimeout(() => {
-        console.error(
-          `[store] durable enqueue for "${entry.action}" still uncommitted after ${STORAGE_WATCHDOG_MS}ms — IndexedDB is unhealthy; delivery continues, durability is degraded`,
-        );
-        storageHealthFn?.(false, elapsed());
-      }, STORAGE_WATCHDOG_MS);
+      // Storage watchdog: an enqueue that hasn't committed by the deadline
+      // means IndexedDB is slow or wedged. Delivery no longer depends on it,
+      // but durability does — report unhealthy so the UI can say so.
+      const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+      const started = now();
+      const elapsed = () => now() - started;
+      let settled = false;
+      let tripped = false;
+      let watchdog: ReturnType<typeof setTimeout> | undefined;
+      const armWatchdog = (delayMs: number) => {
+        const armedAt = now();
+        watchdog = setTimeout(() => {
+          if (settled) return;
+          // Only trip from a live, running page. A timer that fires far past
+          // its deadline, or into a hidden tab, measured an event-loop pause
+          // (throttled/frozen tab, system sleep) — not IndexedDB. Recheck on
+          // a short leash: a genuinely stuck write still trips once the page
+          // is actually running.
+          const overshotMs = now() - armedAt - delayMs;
+          const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+          if (hidden || overshotMs > watchdogMaxLagMs) {
+            armWatchdog(watchdogRecheckMs);
+            return;
+          }
+          tripped = true;
+          overdueEnqueues++;
+          console.error(
+            `[store] durable enqueue for "${entry.action}" still uncommitted after ${Math.round(elapsed())}ms — IndexedDB is unhealthy; delivery continues, durability is degraded`,
+          );
+          storageHealthFn?.(false, elapsed());
+        }, delayMs);
+      };
+      armWatchdog(watchdogMs);
       try {
         await enqueue(entry);
-        if (elapsed() < STORAGE_WATCHDOG_MS) storageHealthFn?.(true, elapsed());
+        settled = true;
+        if (tripped) overdueEnqueues--;
+        // Committed — durability is intact, however long it took. Clear the
+        // banner unless another write is still stuck past its deadline.
+        if (overdueEnqueues === 0) storageHealthFn?.(true, elapsed());
+      } catch (error) {
+        settled = true;
+        if (tripped) overdueEnqueues--;
+        // A rejected durable write is the wedge the banner exists for — the
+        // old fast-failure path cleared the watchdog and reported nothing.
+        console.error(
+          `[store] durable enqueue for "${entry.action}" failed after ${Math.round(elapsed())}ms — delivery continues, durability is degraded`,
+          error,
+        );
+        storageHealthFn?.(false, elapsed());
+        throw error;
       } finally {
-        clearTimeout(watchdog);
+        settled = true;
+        if (watchdog !== undefined) clearTimeout(watchdog);
         pendingOutboxEnqueues--;
       }
       // Coalesce: keep only the newest row per key. Compared by entry ts, not
@@ -1435,9 +1496,10 @@ export function mutativeMiddleware(config: any, opts?: {
       dispatchErrorFn = fn;
     };
 
-    // Storage-health signal from the enqueue watchdog: healthy=false when a
-    // durable write exceeded STORAGE_WATCHDOG_MS, healthy=true when a later
-    // write commits promptly again. Delivery is unaffected either way.
+    // Storage-health signal from the enqueue watchdog: healthy=false while a
+    // durable write is stuck past STORAGE_WATCHDOG_MS (or failed outright),
+    // healthy=true when writes commit and none are overdue. Delivery is
+    // unaffected either way.
     wrapped._setStorageHealth = (fn: ((healthy: boolean, elapsedMs: number) => void) | null) => {
       storageHealthFn = fn;
     };

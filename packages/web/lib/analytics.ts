@@ -43,12 +43,18 @@ export function initAnalytics() {
     posthog.init(POSTHOG_KEY, {
       api_host: POSTHOG_HOST,
       autocapture: true,
-      capture_pageview: true,
+      // "history_change" also fires $pageview on SPA navigations (pushState/
+      // popstate) — plain `true` only captures the initial load, which misses
+      // nearly all movement in a single-page app.
+      capture_pageview: "history_change",
       capture_pageleave: true,
+      capture_dead_clicks: true,
       persistence: "localStorage",
       disable_session_recording: IS_DEV,
     });
-    posthog.register({ platform });
+    // Dev and prod share one PostHog project; the environment super property
+    // is what keeps local-dev traffic filterable out of product metrics.
+    posthog.register({ platform, environment: IS_DEV ? "development" : "production" });
   }
 }
 

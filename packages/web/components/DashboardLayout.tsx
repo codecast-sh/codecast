@@ -358,14 +358,33 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
   const rightPeekEnabled = !s.sidePanelOpen && !isMobile;
 
-  // The companion is scoped to the working surface that opened it — leaving
-  // tasks/docs/plans closes it. Without this it becomes an ambient column that
-  // follows you between pages (the old conversation-column bug).
+  // The conversation you're attending to stays visible wherever it CAN be: it
+  // owns the stage on the inbox, and rides along as the companion on a working
+  // surface. Without this carry, "open a session, then click Tasks" silently
+  // dropped it while "open Tasks, then click the session" worked — the same two
+  // objects behaving differently by order, which is the actual defect.
+  //
+  // This is not the old ambient column: it only ever mirrors the conversation
+  // you were JUST attending, only on surfaces that can hold it, and a hand
+  // close (✕) sticks until you attend a different one.
   useWatchEffect(() => {
-    if (!isOnWorkingPage && s.companionSessionId) {
-      useInboxStore.getState().closeCompanion();
+    const store = useInboxStore.getState();
+    const attended = s.currentSessionId ?? s.viewingDismissedId ?? null;
+    if (isOnWorkingPage && !isMobile) {
+      // MIRROR, don't just fill: there is exactly one conversation you're
+      // attending to, and it shows either on the stage (inbox) or here. If it
+      // changes by any route while a companion is open, the companion follows —
+      // otherwise you sit watching a stale pane while the inbox has moved on,
+      // and going back would land somewhere you weren't.
+      if (attended && store.companionDismissedFor !== attended && s.companionSessionId !== attended) {
+        store.openCompanion(attended);
+      }
+    } else if (s.companionSessionId) {
+      // The surface that can hold it is gone — pure bookkeeping, not a
+      // dismissal, so returning to a working surface brings it back.
+      store.closeCompanion({ remember: false });
     }
-  }, [isOnWorkingPage, s.companionSessionId]);
+  }, [isOnWorkingPage, isMobile, s.companionSessionId, s.currentSessionId, s.viewingDismissedId]);
 
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
@@ -411,7 +430,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
   const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage, isOnConversationPage, isOnWorkingPage });
   const openAsCompanion = useCallback((id: string) => {
-    useInboxStore.getState().openCompanion(id);
+    const store = useInboxStore.getState();
+    store.openCompanion(id);
+    // Keep the attended conversation in sync: this IS the one you're now
+    // watching, so returning to the inbox lands on it rather than on whatever
+    // you had open before. No route change — navigateToSession only moves the
+    // pointer while the working surface stays on screen.
+    store.navigateToSession(id);
   }, []);
   const sessionListOnSelect = sessionSelectKind === "leave"
     ? handleLeaveAndOpenSession
