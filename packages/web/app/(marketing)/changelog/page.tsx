@@ -377,6 +377,26 @@ export default function ChangelogPage() {
                                 </li>
                               ))}
                             </ul>
+                            {s.docs && s.docs.length > 0 && (
+                              <div
+                                className="mt-3.5 pt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5"
+                                style={{ borderTop: `1px solid ${SOL.base2}` }}
+                              >
+                                {s.docs.map((d) => (
+                                  <Link
+                                    key={d.href}
+                                    href={d.href}
+                                    className="inline-flex items-center gap-1 font-mono text-[12px] font-medium hover:underline"
+                                    style={{ color: ac }}
+                                  >
+                                    Deep dive: {d.label}
+                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M9 5l7 7-7 7" />
+                                    </svg>
+                                  </Link>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                       );
