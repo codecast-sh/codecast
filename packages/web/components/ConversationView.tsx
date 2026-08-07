@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHan
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, hasOpenModal, type ShortcutAction } from "../shortcuts";
+import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, hasOpenModal, altChordDirection, type ShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
@@ -1741,8 +1741,9 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   // ⌥↑ climbs to the project picker; ⌥↓ drops to the agent row,
   // committing the picker's highlighted project on the way through. Enter
   // inside either picker returns focus to the input. Self-gating: the listener
-  // exists only while this null-state surface is mounted. e.code, not e.key —
-  // mac Option+letter composes special characters into e.key.
+  // exists only while this null-state surface is mounted. Chord resolution
+  // (including releasing ⌥←/⌥→ word jump to a text caret) lives in
+  // altChordDirection.
   const projectsRef = useRef<PickerHandle | null>(null);
   const agentsRef = useRef<PickerHandle | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -1752,23 +1753,20 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   const [machineSlot, setMachineSlot] = useState<HTMLElement | null>(null);
   useEffect(() => {
     const onChord = (e: KeyboardEvent) => {
-      if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
-      const up = e.code === "KeyK" || e.code === "ArrowUp";
-      const down = e.code === "KeyJ" || e.code === "ArrowDown";
-      const left = e.code === "KeyH" || e.code === "ArrowLeft";
-      const right = e.code === "KeyL" || e.code === "ArrowRight";
-      if (!up && !down && !left && !right) return;
+      // altChordDirection also releases ⌥←/⌥→ from a text caret (word jump).
+      const dir = altChordDirection(e);
+      if (!dir) return;
       // The compose dialog hosts this surface inside an aria-modal container —
       // a modal that CONTAINS us doesn't block the chords, only one stacked
       // above (draft confirm, settings) does.
       if (hasOpenModal(rootRef.current)) return;
       e.preventDefault();
       e.stopPropagation();
-      if (left || right) {
-        const delta: -1 | 1 = left ? -1 : 1;
+      if (dir === "left" || dir === "right") {
+        const delta: -1 | 1 = dir === "left" ? -1 : 1;
         if (projectsRef.current?.isOpen()) projectsRef.current.move?.(delta);
         else agentsRef.current?.move?.(delta);
-      } else if (up) {
+      } else if (dir === "up") {
         if (!projectsRef.current?.isOpen()) projectsRef.current?.focus();
       } else {
         if (projectsRef.current?.isOpen()) projectsRef.current.commitAndClose?.();
