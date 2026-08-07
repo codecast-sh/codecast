@@ -2885,8 +2885,10 @@ interface InboxStoreState {
   // -- Side panel --
   // -- Stage companion (see openCompanion) --
   companionSessionId: string | null;
+  /** Session whose companion the user closed by hand; suppresses carry-across. */
+  companionDismissedFor: string | null;
   openCompanion: (sessionId: string) => void;
-  closeCompanion: () => void;
+  closeCompanion: (opts?: { remember?: boolean }) => void;
 
   sidePanelSessionId: string | null;
   sidePanelOpen: boolean;
@@ -6119,6 +6121,15 @@ export const useInboxStore = create<InboxStoreState>(
     if (!this.clientState.drafts) this.clientState.drafts = {};
     this.clientState.drafts[id] = null;
     if (this.sessions[id]?._hasDraft) delete this.sessions[id]._hasDraft;
+    // The conversation row is a second durable home for the draft (mobile
+    // persists straight to conversations.draft_message, and the composer seeds
+    // from it via initialDraft). A final clear that leaves it standing lets
+    // the row re-seed the composer on the next boot. Only real Convex ids —
+    // compose stubs and comment keys have no server row to clear.
+    if (/^[a-z0-9]{32}$/.test(id)) {
+      if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
+      (this.conversations[id] as any).draft_message = null;
+    }
   }),
 
   // =====================
@@ -7024,12 +7035,22 @@ export const useInboxStore = create<InboxStoreState>(
   // task, a doc). Opening another replaces it — stage panes swap, they never
   // accumulate, so the layout can never grow past page + companion + rail.
   companionSessionId: null,
+  companionDismissedFor: null,
 
   openCompanion: action(function (this: Draft, sessionId: string) {
     this.companionSessionId = sessionId;
+    // An explicit open outranks an earlier dismissal.
+    this.companionDismissedFor = null;
   }),
 
-  closeCompanion: action(function (this: Draft) {
+  // remember:true (the ✕) suppresses carry-across for THIS conversation until
+  // you attend a different one — otherwise every navigation would helpfully
+  // re-add the pane you just closed, making the ✕ a lie. remember:false is the
+  // bookkeeping close used when the surface itself goes away.
+  closeCompanion: action(function (this: Draft, opts?: { remember?: boolean }) {
+    if (opts?.remember !== false && this.companionSessionId) {
+      this.companionDismissedFor = this.companionSessionId;
+    }
     this.companionSessionId = null;
   }),
 
