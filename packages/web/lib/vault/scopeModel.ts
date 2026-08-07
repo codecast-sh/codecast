@@ -90,10 +90,13 @@ export function deriveTeamForRoot(
     if (!e.path) continue;
     const path = normalizeDir(e.path);
     if (!isAtOrUnder(path, dir)) continue;
-    if (path.length < closest) {
-      closest = path.length;
+    // Depth in directories, not characters: `/w/a/b` sits deeper under `/w`
+    // than `/w/abcd` does, even though it is the shorter string.
+    const depth = path === dir ? 0 : path.slice(dir.length + 1).split("/").length;
+    if (depth < closest) {
+      closest = depth;
       cohort = [e];
-    } else if (path.length === closest) {
+    } else if (depth === closest) {
       cohort.push(e);
     }
   }
@@ -137,11 +140,14 @@ export const PRESENCE_LABELS: Record<VaultPresence, string> = {
   "other-machine": "Elsewhere",
 };
 
+/**
+ * Who sees it, in words — kept short enough to survive a 180px rail, because
+ * this clause is the one thing on the line that cannot be inferred from an
+ * icon. The full context is the sentence below.
+ */
 export function teamScopeWords(team: VaultTeamScope): string {
-  if (team.kind === "personal") return "personal — nothing here is shared";
-  return team.shared
-    ? `shared with ${team.teamName}`
-    : `private to you, filed under ${team.teamName}`;
+  if (team.kind === "personal") return "personal";
+  return team.shared ? `shared with ${team.teamName}` : `private, filed under ${team.teamName}`;
 }
 
 export function teamScopeLabel(team: VaultTeamScope): string {
