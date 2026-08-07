@@ -4,6 +4,7 @@ import { useMountEffect } from "@/hooks/useMountEffect";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { InstallTabs } from "@/components/install-tabs";
+import { GUIDES, guideHref, type GuideCategory } from "./guides/guides";
 
 const SOL = {
   base03: "#002b36",
@@ -139,6 +140,7 @@ const TOC = [
     { id: "authentication", label: "Authentication" },
     { id: "daemon", label: "The Daemon" },
   ]},
+  { id: "guides", label: "Deep Dive Guides", children: [] },
   { id: "desktop-app", label: "Desktop App", children: [
     { id: "inbox", label: "Inbox & Orchestration" },
     { id: "inbox-shortcuts", label: "Keyboard Shortcuts" },
@@ -368,6 +370,42 @@ Uptime: 4d 12h`}</Code>
           <Callout type="tip">
             Run <InlineCode>cast setup</InlineCode> after install to auto-start the daemon on login. You won&apos;t need to think about it again.
           </Callout>
+
+          {/* Deep dive guides */}
+          <Heading id="guides" level={2}>Deep Dive Guides</Heading>
+          <p className="mb-5" style={{ color: SOL.base00 }}>
+            The sections below are the reference. These guides go deeper: how each agent
+            capability works mechanically -- what <InlineCode>cast install</InlineCode> writes
+            where, what happens at runtime, and the patterns each one enables. Start
+            with <a href={guideHref("agent-snippets")} className="underline" style={{ color: SOL.blue }}>how agent snippets work</a>;
+            everything else builds on it.
+          </p>
+          {(["The snippet system", "Recall", "Collaboration", "Work tracking", "Output"] as GuideCategory[]).map((cat) => {
+            const inCat = GUIDES.filter((g) => g.category === cat);
+            if (inCat.length === 0) return null;
+            return (
+              <div key={cat} className="mb-6">
+                <div className="text-[11px] font-mono uppercase tracking-wider mb-2.5" style={{ color: SOL.base01 }}>
+                  {cat}
+                </div>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  {inCat.map((g) => (
+                    <Link
+                      key={g.slug}
+                      href={guideHref(g.slug)}
+                      className="rounded-lg p-4 block transition-colors hover:shadow-sm"
+                      style={{ backgroundColor: `${SOL.base2}55`, border: `1px solid ${SOL.base2}` }}
+                    >
+                      <div className="font-mono text-sm font-semibold mb-1" style={{ color: SOL.base03 }}>
+                        {g.title}
+                      </div>
+                      <div className="text-[13px] leading-relaxed" style={{ color: SOL.base00 }}>{g.dek}</div>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
 
           {/* Agent Memory */}
           <Heading id="agent-memory" level={2}>Agent Memory</Heading>

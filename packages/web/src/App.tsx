@@ -14,6 +14,7 @@ const Landing = lazy(() => import("@/app/(marketing)/page"));
 const About = lazy(() => import("@/app/(marketing)/about/page"));
 const Features = lazy(() => import("@/app/(marketing)/features/page"));
 const Documentation = lazy(() => import("@/app/(marketing)/documentation/page"));
+const DocumentationGuide = lazy(() => import("@/app/(marketing)/documentation/guides/GuidePage"));
 const Privacy = lazy(() => import("@/app/(marketing)/privacy/page"));
 const Security = lazy(() => import("@/app/(marketing)/security/page"));
 const Support = lazy(() => import("@/app/(marketing)/support/page"));
@@ -124,6 +125,7 @@ export function App() {
               <Route path="about" element={<E name="About"><About /></E>} />
               <Route path="features" element={<E name="Features"><Features /></E>} />
               <Route path="documentation" element={<E name="Documentation"><Documentation /></E>} />
+              <Route path="documentation/:slug" element={<E name="DocumentationGuide"><DocumentationGuide /></E>} />
               <Route path="privacy" element={<E name="Privacy"><Privacy /></E>} />
               <Route path="security" element={<E name="Security"><Security /></E>} />
               <Route path="support" element={<E name="Support"><Support /></E>} />
