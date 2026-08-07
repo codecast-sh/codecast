@@ -3,7 +3,7 @@
 import { createContext, useContext, useCallback, useRef, ReactNode } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { ShortcutAction, SHORTCUTS, matchShortcut, inputGuardBypass, hasOpenModal } from "./registry";
+import { ShortcutAction, SHORTCUTS, matchShortcut, inputGuardBypass, hasOpenModal, isEditableTarget } from "./registry";
 import { onShortcutUsed } from "../tips/useTips";
 import { setShortcutHandler } from "./listener";
 
@@ -24,8 +24,7 @@ const ShortcutContext = createContext<ShortcutContextValue | null>(null);
 function isInputTarget(e: KeyboardEvent): boolean {
   const el = e.target as HTMLElement;
   if (!el) return false;
-  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return true;
-  if (el.isContentEditable) return true;
+  if (isEditableTarget(el)) return true;
   // Some regions own their own single-letter keys and must not leak them to the
   // global conversation shortcuts (h/t/d/r, and critically y/n which approve or
   // deny a live permission prompt). A region opts in either with the inline

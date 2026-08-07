@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { SHORTCUTS, matchShortcut, type ShortcutAction } from "./registry";
+import { SHORTCUTS, matchShortcut, altChordDirection, type ShortcutAction } from "./registry";
 
 // Ctrl+N opens the compose modal; Ctrl+Alt+N (⌃⌥N) opens a full new session in the
 // main window. This guards that swap (a prior commit had Ctrl+N opening the full
@@ -38,5 +38,45 @@ describe("new-session key bindings", () => {
 
   test("Ctrl+N (no Alt) never resolves to the full-page action", () => {
     expect(resolveAction({ key: "n", code: "KeyN", ctrlKey: true })).not.toBe("session.create");
+  });
+});
+
+// NewSessionView's window-capture ⌥-chord router resolves keydowns through
+// altChordDirection. Regression: adding ⌥←/⌥→ to the router (4497dcc59) stole
+// macOS word jump from the message textarea — the agent picker cycled instead
+// of the caret moving. Horizontal ARROWS from an editable target must resolve
+// to null; everything else keeps routing.
+describe("new-session ⌥-chord router (altChordDirection)", () => {
+  const textarea = { tagName: "TEXTAREA" } as unknown as EventTarget;
+  const body = { tagName: "BODY" } as unknown as EventTarget;
+  const chord = (code: string, target: EventTarget, mods: Partial<KeyboardEvent> = {}) =>
+    altChordDirection({ altKey: true, metaKey: false, ctrlKey: false, shiftKey: false, code, target, ...mods });
+
+  test("⌥←/⌥→ from a text caret is released (word jump), not routed", () => {
+    expect(chord("ArrowLeft", textarea)).toBeNull();
+    expect(chord("ArrowRight", textarea)).toBeNull();
+  });
+
+  test("⌥H/⌥L still cycle the pickers even from the caret", () => {
+    expect(chord("KeyH", textarea)).toBe("left");
+    expect(chord("KeyL", textarea)).toBe("right");
+  });
+
+  test("⌥←/⌥→ route when focus is outside a text field", () => {
+    expect(chord("ArrowLeft", body)).toBe("left");
+    expect(chord("ArrowRight", body)).toBe("right");
+  });
+
+  test("⌥↑/⌥↓ stay intercepted from the caret — they climb out of the textarea", () => {
+    expect(chord("ArrowUp", textarea)).toBe("up");
+    expect(chord("ArrowDown", textarea)).toBe("down");
+    expect(chord("KeyK", textarea)).toBe("up");
+    expect(chord("KeyJ", textarea)).toBe("down");
+  });
+
+  test("extra modifiers or no Alt never route", () => {
+    expect(chord("ArrowLeft", body, { altKey: false })).toBeNull();
+    expect(chord("ArrowLeft", body, { shiftKey: true })).toBeNull();
+    expect(chord("KeyH", body, { metaKey: true })).toBeNull();
   });
 });
