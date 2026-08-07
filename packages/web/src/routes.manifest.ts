@@ -83,6 +83,7 @@ const Landing = lazy(() => import("@/app/(marketing)/page"));
 const About = lazy(() => import("@/app/(marketing)/about/page"));
 const Features = lazy(() => import("@/app/(marketing)/features/page"));
 const Documentation = lazy(() => import("@/app/(marketing)/documentation/page"));
+const DocumentationGuide = lazy(() => import("@/app/(marketing)/documentation/guides/GuidePage"));
 const Privacy = lazy(() => import("@/app/(marketing)/privacy/page"));
 const Security = lazy(() => import("@/app/(marketing)/security/page"));
 const Support = lazy(() => import("@/app/(marketing)/support/page"));
@@ -185,6 +186,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "about", component: cast(About), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "features", component: cast(Features), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "documentation", component: cast(Documentation), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "documentation/:slug", component: cast(DocumentationGuide), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "privacy", component: cast(Privacy), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "security", component: cast(Security), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "support", component: cast(Support), layout: "marketing", guestOk: true, guestKind: "public" },
