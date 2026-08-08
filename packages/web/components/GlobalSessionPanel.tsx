@@ -5,6 +5,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
+import { ImageLightbox } from "./ImageGallery";
 import { SessionErrorBanner } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
 import { ConversationData } from "./ConversationView";
@@ -1480,6 +1481,16 @@ export const SessionCard = memo(function SessionCard({
   const restartStartedAt = useInboxStore((st) => st.restartingSessions[session._id]);
   const showModelBadge = useInboxStore((st) => st.clientState?.ui?.show_model_badge === true);
   const showAgentIcon = useInboxStore((st) => st.clientState?.ui?.show_agent_icon !== false);
+  // Row thumbnail for sessions that contain images (server-denormalized
+  // image_preview_url). Independent of simple view — applies in both.
+  // Clicking it zooms the image (ImageLightbox), not the session. It lives on
+  // the RIGHT edge — a left thumb pushes the title column off the list's
+  // shared text edge — and the hover toolbar + pin badge shift left of it
+  // (THUMB_INSET) so the controls never cover the click target.
+  const showImageThumb = useInboxStore((st) => st.clientState?.ui?.inbox_image_thumbs === true);
+  const [thumbZoom, setThumbZoom] = useState(false);
+  const hasThumb = showImageThumb && !!session.image_preview_url;
+  const THUMB_INSET = 46;
   // sessionLabel and isFavorite are now passed as scalar props (computed once in
   // the parent via labelByConv/cardIsFavorite) instead of per-card store scans —
   // see ct-37958. Only spawnedByTitle stays a local selector.
@@ -1804,6 +1815,8 @@ export const SessionCard = memo(function SessionCard({
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
       >
+      <div className="flex items-center gap-2.5">
+      <div className="min-w-0 flex-1">
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text-muted" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
@@ -2049,12 +2062,32 @@ export const SessionCard = memo(function SessionCard({
           </div>
         )}
       </div>
+      {hasThumb && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setThumbZoom(true); }}
+          className="shrink-0 self-center rounded-md overflow-hidden border border-sol-border/60 cursor-zoom-in relative z-[3]"
+          title="View image"
+        >
+          <img
+            src={session.image_preview_url!}
+            alt=""
+            loading="lazy"
+            draggable={false}
+            className="w-9 h-9 object-cover"
+          />
+        </button>
+      )}
+      </div>
+      {thumbZoom && session.image_preview_url && (
+        <ImageLightbox src={session.image_preview_url} onClose={() => setThumbZoom(false)} />
+      )}
+      </div>
       {/* The ONE pin a pinned session shows: a persistent, interactive badge anchored
           top-right. It stays put on hover (z above the toolbar) and the hover toolbar
           omits its own pin button for pinned rows — so the pin never duplicates or
           cross-fades into a second copy. */}
       {onPin && session.is_pinned && (
-        <div data-sv-fade className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
+        <div data-sv-fade className="absolute top-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, right: hasThumb ? THUMB_INSET : 0, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
           <ShortcutTooltip label="Unpin" action="session.pin" side="left">
             <button
               onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); }}
@@ -2069,7 +2102,7 @@ export const SessionCard = memo(function SessionCard({
         </div>
       )}
       {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
-        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
+        <div data-sv-fade className={`absolute top-0 bottom-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={{ right: hasThumb ? THUMB_INSET : 0, ...(isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : {}) }}>
           {/* Pin slot, first so it anchors the top of the toolbar. When the row is
               already pinned, the persistent badge above IS the pin — here we render
               only an invisible spacer the same size, so the remaining actions sit

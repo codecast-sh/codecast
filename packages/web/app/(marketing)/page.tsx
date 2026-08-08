@@ -9,6 +9,7 @@ import { InstallTabs } from "@/components/install-tabs";
 import { Logo } from "@/components/Logo";
 import { AppLoader } from "@/components/AppLoader";
 import { isDesktop } from "@/lib/desktop";
+import { track } from "@/lib/analytics";
 import { useLocalAuth } from "@/lib/localAuth";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { useRouteMeta } from "./pageMeta";
@@ -199,7 +200,7 @@ export default function LandingPage() {
               </span>
               <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Mac App</span>
             </Link>
-            <a href="https://apps.apple.com/app/id6757820850" target="_blank" rel="noopener noreferrer" className="group inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md transition-all" style={{ backgroundColor: 'rgba(181,137,0,0.1)', color: '#b58900' }}>
+            <a href="https://apps.apple.com/app/id6757820850" onClick={() => track("ios_app_clicked", { location: "landing_chip" })} target="_blank" rel="noopener noreferrer" className="group inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md transition-all" style={{ backgroundColor: 'rgba(181,137,0,0.1)', color: '#b58900' }}>
               <span className="relative flex h-2 w-2">
                 <span className="relative inline-flex rounded-full h-2 w-2" style={{ backgroundColor: '#b58900' }}></span>
               </span>
@@ -230,7 +231,7 @@ export default function LandingPage() {
           </p>
 
           <div className="max-w-xl mx-auto mb-4">
-            <InstallTabs />
+            <InstallTabs location="landing_hero" />
             <p className="mt-3 text-sm" style={{ color: '#93a1a1' }}>
               One command installs the CLI and signs you in. Free for individuals.
             </p>

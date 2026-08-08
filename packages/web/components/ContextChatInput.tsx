@@ -78,10 +78,7 @@ export function ContextChatInput({
     if (conversationId) {
       const clientId = store.addOptimisticMessage(conversationId, fullMessage);
       store.sendMessage(conversationId, fullMessage, undefined, clientId);
-      useInboxStore.setState({
-        sidePanelSessionId: conversationId,
-        sidePanelOpen: true,
-      });
+      store.openSidePanel(conversationId);
       setMessage("");
       setSelectedAgent(null);
       if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -140,7 +137,7 @@ export function ContextChatInput({
       textareaRef.current.style.height = "auto";
     }
 
-    useInboxStore.setState({ sidePanelSessionId: sid, sidePanelOpen: true });
+    useInboxStore.getState().openSidePanel(sid);
 
     // Resolve through the shared tracked-create/by_session_id lifecycle, then
     // issue the durable send with the SAME client id as the optimistic bubble.

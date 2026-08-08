@@ -387,6 +387,11 @@ export default defineSchema({
       v.literal("tool")
     )),
     last_message_preview: v.optional(v.string()),
+    // Serving URL of the newest image in this conversation (attachment,
+    // screenshot, or a trusted markdown image in prose) — the inbox row
+    // thumbnail. Denormalized at message-write time (latestImagePreviewUrl);
+    // never cleared, so presence also means "this session has images".
+    image_preview_url: v.optional(v.string()),
     has_pending_messages: v.optional(v.boolean()),
     // True while the conversation's newest message is a transient Claude Code
     // API/auth-error banner (see isApiErrorBanner). Cleared when a real turn

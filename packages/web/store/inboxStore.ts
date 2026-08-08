@@ -10,6 +10,7 @@ import {
   sync,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
+import { createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, promote as wsPromotePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
@@ -82,7 +83,7 @@ import { pushInboxViewHistory, isApplyingViewHistory, type InboxViewSnapshot } f
 // is here: it decides the ARRANGEMENT at first paint. Seeded from localStorage
 // synchronously, a pinned split renders as a split immediately instead of
 // flashing a peek overlay until the server clientState arrives.
-const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "pinned_surfaces"] as const;
+const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "pinned_surfaces", "workspace"] as const;
 const CRITICAL_PREFS_LS_KEY = "codecast-critical-ui";
 
 function readCriticalUiPrefs(): Record<string, any> {
@@ -116,6 +117,24 @@ function writeCriticalUiPrefs(partial: Record<string, any>) {
     localStorage.setItem(CRITICAL_PREFS_LS_KEY, JSON.stringify({ ...existing, ...toWrite }));
   } catch {}
 }
+
+// The arrangement (not its contents) is a durable preference: mirror it into
+// the ui bag on every slot mutation so it survives reload and rides the same
+// per-device sync as the other layout prefs. In CRITICAL_UI_KEYS, so the shell
+// paints the right arrangement immediately instead of flashing a default.
+function persistWorkspace(draft: any) {
+  if (!draft.clientState) draft.clientState = {};
+  if (!draft.clientState.ui) draft.clientState.ui = {};
+  draft.clientState.ui.workspace = serializeWorkspace(draft.workspace as WorkspaceState);
+  writeCriticalUiPrefs({ workspace: draft.clientState.ui.workspace });
+}
+
+// Region "is it open" questions are now selectors over slot state, not stored
+// booleans — one source of truth for the right edge.
+export const selectSessionRailOpen = (s: { workspace: WorkspaceState }) => isSessionRailOpen(s.workspace);
+export const selectCommentRailOpen = (s: { workspace: WorkspaceState }) => isCommentRailOpen(s.workspace);
+export const selectSessionRailUserClosed = (s: { workspace: WorkspaceState }) =>
+  !wsAutoAllowedPure(s.workspace, "context", SESSION_LIST_PANE);
 
 export function getProjectName(gitRoot?: string, projectPath?: string): string {
   const path = gitRoot || projectPath;
@@ -290,6 +309,10 @@ export type InboxSession = {
   // whose precedence the client predicates below mirror.
   inbox_killed_at?: number | null;
   last_user_message?: string | null;
+  // Newest image in the conversation (server-denormalized, see convex schema).
+  // Presence doubles as "this session has images"; rendered as the inbox row
+  // thumbnail when the inbox_image_thumbs pref is on.
+  image_preview_url?: string | null;
   session_error?: string;
   // True when the session's latest turn is an unresolved Claude Code auth/API
   // error banner ("Please run /login · API Error: 401 …") — the CLI was signed
@@ -740,10 +763,19 @@ export type ClientUI = {
   // side-by-side split instead of the default transient peek. Toggled from the
   // detail header's pin control. Layout pref → unstamped, per-device local_wins.
   pinned_surfaces?: Record<string, boolean>;
+  // The workspace arrangement (see store/workspace.ts): which slots are open,
+  // peek vs split, and their sizes. Subject-bearing panes are deliberately NOT
+  // persisted — the arrangement is worth remembering, its contents are
+  // re-derived from where you are now.
+  workspace?: PersistedWorkspace;
   // Simple view: calm, low-chrome rendering of conversations and inbox cards —
   // secondary badges, counts and meta rows drop away. A per-user preference
   // ("my reading style follows me") → stamped LWW.
   simple_view?: boolean;
+  // Show a small thumbnail on inbox session rows when the session contains
+  // images (session.image_preview_url). Independent of simple_view — applies
+  // in both. Off by default; per-user preference → stamped LWW.
+  inbox_image_thumbs?: boolean;
 };
 
 export type ClientLayouts = {
@@ -783,8 +815,8 @@ export type AppTab = {
   path: string;
   sessionId?: string;
   sidePanelSessionId?: string;
-  sidePanelOpen?: boolean;
-  sidePanelUserClosed?: boolean;
+  /** The tab's own arrangement — one snapshot instead of a flag per region. */
+  workspace?: PersistedWorkspace;
   createdAt: number;
 };
 
@@ -1404,6 +1436,10 @@ export function sessionStructuralSig(s: InboxSession): string {
     // the fields that change rows; stamps once per turn end/wakeup, never on
     // heartbeats.
     s.loop_state ? `${s.loop_state.status}:${s.loop_state.wakeup_at}` : "",
+    // Row thumbnail (inbox_image_thumbs pref). Changes only when a NEW image
+    // lands in the session — never on heartbeats — so folding it in is cheap
+    // and keeps the thumb from waiting on the coarse ticker.
+    s.image_preview_url || "",
   ].join("\x1f");
 }
 
@@ -2450,7 +2486,6 @@ interface InboxStoreState {
   getReviewComments: (conversationId: string) => PendingComment[];
 
   // ── Comment rail (ephemeral UI; teammate comment thread on the right) ──
-  commentRailOpen: boolean | null;            // null = auto (open when comments exist / shared)
   commentRailAnchor: string | null;           // a pending anchored thread (messageId) to focus
   commentRailNonce: number;                   // bump to re-trigger focus/scroll to the anchor
   commentRailWidth: Record<string, number>;   // reserved width (px) per conversation; published by the rail, read by the layout
@@ -2883,6 +2918,17 @@ interface InboxStoreState {
   closeSettingsModal: () => void;
 
   // -- Side panel --
+  // -- Workspace slots (see store/workspace.ts + WORKSPACE_SLOTS.md) --
+  // The layout as data: fixed slots, at most one pane each. Regions migrate
+  // onto this one at a time; the legacy flags below disappear as they land.
+  workspace: WorkspaceState;
+  wsShow: (slot: SlotId, pane: Pane, opts?: { presentation?: Presentation }) => void;
+  wsHide: (slot: SlotId, opts?: { remember?: boolean }) => void;
+  wsToggle: (slot: SlotId, pane: Pane) => void;
+  wsPromote: (slot: SlotId) => void;
+  wsSetPresentation: (slot: SlotId, presentation: Presentation) => void;
+  wsSetSize: (slot: SlotId, size: number) => void;
+
   // -- Stage companion (see openCompanion) --
   companionSessionId: string | null;
   /** Session whose companion the user closed by hand; suppresses carry-across. */
@@ -2891,8 +2937,6 @@ interface InboxStoreState {
   closeCompanion: (opts?: { remember?: boolean }) => void;
 
   sidePanelSessionId: string | null;
-  sidePanelOpen: boolean;
-  sidePanelUserClosed: boolean;
   openSidePanel: (sessionId: string) => void;
   closeSidePanel: () => void;
   clearSidePanelSession: () => void;
@@ -3189,7 +3233,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // silently globalizing them would yank screens out from under people.
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "inbox_show_old",
-  "simple_view",
+  "simple_view", "inbox_image_thumbs",
 ]);
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
@@ -4286,16 +4330,25 @@ export const useInboxStore = create<InboxStoreState>(
   reviewEditingId: null,
   reviewComments: {},
 
-  commentRailOpen: null,
   commentRailAnchor: null,
   commentRailNonce: 0,
   commentRailWidth: {},
-  setCommentRailOpen: (open: boolean | null) => set({ commentRailOpen: open }),
+  // The comment rail and the session list share the ONE right edge, so opening
+  // comments displaces the rail rather than stacking a second one. Closing
+  // comments hands the edge back to the session list unless you had closed the
+  // rail by hand — the slot's own dismissal answers that, no extra flag.
+  setCommentRailOpen: (open: boolean | null) => {
+    const st = get();
+    const conv = st.currentSessionId ?? st.viewingDismissedId ?? null;
+    if (open === true && conv) st.wsShow("context", { kind: "comments", ref: conv });
+    else if (wsAutoAllowedPure(st.workspace, "context", SESSION_LIST_PANE)) st.wsShow("context", SESSION_LIST_PANE);
+    else st.wsHide("context", { remember: false });
+  },
   // Focus/expand a message's inline anchored thread (the gutter handle). Doesn't
   // open the global dock — anchored threads live inline at their message.
   openCommentThread: (messageId: string | null = null) =>
     set((s: any) => ({ commentRailAnchor: messageId, commentRailNonce: s.commentRailNonce + 1 })),
-  closeCommentRail: () => set({ commentRailOpen: false }),
+  closeCommentRail: () => get().setCommentRailOpen(false),
   setCommentRailWidth: (conversationId: string, w: number) =>
     set((s: any) => {
       if ((s.commentRailWidth[conversationId] ?? 0) === w) return {};
@@ -7034,6 +7087,33 @@ export const useInboxStore = create<InboxStoreState>(
   // The ONE conversation allowed to share the stage with a working page (a
   // task, a doc). Opening another replaces it — stage panes swap, they never
   // accumulate, so the layout can never grow past page + companion + rail.
+  workspace: hydrateWorkspace((readCriticalUiPrefs() as any).workspace),
+
+  wsShow: action(function (this: Draft, slot: SlotId, pane: Pane, opts?: { presentation?: Presentation }) {
+    this.workspace = showPane(this.workspace as WorkspaceState, slot, pane, opts);
+    persistWorkspace(this);
+  }),
+  wsHide: action(function (this: Draft, slot: SlotId, opts?: { remember?: boolean }) {
+    this.workspace = hidePane(this.workspace as WorkspaceState, slot, opts);
+    persistWorkspace(this);
+  }),
+  wsToggle: action(function (this: Draft, slot: SlotId, pane: Pane) {
+    this.workspace = togglePane(this.workspace as WorkspaceState, slot, pane);
+    persistWorkspace(this);
+  }),
+  wsPromote: action(function (this: Draft, slot: SlotId) {
+    this.workspace = wsPromotePure(this.workspace as WorkspaceState, slot);
+    persistWorkspace(this);
+  }),
+  wsSetPresentation: action(function (this: Draft, slot: SlotId, presentation: Presentation) {
+    this.workspace = wsSetPresentationPure(this.workspace as WorkspaceState, slot, presentation);
+    persistWorkspace(this);
+  }),
+  wsSetSize: action(function (this: Draft, slot: SlotId, size: number) {
+    this.workspace = wsSetSizePure(this.workspace as WorkspaceState, slot, size);
+    persistWorkspace(this);
+  }),
+
   companionSessionId: null,
   companionDismissedFor: null,
 
@@ -7055,18 +7135,17 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   sidePanelSessionId: null,
-  sidePanelOpen: false,
-  sidePanelUserClosed: false,
 
   openSidePanel: action(function (this: Draft, sessionId: string) {
     this.sidePanelSessionId = sessionId;
-    this.sidePanelOpen = true;
-    this.sidePanelUserClosed = false;
+    this.workspace = showPane(this.workspace as WorkspaceState, "context", SESSION_LIST_PANE);
+    persistWorkspace(this);
   }),
 
   closeSidePanel: action(function (this: Draft) {
     this.sidePanelSessionId = null;
-    this.sidePanelOpen = false;
+    this.workspace = hidePane(this.workspace as WorkspaceState, "context", { remember: true });
+    persistWorkspace(this);
   }),
 
   clearSidePanelSession: action(function (this: Draft) {
@@ -7074,14 +7153,14 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   toggleSidePanel: action(function (this: Draft) {
-    if (this.sidePanelOpen) {
-      this.sidePanelOpen = false;
-      this.sidePanelUserClosed = true;
+    const ws = this.workspace as WorkspaceState;
+    if (isSessionRailOpen(ws)) {
+      this.workspace = hidePane(ws, "context", { remember: true });
     } else {
-      this.sidePanelOpen = true;
-      this.sidePanelUserClosed = false;
+      this.workspace = showPane(ws, "context", SESSION_LIST_PANE);
       this.sidePanelSessionId = this.sidePanelSessionId ?? this.currentSessionId ?? null;
     }
+    persistWorkspace(this);
   }),
 
 
@@ -7116,8 +7195,7 @@ export const useInboxStore = create<InboxStoreState>(
       path: opts.path,
       sessionId: opts.sessionId,
       sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-      sidePanelOpen: this.sidePanelOpen || undefined,
-      sidePanelUserClosed: this.sidePanelUserClosed || undefined,
+      workspace: serializeWorkspace(this.workspace as WorkspaceState),
       createdAt: Date.now(),
     };
     this.tabs = [...this.tabs, tab];
@@ -7155,8 +7233,7 @@ export const useInboxStore = create<InboxStoreState>(
       this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
         ...t,
         sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-        sidePanelOpen: this.sidePanelOpen || undefined,
-        sidePanelUserClosed: this.sidePanelUserClosed || undefined,
+        workspace: serializeWorkspace(this.workspace as WorkspaceState),
         path: stampedTabPath(t),
       } : t);
     }
@@ -7164,8 +7241,7 @@ export const useInboxStore = create<InboxStoreState>(
     this.activeTabId = id;
     if (target) {
       this.sidePanelSessionId = target.sidePanelSessionId ?? null;
-      this.sidePanelOpen = target.sidePanelOpen ?? false;
-      this.sidePanelUserClosed = target.sidePanelUserClosed ?? false;
+      if (target.workspace) this.workspace = hydrateWorkspace(target.workspace);
     }
   }),
 
@@ -7185,8 +7261,7 @@ export const useInboxStore = create<InboxStoreState>(
     this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
       ...t,
       sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-      sidePanelOpen: this.sidePanelOpen || undefined,
-      sidePanelUserClosed: this.sidePanelUserClosed || undefined,
+      workspace: serializeWorkspace(this.workspace as WorkspaceState),
       path: stampedTabPath(t),
       ...patch,
     } : t);

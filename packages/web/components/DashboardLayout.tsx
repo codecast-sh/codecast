@@ -37,7 +37,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader } from "./AppLoader";
 import { SettingsModal } from "./settings/SettingsModal";
-import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName, resolveShowOld } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
@@ -133,7 +133,7 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
     <button
       onClick={() => {
         const store = useInboxStore.getState();
-        if (!store.sidePanelOpen) store.toggleSidePanel();
+        if (!selectSessionRailOpen(store)) store.toggleSidePanel();
         const firstWorking = working[0];
         if (firstWorking) {
           if (isOnInboxPage) store.setCurrentSession(firstWorking._id);
@@ -213,12 +213,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.clientState.ui?.sidebar_collapsed,
     s => s.clientState.layouts?.dashboard,
     s => s.currentConversation?.source,
-    s => s.sidePanelOpen,
+    s => selectSessionRailOpen(s),
     s => s.sidePanelSessionId,
     s => s.companionSessionId,
     s => s.currentSessionId,
     s => s.viewingDismissedId,
-    s => s.commentRailOpen,
+    s => selectCommentRailOpen(s),
     s => s.clientState.ui?.comments_enabled ?? false,
     s => s.clientState.ui?.simple_view === true,
     // Re-render the header toggle when comments change, so a teammate's comment on
@@ -330,7 +330,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
   const isViewingConversation = isOnConversationPage || (isOnInboxPage && !!(s.currentSessionId || s.viewingDismissedId));
-  const commentRailOpen = s.commentRailOpen === true;
+  const commentRailOpen = selectCommentRailOpen(s);
   // The comment tools are opt-in (off by default), but a conversation that already
   // has comments still surfaces the toggle so you can open it to read + reply.
   const commentsEnabled = s.clientState.ui?.comments_enabled ?? false;
@@ -352,11 +352,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // inside it (clicking a session promotes it to the stage instead; see
   // resolveSessionSelectKind). sidePanelSessionId survives purely as the
   // rail's highlight pointer.
-  const showSessionList = s.sidePanelOpen && !isMobile;
-  const showMobileSessionList = s.sidePanelOpen && isMobile;
+  const railOpen = selectSessionRailOpen(s);
+  const showSessionList = railOpen && !isMobile;
+  const showMobileSessionList = railOpen && isMobile;
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
-  const rightPeekEnabled = !s.sidePanelOpen && !isMobile;
+  const rightPeekEnabled = !railOpen && !isMobile;
 
   // The conversation you're attending to stays visible wherever it CAN be: it
   // owns the stage on the inbox, and rides along as the companion on a working
@@ -460,7 +461,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       // The Favorites view is a mode of the inbox's session list; leaving the
       // inbox drops back to the active desk so the rail isn't stuck on the shelf.
       if (store.showFavorites) store.setShowFavorites(false);
-      if (store.sidePanelUserClosed) return;
+      if (selectSessionRailUserClosed(store)) return;
       const current = store.currentSessionId;
       if (current) {
         store.openSidePanel(current);
@@ -475,7 +476,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     prevPathnameRef.current = pathname;
     if (!prev || prev === pathname) return;
     const store = useInboxStore.getState();
-    if (store.sidePanelUserClosed) return;
+    if (selectSessionRailUserClosed(store)) return;
     const wasConvPage = prev.includes("/conversation/");
     const isNowConvPage = pathname?.includes("/conversation/");
     if (wasConvPage && !isNowConvPage) {
@@ -565,7 +566,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     });
     if (isOnInboxPage || isOnConversationPage) {
       store.setCurrentSession(stubId);
-    } else if (store.sidePanelOpen) {
+    } else if (selectSessionRailOpen(store)) {
       useInboxStore.setState({ sidePanelSessionId: stubId });
     } else {
       router.push(`/conversation/${stubId}?focus=1`);

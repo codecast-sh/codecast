@@ -8,6 +8,7 @@ import { Spinner } from "./ui/spinner";
 import { useStableOrder } from "../hooks/useStableOrder";
 import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { AgentIcon, type Conversation } from "./ConversationList";
+import { ImageLightbox } from "./ImageGallery";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession, isWarmupSession } from "../lib/sessionFilters";
 import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSessions, feedPagePersistence, type InboxSession } from "../store/inboxStore";
@@ -162,6 +163,12 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
   const dur = conv.duration_ms > 90000 ? shortDuration(conv.duration_ms) : null;
   const title = cleanTitle(conv.title || "Untitled");
   const author = conv.author_name?.split(" ")[0];
+  // Row thumbnail for sessions that contain images — same pref as the inbox
+  // session list (inbox_image_thumbs). Clicking it zooms the image, not the
+  // session.
+  const showImageThumb = useInboxStore((st) => st.clientState?.ui?.inbox_image_thumbs === true);
+  const thumbUrl = showImageThumb ? conv.image_preview_url : null;
+  const [thumbZoom, setThumbZoom] = useState(false);
 
   // Expandable summary: show the full text on demand. We only surface the toggle
   // when the 2-line clamp actually truncates (measured while collapsed) — so
@@ -182,7 +189,8 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
       className="group relative cursor-pointer rounded-lg border border-sol-border/25 bg-sol-card hover:bg-sol-card-hover hover:border-sol-border/50 shadow-sm hover:shadow transition-all overflow-hidden"
     >
       {isActive && <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-sol-green/60" />}
-      <div className="px-4 py-3">
+      <div className="px-4 py-3 flex items-center gap-3">
+      <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 min-w-0">
           {showActor && <Avatar name={conv.author_name || "?"} image={conv.author_avatar} />}
           <span className="font-medium text-[13px] text-sol-text/90 truncate min-w-0 group-hover:text-sol-yellow transition-colors">
@@ -223,6 +231,19 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
           {dur && <HeatStat value={conv.duration_ms / 60000} breaks={DUR_MIN_BREAKS}>{dur}</HeatStat>}
           <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-3 h-3 opacity-40 ml-auto shrink-0" />
         </div>
+      </div>
+      {thumbUrl && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setThumbZoom(true); }}
+          className="shrink-0 self-center rounded-md overflow-hidden border border-sol-border/40 cursor-zoom-in"
+          title="View image"
+        >
+          <img src={thumbUrl} alt="" loading="lazy" draggable={false} className="w-11 h-11 object-cover" />
+        </button>
+      )}
+      {thumbZoom && thumbUrl && (
+        <ImageLightbox src={thumbUrl} onClose={() => setThumbZoom(false)} />
+      )}
       </div>
     </div>
   );
@@ -696,6 +717,7 @@ function inboxSessionToConv(s: InboxSession): Conversation {
     user_id: "",
     title: s.title,
     subtitle: s.subtitle ?? s.idle_summary ?? null,
+    image_preview_url: s.image_preview_url ?? null,
     project_path: s.project_path ?? null,
     git_root: s.git_root ?? null,
     git_branch: s.git_branch ?? null,

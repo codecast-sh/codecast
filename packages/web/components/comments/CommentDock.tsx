@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { MessageSquare, PanelRightClose, CornerUpRight, Quote } from "lucide-react";
-import { useInboxStore } from "../../store/inboxStore";
+import { useInboxStore, selectCommentRailOpen } from "../../store/inboxStore";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { isConvexId } from "../../lib/entityLinks";
 import { cleanContent } from "../../lib/conversationProcessor";
@@ -52,7 +52,7 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
   const currentUserId = user?._id as string | undefined;
   const comments = useConversationComments(conversationId);
 
-  const open = useInboxStore((s) => s.commentRailOpen) === true;
+  const open = useInboxStore(selectCommentRailOpen);
   const setOpen = useInboxStore((s) => s.setCommentRailOpen);
   const setWidth = useInboxStore((s) => s.setCommentRailWidth);
   const commentsEnabled = useInboxStore((s) => s.clientState.ui?.comments_enabled ?? false);

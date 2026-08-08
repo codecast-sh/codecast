@@ -1,4 +1,4 @@
-# @codecast/cli
+# @codecast-sh/cli
 
 Codecast is where your team sees, steers, and remembers every coding agent session — any agent, any machine.
 
@@ -7,7 +7,7 @@ This package installs the `codecast` and `cast` commands. It downloads the compi
 ## Install
 
 ```sh
-npm install -g @codecast/cli
+npm install -g @codecast-sh/cli
 ```
 
 Other channels install the same binary:
