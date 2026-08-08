@@ -1,17 +1,19 @@
 import { useState } from "react";
 import { copyToClipboard } from "../lib/utils";
+import { track } from "../lib/analytics";
 
 const INSTALL_COMMANDS = {
   unix: "curl -fsSL codecast.sh/install | sh",
   windows: 'powershell -c "irm codecast.sh/install.ps1 | iex"',
 };
 
-export function InstallTabs() {
+export function InstallTabs({ location = "unknown" }: { location?: string }) {
   const [platform, setPlatform] = useState<"unix" | "windows">("unix");
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     await copyToClipboard(INSTALL_COMMANDS[platform]);
+    track("install_command_copied", { location, platform, with_token: false });
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
