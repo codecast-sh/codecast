@@ -11,6 +11,7 @@ import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages, cancelQueuedMessagesOnKill } from "./pendingMessages";
+import { latestImagePreviewUrl } from "./messages";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
@@ -916,6 +917,17 @@ export const createConversation = mutation({
     await ctx.db.patch(conversationId, {
       short_id: conversationId.toString().slice(0, 7),
     });
+    // Funnel: the user's first synced session ever. Stamped on the users doc so
+    // this stays an O(1) check instead of a conversations scan per create.
+    const creator = await ctx.db.get(args.user_id);
+    if (creator && !(creator as any).first_session_synced_at) {
+      await ctx.db.patch(args.user_id, { first_session_synced_at: now } as any);
+      await ctx.scheduler.runAfter(0, internal.analytics.capture, {
+        event: "first_session_synced",
+        distinctId: args.user_id.toString(),
+        properties: { agent_type: args.agent_type },
+      });
+    }
     // git_diff blobs live off the hot doc in conversation_git_diffs.
     await setConvGitDiff(ctx, conversationId, args.git_diff, args.git_diff_staged);
     // Terminal-started sessions: the SessionStart hook usually reports the
@@ -2457,6 +2469,9 @@ export const listConversations = query({
             visibility_mode: visibilityMode,
             title: fullTitle,
             subtitle: (visibilityMode === "full" || visibilityMode === "detailed") ? (c.subtitle || null) : null,
+            // Row thumbnail (see schema.image_preview_url) — full/detailed
+            // visibility only, so restricted teammates don't leak image URLs.
+            image_preview_url: (visibilityMode === "full" || visibilityMode === "detailed") ? (c.image_preview_url ?? null) : null,
             first_user_message: null,
             first_assistant_message: null,
             message_alternates: [],
@@ -3954,6 +3969,12 @@ export const searchForCLI = query({
           proximityScore: 0,
           coverage: 1,
           user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
+          ...(conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
+          ...((conv as any).worktree_name &&
+          (conv as any).worktree_status !== "merged" &&
+          (conv as any).worktree_status !== "archived"
+            ? { worktree: (conv as any).worktree_name }
+            : {}),
           matches: [],
           context: [],
           title_match: true,
@@ -3997,6 +4018,9 @@ export const searchForCLI = query({
       proximityScore: number;
       coverage: number;
       user?: { name: string | null; email: string | null };
+      recent_files?: string[];
+      worktree?: string;
+      machine?: string;
       matches: Array<{
         line: number;
         role: string;
@@ -4010,6 +4034,9 @@ export const searchForCLI = query({
       }>;
       title_match?: boolean;
     }> = [];
+
+    // Device labels resolved once per (runner, device) pair across the result set.
+    const searchDeviceLabels = new Map<string, string | undefined>();
 
     let totalMatches = 0;
 
@@ -4121,6 +4148,22 @@ export const searchForCLI = query({
       const owner = teamUserMap.get(conv.user_id.toString()) || (conv.user_id.toString() === authUserId.toString() ? user : null);
       const isOwnConv = conv.user_id.toString() === authUserId.toString();
 
+      // Location signals, so a search hit says WHERE the session works before
+      // anyone attributes edits to it (same fields as the feed card).
+      let machineLabel: string | undefined;
+      const devId = (conv as any).owner_device_id as string | undefined;
+      if (devId) {
+        const devKey = `${conv.user_id.toString()}:${devId}`;
+        if (!searchDeviceLabels.has(devKey)) {
+          const device = await ctx.db
+            .query("devices")
+            .withIndex("by_user_device", (q: any) => q.eq("user_id", conv.user_id).eq("device_id", devId))
+            .first();
+          searchDeviceLabels.set(devKey, device?.label);
+        }
+        machineLabel = searchDeviceLabels.get(devKey) ?? undefined;
+      }
+
       results.push({
         id: conv.short_id || conv._id.toString().slice(0, 7),
         title,
@@ -4130,6 +4173,13 @@ export const searchForCLI = query({
         proximityScore,
         coverage,
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
+        ...(conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
+        ...((conv as any).worktree_name &&
+        (conv as any).worktree_status !== "merged" &&
+        (conv as any).worktree_status !== "archived"
+          ? { worktree: (conv as any).worktree_name }
+          : {}),
+        ...(machineLabel ? { machine: machineLabel } : {}),
         matches: formattedMatches,
         context: [],
       });
@@ -4183,6 +4233,12 @@ export const searchForCLI = query({
           proximityScore: 0,
           coverage: 0,
           user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
+          ...(conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
+          ...((conv as any).worktree_name &&
+          (conv as any).worktree_status !== "merged" &&
+          (conv as any).worktree_status !== "archived"
+            ? { worktree: (conv as any).worktree_name }
+            : {}),
           matches: [],
           context: [],
           title_match: true,
@@ -5619,6 +5675,44 @@ export const getForkBranchMessages = query({
   },
 });
 
+// Lazy backfill for conversations older than the image_preview_url
+// denormalization: the web client calls this when it renders a conversation
+// whose loaded messages contain images but whose row lacks the preview. The
+// URL is recomputed SERVER-side from the conversation's own messages (bounded
+// newest-first scan) — a client can trigger the backfill but never supply the
+// value. Idempotent and write-once: a set preview short-circuits.
+export const backfillImagePreview = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Unauthorized");
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Can only backfill your own conversations");
+    }
+    if (conversation.image_preview_url) return;
+    const recent = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", args.conversation_id))
+      .order("desc")
+      .take(300);
+    for (const msg of recent) {
+      const url = await latestImagePreviewUrl(ctx, [msg]);
+      if (url) {
+        await ctx.db.patch(args.conversation_id, { image_preview_url: url });
+        return;
+      }
+    }
+  },
+});
+
 export const toggleFavorite = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -6383,7 +6477,32 @@ export const feedForCLI = query({
         tool_calls_count?: number;
         tool_results_count?: number;
       }>;
+      // Last few real prose messages — what the session is doing NOW. The head
+      // preview alone misrepresents long sessions by their founding prompt.
+      tail?: Array<{ line: number; role: string; content: string }>;
+      idle_summary?: string;
+      recent_files?: string[];
+      worktree?: string;
+      git_branch?: string;
+      machine?: string;
+      last_activity_at?: string;
     }> = [];
+
+    // Machine label per unique (runner, device) pair, so a card names the
+    // machine a session runs on. A session on another machine cannot be the
+    // author of local working-tree edits — without this line agents guess.
+    const deviceLabels = new Map<string, string>();
+    for (const conv of allConversations) {
+      const devId = (conv as any).owner_device_id as string | undefined;
+      if (!devId) continue;
+      const key = `${conv.user_id.toString()}:${devId}`;
+      if (deviceLabels.has(key)) continue;
+      const device = await ctx.db
+        .query("devices")
+        .withIndex("by_user_device", (q: any) => q.eq("user_id", conv.user_id).eq("device_id", devId))
+        .first();
+      if (device?.label) deviceLabels.set(key, device.label);
+    }
 
     // Only load messages for conversations in the final result set
     for (const conv of allConversations) {
@@ -6448,6 +6567,37 @@ export const feedForCLI = query({
         }
       }
 
+      // Activity tail: newest real prose (user text or assistant text), with
+      // ordinals that line up with `cast read <id> <line>`. Skipped for rows
+      // short enough that the head preview already covers them.
+      const headPreview = preview.slice(0, 2);
+      const headMaxLine = headPreview.length > 0 ? headPreview[headPreview.length - 1].line : 0;
+      const totalMessages = conv.message_count || 0;
+      const recentMsgs = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .order("desc")
+        .take(12);
+      const lastActivityAt = recentMsgs[0]?.timestamp;
+      const tail: Array<{ line: number; role: string; content: string }> = [];
+      for (let i = 0; i < recentMsgs.length && tail.length < 2; i++) {
+        const msg = recentMsgs[i];
+        const line = Math.max(1, totalMessages - i);
+        if (line <= headMaxLine) break;
+        if (msg.role !== "user" && msg.role !== "assistant") continue;
+        if (msg.tool_results && msg.tool_results.length > 0) continue;
+        const text = msg.content?.trim();
+        if (!text) continue;
+        // Collapse whitespace: the tail is a one-line snippet on a card, and
+        // raw newlines from long assistant turns would break the card layout.
+        const flat = text.replace(/\s+/g, " ");
+        tail.unshift({
+          line,
+          role: msg.role,
+          content: flat.length > 200 ? flat.slice(0, 200) + "..." : flat,
+        });
+      }
+
       const owner = teamUserMap.get(conv.user_id.toString()) || (conv.user_id.toString() === authUserId.toString() ? user : null);
       const isOwnConv = conv.user_id.toString() === authUserId.toString();
 
@@ -6482,7 +6632,22 @@ export const feedForCLI = query({
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
         ...(sessionOwner ? { owner: sessionOwner } : {}),
         ...(sessionOwnerId === authUserId.toString() ? { owned_by_me: true } : {}),
-        preview: preview.slice(0, 4),
+        // With a tail present the head shrinks to the goal + first reply; a
+        // short row (no tail beyond the head) keeps the old 4-message preview.
+        preview: tail.length > 0 ? headPreview : preview.slice(0, 4),
+        ...(tail.length > 0 ? { tail } : {}),
+        ...(conv.idle_summary ? { idle_summary: conv.idle_summary } : {}),
+        ...(conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
+        ...((conv as any).worktree_name &&
+        (conv as any).worktree_status !== "merged" &&
+        (conv as any).worktree_status !== "archived"
+          ? { worktree: (conv as any).worktree_name }
+          : {}),
+        ...(conv.git_branch ? { git_branch: conv.git_branch } : {}),
+        ...((conv as any).owner_device_id && deviceLabels.get(`${conv.user_id.toString()}:${(conv as any).owner_device_id}`)
+          ? { machine: deviceLabels.get(`${conv.user_id.toString()}:${(conv as any).owner_device_id}`) }
+          : {}),
+        ...(lastActivityAt ? { last_activity_at: new Date(lastActivityAt).toISOString() } : {}),
       });
     }
 
@@ -7485,6 +7650,9 @@ async function enrichInboxSessionRow(
     tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
     last_user_message: lastUserMessage,
+    // Newest image in the conversation (see schema) — the inbox row thumbnail.
+    // Presence doubles as "this session has images".
+    image_preview_url: conv.image_preview_url ?? null,
     session_error: conv.session_error,
     // True when the latest turn is an unresolved Claude Code auth/API-error
     // banner ("Please run /login · API Error: 401 …", "You've hit your session

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { MessageSquare, PanelRightClose, CornerUpRight, Quote } from "lucide-react";
-import { useInboxStore } from "../../store/inboxStore";
+import { MessageSquare, CornerUpRight, Quote } from "lucide-react";
+import { SlotChrome } from "../workspace/Slot";
+import { useInboxStore, selectCommentRailOpen } from "../../store/inboxStore";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { isConvexId } from "../../lib/entityLinks";
 import { cleanContent } from "../../lib/conversationProcessor";
@@ -52,7 +53,7 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
   const currentUserId = user?._id as string | undefined;
   const comments = useConversationComments(conversationId);
 
-  const open = useInboxStore((s) => s.commentRailOpen) === true;
+  const open = useInboxStore(selectCommentRailOpen);
   const setOpen = useInboxStore((s) => s.setCommentRailOpen);
   const setWidth = useInboxStore((s) => s.setCommentRailWidth);
   const commentsEnabled = useInboxStore((s) => s.clientState.ui?.comments_enabled ?? false);
@@ -120,9 +121,9 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
         <MessageSquare className="w-3.5 h-3.5 text-sol-cyan" />
         <span className="cc-railx-title">Comments</span>
         {comments.totalCount > 0 && <span className="cc-railx-count">{comments.totalCount}</span>}
-        <button type="button" className="cc-railx-close" title="Hide comments" onClick={() => setOpen(false)}>
-          <PanelRightClose className="w-4 h-4" />
-        </button>
+        {/* Shared slot chrome: the comment rail dismisses exactly like the
+            session list it shares this edge with. */}
+        <SlotChrome slot="context" canPromote={false} onClose={() => setOpen(false)} />
       </header>
 
       {comments.anchored.length > 0 && (

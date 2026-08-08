@@ -12,7 +12,7 @@
  * an informed one.
  */
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -65,8 +65,29 @@ function BrowserHandoffToast({
     onOpen(path);
   };
 
+  // Sonner measures a custom toast only when its jsx prop changes, so a card
+  // that grows internally (skeleton → loaded preview) leaves sonner's height
+  // records stale. Hover then clamps the card to the stale --initial-height,
+  // the pointer falls outside it, and the stack flickers open/closed. Re-issue
+  // the same toast id on any size change — sonner treats that as an update and
+  // re-measures.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    let lastHeight = node.getBoundingClientRect().height;
+    const ro = new ResizeObserver(() => {
+      const height = node.getBoundingClientRect().height;
+      if (Math.abs(height - lastHeight) < 1) return;
+      lastHeight = height;
+      showBrowserHandoffToast(path, onOpen);
+    });
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [path, onOpen]);
+
   return (
-    <div className="w-[356px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-sol-cyan/40 bg-sol-bg-alt shadow-xl shadow-sol-cyan/10">
+    <div ref={rootRef} className="w-[356px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-sol-cyan/40 bg-sol-bg-alt shadow-xl shadow-sol-cyan/10">
       <div className="flex items-center gap-2 border-b border-sol-border/60 bg-sol-cyan/5 px-3 py-2">
         <MonitorDown className="h-3.5 w-3.5 flex-shrink-0 text-sol-cyan" />
         <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-sol-text">

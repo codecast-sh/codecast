@@ -3,7 +3,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { History, MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid } from "lucide-react";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, selectSessionRailOpen } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -62,7 +62,7 @@ export function RecentlyViewedMenu({ onSelectSession }: { onSelectSession: (id: 
       const store = useInboxStore.getState();
       if (item.bucketId) store.setActiveBucketFilter(item.bucketId);
       else store.setActiveProjectFilter(item.projectName!, item.projectPath ?? null);
-      if (!store.sidePanelOpen) store.toggleSidePanel();
+      if (!selectSessionRailOpen(store)) store.toggleSidePanel();
       // Views live in the session panel, which non-tab surfaces (Settings,
       // auth) don't render — head home to the inbox from those.
       if (isNonTabRoute(location.pathname)) router.push("/inbox");

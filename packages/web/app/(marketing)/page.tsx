@@ -9,22 +9,27 @@ import { InstallTabs } from "@/components/install-tabs";
 import { Logo } from "@/components/Logo";
 import { AppLoader } from "@/components/AppLoader";
 import { isDesktop } from "@/lib/desktop";
+import { track } from "@/lib/analytics";
 import { useLocalAuth } from "@/lib/localAuth";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { useRouteMeta } from "./pageMeta";
 
-function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" | "rose" }) {
+function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" | "rose" | "violet" | "cyan" }) {
   const colors: Record<string, string> = {
     amber: "bg-[#b58900]/30",
     green: "bg-[#859900]/30",
     blue: "bg-[#268bd2]/30",
     rose: "bg-[#d33682]/30",
+    violet: "bg-[#6c71c4]/30",
+    cyan: "bg-[#2aa198]/30",
   };
   const transforms: Record<string, { rotate: number; translate: string }> = {
     amber: { rotate: -2.1, translate: "-2px, 1px" },
     green: { rotate: 1.8, translate: "1px, -2px" },
     blue: { rotate: -1.5, translate: "2px, 1px" },
     rose: { rotate: 2.2, translate: "-1px, -1px" },
+    violet: { rotate: -1.8, translate: "1px, 1px" },
+    cyan: { rotate: 1.6, translate: "-2px, -1px" },
   };
   const t = transforms[color];
   return (
@@ -181,8 +186,8 @@ export default function LandingPage() {
               </Button>
             </Link>
             <Link href="/signup">
-              <Button className="font-medium text-white" style={{ backgroundColor: '#002b36' }}>
-                Get started
+              <Button variant="outline" className="font-medium bg-transparent" style={{ borderColor: '#93a1a1', color: '#586e75' }}>
+                Sign up
               </Button>
             </Link>
           </div>
@@ -190,16 +195,16 @@ export default function LandingPage() {
       </nav>
 
       {/* Hero */}
-      <section className="max-w-6xl mx-auto px-6 pt-20 pb-8">
+      <section className="max-w-6xl mx-auto px-6 pt-12 pb-8">
         <div className="text-center max-w-3xl mx-auto">
-          <div className="flex flex-wrap gap-3 justify-center mb-6">
+          <div className="flex flex-wrap gap-3 justify-center mb-5">
             <Link href="/download" className="group inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md transition-all" style={{ backgroundColor: 'rgba(42,161,152,0.1)', color: '#2aa198' }}>
               <span className="relative flex h-2 w-2">
                 <span className="relative inline-flex rounded-full h-2 w-2" style={{ backgroundColor: '#2aa198' }}></span>
               </span>
               <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Mac App</span>
             </Link>
-            <a href="https://apps.apple.com/app/id6757820850" target="_blank" rel="noopener noreferrer" className="group inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md transition-all" style={{ backgroundColor: 'rgba(181,137,0,0.1)', color: '#b58900' }}>
+            <a href="https://apps.apple.com/app/id6757820850" onClick={() => track("ios_app_clicked", { location: "landing_chip" })} target="_blank" rel="noopener noreferrer" className="group inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md transition-all" style={{ backgroundColor: 'rgba(181,137,0,0.1)', color: '#b58900' }}>
               <span className="relative flex h-2 w-2">
                 <span className="relative inline-flex rounded-full h-2 w-2" style={{ backgroundColor: '#b58900' }}></span>
               </span>
@@ -216,29 +221,34 @@ export default function LandingPage() {
             <span style={{ color: '#93a1a1' }}>every coding agent session</span>
           </h1>
 
-          <p className="text-lg leading-relaxed mb-3" style={{ color: '#657b83' }}>
-            <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="blue">Cursor</Highlight>, and <Highlight color="rose">Gemini</Highlight> — with OpenCode and pi coming.
+          <p className="text-lg leading-relaxed mb-8" style={{ color: '#657b83' }}>
+            <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="blue">Cursor</Highlight>, <Highlight color="violet">OpenCode</Highlight>, and <Highlight color="cyan">pi</Highlight> — any agent, any machine.
           </p>
-          <p className="text-xl leading-relaxed mb-4 max-w-2xl mx-auto" style={{ color: '#657b83' }}>
-            Codecast is where your team sees, steers, and remembers every coding agent session.
-            The daemon watches the real sessions you already run — any agent, any machine —
-            and keeps a searchable record of everything they&apos;ve done.
+
+          <div className="max-w-2xl mx-auto mb-6">
+            <div className="relative">
+              <div className="absolute -inset-3 bg-gradient-to-r from-[#b58900]/25 via-[#cb4b16]/25 to-[#dc322f]/25 rounded-2xl blur-lg opacity-70"></div>
+              <div className="relative">
+                <InstallTabs location="landing_hero" showAlternatives={false} />
+              </div>
+            </div>
+            <p className="mt-4 text-sm" style={{ color: '#93a1a1' }}>
+              One command installs the CLI and puts your next agent session on the record. Free for individuals.
+            </p>
+          </div>
+
+          <p className="text-lg leading-relaxed mb-3 max-w-2xl mx-auto" style={{ color: '#657b83' }}>
+            The daemon watches the real sessions you already run and keeps a searchable
+            record of everything they&apos;ve done — your team&apos;s shared memory.
           </p>
 
           <p className="text-lg mb-8 font-mono min-h-[28px]" style={{ color: '#586e75' }}>
             Imagine <TypingEffect />
           </p>
 
-          <div className="max-w-xl mx-auto mb-4">
-            <InstallTabs />
-            <p className="mt-3 text-sm" style={{ color: '#93a1a1' }}>
-              One command installs the CLI and signs you in. Free for individuals.
-            </p>
-          </div>
-
           <div className="flex flex-col sm:flex-row gap-3 justify-center items-center mb-12">
             <Link href="/signup">
-              <Button variant="outline" className="bg-transparent text-sm px-5 h-10 font-medium" style={{ borderColor: '#002b36', color: '#002b36' }}>
+              <Button variant="outline" className="bg-transparent text-sm px-5 h-10 font-medium" style={{ borderColor: '#93a1a1', color: '#586e75' }}>
                 Get started free
               </Button>
             </Link>
@@ -434,8 +444,8 @@ export default function LandingPage() {
                     </svg>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-lg mb-1">Four agents today, more coming</h3>
-                    <p className="text-[#93a1a1]">Claude Code, Codex, Cursor, and Gemini sync now. OpenCode and pi are in development. One record, whichever tool you reach for.</p>
+                    <h3 className="font-semibold text-lg mb-1">Six agents today, more coming</h3>
+                    <p className="text-[#93a1a1]">Claude Code, Codex, Cursor, OpenCode, pi, and Gemini sync now. One record, whichever tool you reach for.</p>
                   </div>
                 </div>
 
@@ -505,7 +515,7 @@ export default function LandingPage() {
                   <span className="text-[#586e75]">○</span>
                   <span className="text-[#93a1a1]">dana</span>
                   <span className="text-[#586e75]">migrated to new API schema</span>
-                  <span className="text-[#d33682] ml-auto text-xs">gemini</span>
+                  <span className="text-[#6c71c4] ml-auto text-xs">opencode</span>
                   <span className="text-[#586e75]">1h ago</span>
                 </div>
                 <div className="flex items-center gap-3">
@@ -660,10 +670,10 @@ export default function LandingPage() {
           <div className="relative">
             <div className="absolute -left-4 -top-4 w-12 h-12 rounded-full text-white flex items-center justify-center font-mono font-bold text-lg" style={{ backgroundColor: '#268bd2' }}>2</div>
             <div className="rounded-xl p-6 pt-10 h-full" style={{ backgroundColor: '#fdf6e3', border: '1px solid #eee8d5' }}>
-              <div className="font-mono text-sm mb-2" style={{ color: '#93a1a1' }}>$ claude / codex / cursor / gemini</div>
+              <div className="font-mono text-sm mb-2" style={{ color: '#93a1a1' }}>$ claude / codex / cursor / opencode / pi</div>
               <h3 className="text-xl font-semibold mb-2 font-mono" style={{ color: '#002b36' }}>Code with your agents</h3>
               <p style={{ color: '#657b83' }}>
-                Use Claude Code, Codex, Cursor, or Gemini as normal. Every session syncs in real time to your inbox.
+                Use Claude Code, Codex, Cursor, OpenCode, or pi as normal. Every session syncs in real time to your inbox.
               </p>
             </div>
           </div>

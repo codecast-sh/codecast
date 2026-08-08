@@ -13,6 +13,25 @@ const app = new Hono();
 
 const DIST_DIR = join(import.meta.dirname, "../dist");
 
+// Server-side PostHog capture for funnel steps with no browser attached (curl
+// fetching the install script, dmg redirects). Same Railway env that bakes the
+// client key into the bundle. Personless events: a curl has no identity to
+// merge, and creating a person per fetch would pollute the person store.
+const POSTHOG_KEY = process.env.VITE_POSTHOG_KEY;
+function phCapture(event: string, properties: Record<string, unknown> = {}) {
+  if (!POSTHOG_KEY) return;
+  fetch("https://us.i.posthog.com/i/v0/e/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: POSTHOG_KEY,
+      event,
+      distinct_id: crypto.randomUUID(),
+      properties: { source: "web_server", $process_person_profile: false, ...properties },
+    }),
+  }).catch(() => {});
+}
+
 const MIME: Record<string, string> = {
   ".js": "text/javascript; charset=utf-8",
   ".mjs": "text/javascript; charset=utf-8",
@@ -92,9 +111,10 @@ app.get("/api/health", (c) =>
   })
 );
 
-app.get("/download/mac", (c) =>
-  c.redirect(`${MAC_DMG_URL}?v=${MAC_DMG_VERSION}`, 302)
-);
+app.get("/download/mac", (c) => {
+  phCapture("desktop_dmg_downloaded", { version: MAC_DMG_VERSION });
+  return c.redirect(`${MAC_DMG_URL}?v=${MAC_DMG_VERSION}`, 302);
+});
 
 // Latest published desktop version, same-origin so the in-app update banner can
 // compare it against the running app's version without a cross-origin fetch to
@@ -113,6 +133,7 @@ app.get("/download/:binary", (c) => {
 app.get("/install", async (c) => {
   try {
     const script = await readFile(join(DIST_DIR, "install.sh"), "utf-8");
+    phCapture("install_script_downloaded", { script: "sh" });
     c.header("Content-Type", "text/plain; charset=utf-8");
     c.header("Cache-Control", "public, max-age=3600");
     return c.text(script);
@@ -124,6 +145,7 @@ app.get("/install", async (c) => {
 app.get("/install.ps1", async (c) => {
   try {
     const script = await readFile(join(DIST_DIR, "install.ps1"), "utf-8");
+    phCapture("install_script_downloaded", { script: "ps1" });
     c.header("Content-Type", "text/plain; charset=utf-8");
     c.header("Cache-Control", "public, max-age=3600");
     return c.text(script);

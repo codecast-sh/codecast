@@ -534,6 +534,87 @@ async function getAuthenticatedUserId(
 }
 
 /**
+ * Fold this message's edited paths into the conversation's recent_files list
+ * (newest first, deduped, capped). Returns null when the list is unchanged so
+ * callers skip the patch. Commit pseudo-changes carry no meaningful path and
+ * are excluded — this list answers "where does this session work", not "what
+ * did it commit".
+ */
+export function mergeRecentFiles(
+  existing: string[] | undefined,
+  changes: Array<{ filePath: string; changeType: string }>,
+): string[] | null {
+  const RECENT_FILES_CAP = 8;
+  const incoming: string[] = [];
+  // Reverse so the message's last edit ranks newest, then dedupe first-wins.
+  for (let i = changes.length - 1; i >= 0; i--) {
+    const fc = changes[i];
+    if (fc.changeType === "commit" || !fc.filePath?.trim()) continue;
+    if (!incoming.includes(fc.filePath)) incoming.push(fc.filePath);
+  }
+  if (incoming.length === 0) return null;
+  const merged = [...incoming];
+  for (const p of existing ?? []) {
+    if (merged.length >= RECENT_FILES_CAP) break;
+    if (!merged.includes(p)) merged.push(p);
+  }
+  const capped = merged.slice(0, RECENT_FILES_CAP);
+  const prev = existing ?? [];
+  if (capped.length === prev.length && capped.every((p, i) => p === prev[i])) return null;
+  return capped;
+}
+
+/**
+ * One-time backfill: seed conversations.recent_files from the already
+ * materialized file_changes table, so feed cards show WHERE existing sessions
+ * work without waiting for their next edit. Walks conversations newest-created
+ * first in small self-scheduled batches; only rows active since the cutoff and
+ * still unseeded pay the (content-heavy) file_changes reads. Writes [] to
+ * processed rows with no edits so a re-run skips them.
+ */
+export const backfillRecentFiles = internalMutation({
+  args: { cursor_ts: v.optional(v.number()), cutoff_ts: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const cutoff = args.cutoff_ts ?? Date.now() - 14 * 24 * 60 * 60 * 1000;
+    // Bound the walk: a conversation CREATED well before the activity cutoff
+    // and still active is rare enough to leave to organic maintenance.
+    const walkFloor = cutoff - 45 * 24 * 60 * 60 * 1000;
+    const batch = await ctx.db
+      .query("conversations")
+      .withIndex("by_creation_time", (q) =>
+        args.cursor_ts !== undefined ? q.lt("_creationTime", args.cursor_ts) : q,
+      )
+      .order("desc")
+      .take(40);
+    let seeded = 0;
+    for (const conv of batch) {
+      if (conv.updated_at < cutoff || conv.recent_files !== undefined) continue;
+      const rows = await ctx.db
+        .query("file_changes")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .order("desc")
+        .take(12);
+      // Rows arrive newest-first; mergeRecentFiles treats the LAST change as
+      // newest, so feed it ascending.
+      const merged = mergeRecentFiles(
+        undefined,
+        rows.reverse().map((r) => ({ filePath: r.file_path, changeType: r.change_type })),
+      );
+      await ctx.db.patch(conv._id, { recent_files: merged ?? [] });
+      seeded++;
+    }
+    const oldest = batch[batch.length - 1];
+    if (oldest && oldest._creationTime > walkFloor) {
+      await ctx.scheduler.runAfter(0, internal.messages.backfillRecentFiles, {
+        cursor_ts: oldest._creationTime,
+        cutoff_ts: cutoff,
+      });
+    }
+    return { scanned: batch.length, seeded, done: !oldest || oldest._creationTime <= walkFloor };
+  },
+});
+
+/**
  * Materialize per-edit file changes for a freshly-inserted message into the
  * file_changes table. Called only on genuine inserts (never the uuid/content
  * dedup branches) so re-synced messages don't duplicate rows. Runs the shared
@@ -571,7 +652,15 @@ async function materializeFileChanges(
 
   const msg = { _id: messageId, timestamp, tool_calls: toolCalls, tool_results: toolResults };
   if (!hasFileChangeToolCall(msg)) return;
-  for (const fc of extractFileChanges([msg])) {
+  const extracted = extractFileChanges([msg]);
+  // Keep the conversation's "where does it work" list current in the same
+  // transaction — feed/search cards render it (see schema.recent_files).
+  if (extracted.length > 0) {
+    const conv = await ctx.db.get(conversationId);
+    const nextRecent = mergeRecentFiles(conv?.recent_files, extracted);
+    if (nextRecent) await ctx.db.patch(conversationId, { recent_files: nextRecent });
+  }
+  for (const fc of extracted) {
     await ctx.db.insert("file_changes", {
       conversation_id: conversationId,
       change_key: fc.id,
@@ -634,6 +723,49 @@ export const getConversationFileChanges = query({
       }));
   },
 });
+
+// Newest displayable image in a message batch → the conversation's inbox
+// thumbnail (conversations.image_preview_url). Storage-backed images (pasted
+// attachments, tool screenshots) resolve via ctx.storage.getUrl; markdown
+// images embedded in prose (`cast image` output) count only when they point at
+// our own storage origin — mirroring the web's trusted-origin gate, so a
+// third-party URL an agent emits can never become a team-visible thumbnail.
+// Scans newest-first and returns the first hit; undefined when the batch
+// carries no image.
+const MD_IMAGE_URL_RE = /!\[[^\]]*\]\((https?:\/\/[^)\s]+?)(?:\s+"[^"]*")?\)/g;
+function trustedImageOrigin(): string | null {
+  const base = process.env.CONVEX_CLOUD_ORIGIN || process.env.CONVEX_CLOUD_URL || process.env.VITE_CONVEX_URL || "";
+  try { return base ? new URL(base).origin : null; } catch { return null; }
+}
+export async function latestImagePreviewUrl(
+  ctx: { storage: { getUrl: (id: any) => Promise<string | null> } },
+  msgs: Array<{ content?: string; images?: Array<{ storage_id?: string }> }>,
+): Promise<string | undefined> {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.images) {
+      for (let j = m.images.length - 1; j >= 0; j--) {
+        const sid = m.images[j].storage_id;
+        if (!sid) continue;
+        const url = await ctx.storage.getUrl(sid as any);
+        if (url) return url;
+      }
+    }
+    if (m.content && m.content.includes("![")) {
+      const origin = trustedImageOrigin();
+      if (origin) {
+        let last: string | undefined;
+        for (const match of m.content.matchAll(MD_IMAGE_URL_RE)) {
+          try {
+            if (new URL(match[1]).origin === origin) last = match[1];
+          } catch {}
+        }
+        if (last) return last;
+      }
+    }
+  }
+  return undefined;
+}
 
 // Storage ids embedded in an injected-image echo. The daemon delivers an image
 // as `[Image /tmp/codecast/images/<storageId>.png]` (downloadImage names the
@@ -952,6 +1084,10 @@ export const addMessage = mutation({
       convPatch.last_user_message_at = msgTimestamp;
     } else if (args.role === "user") {
       convPatch.last_user_message_at = msgTimestamp;
+    }
+    const imagePreview = await latestImagePreviewUrl(ctx, [{ content: contentToStore, images }]);
+    if (imagePreview && imagePreview !== conversation.image_preview_url) {
+      convPatch.image_preview_url = imagePreview;
     }
     // Fold harness-loop events (ScheduleWakeup / scheduled_task_fire) into the
     // conversation's loop_state so the inbox trigger set sees the armed loop.
@@ -1439,6 +1575,10 @@ export const addMessages = mutation({
         if (preview) {
           convPatch.last_message_preview = preview;
         }
+      }
+      const imagePreview = await latestImagePreviewUrl(ctx, args.messages);
+      if (imagePreview && imagePreview !== conversation.image_preview_url) {
+        convPatch.image_preview_url = imagePreview;
       }
       await ctx.db.patch(args.conversation_id, convPatch);
 

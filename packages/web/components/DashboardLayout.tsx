@@ -37,7 +37,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader } from "./AppLoader";
 import { SettingsModal } from "./settings/SettingsModal";
-import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName, resolveShowOld } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
@@ -45,6 +45,7 @@ import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
 import { StageCompanion } from "./StageCompanion";
+import { companionId, autoAllowed as wsAutoAllowed, surfaceForPath, slotPolicyFor } from "../store/workspace";
 import { EdgePeek } from "./EdgePeek";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { useSyncTeamInboxSessions } from "../hooks/useSyncTeamInboxSessions";
@@ -60,7 +61,6 @@ import { TabBar } from "./TabBar";
 import { pathLabel } from "../lib/pathLabel";
 import { TabContent } from "./TabContent";
 import { TerminalDock } from "./terminal/TerminalDock";
-import { toggleTerminalOpen } from "../lib/terminal/panelPrefs";
 import { VaultQuickSwitcherDock } from "./vault/VaultQuickSwitcherDock";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { useTipActions } from "../tips";
@@ -133,7 +133,7 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
     <button
       onClick={() => {
         const store = useInboxStore.getState();
-        if (!store.sidePanelOpen) store.toggleSidePanel();
+        if (!selectSessionRailOpen(store)) store.toggleSidePanel();
         const firstWorking = working[0];
         if (firstWorking) {
           if (isOnInboxPage) store.setCurrentSession(firstWorking._id);
@@ -210,15 +210,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const s = useTrackedStore([
     s => s.clientStateInitialized,
     s => s.clientState.ui?.zen_mode,
-    s => s.clientState.ui?.sidebar_collapsed,
+    s => selectNavCollapsed(s),
     s => s.clientState.layouts?.dashboard,
     s => s.currentConversation?.source,
-    s => s.sidePanelOpen,
+    s => selectSessionRailOpen(s),
     s => s.sidePanelSessionId,
-    s => s.companionSessionId,
+    s => companionId(s.workspace),
     s => s.currentSessionId,
     s => s.viewingDismissedId,
-    s => s.commentRailOpen,
+    s => selectCommentRailOpen(s),
     s => s.clientState.ui?.comments_enabled ?? false,
     s => s.clientState.ui?.simple_view === true,
     // Re-render the header toggle when comments change, so a teammate's comment on
@@ -246,7 +246,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     return query ? new URLSearchParams(query).get("dir") : null;
   }, [activeTabPath]);
   const isZenMode = s.clientState.ui?.zen_mode ?? false;
-  const sidebarCollapsed = s.clientState.ui?.sidebar_collapsed ?? false;
+  const sidebarCollapsed = selectNavCollapsed(s);
   const rawLayout = s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT;
   const layout = {
     sidebar: Math.max(10, Math.min(50, rawLayout.sidebar ?? 25)),
@@ -321,16 +321,18 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
-  // Working surfaces (a task/doc/plan on the stage) open a clicked session
-  // BESIDE the page as the stage's companion; everywhere else a session is a
-  // primary object that takes the whole stage.
-  const isOnWorkingPage = isOnTasksPage || isOnDocsPage || isOnPlansPage;
+  // Which slots this route may host comes from ONE table (slotPolicyFor), not
+  // from a predicate assembled per feature. Settings is resolved from the real
+  // router URL because the tab-aware pathname reports the carried inbox tab.
+  const surface = isOnSettingsPage ? "settings" : surfaceForPath(pathname ?? "");
+  const slotPolicy = slotPolicyFor(surface);
+  const isOnWorkingPage = slotPolicy.secondary;
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
   const isViewingConversation = isOnConversationPage || (isOnInboxPage && !!(s.currentSessionId || s.viewingDismissedId));
-  const commentRailOpen = s.commentRailOpen === true;
+  const commentRailOpen = selectCommentRailOpen(s);
   // The comment tools are opt-in (off by default), but a conversation that already
   // has comments still surfaces the toggle so you can open it to read + reply.
   const commentsEnabled = s.clientState.ui?.comments_enabled ?? false;
@@ -352,11 +354,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // inside it (clicking a session promotes it to the stage instead; see
   // resolveSessionSelectKind). sidePanelSessionId survives purely as the
   // rail's highlight pointer.
-  const showSessionList = s.sidePanelOpen && !isMobile;
-  const showMobileSessionList = s.sidePanelOpen && isMobile;
+  const railOpen = selectSessionRailOpen(s);
+  const showSessionList = railOpen && !isMobile;
+  const showMobileSessionList = railOpen && isMobile;
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
-  const rightPeekEnabled = !s.sidePanelOpen && !isMobile;
+  const rightPeekEnabled = !railOpen && !isMobile;
 
   // The conversation you're attending to stays visible wherever it CAN be: it
   // owns the stage on the inbox, and rides along as the companion on a working
@@ -370,21 +373,23 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   useWatchEffect(() => {
     const store = useInboxStore.getState();
     const attended = s.currentSessionId ?? s.viewingDismissedId ?? null;
+    const companion = companionId(s.workspace);
     if (isOnWorkingPage && !isMobile) {
       // MIRROR, don't just fill: there is exactly one conversation you're
       // attending to, and it shows either on the stage (inbox) or here. If it
       // changes by any route while a companion is open, the companion follows —
       // otherwise you sit watching a stale pane while the inbox has moved on,
       // and going back would land somewhere you weren't.
-      if (attended && store.companionDismissedFor !== attended && s.companionSessionId !== attended) {
-        store.openCompanion(attended);
+      const pane = attended ? ({ kind: "conversation", ref: attended } as const) : null;
+      if (pane && companion !== attended && wsAutoAllowed(s.workspace, "secondary", pane)) {
+        store.wsShow("secondary", pane, { presentation: "split" });
       }
-    } else if (s.companionSessionId) {
+    } else if (companion) {
       // The surface that can hold it is gone — pure bookkeeping, not a
       // dismissal, so returning to a working surface brings it back.
-      store.closeCompanion({ remember: false });
+      store.wsHide("secondary", { remember: false });
     }
-  }, [isOnWorkingPage, isMobile, s.companionSessionId, s.currentSessionId, s.viewingDismissedId]);
+  }, [isOnWorkingPage, isMobile, companionId(s.workspace), s.currentSessionId, s.viewingDismissedId]);
 
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
@@ -431,7 +436,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage, isOnConversationPage, isOnWorkingPage });
   const openAsCompanion = useCallback((id: string) => {
     const store = useInboxStore.getState();
-    store.openCompanion(id);
+    store.wsShow("secondary", { kind: "conversation", ref: id }, { presentation: "split" });
     // Keep the attended conversation in sync: this IS the one you're now
     // watching, so returning to the inbox lands on it rather than on whatever
     // you had open before. No route change — navigateToSession only moves the
@@ -460,7 +465,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       // The Favorites view is a mode of the inbox's session list; leaving the
       // inbox drops back to the active desk so the rail isn't stuck on the shelf.
       if (store.showFavorites) store.setShowFavorites(false);
-      if (store.sidePanelUserClosed) return;
+      if (selectSessionRailUserClosed(store)) return;
       const current = store.currentSessionId;
       if (current) {
         store.openSidePanel(current);
@@ -475,7 +480,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     prevPathnameRef.current = pathname;
     if (!prev || prev === pathname) return;
     const store = useInboxStore.getState();
-    if (store.sidePanelUserClosed) return;
+    if (selectSessionRailUserClosed(store)) return;
     const wasConvPage = prev.includes("/conversation/");
     const isNowConvPage = pathname?.includes("/conversation/");
     if (wasConvPage && !isNowConvPage) {
@@ -565,7 +570,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     });
     if (isOnInboxPage || isOnConversationPage) {
       store.setCurrentSession(stubId);
-    } else if (store.sidePanelOpen) {
+    } else if (selectSessionRailOpen(store)) {
       useInboxStore.setState({ sidePanelSessionId: stubId });
     } else {
       router.push(`/conversation/${stubId}?focus=1`);
@@ -702,7 +707,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const sidebarAppliedRef = useRef<boolean | null>(null);
   // True while we're imperatively collapsing/expanding the panel. The library
   // emits a 0-size onResize during that transition; without this flag that event
-  // is misread as a user drag-to-collapse and writes sidebar_collapsed:true,
+  // is misread as a user drag-to-collapse and folds the nav slot,
   // instantly reverting an expand (the "toggle does nothing" bug).
   const sidebarProgrammaticRef = useRef(false);
 
@@ -773,7 +778,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // conversation running beside it. A second session swaps this one out
   // (there is a single companionSessionId), so panes cannot accumulate.
   // Only working surfaces host a companion; elsewhere the page owns the stage.
-  const showCompanion = !!s.companionSessionId && isOnWorkingPage && !isMobile;
+  const showCompanion = !!companionId(s.workspace) && isOnWorkingPage && !isMobile;
   const pageContent = showCompanion ? (
     <Group orientation="horizontal" className="h-full" defaultLayout={{ "stage-page": 58, "stage-companion": 42 }}>
       <Panel id="stage-page" minSize={320}>{pageContentInner}</Panel>
@@ -840,7 +845,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           <div className="flex items-center gap-1 flex-shrink-0">
             <ShortcutTooltip label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
               <button
-                onClick={(e) => { s.updateClientUI({ sidebar_collapsed: !sidebarCollapsed }); tipActions.whisper('sidebar.toggleLeft', e); }}
+                onClick={(e) => { s.setNavCollapsed(!sidebarCollapsed); tipActions.whisper('sidebar.toggleLeft', e); }}
                 className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
               >
                 <PanelLeft className="w-[18px] h-[18px]" />
@@ -950,7 +955,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             {!isMobile && (
               <ShortcutTooltip label="Toggle terminal" action="terminal.toggle">
                 <button
-                  onClick={(e) => { toggleTerminalOpen(); tipActions.whisper('terminal.toggle', e); }}
+                  onClick={(e) => { s.setDockOpen(s.workspace.dock.pane == null); tipActions.whisper('terminal.toggle', e); }}
                   className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
                   aria-label="Toggle terminal panel"
                 >
@@ -1027,10 +1032,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               onResize={(size) => {
                 // Persist a *user drag* down to 0 as a collapse. Ignore the 0-size
                 // events the library emits while we're imperatively expanding —
-                // those would otherwise rewrite sidebar_collapsed:true and instantly
+                // those would otherwise re-fold the nav slot and instantly
                 // revert the expand (the "toggle does nothing" bug).
                 if (size.asPercentage === 0 && !sidebarHidden && !sidebarProgrammaticRef.current) {
-                  s.updateClientUI({ sidebar_collapsed: true });
+                  s.setNavCollapsed(true);
                 }
               }}
             >

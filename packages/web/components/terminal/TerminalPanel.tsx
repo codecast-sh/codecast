@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { useConvex } from "convex/react";
 import { Plus, X, Trash2, ChevronDown, ChevronUp, RotateCw, TerminalSquare, Eye } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
-import { setTerminalHeight, setTerminalOpen, useTerminalPanelPrefs } from "../../lib/terminal/panelPrefs";
+import { DEFAULT_TERMINAL_HEIGHT } from "../../lib/terminal/panelPrefs";
 import {
   getTerminalEndpoint,
   probeEndpoint,
@@ -45,7 +45,10 @@ type EndpointState =
   | { phase: "unavailable"; reason: string };
 
 export function TerminalPanel() {
-  const { open, height: storedHeight } = useTerminalPanelPrefs();
+  // Open state and height are the dock slot's — one layout model, and
+  // SLOT_PERSISTENCE keeps this region device-local without its own store.
+  const open = useInboxStore((st) => st.workspace.dock.pane != null);
+  const storedHeight = useInboxStore((st) => st.workspace.dock.size) ?? DEFAULT_TERMINAL_HEIGHT;
 
   const convex = useConvex();
   const [ep, setEp] = useState<EndpointState>({ phase: "idle" });
@@ -155,7 +158,7 @@ export function TerminalPanel() {
         document.body.style.cursor = "";
         heightRef.current = latest;
         setDragHeight(null);
-        if (latest !== startHeight) setTerminalHeight(latest);
+        if (latest !== startHeight) useInboxStore.getState().wsSetSize("dock", latest);
       };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
@@ -305,7 +308,7 @@ export function TerminalPanel() {
             {maximized ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
           </button>
           <button
-            onClick={() => setTerminalOpen(false)}
+            onClick={() => useInboxStore.getState().setDockOpen(false)}
             title="Hide terminal (ctrl+`)"
             className="p-1 rounded text-sol-text-dim/50 hover:text-sol-text-muted transition-colors"
           >
