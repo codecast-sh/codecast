@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { copyToClipboard } from '@/lib/clipboard';
 import { Theme, CHROME_FONT_CAP } from '@/constants/Theme';
 import { DOMPURIFY_SOURCE } from '@/lib/vendor/dompurifySource';
-import { CONVEX_URL } from '@/lib/convex';
+import { CONVEX_ORIGIN } from '@/lib/convex';
 
 // Inline visual canvas — the mobile twin of web's HtmlSnippet. The agent emits a
 // ```cast-canvas fenced block of static HTML/CSS/SVG; we render it in a WebView
@@ -63,10 +63,8 @@ const PURIFY_CONFIG = JSON.stringify({
 });
 
 // Origins whose images may render inside a canvas, injected into the WebView
-// sanitize script as a JS array literal. Regex, not `new URL` — Hermes.
-const TRUSTED_IMG_ORIGINS_JS = JSON.stringify([
-  CONVEX_URL.replace(/^(https?:\/\/[^/?#]+).*$/i, '$1').toLowerCase(),
-]);
+// sanitize script as a JS array literal.
+const TRUSTED_IMG_ORIGINS_JS = JSON.stringify([CONVEX_ORIGIN]);
 
 // --sol-* tokens bridged from the app theme so canvases authored against
 // codecast's palette render native-looking, same as web.
