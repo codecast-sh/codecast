@@ -1480,6 +1480,9 @@ export const SessionCard = memo(function SessionCard({
   const restartStartedAt = useInboxStore((st) => st.restartingSessions[session._id]);
   const showModelBadge = useInboxStore((st) => st.clientState?.ui?.show_model_badge === true);
   const showAgentIcon = useInboxStore((st) => st.clientState?.ui?.show_agent_icon !== false);
+  // Row thumbnail for sessions that contain images (server-denormalized
+  // image_preview_url). Independent of simple view — applies in both.
+  const showImageThumb = useInboxStore((st) => st.clientState?.ui?.inbox_image_thumbs === true);
   // sessionLabel and isFavorite are now passed as scalar props (computed once in
   // the parent via labelByConv/cardIsFavorite) instead of per-card store scans —
   // see ct-37958. Only spawnedByTitle stays a local selector.
@@ -1804,6 +1807,8 @@ export const SessionCard = memo(function SessionCard({
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
       >
+      <div className="flex items-start gap-2.5">
+      <div className="min-w-0 flex-1">
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text-muted" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
@@ -2048,6 +2053,17 @@ export const SessionCard = memo(function SessionCard({
             </span>
           </div>
         )}
+      </div>
+      {showImageThumb && session.image_preview_url && (
+        <img
+          src={session.image_preview_url}
+          alt=""
+          loading="lazy"
+          draggable={false}
+          className="w-9 h-9 mt-0.5 shrink-0 rounded-md object-cover border border-sol-border/60"
+        />
+      )}
+      </div>
       </div>
       {/* The ONE pin a pinned session shows: a persistent, interactive badge anchored
           top-right. It stays put on hover (z above the toolbar) and the hover toolbar

@@ -1,7 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
-import { useState, memo } from "react";
+import { useState, memo, Children } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery } from "../ImageGallery";
 import { CodeBlock } from "../CodeBlock";
@@ -107,7 +107,15 @@ export function isPlanFile(filePath: string, content: string): boolean {
   return false;
 }
 
-const MD_IMAGE_COLLAPSED_HEIGHT = 100;
+const MD_IMAGE_COLLAPSED_HEIGHT = 160;
+
+/** Alt text worth showing under the image. `cast image` defaults alt to the
+ *  file name, which reads as a real caption; the generic fallbacks don't. */
+function captionFromAlt(alt?: string): string | undefined {
+  const trimmed = alt?.trim();
+  if (!trimmed || /^(image|img)$/i.test(trimmed)) return undefined;
+  return trimmed;
+}
 
 export function CollapsibleImage({
   src: rawSrc,
@@ -145,7 +153,7 @@ export function CollapsibleImage({
   if (blocked) {
     return (
       <span
-        className="my-2 flex max-w-md flex-col gap-1.5 rounded border border-dashed border-sol-border bg-sol-bg-alt p-3 text-xs"
+        className="my-2 flex max-w-md flex-col gap-1.5 rounded-lg border border-dashed border-[color-mix(in_srgb,var(--sol-border)_50%,transparent)] bg-sol-bg-alt p-3 text-xs"
         onClick={(e) => { e.stopPropagation(); setRevealed(true); }}
         role="button"
         tabIndex={0}
@@ -158,21 +166,23 @@ export function CollapsibleImage({
     );
   }
 
+  const caption = captionFromAlt(alt);
   return (
     <span
-      className="my-2 block cursor-pointer relative max-w-md"
-      style={{ minHeight: MD_IMAGE_COLLAPSED_HEIGHT }}
+      className="my-2 block cursor-pointer max-w-md"
       onClick={() => gallery?.open(src)}
     >
-      {!loaded && (
-        <span className="absolute inset-0 block rounded-t border-x border-t border-sol-border bg-sol-bg-alt flex items-center justify-center z-10" style={{ height: MD_IMAGE_COLLAPSED_HEIGHT }}>
-          <span className="text-sol-text-dim text-xs">Loading image...</span>
-        </span>
-      )}
+      {/* Soft borders need explicit color-mix values: Tailwind's /opacity
+          modifier is a silent no-op on the bare --sol-* var tokens. */}
       <span
-        className="block overflow-hidden rounded-t border-x border-t border-sol-border hover:border-sol-blue/50 transition-all"
+        className="relative block overflow-hidden rounded-lg border border-[color-mix(in_srgb,var(--sol-border)_35%,transparent)] hover:border-[color-mix(in_srgb,var(--sol-blue)_40%,transparent)] transition-colors"
         style={{ height: MD_IMAGE_COLLAPSED_HEIGHT }}
       >
+        {!loaded && (
+          <span className="absolute inset-0 bg-sol-bg-alt flex items-center justify-center z-10">
+            <span className="text-sol-text-dim text-xs">Loading image...</span>
+          </span>
+        )}
         <img
           src={src}
           alt={alt || "Image"}
@@ -181,16 +191,54 @@ export function CollapsibleImage({
           onLoad={() => setLoaded(true)}
           onError={() => setErrored(true)}
         />
+        {loaded && (
+          <span
+            className="absolute inset-x-0 bottom-0 h-16 pointer-events-none block"
+            style={{ background: 'linear-gradient(to bottom, transparent, var(--image-fade-bg, var(--sol-bg, #0a0a0a)))' }}
+          />
+        )}
       </span>
-      {loaded && (
-        <span
-          className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none block"
-          style={{ background: 'linear-gradient(to bottom, transparent, var(--image-fade-bg, var(--sol-bg, #0a0a0a)))' }}
-        />
+      {caption && (
+        <span className="block mt-1 text-[11px] leading-snug text-sol-text-muted">{caption}</span>
       )}
     </span>
   );
 }
+
+// A paragraph that is exclusively images (plus whitespace/line breaks) renders
+// as a side-by-side grid instead of stacked full-width blocks, so
+// `![before](u1) ![after](u2)` reads as a comparison row. Children arrive
+// already rendered through the active component map's `img` (CollapsibleImage
+// here, VaultImage in the vault), so per-surface image behavior — click gates,
+// vault path resolution, gallery registration — is untouched.
+function countImageOnlyChildren(node: { children?: Array<{ type?: string; tagName?: string; value?: string }> } | undefined): number {
+  let count = 0;
+  for (const child of node?.children ?? []) {
+    if (child.type === 'element' && child.tagName === 'img') count++;
+    else if (child.type === 'text' && !child.value?.trim()) continue;
+    else if (child.type === 'element' && child.tagName === 'br') continue;
+    else return 0;
+  }
+  return count;
+}
+
+export const ImageRowParagraph: Components['p'] = ({ node, children, ...props }) => {
+  const imageCount = countImageOnlyChildren(node);
+  if (imageCount >= 2) {
+    // Whitespace text nodes between the markdown images would become empty
+    // grid cells — keep only the rendered elements.
+    const items = Children.toArray(children).filter((c) => typeof c !== 'string' || c.trim() !== '');
+    return (
+      <span
+        className="my-2 grid gap-x-2"
+        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(200px, 1fr))`, maxWidth: imageCount === 2 ? 560 : undefined }}
+      >
+        {items}
+      </span>
+    );
+  }
+  return <p {...props}>{children}</p>;
+};
 
 // Hoisted to module scope so ReactMarkdown receives stable plugin/component
 // identities on every render. Inline literals here meant react-markdown re-ran
@@ -287,6 +335,7 @@ export const MD_COMPONENTS: Components = {
             <td className="border border-sol-border/50 px-2 py-1">{children}</td>
           ),
           img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
+          p: ImageRowParagraph,
 };
 
 // memo: props are all primitives (content/filePath/className), so this skips the

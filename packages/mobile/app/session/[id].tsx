@@ -12,6 +12,8 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import Svg, { Path } from 'react-native-svg';
 import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
+import { extractSessionImages } from '@codecast/web/lib/sessionImages';
+import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isScheduledTaskMessage } from '@codecast/web/components/sessionMessage';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
@@ -114,6 +116,9 @@ type ImageData = {
   data?: string;
   storage_id?: string;
   tool_use_id?: string;
+  // Ready-to-render src (a trusted markdown image URL or a prebuilt data: URI)
+  // for gallery entries that aren't storage-backed message attachments.
+  url?: string;
 };
 
 type Message = {
@@ -1376,9 +1381,19 @@ function useImageSrc(image: ImageData) {
   );
   return image.storage_id
     ? storageUrl ?? undefined
-    : image.data
-      ? `data:${image.media_type};base64,${image.data}`
-      : undefined;
+    : image.url
+      ? image.url
+      : image.data
+        ? `data:${image.media_type};base64,${image.data}`
+        : undefined;
+}
+
+// Identity of an image across the raw message shape and the gallery's scanned
+// entries (extractSessionImages keys the same way).
+function imageKeyOf(image: ImageData): string | undefined {
+  return image.storage_id
+    || image.url
+    || (image.data ? `data:${image.media_type};base64,${image.data}` : undefined);
 }
 
 function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void }) {
@@ -1556,6 +1571,24 @@ function GalleryImage({ image, screenWidth, screenHeight, onZoomChange, onReques
   );
 }
 
+// One thumb in the gallery's bottom filmstrip. Dimmed unless current; a
+// storage-backed entry shows a placeholder square until its URL resolves.
+function GalleryThumb({ image, active, onPress }: { image: ImageData; active: boolean; onPress: () => void }) {
+  const src = useImageSrc(image);
+  if (!src) return <RNView style={[styles.galleryThumb, styles.galleryThumbPlaceholder]} />;
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
+      <Image
+        source={{ uri: src }}
+        style={[styles.galleryThumb, active ? styles.galleryThumbActive : styles.galleryThumbInactive]}
+        resizeMode="cover"
+      />
+    </TouchableOpacity>
+  );
+}
+
+const GALLERY_THUMB_STEP = 46; // 40px thumb + 6px gap, for strip auto-centering
+
 function ImageGallery({ images, initialIndex, visible, onClose }: {
   images: ImageData[];
   initialIndex: number;
@@ -1566,7 +1599,18 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
   const [isZoomed, setIsZoomed] = useState(false);
   const [isLandscape, setIsLandscape] = useState(false);
   const flatListRef = useRef<FlatList>(null);
+  const thumbStripRef = useRef<FlatList>(null);
+  const insets = useSafeAreaInsets();
   const { width: deviceWidth, height: deviceHeight } = useWindowDimensions();
+
+  // Keep the active thumb centered as swipes/taps move the selection.
+  useEffect(() => {
+    if (!visible || images.length < 2) return;
+    thumbStripRef.current?.scrollToOffset({
+      offset: Math.max(0, currentIndex * GALLERY_THUMB_STEP - deviceWidth / 2 + GALLERY_THUMB_STEP / 2),
+      animated: true,
+    });
+  }, [visible, currentIndex, images.length, deviceWidth]);
 
   const screenWidth = isLandscape ? deviceHeight : deviceWidth;
   const screenHeight = isLandscape ? deviceWidth : deviceHeight;
@@ -1619,6 +1663,28 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
           <FontAwesome name="rotate-right" size={18} color={isLandscape ? Theme.accent : '#fff'} />
         </TouchableOpacity>
         <RNText style={styles.galleryCounter}>{currentIndex + 1} / {images.length}</RNText>
+        {images.length > 1 && (
+          <RNView style={[styles.galleryThumbStrip, { bottom: insets.bottom + 16 }]} pointerEvents="box-none">
+            <FlatList
+              ref={thumbStripRef}
+              data={images}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyExtractor={(_, i) => String(i)}
+              contentContainerStyle={styles.galleryThumbStripContent}
+              renderItem={({ item, index }) => (
+                <GalleryThumb
+                  image={item}
+                  active={index === currentIndex}
+                  onPress={() => {
+                    setCurrentIndex(index);
+                    flatListRef.current?.scrollToIndex({ index, animated: false });
+                  }}
+                />
+              )}
+            />
+          </RNView>
+        )}
       </RNView>
     </Modal>
   );
@@ -3743,26 +3809,22 @@ export default function SessionDetailScreen() {
     return map;
   }, [allMessages]);
 
+  // Every image in the session, in transcript order — attachments, tool
+  // screenshots AND trusted markdown images in prose (same scan as the web
+  // header gallery; entries carry either a storage_id or a ready src).
   const allSessionImages = useMemo(() => {
-    const imgs: ImageData[] = [];
-    for (const msg of allMessages) {
-      if (msg.images) {
-        for (const img of msg.images) {
-          imgs.push(img);
-        }
-      }
-    }
-    return imgs;
+    return extractSessionImages(allMessages, isTrustedImageSrc).map((e): ImageData =>
+      e.storage_id
+        ? { media_type: "image/png", storage_id: e.storage_id }
+        : { media_type: "image", url: e.src }
+    );
   }, [allMessages]);
 
   const [galleryVisible, setGalleryVisible] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const openGallery = useCallback((image: ImageData) => {
-    const idx = allSessionImages.findIndex(img =>
-      (img.storage_id && img.storage_id === image.storage_id) ||
-      (img.data && img.data === image.data) ||
-      (img.tool_use_id && img.tool_use_id === image.tool_use_id)
-    );
+    const key = imageKeyOf(image);
+    const idx = key ? allSessionImages.findIndex(img => imageKeyOf(img) === key) : -1;
     setGalleryIndex(Math.max(0, idx));
     setGalleryVisible(true);
   }, [allSessionImages]);
@@ -4400,6 +4462,16 @@ export default function SessionDetailScreen() {
             <FontAwesome name="chevron-left" size={18} color={Theme.text} />
           </TouchableOpacity>
           <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{conversation.title || 'Conversation'}</RNText>
+          {allSessionImages.length > 0 && (
+            <TouchableOpacity
+              onPress={() => { setGalleryIndex(0); setGalleryVisible(true); }}
+              style={styles.headerIconBtn}
+              hitSlop={{ top: 12, bottom: 12, left: 4, right: 4 }}
+              activeOpacity={0.6}
+            >
+              <Feather name="image" size={17} color={Theme.textMuted} />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 12 }} activeOpacity={0.6}>
             <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
           </TouchableOpacity>
@@ -5848,6 +5920,34 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     zIndex: 10,
+  },
+  galleryThumbStrip: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 10,
+  },
+  galleryThumbStripContent: {
+    paddingHorizontal: 12,
+    gap: 6,
+    alignItems: 'center',
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+  galleryThumb: {
+    width: 40,
+    height: 40,
+    borderRadius: 6,
+  },
+  galleryThumbActive: {
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.9)',
+  },
+  galleryThumbInactive: {
+    opacity: 0.45,
+  },
+  galleryThumbPlaceholder: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
   },
   imageLoading: {
     height: 60,

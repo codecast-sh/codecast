@@ -213,11 +213,20 @@ fi
 # non-fatal: R2 + force-update are the real release, these are mirrors.
 echo ""
 echo "Publishing to npm..."
-if npm whoami >/dev/null 2>&1; then
+if [ -n "${NPM_TOKEN:-}" ]; then
+  # Granular access token (bypass 2FA) from .env.deploy. The npmrc holds the
+  # literal ${NPM_TOKEN} placeholder — npm expands it from the environment, so
+  # the token itself never touches disk.
+  NPMRC=$(mktemp)
+  echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' > "$NPMRC"
+  (cd npm && npm publish --access public --userconfig "$NPMRC") \
+    || echo "  WARNING: npm publish failed (non-fatal) — rerun: cd npm && npm publish --access public"
+  command rm -f "$NPMRC"
+elif npm whoami >/dev/null 2>&1; then
   (cd npm && npm publish --access public) \
     || echo "  WARNING: npm publish failed (non-fatal) — rerun: cd npm && npm publish --access public"
 else
-  echo "  WARNING: not logged in to npm (npm login) — skipped. Rerun: cd npm && npm publish --access public"
+  echo "  WARNING: no NPM_TOKEN in .env.deploy and not logged in to npm — skipped. Rerun: cd npm && npm publish --access public"
 fi
 
 echo ""

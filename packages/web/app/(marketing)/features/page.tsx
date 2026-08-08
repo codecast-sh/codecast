@@ -321,7 +321,7 @@ export default function CLIPage() {
           </p>
 
           <div className="mb-8">
-            <InstallTabs />
+            <InstallTabs location="features" />
           </div>
         </div>
       </section>

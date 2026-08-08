@@ -14,7 +14,9 @@ import ReactMarkdownBase from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { compressImage } from "../lib/compressImage";
-import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
+import { useStorageImageUrl, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
+import { extractSessionImages } from "../lib/sessionImages";
+import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus } from "@codecast/shared/contracts";
@@ -102,7 +104,7 @@ import { TmuxAttachPill } from "./TmuxAttachPill";
 import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
-import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
+import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
@@ -310,6 +312,7 @@ const MESSAGE_MD_COMPONENTS = {
   code: EntityAwareCode,
   a: EntityAwareLink,
   img: ({ src, alt }: { src?: string | Blob; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
+  p: ImageRowParagraph,
   pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
 };
 
@@ -317,7 +320,10 @@ const MESSAGE_MD_COMPONENTS = {
 // cards, command markdown, summaries). Same identity rule as above: the memo'd
 // ReactMarkdown wrapper only bails out of a re-parse when these are module consts.
 const MD_COMPONENTS_CODE_LINK = { code: MESSAGE_MD_COMPONENTS.code, a: MESSAGE_MD_COMPONENTS.a };
-const MD_COMPONENTS_NO_IMG = { ...MD_COMPONENTS_CODE_LINK, pre: MESSAGE_MD_COMPONENTS.pre };
+// "No images" must be enforced, not implied: with no `img` override react-markdown
+// emits a raw <img>, which auto-fetches — full-bleed layout AND the third-party
+// beacon channel CollapsibleImage's click gate exists to close.
+const MD_COMPONENTS_NO_IMG = { ...MD_COMPONENTS_CODE_LINK, pre: MESSAGE_MD_COMPONENTS.pre, img: () => null };
 const MD_COMPONENTS_NO_PRE = { ...MD_COMPONENTS_CODE_LINK, img: MESSAGE_MD_COMPONENTS.img };
 
 // Cross-mount markdown render cache. React.memo only helps while a component
@@ -469,6 +475,29 @@ type ImageData = {
   preview_url?: string;
   uploading?: boolean;
 };
+
+// Header entry to the session gallery: every image in the transcript, opened
+// over the lightbox's explicit-list channel (openList) — the register() channel
+// only knows images the virtualized feed has actually mounted. Rendered inside
+// ImageGalleryProvider (a child, not the ConversationView body, which sits
+// outside the provider).
+function SessionGalleryButton({ srcs }: { srcs: string[] }) {
+  const gallery = useImageGallery();
+  if (srcs.length === 0) return null;
+  return (
+    <ShortcutTooltip label={`View ${srcs.length === 1 ? "image" : `${srcs.length} images`}`} side="bottom">
+      <button
+        onClick={() => gallery?.openList(srcs, 0)}
+        className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors flex items-center gap-1"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+        <span className="text-[10px] tabular-nums leading-none">{srcs.length}</span>
+      </button>
+    </ShortcutTooltip>
+  );
+}
 
 function formatMessagePartsForCopy(
   content: string | undefined,
@@ -4611,7 +4640,7 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
         ) : (
           <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
             <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
-              components={MD_COMPONENTS_NO_IMG}
+              components={MESSAGE_MD_COMPONENTS}
             >{body}</ReactMarkdown>
           </div>
         )}
@@ -5806,6 +5835,7 @@ const CMD_MD_COMPONENTS = {
   code: EntityAwareCode,
   a: EntityAwareLink,
   img: ({ src, alt }: { src?: string; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
+  p: ImageRowParagraph,
   pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
 };
 
@@ -6403,7 +6433,7 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
       </div>
       <div className={`px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
         <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
-          components={MD_COMPONENTS_NO_IMG}
+          components={MESSAGE_MD_COMPONENTS}
         >{body}</ReactMarkdown>
       </div>
     </div>
@@ -13933,6 +13963,45 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [conversation?.messages]);
 
+  // Every image in the session, in transcript order — the header gallery's
+  // source list (attachments, tool screenshots, trusted markdown images).
+  const sessionImageEntries = useMemo(
+    () => extractSessionImages(conversation?.messages ?? [], (src) => !isRemoteImageSrc(src)),
+    [conversation?.messages]
+  );
+  const sessionImageStorageIds = useMemo(
+    () => sessionImageEntries.map((e) => e.storage_id),
+    [sessionImageEntries]
+  );
+  const sessionImageUrls = useStorageImageUrls(sessionImageStorageIds);
+  const sessionGallerySrcs = useMemo(() => {
+    const srcs: string[] = [];
+    for (const e of sessionImageEntries) {
+      const src = e.src ?? (e.storage_id ? sessionImageUrls[e.storage_id] : undefined);
+      if (src) srcs.push(src);
+    }
+    return srcs;
+    // sessionImageUrls is rebuilt per render; its content only grows as the
+    // batched resolution fills in, so keying on its size is exact.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionImageEntries, Object.keys(sessionImageUrls).length]);
+
+  // Older sessions predate the image_preview_url denormalization (the inbox
+  // row thumbnail): when the loaded transcript visibly has images but the row
+  // doesn't know it, ask the server to recompute — server-side, idempotent,
+  // owner-only, once per opened conversation.
+  const backfillImagePreview = useMutation(api.conversations.backfillImagePreview);
+  const imagePreviewBackfilledRef = useRef<string | null>(null);
+  useEffect(() => {
+    const cid = conversation?._id?.toString();
+    if (!cid || !isConvexId(cid) || sessionImageEntries.length === 0) return;
+    if (conversation?.is_own === false) return;
+    if (useInboxStore.getState().sessions[cid]?.image_preview_url) return;
+    if (imagePreviewBackfilledRef.current === cid) return;
+    imagePreviewBackfilledRef.current = cid;
+    backfillImagePreview({ conversation_id: cid as Id<"conversations"> }).catch(() => {});
+  }, [conversation?._id, conversation?.is_own, sessionImageEntries.length, backfillImagePreview]);
+
   const taskSubjectMap = useMemo(() => {
     const createInputs: Record<string, string> = {};
     const idMap: Record<string, string> = {};
@@ -14559,6 +14628,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </button>
                   </div>
                 )}
+
+                {sessionGallerySrcs.length > 0 && <SessionGalleryButton srcs={sessionGallerySrcs} />}
 
                 <ShortcutTooltip label="Search in conversation" side="bottom">
                   <button

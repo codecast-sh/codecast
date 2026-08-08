@@ -1,7 +1,8 @@
-import { StyleSheet, TouchableOpacity, View as RNView, Animated as RNAnimated, PanResponder } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView, Animated as RNAnimated, PanResponder, Image } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { useRef, useCallback, useEffect, useMemo } from 'react';
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { gestureHandler } from '@/lib/gestureHandler';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -37,6 +38,9 @@ export type SessionData = {
   model?: string | null;
   inbox_stashed_at?: number | null;
   inbox_dismissed_at?: number | null;
+  // Newest image in the session (server-denormalized) — the row thumbnail
+  // when the inbox_image_thumbs pref is on.
+  image_preview_url?: string | null;
 };
 
 /** "claude-opus-4-8" → "opus-4-8"; unknowns pass through. */
@@ -168,15 +172,20 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
   // (cast send, teammate broadcasts, scheduled tasks) and harness noise never
   // surface as "what the human said".
   const userMessage = cleanUserMessage(session.last_user_message);
+  // Row thumbnail for sessions that contain images — same pref as web
+  // (inbox_image_thumbs, stamped LWW so the toggle follows the user).
+  const showImageThumb = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
+  const thumbUrl = showImageThumb ? session.image_preview_url : null;
 
   return (
     <TouchableOpacity
       onPress={onPress}
       onLongPress={onLongPress ? () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onLongPress(); } : undefined}
       delayLongPress={400}
-      style={styles.conversationContent}
+      style={[styles.conversationContent, thumbUrl ? styles.contentWithThumb : null]}
       activeOpacity={0.6}
     >
+      <RNView style={thumbUrl ? styles.contentColumn : null}>
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <RNView style={styles.iconWithStatus}>
@@ -228,6 +237,10 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
           <RNText style={styles.messageCount}>{session.message_count} msgs</RNText>
         )}
       </RNView>
+      </RNView>
+      {thumbUrl && (
+        <Image source={{ uri: thumbUrl }} style={styles.imageThumb} resizeMode="cover" />
+      )}
     </TouchableOpacity>
   );
 }
@@ -409,6 +422,23 @@ export const styles = StyleSheet.create({
   conversationContent: {
     paddingHorizontal: Spacing.lg,
     paddingVertical: 10,
+  },
+  // Thumb variant: content column + thumbnail side by side.
+  contentWithThumb: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  contentColumn: {
+    flex: 1,
+    minWidth: 0,
+  },
+  imageThumb: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.bgHighlight,
   },
   conversationHeader: {
     flexDirection: 'row',
