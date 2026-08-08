@@ -207,8 +207,11 @@ export default function DevicesSettingsPage() {
 
       {sorted.length === 0 ? (
         <Card className="p-6 text-center text-sm text-gray-400">
-          No devices yet. Start the daemon with <code className="font-mono text-gray-300">cast daemon</code> on a machine
-          to see it here.
+          No devices yet. Install the CLI on a machine to see it here —{" "}
+          <a href="/settings/cli" className="text-sol-yellow hover:text-sol-yellow/80">
+            get the install command
+          </a>
+          . Already installed? Start it with <code className="font-mono text-gray-300">cast start</code>.
         </Card>
       ) : (
         <div className="space-y-3">

@@ -5,7 +5,8 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Logo, LogoMark } from "@/components/Logo";
 import { useMountEffect } from "@/hooks/useMountEffect";
-import { usePageMeta } from "../pageMeta";
+import { InstallTabs } from "@/components/install-tabs";
+import { useRouteMeta } from "../pageMeta";
 
 // The server 302s this to the pinned dmg on dl.codecast.sh (release.sh bumps the pin).
 const MAC_DOWNLOAD_URL = "https://codecast.sh/download/mac";
@@ -152,10 +153,7 @@ function StepCard({
 }
 
 export default function DownloadPage() {
-  usePageMeta(
-    "Download - codecast",
-    "Download the Codecast desktop app for macOS. See, steer, and remember every coding agent session.",
-  );
+  useRouteMeta("/download");
 
   const [isMac, setIsMac] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
@@ -290,6 +288,20 @@ export default function DownloadPage() {
         </div>
       </section>
 
+      {/* CLI — the piece that actually produces sessions */}
+      <section className="mx-auto max-w-3xl px-6 pb-16 text-center">
+        <h2 className="mb-3 font-mono text-2xl font-bold text-[#002b36]">
+          Don&apos;t skip the CLI
+        </h2>
+        <p className="mx-auto mb-6 max-w-xl text-[#657b83]">
+          The apps are windows into your sessions — the CLI is what records them. Run one command
+          on each machine where your agents work; it installs, signs you in, and starts syncing.
+        </p>
+        <div className="mx-auto max-w-xl text-left">
+          <InstallTabs />
+        </div>
+      </section>
+
       {/* Alternatives */}
       <section className="mx-auto max-w-3xl px-6 pb-20 text-center">
         <p className="text-sm text-[#657b83]">
@@ -301,8 +313,7 @@ export default function DownloadPage() {
           <a href={APP_STORE_URL} target="_blank" rel="noopener noreferrer" className="font-medium text-[#b58900] hover:text-[#cb4b16]">
             iOS app
           </a>
-          . Agents run through the CLI — install it with{" "}
-          <code className="rounded bg-[#eee8d5] px-1.5 py-0.5 font-mono text-[13px] text-[#586e75]">curl -fsSL codecast.sh/install | sh</code>
+          .
         </p>
       </section>
 

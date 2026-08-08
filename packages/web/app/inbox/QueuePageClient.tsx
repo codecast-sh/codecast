@@ -20,6 +20,7 @@ import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeS
 import { SharePopover } from "../../components/SharePopover";
 import { SessionErrorBanner } from "../../components/SessionErrorBanner";
 import { ActivityFeed } from "../../components/ActivityFeed";
+import { EmptyState } from "../../components/EmptyState";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { TriggerContextPanel } from "../../components/TriggerContextPanel";
@@ -254,6 +255,11 @@ export function QueuePageClient() {
   const trackedSessions = useTrackedStore([s => sessionsWakeSig(s.sessions)]);
   const sessions = trackedSessions.sessions;
   const clientStateInitialized = useInboxStore((s) => s.clientStateInitialized);
+  // True only once the user doc has synced AND no CLI has ever checked in —
+  // the boolean selector stays stable across heartbeat churn on currentUser.
+  const showCliOnboarding = useInboxStore(
+    (s) => s.currentUser != null && !s.currentUser.cli_version && !s.currentUser.daemon_last_seen && !s.currentUser.last_heartbeat
+  );
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const advanceToNext = useInboxStore((s) => s.advanceToNext);
   const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
@@ -627,9 +633,15 @@ export function QueuePageClient() {
       ) : (
         <div className="h-full overflow-y-auto" data-main-scroll>
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-8">
-            <ErrorBoundary name="ActivityFeed" level="inline">
-              <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
-            </ErrorBoundary>
+            {showCliOnboarding ? (
+              <ErrorBoundary name="Onboarding" level="inline">
+                <EmptyState variant="onboarding" title="" description="" />
+              </ErrorBoundary>
+            ) : (
+              <ErrorBoundary name="ActivityFeed" level="inline">
+                <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
+              </ErrorBoundary>
+            )}
           </div>
         </div>
       )}
