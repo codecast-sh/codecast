@@ -15,6 +15,9 @@ beforeAll(() => {
   // jsdom, not happy-dom: DOMPurify silently mis-sanitizes on happy-dom's DOM
   // (kept <script>, dropped <b>) while still reporting isSupported.
   g.window = new JSDOM("").window;
+  // trustedImageOrigins reads this lazily at first use — set before the first
+  // sanitize call so the Convex storage origin counts as trusted, like in the app.
+  process.env.VITE_CONVEX_URL = "https://convex.test.example";
 });
 
 afterAll(() => {
@@ -113,5 +116,30 @@ describe("sanitizeCanvasHtml", () => {
     );
     expect(out).not.toContain("evil.example");
     expect(out).toContain('href="data:image/png');
+  });
+
+  // Trusted-origin carve-out: images on our own Convex storage origin (where
+  // `cast image` uploads and pasted transcript images live) are not egress —
+  // the GET reaches only our infrastructure. Everything else stays stripped.
+
+  test("keeps <img> on the Convex storage origin", async () => {
+    const out = await sanitize(
+      '<img src="https://convex.test.example/api/storage/abc-123" alt="shot">',
+    );
+    expect(out).toContain('src="https://convex.test.example/api/storage/abc-123"');
+  });
+
+  test("keeps svg <image> on the Convex storage origin", async () => {
+    const out = await sanitize(
+      '<svg><image href="https://convex.test.example/api/storage/abc-123"/></svg>',
+    );
+    expect(out).toContain("convex.test.example");
+  });
+
+  test("still strips a lookalike host and relative srcs", async () => {
+    const out = await sanitize(
+      '<img src="https://convex.test.example.evil.com/x.png"><img src="/api/storage/abc"><img src="shot.png">',
+    );
+    expect(out).not.toContain("<img");
   });
 });

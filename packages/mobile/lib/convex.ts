@@ -5,7 +5,7 @@ import { ConvexReactClient } from "convex/react";
 // sign-in method errored under App Store review. Local/dev flows always set
 // the env var, so the fallback only engages when a build would otherwise be
 // pointed at nothing.
-const CONVEX_URL = process.env.EXPO_PUBLIC_CONVEX_URL || "https://convex.codecast.sh";
+export const CONVEX_URL = process.env.EXPO_PUBLIC_CONVEX_URL || "https://convex.codecast.sh";
 
 export const convex = new ConvexReactClient(CONVEX_URL, {
   unsavedChangesWarning: false,

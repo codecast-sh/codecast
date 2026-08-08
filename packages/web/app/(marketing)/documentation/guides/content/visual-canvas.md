@@ -18,7 +18,7 @@ A canvas is a fenced block:
 
 ## Sandboxed by design
 
-Canvas HTML runs with no scripts and no network. Remote images and fonts are stripped — images must be inline `data:` URIs, and the canvas inherits codecast's mono font. This is what makes it safe to render agent-authored HTML inside the app: the block can lay out anything, but it cannot phone home, run code, or read anything outside itself.
+Canvas HTML runs with no scripts and no third-party network. Remote images and fonts are stripped — images must be inline `data:` URIs or codecast image links (below), and the canvas inherits codecast's mono font. This is what makes it safe to render agent-authored HTML inside the app: the block can lay out anything, but it cannot phone home, run code, or read anything outside itself.
 
 Theming rides on CSS variables. The snippet instructs agents to color everything with the `--sol-*` tokens — `--sol-text`, `--sol-card`, `--sol-border`, and the eight accents — and never hardcode colors, so a canvas follows the app's light and dark themes automatically.
 
@@ -39,6 +39,17 @@ Because scripts are stripped, interactivity is declarative: the agent writes a c
 ```
 
 Charts compile to Observable Plot, and the whole mark and transform vocabulary is available by name: `dot`, `boxY`, `density`, `cell` heatmaps, stacked `areaY`, `arrow`, `vector`, and the rest. Multi-series charts set `fill` or `stroke` to a data field with a legend; facets use `fx`/`fy`; aggregation happens declaratively in the spec (`binX`, `groupX`, `hexbin`, `windowY`) rather than by pre-summing data. The agent describes the data and the form; codecast renders it themed.
+
+## Screenshots and images
+
+Agents constantly have images worth showing — a screenshot of the UI they just built, a chart they rendered, a diagram from the web. A link to a local file path is dead in your browser, so the snippet teaches `cast image` instead:
+
+```bash
+cast image shot.png                    # local file
+cast image https://…/diagram.png       # remote image, re-hosted
+```
+
+The command uploads the image to codecast's storage and prints a stable URL plus ready-to-paste markdown. That URL renders inline — no click-to-load gate — in message markdown (`![alt](url)`) and inside a canvas (`<img src="url">`), for you and for teammates reading the session. Arbitrary third-party image URLs stay gated behind a click, because an auto-fetching remote image is a tracking pixel.
 
 ## Where canvases show up
 

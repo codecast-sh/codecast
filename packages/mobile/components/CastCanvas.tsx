@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { copyToClipboard } from '@/lib/clipboard';
 import { Theme, CHROME_FONT_CAP } from '@/constants/Theme';
 import { DOMPURIFY_SOURCE } from '@/lib/vendor/dompurifySource';
+import { CONVEX_URL } from '@/lib/convex';
 
 // Inline visual canvas — the mobile twin of web's HtmlSnippet. The agent emits a
 // ```cast-canvas fenced block of static HTML/CSS/SVG; we render it in a WebView
@@ -60,6 +61,12 @@ const PURIFY_CONFIG = JSON.stringify({
   ADD_TAGS: ['use'],
   ADD_ATTR: ['target'],
 });
+
+// Origins whose images may render inside a canvas, injected into the WebView
+// sanitize script as a JS array literal. Regex, not `new URL` — Hermes.
+const TRUSTED_IMG_ORIGINS_JS = JSON.stringify([
+  CONVEX_URL.replace(/^(https?:\/\/[^/?#]+).*$/i, '$1').toLowerCase(),
+]);
 
 // --sol-* tokens bridged from the app theme so canvases authored against
 // codecast's palette render native-looking, same as web.
@@ -122,8 +129,16 @@ function buildShell(code: string): string {
 <script>
 (function(){
   // Same egress rules as web's canvasSanitize.ts: no scripts (DOMPurify), no
-  // network fetches — remote images and CSS url()/@import are scrubbed so a
-  // synced canvas can't phone home from a teammate's phone.
+  // third-party network fetches — remote images and CSS url()/@import are
+  // scrubbed so a synced canvas can't phone home from a teammate's phone.
+  // Images on our own Convex storage origin (cast image uploads, pasted
+  // transcript images) are the one carve-out, matching web.
+  var TRUSTED_IMG_ORIGINS = ${TRUSTED_IMG_ORIGINS_JS};
+  function trustedImgSrc(src){
+    if (src.indexOf('data:') === 0) return true;
+    var m = /^(https?:\\/\\/[^\\/?#]+)(?:[\\/?#]|$)/i.exec(src);
+    return !!m && TRUSTED_IMG_ORIGINS.indexOf(m[1].toLowerCase()) !== -1;
+  }
   function scrubCss(css){
     return css.replace(/@import\\b[^;}]*[;}]?/gi, '')
       .replace(/url\\(\\s*(['"]?)(?!\\s*['"]?\\s*(?:data:|#))[^)]*\\)/gi, 'none');
@@ -138,11 +153,11 @@ function buildShell(code: string): string {
     }
     if (tag === 'image') {
       href = node.getAttribute('href') || node.getAttribute('xlink:href') || '';
-      if (href.indexOf('data:') !== 0 && node.parentNode) node.parentNode.removeChild(node);
+      if (!trustedImgSrc(href) && node.parentNode) node.parentNode.removeChild(node);
     }
     if (tag === 'img') {
       var src = node.getAttribute('src') || '';
-      if (src.indexOf('data:') !== 0 && node.parentNode) node.parentNode.removeChild(node);
+      if (!trustedImgSrc(src) && node.parentNode) node.parentNode.removeChild(node);
     }
     URL_ATTRS.forEach(function(attr){
       var v = node.getAttribute && node.getAttribute(attr);

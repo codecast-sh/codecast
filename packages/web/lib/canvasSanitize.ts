@@ -1,11 +1,14 @@
 import createDOMPurify from "dompurify";
+import { isTrustedAbsoluteImageSrc } from "./trustedImageOrigins";
 
 // Sanitization policy for cast-canvas content (and all-HTML message bodies).
 // Conversations sync across a team, so canvases are untrusted. Two invariants:
 //   1. No script execution — DOMPurify strips scripts and event handlers.
-//   2. No network egress — a canvas viewed by a teammate must not phone home.
-//      Remote images and CSS url() fetches would leak viewer IP + timing, so
-//      only data: URIs and same-document (#id) references survive.
+//   2. No third-party network egress — a canvas viewed by a teammate must not
+//      phone home. Remote images and CSS url() fetches would leak viewer IP +
+//      timing, so only data: URIs, same-document (#id) references, and images
+//      on our own trusted origins (Convex storage — where `cast image` uploads
+//      and pasted transcript images live) survive.
 // Rendering happens in a Shadow DOM (see HtmlSnippet.tsx for why shadow +
 // sanitize beats an iframe).
 
@@ -56,20 +59,21 @@ function getPurify() {
       el.setAttribute("target", "_blank");
       el.setAttribute("rel", "noopener noreferrer");
     }
-    // Only embedded (data:) images — a remote src is a tracking pixel.
+    // Embedded (data:) images or our own trusted origins — an arbitrary
+    // remote src is a tracking pixel.
     if (tag === "img") {
       const src = el.getAttribute("src") ?? "";
-      if (!src.startsWith("data:")) el.remove();
+      if (!isTrustedAbsoluteImageSrc(src)) el.remove();
     }
     // SVG's reference-taking elements may only point into the current document
-    // (<use href="#id">) or embed their bits (<image href="data:...">).
+    // (<use href="#id">) or carry image bits under the same policy as <img>.
     if (tag === "use") {
       const href = el.getAttribute("href") ?? el.getAttribute("xlink:href") ?? "";
       if (!href.startsWith("#")) el.remove();
     }
     if (tag === "image") {
       const href = el.getAttribute("href") ?? el.getAttribute("xlink:href") ?? "";
-      if (!href.startsWith("data:")) el.remove();
+      if (!isTrustedAbsoluteImageSrc(href)) el.remove();
     }
     for (const attr of URL_ATTRS) {
       const v = el.getAttribute(attr);

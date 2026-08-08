@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
 import { registerRemoteCommand } from "./remote/cli.js";
 import { registerPublishCommand } from "./publish.js";
+import { registerImageCommand } from "./imageCommand.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -2330,7 +2331,16 @@ When structure or magnitude carries the meaning — comparisons, flows, timeline
 
 **Theme with \`--sol-*\` tokens; never hardcode colors.** Text \`--sol-text/-text-muted/-text-dim\` · surfaces \`--sol-card/-bg-alt/-border\` · accents \`--sol-blue/green/yellow/red/magenta/cyan/orange/violet\` · soft fill \`color-mix(in srgb, var(--sol-blue) 14%, transparent)\`. Full CSS and SVG: grid/flex panels, gradients, \`<defs>\`+\`<use>\`, CSS animations/transitions, hover states, \`<details>\`. Compose like a considered report: title, one-line takeaway, then panels. \`data-canvas-size="wide"\` on the root lets a dashboard use the full screen width.
 
-**Sandboxed: no scripts, no network.** Remote images and fonts are stripped — embed images as \`data:\` URIs. Interactivity is declarative; codecast supplies the behavior:
+**Sandboxed: no scripts, no network.** Third-party remote images and fonts are stripped. To show an image — a screenshot you took, a local file, a remote image — upload it first:
+
+\`\`\`bash
+cast image shot.png            # or a URL: cast image https://…/diagram.png
+# → prints a stable https URL + ready markdown ![shot](url)
+\`\`\`
+
+That URL renders inline for the human everywhere: \`![alt](url)\` in any reply or message, \`<img src="url">\` inside a canvas. Never link local file paths (\`/tmp/…\`, \`/var/folders/…\`) — the human's browser cannot read files on this machine, so those links are dead. \`data:\` URIs also work in a canvas but bloat the message; prefer \`cast image\`.
+
+Interactivity is declarative; codecast supplies the behavior:
 
 - Tabs: \`<div class="cast-tabs"><section data-tab="Label">…</section>…</div>\`
 - Sortable table: \`<table class="cast-table">\` — headers become click-to-sort
@@ -2867,6 +2877,15 @@ async function promptMemoryEnablement(): Promise<void> {
       console.log(`Workflow snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
   }
+  if (config.visual_enabled && config.visual_version !== getVisualVersion()) {
+    const result = installVisualSnippet(true);
+    config.visual_version = getVisualVersion();
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Visual snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  }
 
   if (config.memory_enabled !== undefined && config.memory_version === getMemoryVersion()) {
     if (config.memory_enabled) {
@@ -3188,6 +3207,7 @@ program
 registerWorkspaceCommand(program);
 registerRemoteCommand(program);
 registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 
 program
   .command("auth")

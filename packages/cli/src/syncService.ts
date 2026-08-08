@@ -10,7 +10,7 @@ const MAX_TOOL_RESULT_SIZE = 50_000;
 // Max serialized bytes of one addMessages batch (~0.9MB, well under the 5MB
 // that triggered isolate OOM/timeouts in the 2026-05-13 stuck-sync incident).
 const MAX_BATCH_BYTES = 900_000;
-const MAX_IMAGE_SIZE = 5_000_000;
+export const MAX_IMAGE_SIZE = 5_000_000;
 const MAX_INLINE_IMAGE_SIZE = 500_000;
 const MAX_IMAGES_PER_MESSAGE = 10;
 // Upload images concurrently rather than one-at-a-time. Uploads go to file storage
@@ -64,7 +64,7 @@ function truncate(str: string, maxLen: number): string {
   return str.slice(0, maxLen) + `\n... [truncated ${str.length - maxLen} chars]`;
 }
 
-function detectImageMediaType(data: Buffer): string | null {
+export function detectImageMediaType(data: Buffer): string | null {
   if (
     data.length >= 8 &&
     data[0] === 0x89 &&
