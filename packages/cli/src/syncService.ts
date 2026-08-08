@@ -1,5 +1,8 @@
 import { ConvexHttpClient, ConvexClient } from "convex/browser";
 import { readFile, stat } from "node:fs/promises";
+import * as os from "node:os";
+import * as nodePath from "node:path";
+import { hashImageBytes, lookupByHash, lookupByPath, storeUpload } from "./imageCache.js";
 import { redactSecrets } from "./redact.js";
 import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
@@ -11,6 +14,22 @@ const MAX_TOOL_RESULT_SIZE = 50_000;
 // that triggered isolate OOM/timeouts in the 2026-05-13 stuck-sync incident).
 const MAX_BATCH_BYTES = 900_000;
 export const MAX_IMAGE_SIZE = 5_000_000;
+
+// Markdown image/link whose target is an absolute (or ~/) local path with a
+// raster extension — the "dead screenshot link" shape rescueLocalImageLinks
+// rewrites. Groups: (1) opener through "(", (2) the path, (3) ")".
+const LOCAL_IMAGE_LINK_RE = /(!?\[[^\]\n]*\]\()((?:\/|~\/)[^)\s]+?\.(?:png|jpe?g|gif|webp|avif|bmp))(\))/gi;
+const MAX_LINK_RESCUES_PER_MESSAGE = 8;
+// Browser-renderable raster types (tiff sniffs but doesn't render; svg is a
+// script vector when served for direct navigation).
+const RESCUABLE_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/bmp",
+]);
 const MAX_INLINE_IMAGE_SIZE = 500_000;
 const MAX_IMAGES_PER_MESSAGE = 10;
 // Upload images concurrently rather than one-at-a-time. Uploads go to file storage
@@ -664,6 +683,70 @@ export class SyncService {
     );
   }
 
+  /**
+   * Rescue dead local image links in agent prose. Agents link screenshots as
+   * `![…](/var/folders/…/shot.jpg)` or `[label](/tmp/shot.png)` — paths the
+   * viewer's browser can never read, so the link is dead the moment it syncs.
+   * Before a message ships, upload each linked local raster image and rewrite
+   * the link to its stable storage URL, which renders inline in the transcript.
+   *
+   * Assistant messages only: user-message text carries the tmux-injected
+   * `/codecast/images/<id>.png` paths that echo reconciliation parses
+   * (messages.ts injectedImageStorageIds) — rewriting those would break it.
+   * Uploads dedup through the persistent image cache (~/.codecast), and a
+   * since-deleted temp file falls back to the last URL uploaded for its path,
+   * so re-syncs are stable across daemon restarts.
+   */
+  async rescueLocalImageLinks(messages: Array<{ role?: string; content?: string }>): Promise<void> {
+    for (const msg of messages) {
+      if (msg.role !== "assistant" || !msg.content || !msg.content.includes("](")) continue;
+      const scan = new RegExp(LOCAL_IMAGE_LINK_RE.source, "gi");
+      const paths = new Set<string>();
+      let m: RegExpExecArray | null;
+      while ((m = scan.exec(msg.content)) !== null && paths.size < MAX_LINK_RESCUES_PER_MESSAGE) {
+        paths.add(m[2]);
+      }
+      if (paths.size === 0) continue;
+      const replacements = new Map<string, string>();
+      for (const rawPath of paths) {
+        const url = await this.resolveLocalImageUrl(rawPath);
+        if (url) replacements.set(rawPath, url);
+      }
+      if (replacements.size === 0) continue;
+      msg.content = msg.content.replace(
+        new RegExp(LOCAL_IMAGE_LINK_RE.source, "gi"),
+        (full, open: string, linkPath: string, close: string) => {
+          const url = replacements.get(linkPath);
+          return url ? `${open}${url}${close}` : full;
+        },
+      );
+    }
+  }
+
+  private async resolveLocalImageUrl(rawPath: string): Promise<string | null> {
+    const absPath = rawPath.startsWith("~/") ? nodePath.join(os.homedir(), rawPath.slice(2)) : rawPath;
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(absPath);
+    } catch {
+      // Temp screenshots get cleaned up; if this exact path uploaded before,
+      // its last-known URL still points at the same picture.
+      return lookupByPath(absPath)?.url ?? null;
+    }
+    if (bytes.length > MAX_IMAGE_SIZE) return null;
+    const mediaType = detectImageMediaType(bytes);
+    if (!mediaType || !RESCUABLE_IMAGE_TYPES.has(mediaType)) return null;
+    const hash = hashImageBytes(bytes);
+    const cached = lookupByHash(hash);
+    if (cached) return cached.url;
+    const storageId = await this.uploadImage(bytes.toString("base64"), mediaType);
+    if (!storageId) return null;
+    const url = await this.getImageUrl(storageId);
+    if (!url) return null;
+    storeUpload({ hash, absPath, storageId, url });
+    return url;
+  }
+
   async uploadImage(base64Data: string, mediaType: string): Promise<string | null> {
     if (!base64Data) {
       console.warn("[SyncService] uploadImage called with no data");
@@ -965,6 +1048,7 @@ export class SyncService {
     model?: string;
   }): Promise<string> {
     await this.throttle();
+    await this.rescueLocalImageLinks([params]);
     const imageHolder = [{
       images: params.images ? params.images.map((image) => ({ ...image })) : undefined,
     }];
@@ -1058,6 +1142,7 @@ export class SyncService {
     if (params.messages.length === 0) {
       return { inserted: 0, ids: [] };
     }
+    await this.rescueLocalImageLinks(params.messages);
     await this.offloadImages(params.messages);
 
     const roleMap: Record<string, "user" | "assistant" | "system" | "tool"> = {
