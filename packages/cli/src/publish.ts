@@ -45,7 +45,7 @@ const THUMB_TIMEOUT_MS = 10_000;
 
 // ── backend calls ────────────────────────────────────────────────────────────
 
-async function apiPost(
+export async function apiPost(
   deps: PublishDeps,
   urlPath: string,
   body: Record<string, unknown>,
@@ -197,7 +197,10 @@ export function buildPublishPayload(absPath: string, titleOverride?: string): Pu
     };
   }
   if (!isHtmlPath(absPath)) {
-    throw new Error(`Can't publish ${path.basename(absPath)} — publish an .html or .md file, or a directory bundle`);
+    const hint = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(absPath)
+      ? ` (for an inline-shareable image link, use \`cast image ${path.basename(absPath)}\`)`
+      : "";
+    throw new Error(`Can't publish ${path.basename(absPath)} — publish an .html or .md file, or a directory bundle${hint}`);
   }
   return {
     title: resolveArtifactTitle(content, absPath, titleOverride),
