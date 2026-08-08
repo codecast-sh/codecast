@@ -223,7 +223,7 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
           </p>
           <SetupTokenCommand />
           <p className="text-xs text-sol-text-dim mt-3">
-            Works with Claude Code, Cursor, Windsurf, and more.{" "}
+            Works with Claude Code, Codex, Cursor, and Gemini.{" "}
             <a href="/settings/cli" className="text-sol-yellow hover:text-sol-yellow/80 transition-colors">
               Setup guide
             </a>
@@ -256,7 +256,7 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
             <SetupTokenCommand />
 
             <p className="text-xs text-sol-text-dim text-center mt-4">
-              Works with Claude Code, Cursor, Windsurf, and more.{" "}
+              Works with Claude Code, Codex, Cursor, and Gemini.{" "}
               <a href="/settings/cli" className="text-sol-yellow hover:text-sol-yellow/80 transition-colors">
                 Setup guide
               </a>

@@ -57,7 +57,7 @@ const SUPPORT_OPTIONS = [
 const FAQ = [
   {
     q: "How do I install the CLI?",
-    a: "Run `npm install -g @codecast/cli` or `brew install codecast` to install the CLI globally.",
+    a: "Run `curl -fsSL codecast.sh/install | sh`. The CLI keeps itself up to date after that.",
   },
   {
     q: "How do I sync my conversations?",

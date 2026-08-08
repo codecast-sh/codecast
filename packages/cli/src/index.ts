@@ -1692,6 +1692,14 @@ async function runOnboarding(config: Config): Promise<void> {
 
   console.log("\nStatus:");
   showStatus();
+
+  // Closing pointer: showWelcome() scrolled away during the prompts, so the last
+  // thing on screen must tell the user where their sessions actually appear.
+  const dashboardUrl = `${config.web_url || WEB_URL}/inbox`;
+  console.log(`${fmt.success("You're all set.")} Run your agents as usual — every session syncs automatically.`);
+  console.log(`  ${fmt.muted("See them live:")} ${fmt.accent(dashboardUrl)}`);
+  console.log(`  ${fmt.muted("From the terminal:")} ${fmt.cmd("cast feed")} ${fmt.muted("·")} ${fmt.cmd("cast search")} ${fmt.muted("·")} ${fmt.cmd("cast status")}`);
+  console.log("");
 }
 
 async function runLogin(setupToken: string): Promise<void> {
@@ -1751,6 +1759,7 @@ async function runLogin(setupToken: string): Promise<void> {
     await runOnboarding(config);
   } catch (err) {
     console.error("Failed to connect to server:", (err as Error).message);
+    console.log(`\nYou can also sign in through the browser instead: ${fmt.cmd("cast auth")}`);
     process.exit(1);
   }
 }
@@ -8574,6 +8583,12 @@ program
   )
   .option("--disable", "Disable auto-start on login")
   .action((options) => {
+    // "setup" reads like "set up codecast" — catch the user who hasn't
+    // authenticated yet before configuring autostart for a daemon that can't run.
+    if (!options.disable && !readConfig()?.auth_token) {
+      console.log(`Not signed in yet. Run ${fmt.cmd("cast auth")} first — it configures auto-start too.`);
+      process.exit(1);
+    }
     switch (process.platform) {
       case "darwin":
         setupMacOS(options.disable);

@@ -193,11 +193,21 @@ if [ -n "${TOKEN}" ]; then
     "${INSTALL_DIR}/codecast" login "${TOKEN}"
   fi
 else
-  # Restart daemon if it was running before
-  if [ -n "${OLD_PID}" ] && [ -f "${HOME}/.codecast/config.json" ]; then
-    echo "Restarting daemon..."
+  if [ -f "${HOME}/.codecast/config.json" ]; then
+    # Already authenticated (fresh install or update) — make sure the daemon runs
+    echo "Existing login found. Starting daemon..."
     "${INSTALL_DIR}/codecast" start 2>/dev/null || true
+  elif [ -r /dev/tty ]; then
+    # Fresh interactive install: go straight into sign-in so one command takes the
+    # user from nothing to synced. stdin is the curl pipe, so read from the terminal.
+    echo "Next: sign in to link this machine (opens your browser)."
+    echo ""
+    if ! "${INSTALL_DIR}/codecast" auth < /dev/tty; then
+      echo ""
+      echo "Sign-in did not complete. Run 'cast auth' anytime to finish setup."
+    fi
   else
+    # Headless/CI install with no terminal to prompt from
     echo "Run 'cast auth' to authenticate and start syncing."
   fi
 fi
