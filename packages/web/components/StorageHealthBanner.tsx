@@ -5,8 +5,8 @@ import { useInboxStore } from "../store/inboxStore";
  * Slim strip shown while IndexedDB writes are timing out (the middleware's
  * enqueue watchdog). Delivery is unaffected — sends go straight to the server
  * — but crash recovery and offline cache are degraded until storage recovers.
- * Renders in the DashboardLayout banner stack; clears itself when a durable
- * write commits promptly again.
+ * Renders in the DashboardLayout banner stack; clears itself as soon as no
+ * durable write is stuck past the watchdog deadline.
  */
 export function StorageHealthBanner() {
   const degraded = useInboxStore((s) => s.storageDegraded);
