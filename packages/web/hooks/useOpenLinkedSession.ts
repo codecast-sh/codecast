@@ -75,7 +75,7 @@ export function useOpenLinkedSession() {
     if (open === "route") {
       router.push(`/conversation/${sid}`);
     } else if (open === "companion") {
-      store.openCompanion(sid);
+      store.wsShow("secondary", { kind: "conversation", ref: sid }, { presentation: "split" });
     } else {
       store.navigateToSession(sid);
     }

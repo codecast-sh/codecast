@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useInboxStore, isSessionWaitingForInput } from "../store/inboxStore";
+import { useInboxStore, isSessionWaitingForInput, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
@@ -183,8 +183,7 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('sidebar.toggleLeft', useCallback(() => {
     const store = useInboxStore.getState();
-    const collapsed = store.clientState.ui?.sidebar_collapsed ?? false;
-    store.updateClientUI({ sidebar_collapsed: !collapsed });
+    store.setNavCollapsed(!selectNavCollapsed(store));
   }, []));
 
   useShortcutAction('sidebar.toggleRight', useCallback(() => {
@@ -194,11 +193,12 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('sidebar.toggleComments', useCallback(() => {
     const store = useInboxStore.getState();
-    store.setCommentRailOpen(store.commentRailOpen !== true);
+    store.setCommentRailOpen(!selectCommentRailOpen(store));
   }, []));
 
   useShortcutAction('terminal.toggle', useCallback(() => {
-    void import("../lib/terminal/panelPrefs").then((m) => m.toggleTerminalOpen());
+    const store = useInboxStore.getState();
+    store.setDockOpen(store.workspace.dock.pane == null);
   }, []));
 
   useShortcutAction('ui.undo', useCallback(() => {

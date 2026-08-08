@@ -213,13 +213,12 @@ export function HtmlSnippet({ code }: { code: string }) {
   return (
     <div className="my-3 overflow-hidden rounded border border-sol-border/40 bg-sol-bg-alt">
       <div className="flex items-center justify-between gap-2 border-b border-sol-border/40 px-3 py-1.5">
-        <span
-          className={`truncate text-xs font-medium ${title ? "text-sol-text-muted" : "uppercase tracking-wide text-sol-text-dim/70 text-[11px]"}`}
-          title={title ?? undefined}
-        >
-          {title ?? "Canvas"}
-        </span>
-        <div className="flex items-center gap-0.5">
+        {title && (
+          <span className="truncate text-xs font-medium text-sol-text-muted" title={title}>
+            {title}
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-0.5">
           <button
             onClick={() => setShowSource((v) => !v)}
             className={headerBtn}

@@ -42,7 +42,7 @@ import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
 import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet } from "./snippets.js";
 import { installStableHook, removeStableHook, runStableContextHook } from "./stableContext.js";
-import { prepareSessionSendBody } from "./sendBody.js";
+import { expandStdinArgs, readStdinBody } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -1427,6 +1427,10 @@ function showStatus(): void {
     } catch {
       row("File handles", fmt.muted("unavailable"));
     }
+  } else if (!daemonSupportedOnPlatform()) {
+    // Native Windows: not "stopped" — the daemon can't run here at all.
+    row("Daemon", fmt.warning("not available on native Windows"));
+    console.log(`  ${fmt.muted("codecast runs inside WSL. In PowerShell:")} ${fmt.cmd("irm codecast.sh/install.ps1 | iex")}`);
   } else {
     const restarting = launchdStatus?.state === "spawn scheduled";
     row("Daemon", restarting ? fmt.warning("restarting") : fmt.muted(icons.cross + " stopped"));
@@ -1664,20 +1668,33 @@ async function runOnboarding(config: Config): Promise<void> {
       } catch {}
     }
   } else {
-    // No interactive terminal (piped/headless install): apply the recommended
-    // defaults and point at the per-feature commands instead of hanging.
+    // No interactive terminal (piped/headless install): apply the same
+    // recommended defaults the wizard offers — memory on, stable context off —
+    // instead of silently skipping them, then say what was applied.
+    console.log(`${fmt.muted("Non-interactive install — applying recommended defaults.")}\n`);
     if (config.sync_mode === undefined) {
       config.sync_mode = "all";
       config.sync_projects = [];
       writeConfig(config);
       await updateSyncSettingsOnServer(config);
     }
-    console.log(`${fmt.muted("Non-interactive install — applied defaults (sync: all projects).")}`);
-    console.log(`${fmt.muted("Configure anytime:")}`);
-    console.log(`  ${fmt.cmd("cast sync-settings")}   ${fmt.muted("project & team sync")}`);
-    console.log(`  ${fmt.cmd("cast memory")}          ${fmt.muted("agent memory")}`);
-    console.log(`  ${fmt.cmd("cast stable")}          ${fmt.muted("stable context")}\n`);
+    await promptMemoryEnablement(false);
+    console.log(`${fmt.muted("Applied:")}`);
+    console.log(`  ${fmt.value("Sync: all projects")}     ${fmt.muted("change:")} ${fmt.cmd("cast sync-settings")}`);
+    console.log(`  ${fmt.value("Agent memory: on")}       ${fmt.muted("change:")} ${fmt.cmd("cast memory --disable")}`);
+    console.log(`  ${fmt.value("Stable context: off")}    ${fmt.muted("change:")} ${fmt.cmd("cast stable solo")}\n`);
     ensureTmux();
+  }
+
+  // Native Windows: auth worked, but the daemon only runs inside WSL, so
+  // nothing on this machine will sync. Ending with "you're all set" would be a
+  // lie — say what the real path is and stop.
+  if (!daemonSupportedOnPlatform()) {
+    console.log(`\n${fmt.warning("You're signed in, but sessions won't sync from native Windows.")}`);
+    console.log("On Windows, codecast runs inside WSL. In PowerShell, run:");
+    console.log(`  ${fmt.cmd("irm codecast.sh/install.ps1 | iex")}`);
+    console.log(`${fmt.muted("That sets up WSL, installs codecast inside it, and starts syncing from there.")}\n`);
+    return;
   }
 
   if (!isDaemonRunning()) {
@@ -2273,7 +2290,10 @@ cast task update <id> --plan <plan_id>      # Bind existing task to plan
 cast task context <id>                      # Full context for a task
 cast task context --current                 # Context for session's current task
 cast plan create "Title" -g "goal" -b "body"  # Create plan with inline body
-cast plan create "Title" --body-file plan.md  # Create plan from file
+cast plan create "Title" --body-file plan.md  # Create plan from file ('-' reads stdin)
+cast task comment ct-123 - <<'EOF'           # any text arg takes '-' for a heredoc body
+…multi-line progress note, exact newlines…
+EOF
 cast plan bind/unbind <plan_id>             # Bind/unbind session to plan
 cast plan show/status <plan_id>            # Plan details
 cast plan context <plan_id>                # Full context for a plan (for agents)
@@ -2347,7 +2367,7 @@ cast image shot.png            # or a URL: cast image https://…/diagram.png
 # → prints a stable https URL + ready markdown ![shot](url)
 \`\`\`
 
-That URL renders inline for the human everywhere: \`![alt](url)\` in any reply or message, \`<img src="url">\` inside a canvas. Never link local file paths (\`/tmp/…\`, \`/var/folders/…\`) — the human's browser cannot read files on this machine, so those links are dead. \`data:\` URIs also work in a canvas but bloat the message; prefer \`cast image\`.
+That URL renders inline for the human everywhere: \`![alt](url)\` in any reply or message, \`<img src="url">\` inside a canvas. The alt text renders as a caption — write a real one (\`--alt "30-day overview"\`). Several images in one paragraph render side by side, so \`![before](u1) ![after](u2)\` reads as a comparison row. Never link local file paths (\`/tmp/…\`, \`/var/folders/…\`) — the human's browser cannot read files on this machine, so those links are dead. \`data:\` URIs also work in a canvas but bloat the message; prefer \`cast image\`.
 
 Interactivity is declarative; codecast supplies the behavior:
 
@@ -2369,7 +2389,12 @@ You can spin work off into your human's inbox as independent sessions — not hi
 \`\`\`bash
 cast fork "<direction>" ["<direction>" ...]   # branch THIS conversation N ways from here
 cast spawn "<task>" ["<task>" ...]            # start N fresh sessions, no shared history
+cast spawn - <<'EOF'                          # multi-line briefing via stdin (same as cast send)
+…goal, numbered steps, constraints — exact newlines preserved…
+EOF
 \`\`\`
+
+For a multi-line prompt, pass \`-\` as the prompt and feed the body via heredoc — never \`"$(cat file)"\`, which mangles formatting. \`-\` works for one prompt per invocation, on both \`fork\` and \`spawn\`.
 
 \`cast fork\` branches the current conversation — each branch keeps the full history up to the fork point (the latest user message by default; \`--at <line>\` picks another spot, \`-s <id>\` forks a different session), then pursues its own direction. Use it when the thread splits into distinct paths worth exploring in parallel.
 
@@ -2380,6 +2405,17 @@ Both start working immediately and appear in the inbox. A branch or session only
 Labels carry across a fork by default: a branch inherits whatever label you'd filed the parent session under (labels are your personal filing, so this follows your own filing even when you fork a teammate's session), keeping a fork grouped with its source without any flag. Pass \`--label <name>\` to file the new sessions under a label you choose instead — an override for forks, and the only way to file a \`spawn\` (which starts fresh, with nothing to inherit). The label is created if it doesn't exist: \`cast spawn --label rollout "<task>" "<task>"\`, then \`cast sessions --label rollout\` to see the whole fan-out as a group.
 ${FORKS_SNIPPET_END}
 `;
+
+// CLI shim over the shared '-'-to-stdin convention (sendBody.ts): expand '-'
+// arguments to the stdin body, exiting with the usage error instead of throwing.
+function expandStdinPromptArgs(args: string[]): string[] {
+  try {
+    return expandStdinArgs(args);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
+}
 
 // Generic marked-snippet installer: idempotent header check + end-marker replace,
 // otherwise append. Used for snippets that don't need the bespoke per-section
@@ -2832,7 +2868,10 @@ function uninstallOrchestration(): void {
   if (fs.existsSync(orchDest)) fs.rmSync(orchDest, { recursive: true });
 }
 
-async function promptMemoryEnablement(): Promise<void> {
+// interactive=false (piped/headless install) applies the prompt's default
+// answer — memory on — through the exact same install path, so the two modes
+// can't drift.
+async function promptMemoryEnablement(interactive = true): Promise<void> {
   const config = readConfig() || {};
 
   // Auto-update already-enabled snippets
@@ -2938,14 +2977,17 @@ async function promptMemoryEnablement(): Promise<void> {
     }
   }
 
-  console.log("--- Agent Memory ---");
-  console.log("Lets your agents search and learn from past conversations.");
-  console.log(`${fmt.muted("Adds cast commands to your agent config so they can recall prior work.")}\n`);
+  let enableMemory = true;
+  if (interactive) {
+    console.log("--- Agent Memory ---");
+    console.log("Lets your agents search and learn from past conversations.");
+    console.log(`${fmt.muted("Adds cast commands to your agent config so they can recall prior work.")}\n`);
 
-  const enableMemory = await confirm({
-    message: "Enable agent memory?",
-    default: true,
-  });
+    enableMemory = await confirm({
+      message: "Enable agent memory?",
+      default: true,
+    });
+  }
 
   if (enableMemory) {
     const result = installMemorySnippet(false);
@@ -3266,11 +3308,7 @@ program
   .argument("<text>", "Message text; '-' reads it from stdin (heredoc-friendly for multi-line markdown)")
   .option("--from <id>", "Override sender session (default: detect current session)")
   .action(async (sessionId: string, text: string, options: any) => {
-    const fromStdin = text === "-";
-    if (fromStdin) {
-      text = fs.readFileSync(0, "utf-8");
-    }
-    const body = prepareSessionSendBody(text ?? "", fromStdin);
+    const body = expandStdinPromptArgs([text ?? ""])[0];
     if (!body.trim()) {
       console.error("Message text is empty");
       process.exit(1);
@@ -10248,7 +10286,7 @@ program
     "  cast fork                                                 # legacy: one unseeded fork\n" +
     "  cast fork -s abc1234 --from 15 --resume                   # fork another session, open it locally"
   )
-  .argument("[directions...]", "One seed prompt per branch; each branch starts on it immediately")
+  .argument("[directions...]", "One seed prompt per branch; '-' reads that prompt from stdin (heredoc-friendly)")
   .option("-s, --session <id>", "Conversation to fork (default: current session)")
   .option("--at <line>", "Fork at message line N (cast read numbering); default: the latest user message")
   .option("--tip", "Fork at the very end instead (include everything so far)")
@@ -10278,7 +10316,7 @@ program
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-    const directions: string[] = (rawDirections ?? []).map((d) => d.trim()).filter(Boolean);
+    const directions: string[] = expandStdinPromptArgs(rawDirections ?? []).map((d) => d.trim()).filter(Boolean);
     let id: string | undefined = options.session;
 
     // Back-compat: the old `cast fork <id>` took the conversation as the first
@@ -10552,9 +10590,13 @@ program
     "  cast spawn \"audit the auth flow\" \"audit the billing flow\"\n" +
     "  cast spawn -C ~/src/api \"port the v1 routes to v2\"\n" +
     "  cast spawn --isolated \"refactor the store\" \"rewrite the router\"   # parallel worktrees\n" +
-    "  cast spawn --device nose \"run the nightly backfill\"   # start it on a specific machine"
+    "  cast spawn --device nose \"run the nightly backfill\"   # start it on a specific machine\n" +
+    "  cast spawn - <<'EOF'\n" +
+    "  Multi-line briefing with headings and code blocks,\n" +
+    "  delivered exactly as written.\n" +
+    "  EOF"
   )
-  .argument("<prompts...>", "One task per session; each starts working on it immediately")
+  .argument("<prompts...>", "One task per session; '-' reads that prompt from stdin (heredoc-friendly for multi-line briefings)")
   .option("-C, --dir <path>", "Working directory (default: current project)")
     .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi", "claude")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
@@ -10570,7 +10612,7 @@ program
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-    const prompts = (rawPrompts ?? []).map((p) => p.trim()).filter(Boolean);
+    const prompts = expandStdinPromptArgs(rawPrompts ?? []).map((p) => p.trim()).filter(Boolean);
     if (prompts.length === 0) {
       console.error("Give at least one task: cast spawn \"<task>\"");
       process.exit(1);
@@ -11699,12 +11741,10 @@ trigger
   .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Runs stay associated: each one links back to this trigger at the top of its conversation.")
   .option("--thread", "Post results back to the current conversation thread")
   .action(async (prompt, options) => {
-    if (prompt === "-") {
-      prompt = fs.readFileSync(0, "utf-8").trim();
-      if (!prompt) {
-        console.error("Empty prompt on stdin");
-        process.exit(1);
-      }
+    prompt = expandStdinPromptArgs([prompt])[0].trim();
+    if (!prompt) {
+      console.error("Empty prompt");
+      process.exit(1);
     }
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -12817,10 +12857,11 @@ work
   .command("comment")
   .description("Add a comment to a task")
   .argument("<short_id>", "Task short ID")
-  .argument("<text>", "Comment text")
+  .argument("<text>", "Comment text; '-' reads it from stdin (heredoc-friendly)")
   .option("-t, --type <type>", "Comment type: note, progress, blocker, review", "note")
   .option("-a, --author <name>", "Override comment author (default: auto-detect)")
   .action(async (shortId: string, text: string, options: any) => {
+    text = expandStdinPromptArgs([text])[0];
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId, text, comment_type: options.type };
     if (sessionId) {
@@ -13015,18 +13056,21 @@ doc
   .command("create")
   .description("Create a new document")
   .argument("<title>", "Document title")
-  .option("-c, --content <text>", "Document content (markdown)")
-  .option("--content-file <path>", "Read content from file")
+  .option("-c, --content <text>", "Document content (markdown); '-' reads it from stdin (heredoc-friendly)")
+  .option("--content-file <path>", "Read content from file ('-' for stdin)")
   .option("-t, --type <type>", "Document type (note, plan, insight, decision, runbook)", "note")
   .option("-l, --labels <labels>", "Comma-separated labels")
   .option("--project <id>", "Project ID")
   .action(async (title: string, options: any) => {
     const body: Record<string, any> = { title };
     if (options.contentFile) {
-      const fs = await import("fs");
-      body.content = fs.readFileSync(options.contentFile, "utf-8");
+      body.content = options.contentFile === "-"
+        ? readStdinBody()
+        : fs.readFileSync(options.contentFile, "utf-8");
     } else if (options.content) {
-      body.content = options.content.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+      body.content = options.content === "-"
+        ? readStdinBody()
+        : options.content.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
     } else {
       body.content = `# ${title}\n`;
     }
@@ -13166,10 +13210,11 @@ doc
   .command("comment")
   .description("Add a comment to a document")
   .argument("<id>", "Document ID")
-  .argument("<text>", "Comment text")
+  .argument("<text>", "Comment text; '-' reads it from stdin (heredoc-friendly)")
   .option("-t, --type <type>", "Comment type: note, progress, decision, discovery, reference, blocker", "note")
   .option("-a, --author <name>", "Override comment author")
   .action(async (id: string, text: string, options: any) => {
+    text = expandStdinPromptArgs([text])[0];
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { id, content: text, type: options.type };
     if (sessionId) body.session_id = sessionId;
@@ -13326,7 +13371,7 @@ plan
   .argument("<title>", "Plan title")
   .option("-g, --goal <text>", "Plan goal")
   .option("-b, --body <text>", "Plan body (short text)")
-  .option("--body-file <path>", "Plan body from file (for longer content)")
+  .option("--body-file <path>", "Plan body from file (for longer content; '-' for stdin)")
   .option("-a, --acceptance <criteria>", "Acceptance criterion (repeatable)", (val: string, prev: string[]) => prev.concat([val]), [] as string[])
   .option("--from-session", "Promote from current session")
   .option("--project <id>", "Project ID")
@@ -13336,10 +13381,9 @@ plan
     const body: Record<string, any> = { title };
     if (options.goal) body.goal = options.goal;
     if (options.bodyFile) {
-      const fs = await import("fs");
-      body.body = fs.readFileSync(options.bodyFile, "utf-8");
+      body.body = options.bodyFile === "-" ? readStdinBody() : fs.readFileSync(options.bodyFile, "utf-8");
     } else if (options.body) {
-      body.body = options.body;
+      body.body = expandStdinPromptArgs([options.body])[0];
     }
     if (options.acceptance?.length) body.acceptance_criteria = options.acceptance;
     if (options.project) body.project_id = options.project;
@@ -13603,7 +13647,7 @@ plan
   .option("--goal <text>", "Update goal")
   .option("--title <text>", "Update title")
   .option("-b, --body <text>", "Update body (short text)")
-  .option("--body-file <path>", "Update body from file (for longer content)")
+  .option("--body-file <path>", "Update body from file (for longer content; '-' for stdin)")
   .action(async (planId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     if (options.log) {
@@ -13614,10 +13658,9 @@ plan
     }
     let bodyContent: string | undefined;
     if (options.bodyFile) {
-      const fs = await import("fs");
-      bodyContent = fs.readFileSync(options.bodyFile, "utf-8");
+      bodyContent = options.bodyFile === "-" ? readStdinBody() : fs.readFileSync(options.bodyFile, "utf-8");
     } else if (options.body) {
-      bodyContent = options.body;
+      bodyContent = expandStdinPromptArgs([options.body])[0];
     }
     if (options.goal || options.title || bodyContent !== undefined) {
       const body: Record<string, any> = { short_id: planId };
@@ -13663,7 +13706,7 @@ plan
   .command("comment")
   .description("Add a comment to a plan")
   .argument("<plan_id>", "Plan short ID")
-  .argument("<text>", "Comment text")
+  .argument("<text>", "Comment text; '-' reads it from stdin (heredoc-friendly)")
   .option("-t, --type <type>", "Comment type: progress, decision, discovery, reference, blocker, note", "progress")
   .option("-d, --decision", "Shorthand for --type decision")
   .option("-f, --finding", "Shorthand for --type discovery")
@@ -13671,6 +13714,7 @@ plan
   .option("-r, --rationale <why>", "Rationale (for decisions)")
   .option("-a, --author <name>", "Override comment author")
   .action(async (planId: string, text: string, options: any) => {
+    text = expandStdinPromptArgs([text])[0];
     const sessionId = detectCurrentSessionId();
     let type = options.type;
     if (options.decision) type = "decision";

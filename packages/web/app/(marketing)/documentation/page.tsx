@@ -332,7 +332,7 @@ export default function DocsPage() {
 
           <Heading id="installation" level={3}>Installation</Heading>
           <p className="mb-2" style={{ color: SOL.base00 }}>One command. Works on macOS, Linux, and WSL.</p>
-          <InstallTabs />
+          <InstallTabs location="documentation" />
           <p className="mt-4 text-sm" style={{ color: SOL.base01 }}>
             This installs the <InlineCode>cast</InlineCode> CLI and background daemon. No root access required.
           </p>
