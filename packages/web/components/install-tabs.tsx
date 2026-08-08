@@ -68,6 +68,11 @@ export function InstallTabs() {
           )}
         </button>
       </div>
+      {platform === "unix" && (
+        <div className="px-4 pb-3 text-xs" style={{ backgroundColor: '#002b36', color: '#586e75' }}>
+          Also via <code>brew install codecast-sh/tap/codecast</code> or <code>npm install -g @codecast/cli</code>
+        </div>
+      )}
       {platform === "windows" && (
         <div className="px-4 pb-3 text-xs" style={{ backgroundColor: '#002b36', color: '#586e75' }}>
           Runs in PowerShell. Installs codecast into WSL (Windows Subsystem for Linux) and sets WSL up first if needed.
