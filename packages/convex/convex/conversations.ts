@@ -11,6 +11,7 @@ import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages, cancelQueuedMessagesOnKill } from "./pendingMessages";
+import { latestImagePreviewUrl } from "./messages";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
@@ -916,6 +917,17 @@ export const createConversation = mutation({
     await ctx.db.patch(conversationId, {
       short_id: conversationId.toString().slice(0, 7),
     });
+    // Funnel: the user's first synced session ever. Stamped on the users doc so
+    // this stays an O(1) check instead of a conversations scan per create.
+    const creator = await ctx.db.get(args.user_id);
+    if (creator && !(creator as any).first_session_synced_at) {
+      await ctx.db.patch(args.user_id, { first_session_synced_at: now } as any);
+      await ctx.scheduler.runAfter(0, internal.analytics.capture, {
+        event: "first_session_synced",
+        distinctId: args.user_id.toString(),
+        properties: { agent_type: args.agent_type },
+      });
+    }
     // git_diff blobs live off the hot doc in conversation_git_diffs.
     await setConvGitDiff(ctx, conversationId, args.git_diff, args.git_diff_staged);
     // Terminal-started sessions: the SessionStart hook usually reports the
@@ -2457,6 +2469,9 @@ export const listConversations = query({
             visibility_mode: visibilityMode,
             title: fullTitle,
             subtitle: (visibilityMode === "full" || visibilityMode === "detailed") ? (c.subtitle || null) : null,
+            // Row thumbnail (see schema.image_preview_url) — full/detailed
+            // visibility only, so restricted teammates don't leak image URLs.
+            image_preview_url: (visibilityMode === "full" || visibilityMode === "detailed") ? (c.image_preview_url ?? null) : null,
             first_user_message: null,
             first_assistant_message: null,
             message_alternates: [],
@@ -5619,6 +5634,44 @@ export const getForkBranchMessages = query({
   },
 });
 
+// Lazy backfill for conversations older than the image_preview_url
+// denormalization: the web client calls this when it renders a conversation
+// whose loaded messages contain images but whose row lacks the preview. The
+// URL is recomputed SERVER-side from the conversation's own messages (bounded
+// newest-first scan) — a client can trigger the backfill but never supply the
+// value. Idempotent and write-once: a set preview short-circuits.
+export const backfillImagePreview = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Unauthorized");
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Can only backfill your own conversations");
+    }
+    if (conversation.image_preview_url) return;
+    const recent = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", args.conversation_id))
+      .order("desc")
+      .take(300);
+    for (const msg of recent) {
+      const url = await latestImagePreviewUrl(ctx, [msg]);
+      if (url) {
+        await ctx.db.patch(args.conversation_id, { image_preview_url: url });
+        return;
+      }
+    }
+  },
+});
+
 export const toggleFavorite = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -7485,6 +7538,9 @@ async function enrichInboxSessionRow(
     tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
     last_user_message: lastUserMessage,
+    // Newest image in the conversation (see schema) — the inbox row thumbnail.
+    // Presence doubles as "this session has images".
+    image_preview_url: conv.image_preview_url ?? null,
     session_error: conv.session_error,
     // True when the latest turn is an unresolved Claude Code auth/API-error
     // banner ("Please run /login · API Error: 401 …", "You've hit your session

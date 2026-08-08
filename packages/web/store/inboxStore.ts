@@ -10,6 +10,7 @@ import {
   sync,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
+import { createWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, promote as wsPromotePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
@@ -290,6 +291,10 @@ export type InboxSession = {
   // whose precedence the client predicates below mirror.
   inbox_killed_at?: number | null;
   last_user_message?: string | null;
+  // Newest image in the conversation (server-denormalized, see convex schema).
+  // Presence doubles as "this session has images"; rendered as the inbox row
+  // thumbnail when the inbox_image_thumbs pref is on.
+  image_preview_url?: string | null;
   session_error?: string;
   // True when the session's latest turn is an unresolved Claude Code auth/API
   // error banner ("Please run /login · API Error: 401 …") — the CLI was signed
@@ -744,6 +749,10 @@ export type ClientUI = {
   // secondary badges, counts and meta rows drop away. A per-user preference
   // ("my reading style follows me") → stamped LWW.
   simple_view?: boolean;
+  // Show a small thumbnail on inbox session rows when the session contains
+  // images (session.image_preview_url). Independent of simple_view — applies
+  // in both. Off by default; per-user preference → stamped LWW.
+  inbox_image_thumbs?: boolean;
 };
 
 export type ClientLayouts = {
@@ -1404,6 +1413,10 @@ export function sessionStructuralSig(s: InboxSession): string {
     // the fields that change rows; stamps once per turn end/wakeup, never on
     // heartbeats.
     s.loop_state ? `${s.loop_state.status}:${s.loop_state.wakeup_at}` : "",
+    // Row thumbnail (inbox_image_thumbs pref). Changes only when a NEW image
+    // lands in the session — never on heartbeats — so folding it in is cheap
+    // and keeps the thumb from waiting on the coarse ticker.
+    s.image_preview_url || "",
   ].join("\x1f");
 }
 
@@ -2883,6 +2896,17 @@ interface InboxStoreState {
   closeSettingsModal: () => void;
 
   // -- Side panel --
+  // -- Workspace slots (see store/workspace.ts + WORKSPACE_SLOTS.md) --
+  // The layout as data: fixed slots, at most one pane each. Regions migrate
+  // onto this one at a time; the legacy flags below disappear as they land.
+  workspace: WorkspaceState;
+  wsShow: (slot: SlotId, pane: Pane, opts?: { presentation?: Presentation }) => void;
+  wsHide: (slot: SlotId, opts?: { remember?: boolean }) => void;
+  wsToggle: (slot: SlotId, pane: Pane) => void;
+  wsPromote: (slot: SlotId) => void;
+  wsSetPresentation: (slot: SlotId, presentation: Presentation) => void;
+  wsSetSize: (slot: SlotId, size: number) => void;
+
   // -- Stage companion (see openCompanion) --
   companionSessionId: string | null;
   /** Session whose companion the user closed by hand; suppresses carry-across. */
@@ -3189,7 +3213,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // silently globalizing them would yank screens out from under people.
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "inbox_show_old",
-  "simple_view",
+  "simple_view", "inbox_image_thumbs",
 ]);
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
@@ -7034,6 +7058,27 @@ export const useInboxStore = create<InboxStoreState>(
   // The ONE conversation allowed to share the stage with a working page (a
   // task, a doc). Opening another replaces it — stage panes swap, they never
   // accumulate, so the layout can never grow past page + companion + rail.
+  workspace: createWorkspace(),
+
+  wsShow: action(function (this: Draft, slot: SlotId, pane: Pane, opts?: { presentation?: Presentation }) {
+    this.workspace = showPane(this.workspace as WorkspaceState, slot, pane, opts);
+  }),
+  wsHide: action(function (this: Draft, slot: SlotId, opts?: { remember?: boolean }) {
+    this.workspace = hidePane(this.workspace as WorkspaceState, slot, opts);
+  }),
+  wsToggle: action(function (this: Draft, slot: SlotId, pane: Pane) {
+    this.workspace = togglePane(this.workspace as WorkspaceState, slot, pane);
+  }),
+  wsPromote: action(function (this: Draft, slot: SlotId) {
+    this.workspace = wsPromotePure(this.workspace as WorkspaceState, slot);
+  }),
+  wsSetPresentation: action(function (this: Draft, slot: SlotId, presentation: Presentation) {
+    this.workspace = wsSetPresentationPure(this.workspace as WorkspaceState, slot, presentation);
+  }),
+  wsSetSize: action(function (this: Draft, slot: SlotId, size: number) {
+    this.workspace = wsSetSizePure(this.workspace as WorkspaceState, slot, size);
+  }),
+
   companionSessionId: null,
   companionDismissedFor: null,
 
