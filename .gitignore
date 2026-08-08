@@ -95,3 +95,4 @@ videos/
 
 # Scratch UI harnesses (throwaway, per-session)
 packages/web/_chiptest.*
+dist-ssr/

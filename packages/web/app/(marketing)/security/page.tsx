@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
+import { useRouteMeta } from "../pageMeta";
 
 function ShieldIcon({ className }: { className?: string }) {
   return (
@@ -158,6 +159,7 @@ const FAQ = [
 ];
 
 export default function SecurityPage() {
+  useRouteMeta("/security");
   return (
     <main className="min-h-screen bg-stone-50 w-full">
       {/* Nav */}

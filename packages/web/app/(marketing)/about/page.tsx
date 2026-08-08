@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
+import { useRouteMeta } from "../pageMeta";
 
 export default function AboutPage() {
+  useRouteMeta("/about");
   return (
     <main className="min-h-screen w-full" style={{ backgroundColor: '#fdf6e3' }}>
       <nav className="border-b border-[#eee8d5] bg-[#fdf6e3]/80 backdrop-blur-sm sticky top-0 z-50">

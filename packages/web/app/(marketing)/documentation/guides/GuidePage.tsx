@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { usePageMeta } from "../../pageMeta";
 import { GUIDES, getGuide, guideHref, type Guide } from "./guides";
+import { getGuideContent } from "./guideContent";
 
 // Solarized light palette — matches the documentation page.
 const SOL = {
@@ -249,7 +250,7 @@ export default function GuidePage() {
         </header>
 
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-          {guide.content}
+          {getGuideContent(guide.slug) ?? ""}
         </ReactMarkdown>
 
         <MoreGuides current={guide} />

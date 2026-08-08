@@ -3,11 +3,7 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
-import { usePageMeta } from "../pageMeta";
-
-const PAGE_TITLE = "Pricing — Codecast";
-const PAGE_DESCRIPTION =
-  "Free forever for individuals. Team at $20/seat/month (early access). Enterprise on request. Bring your own agent subscriptions — codecast never resells or marks up model usage.";
+import { useRouteMeta } from "../pageMeta";
 
 function CheckIcon({ className, color }: { className?: string; color: string }) {
   return (
@@ -98,7 +94,7 @@ const TIERS: Tier[] = [
 export default function PricingPage() {
   // Real page metadata in this SPA means writing document.title on mount; reuse the
   // blog surface's shared hook rather than duplicating the effect.
-  usePageMeta(PAGE_TITLE, PAGE_DESCRIPTION);
+  useRouteMeta("/pricing");
 
   return (
     <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: "#fdf6e3" }}>
