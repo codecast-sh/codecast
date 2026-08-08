@@ -39,8 +39,8 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
-import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END } from "./snippets.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
+import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet } from "./snippets.js";
 import { installStableHook, removeStableHook, runStableContextHook } from "./stableContext.js";
 import { prepareSessionSendBody } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -2895,6 +2895,15 @@ async function promptMemoryEnablement(): Promise<void> {
       console.log(`Visual snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
   }
+  if (config.publish_enabled && config.publish_version !== getPublishVersion()) {
+    const result = installPublishSnippet(true);
+    config.publish_version = getPublishVersion();
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Publish snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  }
 
   if (config.memory_enabled !== undefined && config.memory_version === getMemoryVersion()) {
     if (config.memory_enabled) {
@@ -4698,6 +4707,7 @@ program
         if (config.work_enabled) installWorkSnippet(true);
         if (config.workflow_enabled) installWorkflowSnippet(true);
         if (config.visual_enabled) installVisualSnippet(true);
+        if (config.publish_enabled) installPublishSnippet(true);
         // Messaging is on by default for memory installs — backfill/refresh + persist.
         const msgPatch = ensureMessagingForMemory(config);
         if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
@@ -9380,6 +9390,7 @@ program
       triggers: { getVersion: getTaskVersion, install: installTaskSnippet, reEnable: "cast trigger install" },
       workflows: { getVersion: getWorkflowVersion, install: installWorkflowSnippet, reEnable: "cast workflow install" },
       visual: { getVersion: getVisualVersion, install: installVisualSnippet, reEnable: "cast install" },
+      publish: { getVersion: getPublishVersion, install: installPublishSnippet, reEnable: "cast install" },
       orchestration: { getVersion: getWorkVersion, install: installOrchestration, reEnable: "cast install" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
@@ -10727,6 +10738,7 @@ program
       if (config.work_enabled) installWorkSnippet(true);
       if (config.workflow_enabled) installWorkflowSnippet(true);
       if (config.visual_enabled) installVisualSnippet(true);
+      if (config.publish_enabled) installPublishSnippet(true);
       // Messaging is on by default for memory installs — backfill/refresh + persist.
       const msgPatch = ensureMessagingForMemory(config);
       if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
