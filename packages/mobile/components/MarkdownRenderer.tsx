@@ -573,7 +573,7 @@ export const mdStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Theme.border,
     marginVertical: 6,
-    backgroundColor: Theme.bgSecondary,
+    backgroundColor: Theme.bgAlt,
   },
   imageModal: {
     flex: 1,

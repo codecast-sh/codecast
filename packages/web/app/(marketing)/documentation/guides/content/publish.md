@@ -54,3 +54,5 @@ The intended loop: a viewer comments, the agent revises and republishes (same UR
 ## Canvas or page?
 
 The [visual canvas](/documentation/visual-canvas) renders inside a conversation and lives in the transcript; a published page lives at its own URL with gates and history. Inline evidence for the person reading the session goes on a canvas. Deliverables someone will open by link — status pages, reports for stakeholders, live dashboards under `--watch` — get published.
+
+For a single image there is a third door: `cast image <file-or-url>` uploads a screenshot or chart render and prints a stable URL that renders inline in message markdown and canvases — no page around it. See [screenshots and images](/documentation/visual-canvas) for how agents use it.
