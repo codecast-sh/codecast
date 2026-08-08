@@ -75,7 +75,7 @@ export function TmuxAttachPill({
           canSplit
             ? splitOpen
               ? "Hide this agent's terminal"
-              : "Watch this agent's terminal (read-only, opens below the conversation)"
+              : "Watch this agent's terminal (read-only, opens above the conversation)"
             : `Copy ${attach}`
         }
         side="bottom"
