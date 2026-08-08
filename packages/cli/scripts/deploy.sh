@@ -161,9 +161,23 @@ for b in "${ARTIFACTS[@]}"; do
   curl -so /dev/null --max-time 300 -w "  $b: %{speed_download} B/s\n" "https://dl.codecast.sh/$b" || echo "  $b: prewarm failed (non-fatal)"
 done
 
+# Sync the npm distribution package (version + per-platform checksums).
+# npm/install.js and the Homebrew formula both install the GitHub release
+# assets for exactly this version, verified against these hashes.
+sha() { shasum -a 256 "$BINARIES_DIR/$1" | cut -d' ' -f1; }
+jq --arg v "$VERSION" '.version = $v' npm/package.json > npm/package.json.tmp && mv npm/package.json.tmp npm/package.json
+jq -n \
+  --arg da "$(sha codecast-darwin-arm64)" \
+  --arg dx "$(sha codecast-darwin-x64)" \
+  --arg la "$(sha codecast-linux-arm64)" \
+  --arg lx "$(sha codecast-linux-x64)" \
+  --arg wx "$(sha codecast-windows-x64.exe)" \
+  '{"darwin-arm64":$da,"darwin-x64":$dx,"linux-arm64":$la,"linux-x64":$lx,"windows-x64":$wx}' \
+  > npm/checksums.json
+
 # Commit version bump
 if [[ "$NO_BUMP" == "false" ]]; then
-  git add package.json
+  git add package.json npm/package.json npm/checksums.json
   git commit -m "chore(cli): bump version to $VERSION"
   git push
 fi
@@ -194,3 +208,25 @@ else
   gh release create "v$VERSION" "${RELEASE_FILES[@]}" --generate-notes \
     || echo "  WARNING: GitHub release failed (non-fatal) — rerun: gh release create v$VERSION with the files in $BINARIES_DIR"
 fi
+
+# npm + Homebrew ride the GitHub release assets published above. Both are
+# non-fatal: R2 + force-update are the real release, these are mirrors.
+echo ""
+echo "Publishing to npm..."
+if npm whoami >/dev/null 2>&1; then
+  (cd npm && npm publish --access public) \
+    || echo "  WARNING: npm publish failed (non-fatal) — rerun: cd npm && npm publish --access public"
+else
+  echo "  WARNING: not logged in to npm (npm login) — skipped. Rerun: cd npm && npm publish --access public"
+fi
+
+echo ""
+echo "Updating Homebrew tap..."
+FORMULA_B64=$(./scripts/make-formula.sh "$VERSION" npm/checksums.json | base64)
+FORMULA_SHA=$(gh api repos/codecast-sh/homebrew-tap/contents/Formula/codecast.rb -q .sha 2>/dev/null || true)
+gh api -X PUT repos/codecast-sh/homebrew-tap/contents/Formula/codecast.rb \
+  -f message="codecast $VERSION" \
+  -f content="$FORMULA_B64" \
+  ${FORMULA_SHA:+-f sha="$FORMULA_SHA"} >/dev/null \
+  && echo "  Formula updated to $VERSION" \
+  || echo "  WARNING: tap update failed (non-fatal) — rerun: ./scripts/make-formula.sh $VERSION npm/checksums.json, push to codecast-sh/homebrew-tap"
