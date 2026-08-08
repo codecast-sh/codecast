@@ -54,6 +54,22 @@ export function initAnalytics() {
       posthog = new PostHogCtor(POSTHOG_KEY, {
         host: POSTHOG_HOST,
         disabled: IS_DEV,
+        // Application Opened / Backgrounded / Updated events.
+        captureAppLifecycleEvents: true,
+        // Needs the posthog-react-native-session-replay NATIVE module, so it
+        // only takes effect on binaries built with it (2026-08+). The SDK
+        // try/catch-guards its own require, so an OTA landing on an older
+        // binary degrades to no replay instead of the crash-and-rollback
+        // this file's header warns about.
+        enableSessionReplay: true,
+        sessionReplayConfig: {
+          // Text inputs can hold prompts and pasted secrets; images are the
+          // conversation content itself, so masking them would blank replays.
+          maskAllTextInputs: true,
+          maskAllImages: false,
+          captureLog: true,
+          captureNetworkTelemetry: true,
+        },
       });
       posthog.register({ platform: "mobile" });
     } catch {
@@ -78,6 +94,12 @@ export function resetUser() {
 
 export function track(event: string, properties?: Record<string, string | number | boolean>) {
   posthog?.capture(event, properties);
+}
+
+// Screen views. posthog-react-native has no router integration of its own, so
+// the root layout feeds it every expo-router pathname change.
+export function trackScreen(name: string, properties?: Record<string, string | number | boolean>) {
+  posthog?.screen(name, properties);
 }
 
 export function captureError(error: Error, context?: Record<string, unknown>) {
