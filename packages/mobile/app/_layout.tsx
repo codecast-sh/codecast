@@ -1,7 +1,7 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import * as SecureStore from 'expo-secure-store';
 import * as Linking from 'expo-linking';
@@ -18,7 +18,7 @@ import { Mono } from '@/constants/fonts';
 import { convex } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
-import { initAnalytics, identifyUser, resetUser, wrapRoot } from '@/lib/analytics';
+import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@/lib/analytics';
 import { api } from '@codecast/convex/convex/_generated/api';
 
 // Keychain failures must degrade to "signed out", never hang auth: a rejected
@@ -80,6 +80,13 @@ function RootLayout() {
   useEffect(() => {
     initAnalytics();
   }, []);
+
+  // Screen views for every route change. Declared after initAnalytics so the
+  // mount-time firing sees an initialized client (effects run top-down).
+  const pathname = usePathname();
+  useEffect(() => {
+    if (pathname) trackScreen(pathname);
+  }, [pathname]);
 
   useEffect(() => {
     if (error) throw error;
