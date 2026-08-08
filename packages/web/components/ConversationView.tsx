@@ -102,7 +102,7 @@ import { TmuxAttachPill } from "./TmuxAttachPill";
 import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
-import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
+import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
@@ -310,6 +310,7 @@ const MESSAGE_MD_COMPONENTS = {
   code: EntityAwareCode,
   a: EntityAwareLink,
   img: ({ src, alt }: { src?: string | Blob; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
+  p: ImageRowParagraph,
   pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
 };
 
@@ -317,7 +318,10 @@ const MESSAGE_MD_COMPONENTS = {
 // cards, command markdown, summaries). Same identity rule as above: the memo'd
 // ReactMarkdown wrapper only bails out of a re-parse when these are module consts.
 const MD_COMPONENTS_CODE_LINK = { code: MESSAGE_MD_COMPONENTS.code, a: MESSAGE_MD_COMPONENTS.a };
-const MD_COMPONENTS_NO_IMG = { ...MD_COMPONENTS_CODE_LINK, pre: MESSAGE_MD_COMPONENTS.pre };
+// "No images" must be enforced, not implied: with no `img` override react-markdown
+// emits a raw <img>, which auto-fetches — full-bleed layout AND the third-party
+// beacon channel CollapsibleImage's click gate exists to close.
+const MD_COMPONENTS_NO_IMG = { ...MD_COMPONENTS_CODE_LINK, pre: MESSAGE_MD_COMPONENTS.pre, img: () => null };
 const MD_COMPONENTS_NO_PRE = { ...MD_COMPONENTS_CODE_LINK, img: MESSAGE_MD_COMPONENTS.img };
 
 // Cross-mount markdown render cache. React.memo only helps while a component
@@ -4611,7 +4615,7 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
         ) : (
           <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
             <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
-              components={MD_COMPONENTS_NO_IMG}
+              components={MESSAGE_MD_COMPONENTS}
             >{body}</ReactMarkdown>
           </div>
         )}
@@ -5806,6 +5810,7 @@ const CMD_MD_COMPONENTS = {
   code: EntityAwareCode,
   a: EntityAwareLink,
   img: ({ src, alt }: { src?: string; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
+  p: ImageRowParagraph,
   pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
 };
 
@@ -6403,7 +6408,7 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
       </div>
       <div className={`px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
         <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
-          components={MD_COMPONENTS_NO_IMG}
+          components={MESSAGE_MD_COMPONENTS}
         >{body}</ReactMarkdown>
       </div>
     </div>
