@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { InstallTabs } from "@/components/install-tabs";
 import { GUIDES, guideHref, type GuideCategory } from "./guides/guides";
+import { useRouteMeta } from "../pageMeta";
 
 const SOL = {
   base03: "#002b36",
@@ -243,6 +244,7 @@ function Sidebar({ activeId }: { activeId: string }) {
 }
 
 export default function DocsPage() {
+  useRouteMeta("/documentation");
   const [activeId, setActiveId] = useState("getting-started");
 
   useMountEffect(() => {

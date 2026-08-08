@@ -4,7 +4,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { BlogNav, BlogFooter, Terminal, Cmd, SOL } from "../blogChrome";
-import { usePageMeta } from "../../pageMeta";
+import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 
 // Genuine `cast blame` output captured from this repository on 2026-07-20.
@@ -72,10 +72,7 @@ function Code({ children }: { children: ReactNode }) {
 
 export default function GitBlameForAiAgentsPost() {
   const post = getPost("git-blame-for-ai-agents");
-  usePageMeta(
-    "git blame for AI agents — Codecast",
-    "When an agent writes the line, the author column goes blank. cast blame fills it back in with the conversation that wrote it.",
-  );
+  useRouteMeta("/blog/git-blame-for-ai-agents");
 
   return (
     <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: SOL.base3 }}>

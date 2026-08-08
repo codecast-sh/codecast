@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { RELEASES, type Accent, type SectionIcon } from "./changelogData";
+import { useRouteMeta } from "../pageMeta";
 
 const SOL = {
   base03: "#002b36",
@@ -159,6 +160,7 @@ function SectionHeader({ ac, Icon, kind, uid }: { ac: string; Icon: LucideIcon; 
 }
 
 export default function ChangelogPage() {
+  useRouteMeta("/changelog");
   const [activeId, setActiveId] = useState(RELEASES[0]?.id ?? "");
 
   // Scroll-spy: highlight the month in the rail that's nearest the top.

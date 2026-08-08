@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
+import { useRouteMeta } from "../pageMeta";
 
 export default function PrivacyPage() {
+  useRouteMeta("/privacy");
   return (
     <main className="min-h-screen bg-stone-50 w-full">
       {/* Nav */}

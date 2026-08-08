@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
+import { useRouteMeta } from "../pageMeta";
 
 function MailIcon({ className }: { className?: string }) {
   return (
@@ -81,6 +82,7 @@ const FAQ = [
 ];
 
 export default function SupportPage() {
+  useRouteMeta("/support");
   return (
     <main className="min-h-screen bg-stone-50 w-full">
       {/* Nav */}

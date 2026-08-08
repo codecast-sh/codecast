@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { InstallTabs } from "@/components/install-tabs";
-import { usePageMeta } from "../pageMeta";
+import { useRouteMeta } from "../pageMeta";
 
 function TerminalIcon({ className }: { className?: string }) {
   return (
@@ -262,12 +262,9 @@ const COMMAND_REFERENCE = [
   },
 ];
 
-const PAGE_TITLE = "Features — Codecast";
-const PAGE_DESCRIPTION =
-  "The cast CLI and everything codecast records: a searchable memory of every agent conversation, cast blame from a line to the conversation that wrote it, a live inbox you can steer from anywhere, and the agents you already run.";
 
 export default function CLIPage() {
-  usePageMeta(PAGE_TITLE, PAGE_DESCRIPTION);
+  useRouteMeta("/features");
 
   return (
     <main className="min-h-screen bg-stone-50 w-full">

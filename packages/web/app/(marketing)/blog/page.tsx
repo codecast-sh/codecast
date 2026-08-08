@@ -2,14 +2,11 @@
 
 import Link from "next/link";
 import { BlogNav, BlogFooter, SOL } from "./blogChrome";
-import { usePageMeta } from "../pageMeta";
+import { useRouteMeta } from "../pageMeta";
 import { POSTS } from "./posts";
 
 export default function BlogIndexPage() {
-  usePageMeta(
-    "Blog — Codecast",
-    "Notes on agent memory, attribution, and steering coding agents at team scale.",
-  );
+  useRouteMeta("/blog");
 
   return (
     <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: SOL.base3 }}>
