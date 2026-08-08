@@ -4,9 +4,11 @@ import {
   ScrollView,
   TouchableOpacity,
   View as RNView,
+  Image as RNImage,
   Linking,
   Modal,
 } from 'react-native';
+import { isTrustedImageSrc } from '@/lib/convex';
 import { Text as RNText } from '@/components/Themed';
 import * as Haptics from 'expo-haptics';
 import { copyToClipboard } from '@/lib/clipboard';
@@ -285,6 +287,36 @@ export function CodeBlockWithCopy({ content, language }: { content: string; lang
   );
 }
 
+// A markdown image on its own line: ![alt](src). Web renders these inline for
+// trusted srcs (storage-origin `cast image` uploads, pasted transcript images);
+// mobile parity here. Untrusted srcs fall through to the paragraph path, where
+// the [alt](url) portion renders as a tappable link — never an auto-fetch.
+const IMAGE_LINE_RE = /^!\[([^\]]*)\]\(([^)\s]+)\)$/;
+
+function MarkdownImage({ src, alt }: { src: string; alt: string }) {
+  const [full, setFull] = useState(false);
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <>
+      <TouchableOpacity onPress={() => setFull(true)} activeOpacity={0.85}>
+        <RNImage
+          source={{ uri: src }}
+          style={mdStyles.image}
+          resizeMode="cover"
+          accessibilityLabel={alt}
+          onError={() => setFailed(true)}
+        />
+      </TouchableOpacity>
+      <Modal visible={full} transparent animationType="fade" onRequestClose={() => setFull(false)}>
+        <TouchableOpacity style={mdStyles.imageModal} activeOpacity={1} onPress={() => setFull(false)}>
+          <RNImage source={{ uri: src }} style={mdStyles.imageFull} resizeMode="contain" />
+        </TouchableOpacity>
+      </Modal>
+    </>
+  );
+}
+
 export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean }) {
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
@@ -305,6 +337,15 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
         <RNText key={`${blockKey}h${elKey++}`} style={[baseStyle, { fontSize, fontWeight: '700', marginTop: 8, marginBottom: 4 }]}>
           {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser)}
         </RNText>
+      );
+      i++;
+      continue;
+    }
+
+    const imageMatch = trimmed.match(IMAGE_LINE_RE);
+    if (imageMatch && isTrustedImageSrc(imageMatch[2])) {
+      elements.push(
+        <MarkdownImage key={`${blockKey}img${elKey++}`} src={imageMatch[2]} alt={imageMatch[1]} />
       );
       i++;
       continue;
