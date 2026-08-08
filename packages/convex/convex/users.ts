@@ -258,6 +258,16 @@ export const daemonHeartbeat = mutation({
     const newOldest = args.oldest_pending_ms ?? 0;
 
     const patch: Record<string, any> = {};
+    // Funnel: first heartbeat ever carrying a version = the CLI daemon came
+    // alive for this user for the first time (upgrades change an existing value
+    // and don't re-fire).
+    if (!existingUser?.cli_version && args.version) {
+      await ctx.scheduler.runAfter(0, internal.analytics.capture, {
+        event: "cli_daemon_connected",
+        distinctId: auth.userId.toString(),
+        properties: { cli_version: args.version, cli_platform: args.platform },
+      });
+    }
     // Sticky fields: write only on actual change.
     if (existingUser?.cli_version !== args.version) patch.cli_version = args.version;
     if (existingUser?.cli_platform !== args.platform) patch.cli_platform = args.platform;

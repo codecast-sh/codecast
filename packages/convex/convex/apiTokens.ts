@@ -2,6 +2,7 @@ import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 
 const CONVEX_URL = process.env.CONVEX_CLOUD_ORIGIN || process.env.CONVEX_CLOUD_URL || process.env.VITE_CONVEX_URL || "";
 
@@ -43,6 +44,14 @@ export const createToken = mutation({
       last_used_at: now,
     });
 
+    // Funnel: the only caller is the /auth/cli authorize page, so a token mint
+    // here IS a completed browser-based `cast auth`.
+    await ctx.scheduler.runAfter(0, internal.analytics.capture, {
+      event: "cli_authed",
+      distinctId: userId.toString(),
+      properties: { method: "browser" },
+    });
+
     return { token, userId };
   },
 });
@@ -67,6 +76,11 @@ export const createSetupToken = mutation({
       created_at: now,
       last_used_at: now,
       expires_at: expiresAt,
+    });
+
+    await ctx.scheduler.runAfter(0, internal.analytics.capture, {
+      event: "setup_token_generated",
+      distinctId: userId.toString(),
     });
 
     return { token, expiresAt };
@@ -254,6 +268,13 @@ export const exchangeSetupToken = internalMutation({
       name: `CLI - ${new Date(now).toISOString().split("T")[0]}`,
       created_at: now,
       last_used_at: now,
+    });
+
+    // Funnel: a setup-token exchange is a completed `cast login <token>`.
+    await ctx.scheduler.runAfter(0, internal.analytics.capture, {
+      event: "cli_authed",
+      distinctId: tokenDoc.user_id.toString(),
+      properties: { method: "setup_token" },
     });
 
     const user = await ctx.db.get(tokenDoc.user_id);

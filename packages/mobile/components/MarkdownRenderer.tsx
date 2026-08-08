@@ -287,33 +287,50 @@ export function CodeBlockWithCopy({ content, language }: { content: string; lang
   );
 }
 
-// A markdown image on its own line: ![alt](src). Web renders these inline for
-// trusted srcs (storage-origin `cast image` uploads, pasted transcript images);
-// mobile parity here. Untrusted srcs fall through to the paragraph path, where
-// the [alt](url) portion renders as a tappable link — never an auto-fetch.
-const IMAGE_LINE_RE = /^!\[([^\]]*)\]\(([^)\s]+)\)$/;
+// Markdown images on their own line(s): ![alt](src), one or several per line.
+// Web renders these inline for trusted srcs (storage-origin `cast image`
+// uploads, pasted transcript images) with the alt as a caption, side by side
+// when adjacent; mobile parity here. Untrusted srcs fall through to the
+// paragraph path, where the [alt](url) portion renders as a tappable link —
+// never an auto-fetch.
+const IMAGE_TOKEN_RE = /!\[([^\]]*)\]\(([^)\s]+)\)/g;
 
-function MarkdownImage({ src, alt }: { src: string; alt: string }) {
+// The line's images, or null unless the line is images-only and every src is
+// trusted (mixed lines keep paragraph semantics).
+function parseTrustedImageLine(l: string): { alt: string; src: string }[] | null {
+  if (!l.startsWith('![')) return null;
+  const re = new RegExp(IMAGE_TOKEN_RE.source, 'g');
+  const imgs: { alt: string; src: string }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(l)) !== null) imgs.push({ alt: m[1], src: m[2] });
+  if (imgs.length === 0) return null;
+  if (l.replace(new RegExp(IMAGE_TOKEN_RE.source, 'g'), '').trim() !== '') return null;
+  return imgs.every((img) => isTrustedImageSrc(img.src)) ? imgs : null;
+}
+
+function MarkdownImage({ src, alt, tiled }: { src: string; alt: string; tiled?: boolean }) {
   const [full, setFull] = useState(false);
   const [failed, setFailed] = useState(false);
+  const caption = alt.trim() && !/^(image|img)$/i.test(alt.trim()) ? alt.trim() : undefined;
   if (failed) return null;
   return (
-    <>
+    <RNView style={tiled ? mdStyles.imageTile : undefined}>
       <TouchableOpacity onPress={() => setFull(true)} activeOpacity={0.85}>
         <RNImage
           source={{ uri: src }}
-          style={mdStyles.image}
+          style={[mdStyles.image, tiled && mdStyles.imageTiled]}
           resizeMode="cover"
           accessibilityLabel={alt}
           onError={() => setFailed(true)}
         />
       </TouchableOpacity>
+      {caption ? <RNText style={mdStyles.imageCaption}>{caption}</RNText> : null}
       <Modal visible={full} transparent animationType="fade" onRequestClose={() => setFull(false)}>
         <TouchableOpacity style={mdStyles.imageModal} activeOpacity={1} onPress={() => setFull(false)}>
           <RNImage source={{ uri: src }} style={mdStyles.imageFull} resizeMode="contain" />
         </TouchableOpacity>
       </Modal>
-    </>
+    </RNView>
   );
 }
 
@@ -342,12 +359,28 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
       continue;
     }
 
-    const imageMatch = trimmed.match(IMAGE_LINE_RE);
-    if (imageMatch && isTrustedImageSrc(imageMatch[2])) {
-      elements.push(
-        <MarkdownImage key={`${blockKey}img${elKey++}`} src={imageMatch[2]} alt={imageMatch[1]} />
-      );
+    const imageLine = parseTrustedImageLine(trimmed);
+    if (imageLine) {
+      // Consume the run: adjacent images-only lines join the same row.
+      const run = [...imageLine];
       i++;
+      while (i < lines.length) {
+        const next = parseTrustedImageLine(lines[i].trim());
+        if (!next) break;
+        run.push(...next);
+        i++;
+      }
+      elements.push(
+        run.length > 1 ? (
+          <RNView key={`${blockKey}imgrow${elKey++}`} style={mdStyles.imageRow}>
+            {run.map((img, j) => (
+              <MarkdownImage key={j} src={img.src} alt={img.alt} tiled />
+            ))}
+          </RNView>
+        ) : (
+          <MarkdownImage key={`${blockKey}img${elKey++}`} src={run[0].src} alt={run[0].alt} />
+        )
+      );
       continue;
     }
 
@@ -462,8 +495,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
     const paraLines: string[] = [];
     while (i < lines.length) {
       const l = lines[i].trim();
-      const paraImage = l.match(IMAGE_LINE_RE);
-      if (!l || l.match(/^#{1,3}\s/) || l.match(/^[-*]\s/) || l.match(/^\d+[.)]\s/) || l.startsWith('> ') || (paraImage && isTrustedImageSrc(paraImage[2])) || (l.includes('|') && i + 1 < lines.length && lines[i + 1]?.trim().match(/^\|?\s*[-:]+[-| :]*$/))) break;
+      if (!l || l.match(/^#{1,3}\s/) || l.match(/^[-*]\s/) || l.match(/^\d+[.)]\s/) || l.startsWith('> ') || parseTrustedImageLine(l) || (l.includes('|') && i + 1 < lines.length && lines[i + 1]?.trim().match(/^\|?\s*[-:]+[-| :]*$/))) break;
       paraLines.push(lines[i]);
       i++;
     }
@@ -572,8 +604,26 @@ export const mdStyles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: Theme.border,
-    marginVertical: 6,
+    marginTop: 6,
+    marginBottom: 2,
     backgroundColor: Theme.bgAlt,
+  },
+  imageTiled: {
+    height: 120,
+  },
+  imageTile: {
+    width: '48.5%',
+  },
+  imageRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: 8,
+    marginBottom: 4,
+  },
+  imageCaption: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    marginBottom: 6,
   },
   imageModal: {
     flex: 1,

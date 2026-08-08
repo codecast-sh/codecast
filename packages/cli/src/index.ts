@@ -1427,6 +1427,10 @@ function showStatus(): void {
     } catch {
       row("File handles", fmt.muted("unavailable"));
     }
+  } else if (!daemonSupportedOnPlatform()) {
+    // Native Windows: not "stopped" — the daemon can't run here at all.
+    row("Daemon", fmt.warning("not available on native Windows"));
+    console.log(`  ${fmt.muted("codecast runs inside WSL. In PowerShell:")} ${fmt.cmd("irm codecast.sh/install.ps1 | iex")}`);
   } else {
     const restarting = launchdStatus?.state === "spawn scheduled";
     row("Daemon", restarting ? fmt.warning("restarting") : fmt.muted(icons.cross + " stopped"));
@@ -1664,20 +1668,33 @@ async function runOnboarding(config: Config): Promise<void> {
       } catch {}
     }
   } else {
-    // No interactive terminal (piped/headless install): apply the recommended
-    // defaults and point at the per-feature commands instead of hanging.
+    // No interactive terminal (piped/headless install): apply the same
+    // recommended defaults the wizard offers — memory on, stable context off —
+    // instead of silently skipping them, then say what was applied.
+    console.log(`${fmt.muted("Non-interactive install — applying recommended defaults.")}\n`);
     if (config.sync_mode === undefined) {
       config.sync_mode = "all";
       config.sync_projects = [];
       writeConfig(config);
       await updateSyncSettingsOnServer(config);
     }
-    console.log(`${fmt.muted("Non-interactive install — applied defaults (sync: all projects).")}`);
-    console.log(`${fmt.muted("Configure anytime:")}`);
-    console.log(`  ${fmt.cmd("cast sync-settings")}   ${fmt.muted("project & team sync")}`);
-    console.log(`  ${fmt.cmd("cast memory")}          ${fmt.muted("agent memory")}`);
-    console.log(`  ${fmt.cmd("cast stable")}          ${fmt.muted("stable context")}\n`);
+    await promptMemoryEnablement(false);
+    console.log(`${fmt.muted("Applied:")}`);
+    console.log(`  ${fmt.value("Sync: all projects")}     ${fmt.muted("change:")} ${fmt.cmd("cast sync-settings")}`);
+    console.log(`  ${fmt.value("Agent memory: on")}       ${fmt.muted("change:")} ${fmt.cmd("cast memory --disable")}`);
+    console.log(`  ${fmt.value("Stable context: off")}    ${fmt.muted("change:")} ${fmt.cmd("cast stable solo")}\n`);
     ensureTmux();
+  }
+
+  // Native Windows: auth worked, but the daemon only runs inside WSL, so
+  // nothing on this machine will sync. Ending with "you're all set" would be a
+  // lie — say what the real path is and stop.
+  if (!daemonSupportedOnPlatform()) {
+    console.log(`\n${fmt.warning("You're signed in, but sessions won't sync from native Windows.")}`);
+    console.log("On Windows, codecast runs inside WSL. In PowerShell, run:");
+    console.log(`  ${fmt.cmd("irm codecast.sh/install.ps1 | iex")}`);
+    console.log(`${fmt.muted("That sets up WSL, installs codecast inside it, and starts syncing from there.")}\n`);
+    return;
   }
 
   if (!isDaemonRunning()) {
@@ -2347,7 +2364,7 @@ cast image shot.png            # or a URL: cast image https://…/diagram.png
 # → prints a stable https URL + ready markdown ![shot](url)
 \`\`\`
 
-That URL renders inline for the human everywhere: \`![alt](url)\` in any reply or message, \`<img src="url">\` inside a canvas. Never link local file paths (\`/tmp/…\`, \`/var/folders/…\`) — the human's browser cannot read files on this machine, so those links are dead. \`data:\` URIs also work in a canvas but bloat the message; prefer \`cast image\`.
+That URL renders inline for the human everywhere: \`![alt](url)\` in any reply or message, \`<img src="url">\` inside a canvas. The alt text renders as a caption — write a real one (\`--alt "30-day overview"\`). Several images in one paragraph render side by side, so \`![before](u1) ![after](u2)\` reads as a comparison row. Never link local file paths (\`/tmp/…\`, \`/var/folders/…\`) — the human's browser cannot read files on this machine, so those links are dead. \`data:\` URIs also work in a canvas but bloat the message; prefer \`cast image\`.
 
 Interactivity is declarative; codecast supplies the behavior:
 
@@ -2369,7 +2386,12 @@ You can spin work off into your human's inbox as independent sessions — not hi
 \`\`\`bash
 cast fork "<direction>" ["<direction>" ...]   # branch THIS conversation N ways from here
 cast spawn "<task>" ["<task>" ...]            # start N fresh sessions, no shared history
+cast spawn - <<'EOF'                          # multi-line briefing via stdin (same as cast send)
+…goal, numbered steps, constraints — exact newlines preserved…
+EOF
 \`\`\`
+
+For a multi-line prompt, pass \`-\` as the prompt and feed the body via heredoc — never \`"$(cat file)"\`, which mangles formatting. \`-\` works for one prompt per invocation, on both \`fork\` and \`spawn\`.
 
 \`cast fork\` branches the current conversation — each branch keeps the full history up to the fork point (the latest user message by default; \`--at <line>\` picks another spot, \`-s <id>\` forks a different session), then pursues its own direction. Use it when the thread splits into distinct paths worth exploring in parallel.
 
@@ -2380,6 +2402,22 @@ Both start working immediately and appear in the inbox. A branch or session only
 Labels carry across a fork by default: a branch inherits whatever label you'd filed the parent session under (labels are your personal filing, so this follows your own filing even when you fork a teammate's session), keeping a fork grouped with its source without any flag. Pass \`--label <name>\` to file the new sessions under a label you choose instead — an override for forks, and the only way to file a \`spawn\` (which starts fresh, with nothing to inherit). The label is created if it doesn't exist: \`cast spawn --label rollout "<task>" "<task>"\`, then \`cast sessions --label rollout\` to see the whole fan-out as a group.
 ${FORKS_SNIPPET_END}
 `;
+
+// '-' as a prompt/direction argument reads that one prompt from stdin
+// (heredoc-friendly), matching `cast send -`. Stdin holds a single body, so
+// only one '-' is allowed per invocation.
+function expandStdinPromptArgs(args: string[]): string[] {
+  let stdinUsed = false;
+  return args.map((arg) => {
+    if (arg !== "-") return arg;
+    if (stdinUsed) {
+      console.error("Only one prompt can be read from stdin ('-')");
+      process.exit(1);
+    }
+    stdinUsed = true;
+    return prepareSessionSendBody(fs.readFileSync(0, "utf-8"), true);
+  });
+}
 
 // Generic marked-snippet installer: idempotent header check + end-marker replace,
 // otherwise append. Used for snippets that don't need the bespoke per-section
@@ -2832,7 +2870,10 @@ function uninstallOrchestration(): void {
   if (fs.existsSync(orchDest)) fs.rmSync(orchDest, { recursive: true });
 }
 
-async function promptMemoryEnablement(): Promise<void> {
+// interactive=false (piped/headless install) applies the prompt's default
+// answer — memory on — through the exact same install path, so the two modes
+// can't drift.
+async function promptMemoryEnablement(interactive = true): Promise<void> {
   const config = readConfig() || {};
 
   // Auto-update already-enabled snippets
@@ -2938,14 +2979,17 @@ async function promptMemoryEnablement(): Promise<void> {
     }
   }
 
-  console.log("--- Agent Memory ---");
-  console.log("Lets your agents search and learn from past conversations.");
-  console.log(`${fmt.muted("Adds cast commands to your agent config so they can recall prior work.")}\n`);
+  let enableMemory = true;
+  if (interactive) {
+    console.log("--- Agent Memory ---");
+    console.log("Lets your agents search and learn from past conversations.");
+    console.log(`${fmt.muted("Adds cast commands to your agent config so they can recall prior work.")}\n`);
 
-  const enableMemory = await confirm({
-    message: "Enable agent memory?",
-    default: true,
-  });
+    enableMemory = await confirm({
+      message: "Enable agent memory?",
+      default: true,
+    });
+  }
 
   if (enableMemory) {
     const result = installMemorySnippet(false);
@@ -10248,7 +10292,7 @@ program
     "  cast fork                                                 # legacy: one unseeded fork\n" +
     "  cast fork -s abc1234 --from 15 --resume                   # fork another session, open it locally"
   )
-  .argument("[directions...]", "One seed prompt per branch; each branch starts on it immediately")
+  .argument("[directions...]", "One seed prompt per branch; '-' reads that prompt from stdin (heredoc-friendly)")
   .option("-s, --session <id>", "Conversation to fork (default: current session)")
   .option("--at <line>", "Fork at message line N (cast read numbering); default: the latest user message")
   .option("--tip", "Fork at the very end instead (include everything so far)")
@@ -10278,7 +10322,7 @@ program
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-    const directions: string[] = (rawDirections ?? []).map((d) => d.trim()).filter(Boolean);
+    const directions: string[] = expandStdinPromptArgs(rawDirections ?? []).map((d) => d.trim()).filter(Boolean);
     let id: string | undefined = options.session;
 
     // Back-compat: the old `cast fork <id>` took the conversation as the first
@@ -10552,9 +10596,13 @@ program
     "  cast spawn \"audit the auth flow\" \"audit the billing flow\"\n" +
     "  cast spawn -C ~/src/api \"port the v1 routes to v2\"\n" +
     "  cast spawn --isolated \"refactor the store\" \"rewrite the router\"   # parallel worktrees\n" +
-    "  cast spawn --device nose \"run the nightly backfill\"   # start it on a specific machine"
+    "  cast spawn --device nose \"run the nightly backfill\"   # start it on a specific machine\n" +
+    "  cast spawn - <<'EOF'\n" +
+    "  Multi-line briefing with headings and code blocks,\n" +
+    "  delivered exactly as written.\n" +
+    "  EOF"
   )
-  .argument("<prompts...>", "One task per session; each starts working on it immediately")
+  .argument("<prompts...>", "One task per session; '-' reads that prompt from stdin (heredoc-friendly for multi-line briefings)")
   .option("-C, --dir <path>", "Working directory (default: current project)")
     .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi", "claude")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
@@ -10570,7 +10618,7 @@ program
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-    const prompts = (rawPrompts ?? []).map((p) => p.trim()).filter(Boolean);
+    const prompts = expandStdinPromptArgs(rawPrompts ?? []).map((p) => p.trim()).filter(Boolean);
     if (prompts.length === 0) {
       console.error("Give at least one task: cast spawn \"<task>\"");
       process.exit(1);

@@ -916,6 +916,17 @@ export const createConversation = mutation({
     await ctx.db.patch(conversationId, {
       short_id: conversationId.toString().slice(0, 7),
     });
+    // Funnel: the user's first synced session ever. Stamped on the users doc so
+    // this stays an O(1) check instead of a conversations scan per create.
+    const creator = await ctx.db.get(args.user_id);
+    if (creator && !(creator as any).first_session_synced_at) {
+      await ctx.db.patch(args.user_id, { first_session_synced_at: now } as any);
+      await ctx.scheduler.runAfter(0, internal.analytics.capture, {
+        event: "first_session_synced",
+        distinctId: args.user_id.toString(),
+        properties: { agent_type: args.agent_type },
+      });
+    }
     // git_diff blobs live off the hot doc in conversation_git_diffs.
     await setConvGitDiff(ctx, conversationId, args.git_diff, args.git_diff_staged);
     // Terminal-started sessions: the SessionStart hook usually reports the
