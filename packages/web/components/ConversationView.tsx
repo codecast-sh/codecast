@@ -102,7 +102,7 @@ import { TmuxAttachPill } from "./TmuxAttachPill";
 import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
-import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
+import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
@@ -310,6 +310,7 @@ const MESSAGE_MD_COMPONENTS = {
   code: EntityAwareCode,
   a: EntityAwareLink,
   img: ({ src, alt }: { src?: string | Blob; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
+  p: ImageRowParagraph,
   pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
 };
 
@@ -5806,6 +5807,7 @@ const CMD_MD_COMPONENTS = {
   code: EntityAwareCode,
   a: EntityAwareLink,
   img: ({ src, alt }: { src?: string; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
+  p: ImageRowParagraph,
   pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
 };
 

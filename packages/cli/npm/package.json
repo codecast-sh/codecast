@@ -9,12 +9,17 @@
     "url": "git+https://github.com/codecast-sh/codecast.git",
     "directory": "packages/cli/npm"
   },
+  "bugs": {
+    "url": "https://github.com/codecast-sh/codecast/issues"
+  },
   "keywords": [
     "codecast",
     "cli",
     "coding-agents",
     "claude",
+    "claude-code",
     "codex",
+    "ai-agents",
     "agent-observability"
   ],
   "bin": {
