@@ -6119,6 +6119,15 @@ export const useInboxStore = create<InboxStoreState>(
     if (!this.clientState.drafts) this.clientState.drafts = {};
     this.clientState.drafts[id] = null;
     if (this.sessions[id]?._hasDraft) delete this.sessions[id]._hasDraft;
+    // The conversation row is a second durable home for the draft (mobile
+    // persists straight to conversations.draft_message, and the composer seeds
+    // from it via initialDraft). A final clear that leaves it standing lets
+    // the row re-seed the composer on the next boot. Only real Convex ids —
+    // compose stubs and comment keys have no server row to clear.
+    if (/^[a-z0-9]{32}$/.test(id)) {
+      if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
+      (this.conversations[id] as any).draft_message = null;
+    }
   }),
 
   // =====================

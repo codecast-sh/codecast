@@ -8768,10 +8768,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
   const cached = useInboxStore.getState().getDraft(conversationId);
-  // The exact text last seeded from a PERSISTED store draft, still untouched by
-  // the user. While set, the delayed stale re-check may heal it against the
-  // message window once messages load (the mount-time check often runs before
-  // they have). Any setMessage — typing, send, populate — voids it.
+  // The exact text last seeded from a PERSISTED source (store draft or the
+  // conversation row's draft_message), still untouched by the user. While set,
+  // the delayed stale re-check may heal it against the message window once
+  // messages load (the mount-time check often runs before they have), and the
+  // leave-time snapshot refuses to re-create a draft another surface cleared —
+  // untouched seeded text is display state, not input. Any setMessage —
+  // typing, send, populate — voids it.
   const seededDraftRef = useRef<string | null>(null);
   // Fallback to the conversation-keyed entry: when a new session gets its
   // session_id stamped the key flips (conv id → session id) and this component
@@ -8785,7 +8788,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // attached is kept — the images make it more than a resent copy).
     if (!cached?.draft_image_storage_ids?.length) {
       if (isStaleSentDraft(conversationId, persisted)) return "";
-      if (cached?.draft_message) seededDraftRef.current = persisted;
+      if (persisted) seededDraftRef.current = persisted;
     }
     return persisted;
   });
@@ -9442,6 +9445,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // Uploading rows are kept: their pending upload lives in the module-level
     // registry, so a successor composer instance can restore and re-attach.
     const imgs = pastedImagesRef.current.filter(i => i.storageId || i.uploading);
+    // An untouched seeded draft is display state — persisting it adds nothing
+    // (its source already holds it) and, if another surface cleared the draft
+    // while this composer sat mounted, re-persisting is exactly how a deleted
+    // draft resurrects. Only user-edited text earns a snapshot.
+    if (msg && seededDraftRef.current !== null && msg === seededDraftRef.current) return;
     if (!msg && imgs.length === 0) {
       // A composer that held text and leaves empty is an explicit clear —
       // commit it durably. Without this, delete-then-navigate loses the race
@@ -9482,7 +9490,17 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         clearTimeout(draftTimerRef.current);
         draftTimerRef.current = null;
       }
-      sacredInputs.set(sacredKeyRef.current, { text: draftTextForPersist() });
+      // Untouched seeded text stays out of the sacred cache: sacred entries
+      // outrank the store on the flip back and no heal ever looks there, so a
+      // stashed seed would pin a since-cleared draft for the page's lifetime.
+      // The store still holds it if it's real; the successor re-seeds from
+      // there with the heals applied.
+      const flipText = draftTextForPersist();
+      if (flipText && seededDraftRef.current !== null && flipText === seededDraftRef.current) {
+        sacredInputs.delete(sacredKeyRef.current);
+      } else {
+        sacredInputs.set(sacredKeyRef.current, { text: flipText });
+      }
       saveDraftSnapshot(convIdRef.current);
       sacredKeyRef.current = sacredKey;
       convIdRef.current = conversationId;
