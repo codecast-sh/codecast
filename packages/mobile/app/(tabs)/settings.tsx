@@ -55,6 +55,7 @@ export default function SettingsScreen() {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const storeTheme = useInboxStore((s) => s.clientState?.ui?.theme);
+  const inboxImageThumbs = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
 
   const activeTeamId = (currentUser?.active_team_id || currentUser?.team_id) as Id<"teams"> | undefined;
@@ -325,6 +326,22 @@ export default function SettingsScreen() {
               <FontAwesome name="chevron-right" size={10} color={Theme.textMuted0} />
             </RNView>
           </TouchableOpacity>
+          <RNView style={styles.settingDivider} />
+          <RNView style={styles.setting}>
+            <RNView style={styles.settingText}>
+              <RNText style={styles.settingLabel}>Image Thumbnails</RNText>
+              <RNText style={styles.settingDescription}>
+                Show a small thumbnail on inbox rows when a session contains images
+              </RNText>
+            </RNView>
+            <Switch
+              value={inboxImageThumbs}
+              onValueChange={(v) => updateClientUI({ inbox_image_thumbs: v })}
+              trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+              thumbColor="#fff"
+              ios_backgroundColor={Theme.bgHighlight}
+            />
+          </RNView>
         </RNView>
       </RNView>
 
