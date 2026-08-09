@@ -1,4 +1,4 @@
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router";
 import { useInboxStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { AppLoader } from "../AppLoader";
@@ -11,13 +11,18 @@ import type { SettingsPathHit } from "../../lib/settingsSections";
  * panels read OAuth/team-setup params from the URL.
  */
 export function SettingsRedirect({ hit }: { hit: SettingsPathHit }) {
-  const router = useRouter();
+  // Drive React Router directly, not the tab-aware compat router: this
+  // component only mounts on hard-load routes OUTSIDE the tab shell (/cli,
+  // legacy /settings/*), but a user with persisted tabs makes the compat
+  // replace() take the tab-routing path — a bare replaceState that never
+  // unmounts this route, leaving the loader up forever.
+  const navigate = useNavigate();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
 
   useWatchEffect(() => {
     useInboxStore.getState().openSettingsModal(hit.section);
     const home = activeTeamId ? "/team/activity" : "/inbox";
-    router.replace(home + (hit.search ? `?${hit.search}` : ""));
+    navigate(home + (hit.search ? `?${hit.search}` : ""), { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
