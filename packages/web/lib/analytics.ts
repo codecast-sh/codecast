@@ -27,11 +27,14 @@ export function initAnalytics() {
       environment: IS_DEV ? "development" : "production",
       enabled: !IS_DEV,
       tracesSampleRate: IS_DEV ? 1.0 : 0.2,
-      replaysSessionSampleRate: 0,
-      replaysOnErrorSampleRate: 1.0,
+      // No replayIntegration: even with replaysSessionSampleRate 0, the
+      // on-error mode keeps an rrweb recorder buffering EVERY DOM mutation so
+      // the last seconds exist when an error fires. This app mutates the DOM
+      // continuously (heartbeats, streaming transcripts), and the recorder
+      // showed up directly in keystroke CPU profiles. Error stacks + breadcrumbs
+      // remain; only the video-replay-on-error goes.
       integrations: [
         Sentry.browserTracingIntegration(),
-        Sentry.replayIntegration(),
       ],
       initialScope: {
         tags: { platform },
@@ -48,9 +51,16 @@ export function initAnalytics() {
       // nearly all movement in a single-page app.
       capture_pageview: "history_change",
       capture_pageleave: true,
-      capture_dead_clicks: true,
       persistence: "localStorage",
-      disable_session_recording: IS_DEV,
+      // Session recording is disabled everywhere, not just dev: rrweb
+      // serializes every DOM mutation, and this UI mutates several times a
+      // second at idle (liveness dots, streaming messages). The recorder was a
+      // top self-time frame in keystroke CPU profiles — measurable typing lag
+      // for every user, on all the time. Dead-click detection rides the same
+      // per-interaction instrumentation. Product EVENTS (pageviews, captures,
+      // autocapture clicks) all stay.
+      disable_session_recording: true,
+      capture_dead_clicks: false,
     });
     // Dev and prod share one PostHog project; the environment super property
     // is what keeps local-dev traffic filterable out of product metrics.
