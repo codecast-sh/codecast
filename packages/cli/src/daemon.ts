@@ -16586,12 +16586,29 @@ async function main(): Promise<void> {
     daemonVersion = "unknown";
   }
 
+  // A version change since the last boot means a self-update restarted us —
+  // the interactive `cast update` paths (which refresh snippets) never ran, so
+  // shell out to `snippets-refresh` to bring every enabled snippet's text to
+  // this binary's versions. Detected BEFORE the version file is overwritten.
+  let bootedNewVersion = false;
+  try {
+    const priorVersion = fs.existsSync(VERSION_FILE) ? fs.readFileSync(VERSION_FILE, "utf-8").trim() : "";
+    bootedNewVersion = !!priorVersion && priorVersion !== daemonVersion;
+  } catch {}
+
   try {
     fs.writeFileSync(VERSION_FILE, daemonVersion, { mode: 0o600 });
   } catch {}
 
   activeConfig = readConfig();
   loadPersistedLogQueue();
+
+  if (bootedNewVersion) {
+    log(`[SNIPPET] version changed to v${daemonVersion} — refreshing enabled snippets`);
+    runCastCommand(["snippets-refresh"], { timeoutMs: 60 * 1000 }).catch((e) =>
+      logError("snippets-refresh after update failed", e instanceof Error ? e : new Error(String(e)))
+    );
+  }
 
   // Messaging is on by default for memory installs. Backfill/refresh it here so
   // every daemon distributes the snippet onto its own machine's CLAUDE.md on
