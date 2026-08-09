@@ -1014,7 +1014,7 @@ export function FileDiffLayout({
             />
           </Panel>
 
-          <Separator className="w-1.5 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors" />
+          <Separator className="cc-split" />
 
           <Panel id="diff-content" minSize={30}>
             <FileDiffContent {...diffContentProps} />

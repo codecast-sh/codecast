@@ -253,7 +253,7 @@ export function ConversationDiffLayout({
         </Panel>
 
         {/* Resize handle - on LEFT of timeline */}
-        <Separator className="w-1 bg-sol-border hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors" />
+        <Separator className="cc-split" />
 
         {/* Timeline + Diff Panel */}
         <Panel id="diff-panel" minSize={20}>

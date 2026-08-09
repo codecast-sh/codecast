@@ -1012,7 +1012,7 @@ pre[class*="language-"] {
    (--sidebar-frozen-w, set from JS) so text doesn't reflow mid-animation.
    !important needed: the library sets overflow inline on both divs. */
 [data-panel].sidebar-animating {
-  transition: flex-grow 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  transition: flex-grow var(--cc-panel-motion);
   overflow: hidden !important;
 }
 [data-panel].sidebar-animating > div {
@@ -1026,7 +1026,7 @@ pre[class*="language-"] {
    full-width list. The shadow separates it from the list still living under. */
 .peek-overlay {
   box-shadow: -24px 0 48px rgba(0, 0, 0, 0.18);
-  animation: peek-slide-in 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  animation: peek-slide-in var(--cc-panel-motion);
 }
 @keyframes peek-slide-in {
   from { transform: translateX(24px); opacity: 0.6; }
@@ -2032,11 +2032,13 @@ pre[class*="language-"] {
 .cc-railx-resize:hover::after,
 .cc-railx-resize:active::after { background: var(--cc-accent); }
 .cc-railx-head {
-  display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;
-  padding: 0.55rem 0.55rem 0.55rem 0.8rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+  height: var(--cc-panel-head-h); min-height: var(--cc-panel-head-h);
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--cc-panel-rule);
+  background: var(--cc-panel-head-bg);
 }
-.cc-railx-title { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--sol-text-muted); }
+.cc-railx-title { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--sol-text-muted); }
 .cc-railx-count {
   font-size: 0.62rem; font-weight: 600; color: var(--cc-accent);
   background: color-mix(in srgb, var(--cc-accent) 14%, transparent);
@@ -2355,6 +2357,18 @@ pre[class*="language-"] {
    frame: identical header height, type scale, borders and
    controls. See components/workspace/Slot.tsx.
    ============================================================ */
+:root {
+  /* The panel frame, in one place: every region reads from these, so the
+     family resemblance can't drift the way five hand-tuned headers did. */
+  --cc-panel-head-h: 32px;
+  --cc-panel-rule: color-mix(in srgb, var(--sol-border) 45%, transparent);
+  --cc-panel-head-bg: color-mix(in srgb, var(--sol-bg-alt) 60%, var(--sol-bg));
+  /* One motion for every panel: the peek slide, the collapse, the width
+     transition. Regions used to each pick their own (240ms, 250ms, 280ms,
+     200ms), which reads as different components even when they aren't. */
+  --cc-panel-motion: 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
 .cc-panel {
   display: flex;
   flex-direction: column;
@@ -2367,10 +2381,11 @@ pre[class*="language-"] {
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
-  height: 30px;
+  height: var(--cc-panel-head-h);
+  min-height: var(--cc-panel-head-h);
   padding: 0 6px 0 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
-  background: color-mix(in srgb, var(--sol-bg-alt) 60%, var(--sol-bg));
+  border-bottom: 1px solid var(--cc-panel-rule);
+  background: var(--cc-panel-head-bg);
   user-select: none;
 }
 .cc-panel__icon {
@@ -2407,6 +2422,31 @@ pre[class*="language-"] {
 .cc-panel__btn:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
 .cc-panel__btn.is-on { color: var(--sol-cyan); }
 .cc-panel__btn.is-close:hover { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 12%, transparent); }
+
+/* One resize handle everywhere: a hairline that thickens into the accent on
+   hover, with a generous invisible grab area. Three hand-rolled variants
+   (1px black/10, 1px sol-border, 1.5px sol-border/50) collapse into this. */
+.cc-split {
+  position: relative;
+  z-index: 10;
+  width: 1px;
+  background: var(--cc-panel-rule);
+  cursor: col-resize;
+}
+.cc-split::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: -3px;
+  right: -3px;
+  transition: background-color 150ms;
+}
+.cc-split:hover::before,
+.cc-split[data-resize-handle-active]::before { background: var(--sol-cyan); }
+.cc-split.is-hidden { visibility: hidden; }
+
+/* Width changes (peek ⇄ full) ride the same motion as everything else. */
+.cc-panel-width { transition: width var(--cc-panel-motion); }
 
 /* A panel presented as a peek keeps the frame and gains the lift. */
 .cc-panel--overlay {

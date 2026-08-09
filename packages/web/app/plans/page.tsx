@@ -289,7 +289,7 @@ export default function PlansPage() {
           closeHref="/plans"
           list={
             <div className="flex flex-col h-full bg-sol-bg">
-            <div className="px-3 py-3 border-b border-sol-border/30 flex items-center justify-between">
+            <div className="cc-panel__head justify-between">
               <div className="flex items-center gap-2">
                 <Target className="w-4 h-4 text-sol-cyan" />
                 <h2 className="text-sm font-semibold text-sol-text tracking-tight">Plans</h2>

@@ -97,7 +97,7 @@ export function DocumentDetailLayout({
       {/* Wraps the action cluster to a second row rather than letting it overflow
           (and clip its trailing icons) once the back/type/watch cluster and the
           icons can no longer share one line — e.g. a narrow split-pane doc view. */}
-      <div className="flex flex-wrap items-center justify-between gap-y-2 px-6 py-2 border-b border-sol-border/10 flex-shrink-0">
+      <div className="cc-panel__head justify-between">
         <div className="flex items-center gap-3">
           <Link
             href={backHref}
