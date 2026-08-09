@@ -725,8 +725,9 @@ function BlockedSessionsBanner({
 //   • the LEFT ACCENT = health/liveness — red ONLY when a run failed or the
 //     agent flagged it (red always means "look at this"); green while running;
 //     dim when paused; else the calm schedule-orange.
-//   • the BADGE = the NEXT fire — a brighter orange when it's imminent (<10m),
-//     but never red: "about to fire" is not "went wrong".
+//   • the BADGE = the NEXT fire — neutral at rest (a countdown is schedule
+//     furniture, not an alert), orange only when imminent (<10m), and never
+//     red: "about to fire" is not "went wrong".
 type SchedAccent = "running" | "attention" | "paused" | "normal";
 function schedAccent(task: { status: string; last_run_failed?: boolean; last_run_needs_attention?: boolean }): SchedAccent {
   if (task.status === "running") return "running";
@@ -748,7 +749,7 @@ function schedBadgeTone(task: { status: string; run_at?: number }, now: number):
   if (isTaskOverdue(task, now)) return "bg-sol-red/10 text-sol-red border-sol-red/40 font-bold";
   const ms = task.run_at !== undefined ? task.run_at - now : undefined;
   if (ms !== undefined && ms <= 10 * 60_000) return "bg-sol-orange/20 text-sol-orange border-sol-orange/50 font-bold";
-  return "bg-sol-orange/10 text-sol-orange border-sol-orange/30";
+  return "bg-sol-bg-alt/60 text-sol-text-muted border-sol-border/60";
 }
 
 // One schedule row, used EVERYWHERE a schedule renders as a row: the dock
@@ -854,7 +855,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
             alone marks it as a schedule — no extra identity icon. */}
         <div className="flex gap-1.5 min-w-0">
         {attached && (
-          <span className="flex items-center mt-[2px] shrink-0 text-sol-orange/70" role="img" aria-label={row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"}>
+          <span className="flex items-center mt-[2px] shrink-0 text-sol-orange/50" role="img" aria-label={row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"}>
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <title>{row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
@@ -893,7 +894,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
               shows exactly which rows that number pointed at. */}
           {unread && (
             <ShortcutTooltip label="Outcome landed since you last opened this list">
-              <span className="shrink-0 px-1 rounded-full bg-sol-orange text-sol-bg text-[9px] font-semibold">new</span>
+              <span className="shrink-0 px-1 rounded-full bg-sol-cyan/15 text-sol-cyan text-[9px] font-medium">new</span>
             </ShortcutTooltip>
           )}
           <span className="ml-auto shrink-0 text-[10px] font-medium text-sol-text-muted">
@@ -1377,7 +1378,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
         )}
         {unreadCount > 0 && (
           <ShortcutTooltip label={`${unreadCount} outcome${unreadCount === 1 ? "" : "s"} landed since you last opened this list`} hint="marked inside">
-            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-orange text-sol-bg">
+            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30">
               {unreadCount} new
             </span>
           </ShortcutTooltip>
