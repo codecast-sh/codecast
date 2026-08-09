@@ -724,6 +724,49 @@ export const getConversationFileChanges = query({
   },
 });
 
+// Newest displayable image in a message batch → the conversation's inbox
+// thumbnail (conversations.image_preview_url). Storage-backed images (pasted
+// attachments, tool screenshots) resolve via ctx.storage.getUrl; markdown
+// images embedded in prose (`cast image` output) count only when they point at
+// our own storage origin — mirroring the web's trusted-origin gate, so a
+// third-party URL an agent emits can never become a team-visible thumbnail.
+// Scans newest-first and returns the first hit; undefined when the batch
+// carries no image.
+const MD_IMAGE_URL_RE = /!\[[^\]]*\]\((https?:\/\/[^)\s]+?)(?:\s+"[^"]*")?\)/g;
+function trustedImageOrigin(): string | null {
+  const base = process.env.CONVEX_CLOUD_ORIGIN || process.env.CONVEX_CLOUD_URL || process.env.VITE_CONVEX_URL || "";
+  try { return base ? new URL(base).origin : null; } catch { return null; }
+}
+export async function latestImagePreviewUrl(
+  ctx: { storage: { getUrl: (id: any) => Promise<string | null> } },
+  msgs: Array<{ content?: string; images?: Array<{ storage_id?: string }> }>,
+): Promise<string | undefined> {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.images) {
+      for (let j = m.images.length - 1; j >= 0; j--) {
+        const sid = m.images[j].storage_id;
+        if (!sid) continue;
+        const url = await ctx.storage.getUrl(sid as any);
+        if (url) return url;
+      }
+    }
+    if (m.content && m.content.includes("![")) {
+      const origin = trustedImageOrigin();
+      if (origin) {
+        let last: string | undefined;
+        for (const match of m.content.matchAll(MD_IMAGE_URL_RE)) {
+          try {
+            if (new URL(match[1]).origin === origin) last = match[1];
+          } catch {}
+        }
+        if (last) return last;
+      }
+    }
+  }
+  return undefined;
+}
+
 // Storage ids embedded in an injected-image echo. The daemon delivers an image
 // as `[Image /tmp/codecast/images/<storageId>.png]` (downloadImage names the
 // file by its Convex storage id), so the agent's echoed user turn carries the
@@ -1041,6 +1084,10 @@ export const addMessage = mutation({
       convPatch.last_user_message_at = msgTimestamp;
     } else if (args.role === "user") {
       convPatch.last_user_message_at = msgTimestamp;
+    }
+    const imagePreview = await latestImagePreviewUrl(ctx, [{ content: contentToStore, images }]);
+    if (imagePreview && imagePreview !== conversation.image_preview_url) {
+      convPatch.image_preview_url = imagePreview;
     }
     // Fold harness-loop events (ScheduleWakeup / scheduled_task_fire) into the
     // conversation's loop_state so the inbox trigger set sees the armed loop.
@@ -1528,6 +1575,10 @@ export const addMessages = mutation({
         if (preview) {
           convPatch.last_message_preview = preview;
         }
+      }
+      const imagePreview = await latestImagePreviewUrl(ctx, args.messages);
+      if (imagePreview && imagePreview !== conversation.image_preview_url) {
+        convPatch.image_preview_url = imagePreview;
       }
       await ctx.db.patch(args.conversation_id, convPatch);
 
