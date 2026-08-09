@@ -150,3 +150,135 @@ describe("formatMonitor reports the three retirement states separately", () => {
     expect(line).not.toContain("killed");
   });
 });
+
+// ── Feed cards: where a session ACTUALLY works ────────────────────────────────
+// A card must reveal worktree residence, machine, recent edits, and latest
+// activity — the four signals whose absence made agents mis-attribute
+// working-tree edits and message the wrong session (jx7fnt5 → jx7b88a).
+import { formatFeedResults, worktreeFromPath, feedFilePath } from "./formatter";
+
+function feedConv(overrides: Record<string, any> = {}) {
+  return {
+    id: "conversations_feed1",
+    title: "Budget mandate",
+    project_path: "/Users/x/src/app",
+    updated_at: new Date().toISOString(),
+    message_count: 9000,
+    work_state: "working",
+    preview: [
+      { line: 1, role: "user", content: "the founding goal" },
+      { line: 2, role: "assistant", content: "the plan" },
+    ],
+    ...overrides,
+  };
+}
+
+describe("formatFeedResults location + activity lines", () => {
+  test("renders worktree, machine, edits, and the latest-messages tail", () => {
+    const out = strip(
+      formatFeedResults({
+        conversations: [
+          feedConv({
+            worktree: "cockpit-bill",
+            machine: "mac-studio",
+            // Machine shows because this is another person's session; a
+            // single-machine feed of your own sessions hides the label.
+            user: { name: "sam", email: null },
+            recent_files: [
+              "/Users/x/src/app/.codecast/worktrees/cockpit-bill/src/budget/types.ts",
+              "/Users/x/src/app/src/budget/page.tsx",
+            ],
+            tail: [
+              { line: 8999, role: "user", content: "latest ask" },
+              { line: 9000, role: "assistant", content: "latest answer" },
+            ],
+          }),
+        ],
+        scope: "global",
+      } as any),
+    );
+    expect(out).toContain("worktree cockpit-bill");
+    expect(out).toContain("on mac-studio");
+    expect(out).toContain("edits:");
+    expect(out).toContain("budget/types.ts");
+    expect(out).toContain("the founding goal");
+    expect(out).toContain("⋮");
+    expect(out).toContain("latest answer");
+    expect(out).toContain("8999");
+    expect(out).toContain("cast diff");
+  });
+
+  test("derives worktree residence from recent edit paths when unregistered", () => {
+    const out = strip(
+      formatFeedResults({
+        conversations: [
+          feedConv({
+            recent_files: ["/Users/x/src/app/.codecast/worktrees/fix-auth/src/a.ts"],
+          }),
+        ],
+        scope: "global",
+      } as any),
+    );
+    expect(out).toContain("worktree fix-auth");
+  });
+
+  test("summary line renders only for non-working sessions", () => {
+    const base = { idle_summary: "Repaired 26 searches; watching conversion." };
+    const idle = strip(
+      formatFeedResults({ conversations: [feedConv({ ...base, work_state: "needs_input" })], scope: "g" } as any),
+    );
+    const working = strip(
+      formatFeedResults({ conversations: [feedConv({ ...base, work_state: "working" })], scope: "g" } as any),
+    );
+    expect(idle).toContain("summary: Repaired 26 searches");
+    expect(working).not.toContain("summary:");
+  });
+
+  test("a card with none of the new fields renders exactly as before", () => {
+    const out = strip(formatFeedResults({ conversations: [feedConv()], scope: "g" } as any));
+    expect(out).toContain("Budget mandate");
+    expect(out).toContain("the founding goal");
+    expect(out).not.toContain("worktree");
+    expect(out).not.toContain("edits:");
+  });
+});
+
+describe("worktreeFromPath", () => {
+  test("extracts the worktree segment", () => {
+    expect(worktreeFromPath("/a/.codecast/worktrees/fix-auth/src/x.ts")).toBe("fix-auth");
+    expect(worktreeFromPath("/a/src/x.ts")).toBeUndefined();
+    expect(worktreeFromPath(undefined)).toBeUndefined();
+  });
+});
+
+describe("feed machine label discrimination", () => {
+  test("hidden when every card is your own on one machine; shown across all once two machines appear", () => {
+    const solo = strip(
+      formatFeedResults({ conversations: [feedConv({ machine: "mbp" })], scope: "g" } as any),
+    );
+    expect(solo).not.toContain("on mbp");
+    const mixed = strip(
+      formatFeedResults({
+        conversations: [feedConv({ machine: "mbp" }), feedConv({ machine: "mac-studio" })],
+        scope: "g",
+      } as any),
+    );
+    expect(mixed).toContain("on mbp");
+    expect(mixed).toContain("on mac-studio");
+  });
+});
+
+describe("feedFilePath", () => {
+  test("relativizes against the project and the worktree copy", () => {
+    expect(feedFilePath("/Users/x/src/app/packages/cli/src/a.ts", "/Users/x/src/app")).toBe(
+      "packages/cli/src/a.ts",
+    );
+    expect(
+      feedFilePath("/Users/x/src/app/.codecast/worktrees/fix-auth/packages/cli/src/a.ts", "/Users/x/src/app"),
+    ).toBe("packages/cli/src/a.ts");
+  });
+
+  test("keeps a foreign absolute path visibly absolute", () => {
+    expect(feedFilePath("/Users/ec2-user/work/repo/src/a.ts", "/Users/x/src/app")).toContain("/Users/ec2-user");
+  });
+});

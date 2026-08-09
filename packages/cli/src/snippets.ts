@@ -48,6 +48,8 @@ export const MESSAGING_SNIPPET = `
 
 It lands as a new turn attributed to you; inbound arrives wrapped as \`<session-message from="jx7c6zk">…</session-message>\` — reply to its ID.
 
+Target on evidence, not inference: \`cast diff <id>\` lists the files a session actually changed, \`cast read <id>\` shows what it is doing now — work state says who is paying attention, not who wrote what. A teammate's session runs on another machine, in their own checkout: it can never explain your local tree, so coordinate on what you truly share — branches, schemas, deploys — and phrase what you can't verify as a question.
+
 For anything multi-line, pass \`-\` and feed the body via heredoc — never \`"$(cat file)"\`, which mangles formatting and records only the substitution in the transcript.
 
 \`\`\`bash

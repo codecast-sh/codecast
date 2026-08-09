@@ -1,6 +1,34 @@
 import { c, fmt } from "./colors.js";
 import { structuredPayloadSummary, structuredPayloadKeysFromRaw } from "@codecast/shared/render";
 
+/** Worktree name embedded in a path (".codecast/worktrees/<name>/…"), if any.
+ * Lets a feed card reveal worktree residence even when the session never
+ * registered one — it cd'd there per command and only its edits know. */
+export function worktreeFromPath(path: string | undefined): string | undefined {
+  return path?.match(/\/worktrees\/([^/]+)\//)?.[1];
+}
+
+/** Compact display for an edited file on a feed card: relative to the card's
+ * project (or its worktree copy) when possible, last segments otherwise. The
+ * generic shortenToolPath can't be used here — an absolute path under ~/src
+ * matches its `src/` anchor and yields a misleading "src/<repo>/…" prefix. */
+export function feedFilePath(filePath: string, projectPath?: string | null): string {
+  let rel = filePath;
+  const wt = filePath.match(/^.*\/worktrees\/[^/]+\//);
+  if (wt) {
+    rel = filePath.slice(wt[0].length);
+  } else if (projectPath && filePath.startsWith(projectPath.replace(/\/$/, "") + "/")) {
+    rel = filePath.slice(projectPath.replace(/\/$/, "").length + 1);
+  }
+  // Still absolute = outside the project entirely; keep that visible (~ or a
+  // foreign /Users/<other>/ prefix is itself the signal) via truncatePath.
+  if (rel.startsWith("/")) return truncatePath(rel, 45);
+  if (rel.length <= 45) return rel;
+  const segments = rel.split("/");
+  while (segments.length > 2 && segments.join("/").length > 42) segments.shift();
+  return "…/" + segments.join("/");
+}
+
 function shortenToolPath(path: string): string {
   const match = path.match(/(?:packages|src|lib|app)\/.*$/);
   if (match) return match[0];
@@ -76,6 +104,9 @@ interface SearchConversation {
   updated_at: string;
   message_count: number;
   user?: { name: string | null; email: string | null };
+  recent_files?: string[];
+  worktree?: string;
+  machine?: string;
   matches: SearchMatch[];
   context: ContextMessage[];
   title_match?: boolean;
@@ -325,6 +356,20 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
       !result.titles_only && conv.title_match ? `${c.dim}title match${c.reset}` : "",
     ].filter(Boolean).join(" | ");
     lines.push(meta);
+
+    // Same location signals as the feed card: worktree residence (explicit or
+    // derived from its edits), machine, and the files it recently changed.
+    const worktree = conv.worktree || worktreeFromPath(conv.recent_files?.[0]);
+    const place = [
+      worktree ? `${c.magenta}worktree ${worktree}${c.reset}` : "",
+      conv.machine ? `on ${conv.machine}` : "",
+    ].filter(Boolean).join(" · ");
+    if (place) lines.push(`${c.dim}${place}${c.reset}`);
+    if (conv.recent_files?.length) {
+      const shown = conv.recent_files.slice(0, 3).map((p) => feedFilePath(p, conv.project_path)).join(", ");
+      const more = conv.recent_files.length > 3 ? ` +${conv.recent_files.length - 3}` : "";
+      lines.push(`${c.dim}edits:${c.reset} ${shown}${c.dim}${more}${c.reset}`);
+    }
     lines.push("");
 
     for (const msg of conv.matches) {
@@ -344,6 +389,7 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
     lines.push("  cast read <id> <line>:<line>   # read message range");
     lines.push("  cast read <id>                 # read all messages");
     lines.push("  cast summary <id>              # get session summary");
+    lines.push("  cast diff <id>                 # files a session changed, before attributing work");
   }
 
   lines.push("</SEARCHRESULTS>");
@@ -491,6 +537,15 @@ interface FeedConversation {
   owner?: { name: string | null; email: string | null };
   owned_by_me?: boolean;
   preview: FeedPreviewMessage[];
+  /** Newest real prose messages — what the session is doing NOW. */
+  tail?: FeedPreviewMessage[];
+  idle_summary?: string;
+  /** Files the session recently edited (absolute paths, newest first). */
+  recent_files?: string[];
+  worktree?: string;
+  git_branch?: string;
+  machine?: string;
+  last_activity_at?: string;
 }
 
 interface FeedResult {
@@ -806,6 +861,13 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
   const pageInfo = options.page && options.page > 1 ? ` (page ${options.page})` : "";
   lines.push(`Recent conversations (${result.conversations.length})${pageInfo}\n`);
 
+  // Machine labels earn their line only when they discriminate: several
+  // machines in view, or another person's session (their machine ≠ yours by
+  // definition). A single-machine solo feed would repeat one label as noise.
+  const distinctMachines = new Set(
+    result.conversations.map((cv) => cv.machine).filter(Boolean),
+  ).size;
+
   for (const conv of result.conversations) {
     const header = `── ${conv.title} `;
     const padding = "─".repeat(Math.max(0, 60 - header.length));
@@ -827,17 +889,54 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
       userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
       ownerDisplay ? `${c.magenta}${ownerDisplay}${c.reset}` : "",
     ].filter(Boolean).join(" | ");
-    lines.push(`   ${meta}\n`);
+    lines.push(`   ${meta}`);
 
-    for (const msg of conv.preview) {
+    // WHERE the session actually works: an explicit worktree beats one derived
+    // from its edits; a session on another machine can't touch your tree.
+    const worktree = conv.worktree || worktreeFromPath(conv.recent_files?.[0]);
+    const quiet =
+      conv.last_activity_at && conv.work_state !== "working"
+        ? formatRelativeTime(conv.last_activity_at)
+        : "";
+    const showMachine = !!conv.machine && (distinctMachines >= 2 || !!conv.user);
+    const place = [
+      worktree ? `${c.magenta}worktree ${worktree}${c.reset}` : "",
+      conv.git_branch && conv.git_branch !== worktree && conv.git_branch !== "HEAD"
+        ? `branch ${conv.git_branch}`
+        : "",
+      showMachine ? `on ${conv.machine}` : "",
+      quiet && quiet !== formatRelativeTime(conv.updated_at) ? `last msg ${quiet}` : "",
+    ].filter(Boolean).join(" · ");
+    if (place) lines.push(`   ${c.dim}${place}${c.reset}`);
+
+    if (conv.recent_files?.length) {
+      const shown = conv.recent_files.slice(0, 3).map((p) => feedFilePath(p, conv.project_path)).join(", ");
+      const more = conv.recent_files.length > 3 ? ` +${conv.recent_files.length - 3}` : "";
+      lines.push(`   ${c.dim}edits:${c.reset} ${shown}${c.dim}${more}${c.reset}`);
+    }
+
+    if (conv.idle_summary && conv.work_state !== "working") {
+      lines.push(`   ${c.dim}summary:${c.reset} ${conv.idle_summary}`);
+    }
+    lines.push("");
+
+    const renderMsg = (msg: FeedPreviewMessage) => {
       const lineNum = String(msg.line).padStart(4);
       const role = formatRole(msg.role);
-
       if (msg.role === "user") {
         lines.push(`  ${lineNum}: ${role} ${msg.content}`);
       } else {
         lines.push(`       ${lineNum}: ${role} ${msg.content}`);
       }
+    };
+
+    for (const msg of conv.preview) renderMsg(msg);
+    if (conv.tail?.length) {
+      const lastHead = conv.preview[conv.preview.length - 1];
+      if (!lastHead || conv.tail[0].line > lastHead.line + 1) {
+        lines.push(`       ${c.dim}⋮${c.reset}`);
+      }
+      for (const msg of conv.tail) renderMsg(msg);
     }
 
     lines.push("");
@@ -848,6 +947,7 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
     const page = options.page ?? 1;
     lines.push(`Use: cast read ${firstId} <range>        # read messages by line range`);
     lines.push(`     cast read ${firstId} <line> --full   # expand tool calls for a message`);
+    lines.push(`     cast diff ${firstId}                # files a session changed, before attributing work`);
     lines.push(`     cast feed -p ${page + 1}                  # next page`);
   }
 
