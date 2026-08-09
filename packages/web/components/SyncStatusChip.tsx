@@ -47,9 +47,19 @@ export function selectSyncing(s: { liveLoading: Record<string, boolean> }): bool
 }
 
 export function SyncStatusChip() {
-  const liveLoading = useInboxStore((s) => s.liveLoading);
-  const syncProgress = useInboxStore((s) => s.syncProgress);
-  const syncing = selectSyncing({ liveLoading });
+  // Subscribe to stable primitives only: `liveLoading` / `syncProgress` get a
+  // new object identity on every crawl page write (~2/s while a backfill runs),
+  // and this chip is always mounted in the header. Deriving booleans/strings in
+  // the selector keeps Object.is stable so the chip only re-renders when the
+  // rendered text actually changes. The full objects are read inside the hover
+  // panel, which mounts only while hovered.
+  const syncing = useInboxStore((s) => selectSyncing(s));
+  const scopeSummary = useInboxStore((s) => {
+    const keys = Object.keys(s.liveLoading);
+    if (keys.length <= 1) return "";
+    const settled = keys.filter((k) => !s.liveLoading[k]).length;
+    return ` ${settled}/${keys.length}`;
+  });
   const [stalled, setStalled] = useState(false);
   // Mirror DaemonStatusChip: render nothing until mounted so SSR markup and the
   // first client render agree (no hydration mismatch).
@@ -84,17 +94,6 @@ export function SyncStatusChip() {
 
   if (!mounted || !syncing) return null;
 
-  const known = Object.keys(SCOPE_LABELS);
-  const rank = (s: string) => {
-    const i = known.indexOf(s);
-    return i === -1 ? known.length : i;
-  };
-  const scopes = Object.keys(liveLoading).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-  const settled = scopes.filter((k) => !liveLoading[k]).length;
-  const crawls = Object.entries(syncProgress)
-    .filter(([, p]) => p.loading)
-    .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
-
   const color = stalled ? "var(--sol-yellow)" : "var(--sol-cyan)";
   return (
     <div className="relative hidden md:block" onMouseEnter={openNow} onMouseLeave={closeSoon}>
@@ -112,17 +111,37 @@ export function SyncStatusChip() {
           style={{ color }}
         >
           {stalled ? "sync slow" : "syncing"}
-          {scopes.length > 1 ? ` ${settled}/${scopes.length}` : ""}
+          {scopeSummary}
         </span>
       </div>
-      {open && (
-        <div className="absolute right-0 top-full z-50 pt-1.5">
-          <div className="w-[260px] rounded-md border bg-popover text-popover-foreground shadow-md">
-            <div className="border-b border-sol-border/60 px-3 py-2 text-xs font-semibold text-sol-text">
-              {stalled ? "Sync is taking longer than usual" : "Syncing the latest data"}
-            </div>
-            <div className="px-3 py-2 space-y-1.5">
-              {scopes.map((scope) => (
+      {open && <SyncDetailPanel stalled={stalled} color={color} />}
+    </div>
+  );
+}
+
+// Hover detail: the only consumer of the churning `liveLoading` / `syncProgress`
+// objects. Mounted solely while the pill is hovered, so their per-page identity
+// churn costs nothing the rest of the time.
+function SyncDetailPanel({ stalled, color }: { stalled: boolean; color: string }) {
+  const liveLoading = useInboxStore((s) => s.liveLoading);
+  const syncProgress = useInboxStore((s) => s.syncProgress);
+  const known = Object.keys(SCOPE_LABELS);
+  const rank = (s: string) => {
+    const i = known.indexOf(s);
+    return i === -1 ? known.length : i;
+  };
+  const scopes = Object.keys(liveLoading).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  const crawls = Object.entries(syncProgress)
+    .filter(([, p]) => p.loading)
+    .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
+  return (
+    <div className="absolute right-0 top-full z-50 pt-1.5">
+      <div className="w-[260px] rounded-md border bg-popover text-popover-foreground shadow-md">
+        <div className="border-b border-sol-border/60 px-3 py-2 text-xs font-semibold text-sol-text">
+          {stalled ? "Sync is taking longer than usual" : "Syncing the latest data"}
+        </div>
+        <div className="px-3 py-2 space-y-1.5">
+          {scopes.map((scope) => (
                 <div key={scope} className="flex items-center gap-2 text-xs">
                   <span className="text-sol-text">{scopeLabel(scope)}</span>
                   {liveLoading[scope] ? (
