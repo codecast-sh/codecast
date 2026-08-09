@@ -229,12 +229,12 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           embedded
           headerExtra={shareControls}
           headerEnd={onClose ? (
-            <button onClick={onClose} className="p-1 rounded text-sol-text-dim hover:text-sol-text transition-colors" title="Close">
+            <button onClick={onClose} className="cc-panel__btn is-close" title="Close">
               <X className="w-3.5 h-3.5" />
             </button>
           ) : undefined}
           headerLeft={onExpandToMain ? (
-            <button onClick={onExpandToMain} className="p-0.5 rounded text-sol-text-dim hover:text-sol-cyan transition-colors flex-shrink-0" title="Collapse sessions">
+            <button onClick={onExpandToMain} className="cc-panel__btn flex-shrink-0" title="Open full — take the stage">
               <ChevronsLeft className="w-4 h-4" />
             </button>
           ) : undefined}
@@ -724,10 +724,11 @@ function BlockedSessionsBanner({
 // can't blur into each other:
 //   • the LEFT ACCENT = health/liveness — red ONLY when a run failed or the
 //     agent flagged it (red always means "look at this"); green while running;
-//     dim when paused; else the calm schedule-orange.
-//   • the BADGE = the NEXT fire — neutral at rest (a countdown is schedule
-//     furniture, not an alert), orange only when imminent (<10m), and never
-//     red: "about to fire" is not "went wrong".
+//     dim when paused; else the calm schedule-amber.
+//   • the BADGE = the NEXT fire — a soft orange tint at rest (orange is the
+//     trigger accent, but a resting countdown is furniture, so tint not solid),
+//     brighter when imminent (<10m), and never red: "about to fire" is not
+//     "went wrong".
 type SchedAccent = "running" | "attention" | "paused" | "normal";
 function schedAccent(task: { status: string; last_run_failed?: boolean; last_run_needs_attention?: boolean }): SchedAccent {
   if (task.status === "running") return "running";
@@ -739,7 +740,7 @@ const SCHED_ACCENT: Record<SchedAccent, string> = {
   running: "border-l-sol-green",
   attention: "border-l-sol-red",
   paused: "border-l-sol-border",
-  normal: "border-l-sol-orange/50",
+  normal: "border-l-sol-amber/50",
 };
 function schedBadgeTone(task: { status: string; run_at?: number }, now: number): string {
   if (task.status === "paused") return "bg-sol-bg-alt text-sol-text-dim border-sol-border/50";
@@ -748,8 +749,8 @@ function schedBadgeTone(task: { status: string; run_at?: number }, now: number):
   // due work within seconds, so minutes overdue means nothing is listening.
   if (isTaskOverdue(task, now)) return "bg-sol-red/10 text-sol-red border-sol-red/40 font-bold";
   const ms = task.run_at !== undefined ? task.run_at - now : undefined;
-  if (ms !== undefined && ms <= 10 * 60_000) return "bg-sol-orange/20 text-sol-orange border-sol-orange/50 font-bold";
-  return "bg-sol-bg-alt/60 text-sol-text-muted border-sol-border/60";
+  if (ms !== undefined && ms <= 10 * 60_000) return "bg-sol-amber/20 text-sol-amber border-sol-amber/50 font-bold";
+  return "bg-sol-amber/[0.08] text-sol-amber/90 border-sol-amber/25";
 }
 
 // One schedule row, used EVERYWHERE a schedule renders as a row: the dock
@@ -809,7 +810,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
   // Click feedback: an orange wash that fades (keyed so re-clicks re-trigger).
   // Selection alone can't confirm the click — the row's session is often
   // already active, and the resting selected tint is the shared cyan — so the
-  // schedule-orange pulse is what says "this schedule heard you".
+  // schedule-amber pulse is what says "this schedule heard you".
   const [clickFlash, setClickFlash] = useState(0);
   // Inline run history (the hover rail's History verb). Query only while
   // open, so a resting roster costs nothing; each entry navigates to the
@@ -819,6 +820,8 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
   return (
     <div
       data-schedrow={task._id}
+      data-attached={attached || undefined}
+      data-row-active={isActive || undefined}
       className={`group/schedrow relative transition-colors ${
         // Attached rows sit flush under their card — no separator line above and
         // no left accent bar. The ↳ arrow carries the parent/child connection,
@@ -834,7 +837,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
             ? ""
             : `border-l-2 ${SCHED_ACCENT[accent]}`
       } ${
-        highlighted ? "bg-[color-mix(in_srgb,var(--sol-bg-alt)_70%,transparent)] ring-1 ring-inset ring-sol-orange/40" : ""
+        highlighted ? "bg-[color-mix(in_srgb,var(--sol-bg-alt)_70%,transparent)] ring-1 ring-inset ring-sol-amber/40" : ""
       }`}
     >
       {/* Inner relative wrapper: the click-flash and the hover verb rail size
@@ -842,20 +845,20 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
           under the rail's gradient or its hover targets. */}
       <div className="relative">
       <button
-        className={`w-full text-left cursor-pointer pr-3 ${attached ? "pl-2 py-1" : "pl-2.5 py-1.5"} hover:bg-sol-orange/[0.05] transition-[background-color,opacity] ${paused ? "opacity-55 hover:opacity-90" : ""}`}
+        className={`w-full text-left cursor-pointer pr-3 ${attached ? "pl-2 py-1" : "pl-2.5 py-1.5"} hover:bg-sol-amber/[0.05] transition-[background-color,opacity] ${paused ? "opacity-55 hover:opacity-90" : ""}`}
         onClick={() => {
           setClickFlash((n) => n + 1);
           onOpen(row);
         }}
       >
         {/* Attached rows wear the subagent child idiom: the SAME ↳ corner arrow
-            the subagent rows below carry (in schedule-orange, not subagent
+            the subagent rows below carry (in schedule-amber, not subagent
             violet), so the connectors line up and the row reads as this card's
             child instead of a glyph floating in indented space. The orange
             alone marks it as a schedule — no extra identity icon. */}
         <div className="flex gap-1.5 min-w-0">
         {attached && (
-          <span className="flex items-center mt-[2px] shrink-0 text-sol-orange/50" role="img" aria-label={row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"}>
+          <span className="flex items-center mt-[2px] shrink-0 text-sol-amber/70" role="img" aria-label={row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"}>
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <title>{row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
@@ -894,7 +897,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
               shows exactly which rows that number pointed at. */}
           {unread && (
             <ShortcutTooltip label="Outcome landed since you last opened this list">
-              <span className="shrink-0 px-1 rounded-full bg-sol-cyan/15 text-sol-cyan text-[9px] font-medium">new</span>
+              <span className="shrink-0 px-1 rounded-full bg-sol-amber/15 text-sol-amber text-[9px] font-medium">new</span>
             </ShortcutTooltip>
           )}
           <span className="ml-auto shrink-0 text-[10px] font-medium text-sol-text-muted">
@@ -923,7 +926,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
         {(() => {
           const sparkle = !isPseudo && !task.display_summary && now - task.created_at < 5 * 60_000 && (
             <ShortcutTooltip label="Haiku is distilling a summary of this prompt">
-              <span className="text-sol-orange/70 animate-pulse motion-reduce:animate-none">✦ </span>
+              <span className="text-sol-amber/70 animate-pulse motion-reduce:animate-none">✦ </span>
             </ShortcutTooltip>
           );
           const ago = task.last_run_at !== undefined ? `${fmtDuration(Math.max(0, now - task.last_run_at))} ago` : undefined;
@@ -1024,7 +1027,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
             aria-expanded={runsOpen}
             onClick={(e) => { e.stopPropagation(); setRunsOpen((v) => !v); }}
             className={`p-1 rounded transition-[color,background-color,transform] duration-100 active:scale-90 ${
-              runsOpen ? "text-sol-orange bg-sol-orange/10" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"
+              runsOpen ? "text-sol-amber bg-sol-amber/10" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"
             }`}
           >
             <History className="w-3.5 h-3.5" />
@@ -1045,7 +1048,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
             <button
               aria-label="Run now"
               onClick={(e) => { e.stopPropagation(); runNow({ task_id: taskId }).catch(() => {}); toast.success("Run queued"); }}
-              className="p-1 rounded text-sol-text-dim hover:text-sol-orange hover:bg-sol-orange/10 transition-[color,background-color,transform] duration-100 active:scale-90"
+              className="p-1 rounded text-sol-text-dim hover:text-sol-amber hover:bg-sol-amber/10 transition-[color,background-color,transform] duration-100 active:scale-90"
             >
               <Play className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} />
             </button>
@@ -1363,12 +1366,12 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
         aria-label={`Triggers: ${rows.length} armed`}
         className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-sol-bg hover:bg-sol-bg-alt/60 transition-colors"
       >
-        <svg className={`w-3 h-3 shrink-0 ${attention ? "text-sol-red" : "text-sol-orange"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <svg className={`w-3 h-3 shrink-0 ${attention ? "text-sol-red" : "text-sol-amber"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
           <circle cx="12" cy="12" r="9" />
           <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <span className="shrink-0 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wider text-sol-orange">
-          Triggers <span className="text-sol-orange/60 tabular-nums">{rows.length}</span>
+        <span className="shrink-0 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wider text-sol-amber">
+          Triggers <span className="text-sol-amber/60 tabular-nums">{rows.length}</span>
         </span>
         {nextIn !== undefined && (
           <span className="text-[10px] text-sol-text-dim truncate min-w-0">
@@ -1378,7 +1381,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
         )}
         {unreadCount > 0 && (
           <ShortcutTooltip label={`${unreadCount} outcome${unreadCount === 1 ? "" : "s"} landed since you last opened this list`} hint="marked inside">
-            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30">
+            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-amber/15 text-sol-amber border border-sol-amber/30">
               {unreadCount} new
             </span>
           </ShortcutTooltip>
@@ -3292,10 +3295,12 @@ export function SessionListPanel({
         {...dropProps}
         className={isDragOverSection ? "ring-1 ring-inset ring-sol-cyan/70 bg-sol-cyan/[0.04] transition-colors" : isDropTarget ? "transition-colors" : undefined}
       >
+        {/* The section color rides on the button itself so simple view can
+            tint the divider rule with currentColor; children set their own. */}
         <button
           data-sv-sec
           onClick={() => s.toggleCollapsedSection(key)}
-          className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2"
+          className={`w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2 ${color}`}
         >
           {opts?.monoLabel ? (
             <span className={`text-[10px] font-semibold flex items-center gap-1.5 min-w-0 ${color}`}>
@@ -3460,6 +3465,8 @@ export function SessionListPanel({
   return (
     <div data-sv-rail className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
       <div className="cc-panel__head min-w-0">
+        <span className="cc-panel__icon"><List className="w-3.5 h-3.5" /></span>
+        <span className="cc-panel__title">Sessions</span>
         {favoritesView && (
           <div className="flex items-center gap-1.5 flex-shrink-0 text-sol-yellow mr-0.5" title="Kept sessions — your long-term shelf">
             <Star className="w-3.5 h-3.5 fill-current" />
