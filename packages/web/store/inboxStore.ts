@@ -3294,18 +3294,27 @@ function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boole
 // subscribers stop re-rendering at idle.
 const PRESENCE_QUANTUM_MS = 60_000;
 const PRESENCE_FIELDS = ["daemon_last_seen", "last_heartbeat", "last_seen", "recent_session_updated"];
+// Streaming counters shown only in hover tooltips (a teammate's message count
+// ticks up on every agent turn); step them so the roster ref doesn't churn on
+// each increment.
+const COUNTER_QUANTUM = 16;
+const COUNTER_FIELDS = ["recent_session_messages"];
 function quantizePresence<T>(rec: T): T {
   if (!rec || typeof rec !== "object") return rec;
   let out: any = rec;
+  const setQ = (k: string, q: number, v: number) => {
+    if (q !== v) {
+      if (out === rec) out = { ...(rec as any) };
+      out[k] = q;
+    }
+  };
   for (const k of PRESENCE_FIELDS) {
     const v = (rec as any)[k];
-    if (typeof v === "number") {
-      const q = Math.floor(v / PRESENCE_QUANTUM_MS) * PRESENCE_QUANTUM_MS;
-      if (q !== v) {
-        if (out === rec) out = { ...(rec as any) };
-        out[k] = q;
-      }
-    }
+    if (typeof v === "number") setQ(k, Math.floor(v / PRESENCE_QUANTUM_MS) * PRESENCE_QUANTUM_MS, v);
+  }
+  for (const k of COUNTER_FIELDS) {
+    const v = (rec as any)[k];
+    if (typeof v === "number") setQ(k, Math.floor(v / COUNTER_QUANTUM) * COUNTER_QUANTUM, v);
   }
   return out;
 }
@@ -5461,11 +5470,18 @@ export const useInboxStore = create<InboxStoreState>(
   // IDB write, no server dispatch — this is purely local bookkeeping. `cursor`
   // only ever moves FORWARD (max) so a late/out-of-order delta can't rewind it
   // and cause already-synced rows to be re-fetched; `backfilledAt` is set wholesale.
-  recordSyncMeta: sync(function (this: Draft, key: string, patch: { cursor?: number; backfilledAt?: number }) {
+  recordSyncMeta: sync(function (this: Draft, key: string, patch: { cursor?: number; backfilledAt?: number; resumeCursor?: string | null; resumeAt?: number }) {
     const prev = this.syncMeta[key] ?? {};
     const next = { ...prev };
     if (typeof patch.cursor === "number" && patch.cursor > (prev.cursor ?? 0)) next.cursor = patch.cursor;
     if (typeof patch.backfilledAt === "number") next.backfilledAt = patch.backfilledAt;
+    // Mid-crawl checkpoint (reconcileCrawl): the continuation cursor of an
+    // interrupted backfill, so a reload resumes instead of re-walking from page
+    // zero. Unlike `cursor` this may move to any value, and null clears it.
+    if ("resumeCursor" in patch) {
+      next.resumeCursor = patch.resumeCursor ?? undefined;
+      next.resumeAt = patch.resumeCursor == null ? undefined : patch.resumeAt;
+    }
     this.syncMeta[key] = next;
   }),
 
@@ -6553,9 +6569,17 @@ export const useInboxStore = create<InboxStoreState>(
   toggleSidebarNav: (section: string) => set((s: any) => ({
     sidebarNavExpanded: { ...s.sidebarNavExpanded, [section]: !s.sidebarNavExpanded[section] },
   })),
-  setLiveLoading: (scope: string, loading: boolean) => set((s: any) => ({
-    liveLoading: { ...s.liveLoading, [scope]: loading },
-  })),
+  setLiveLoading: (scope: string, loading: boolean) => {
+    // No-op guard: the sync hooks re-assert their status on effect re-runs
+    // (reconnects, workspace flicker), and each unconditional write was a fresh
+    // liveLoading identity waking every subscriber. First write for a scope
+    // always lands (the chip lists scopes from these keys).
+    const cur = useInboxStore.getState().liveLoading;
+    if (scope in cur && cur[scope] === loading) return;
+    set((s: any) => ({
+      liveLoading: { ...s.liveLoading, [scope]: loading },
+    }));
+  },
 
   comments: {},
   tasks: {},

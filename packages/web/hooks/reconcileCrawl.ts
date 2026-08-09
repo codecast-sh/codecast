@@ -181,10 +181,27 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
     }
   };
 
+  // Resume checkpoint: a reload mid-crawl used to restart from page zero, so a
+  // client that reloads more often than a full crawl takes NEVER finished — it
+  // paid the whole table walk on every launch, forever. Each flush persists the
+  // continuation cursor; a fresh launch inside the window picks up where the
+  // interrupted crawl stopped (earlier pages already landed via their flushes).
+  // A resumed run's `all` is only the tail, so it reports complete=false — a
+  // pruning consumer (the dismiss CLEAR, docs' absent-prune) must never treat a
+  // partial set as authoritative. True deletion reconcile happens on the next
+  // un-resumed crawl after the throttle window.
+  const RESUME_WINDOW_MS = 30 * 60 * 1000;
+  const meta = useInboxStore.getState().syncMeta[metaKey];
+  const resumeCursor =
+    meta?.resumeCursor && Date.now() - (meta.resumeAt ?? 0) < RESUME_WINDOW_MS
+      ? meta.resumeCursor
+      : null;
+
   (async () => {
     setProgress(namespace, true, 0);
     const all: any[] = [];
-    let cursor: string | null = null;
+    let cursor: string | null = resumeCursor;
+    let resumedMidway = !!resumeCursor;
     let completed = false; // reached the true end vs stopped at maxPages
     const seenCursors = new Set<string>();
     // Batch page overlays: every onPage is a store write that wakes all
@@ -197,13 +214,19 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
     const FLUSH_MS = 700;
     let buffer: any[] = [];
     let lastFlush = Date.now();
-    const flush = (loading: boolean) => {
+    // `ckpt` is the continuation cursor AFTER the rows being flushed — the rows
+    // themselves have landed via onPage, so resuming from it is exact. Undefined
+    // skips checkpointing (nothing new to record).
+    const flush = (loading: boolean, ckpt?: string | null) => {
       if (buffer.length) {
         opts.onPage(buffer);
         buffer = [];
       }
       lastFlush = Date.now();
       setProgress(namespace, loading, all.length);
+      if (ckpt !== undefined && ckpt !== null && !superseded()) {
+        useInboxStore.getState().recordSyncMeta(metaKey, { resumeCursor: ckpt, resumeAt: Date.now() });
+      }
     };
     for (let i = 0; i < maxPages; i++) {
       // Retry transient page failures with backoff — one hiccup must not abandon
@@ -216,13 +239,20 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
           if (attempt === 4) {
             // Persistent failure: don't snapshot a partial set (it would prune
             // real rows). Leave overlaid pages in place; retry next effect run.
-            if (!superseded()) { flush(false); st.runningKey = null; }
+            // A resumed run that failed on its FIRST fetch likely holds an
+            // expired continuation cursor — clear the checkpoint (after flush,
+            // which re-records it) so the next run restarts from page zero
+            // instead of failing forever.
+            if (!superseded()) { flush(false, cursor); st.runningKey = null; }
+            if (resumedMidway && all.length === 0) {
+              useInboxStore.getState().recordSyncMeta(metaKey, { resumeCursor: null });
+            }
             return;
           }
           await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
         }
       }
-      if (!isCurrent() || !page) { flush(true); stop(all.length); return; } // a newer workspace crawl took over
+      if (!isCurrent() || !page) { flush(true, cursor); stop(all.length); return; } // a newer workspace crawl took over
       const rows = page.rows ?? [];
       all.push(...rows);
       buffer.push(...rows);
@@ -231,20 +261,22 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       // belt-and-braces guard against a cursor that never advances.
       const next = page.continueCursor || null;
       const more = !page.isDone && !!next && !seenCursors.has(next);
-      if (!more || buffer.length >= FLUSH_ROWS || Date.now() - lastFlush >= FLUSH_MS) flush(more);
+      if (!more || buffer.length >= FLUSH_ROWS || Date.now() - lastFlush >= FLUSH_MS) flush(more, next);
       if (!more) { completed = true; break; }
       seenCursors.add(next!);
       cursor = next;
       await new Promise((r) => setTimeout(r, pageDelayMs));
     }
-    if (buffer.length) flush(true); // maxPages-truncated: land the tail overlay
+    if (buffer.length) flush(true, cursor); // maxPages-truncated: land the tail overlay
     if (!isCurrent()) { stop(all.length); return; }
     // Final completeness pass: re-overlay the full set. onComplete is a DELTA
     // overlay (the big collections are isDelta in SYNC_REGISTRY) — additive, never
     // prunes — so this only fills in rows onPage may have missed. Deletions arrive
     // as deltas, never by snapshot, so a short/truncated crawl can't gut the cache.
     // `completed` lets a pruning consumer (the dismiss CLEAR) know the set is whole.
-    await opts.onComplete(all, completed, isCurrent);
+    // A resumed run only walked the tail — its `all` is partial, so consumers
+    // must treat it as incomplete even though the table is cumulatively covered.
+    await opts.onComplete(all, completed && !resumedMidway, isCurrent);
     if (!isCurrent()) { stop(all.length); return; }
     // Persist the watermark: backfilledAt (durable throttle — skip the crawl on
     // the next launch) and cursor = the highest updated_at we just saw (so the
@@ -256,7 +288,10 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       const u = (r as any)?.updated_at;
       if (typeof u === "number" && u > maxUpdated) maxUpdated = u;
     }
-    useInboxStore.getState().recordSyncMeta(metaKey, { backfilledAt: now, cursor: maxUpdated || undefined });
+    // resumeCursor: null clears the mid-crawl checkpoint — the walk finished
+    // (cumulatively, when resumed), so the next crawl starts fresh after the
+    // throttle window and regains full deletion-reconcile authority.
+    useInboxStore.getState().recordSyncMeta(metaKey, { backfilledAt: now, cursor: maxUpdated || undefined, resumeCursor: null });
     setProgress(namespace, false, all.length);
     st.doneAt.set(wsKey, now);
     st.runningKey = null;

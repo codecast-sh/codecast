@@ -105,6 +105,115 @@ describe("runReconcileCrawl — boot-eager wiring", () => {
 
 });
 
+// A reload mid-crawl used to restart the walk from page zero — a client that
+// reloads more often than a full crawl takes never finished and re-paid the
+// whole table walk every launch. The flush checkpoint + resume below is what
+// breaks that loop; the complete=false degradation is what keeps a resumed
+// (partial-`all`) run from ever driving a prune.
+describe("runReconcileCrawl — mid-crawl resume", () => {
+  beforeEach(() => {
+    useInboxStore.setState({ syncMeta: {}, syncProgress: {} });
+  });
+
+  const pagedFetcher = (pages: Record<string, { rows: any[]; next: string | null }>, log: (string | null)[]) =>
+    async (cursor: string | null) => {
+      log.push(cursor);
+      const p = pages[cursor ?? "start"];
+      return { rows: p.rows, isDone: p.next === null, continueCursor: p.next };
+    };
+
+  it("resumes from a fresh checkpoint, reports complete=false, and clears the checkpoint", async () => {
+    const ns = "resumeNs";
+    const key = syncMetaKey(ns, "ws1");
+    // A prior interrupted run checkpointed at cursor "c2".
+    useInboxStore.getState().recordSyncMeta(key, { resumeCursor: "c2", resumeAt: Date.now() });
+
+    const fetched: (string | null)[] = [];
+    let completeFlag: boolean | null = null;
+    const all: any[] = [];
+    runReconcileCrawl({
+      namespace: ns,
+      wsKey: "ws1",
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 10,
+      fetchPage: pagedFetcher({
+        start: { rows: [{ _id: "a" }], next: "c2" },
+        c2: { rows: [{ _id: "b" }], next: "c3" },
+        c3: { rows: [{ _id: "c" }], next: null },
+      }, fetched),
+      onPage: (rows) => all.push(...rows),
+      onComplete: (rowsAll, complete) => { completeFlag = complete; },
+    });
+    await delay(60);
+
+    // First fetch used the checkpoint, not page zero.
+    expect(fetched[0]).toBe("c2");
+    expect(all.map((r) => r._id)).toEqual(["b", "c"]);
+    // Partial `all` ⇒ consumers must not prune on it.
+    expect(completeFlag).toBe(false);
+    // Checkpoint cleared + durable watermark written on completion.
+    const meta = useInboxStore.getState().syncMeta[key];
+    expect(meta?.resumeCursor).toBeUndefined();
+    expect(meta?.backfilledAt).toBeGreaterThan(0);
+  });
+
+  it("ignores a stale checkpoint and reports complete=true from a full walk", async () => {
+    const ns = "resumeStaleNs";
+    const key = syncMetaKey(ns, "ws1");
+    useInboxStore.getState().recordSyncMeta(key, { resumeCursor: "c2", resumeAt: Date.now() - 31 * 60 * 1000 });
+
+    const fetched: (string | null)[] = [];
+    let completeFlag: boolean | null = null;
+    runReconcileCrawl({
+      namespace: ns,
+      wsKey: "ws1",
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 10,
+      fetchPage: pagedFetcher({
+        start: { rows: [{ _id: "a" }], next: "c2" },
+        c2: { rows: [{ _id: "b" }], next: null },
+      }, fetched),
+      onPage: () => {},
+      onComplete: (rowsAll, complete) => { completeFlag = complete; },
+    });
+    await delay(60);
+
+    expect(fetched[0]).toBe(null);
+    expect(completeFlag).toBe(true);
+  });
+
+  it("persists a checkpoint while crawling so an interruption can resume", async () => {
+    const ns = "resumeCkptNs";
+    const key = syncMetaKey(ns, "wsCk");
+    let sawCheckpoint: string | undefined;
+    runReconcileCrawl({
+      namespace: ns,
+      wsKey: "wsCk",
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 10,
+      fetchPage: async (cursor) => {
+        // Big page (>= FLUSH_ROWS) so every page flushes + checkpoints.
+        const rows = Array.from({ length: 200 }, (_, i) => ({ _id: `${cursor ?? "p0"}-${i}` }));
+        if (cursor === null) return { rows, isDone: false, continueCursor: "cNext" };
+        // Second page: capture what the first flush persisted, then finish.
+        sawCheckpoint = useInboxStore.getState().syncMeta[key]?.resumeCursor ?? undefined;
+        return { rows, isDone: true, continueCursor: null };
+      },
+      onPage: () => {},
+      onComplete: () => {},
+    });
+    await delay(80);
+    // The flush after page 1 checkpointed the cursor that page was fetched with
+    // (refetch overlap on resume is safe — overlays are additive).
+    expect(sawCheckpoint).toBeDefined();
+    // And completion cleared it.
+    expect(useInboxStore.getState().syncMeta[key]?.resumeCursor).toBeUndefined();
+  });
+});
+
 describe("inbox principal crawl keys", () => {
   it("does not share a completion mark between accounts, and skips before identity resolves", async () => {
     const namespace = `inbox-principal-${Math.random()}`;

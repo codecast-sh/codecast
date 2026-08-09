@@ -124,7 +124,11 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
         return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
       },
       onPage: (rows) => syncTable("docs", rows, { isDelta: true }),
-      onComplete: (all) => {
+      onComplete: (all, complete) => {
+        // `complete` is false when the crawl stopped early OR resumed from a
+        // mid-crawl checkpoint (reconcileCrawl's reload-resume): `all` is then
+        // only the tail of the table, and neither the derived project paths nor
+        // the absent-prune below may treat it as the whole workspace.
         const projectPaths = dedupeProjectPaths([
           ...new Set(all.map((d) => d.project_path).filter(Boolean) as string[]),
         ]);
@@ -135,14 +139,15 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
         // circuit an unchanged crawl entirely.
         const prevPaths = useInboxStore.getState().docProjectPaths;
         const pathsChanged =
-          prevPaths.length !== projectPaths.length ||
-          projectPaths.some((p, i) => prevPaths[i] !== p);
+          complete &&
+          (prevPaths.length !== projectPaths.length ||
+            projectPaths.some((p, i) => prevPaths[i] !== p));
         // The crawl is the COMPLETE set for this workspace, so docs of this
         // workspace absent from it are server-side deletions — prune them
         // (scoped, so the other workspace's cached docs are untouched). This is
         // the only channel by which a doc deletion reaches a client's cache.
         const pruneAbsentScope =
-          wsArgs === "skip"
+          wsArgs === "skip" || !complete
             ? undefined
             : (wsArgs as any).workspace === "team"
               ? (d: any) => d.team_id === (wsArgs as any).team_id
