@@ -1,5 +1,5 @@
 {
-  "name": "@codecast/cli",
+  "name": "@codecast-sh/cli",
   "version": "1.1.101",
   "description": "See, steer, and remember every coding agent session — any agent, any machine.",
   "license": "MIT",
@@ -9,12 +9,17 @@
     "url": "git+https://github.com/codecast-sh/codecast.git",
     "directory": "packages/cli/npm"
   },
+  "bugs": {
+    "url": "https://github.com/codecast-sh/codecast/issues"
+  },
   "keywords": [
     "codecast",
     "cli",
     "coding-agents",
     "claude",
+    "claude-code",
     "codex",
+    "ai-agents",
     "agent-observability"
   ],
   "bin": {

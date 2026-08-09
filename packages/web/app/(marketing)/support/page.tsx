@@ -57,7 +57,7 @@ const SUPPORT_OPTIONS = [
 const FAQ = [
   {
     q: "How do I install the CLI?",
-    a: "Run `curl -fsSL codecast.sh/install | sh`. Homebrew (`brew install codecast-sh/tap/codecast`) and npm (`npm install -g @codecast/cli`) install the same binary. It keeps itself up to date after that.",
+    a: "Run `curl -fsSL codecast.sh/install | sh`. Homebrew (`brew install codecast-sh/tap/codecast`) and npm (`npm install -g @codecast-sh/cli`) install the same binary. It keeps itself up to date after that.",
   },
   {
     q: "How do I sync my conversations?",
