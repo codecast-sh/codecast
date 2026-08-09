@@ -1,17 +1,19 @@
 import { useState } from "react";
 import { copyToClipboard } from "../lib/utils";
+import { track } from "../lib/analytics";
 
 const INSTALL_COMMANDS = {
   unix: "curl -fsSL codecast.sh/install | sh",
   windows: 'powershell -c "irm codecast.sh/install.ps1 | iex"',
 };
 
-export function InstallTabs() {
+export function InstallTabs({ location = "unknown", showAlternatives = true }: { location?: string; showAlternatives?: boolean }) {
   const [platform, setPlatform] = useState<"unix" | "windows">("unix");
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     await copyToClipboard(INSTALL_COMMANDS[platform]);
+    track("install_command_copied", { location, platform, with_token: false });
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -39,6 +41,16 @@ export function InstallTabs() {
         >
           Windows
         </button>
+        <a
+          href={platform === "unix" ? "https://codecast.sh/install" : "https://codecast.sh/install.ps1"}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={() => track("install_script_viewed", { location, platform })}
+          className="ml-auto px-5 py-2.5 text-sm font-medium transition-colors hover:text-[#002b36]"
+          style={{ color: '#93a1a1' }}
+        >
+          View install script
+        </a>
       </div>
       <div className="p-4 flex items-center justify-between gap-4" style={{ backgroundColor: '#002b36' }}>
         <code className="text-sm font-mono" style={{ color: '#eee8d5' }}>
@@ -53,13 +65,16 @@ export function InstallTabs() {
         </code>
         <button
           onClick={handleCopy}
-          className="p-2 rounded transition-colors"
-          style={{ color: '#586e75' }}
+          className="p-2 rounded-md transition-colors shrink-0"
+          style={copied
+            ? { backgroundColor: '#859900', color: '#002b36' }
+            : { backgroundColor: '#b58900', color: '#002b36' }
+          }
           title="Copy to clipboard"
         >
           {copied ? (
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
             </svg>
           ) : (
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -68,9 +83,9 @@ export function InstallTabs() {
           )}
         </button>
       </div>
-      {platform === "unix" && (
+      {showAlternatives && platform === "unix" && (
         <div className="px-4 pb-3 text-xs" style={{ backgroundColor: '#002b36', color: '#586e75' }}>
-          Also via <code>brew install codecast-sh/tap/codecast</code> or <code>npm install -g @codecast/cli</code>
+          Also via <code>brew install codecast-sh/tap/codecast</code> or <code>npm install -g @codecast-sh/cli</code>
         </div>
       )}
       {platform === "windows" && (

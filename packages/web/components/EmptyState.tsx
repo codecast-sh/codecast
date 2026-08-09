@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { copyToClipboard } from "../lib/utils";
+import { track } from "../lib/analytics";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 
 interface EmptyStateProps {
@@ -130,6 +131,7 @@ function SetupTokenCommand() {
 
   const handleCopy = async (text: string) => {
     await copyToClipboard(text);
+    track("install_command_copied", { location: "onboarding_empty_state", platform: "unix", with_token: true });
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
