@@ -2836,6 +2836,30 @@ function installOrchestration(update = false): { installed: boolean; updated: bo
   return { installed: anyChange && !update, updated: anyChange && update };
 }
 
+// Re-install every ENABLED snippet + the harness hooks so a new binary's
+// snippet text reaches this machine's CLAUDE.md/AGENTS.md. The single refresh
+// path behind: the two interactive update commands, and the daemon's
+// boot-after-self-update (via the hidden `snippets-refresh` command) — a
+// daemon that self-updates never runs the interactive paths, and without this
+// its feature snippets stayed at the old version until a human ran `cast
+// update`. Mutates `config` (messaging backfill) and persists when it does.
+function refreshEnabledSnippets(config: Record<string, any>): void {
+  if (config.memory_enabled) installMemorySnippet(true);
+  if (config.task_enabled) installTaskSnippet(true);
+  if (config.work_enabled) installWorkSnippet(true);
+  if (config.workflow_enabled) installWorkflowSnippet(true);
+  if (config.visual_enabled) installVisualSnippet(true);
+  if (config.publish_enabled) installPublishSnippet(true);
+  // Messaging is on by default for memory installs — backfill/refresh + persist.
+  const msgPatch = ensureMessagingForMemory(config);
+  if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
+  else if (config.messaging_enabled) installMessagingSnippet(true);
+  if (config.orch_enabled) installOrchestration(true);
+  installSessionRegisterHook();
+  installStatusHook();
+  installTaskPulseHook();
+}
+
 function uninstallOrchestration(): void {
   const claudeDir = path.join(os.homedir(), ".claude");
   const ORCH_MARKER = "/.codecast/orchestration/";
@@ -4740,20 +4764,7 @@ program
       const { success } = await performUpdate();
       if (success) {
         const config = readConfig() || {};
-        if (config.memory_enabled) installMemorySnippet(true);
-        if (config.task_enabled) installTaskSnippet(true);
-        if (config.work_enabled) installWorkSnippet(true);
-        if (config.workflow_enabled) installWorkflowSnippet(true);
-        if (config.visual_enabled) installVisualSnippet(true);
-        if (config.publish_enabled) installPublishSnippet(true);
-        // Messaging is on by default for memory installs — backfill/refresh + persist.
-        const msgPatch = ensureMessagingForMemory(config);
-        if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
-        else if (config.messaging_enabled) installMessagingSnippet(true);
-        if (config.orch_enabled) installOrchestration(true);
-        installSessionRegisterHook();
-        installStatusHook();
-  installTaskPulseHook();
+        refreshEnabledSnippets(config);
         console.log(`Updated to v${available}`);
       } else {
         console.log("Update failed, restarting with current version");
@@ -10775,20 +10786,7 @@ program
 
     const { success } = await performUpdate();
     if (success) {
-      if (config.memory_enabled) installMemorySnippet(true);
-      if (config.task_enabled) installTaskSnippet(true);
-      if (config.work_enabled) installWorkSnippet(true);
-      if (config.workflow_enabled) installWorkflowSnippet(true);
-      if (config.visual_enabled) installVisualSnippet(true);
-      if (config.publish_enabled) installPublishSnippet(true);
-      // Messaging is on by default for memory installs — backfill/refresh + persist.
-      const msgPatch = ensureMessagingForMemory(config);
-      if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
-      else if (config.messaging_enabled) installMessagingSnippet(true);
-      if (config.orch_enabled) installOrchestration(true);
-      installSessionRegisterHook();
-      installStatusHook();
-  installTaskPulseHook();
+      refreshEnabledSnippets(config);
 
       // Restart daemon if it was running
       if (daemonWasRunning) {
@@ -15737,6 +15735,15 @@ program
   .command("stable-context", { hidden: true })
   .description("SessionStart hook: print the stable-context feed and record what was injected (internal use)")
   .action(async () => runStableContextHook(readConfig()));
+
+program
+  .command("snippets-refresh", { hidden: true })
+  .description("Re-install all enabled snippets at the current binary's versions (internal use — daemon boot after a version change)")
+  .action(async () => {
+    const config = readConfig() || {};
+    refreshEnabledSnippets(config);
+    console.log("snippets refreshed");
+  });
 
 program
   .command("claude")
