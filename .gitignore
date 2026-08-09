@@ -96,3 +96,6 @@ videos/
 # Scratch UI harnesses (throwaway, per-session)
 packages/web/_chiptest.*
 dist-ssr/
+
+# Private production bundles built for CPU profiling (hundreds of MB)
+packages/web/dist-perf/
