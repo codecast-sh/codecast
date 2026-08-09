@@ -27,9 +27,9 @@ export type SeoEntry = {
 
 export const SITE_URL = "https://codecast.sh";
 
-export const DEFAULT_TITLE = "Codecast — see, steer, and remember every coding agent session";
+export const DEFAULT_TITLE = "Codecast — watch, steer, and search every agent session";
 export const DEFAULT_DESCRIPTION =
-  "Codecast gives your team one place to watch, steer, search, and remember every AI coding agent session — Claude Code, Codex, Gemini, Cursor — on any machine.";
+  "Codecast gives your team one place to watch, steer, search, and remember every AI agent session — Claude Code, Codex, Gemini, Cursor — on any machine.";
 
 const STATIC_ENTRIES: SeoEntry[] = [
   {
@@ -53,7 +53,7 @@ const STATIC_ENTRIES: SeoEntry[] = [
     path: "/documentation",
     title: "Documentation — Codecast",
     description:
-      "Install the cast CLI, sync every coding agent session to one searchable place, and give your agents shared memory. Setup, commands, and deep guides.",
+      "Install the cast CLI, sync every agent session to one searchable place, and give your agents shared memory. Setup, commands, and deep guides.",
   },
   {
     path: "/pricing",
@@ -65,7 +65,7 @@ const STATIC_ENTRIES: SeoEntry[] = [
     path: "/download",
     title: "Download — Codecast",
     description:
-      "Download the Codecast desktop app for macOS. See, steer, and remember every coding agent session.",
+      "Download the Codecast desktop app for macOS. Watch, steer, and search every agent session.",
   },
   {
     path: "/blog",
