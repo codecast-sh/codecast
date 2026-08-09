@@ -2404,6 +2404,21 @@ pre[class*="language-"] {
   min-width: 0;
 }
 .cc-panel__spacer { flex: 1 1 auto; min-width: 8px; }
+
+/* Variant for headers that must WRAP (a list panel's tabs + toolbar reflow as
+   the panel narrows). Same rule, same ground, same type — it just grows
+   instead of clipping, so it stays in the family without losing its behavior. */
+.cc-panel__head--flow {
+  height: auto;
+  min-height: var(--cc-panel-head-h);
+  /* Vertical padding is minimal so a single-row list header lands on exactly
+     the same 32px floor as every other panel; it only grows when its toolbar
+     genuinely needs a second line. Horizontal padding is left to the container
+     query (.cq-header-pad), which compacts it deliberately in narrow panels. */
+  padding-block: 0;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
 .cc-panel__actions { display: inline-flex; align-items: center; gap: 2px; }
 .cc-panel__body { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 

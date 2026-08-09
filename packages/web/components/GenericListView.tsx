@@ -882,9 +882,9 @@ export function GenericListView<T>({
           .cq-header row is what adapts (wraps the toolbar below the tabs) as the
           panel narrows — a container can't query its own width, only a child's. */}
       <div className={`cq-container ${filterBarShown ? "" : "border-b border-sol-border/30"}`}>
-        <div className="cq-header cq-header-pad flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-6 py-3">
+        <div className="cq-header cq-header-pad cc-panel__head cc-panel__head--flow flex-wrap justify-between gap-x-2">
         <div className="flex items-center gap-2 min-w-0">
-          <h1 className="text-lg font-semibold text-sol-text tracking-tight flex-shrink-0 cq-header-collapse">{title}</h1>
+          <h1 className="cc-panel__title flex-shrink-0 cq-header-collapse">{title}</h1>
           {syncScope && <SyncProgressBadge scope={syncScope} />}
           {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
               see .cq-tabs-compact in globals.css): a single compact dropdown. */}
