@@ -3,6 +3,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { copyToClipboard } from "../../../lib/utils";
+import { track } from "../../../lib/analytics";
 import { AppLoader } from "../../../components/AppLoader";
 
 type InstallOs = "unix" | "windows";
@@ -38,6 +39,9 @@ export default function CliSettingsPage() {
 
   const handleCopy = async (text: string, label: string) => {
     await copyToClipboard(text);
+    if (label === "install") {
+      track("install_command_copied", { location: "settings_cli", platform: os, with_token: true });
+    }
     setCopied(label);
     setTimeout(() => setCopied(null), 2000);
   };

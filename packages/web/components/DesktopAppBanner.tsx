@@ -1,5 +1,6 @@
 import { X, Monitor, ArrowRight } from "lucide-react";
 import { isDesktop } from "../lib/desktop";
+import { track } from "../lib/analytics";
 import { useTrackedStore } from "../store/inboxStore";
 
 export function DesktopAppBanner() {
@@ -26,6 +27,7 @@ export function DesktopAppBanner() {
         <div className="flex items-center gap-2 flex-shrink-0">
           <a
             href="https://codecast.sh/download/mac"
+            onClick={() => track("desktop_download_clicked", { location: "banner" })}
             className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium bg-sol-cyan/20 hover:bg-sol-cyan/30 text-sol-cyan rounded transition-colors"
           >
             Download

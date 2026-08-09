@@ -11,6 +11,7 @@
 import type * as accountSwitch from "../accountSwitch.js";
 import type * as admin_mergeUser from "../admin_mergeUser.js";
 import type * as agentTasks from "../agentTasks.js";
+import type * as analytics from "../analytics.js";
 import type * as anchors from "../anchors.js";
 import type * as apiTokens from "../apiTokens.js";
 import type * as artifactPages from "../artifactPages.js";
@@ -138,6 +139,7 @@ declare const fullApi: ApiFromModules<{
   accountSwitch: typeof accountSwitch;
   admin_mergeUser: typeof admin_mergeUser;
   agentTasks: typeof agentTasks;
+  analytics: typeof analytics;
   anchors: typeof anchors;
   apiTokens: typeof apiTokens;
   artifactPages: typeof artifactPages;

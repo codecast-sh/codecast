@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Logo, LogoMark } from "@/components/Logo";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { InstallTabs } from "@/components/install-tabs";
+import { track } from "@/lib/analytics";
 import { useRouteMeta } from "../pageMeta";
 
 // The server 302s this to the pinned dmg on dl.codecast.sh (release.sh bumps the pin).
@@ -174,6 +175,7 @@ export default function DownloadPage() {
     // Kick off the download after a beat, like an installer page should. Navigating to
     // an attachment response doesn't unload the SPA, so the guide stays on screen.
     const t = setTimeout(() => {
+      track("desktop_download_clicked", { location: "download_page_auto" });
       window.location.href = MAC_DOWNLOAD_URL;
     }, 900);
     return () => clearTimeout(t);
@@ -219,7 +221,7 @@ export default function DownloadPage() {
         {isMac ? (
           <p className="mx-auto max-w-xl text-lg leading-relaxed text-[#657b83]">
             Your download should start automatically. If not,{" "}
-            <a href={MAC_DOWNLOAD_URL} className="font-medium text-[#b58900] underline underline-offset-4 hover:text-[#cb4b16]">
+            <a href={MAC_DOWNLOAD_URL} onClick={() => track("desktop_download_clicked", { location: "download_page_manual" })} className="font-medium text-[#b58900] underline underline-offset-4 hover:text-[#cb4b16]">
               download manually
             </a>
             .
@@ -231,11 +233,11 @@ export default function DownloadPage() {
               on anything else, Codecast works fully in the browser.
             </p>
             <div className="flex flex-wrap justify-center gap-3">
-              <a href={MAC_DOWNLOAD_URL} className="inline-flex items-center gap-2 rounded-lg bg-[#002b36] px-5 py-2.5 font-medium text-white transition-colors hover:bg-[#073642]">
+              <a href={MAC_DOWNLOAD_URL} onClick={() => track("desktop_download_clicked", { location: "download_page_button" })} className="inline-flex items-center gap-2 rounded-lg bg-[#002b36] px-5 py-2.5 font-medium text-white transition-colors hover:bg-[#073642]">
                 <AppleIcon className="h-5 w-5" />
                 Download for macOS
               </a>
-              <a href={APP_STORE_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-[#93a1a1] px-5 py-2.5 font-medium text-[#586e75] transition-colors hover:bg-[#eee8d5]">
+              <a href={APP_STORE_URL} onClick={() => track("ios_app_clicked", { location: "download_page" })} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-[#93a1a1] px-5 py-2.5 font-medium text-[#586e75] transition-colors hover:bg-[#eee8d5]">
                 <AppleIcon className="h-5 w-5" />
                 iOS App
               </a>
@@ -298,7 +300,7 @@ export default function DownloadPage() {
           on each machine where your agents work; it installs, signs you in, and starts syncing.
         </p>
         <div className="mx-auto max-w-xl text-left">
-          <InstallTabs />
+          <InstallTabs location="download_page" />
         </div>
       </section>
 

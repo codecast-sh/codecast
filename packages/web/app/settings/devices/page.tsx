@@ -202,6 +202,14 @@ export default function DevicesSettingsPage() {
         </p>
         <p className="text-[11px] text-gray-500 mt-2">
           {onlineCount} of {sorted.length} online
+          {sorted.length > 0 && (
+            <>
+              {" · "}
+              <a href="/settings/cli" className="text-sol-yellow hover:text-sol-yellow/80">
+                connect a machine
+              </a>
+            </>
+          )}
         </p>
       </div>
 

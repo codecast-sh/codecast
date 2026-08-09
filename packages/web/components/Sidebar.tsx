@@ -6,6 +6,7 @@ import { useQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { track } from "../lib/analytics";
 import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
@@ -681,6 +682,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       {!isDesktop() && !isNarrow && !hasUsedDesktop && (
         <a
           href="https://codecast.sh/download/mac"
+          onClick={() => track("desktop_download_clicked", { location: "sidebar" })}
           className="flex items-center gap-2 px-3 py-2 mt-2 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors border-t border-sol-border/30 pt-3"
         >
           <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
