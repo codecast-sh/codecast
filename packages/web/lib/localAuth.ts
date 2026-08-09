@@ -1,5 +1,7 @@
 import { useAuthToken } from "@convex-dev/auth/react";
 
+import { CONVEX_URL } from "./convexUrl";
+
 /**
  * Local-first auth signal.
  *
@@ -15,8 +17,7 @@ import { useAuthToken } from "@convex-dev/auth/react";
  * side effects; this one only decides what to draw.
  */
 
-export const CONVEX_URL =
-  import.meta.env.VITE_CONVEX_URL || "https://convex.codecast.sh";
+export { CONVEX_URL };
 
 export const AUTH_STORAGE_NAMESPACE = CONVEX_URL.replace(/[^a-zA-Z0-9]/g, "");
 
