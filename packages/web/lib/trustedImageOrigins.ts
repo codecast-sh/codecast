@@ -12,8 +12,15 @@
 // render immediately; every other http(s) origin is untrusted and callers gate
 // it behind an explicit click (MarkdownRenderer) or strip it (canvasSanitize).
 //
-// Computed lazily, not at module init: window and import.meta.env must exist
-// (SSR, tests), and tests stub VITE_CONVEX_URL before first use.
+// Computed lazily, not at module init: window must exist (SSR, tests), and
+// tests stub VITE_CONVEX_URL before importing this module.
+//
+// The Convex origin comes from the shared CONVEX_URL constant, never from the
+// raw env var: the env var is unset in production builds, and reading it here
+// dead-code-eliminated the Convex origin from the trust set — which gated
+// every image in our own storage behind click-to-load.
+
+import { getConvexUrl } from "./convexUrl";
 
 let trustedOrigins: Set<string> | null = null;
 
@@ -21,10 +28,7 @@ export function getTrustedImageOrigins(): Set<string> {
   if (trustedOrigins) return trustedOrigins;
   const origins = new Set<string>();
   try { origins.add(window.location.origin); } catch { /* non-browser */ }
-  try {
-    const convexUrl = import.meta.env.VITE_CONVEX_URL;
-    if (convexUrl) origins.add(new URL(convexUrl).origin);
-  } catch { /* malformed/unset env */ }
+  try { origins.add(new URL(getConvexUrl()).origin); } catch { /* malformed */ }
   trustedOrigins = origins;
   return origins;
 }
