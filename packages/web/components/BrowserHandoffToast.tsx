@@ -78,7 +78,6 @@ function BrowserHandoffToast({
     let lastHeight = node.getBoundingClientRect().height;
     const ro = new ResizeObserver(() => {
       const height = node.getBoundingClientRect().height;
-      console.log("[handoff-ro] fired", { height, lastHeight });
       if (Math.abs(height - lastHeight) < 1) return;
       lastHeight = height;
       showBrowserHandoffToast(path, onOpen);
