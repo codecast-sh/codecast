@@ -12,6 +12,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { AuthGuard } from "../../components/AuthGuard";
 import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
+import { DetailSplitLayout } from "../../components/DetailSplitLayout";
 import { PlanDetailPanel } from "../../components/PlanDetailPanel";
 import { CreateDocModal } from "../../components/CreateDocModal";
 import {
@@ -283,8 +284,11 @@ export default function PlansPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <div className="h-full flex">
-          <div className="w-[300px] flex-shrink-0 border-r border-sol-border/30 flex flex-col h-full bg-sol-bg">
+        <DetailSplitLayout
+          surface="plans"
+          closeHref="/plans"
+          list={
+            <div className="flex flex-col h-full bg-sol-bg">
             <div className="px-3 py-3 border-b border-sol-border/30 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Target className="w-4 h-4 text-sol-cyan" />
@@ -398,17 +402,10 @@ export default function PlansPage() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto">
-            {selectedPlan ? (
-              <PlanDetailPanel planId={selectedPlan} />
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full text-sol-text-dim">
-                <Target className="w-10 h-10 mb-3 opacity-20" />
-                <p className="text-sm">Select a plan to view details</p>
-              </div>
-            )}
-          </div>
-        </div>
+          }
+        >
+          {selectedPlan ? <PlanDetailPanel planId={selectedPlan} /> : null}
+        </DetailSplitLayout>
       </DashboardLayout>
     </AuthGuard>
   );

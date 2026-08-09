@@ -13,7 +13,7 @@ import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, resolveShowOld } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, resolveShowOld, selectSessionRailOpen } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { PageIcon } from "./RecentlyViewedMenu";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -1503,7 +1503,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         const store = useInboxStore.getState();
         if (row.bucketId) store.setActiveBucketFilter(row.bucketId);
         else store.setActiveProjectFilter(row.projectName!, row.projectPath ?? null);
-        if (!store.sidePanelOpen) store.toggleSidePanel();
+        if (!selectSessionRailOpen(store)) store.toggleSidePanel();
         // The chip views live in the session panel; non-tab surfaces
         // (Settings, auth) don't render it, so head home to the inbox. The
         // real router URL decides — usePathname can report the carried tab.

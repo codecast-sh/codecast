@@ -70,10 +70,13 @@ export function DetailSplitLayout({
   closeHref: string;
   children?: ReactNode;
 }) {
+  // Peek vs pinned is the PRESENTATION of the detail, not a per-surface mode
+  // flag: "overlay" floats it over the full-width list, "split" makes both real
+  // columns. One arrangement for every list surface — the point of the slots.
   const s = useTrackedStore([
-    (st) => st.clientState.ui?.pinned_surfaces?.[surface] === true,
+    (st) => st.workspace.primary.presentation,
   ]);
-  const pinned = s.clientState.ui?.pinned_surfaces?.[surface] === true;
+  const pinned = s.workspace.primary.presentation === "split";
   const router = useRouter();
   // Background tab panes stay mounted (display:none) — a hidden pane must not
   // run peek behavior (especially the document-level Esc listener, which
@@ -112,9 +115,7 @@ export function DetailSplitLayout({
   }, [active, closeHref, router]);
 
   const togglePin = () => {
-    const st = useInboxStore.getState();
-    const cur = st.clientState.ui?.pinned_surfaces ?? {};
-    st.updateClientUI({ pinned_surfaces: { ...cur, [surface]: !pinned } });
+    useInboxStore.getState().wsSetPresentation("primary", pinned ? "overlay" : "split");
     setFull(false);
   };
   const ctxValue = { pinned, full, togglePin, toggleFull: () => setFull((f) => !f) };

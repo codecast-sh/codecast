@@ -14,7 +14,7 @@
 import { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, Cloud, FileText, Laptop } from "lucide-react";
-import { getProjectName, useInboxStore } from "../../store/inboxStore";
+import { getProjectName, useInboxStore, selectSessionRailOpen } from "../../store/inboxStore";
 import { shortenVaultRoot } from "../../lib/vault/projectVault";
 import {
   describeVaultScope,
@@ -68,7 +68,7 @@ export function VaultScopeLine({
     if (!root) return;
     const store = useInboxStore.getState();
     store.setActiveProjectFilter(getProjectName(root), root);
-    if (!store.sidePanelOpen) store.toggleSidePanel();
+    if (!selectSessionRailOpen(store)) store.toggleSidePanel();
     router.push("/inbox");
   }, [router, root]);
 

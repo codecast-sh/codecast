@@ -237,14 +237,8 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "meta", key: "activeTabId" },
     dispatchFieldTable: "client_state",
   },
-  sidePanelOpen: {
-    persistence: { kind: "meta", key: "sidePanelOpen" },
-  },
   sidePanelSessionId: {
     persistence: { kind: "meta", key: "sidePanelSessionId" },
-  },
-  sidePanelUserClosed: {
-    persistence: { kind: "meta", key: "sidePanelUserClosed" },
   },
   // The signed-in user record. Persisted so the separate palette window — which
   // hydrates from IDB and runs no live query of its own — can read
