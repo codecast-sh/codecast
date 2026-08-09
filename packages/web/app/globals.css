@@ -2510,3 +2510,11 @@ pre[class*="language-"] {
 .cc-panel--overlay {
   border-left: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
 }
+
+/* Conversation header tools: never starve the panel's own name. The toolbar is
+   capped so the title always has room, and it clips from the LEFT so the
+   rightmost controls (the overflow menu, which is how you reach anything that
+   folded away) survive longest. Close lives outside this box entirely. */
+.cc-conv-tools {
+  max-width: 55%;
+}

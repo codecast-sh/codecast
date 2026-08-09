@@ -14468,19 +14468,27 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
 
             {(conversation as any)?.active_plan && (
-              <span data-simple-hide className="contents">
+              <span data-simple-hide className="cq-header-collapse contents">
                 <PlanBadge plan={(conversation as any).active_plan} />
               </span>
             )}
             {(conversation as any)?.active_task && (
-              <span data-simple-hide className="contents">
+              <span data-simple-hide className="cq-header-collapse contents">
                 <TaskBadge task={(conversation as any).active_task} />
               </span>
             )}
 
             {conversation && (
               <TooltipProvider delayDuration={300}>
-              <div className="flex items-center gap-1 flex-shrink-0 overflow-hidden ml-auto">
+              <div
+                className="cc-conv-tools flex items-center gap-1 min-w-0 overflow-hidden ml-auto"
+                /* The title had flex-basis:0 while this had flex-basis:auto, so
+                   flexbox handed the toolbar its full content width (371px in a
+                   332px row) and the panel name got nothing. Capping the toolbar
+                   guarantees the title a floor; clipping runs right-to-left so
+                   the overflow menu — the way to reach anything that folds —
+                   is the last thing to go, never the first. */
+              >
 
                 {(() => {
                   // Subagents carry parent_conversation_id; visible children
@@ -14718,9 +14726,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
                 </span>
 
+                </div>
+              {/* Overflow menu lives OUTSIDE the clipped toolbar: it is the
+                  route to anything that folds away in a narrow panel, so it must
+                  never be the control that gets clipped. */}
+              <div className="flex items-center flex-shrink-0">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="cq-header-collapse p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
+                    <button className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
                       </svg>
