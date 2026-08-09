@@ -14356,9 +14356,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <header ref={headerRef} data-sv-convhead className={`cq-container border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
-        <div className="px-2 py-0.5 sm:py-1">
-          <div className="flex items-center gap-2 min-w-0 select-none">
+      <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
+        <div>
+          <div className="cc-panel__head cc-panel__head--flow gap-2 min-w-0">
             <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
             {isZenMode && (
               <ShortcutTooltip label="Exit zen mode" action="ui.zenToggle" side="bottom">
@@ -14387,11 +14387,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   if (e.key === "Enter") { e.currentTarget.blur(); }
                   if (e.key === "Escape") { useInboxStore.setState({ renamingSessionId: null }); }
                 }}
-                className="text-xs sm:text-sm font-medium text-sol-text-secondary min-w-0 bg-transparent border-b border-sol-cyan focus:outline-none"
+                className="text-xs sm:text-sm font-medium text-sol-text-secondary flex-1 min-w-0 bg-transparent border-b border-sol-cyan focus:outline-none"
               />
             ) : (
               <h1
-                className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 cursor-default"
+                className="cc-panel__title truncate flex-1 min-w-0 cursor-default"
                 title={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}
                 onDoubleClick={() => { if (isOwner) useInboxStore.setState({ renamingSessionId: conversation!._id }); }}
               >
@@ -14453,7 +14453,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               // Simple view keeps the metadata cluster functional (it owns the
               // model picker) but pulls it back visually; the plan/task badges
               // drop away entirely.
-              <span data-simple-dim className="contents [.simple-view_&]:flex [.simple-view_&]:items-center [.simple-view_&]:gap-1">
+              <span data-simple-dim className="cq-header-collapse contents [.simple-view_&]:flex [.simple-view_&]:items-center [.simple-view_&]:gap-1">
                 <ConversationMetadata
                   agentType={conversation.agent_type}
                   model={conversation.model}
@@ -14541,7 +14541,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 {conversation.git_branch && (
                   <span
                     data-simple-hide
-                    className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
+                    className="cq-header-collapse hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
                     title={conversation.git_branch}
                     onClick={() => {
                       if (conversation.git_remote_url) {
