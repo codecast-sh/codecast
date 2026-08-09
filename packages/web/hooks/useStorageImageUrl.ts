@@ -198,6 +198,43 @@ export function useStorageImageUrl(storageId: string | undefined | null): string
   return undefined;
 }
 
+/**
+ * Bulk variant for a variable-length id list (the session gallery): returns a
+ * map of storage id → resolved URL for every id already resolved, re-rendering
+ * as the batched query fills in the rest. Ids share the same module cache and
+ * batching as the singular hook.
+ */
+export function useStorageImageUrls(
+  storageIds: ReadonlyArray<string | undefined | null>
+): Record<string, string | null> {
+  const convex = useConvex();
+  const [, forceRender] = useReducer((c: number) => c + 1, 0);
+  const idsKey = storageIds.filter(Boolean).join(",");
+
+  useEffect(() => {
+    let cancelled = false;
+    const unsubscribes: Array<() => void> = [];
+    for (const id of idsKey ? idsKey.split(",") : []) {
+      if (urlCache.has(id)) continue;
+      unsubscribes.push(
+        requestUrl(convex, id, () => {
+          if (!cancelled) forceRender();
+        })
+      );
+    }
+    return () => {
+      cancelled = true;
+      unsubscribes.forEach((fn) => fn());
+    };
+  }, [idsKey, convex]);
+
+  const out: Record<string, string | null> = {};
+  for (const id of storageIds) {
+    if (id && urlCache.has(id)) out[id] = urlCache.get(id)!;
+  }
+  return out;
+}
+
 export function hasDecodedSrc(src: string | undefined): boolean {
   return !!src && loadedSrcs.has(src);
 }

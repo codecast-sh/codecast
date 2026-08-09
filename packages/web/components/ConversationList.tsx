@@ -201,6 +201,9 @@ export type Conversation = {
   user_id: string;
   title?: string;
   subtitle?: string | null;
+  // Newest image in the session (server-denormalized) — feed/inbox row
+  // thumbnail when the inbox_image_thumbs pref is on.
+  image_preview_url?: string | null;
   first_user_message?: string;
   first_assistant_message?: string;
   message_alternates?: Array<{ role: "user" | "assistant"; content: string }>;

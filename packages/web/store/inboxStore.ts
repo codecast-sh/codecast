@@ -290,6 +290,10 @@ export type InboxSession = {
   // whose precedence the client predicates below mirror.
   inbox_killed_at?: number | null;
   last_user_message?: string | null;
+  // Newest image in the conversation (server-denormalized, see convex schema).
+  // Presence doubles as "this session has images"; rendered as the inbox row
+  // thumbnail when the inbox_image_thumbs pref is on.
+  image_preview_url?: string | null;
   session_error?: string;
   // True when the session's latest turn is an unresolved Claude Code auth/API
   // error banner ("Please run /login · API Error: 401 …") — the CLI was signed
@@ -736,14 +740,19 @@ export type ClientUI = {
   // than this count as "N new" on the collapsed header. Refreshed whenever the
   // user toggles the section (expanding IS reading the briefing).
   schedules_seen_at?: number;
-  // List surfaces (docs/tasks/plans) whose detail is PINNED into a standing
-  // side-by-side split instead of the default transient peek. Toggled from the
-  // detail header's pin control. Layout pref → unstamped, per-device local_wins.
-  pinned_surfaces?: Record<string, boolean>;
+  // The workspace arrangement (see store/workspace.ts): which slots are open,
+  // peek vs split, and their sizes. Subject-bearing panes are deliberately NOT
+  // persisted — the arrangement is worth remembering, its contents are
+  // re-derived from where you are now.
+  workspace?: PersistedWorkspace;
   // Simple view: calm, low-chrome rendering of conversations and inbox cards —
   // secondary badges, counts and meta rows drop away. A per-user preference
   // ("my reading style follows me") → stamped LWW.
   simple_view?: boolean;
+  // Show a small thumbnail on inbox session rows when the session contains
+  // images (session.image_preview_url). Independent of simple_view — applies
+  // in both. Off by default; per-user preference → stamped LWW.
+  inbox_image_thumbs?: boolean;
 };
 
 export type ClientLayouts = {
@@ -1404,6 +1413,10 @@ export function sessionStructuralSig(s: InboxSession): string {
     // the fields that change rows; stamps once per turn end/wakeup, never on
     // heartbeats.
     s.loop_state ? `${s.loop_state.status}:${s.loop_state.wakeup_at}` : "",
+    // Row thumbnail (inbox_image_thumbs pref). Changes only when a NEW image
+    // lands in the session — never on heartbeats — so folding it in is cheap
+    // and keeps the thumb from waiting on the coarse ticker.
+    s.image_preview_url || "",
   ].join("\x1f");
 }
 
@@ -3189,7 +3202,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // silently globalizing them would yank screens out from under people.
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "inbox_show_old",
-  "simple_view",
+  "simple_view", "inbox_image_thumbs",
 ]);
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
