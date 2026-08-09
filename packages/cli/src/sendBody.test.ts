@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  expandStdinArgs,
   prepareSessionSendBody,
+  readStdinBody,
   removeStdinTransportNewline,
 } from "./sendBody";
 
@@ -32,5 +34,35 @@ describe("prepareSessionSendBody", () => {
   test("only stdin receives transport-newline normalization", () => {
     expect(prepareSessionSendBody("body\n", false)).toBe("body\n");
     expect(prepareSessionSendBody("body\n", true)).toBe("body");
+  });
+});
+
+describe("readStdinBody", () => {
+  test("strips exactly the one transport newline from the stdin body", () => {
+    expect(readStdinBody(() => "# Brief\n\nsteps\n")).toBe("# Brief\n\nsteps");
+  });
+});
+
+describe("expandStdinArgs", () => {
+  test("passes non-dash arguments through untouched", () => {
+    expect(expandStdinArgs(["task a", "task b"], () => "unused")).toEqual(["task a", "task b"]);
+  });
+
+  test("expands a single '-' to the stdin body in place", () => {
+    expect(expandStdinArgs(["task a", "-", "task c"], () => "multi\nline\n")).toEqual([
+      "task a",
+      "multi\nline",
+      "task c",
+    ]);
+  });
+
+  test("a literal dash inside a longer argument is not stdin", () => {
+    expect(expandStdinArgs(["--", "a-b"], () => "unused")).toEqual(["--", "a-b"]);
+  });
+
+  test("rejects a second '-' — stdin holds only one body", () => {
+    expect(() => expandStdinArgs(["-", "-"], () => "body")).toThrow(
+      "Only one argument can be read from stdin",
+    );
   });
 });
