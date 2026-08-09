@@ -177,6 +177,16 @@ import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type Res
 // list goes empty), so a stray "@foo bar baz" quietly falls back to prose.
 // MENTION_TRIGGER_RE matches at the cursor (text before the caret, $-anchored);
 // MENTION_QUERY_RE re-extracts the same body from the text after the "@".
+// Native textarea autosize (Chromium 123+ / the Electron desktop app): the
+// browser grows the field with content, replacing the JS write→measure→write
+// autosize that forced two full-page reflows per keystroke. Safari falls back
+// to the JS path in resetTextareaHeight.
+const FIELD_SIZING_SUPPORTED =
+  typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content");
+const FIELD_SIZING_STYLE: React.CSSProperties = FIELD_SIZING_SUPPORTED
+  ? ({ fieldSizing: "content" } as React.CSSProperties)
+  : {};
+
 const MENTION_TRIGGER_RE = /@([\w./\\-]*(?: [\w./\\-]+){0,4} ?)$/;
 const MENTION_QUERY_RE = /^[\w./\\-]*(?: [\w./\\-]+){0,4} ?/;
 
@@ -9704,12 +9714,22 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   const [isMultiline, setIsMultiline] = useState(false);
   const resetTextareaHeight = () => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      const sh = textareaRef.current.scrollHeight;
-      textareaRef.current.style.height = sh + "px";
-      setIsMultiline(sh > 36);
+    const el = textareaRef.current;
+    if (!el) return;
+    if (FIELD_SIZING_SUPPORTED) {
+      // The browser autosizes via `field-sizing: content` — no JS writes, no
+      // forced reflow. clientHeight is already-laid-out most of the time here.
+      setIsMultiline(el.clientHeight > 36);
+      return;
     }
+    // Fallback (Safari): the write→measure→write dance forces two synchronous
+    // reflows of the whole page per keystroke — it was the single largest
+    // app-code frame in typing CPU profiles, so it only runs where the CSS
+    // property doesn't exist.
+    el.style.height = "auto";
+    const sh = el.scrollHeight;
+    el.style.height = sh + "px";
+    setIsMultiline(sh > 36);
   };
 
   // useLayoutEffect so the height adjusts before paint — useEffect would
@@ -10845,6 +10865,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
                     placeholder={bareComposer ? (composerPlaceholder ?? "Comment…") : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...` : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message..."}
                     rows={1}
+                    style={FIELD_SIZING_STYLE}
                     className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
                   />
                   <div ref={sendRef} className="shrink-0 flex items-end gap-1">
