@@ -1427,6 +1427,10 @@ function showStatus(): void {
     } catch {
       row("File handles", fmt.muted("unavailable"));
     }
+  } else if (!daemonSupportedOnPlatform()) {
+    // Native Windows: not "stopped" — the daemon can't run here at all.
+    row("Daemon", fmt.warning("not available on native Windows"));
+    console.log(`  ${fmt.muted("codecast runs inside WSL. In PowerShell:")} ${fmt.cmd("irm codecast.sh/install.ps1 | iex")}`);
   } else {
     const restarting = launchdStatus?.state === "spawn scheduled";
     row("Daemon", restarting ? fmt.warning("restarting") : fmt.muted(icons.cross + " stopped"));
@@ -1664,20 +1668,33 @@ async function runOnboarding(config: Config): Promise<void> {
       } catch {}
     }
   } else {
-    // No interactive terminal (piped/headless install): apply the recommended
-    // defaults and point at the per-feature commands instead of hanging.
+    // No interactive terminal (piped/headless install): apply the same
+    // recommended defaults the wizard offers — memory on, stable context off —
+    // instead of silently skipping them, then say what was applied.
+    console.log(`${fmt.muted("Non-interactive install — applying recommended defaults.")}\n`);
     if (config.sync_mode === undefined) {
       config.sync_mode = "all";
       config.sync_projects = [];
       writeConfig(config);
       await updateSyncSettingsOnServer(config);
     }
-    console.log(`${fmt.muted("Non-interactive install — applied defaults (sync: all projects).")}`);
-    console.log(`${fmt.muted("Configure anytime:")}`);
-    console.log(`  ${fmt.cmd("cast sync-settings")}   ${fmt.muted("project & team sync")}`);
-    console.log(`  ${fmt.cmd("cast memory")}          ${fmt.muted("agent memory")}`);
-    console.log(`  ${fmt.cmd("cast stable")}          ${fmt.muted("stable context")}\n`);
+    await promptMemoryEnablement(false);
+    console.log(`${fmt.muted("Applied:")}`);
+    console.log(`  ${fmt.value("Sync: all projects")}     ${fmt.muted("change:")} ${fmt.cmd("cast sync-settings")}`);
+    console.log(`  ${fmt.value("Agent memory: on")}       ${fmt.muted("change:")} ${fmt.cmd("cast memory --disable")}`);
+    console.log(`  ${fmt.value("Stable context: off")}    ${fmt.muted("change:")} ${fmt.cmd("cast stable solo")}\n`);
     ensureTmux();
+  }
+
+  // Native Windows: auth worked, but the daemon only runs inside WSL, so
+  // nothing on this machine will sync. Ending with "you're all set" would be a
+  // lie — say what the real path is and stop.
+  if (!daemonSupportedOnPlatform()) {
+    console.log(`\n${fmt.warning("You're signed in, but sessions won't sync from native Windows.")}`);
+    console.log("On Windows, codecast runs inside WSL. In PowerShell, run:");
+    console.log(`  ${fmt.cmd("irm codecast.sh/install.ps1 | iex")}`);
+    console.log(`${fmt.muted("That sets up WSL, installs codecast inside it, and starts syncing from there.")}\n`);
+    return;
   }
 
   if (!isDaemonRunning()) {
@@ -2851,7 +2868,10 @@ function uninstallOrchestration(): void {
   if (fs.existsSync(orchDest)) fs.rmSync(orchDest, { recursive: true });
 }
 
-async function promptMemoryEnablement(): Promise<void> {
+// interactive=false (piped/headless install) applies the prompt's default
+// answer — memory on — through the exact same install path, so the two modes
+// can't drift.
+async function promptMemoryEnablement(interactive = true): Promise<void> {
   const config = readConfig() || {};
 
   // Auto-update already-enabled snippets
@@ -2957,14 +2977,17 @@ async function promptMemoryEnablement(): Promise<void> {
     }
   }
 
-  console.log("--- Agent Memory ---");
-  console.log("Lets your agents search and learn from past conversations.");
-  console.log(`${fmt.muted("Adds cast commands to your agent config so they can recall prior work.")}\n`);
+  let enableMemory = true;
+  if (interactive) {
+    console.log("--- Agent Memory ---");
+    console.log("Lets your agents search and learn from past conversations.");
+    console.log(`${fmt.muted("Adds cast commands to your agent config so they can recall prior work.")}\n`);
 
-  const enableMemory = await confirm({
-    message: "Enable agent memory?",
-    default: true,
-  });
+    enableMemory = await confirm({
+      message: "Enable agent memory?",
+      default: true,
+    });
+  }
 
   if (enableMemory) {
     const result = installMemorySnippet(false);
