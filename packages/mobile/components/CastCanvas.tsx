@@ -303,9 +303,11 @@ export function CastCanvas({ code }: { code: string }) {
           <FontAwesome name="object-group" size={13} color={Theme.violet} />
         </RNView>
         <RNView style={{ flex: 1, minWidth: 0 }}>
-          <RNText style={styles.cardTitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>
-            {title ?? 'Canvas'}
-          </RNText>
+          {!!title && (
+            <RNText style={styles.cardTitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>
+              {title}
+            </RNText>
+          )}
           {!!excerpt && (
             <RNText style={styles.cardExcerpt} numberOfLines={2} maxFontSizeMultiplier={CHROME_FONT_CAP}>
               {excerpt}
@@ -324,7 +326,7 @@ export function CastCanvas({ code }: { code: string }) {
         <RNView style={[styles.fullscreenWrap, { paddingTop: insets.top }]}>
           <RNView style={styles.fullscreenHeader}>
             <RNText style={styles.headerTitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>
-              {title ?? 'Canvas'}
+              {title ?? ''}
             </RNText>
             <RNView style={styles.headerActions}>
               <TouchableOpacity onPress={() => setShowSource((v) => !v)} hitSlop={8} activeOpacity={0.6}>
