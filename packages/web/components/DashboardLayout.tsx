@@ -74,7 +74,8 @@ interface DashboardLayoutProps {
 }
 
 const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
-const separatorClass = "relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan";
+// One handle for every split in the app (see .cc-split in globals.css).
+const separatorClass = "cc-split";
 
 // Stash on globalThis so the context identity survives Vite HMR reloads —
 // without this, a hot-updated inner DashboardLayout reads a fresh context

@@ -226,7 +226,7 @@ export function TerminalPanel() {
       </div>
 
       {/* header */}
-      <div className="flex items-center h-[30px] pl-2 pr-1 gap-1.5 flex-shrink-0 bg-sol-bg-alt/30 border-b border-sol-border/20 select-none">
+      <div className="cc-panel__head gap-1.5">
         <TerminalSquare className="w-3.5 h-3.5 text-sol-text-dim/60 flex-shrink-0" />
         <div className="flex items-center gap-0.5 overflow-x-auto scrollbar-none flex-1 min-w-0">
           {tabs.map((tab) => {

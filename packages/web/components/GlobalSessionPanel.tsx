@@ -3459,7 +3459,7 @@ export function SessionListPanel({
 
   return (
     <div data-sv-rail className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
-      <div className="px-3 py-0.5 sm:py-1 border-b border-sol-border/50 flex-shrink-0 flex items-center gap-2 min-h-[31px] min-w-0">
+      <div className="cc-panel__head min-w-0">
         {favoritesView && (
           <div className="flex items-center gap-1.5 flex-shrink-0 text-sol-yellow mr-0.5" title="Kept sessions — your long-term shelf">
             <Star className="w-3.5 h-3.5 fill-current" />
@@ -3559,7 +3559,7 @@ export function SessionListPanel({
             <button
               onClick={() => s.updateClientUI({ show_subagents: !showSubagents })}
               title={showSubagents ? `Hide ${totalSubagentCount} subagent sessions` : `Show ${totalSubagentCount} subagent sessions`}
-              className={`px-1 py-[3px] rounded-[5px] transition-colors ${
+              className={`cc-panel__btn ${
                 showSubagents
                   ? "bg-sol-violet/15 text-sol-violet"
                   : "text-sol-text-dim/70 hover:text-sol-text"
@@ -3572,7 +3572,7 @@ export function SessionListPanel({
             <button
               onClick={() => s.setShowOldSessions(!showAllSessions)}
               title={showAllSessions ? `Hide ${oldCount} old session${oldCount === 1 ? "" : "s"}` : `Show ${oldCount} old session${oldCount === 1 ? "" : "s"}`}
-              className={`px-1 py-[3px] rounded-[5px] transition-colors ${
+              className={`cc-panel__btn ${
                 showAllSessions
                   ? "bg-sol-cyan/15 text-sol-cyan"
                   : "text-sol-text-dim/70 hover:text-sol-text"
@@ -3588,7 +3588,7 @@ export function SessionListPanel({
           <button
             onClick={() => useInboxStore.getState().setShowFavorites(!favoritesView)}
             title={favoritesView ? "Back to inbox" : "Show favorites"}
-            className={`px-1 py-[3px] rounded-[5px] transition-colors ${
+            className={`cc-panel__btn ${
               favoritesView
                 ? "bg-amber-400/15 text-amber-400"
                 : "text-sol-text-dim/70 hover:text-amber-400"

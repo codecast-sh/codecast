@@ -7,7 +7,7 @@ import { useTrackedStore, useInboxStore } from "../store/inboxStore";
 import { hasOpenModal } from "../shortcuts/registry";
 import { useTabContext } from "./TabContent";
 
-const separatorClass = "relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan";
+const separatorClass = "cc-split";
 
 // List + peek, with pin as the one escalation (the prototype's Direction 1):
 //   click/enter → peek over the full-width list
@@ -148,7 +148,7 @@ export function DetailSplitLayout({
       </Group>
       {overlayDetail && (
         <div
-          className={`peek-overlay absolute inset-y-0 right-0 z-30 bg-sol-bg flex flex-col transition-[width] duration-200 ease-out ${
+          className={`peek-overlay cc-panel-width absolute inset-y-0 right-0 z-30 bg-sol-bg flex flex-col ${
             full ? "w-full border-l-0" : "w-[62%] min-w-[min(480px,100%)] max-w-full border-l border-sol-border/40"
           }`}
         >
