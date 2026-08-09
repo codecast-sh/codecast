@@ -13,6 +13,7 @@ import { track } from "@/lib/analytics";
 import { useLocalAuth } from "@/lib/localAuth";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { useRouteMeta } from "./pageMeta";
+import { InboxHeroMock, TasksMock, DocsMock, AgentChatMock } from "./productMocks";
 
 function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" | "rose" | "violet" | "cyan" }) {
   const colors: Record<string, string> = {
@@ -175,7 +176,7 @@ export default function LandingPage() {
             <Link href="/security" className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors" style={{ color: '#657b83' }} onMouseEnter={e => (e.currentTarget.style.color = '#002b36')} onMouseLeave={e => (e.currentTarget.style.color = '#657b83')}>
               Security
             </Link>
-            <a href="https://github.com/codecast-sh" target="_blank" rel="noopener noreferrer" className="hidden sm:flex items-center px-2 py-1.5 transition-colors" style={{ color: '#657b83' }} onMouseEnter={e => (e.currentTarget.style.color = '#002b36')} onMouseLeave={e => (e.currentTarget.style.color = '#657b83')}>
+            <a href="https://github.com/codecast-sh/codecast" target="_blank" rel="noopener noreferrer" className="hidden sm:flex items-center px-2 py-1.5 transition-colors" style={{ color: '#657b83' }} onMouseEnter={e => (e.currentTarget.style.color = '#002b36')} onMouseLeave={e => (e.currentTarget.style.color = '#657b83')}>
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                 <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
               </svg>
@@ -216,9 +217,9 @@ export default function LandingPage() {
             </Link>
           </div>
 
-          <h1 className="text-5xl md:text-6xl font-bold leading-[1.1] tracking-tight mb-6 font-mono" style={{ color: '#002b36' }}>
-            See, steer, and remember<br />
-            <span style={{ color: '#93a1a1' }}>every coding agent session</span>
+          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-[1.1] tracking-tight mb-6 font-mono lg:-mx-24" style={{ color: '#002b36' }}>
+            Every agent session<br />
+            <span className="block mt-3 font-normal text-lg sm:text-[clamp(1.1rem,2.6vw,1.875rem)] sm:whitespace-nowrap" style={{ color: '#657b83' }}>watchable, steerable, searchable — from any device</span>
           </h1>
 
           <p className="text-lg leading-relaxed mb-8" style={{ color: '#657b83' }}>
@@ -239,7 +240,8 @@ export default function LandingPage() {
 
           <p className="text-lg leading-relaxed mb-3 max-w-2xl mx-auto" style={{ color: '#657b83' }}>
             The daemon watches the real sessions you already run and keeps a searchable
-            record of everything they&apos;ve done — your team&apos;s shared memory.
+            record of everything they&apos;ve done. Free for individuals —
+            and the record becomes shared memory when your team joins.
           </p>
 
           <p className="text-lg mb-8 font-mono min-h-[28px]" style={{ color: '#586e75' }}>
@@ -273,13 +275,8 @@ export default function LandingPage() {
       <section className="max-w-6xl mx-auto px-6 pb-20">
         <div className="relative">
           <div className="absolute -inset-4 bg-gradient-to-r from-[#b58900]/20 via-[#cb4b16]/20 to-[#dc322f]/20 rounded-2xl blur-xl opacity-50"></div>
-          <div className="relative rounded-xl overflow-hidden shadow-2xl">
-            <img
-              src="/docs/hero.png"
-              alt="Codecast inbox showing live agent sessions with working, needs input, and idle status, pinned sessions, and the three-column layout"
-              className="w-full block"
-              style={{ backgroundColor: '#002b36' }}
-            />
+          <div className="relative">
+            <InboxHeroMock />
           </div>
         </div>
       </section>
@@ -293,12 +290,12 @@ export default function LandingPage() {
               <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Pillar 1 &middot; Remembers</span>
             </div>
             <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono">
-              Your agents&apos; history stops evaporating
+              Nothing lost when the terminal closes
             </h2>
             <p className="text-lg text-[#657b83] leading-relaxed mb-6">
               Team memory across every agent conversation. Search it, ask questions of it,
               and trace any line of code back to the conversation that wrote it —
-              instead of losing it all when the terminal closes.
+              months after the session ended.
             </p>
             <div className="space-y-3 mb-6">
               <div className="flex items-center gap-3 text-[#657b83]">
@@ -651,7 +648,7 @@ export default function LandingPage() {
             Up and running in three steps
           </h2>
           <p className="text-lg max-w-2xl mx-auto" style={{ color: '#657b83' }}>
-            Install the CLI, keep running your agents, then see and steer everything from anywhere.
+            Install the CLI, keep running your agents, then watch, steer, and search everything from anywhere.
           </p>
         </div>
 
@@ -682,7 +679,7 @@ export default function LandingPage() {
             <div className="absolute -left-4 -top-4 w-12 h-12 rounded-full text-white flex items-center justify-center font-mono font-bold text-lg" style={{ backgroundColor: '#268bd2' }}>3</div>
             <div className="rounded-xl p-6 pt-10 h-full" style={{ backgroundColor: '#fdf6e3', border: '1px solid #eee8d5' }}>
               <div className="font-mono text-sm mb-2" style={{ color: '#b58900' }}>search / blame / triage / steer</div>
-              <h3 className="text-xl font-semibold mb-2 font-mono" style={{ color: '#002b36' }}>See, steer, and remember</h3>
+              <h3 className="text-xl font-semibold mb-2 font-mono" style={{ color: '#002b36' }}>Watch, steer, and search</h3>
               <p style={{ color: '#657b83' }}>
                 Search the record, trace code to conversations, triage the live inbox, and steer any agent from web, desktop, or phone.
               </p>
@@ -695,7 +692,7 @@ export default function LandingPage() {
       <section className="py-12" style={{ borderTop: '1px solid #eee8d5', borderBottom: '1px solid #eee8d5', backgroundColor: '#eee8d5' }}>
         <div className="max-w-5xl mx-auto px-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-            <StatCard value="4" label="Agents synced today" />
+            <StatCard value="6" label="Agents synced today" />
             <StatCard value="MIT" label="Open source" />
             <StatCard value="iOS + Mac" label="Native apps" />
             <StatCard value="$0" label="Free for individuals" />
@@ -703,19 +700,56 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Supporting features */}
-      <section className="max-w-4xl mx-auto px-6 py-16">
-        <div className="text-center">
+      {/* Product suite */}
+      <section className="max-w-6xl mx-auto px-6 py-20">
+        <div className="text-center mb-12">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md mb-6" style={{ backgroundColor: 'rgba(203,75,22,0.1)', color: '#cb4b16' }}>
+            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: '#cb4b16' }}></span>
+            <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Built in &middot; Deeply integrated</span>
+          </div>
           <h2 className="text-3xl font-bold mb-4 font-mono" style={{ color: '#002b36' }}>
-            And everything around the record
+            A full product suite around the record
           </h2>
           <p className="text-lg leading-relaxed max-w-2xl mx-auto" style={{ color: '#657b83' }}>
-            Fork a session to try two directions at once, change model or effort mid-run,
-            schedule and trigger agents, break work into tasks and plans across several agents,
-            write docs together, and share with your team under per-conversation privacy controls.
-            Self-hostable and MIT licensed.
+            Tasks, plans, docs, and projects live next to your sessions — an issue tracker
+            and shared docs, wired straight into the agents. And agents are first-class users
+            of all of it: they pick up tasks, update plans, write docs, message each other,
+            and collaborate with you in the same place.
           </p>
         </div>
+
+        <div className="grid gap-6 md:grid-cols-3 mb-10">
+          <div>
+            <TasksMock />
+            <h3 className="mt-4 mb-1 font-mono text-lg font-semibold" style={{ color: '#002b36' }}>Tasks &amp; plans</h3>
+            <p className="text-sm leading-relaxed" style={{ color: '#657b83' }}>
+              An issue tracker where agents are assignees. Hand a task to an agent and it starts
+              working; progress, comments, and the finished session flow back onto the task.
+            </p>
+          </div>
+          <div>
+            <DocsMock />
+            <h3 className="mt-4 mb-1 font-mono text-lg font-semibold" style={{ color: '#002b36' }}>Docs, written together</h3>
+            <p className="text-sm leading-relaxed" style={{ color: '#657b83' }}>
+              Shared docs agents read, write, and comment on. Specs go in, plans and findings
+              come out — every edit linked to the session that made it.
+            </p>
+          </div>
+          <div>
+            <AgentChatMock />
+            <h3 className="mt-4 mb-1 font-mono text-lg font-semibold" style={{ color: '#002b36' }}>Agents talk to each other</h3>
+            <p className="text-sm leading-relaxed" style={{ color: '#657b83' }}>
+              Sessions message sessions. A lead agent can split a plan across workers, trade
+              status updates, and ping you only when a human call is needed.
+            </p>
+          </div>
+        </div>
+
+        <p className="text-center text-sm max-w-2xl mx-auto" style={{ color: '#93a1a1' }}>
+          Plus everything around it: fork a session to try two directions, change model or effort
+          mid-run, schedule and trigger agents, and share it all under per-conversation privacy
+          controls. Self-hostable and MIT licensed.
+        </p>
       </section>
 
       {/* Security & Privacy */}
@@ -865,11 +899,11 @@ export default function LandingPage() {
       <section className="max-w-4xl mx-auto px-6 pb-20">
         <div className="bg-[#002b36] rounded-2xl p-12 text-center">
           <h2 className="text-3xl font-bold text-white mb-4 font-mono">
-            See, steer, and remember
+            Start the record
           </h2>
           <p className="text-lg text-[#839496] mb-8 max-w-xl mx-auto">
-            Start the record of everything your agents do — any agent, any machine.
-            Free for individuals. 30 seconds to install.
+            Watch everything your agents do live, and search it forever —
+            any agent, any machine. Free for individuals. 30 seconds to install.
           </p>
           <div className="inline-block rounded-lg px-5 py-3 mb-8 font-mono text-base text-[#eee8d5]" style={{ backgroundColor: '#073642', border: '1px solid #586e75' }}>
             <span className="text-[#586e75]">$ </span>curl -fsSL codecast.sh/install | sh
@@ -880,7 +914,7 @@ export default function LandingPage() {
                 Get started free
               </Button>
             </Link>
-            <Link href="https://github.com/codecast-sh" target="_blank">
+            <Link href="https://github.com/codecast-sh/codecast" target="_blank">
               <Button size="lg" variant="outline" className="border-[#586e75] bg-transparent text-white hover:bg-[#073642] hover:text-white text-base px-8 h-12 font-medium">
                 View on GitHub
               </Button>
@@ -896,7 +930,7 @@ export default function LandingPage() {
             <div>
               <Logo size="md" className="[--logo-c:#444444] text-[#002b36] mb-4" />
               <p className="text-sm text-[#657b83]">
-                See, steer, and remember every coding agent session.
+                Watch, steer, and search every agent session.
               </p>
             </div>
             <div>
@@ -922,7 +956,7 @@ export default function LandingPage() {
             <div>
               <h4 className="font-semibold text-[#002b36] mb-3 text-sm">Connect</h4>
               <ul className="space-y-2 text-sm text-[#657b83]">
-                <li><a href="https://github.com/codecast-sh" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+                <li><a href="https://github.com/codecast-sh/codecast" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">GitHub</a></li>
                 <li><a href="https://x.com/codecastsh" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">Twitter</a></li>
                 <li><a href="https://discord.gg/S7V5Wnfq" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">Discord</a></li>
               </ul>
