@@ -16,7 +16,7 @@ import { ConversationDiffLayout } from "../../components/ConversationDiffLayout"
 import { ConversationData } from "../../components/ConversationView";
 import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated, selectSessionRailOpen, selectSessionRailUserClosed } from "../../store/inboxStore";
 import { SharePopover } from "../../components/SharePopover";
 import { SessionErrorBanner } from "../../components/SessionErrorBanner";
 import { ActivityFeed } from "../../components/ActivityFeed";
@@ -241,7 +241,7 @@ export function QueuePageClient() {
   // Auto-open session panel when entering inbox (DashboardLayout renders it)
   useMountEffect(() => {
     const store = useInboxStore.getState();
-    if (!store.sidePanelOpen && !store.sidePanelUserClosed) {
+    if (!selectSessionRailOpen(store) && !selectSessionRailUserClosed(store)) {
       store.toggleSidePanel();
     }
   });

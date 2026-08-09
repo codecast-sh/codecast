@@ -1,5 +1,6 @@
 "use client";
 import { useRef, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { CollabDocEditor } from "./editor/CollabDocEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
@@ -9,6 +10,7 @@ import { MessageReview } from "./MessageReview";
 import { MarkdownBlocks } from "./tools/MarkdownRenderer";
 import { DocReviewBar } from "./DocReviewBar";
 import { PeekLayoutControls } from "./DetailSplitLayout";
+import { SlotActions } from "./workspace/Slot";
 import { ArrowLeft, Edit3, Eye, MessageSquareQuote, MoreHorizontal, Copy, Check, X } from "lucide-react";
 import Link from "next/link";
 import { copyToClipboard } from "../lib/utils";
@@ -64,6 +66,7 @@ export function DocumentDetailLayout({
   contentReady = true,
   ownerConversationId,
 }: DocumentDetailLayoutProps) {
+  const router = useRouter();
   const [isEditing, setIsEditing] = useState(initialEditable);
   const [reviewing, setReviewing] = useState(false);
   const reviewKey = `doc:${docId}`;
@@ -136,14 +139,11 @@ export function DocumentDetailLayout({
           {/* Layout (pin/full) controls from the surrounding list surface —
               they live IN this header so the detail has exactly one chrome
               row and one close button. Null outside a DetailSplitLayout. */}
+          {/* Shared controls in the detail's own header. Closing here is a
+              navigation, so the slot's default hide is overridden — the
+              affordance stays identical either way. */}
           <PeekLayoutControls />
-          <Link
-            href={backHref}
-            className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
-            title="Close (Esc)"
-          >
-            <X className="w-4 h-4" />
-          </Link>
+          <SlotActions slot="primary" onClose={() => router.push(backHref)} />
           {metaContent && (
             <button
               onClick={() => setShowMeta(!showMeta)}

@@ -5,6 +5,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
+import { ImageLightbox } from "./ImageGallery";
 import { SessionErrorBanner } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
 import { ConversationData } from "./ConversationView";
@@ -26,6 +27,7 @@ import { getLabelColor } from "../lib/labelColors";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
+import { SlotActions } from "./workspace/Slot";
 import { partitionTriggerInbox, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
@@ -1480,6 +1482,20 @@ export const SessionCard = memo(function SessionCard({
   const restartStartedAt = useInboxStore((st) => st.restartingSessions[session._id]);
   const showModelBadge = useInboxStore((st) => st.clientState?.ui?.show_model_badge === true);
   const showAgentIcon = useInboxStore((st) => st.clientState?.ui?.show_agent_icon !== false);
+  // Row thumbnail for sessions that contain images (server-denormalized
+  // image_preview_url). Independent of simple view — applies in both.
+  // Clicking it zooms the image (ImageLightbox), not the session. It lives on
+  // the RIGHT edge — a left thumb pushes the title column off the list's
+  // shared text edge. The hover controls keep their right-edge anchor; the
+  // THUMB slides left on row hover instead, far enough to clear whichever
+  // control set this variant renders, so both stay visible and clickable.
+  const showImageThumb = useInboxStore((st) => st.clientState?.ui?.inbox_image_thumbs === true);
+  const [thumbZoom, setThumbZoom] = useState(false);
+  // A preview URL whose image fails to load must drop the whole thumb slot —
+  // an invisible broken img still reserves ~46px and wraps the text early.
+  const [thumbBroken, setThumbBroken] = useState(false);
+  useEffect(() => setThumbBroken(false), [session.image_preview_url]);
+  const hasThumb = showImageThumb && !!session.image_preview_url && !thumbBroken;
   // sessionLabel and isFavorite are now passed as scalar props (computed once in
   // the parent via labelByConv/cardIsFavorite) instead of per-card store scans —
   // see ct-37958. Only spawnedByTitle stays a local selector.
@@ -1546,6 +1562,16 @@ export const SessionCard = memo(function SessionCard({
     if (session.owner_user_id && session.owner_user_id === meId) return false;
     return true;
   }, [currentUser, session.user_id, session.owned_by_me, session.owner_user_id]);
+  // On row hover the toolbar's gradient rises OVER the thumb (the thumb has
+  // no z, the toolbar paints above but lets clicks through everywhere except
+  // its buttons) while the thumb eases a few px left — ending half hidden
+  // under the gradient and buttons, still clickable on its exposed half.
+  // Stashed/killed rows don't animate at all: their restore cluster sits at
+  // the title line, stacked above the thumb, and both stay clickable as-is.
+  const thumbHoverShift =
+    !isForeignSession && !(onRestore || onKill) && (onDismiss || onStash || onDefer || onPin)
+      ? "group-hover:-translate-x-[14px]"
+      : "";
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
@@ -1804,6 +1830,8 @@ export const SessionCard = memo(function SessionCard({
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
       >
+      <div className="flex items-center gap-2.5">
+      <div className="min-w-0 flex-1">
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text-muted" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
@@ -2049,6 +2077,27 @@ export const SessionCard = memo(function SessionCard({
           </div>
         )}
       </div>
+      {hasThumb && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setThumbZoom(true); }}
+          className={`shrink-0 self-center rounded-md overflow-hidden border border-sol-border/60 cursor-zoom-in transition-transform duration-300 ease-out ${thumbHoverShift}`}
+          title="View image"
+        >
+          <img
+            src={session.image_preview_url!}
+            alt=""
+            loading="lazy"
+            draggable={false}
+            onError={() => setThumbBroken(true)}
+            className="w-9 h-9 object-cover"
+          />
+        </button>
+      )}
+      </div>
+      {thumbZoom && session.image_preview_url && (
+        <ImageLightbox src={session.image_preview_url} onClose={() => setThumbZoom(false)} />
+      )}
+      </div>
       {/* The ONE pin a pinned session shows: a persistent, interactive badge anchored
           top-right. It stays put on hover (z above the toolbar) and the hover toolbar
           omits its own pin button for pinned rows — so the pin never duplicates or
@@ -2069,7 +2118,7 @@ export const SessionCard = memo(function SessionCard({
         </div>
       )}
       {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
-        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
+        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/50 to-sol-bg-alt/85'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 50%, transparent), color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 85%, transparent))' } : undefined}>
           {/* Pin slot, first so it anchors the top of the toolbar. When the row is
               already pinned, the persistent badge above IS the pin — here we render
               only an invisible spacer the same size, so the remaining actions sit
@@ -2084,7 +2133,7 @@ export const SessionCard = memo(function SessionCard({
               <ShortcutTooltip label="Pin" action="session.pin" side="left">
                 <button
                   onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); checkMilestone('m-first-pin'); }}
-                  className="p-1 rounded transition-colors text-sol-text-dim hover:text-sol-magenta"
+                  className="p-1 rounded transition-colors text-sol-text-dim hover:text-sol-magenta pointer-events-auto"
                 >
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 17v5" />
@@ -2100,7 +2149,7 @@ export const SessionCard = memo(function SessionCard({
             <ShortcutTooltip label="Kill — done, tears the agent down" action="session.kill" side="left">
               <button
                 onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-                className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-colors"
+                className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-colors pointer-events-auto"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -2114,7 +2163,7 @@ export const SessionCard = memo(function SessionCard({
                 e.stopPropagation();
                 useInboxStore.getState().openPalette({ targets: [session], targetType: "session", mode: "bucket" });
               }}
-              className="p-1 rounded text-sol-text-dim hover:text-sol-blue transition-colors"
+              className="p-1 rounded text-sol-text-dim hover:text-sol-blue transition-colors pointer-events-auto"
             >
               <Tag className="w-3.5 h-3.5" />
             </button>
@@ -2124,7 +2173,7 @@ export const SessionCard = memo(function SessionCard({
             <ShortcutTooltip label="Stash — set aside, keeps running" action="session.stash" side="left">
               <button
                 onClick={(e) => { e.stopPropagation(); onStash(session._id); tipActions.whisper('session.stash', e); }}
-                className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors"
+                className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors pointer-events-auto"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7l10 10M17 17h-6m6 0v-6" />
@@ -2135,7 +2184,7 @@ export const SessionCard = memo(function SessionCard({
         </div>
       )}
       {!isForeignSession && (onRestore || onKill) && (
-        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-[4]">
           {onKill && (
             <ShortcutTooltip label={isStashed ? "Kill" : "Remove from list"} action={isStashed ? "session.kill" : undefined} side="left">
               <button
@@ -3546,18 +3595,9 @@ export function SessionListPanel({
           >
             <Star className="w-3 h-3" fill={favoritesView ? "currentColor" : "none"} />
           </button>
-          {/* Standard close: every column dismisses with an X in its top-right. */}
-          {onCollapse && (
-            <button
-              onClick={onCollapse}
-              title="Close panel"
-              className="px-1 py-[3px] rounded-[5px] text-sol-text-dim/70 hover:text-sol-red transition-colors"
-            >
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          )}
+          {/* Buttons only — this rail draws its own header, so it takes the
+              shared CONTROLS, not a second header bar. */}
+          <SlotActions slot="context" onClose={onCollapse} />
         </div>
         </div>
       </div>
@@ -3737,17 +3777,6 @@ export function SessionListPanel({
         activeSessionId={activeSessionId}
         onOpen={openScheduleTarget}
       />
-      {onCollapse && (
-        <div className="flex-shrink-0 border-t border-sol-border/30 flex justify-center py-1">
-          <button
-            onClick={onCollapse}
-            className="p-1 rounded text-sol-text-dim/40 hover:text-sol-text-dim transition-colors"
-            title="Collapse to rail"
-          >
-            <ChevronsRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
     </div>
   );
 }

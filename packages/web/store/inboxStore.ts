@@ -10,6 +10,7 @@ import {
   sync,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
+import { createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, promote as wsPromotePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
@@ -82,7 +83,7 @@ import { pushInboxViewHistory, isApplyingViewHistory, type InboxViewSnapshot } f
 // is here: it decides the ARRANGEMENT at first paint. Seeded from localStorage
 // synchronously, a pinned split renders as a split immediately instead of
 // flashing a peek overlay until the server clientState arrives.
-const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "pinned_surfaces"] as const;
+const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "workspace"] as const;
 const CRITICAL_PREFS_LS_KEY = "codecast-critical-ui";
 
 function readCriticalUiPrefs(): Record<string, any> {
@@ -116,6 +117,45 @@ function writeCriticalUiPrefs(partial: Record<string, any>) {
     localStorage.setItem(CRITICAL_PREFS_LS_KEY, JSON.stringify({ ...existing, ...toWrite }));
   } catch {}
 }
+
+// The arrangement (not its contents) is a durable preference: mirror it into
+// the ui bag on every slot mutation so it survives reload and rides the same
+// per-device sync as the other layout prefs. In CRITICAL_UI_KEYS, so the shell
+// paints the right arrangement immediately instead of flashing a default.
+function persistWorkspace(draft: any) {
+  const ws = draft.workspace as WorkspaceState;
+  if (!draft.clientState) draft.clientState = {};
+  if (!draft.clientState.ui) draft.clientState.ui = {};
+  // Shared slots follow the user like any layout pref…
+  draft.clientState.ui.workspace = serializeWorkspace(ws, "shared");
+  writeCriticalUiPrefs({ workspace: draft.clientState.ui.workspace });
+  // …device slots never leave this browser profile (SLOT_PERSISTENCE).
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(DEVICE_WORKSPACE_KEY, JSON.stringify(serializeWorkspace(ws, "device")));
+    }
+  } catch {}
+}
+
+const DEVICE_WORKSPACE_KEY = "codecast-device-workspace";
+
+function readDeviceWorkspace(): any {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    const raw = localStorage.getItem(DEVICE_WORKSPACE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+// Region "is it open" questions are now selectors over slot state, not stored
+// booleans — one source of truth for the right edge.
+/** Nav is folded to its hover-peek edge (the old ui.sidebar_collapsed). */
+export const selectNavCollapsed = (s: { workspace: WorkspaceState }) => s.workspace.nav.presentation === "collapsed";
+
+export const selectSessionRailOpen = (s: { workspace: WorkspaceState }) => isSessionRailOpen(s.workspace);
+export const selectCommentRailOpen = (s: { workspace: WorkspaceState }) => isCommentRailOpen(s.workspace);
+export const selectSessionRailUserClosed = (s: { workspace: WorkspaceState }) =>
+  !wsAutoAllowedPure(s.workspace, "context", SESSION_LIST_PANE);
 
 export function getProjectName(gitRoot?: string, projectPath?: string): string {
   const path = gitRoot || projectPath;
@@ -792,8 +832,8 @@ export type AppTab = {
   path: string;
   sessionId?: string;
   sidePanelSessionId?: string;
-  sidePanelOpen?: boolean;
-  sidePanelUserClosed?: boolean;
+  /** The tab's own arrangement — one snapshot instead of a flag per region. */
+  workspace?: PersistedWorkspace;
   createdAt: number;
 };
 
@@ -2463,7 +2503,6 @@ interface InboxStoreState {
   getReviewComments: (conversationId: string) => PendingComment[];
 
   // ── Comment rail (ephemeral UI; teammate comment thread on the right) ──
-  commentRailOpen: boolean | null;            // null = auto (open when comments exist / shared)
   commentRailAnchor: string | null;           // a pending anchored thread (messageId) to focus
   commentRailNonce: number;                   // bump to re-trigger focus/scroll to the anchor
   commentRailWidth: Record<string, number>;   // reserved width (px) per conversation; published by the rail, read by the layout
@@ -2896,16 +2935,21 @@ interface InboxStoreState {
   closeSettingsModal: () => void;
 
   // -- Side panel --
-  // -- Stage companion (see openCompanion) --
-  companionSessionId: string | null;
-  /** Session whose companion the user closed by hand; suppresses carry-across. */
-  companionDismissedFor: string | null;
-  openCompanion: (sessionId: string) => void;
-  closeCompanion: (opts?: { remember?: boolean }) => void;
+  // -- Workspace slots (see store/workspace.ts + WORKSPACE_SLOTS.md) --
+  // The layout as data: fixed slots, at most one pane each. Regions migrate
+  // onto this one at a time; the legacy flags below disappear as they land.
+  workspace: WorkspaceState;
+  wsShow: (slot: SlotId, pane: Pane, opts?: { presentation?: Presentation }) => void;
+  wsHide: (slot: SlotId, opts?: { remember?: boolean }) => void;
+  wsToggle: (slot: SlotId, pane: Pane) => void;
+  wsPromote: (slot: SlotId) => void;
+  wsSetPresentation: (slot: SlotId, presentation: Presentation) => void;
+  setNavCollapsed: (collapsed: boolean) => void;
+  setDockOpen: (open: boolean) => void;
+  wsSetSize: (slot: SlotId, size: number) => void;
+
 
   sidePanelSessionId: string | null;
-  sidePanelOpen: boolean;
-  sidePanelUserClosed: boolean;
   openSidePanel: (sessionId: string) => void;
   closeSidePanel: () => void;
   clearSidePanelSession: () => void;
@@ -4299,16 +4343,25 @@ export const useInboxStore = create<InboxStoreState>(
   reviewEditingId: null,
   reviewComments: {},
 
-  commentRailOpen: null,
   commentRailAnchor: null,
   commentRailNonce: 0,
   commentRailWidth: {},
-  setCommentRailOpen: (open: boolean | null) => set({ commentRailOpen: open }),
+  // The comment rail and the session list share the ONE right edge, so opening
+  // comments displaces the rail rather than stacking a second one. Closing
+  // comments hands the edge back to the session list unless you had closed the
+  // rail by hand — the slot's own dismissal answers that, no extra flag.
+  setCommentRailOpen: (open: boolean | null) => {
+    const st = get();
+    const conv = st.currentSessionId ?? st.viewingDismissedId ?? null;
+    if (open === true && conv) st.wsShow("context", { kind: "comments", ref: conv });
+    else if (wsAutoAllowedPure(st.workspace, "context", SESSION_LIST_PANE)) st.wsShow("context", SESSION_LIST_PANE);
+    else st.wsHide("context", { remember: false });
+  },
   // Focus/expand a message's inline anchored thread (the gutter handle). Doesn't
   // open the global dock — anchored threads live inline at their message.
   openCommentThread: (messageId: string | null = null) =>
     set((s: any) => ({ commentRailAnchor: messageId, commentRailNonce: s.commentRailNonce + 1 })),
-  closeCommentRail: () => set({ commentRailOpen: false }),
+  closeCommentRail: () => get().setCommentRailOpen(false),
   setCommentRailWidth: (conversationId: string, w: number) =>
     set((s: any) => {
       if ((s.commentRailWidth[conversationId] ?? 0) === w) return {};
@@ -7047,39 +7100,81 @@ export const useInboxStore = create<InboxStoreState>(
   // The ONE conversation allowed to share the stage with a working page (a
   // task, a doc). Opening another replaces it — stage panes swap, they never
   // accumulate, so the layout can never grow past page + companion + rail.
-  companionSessionId: null,
-  companionDismissedFor: null,
-
-  openCompanion: action(function (this: Draft, sessionId: string) {
-    this.companionSessionId = sessionId;
-    // An explicit open outranks an earlier dismissal.
-    this.companionDismissedFor = null;
-  }),
-
-  // remember:true (the ✕) suppresses carry-across for THIS conversation until
-  // you attend a different one — otherwise every navigation would helpfully
-  // re-add the pane you just closed, making the ✕ a lie. remember:false is the
-  // bookkeeping close used when the surface itself goes away.
-  closeCompanion: action(function (this: Draft, opts?: { remember?: boolean }) {
-    if (opts?.remember !== false && this.companionSessionId) {
-      this.companionDismissedFor = this.companionSessionId;
+  workspace: (() => {
+    const prefs = readCriticalUiPrefs() as any;
+    const device = readDeviceWorkspace();
+    const ws = hydrateWorkspace(prefs.workspace, device);
+    // One-time inheritance from the terminal's own key, so an existing user's
+    // dock opens exactly as they left it before the dock became a slot.
+    if (!device) {
+      try {
+        const raw = typeof localStorage !== "undefined" ? localStorage.getItem("cast_term_panel") : null;
+        const legacy = raw ? JSON.parse(raw) : null;
+        if (legacy?.open) ws.dock = { pane: { kind: "terminal" }, presentation: "split", size: legacy.height };
+        else if (typeof legacy?.height === "number") ws.dock = { ...ws.dock, size: legacy.height };
+      } catch {}
     }
-    this.companionSessionId = null;
+    // First boot after the migration: inherit the old sidebar pref so the nav
+    // opens exactly as the user left it.
+    if (!prefs.workspace && prefs.sidebar_collapsed) ws.nav.presentation = "collapsed";
+    return ws;
+  })(),
+
+  wsShow: action(function (this: Draft, slot: SlotId, pane: Pane, opts?: { presentation?: Presentation }) {
+    this.workspace = showPane(this.workspace as WorkspaceState, slot, pane, opts);
+    persistWorkspace(this);
   }),
+  wsHide: action(function (this: Draft, slot: SlotId, opts?: { remember?: boolean }) {
+    this.workspace = hidePane(this.workspace as WorkspaceState, slot, opts);
+    persistWorkspace(this);
+  }),
+  wsToggle: action(function (this: Draft, slot: SlotId, pane: Pane) {
+    this.workspace = togglePane(this.workspace as WorkspaceState, slot, pane);
+    persistWorkspace(this);
+  }),
+  wsPromote: action(function (this: Draft, slot: SlotId) {
+    this.workspace = wsPromotePure(this.workspace as WorkspaceState, slot);
+    persistWorkspace(this);
+  }),
+  wsSetPresentation: action(function (this: Draft, slot: SlotId, presentation: Presentation) {
+    this.workspace = wsSetPresentationPure(this.workspace as WorkspaceState, slot, presentation);
+    persistWorkspace(this);
+  }),
+  // One action owns "is the nav folded", so the header button, the shortcut and
+  // the drag-to-zero handler can't drift apart.
+  // The dock is a slot like any other; SLOT_PERSISTENCE says its arrangement
+  // stays on this device, so no component needs its own storage to say so.
+  setDockOpen: (open: boolean) => {
+    const st = get();
+    if (open) st.wsShow("dock", TERMINAL_PANE);
+    else st.wsHide("dock", { remember: true });
+  },
+
+  setNavCollapsed: action(function (this: Draft, collapsed: boolean) {
+    this.workspace = wsSetPresentationPure(this.workspace as WorkspaceState, "nav", collapsed ? "collapsed" : "split");
+    persistWorkspace(this);
+  }),
+
+  wsSetSize: action(function (this: Draft, slot: SlotId, size: number) {
+    this.workspace = wsSetSizePure(this.workspace as WorkspaceState, slot, size);
+    persistWorkspace(this);
+  }),
+
+
+
 
   sidePanelSessionId: null,
-  sidePanelOpen: false,
-  sidePanelUserClosed: false,
 
   openSidePanel: action(function (this: Draft, sessionId: string) {
     this.sidePanelSessionId = sessionId;
-    this.sidePanelOpen = true;
-    this.sidePanelUserClosed = false;
+    this.workspace = showPane(this.workspace as WorkspaceState, "context", SESSION_LIST_PANE);
+    persistWorkspace(this);
   }),
 
   closeSidePanel: action(function (this: Draft) {
     this.sidePanelSessionId = null;
-    this.sidePanelOpen = false;
+    this.workspace = hidePane(this.workspace as WorkspaceState, "context", { remember: true });
+    persistWorkspace(this);
   }),
 
   clearSidePanelSession: action(function (this: Draft) {
@@ -7087,14 +7182,14 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   toggleSidePanel: action(function (this: Draft) {
-    if (this.sidePanelOpen) {
-      this.sidePanelOpen = false;
-      this.sidePanelUserClosed = true;
+    const ws = this.workspace as WorkspaceState;
+    if (isSessionRailOpen(ws)) {
+      this.workspace = hidePane(ws, "context", { remember: true });
     } else {
-      this.sidePanelOpen = true;
-      this.sidePanelUserClosed = false;
+      this.workspace = showPane(ws, "context", SESSION_LIST_PANE);
       this.sidePanelSessionId = this.sidePanelSessionId ?? this.currentSessionId ?? null;
     }
+    persistWorkspace(this);
   }),
 
 
@@ -7129,8 +7224,7 @@ export const useInboxStore = create<InboxStoreState>(
       path: opts.path,
       sessionId: opts.sessionId,
       sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-      sidePanelOpen: this.sidePanelOpen || undefined,
-      sidePanelUserClosed: this.sidePanelUserClosed || undefined,
+      workspace: serializeWorkspace(this.workspace as WorkspaceState),
       createdAt: Date.now(),
     };
     this.tabs = [...this.tabs, tab];
@@ -7168,8 +7262,7 @@ export const useInboxStore = create<InboxStoreState>(
       this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
         ...t,
         sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-        sidePanelOpen: this.sidePanelOpen || undefined,
-        sidePanelUserClosed: this.sidePanelUserClosed || undefined,
+        workspace: serializeWorkspace(this.workspace as WorkspaceState),
         path: stampedTabPath(t),
       } : t);
     }
@@ -7177,8 +7270,7 @@ export const useInboxStore = create<InboxStoreState>(
     this.activeTabId = id;
     if (target) {
       this.sidePanelSessionId = target.sidePanelSessionId ?? null;
-      this.sidePanelOpen = target.sidePanelOpen ?? false;
-      this.sidePanelUserClosed = target.sidePanelUserClosed ?? false;
+      if (target.workspace) this.workspace = hydrateWorkspace(target.workspace);
     }
   }),
 
@@ -7198,8 +7290,7 @@ export const useInboxStore = create<InboxStoreState>(
     this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
       ...t,
       sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-      sidePanelOpen: this.sidePanelOpen || undefined,
-      sidePanelUserClosed: this.sidePanelUserClosed || undefined,
+      workspace: serializeWorkspace(this.workspace as WorkspaceState),
       path: stampedTabPath(t),
       ...patch,
     } : t);
