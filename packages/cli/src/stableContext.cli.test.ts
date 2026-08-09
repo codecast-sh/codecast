@@ -103,6 +103,7 @@ describe("stable-context CLI isolation", () => {
       expect(result.stdout).toBe(
         `<stable-context mode="solo">
 This gives you bigger-picture visibility on what you have been and are currently working on.
+This is a snapshot from session start — \`cast feed\` / \`cast sessions\` give the current picture. Before attributing work to a session or messaging it about its work, check its evidence: \`cast diff <id>\` shows the files it changed, \`cast read <id>\` its recent turns. A session's state says who is paying attention now, not who wrote what.
 
 <FEED>
 No conversations found.
