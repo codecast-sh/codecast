@@ -2367,7 +2367,7 @@ cast image shot.png            # or a URL: cast image https://…/diagram.png
 # → prints a stable https URL + ready markdown ![shot](url)
 \`\`\`
 
-That URL renders inline for the human everywhere: \`![alt](url)\` in any reply or message, \`<img src="url">\` inside a canvas. Never link local file paths (\`/tmp/…\`, \`/var/folders/…\`) — the human's browser cannot read files on this machine, so those links are dead. \`data:\` URIs also work in a canvas but bloat the message; prefer \`cast image\`.
+That URL renders inline for the human everywhere: \`![alt](url)\` in any reply or message, \`<img src="url">\` inside a canvas. The alt text renders as a caption — write a real one (\`--alt "30-day overview"\`). Several images in one paragraph render side by side, so \`![before](u1) ![after](u2)\` reads as a comparison row. Never link local file paths (\`/tmp/…\`, \`/var/folders/…\`) — the human's browser cannot read files on this machine, so those links are dead. \`data:\` URIs also work in a canvas but bloat the message; prefer \`cast image\`.
 
 Interactivity is declarative; codecast supplies the behavior:
 

@@ -90,6 +90,13 @@ export default function ProfilePage() {
           </div>
           <div className="flex items-center justify-between gap-4">
             <div>
+              <span className="text-sol-base1">Image thumbnails</span>
+              <p className="text-xs text-sol-base01 mt-0.5">Show a small thumbnail on inbox session rows when a session contains images</p>
+            </div>
+            <ImageThumbsToggle />
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div>
               <span className="text-sol-base1">Agent icon</span>
               <p className="text-xs text-sol-base01 mt-0.5">Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox session list</p>
             </div>
@@ -302,6 +309,17 @@ function SimpleViewToggle() {
     <Switch
       checked={enabled}
       onCheckedChange={(v) => updateUI({ simple_view: v })}
+    />
+  );
+}
+
+function ImageThumbsToggle() {
+  const enabled = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
+  const updateUI = useInboxStore((s) => s.updateClientUI);
+  return (
+    <Switch
+      checked={enabled}
+      onCheckedChange={(v) => updateUI({ inbox_image_thumbs: v })}
     />
   );
 }
