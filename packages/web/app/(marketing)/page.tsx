@@ -239,9 +239,9 @@ export default function LandingPage() {
           </div>
 
           <p className="text-lg leading-relaxed mb-3 max-w-2xl mx-auto" style={{ color: '#657b83' }}>
-            The daemon watches the real sessions you already run and keeps a searchable
-            record of everything they&apos;ve done. Free for individuals —
-            and the record becomes shared memory when your team joins.
+            A daemon watches the real sessions you already run and keeps a searchable
+            record of everything they&apos;ve done. That record becomes an opt-in
+            shared memory when your team joins.
           </p>
 
           <p className="text-lg mb-8 font-mono min-h-[28px]" style={{ color: '#586e75' }}>

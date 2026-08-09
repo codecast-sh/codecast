@@ -65,10 +65,10 @@ export function InstallTabs({ location = "unknown", showAlternatives = true }: {
         </code>
         <button
           onClick={handleCopy}
-          className="p-2 rounded-md transition-colors shrink-0"
+          className="group p-2 rounded-lg shrink-0 transition-all duration-200 hover:-translate-y-px hover:brightness-110 active:translate-y-0 active:brightness-95"
           style={copied
-            ? { backgroundColor: '#859900', color: '#002b36' }
-            : { backgroundColor: '#b58900', color: '#002b36' }
+            ? { backgroundColor: '#859900', color: '#fdf6e3', boxShadow: '0 2px 12px rgba(133,153,0,0.45)' }
+            : { background: 'linear-gradient(135deg, #e86c5d 0%, #cb4b16 100%)', color: '#fdf6e3', boxShadow: '0 2px 12px rgba(203,75,22,0.4)' }
           }
           title="Copy to clipboard"
         >
@@ -77,8 +77,9 @@ export function InstallTabs({ location = "unknown", showAlternatives = true }: {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
             </svg>
           ) : (
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="9" width="11" height="11" rx="2" className="transition-transform duration-200 group-hover:translate-x-[1.5px] group-hover:translate-y-[1.5px]" />
+              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" className="transition-transform duration-200 group-hover:-translate-x-[1.5px] group-hover:-translate-y-[1.5px]" />
             </svg>
           )}
         </button>
