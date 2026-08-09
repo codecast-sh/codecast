@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useInboxStore } from "../store/inboxStore";
 
 const ONE_MIN_MS = 60 * 1000;
@@ -112,7 +112,25 @@ export function computeDaemonHealth(
 // reflects our own downtime, not the daemon's silence, and would otherwise fire
 // a false "offline" banner on every wake.
 export function useDaemonHealth(): DaemonHealth {
-  const user = useInboxStore((s) => s.currentUser);
+  // Depend on the six fields health actually reads, not the whole user doc:
+  // currentUser's identity churns on unrelated field changes (device rows
+  // flapping autostart_enabled/daemon_pid), and this hook backs three
+  // always-mounted components. The joined-string dep keeps them quiet unless a
+  // health input really moved.
+  const healthSig = useInboxStore((s) => {
+    const u = s.currentUser as DaemonHealthInput | null | undefined;
+    if (!u) return "";
+    return `${u.daemon_last_seen ?? ""}|${u.last_heartbeat ?? ""}|${u.daemon_pending_sync_count ?? ""}|${u.daemon_oldest_pending_ms ?? ""}|${u.daemon_pending_sync_messages ?? ""}|${u.daemon_pending_sync_conversations ?? ""}`;
+  });
+  const user = useMemo<DaemonHealthInput | null>(() => {
+    if (!healthSig) return null;
+    const [a, b, c, d, e, f] = healthSig.split("|").map((v) => (v === "" ? null : Number(v)));
+    return {
+      daemon_last_seen: a, last_heartbeat: b, daemon_pending_sync_count: c,
+      daemon_oldest_pending_ms: d, daemon_pending_sync_messages: e,
+      daemon_pending_sync_conversations: f,
+    };
+  }, [healthSig]);
   const [now, setNow] = useState(() => Date.now());
   // Mount counts as a fresh start of observation, so grace applies immediately.
   const wokeAtRef = useRef(Date.now());

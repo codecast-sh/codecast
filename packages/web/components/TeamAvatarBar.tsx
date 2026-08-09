@@ -29,6 +29,21 @@ function isOnline(lastSeen: number | undefined): boolean {
   return lastSeen > fiveMinutesAgo;
 }
 
+// Data pump, isolated so the live query's push rate never re-renders the
+// visible bar: getTeamMembers re-emits every few seconds (teammates' presence
+// heartbeats), and a useQuery in the display component re-rendered the whole
+// avatar row on each push. The pump renders nothing; the bar below reads the
+// store, whose teamMembers ref only changes when something displayable changed
+// (the sync layer quantizes presence timestamps and bails on identical pushes).
+function TeamMembersPump({ teamId }: { teamId: Id<"teams"> | undefined }) {
+  const teamMembersQuery = useQuery(
+    api.teams.getTeamMembers,
+    teamId ? { team_id: teamId } : "skip"
+  );
+  useConvexSync(teamMembersQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamMembers", d), []));
+  return null;
+}
+
 export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -36,17 +51,10 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const { user: currentUser } = useCurrentUser();
   const effectiveTeamId = propTeamId ?? activeTeamId ?? ((currentUser as any)?.team_id as Id<"teams"> | undefined);
-  const teamMembersQuery = useQuery(
-    api.teams.getTeamMembers,
-    effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
-  );
-  const cachedMembers = useInboxStore((s) => s.teamMembers);
-  const teamMembers = teamMembersQuery ?? (cachedMembers.length > 0 ? cachedMembers : null);
-
-  useConvexSync(teamMembersQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamMembers", d), []));
+  const teamMembers = useInboxStore((s) => (s.teamMembers.length > 0 ? s.teamMembers : null));
 
   if (!effectiveTeamId || !teamMembers || teamMembers.length === 0) {
-    return null;
+    return <TeamMembersPump teamId={effectiveTeamId} />;
   }
 
   const sortedMembers = [...teamMembers]
@@ -83,6 +91,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
 
   return (
     <div className="flex items-center gap-1 px-2">
+      <TeamMembersPump teamId={effectiveTeamId} />
       {sortedMembers.slice(0, 6).map((member) => {
         const online = isOnline(member.daemon_last_seen);
         const avatar = member.image || member.github_avatar_url;

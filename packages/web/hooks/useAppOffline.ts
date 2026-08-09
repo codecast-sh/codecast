@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useConvexConnectionState } from "convex/react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useConvex } from "convex/react";
 
 // How long the WebSocket must stay down before we call it "disconnected".
 // Covers the normal boot handshake and transient reconnects so consumers
@@ -15,8 +15,18 @@ const DISCONNECT_GRACE_MS = 5_000;
  * daemon looking stale merely because nothing can sync).
  */
 export function useAppOffline(): { offline: boolean; online: boolean } {
-  const connection = useConvexConnectionState();
-  const wsDown = !connection.isWebSocketConnected;
+  // Subscribe to ONLY the websocket-connected boolean, not the whole connection
+  // state: `useConvexConnectionState()` re-emits on every in-flight request
+  // (each keystroke's draft mutation, every query of a session switch), which
+  // re-rendered every consumer of this hook — three always-mounted banners/chips
+  // — on essentially all network activity. The boolean snapshot lets
+  // useSyncExternalStore bail unless connectivity actually flips.
+  const convex = useConvex();
+  const wsConnected = useSyncExternalStore(
+    useCallback((cb: () => void) => convex.subscribeToConnectionState(cb), [convex]),
+    () => convex.connectionState().isWebSocketConnected,
+  );
+  const wsDown = !wsConnected;
 
   const [online, setOnline] = useState(() => navigator.onLine);
   const [wsDownLong, setWsDownLong] = useState(false);

@@ -187,6 +187,24 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
     let cursor: string | null = null;
     let completed = false; // reached the true end vs stopped at maxPages
     const seenCursors = new Set<string>();
+    // Batch page overlays: every onPage is a store write that wakes all
+    // subscribers, and small server pages (docs is capped at 12 rows for query
+    // memory) turn a few-thousand-row crawl into hundreds of writes — measured
+    // as a multi-minute ~2 writes/s re-render drip on every cold launch. Buffer
+    // rows and flush on size/time so the list still streams in visibly, at a
+    // fraction of the commits. Progress rides the same flush cadence.
+    const FLUSH_ROWS = 200;
+    const FLUSH_MS = 700;
+    let buffer: any[] = [];
+    let lastFlush = Date.now();
+    const flush = (loading: boolean) => {
+      if (buffer.length) {
+        opts.onPage(buffer);
+        buffer = [];
+      }
+      lastFlush = Date.now();
+      setProgress(namespace, loading, all.length);
+    };
     for (let i = 0; i < maxPages; i++) {
       // Retry transient page failures with backoff — one hiccup must not abandon
       // the whole crawl and leave a partial list. Give up only after several tries.
@@ -198,28 +216,28 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
           if (attempt === 4) {
             // Persistent failure: don't snapshot a partial set (it would prune
             // real rows). Leave overlaid pages in place; retry next effect run.
-            if (!superseded()) { st.runningKey = null; setProgress(namespace, false, all.length); }
+            if (!superseded()) { flush(false); st.runningKey = null; }
             return;
           }
           await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
         }
       }
-      if (!isCurrent() || !page) { stop(all.length); return; } // a newer workspace crawl took over
+      if (!isCurrent() || !page) { flush(true); stop(all.length); return; } // a newer workspace crawl took over
       const rows = page.rows ?? [];
       all.push(...rows);
-      // Overlay each page immediately so the list fills in progressively.
-      if (rows.length) opts.onPage(rows);
+      buffer.push(...rows);
       // Convex paginate may return short/empty pages mid-stream (rows can be 0
       // while more remain) — only isDone marks the true end. seenCursors is a
       // belt-and-braces guard against a cursor that never advances.
       const next = page.continueCursor || null;
       const more = !page.isDone && !!next && !seenCursors.has(next);
-      setProgress(namespace, more, all.length);
+      if (!more || buffer.length >= FLUSH_ROWS || Date.now() - lastFlush >= FLUSH_MS) flush(more);
       if (!more) { completed = true; break; }
       seenCursors.add(next!);
       cursor = next;
       await new Promise((r) => setTimeout(r, pageDelayMs));
     }
+    if (buffer.length) flush(true); // maxPages-truncated: land the tail overlay
     if (!isCurrent()) { stop(all.length); return; }
     // Final completeness pass: re-overlay the full set. onComplete is a DELTA
     // overlay (the big collections are isDelta in SYNC_REGISTRY) — additive, never
