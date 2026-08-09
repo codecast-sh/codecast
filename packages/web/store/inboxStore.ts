@@ -3210,6 +3210,12 @@ export type SyncOpts = {
   // entry (the deletion contract the IDB diff honors). Per-call only — not for
   // SYNC_REGISTRY, since scope depends on what was crawled.
   pruneAbsentScope?: (record: any) => boolean;
+  // Applied to `incoming` before the list/singleton equality bail. Use it to
+  // quantize volatile fields (presence timestamps, streaming counters) whose
+  // per-push value changes defeat the JSON compare even though nothing the UI
+  // shows has changed — teamMembers re-pushed ~every 2s on teammates' heartbeat
+  // and message-count ticks, waking every subscriber of the roster ref.
+  normalize?: (incoming: any) => any;
 };
 
 // Per-key last-writer-wins for a flat preference bag whose writes carry a
@@ -3277,6 +3283,31 @@ function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boole
     result[key] = applyMerge(local?.[key], server?.[key], fieldSpec, initialized);
   }
   return result;
+}
+
+// Presence-ish timestamps tick every few seconds server-side (daemon heartbeat,
+// teammate activity), but every consumer renders or thresholds them at minute
+// granularity or coarser (isOnline's 5-min window, offlineTierFor's 10-min warn,
+// the profile page's 60s "connected" check). Quantizing them to the minute
+// BEFORE the sync-layer equality bail turns the constant heartbeat re-pushes
+// into value-identical no-ops, so the roster/user refs stay stable and their
+// subscribers stop re-rendering at idle.
+const PRESENCE_QUANTUM_MS = 60_000;
+const PRESENCE_FIELDS = ["daemon_last_seen", "last_heartbeat", "last_seen", "recent_session_updated"];
+function quantizePresence<T>(rec: T): T {
+  if (!rec || typeof rec !== "object") return rec;
+  let out: any = rec;
+  for (const k of PRESENCE_FIELDS) {
+    const v = (rec as any)[k];
+    if (typeof v === "number") {
+      const q = Math.floor(v / PRESENCE_QUANTUM_MS) * PRESENCE_QUANTUM_MS;
+      if (q !== v) {
+        if (out === rec) out = { ...(rec as any) };
+        out[k] = q;
+      }
+    }
+  }
+  return out;
 }
 
 const SYNC_REGISTRY: Record<string, SyncOpts> = {
@@ -3415,9 +3446,12 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       }
     },
   },
-  currentUser: { kind: "singleton" },
+  currentUser: { kind: "singleton", normalize: quantizePresence },
   teams: { kind: "list" },
-  teamMembers: { kind: "list" },
+  teamMembers: {
+    kind: "list",
+    normalize: (list: any) => (Array.isArray(list) ? list.map(quantizePresence) : list),
+  },
   teamUnreadCount: { kind: "scalar" },
   favorites: { kind: "list" },
   bookmarks: {
@@ -5441,6 +5475,7 @@ export const useInboxStore = create<InboxStoreState>(
     const kind = config.kind ?? "collection";
 
     if (kind === "scalar" || kind === "list") {
+      if (config.normalize) incoming = config.normalize(incoming);
       // No-op re-pushes are common — a list-kind subscription re-emits on any
       // read-set change (teamMembers was measured re-pushing ~every 2s on
       // presence heartbeats) — and a wholesale assign registers as a change:
@@ -5462,9 +5497,18 @@ export const useInboxStore = create<InboxStoreState>(
     }
 
     if (kind === "singleton") {
+      if (config.normalize) incoming = config.normalize(incoming);
       const local = (this as any)[field];
       const initKey = `${field}Initialized`;
       const initialized = (this as any)[initKey] ?? false;
+      // Same no-op bail as list-kind above: currentUser re-pushes on every
+      // users-doc heartbeat (last_seen), and each accepted push is a new object
+      // identity that wakes every subscriber. `local &&` keeps the first real
+      // write landing (and setting the init flag below) unconditionally.
+      if (!config.transform && !config.merge && !config.extra &&
+          local && incoming && JSON.stringify(local) === JSON.stringify(incoming)) {
+        return;
+      }
       const result = config.merge
         ? applyMerge(local, incoming, config.merge, initialized)
         : incoming;
