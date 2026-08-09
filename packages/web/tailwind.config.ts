@@ -24,6 +24,7 @@ const config: Config = {
   				base3: '#fdf6e3',
   				yellow: '#b58900',
   				orange: '#cb4b16',
+  				amber: '#b66f20',
   				red: '#dc322f',
   				magenta: '#d33682',
   				violet: '#6c71c4',

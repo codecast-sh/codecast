@@ -132,6 +132,9 @@ html, body {
   /* Solarized accent colors (work on both light/dark) */
   --sol-yellow: #b58900;
   --sol-orange: #cb4b16;
+  /* Trigger accent: yellow-orange, dimmer than sol-orange (which leans red).
+     Owned by the schedule/trigger idiom — rows, pills, dock bar, click flash. */
+  --sol-amber: #b66f20;
   --sol-red: #dc322f;
   --sol-magenta: #d33682;
   --sol-violet: #6c71c4;
@@ -579,7 +582,7 @@ html[data-idle] *::after {
   animation: schedRowFlash 600ms ease-out forwards;
 }
 @keyframes schedRowFlash {
-  0% { background: color-mix(in srgb, var(--sol-orange) 35%, transparent); }
+  0% { background: color-mix(in srgb, var(--sol-amber) 35%, transparent); }
   100% { background: transparent; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1182,14 +1185,37 @@ pre[class*="language-"] {
 .simple-view [data-sv-rail] [data-session-id][class*="ring-sol-cyan"] [data-sv-fade] {
   background: linear-gradient(to right, transparent, var(--sv-card-active-bg) 60%) !important;
 }
+/* Selected card with attached schedule rows: card + rows read as ONE
+   selected block. The card squares its bottom and drops its bottom margin;
+   the rows inset to the card's width, each opening with a hairline in the
+   selection cyan (the card→row join and the row→row separators), and the
+   last row closes the block with the card's own radius. */
+.simple-view [data-sv-rail] [data-session-id][class*="ring-sol-cyan"]:has(+ [data-schedrow][data-row-active]) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  margin-bottom: 0;
+}
+.simple-view [data-sv-rail] [data-schedrow][data-attached][data-row-active] {
+  margin: 0 6px;
+  background: color-mix(in srgb, var(--sol-cyan) 10%, var(--sv-card-bg));
+  border-top: 1px solid color-mix(in srgb, var(--sol-cyan) 30%, transparent);
+}
+.simple-view [data-sv-rail] [data-schedrow][data-attached][data-row-active]:not(:has(~ [data-schedrow][data-row-active])) {
+  border-bottom-left-radius: 9px;
+  border-bottom-right-radius: 9px;
+  margin-bottom: 3px;
+}
 
 /* Section headers (NEEDS INPUT / WORKING / PINNED): still flat — no bar —
-   but legible: a readable letterspaced label above a hairline rule, with
-   clear air between sections so each group visibly starts. */
+   but legible: a readable letterspaced label above a rule, with clear air
+   between sections so each group visibly starts. The rule takes the
+   section's own accent (currentColor — renderSection puts the color class
+   on the button): strong enough to catch a scanning eye, on negative space
+   rather than a filled band. */
 .simple-view [data-sv-rail] [data-sv-sec] {
   background: transparent;
-  border-bottom: 1px solid color-mix(in srgb, var(--sol-text) 10%, transparent);
-  margin-top: 10px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+  margin-top: 12px;
   padding: 8px 12px 6px;
 }
 .simple-view [data-sv-rail] [data-sv-sec] span {
