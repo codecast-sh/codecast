@@ -190,6 +190,32 @@ dock slot for both open state and height, inheriting the legacy
 `cast_term_panel` key once on first boot. A shared arrangement synced from
 another device cannot switch a terminal on here (tested).
 
+**One visual language, measured not eyeballed.** The model was unified before
+the app looked unified, which is why the system stayed invisible. Every panel
+now draws from the same tokens in `globals.css`:
+
+```
+--cc-panel-head-h: 32px      one header height everywhere (was 30/31/32/44/48)
+--cc-panel-rule              one border            (was four opacities)
+--cc-panel-head-bg           one ground            (was three)
+--cc-panel-motion: 220ms     one curve             (was 200/240/250/280ms)
+.cc-split                    one resize handle     (was three styles)
+.cc-panel__btn               one control treatment (was per-region buttons)
+.cc-panel__title: 11px       one title scale       (was 11px and 18px)
+```
+
+Verified live: on `/tasks`, `/docs` and `/plans` all four visible panels compute
+to a single distinct frame signature, and every title to 11px. The one
+remaining variation is deliberate — `.cq-header-pad` compacts a list panel's
+horizontal padding inside a narrow container query, which is responsive
+behaviour worth keeping, not drift.
+
+`SlotChrome` was also split, because conflating two jobs is what produced a
+stray ✕ at the screen edge: `SlotActions` (buttons only, for a region that
+already draws a header) and `SlotPanel` (the whole frame, for one that
+doesn't). Embedding a full header bar inside an existing header is what made
+the first attempt look broken.
+
 **Shared chrome is adopted**, not merely available: the session rail (whose two
 separate closers collapsed into one), the comment rail, the doc detail, and the
 companion all render `SlotChrome`. Panes that close by navigating pass an
