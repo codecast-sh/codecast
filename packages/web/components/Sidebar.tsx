@@ -18,7 +18,8 @@ import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
-import { Globe, Workflow, Zap } from "lucide-react";
+import { Globe, Workflow, Zap, PanelLeft } from "lucide-react";
+import { SlotActions } from "./workspace/Slot";
 
 const api = _api as any;
 
@@ -676,6 +677,14 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         ${isMobileOpen ? 'shadow-xl' : 'hidden md:flex'}
       `}
     >
+      {!isNarrow && (
+        <div className="cc-panel__head">
+          <span className="cc-panel__icon"><PanelLeft className="w-3.5 h-3.5" /></span>
+          <span className="cc-panel__title">Navigator</span>
+          <span className="cc-panel__spacer" />
+          <SlotActions slot="nav" onClose={() => useInboxStore.getState().setNavCollapsed(true)} />
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto scrollbar-auto">
         {sidebarContent}
       </div>

@@ -6,6 +6,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { formatShortcutLabel } from "../shortcuts";
 import { FilterDropdown, FilterOptionList } from "./FilterDropdown";
 import { useInboxStore } from "../store/inboxStore";
+import { SlotActions } from "./workspace/Slot";
 import { toast } from "sonner";
 import { SyncProgressBadge } from "./SyncProgressBadge";
 import {
@@ -884,7 +885,7 @@ export function GenericListView<T>({
       <div className={`cq-container ${filterBarShown ? "" : "border-b border-sol-border/30"}`}>
         <div className="cq-header cq-header-pad cc-panel__head cc-panel__head--flow flex-wrap justify-between gap-x-2">
         <div className="flex items-center gap-2 min-w-0">
-          <h1 className="cc-panel__title flex-shrink-0 cq-header-collapse">{title}</h1>
+          <span className="cc-panel__title flex-shrink-0">{title}</span>
           {syncScope && <SyncProgressBadge scope={syncScope} />}
           {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
               see .cq-tabs-compact in globals.css): a single compact dropdown. */}
@@ -972,6 +973,8 @@ export function GenericListView<T>({
           >
             <Plus className="w-4 h-4" />
           </button>
+          {/* Window controls, in the same place and order as every other panel. */}
+          <SlotActions slot="list" onClose={() => useInboxStore.getState().wsSetPresentation("list", "collapsed")} />
         </div>
         </div>
 

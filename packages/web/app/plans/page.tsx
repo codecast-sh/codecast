@@ -13,6 +13,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { DetailSplitLayout } from "../../components/DetailSplitLayout";
+import { SlotActions } from "../../components/workspace/Slot";
 import { PlanDetailPanel } from "../../components/PlanDetailPanel";
 import { CreateDocModal } from "../../components/CreateDocModal";
 import {
@@ -290,10 +291,13 @@ export default function PlansPage() {
           list={
             <div className="flex flex-col h-full bg-sol-bg">
             <div className="cc-panel__head justify-between">
+              {/* The tab bar already says "Plans"; repeating it here was the
+                  doubled title. Identity stays as the glyph alone. */}
               <div className="flex items-center gap-2">
                 <Target className="w-4 h-4 text-sol-cyan" />
-                <h2 className="text-sm font-semibold text-sol-text tracking-tight">Plans</h2>
+                <span className="cc-panel__title">Plans</span>
               </div>
+              <SlotActions slot="list" onClose={() => useInboxStore.getState().wsSetPresentation("list", "collapsed")} />
               <div className="flex items-center gap-1.5">
                 <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
                   <button

@@ -7,7 +7,6 @@ import { companionId } from "../store/workspace";
 import { InboxConversation } from "./GlobalSessionPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { animatedHideSession } from "../store/undoActions";
-import { SlotPanel } from "./workspace/Slot";
 
 // The second (and last) pane the stage can hold: a live conversation running
 // beside the page you're working on — "watch a session while reading a task".
@@ -53,15 +52,11 @@ export const StageCompanion = memo(function StageCompanion() {
   if (!id || !session) return null;
 
   return (
-    // The full panel frame: same header, same controls, same edges as every
-    // other slot — this is what makes the system visible rather than internal.
-    <SlotPanel
-      slot="secondary"
-      title={session.title || "Session"}
-      canPromote
-      onPromote={handleExpand}
-      className="border-l border-sol-border/30"
-    >
+    // NO wrapper header here: ConversationView already renders one, and it
+    // already hosts close/expand. Adding SlotPanel on top printed the session
+    // title twice in two stacked bars. The conversation's own header IS this
+    // panel's header.
+    <div className="h-full flex flex-col border-l border-sol-border/30 bg-sol-bg">
       <div className="flex-1 min-h-0">
         <ErrorBoundary name="StageCompanion" level="panel">
           <InboxConversation
@@ -72,9 +67,11 @@ export const StageCompanion = memo(function StageCompanion() {
             onSendAndDismiss={handleSendAndDismiss}
             lastUserMessage={session.last_user_message}
             sessionError={session.session_error}
+            onExpandToMain={handleExpand}
+            onClose={handleClose}
           />
         </ErrorBoundary>
       </div>
-    </SlotPanel>
+    </div>
   );
 });
