@@ -80,6 +80,8 @@ ONBOARDING.md
 app_spec.txt
 
 # Agent session artifacts
+.codex/
+.playwright-mcp/
 SESSION_SUMMARY_*.md
 VERIFICATION-*.md
 COMMENT-SYNC-VERIFICATION.md
