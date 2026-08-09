@@ -557,7 +557,11 @@ function ChangesBar({ changes }: { changes: FileChange[] }) {
         top: "calc(100% + var(--conv-sticky-h, 0px))",
         right: "calc(0.75rem + min(var(--conv-sticky-h, 0px), 2.5rem))",
       }}
-      className="absolute mt-2 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-bg-alt/80 backdrop-blur-sm border border-sol-border/40 shadow-sm hover:border-sol-border/70 hover:bg-sol-bg-alt/95 transition-all group cursor-pointer select-none"
+      // OPAQUE on purpose: this floats over message text, and at 80% the line
+      // behind it bled through and became unreadable — invisible in a wide
+      // column where it lands in whitespace, obvious at ~290px where body text
+      // runs the full width.
+      className="cc-changes-pill absolute mt-2 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md border border-sol-border/50 shadow-sm hover:border-sol-border/80 transition-all group cursor-pointer select-none"
     >
       <div className="flex items-center gap-1">
         {displayFiles.map((f) => (
@@ -571,9 +575,13 @@ function ChangesBar({ changes }: { changes: FileChange[] }) {
           <span className="text-[10px] text-sol-text-dim">+{remaining}</span>
         )}
       </div>
+      {/* The label hides when the COLUMN is narrow, not when the window is.
+          The old sm: breakpoints are viewport-based, so a 290px conversation
+          column on a wide screen still rendered the full-length label and
+          covered that much more text. */}
       <span className="text-[11px] text-sol-text-dim group-hover:text-sol-text-secondary transition-colors">
-        <span className="sm:hidden">{uniqueFiles.length}</span>
-        <span className="hidden sm:inline">{uniqueFiles.length} file{uniqueFiles.length !== 1 ? "s" : ""} changed</span>
+        {uniqueFiles.length}
+        <span className="cc-changes-pill__label"> file{uniqueFiles.length !== 1 ? "s" : ""} changed</span>
       </span>
       <svg className="w-3 h-3 text-sol-text-dim/60 group-hover:text-sol-text-dim transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />

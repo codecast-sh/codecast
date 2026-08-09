@@ -1237,6 +1237,17 @@ pre[class*="language-"] {
   font-weight: 600;
 }
 
+/* The "N files changed" pill floats over the message body, so it must be
+   opaque — and it must shrink to the COLUMN, not the window. The conversation
+   header is the query container (cq-container on [data-sv-convhead]). */
+.cc-changes-pill {
+  background: var(--sol-bg-alt);
+}
+@container (max-width: 560px) {
+  .cc-changes-pill__label { display: none; }
+  .cc-changes-pill { gap: 0.375rem; padding-inline: 0.5rem; }
+}
+
 /* Window manager: hide input area on unfocused windows */
 .session-window--blurred [data-chat-input] {
   display: none;

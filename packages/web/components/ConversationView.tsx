@@ -14356,7 +14356,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <header ref={headerRef} data-sv-convhead className={`border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
+      <header ref={headerRef} data-sv-convhead className={`cq-container border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         <div className="px-2 py-0.5 sm:py-1">
           <div className="flex items-center gap-2 min-w-0 select-none">
             <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
