@@ -1118,11 +1118,17 @@ pre[class*="language-"] {
   padding-left: 8px;
   padding-right: 8px;
 }
-.simple-view [data-sv-convhead] button,
+/* Quiet the header's own controls. The :not() is load-bearing: the
+   files-changed pill is a <button> that lives in the header's DOM but is
+   positioned OUT of it, floating over message text. Dimming the ELEMENT makes
+   its background translucent no matter how opaque the background property is,
+   so the one control that must never be see-through was the one this caught.
+   Anything that escapes the header's bounds is content, not chrome. */
+.simple-view [data-sv-convhead] button:not(.cc-changes-pill),
 .simple-view [data-sv-convhead] a {
   opacity: 0.75;
 }
-.simple-view [data-sv-convhead] button:hover,
+.simple-view [data-sv-convhead] button:not(.cc-changes-pill):hover,
 .simple-view [data-sv-convhead] a:hover {
   opacity: 1;
 }
