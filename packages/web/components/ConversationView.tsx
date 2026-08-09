@@ -14468,27 +14468,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
 
             {(conversation as any)?.active_plan && (
-              <span data-simple-hide className="cq-header-collapse contents">
+              <span data-simple-hide className="contents">
                 <PlanBadge plan={(conversation as any).active_plan} />
               </span>
             )}
             {(conversation as any)?.active_task && (
-              <span data-simple-hide className="cq-header-collapse contents">
+              <span data-simple-hide className="contents">
                 <TaskBadge task={(conversation as any).active_task} />
               </span>
             )}
 
             {conversation && (
               <TooltipProvider delayDuration={300}>
-              <div
-                className="cc-conv-tools flex items-center gap-1 min-w-0 overflow-hidden ml-auto"
-                /* The title had flex-basis:0 while this had flex-basis:auto, so
-                   flexbox handed the toolbar its full content width (371px in a
-                   332px row) and the panel name got nothing. Capping the toolbar
-                   guarantees the title a floor; clipping runs right-to-left so
-                   the overflow menu — the way to reach anything that folds —
-                   is the last thing to go, never the first. */
-              >
+              <div className="flex items-center gap-1 flex-shrink-0 overflow-hidden ml-auto">
 
                 {(() => {
                   // Subagents carry parent_conversation_id; visible children
@@ -14683,7 +14675,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <DropdownMenu>
                   <ShortcutTooltip label={`View density: ${DENSITY_OPTIONS.find(o => o.value === density)!.label}`} action="conv.cycleDensity" hint="cycles" side="bottom">
                     <DropdownMenuTrigger asChild>
-                      <button className={`cq-header-collapse p-1 rounded hover:bg-sol-bg-alt transition-colors ${density !== "full" ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}>
+                      <button className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${density !== "full" ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}>
                         {(() => { const Icon = DENSITY_OPTIONS.find(o => o.value === density)!.icon; return <Icon className="w-3.5 h-3.5" />; })()}
                       </button>
                     </DropdownMenuTrigger>
@@ -14711,7 +14703,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <ShortcutTooltip label="Copy link" action="conv.copyLink" side="bottom">
                   <button
                     onClick={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
-                    className="cq-header-collapse p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
+                    className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
@@ -14726,11 +14718,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
                 </span>
 
-                </div>
-              {/* Overflow menu lives OUTSIDE the clipped toolbar: it is the
-                  route to anything that folds away in a narrow panel, so it must
-                  never be the control that gets clipped. */}
-              <div className="flex items-center flex-shrink-0">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">

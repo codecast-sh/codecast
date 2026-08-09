@@ -3465,8 +3465,6 @@ export function SessionListPanel({
   return (
     <div data-sv-rail className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
       <div className="cc-panel__head min-w-0">
-        <span className="cc-panel__icon"><List className="w-3.5 h-3.5" /></span>
-        <span className="cc-panel__title">Sessions</span>
         {favoritesView && (
           <div className="flex items-center gap-1.5 flex-shrink-0 text-sol-yellow mr-0.5" title="Kept sessions — your long-term shelf">
             <Star className="w-3.5 h-3.5 fill-current" />

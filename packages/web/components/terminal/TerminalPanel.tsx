@@ -13,7 +13,6 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { useConvex } from "convex/react";
 import { Plus, X, Trash2, ChevronDown, ChevronUp, RotateCw, TerminalSquare, Eye } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
-import { SlotActions } from "../workspace/Slot";
 import { DEFAULT_TERMINAL_HEIGHT } from "../../lib/terminal/panelPrefs";
 import {
   getTerminalEndpoint,
@@ -228,9 +227,6 @@ export function TerminalPanel() {
 
       {/* header */}
       <div className="cc-panel__head gap-1.5">
-        <span className="cc-panel__icon"><TerminalSquare className="w-3.5 h-3.5" /></span>
-        <span className="cc-panel__title flex-shrink-0">Terminal</span>
-        <SlotActions slot="dock" onClose={() => useInboxStore.getState().setDockOpen(false)} />
         <TerminalSquare className="w-3.5 h-3.5 text-sol-text-dim/60 flex-shrink-0" />
         <div className="flex items-center gap-0.5 overflow-x-auto scrollbar-none flex-1 min-w-0">
           {tabs.map((tab) => {
