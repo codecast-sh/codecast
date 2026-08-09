@@ -87,7 +87,16 @@ export function applySyncTable<T extends { _id: string }>(
     pruneAbsentScope?: (record: T) => boolean;
   },
 ): { table: Record<string, T>; pending: Record<string, PendingEntry> } {
-  const newPending = { ...pending };
+  // Copy-on-write: most pushes change no pending entry (heartbeat re-sends,
+  // crawl overlays), and an always-fresh pending object woke every subscriber
+  // of `s.pending` and re-persisted the map to IDB on each ~1s sessions push.
+  // The original ref is returned untouched unless something actually mutates.
+  let newPending = pending;
+  let pendingMutated = false;
+  const mutPending = (): Record<string, PendingEntry> => {
+    if (!pendingMutated) { newPending = { ...pending }; pendingMutated = true; }
+    return newPending;
+  };
   const table: Record<string, T> = {};
   const incomingMap = new Map(incoming.map(r => [r._id, r]));
   const incomingIds = new Set(incomingMap.keys());
@@ -139,7 +148,7 @@ export function applySyncTable<T extends { _id: string }>(
   if (!isDelta) {
     for (const id of excludeIds) {
       if (!incomingIds.has(id)) {
-        delete newPending[prefix + id];
+        delete mutPending()[prefix + id];
         excludeIds.delete(id);
       }
     }
@@ -151,7 +160,7 @@ export function applySyncTable<T extends { _id: string }>(
     let merged = record;
     for (const { key, field, entry } of overrides) {
       if (fieldEchoesPending(field, (record as any)[field], entry.value)) {
-        delete newPending[key];
+        delete mutPending()[key];
       } else {
         if (merged === record) merged = { ...record };
         (merged as any)[field] = entry.value;
@@ -212,7 +221,7 @@ export function applySyncTable<T extends { _id: string }>(
         // there, and hydration would resurrect the row). Out-of-scope records and
         // records with pending local state keep the normal delta behavior.
         if (pruneAbsentScope && pruneAbsentScope(prev[id]) && !pendingIds!.has(id)) {
-          newPending[`${tableName}:${id}`] = { type: "exclude", ts: Date.now() };
+          mutPending()[`${tableName}:${id}`] = { type: "exclude", ts: Date.now() };
           continue;
         }
         table[id] = prev[id];
@@ -232,12 +241,26 @@ export function applySyncTable<T extends { _id: string }>(
   // batch didn't carry the record.
   for (const id of includeIds) {
     if (!isDelta && incomingIds.has(id)) {
-      delete newPending[prefix + id];
+      delete mutPending()[prefix + id];
     } else if (prev?.[id] && !table[id]) {
       table[id] = prev[id];
     }
   }
 
+  // Whole-collection identity reuse: when every row kept its previous identity
+  // and no row was added or dropped, hand back the previous collection object.
+  // A no-op push then short-circuits everything downstream — no store commit,
+  // no subscriber wake, no IDB re-put of the collection.
+  if (prev) {
+    const tableKeys = Object.keys(table);
+    if (tableKeys.length === Object.keys(prev).length) {
+      let same = true;
+      for (const k of tableKeys) {
+        if (table[k] !== prev[k]) { same = false; break; }
+      }
+      if (same) return { table: prev, pending: newPending };
+    }
+  }
   return { table, pending: newPending };
 }
 

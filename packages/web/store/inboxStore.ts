@@ -2650,8 +2650,8 @@ interface InboxStoreState {
   // instead of re-snapshotting), and `backfilledAt` records when the full
   // reconcile crawl last completed (so it runs once, then incrementally — not a
   // 4,529-row sweep on every launch). See useSyncTasks / reconcileCrawl.
-  syncMeta: Record<string, { cursor?: number; backfilledAt?: number }>;
-  recordSyncMeta: (key: string, patch: { cursor?: number; backfilledAt?: number }) => void;
+  syncMeta: Record<string, { cursor?: number; backfilledAt?: number; resumeCursor?: string | null; resumeAt?: number }>;
+  recordSyncMeta: (key: string, patch: { cursor?: number; backfilledAt?: number; resumeCursor?: string | null; resumeAt?: number }) => void;
   // -- Team activity-feed cache (IDB-persisted, keyed by team+dir) --
   feedConversations: Record<string, any[]>;
   feedHasMore: Record<string, boolean>;
@@ -5605,8 +5605,11 @@ export const useInboxStore = create<InboxStoreState>(
       }
     }
 
-    (this as any)[field] = table;
-    this.pending = pending as any;
+    // applySyncTable returns the PREVIOUS table/pending objects untouched when
+    // a push changed nothing (whole-collection identity reuse) — skip the draft
+    // writes so a no-op sync produces no commit at all.
+    if ((this as any)[field] !== table) (this as any)[field] = table;
+    if (this.pending !== (pending as any)) this.pending = pending as any;
     if (field === "bucketAssignments") {
       for (const row of Object.values(table) as BucketAssignmentItem[]) {
         if (!isConvexId(String(row._id))) continue;
