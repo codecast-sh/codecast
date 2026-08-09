@@ -93,6 +93,7 @@ const Pricing = lazy(() => import("@/app/(marketing)/pricing/page"));
 const Download = lazy(() => import("@/app/(marketing)/download/page"));
 const BlogIndex = lazy(() => import("@/app/(marketing)/blog/page"));
 const BlogGitBlame = lazy(() => import("@/app/(marketing)/blog/git-blame-for-ai-agents/page"));
+const BlogAgentInbox = lazy(() => import("@/app/(marketing)/blog/an-inbox-for-your-agents/page"));
 
 // Auth
 const Login = lazy(() => import("@/app/login/page"));
@@ -196,6 +197,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "download", component: cast(Download), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog", component: cast(BlogIndex), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/git-blame-for-ai-agents", component: cast(BlogGitBlame), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/an-inbox-for-your-agents", component: cast(BlogAgentInbox), layout: "marketing", guestOk: true, guestKind: "public" },
 
   // -- Auth (bare routes, no AuthGuard → public) --
   { path: "login", component: cast(Login), layout: "auth", guestOk: true, guestKind: "public" },

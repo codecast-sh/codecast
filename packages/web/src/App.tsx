@@ -24,6 +24,7 @@ const Pricing = lazy(() => import("@/app/(marketing)/pricing/page"));
 const Download = lazy(() => import("@/app/(marketing)/download/page"));
 const BlogIndex = lazy(() => import("@/app/(marketing)/blog/page"));
 const BlogGitBlame = lazy(() => import("@/app/(marketing)/blog/git-blame-for-ai-agents/page"));
+const BlogAgentInbox = lazy(() => import("@/app/(marketing)/blog/an-inbox-for-your-agents/page"));
 
 const Login = lazy(() => import("@/app/login/page"));
 const Signup = lazy(() => import("@/app/signup/page"));
@@ -135,6 +136,7 @@ export function App() {
               <Route path="download" element={<E name="Download"><Download /></E>} />
               <Route path="blog" element={<E name="BlogIndex"><BlogIndex /></E>} />
               <Route path="blog/git-blame-for-ai-agents" element={<E name="BlogGitBlame"><BlogGitBlame /></E>} />
+              <Route path="blog/an-inbox-for-your-agents" element={<E name="BlogAgentInbox"><BlogAgentInbox /></E>} />
             </Route>
 
             {/* Auth */}
