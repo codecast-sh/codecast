@@ -1185,25 +1185,33 @@ pre[class*="language-"] {
 .simple-view [data-sv-rail] [data-session-id][class*="ring-sol-cyan"] [data-sv-fade] {
   background: linear-gradient(to right, transparent, var(--sv-card-active-bg) 60%) !important;
 }
-/* Selected card with attached schedule rows: card + rows read as ONE
-   selected block. The card squares its bottom and drops its bottom margin;
-   the rows inset to the card's width, each opening with a hairline in the
-   selection cyan (the card→row join and the row→row separators), and the
-   last row closes the block with the card's own radius. */
-.simple-view [data-sv-rail] [data-session-id][class*="ring-sol-cyan"]:has(+ [data-schedrow][data-row-active]) {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+/* Attached schedule rows always carry the card's inset, the reserved
+   separator line, and the closing radius — selection must repaint, never
+   reflow, so everything that affects LAYOUT (margins, border width) is
+   state-independent; only colors react to selection below. */
+.simple-view [data-sv-rail] [data-session-id]:has(+ [data-schedrow][data-attached]) {
   margin-bottom: 0;
 }
-.simple-view [data-sv-rail] [data-schedrow][data-attached][data-row-active] {
+.simple-view [data-sv-rail] [data-schedrow][data-attached] {
   margin: 0 6px;
-  background: color-mix(in srgb, var(--sol-cyan) 10%, var(--sv-card-bg));
-  border-top: 1px solid color-mix(in srgb, var(--sol-cyan) 30%, transparent);
+  border-top: 1px solid transparent;
 }
-.simple-view [data-sv-rail] [data-schedrow][data-attached][data-row-active]:not(:has(~ [data-schedrow][data-row-active])) {
+.simple-view [data-sv-rail] [data-schedrow][data-attached]:not(:has(~ [data-schedrow][data-attached])) {
   border-bottom-left-radius: 9px;
   border-bottom-right-radius: 9px;
   margin-bottom: 3px;
+}
+/* Selected card with attached schedule rows: card + rows read as ONE
+   selected block. The card squares its bottom into the band (radius is
+   paint, not layout), the rows take the selection wash, and the reserved
+   hairlines turn cyan — the card→row join and the row→row separators. */
+.simple-view [data-sv-rail] [data-session-id][class*="ring-sol-cyan"]:has(+ [data-schedrow][data-row-active]) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.simple-view [data-sv-rail] [data-schedrow][data-attached][data-row-active] {
+  background: color-mix(in srgb, var(--sol-cyan) 10%, var(--sv-card-bg));
+  border-top-color: color-mix(in srgb, var(--sol-cyan) 30%, transparent);
 }
 
 /* Section headers (NEEDS INPUT / WORKING / PINNED): still flat — no bar —
