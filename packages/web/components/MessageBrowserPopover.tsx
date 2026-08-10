@@ -157,7 +157,9 @@ function NavDropdown({
 }) {
   const [mounted, setMounted] = useState(false);
   const [search, setSearch] = useState("");
-  const [showMachine, setShowMachine] = useState(true);
+  // Automated rows (triggers, sessions, teammates) start hidden — the list is
+  // primarily a human-message navigator; the chip reveals them on demand.
+  const [showMachine, setShowMachine] = useState(false);
   const [focusIndex, setFocusIndex] = useState(-1);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [hoveredRect, setHoveredRect] = useState<DOMRect | null>(null);
@@ -298,19 +300,22 @@ function NavDropdown({
             {machineCount > 0 && (
               <button
                 onClick={(e) => { e.stopPropagation(); setShowMachine(v => !v); }}
+                aria-pressed={showMachine}
                 title={showMachine
                   ? `Hide ${machineCount} automated message${machineCount !== 1 ? "s" : ""} (triggers, sessions, teammates)`
-                  : `Show ${machineCount} automated message${machineCount !== 1 ? "s" : ""}`}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded-lg border text-[10px] tabular-nums transition-colors flex-shrink-0 ${
+                  : `Show ${machineCount} automated message${machineCount !== 1 ? "s" : ""} (triggers, sessions, teammates)`}
+                className={`flex items-center gap-1 px-2 py-1.5 rounded-lg border text-[11px] tabular-nums transition-colors flex-shrink-0 ${
                   showMachine
-                    ? "border-sol-violet/30 text-sol-violet/80 hover:text-sol-violet"
-                    : "border-sol-border/20 text-sol-text-dim/40 hover:text-sol-text-dim"
+                    ? "bg-sol-violet/15 border-sol-violet/40 text-sol-violet hover:bg-sol-violet/20"
+                    : "border-sol-border/30 text-sol-text-dim/60 hover:text-sol-text-muted hover:border-sol-border/50"
                 }`}
               >
-                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
-                {machineCount}
+                <span className={showMachine ? "" : "line-through decoration-[1.5px] opacity-80"}>
+                  {machineCount} auto
+                </span>
               </button>
             )}
           </div>
