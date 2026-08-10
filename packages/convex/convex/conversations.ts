@@ -10746,16 +10746,12 @@ export const getUserMessages = query({
   args: { conversation_id: v.id("conversations") },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) return [];
-    if (conv.user_id !== userId) {
-      const membership = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", conv.team_id!))
-        .first();
-      if (!membership) return [];
-    }
+    // Same admission as listMessages: owner, team, or share link. The message
+    // browser must serve every viewer the transcript itself serves — including
+    // unauthenticated visitors on a public share token.
+    if ((await checkConversationAccess(ctx, userId, conv)) === "denied") return [];
     return collectNavigableUserMessages(ctx.db, args.conversation_id);
   },
 });
