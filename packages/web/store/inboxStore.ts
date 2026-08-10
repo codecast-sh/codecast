@@ -556,6 +556,9 @@ export type TaskItem = {
   priority: string;
   source: string;
   triage_status?: string;
+  // True = on the human's board: set by triage promote or `cast task create
+  // --human`. Machine-created tasks without it are agent-internal.
+  promoted?: boolean;
   labels?: string[];
   blocked_by?: string[];
   blocks?: string[];

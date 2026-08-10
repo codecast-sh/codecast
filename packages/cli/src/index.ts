@@ -2248,6 +2248,8 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **Create a task** when your work will change code, fix a bug, or produce a deliverable. Run \`cast task create "Title" -p <priority>\` before you start implementing. This is the default — skip it only for simple questions, explanations, or quick lookups that don't produce changes.
 
+**Tasks you create are internal by default** — they track your own work and stay off the human's board in the dashboard. Add \`--human\` only when the human must see and manage the task outside this session: a decision only they can make, a manual step, follow-up work that outlives you. Use it rarely; when in doubt, leave it off.
+
 **Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run \`cast plan create "Title" -g "goal"\` and add tasks with \`cast task create "Title" --plan <plan_id>\`. Don't create plans for single-task work.
 
 **Bind before you build.** For any larger piece of work, default to working under a task or plan with your session bound to it — \`cast task start <id>\` claims a task, \`cast plan bind <plan_id>\` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; sizable work done unbound is invisible to the human tracking it.
@@ -2285,9 +2287,11 @@ cast task ready -q "<topic>"                # Filter ready tasks by title/descri
 cast task ls -q "<topic>"                   # Search all active tasks by title/description
 cast plan ls -q "<topic>"                   # Search active plans by title/goal
 cast task start/done/comment <id>           # Task lifecycle
-cast task create "Title" -t task -p high    # Create task
+cast task create "Title" -t task -p high    # Create task (internal to agent work by default)
 cast task create "Title" --plan <plan_id>   # Create task bound to plan
+cast task create "Title" --human            # Put it on the human's board (rare — see above)
 cast task update <id> --plan <plan_id>      # Bind existing task to plan
+cast task update <id> --human               # Move an existing task onto the human's board
 cast task context <id>                      # Full context for a task
 cast task context --current                 # Context for session's current task
 cast plan create "Title" -g "goal" -b "body"  # Create plan with inline body
@@ -12642,6 +12646,7 @@ work
   .option("--assignee <name>", "Assignee")
   .option("--status <status>", "Initial status (default: open)", "open")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
+  .option("--human", "Put the task on the human's board — for work the human must see and manage (rare)")
   .action(async (title: string, options: any) => {
     const body: Record<string, any> = {
       title,
@@ -12650,6 +12655,7 @@ work
       priority: options.priority,
     };
     if (options.description) body.description = options.description;
+    if (options.human) body.promoted = true;
     if (options.project) body.project_id = options.project;
     if (options.assignee) body.assignee = options.assignee;
     if (options.blockedBy) body.blocked_by = options.blockedBy.split(",").map((s: string) => s.trim());
@@ -12843,10 +12849,13 @@ work
   .option("--project <id>", "Project ID")
   .option("--project-path <path>", "Project directory path")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
+  .option("--human", "Put the task on the human's board (rare)")
+  .option("--no-human", "Take the task off the human's board")
   .action(async (shortId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId };
     if (sessionId) body.conversation_id = sessionId;
+    if (options.human !== undefined) body.promoted = options.human;
     if (options.status) body.status = options.status;
     if (options.priority) body.priority = options.priority;
     if (options.title) body.title = options.title;

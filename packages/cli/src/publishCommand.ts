@@ -87,6 +87,10 @@ export interface AccessFlagValues {
   /** number = expire after ms, null = never (clear), undefined = untouched. */
   expiresMs?: number | null;
   editMode?: string;
+  /** false = hide the publishing-session link on the page, true = show it. */
+  session?: boolean;
+  /** false = turn off the viewer discussion, true = turn it on. */
+  comments?: boolean;
 }
 
 /**
@@ -107,6 +111,8 @@ export function buildAccessPayload(
     }
     access.edit_mode = flags.editMode;
   }
+  if (flags.session !== undefined) access.show_session = flags.session;
+  if (flags.comments !== undefined) access.comments = flags.comments;
   return Object.keys(access).length ? { payload: access } : {};
 }
 
@@ -119,6 +125,8 @@ export function describeAccess(access: Record<string, unknown>): string {
     parts.push(access.expires_in_ms === null ? "never expires" : `expires in ${formatDuration(access.expires_in_ms as number)}`);
   }
   if ("edit_mode" in access) parts.push(`edit: ${access.edit_mode}`);
+  if ("show_session" in access) parts.push(access.show_session ? "session link shown" : "session link hidden");
+  if ("comments" in access) parts.push(access.comments ? "comments on" : "comments off");
   return parts.join(" · ");
 }
 

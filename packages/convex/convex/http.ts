@@ -3711,6 +3711,7 @@ import {
   rollback as artifactRollback,
   edit as artifactEdit,
   comment as artifactComment,
+  identity as artifactIdentity,
   view as artifactView,
   corsPreflight as artifactCors,
 } from "./artifactsHttp";
@@ -3727,6 +3728,7 @@ artifactPost("/cli/artifacts/manage", artifactManage);
 artifactPost("/cli/artifacts/rollback", artifactRollback);
 artifactPost("/cli/artifacts/edit", artifactEdit);
 artifactPost("/cli/artifacts/comment", artifactComment);
+artifactPost("/cli/artifacts/identity", artifactIdentity);
 artifactPost("/cli/artifacts/view", artifactView);
 
 // Vault remote mirror — the daemon's push channel (packages/cli/src/vault/

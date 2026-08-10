@@ -149,7 +149,7 @@ import {
   resumeTmuxPrefix,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
-import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
+import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID } from "@codecast/shared/contracts";
@@ -2870,9 +2870,14 @@ async function executeRemoteCommand(
           // re-append the in-repo subpath. start_session lacked this step, so a
           // foreign recorded path that resume could repair still refused here.
           if (!resolved) {
-            const localRepoRoot = resolveLocalRepo(recordedRoot ?? rawPath);
+            // Seed with the recorded git_root only when rawPath lives under it
+            // (conventionSeed): a root stamped off an unrelated conversation
+            // that exists locally would otherwise win verbatim and launch the
+            // session in the wrong repo.
+            const rootSeed = conventionSeed(rawPath, recordedRoot);
+            const localRepoRoot = resolveLocalRepo(rootSeed);
             if (localRepoRoot) {
-              const subpath = recordedRoot && rawPath.startsWith(recordedRoot) ? rawPath.slice(recordedRoot.length) : "";
+              const subpath = rootSeed !== rawPath ? rawPath.slice(rootSeed.length) : "";
               const full = subpath ? path.join(localRepoRoot, subpath) : localRepoRoot;
               const placed = validatePath(full) ?? localRepoRoot;
               resolved = { path: placed, remapped: true, reason: `convention-resolved ${rawPath} → ${placed}` };
@@ -9752,16 +9757,33 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
 const TMUX_WINDOW_WIDTH = "220";
 const TMUX_WINDOW_HEIGHT = "50";
 const TMUX_SIZE_ARGS = ["-x", TMUX_WINDOW_WIDTH, "-y", TMUX_WINDOW_HEIGHT];
+// When teammate panes split the 220-column window, give the lead pane 130 and
+// leave 89 for the side stack — both sides stay above the 80-column TUI floor.
+const TMUX_LEAD_PANE_WIDTH = "130";
 
-// Self-heal for sessions created before the daemon sized its windows (or
-// re-squeezed by a small attached client that detached): a lead pane under 80
-// columns cannot render the markers the classifier needs, so widen the window
-// before reading it. Best-effort — classification proceeds either way.
+// Self-heal for a lead pane under 80 columns — too narrow to render the markers
+// the classifier needs (and mirrored at that width by the web terminal). Two
+// distinct squeezes: a window that was never sized (created before the daemon
+// sized its windows, or re-squeezed by a small attached client that detached),
+// fixed by resize-window; and a window SPLIT by Claude Code's teammate panes,
+// where resize-window is a no-op — the total is already right, only the pane
+// tiling is wrong — so the lead pane must be widened directly. Returns the tmux
+// commands to run (without target); empty when the pane is healthy.
+export function planLeadPaneHeal(paneWidth: number, windowPanes: number): string[][] {
+  if (paneWidth >= 80) return [];
+  const cmds: string[][] = [["resize-window", "-x", TMUX_WINDOW_WIDTH, "-y", TMUX_WINDOW_HEIGHT]];
+  if (windowPanes > 1) cmds.push(["resize-pane", "-x", TMUX_LEAD_PANE_WIDTH]);
+  return cmds;
+}
+
+// Best-effort — classification proceeds either way.
 async function ensureTmuxPaneWide(target: string): Promise<void> {
   try {
-    const { stdout } = await tmuxExec(["display-message", "-p", "-t", target, "#{pane_width}"]);
-    if (parseInt(stdout.trim(), 10) >= 80) return;
-    await tmuxExec(["resize-window", "-t", target, "-x", TMUX_WINDOW_WIDTH, "-y", TMUX_WINDOW_HEIGHT]);
+    const { stdout } = await tmuxExec(["display-message", "-p", "-t", target, "#{pane_width}|#{window_panes}"]);
+    const [paneWidth, windowPanes] = stdout.trim().split("|").map((part) => parseInt(part, 10));
+    const heals = planLeadPaneHeal(paneWidth, windowPanes);
+    if (!heals.length) return;
+    for (const [cmd, ...rest] of heals) await tmuxExec([cmd, "-t", target, ...rest]);
     // Give the TUI a beat to reflow before the first capture.
     await new Promise(resolve => setTimeout(resolve, 500));
   } catch {}
@@ -14286,7 +14308,7 @@ async function startFreshSessionForDelivery(
   const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${["claude", ...safeBlankArgs].join(" ")}`;
 
   try {
-    tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
+    tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
     await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
     await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", "claude").catch(() => {});
     await setTmuxSessionOption(tmuxSession, "@codecast_project_path", projectPath).catch(() => {});
@@ -14873,6 +14895,34 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
   let repaired = 0;
   let checked = 0;
 
+  // updateProjectPath only consumes the repo root, and the full getGitInfo
+  // (status + both diffs, 8 subprocesses) per FILE starved the event loop for
+  // minutes on a large ~/.claude/projects — the watchdog then killed the daemon
+  // mid-boot as "wedged". One cheap subprocess per unique project path instead.
+  const repoRootCache = new Map<string, string | undefined>();
+  const resolveRepoRoot = (projectPath: string): string | undefined => {
+    if (repoRootCache.has(projectPath)) return repoRootCache.get(projectPath);
+    let root: string | undefined;
+    try {
+      const commonDir = execSync("git rev-parse --path-format=absolute --git-common-dir", {
+        cwd: projectPath,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "ignore"],
+      }).trim();
+      root = commonDir.endsWith("/.git")
+        ? commonDir.slice(0, -5)
+        : execSync("git rev-parse --show-toplevel", {
+            cwd: projectPath,
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "ignore"],
+          }).trim() || undefined;
+    } catch {
+      root = undefined;
+    }
+    repoRootCache.set(projectPath, root);
+    return root;
+  };
+
   for (const dir of projectDirs) {
     const dirPath = path.join(claudeProjectsDir, dir);
     const sessionFiles = fs.readdirSync(dirPath)
@@ -14886,6 +14936,10 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
     if (resolvedDir) recordProjectMapping(path.basename(resolvedDir), resolvedDir);
 
     for (const file of sessionFiles) {
+      // Let the event loop breathe between files: this sweep runs during boot,
+      // and back-to-back synchronous transcript reads starve the heartbeat tick
+      // the watchdog uses to tell alive from wedged.
+      await new Promise(resolve => setImmediate(resolve));
       const filePath = path.join(dirPath, file);
       const sessionId = resolveSessionId(filePath);
 
@@ -14898,8 +14952,7 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(filePath, dir);
         if (!projectPath) continue;
 
-        const gitInfo = getGitInfo(projectPath);
-        const result = await syncService.updateProjectPath(sessionId, projectPath, gitInfo?.repoRoot || gitInfo?.root);
+        const result = await syncService.updateProjectPath(sessionId, projectPath, resolveRepoRoot(projectPath));
         if (result?.updated) {
           repaired++;
           log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
@@ -14939,7 +14992,11 @@ async function backfillPlanModeFromJSONL(syncService: SyncService): Promise<void
       if (planModeSynced.has(sessionId)) continue;
 
       try {
-        const content = fs.readFileSync(filePath, "utf-8");
+        // Async read + a yield per file: this walks every transcript (gigabytes
+        // here) at boot, and readFileSync back-to-back starved the event loop —
+        // the watchdog then killed the daemon mid-boot as "wedged".
+        await new Promise(resolve => setImmediate(resolve));
+        const content = await fs.promises.readFile(filePath, "utf-8");
         if (!content.includes("ExitPlanMode")) continue;
 
         let planContent: string | undefined;
@@ -18175,7 +18232,7 @@ async function main(): Promise<void> {
           registry.register(new ManagedTmuxRuntimeDriver({
             io: {
               async createSession({ tmuxSession, cwd }) {
-                await tmuxExec(["new-session", "-d", "-s", tmuxSession, "-c", cwd]);
+                await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd]);
               },
               async setSessionOption({ tmuxSession, name, value }) {
                 await setTmuxSessionOption(tmuxSession, name, value);
@@ -19004,11 +19061,17 @@ export async function runWatchdog(): Promise<void> {
       const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
       const staleness = passNow - lastTick;
       if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
-        if (daemonTickStale(staleness, passGap)) {
+        // A busy boot starves the tick stamper but keeps writing daemon.log; a
+        // truly wedged loop runs no JS and cannot log (see daemonTickStale).
+        let logAgeMs: number | null = null;
+        try { logAgeMs = passNow - fs.statSync(path.join(CONFIG_DIR, "daemon.log")).mtimeMs; } catch {}
+        if (daemonTickStale(staleness, passGap, logAgeMs)) {
           logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
           try { process.kill(daemonPid, 9); } catch {}
           await new Promise(resolve => setTimeout(resolve, 1000));
           daemonAlive = false;
+        } else if (logAgeMs !== null && logAgeMs <= DAEMON_HEARTBEAT_STALE_MS) {
+          logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but daemon.log written ${Math.round(logAgeMs / 1000)}s ago — busy, not wedged`);
         } else {
           logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but watchdog pass gap ${passGap === null ? "unknown" : Math.round(passGap / 1000) + "s"} implies system sleep — deferring one cycle`);
         }

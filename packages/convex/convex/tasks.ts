@@ -97,6 +97,15 @@ export async function resolveTaskGitContext(
     if (!git_root) git_root = project_path;
   }
 
+  // A git_root that isn't an ancestor of the resolved project_path describes a
+  // DIFFERENT repo — typically the viewer's currently-open conversation stamped
+  // alongside a task-derived path. The daemon prefers git_root when picking a
+  // cwd, so an unrelated root that happens to exist on the target machine would
+  // launch the session in the wrong repo. Drop it; the project_path routes.
+  if (git_root && project_path && project_path !== git_root && !project_path.startsWith(git_root.replace(/\/+$/, "") + "/")) {
+    git_root = undefined;
+  }
+
   // A task stores project_path but never git_remote_url; recover it from the
   // task's source conversations (which a daemon stamped git metadata onto) so a
   // daemon on a different machine can remap a foreign path to the local checkout.
@@ -289,6 +298,9 @@ export const create = mutation({
     blocked_by: v.optional(v.array(v.string())),
     source: v.optional(v.string()),
     confidence: v.optional(v.number()),
+    // Agent-created tasks are internal by default; promoted:true puts the task
+    // on the human's default board (same field the triage promote flow sets).
+    promoted: v.optional(v.boolean()),
     conversation_id: v.optional(v.string()),
     insight_id: v.optional(v.string()),
     plan_id: v.optional(v.string()),
@@ -384,6 +396,7 @@ export const create = mutation({
       source: (args.source || "human") as any,
       triage_status: args.source === "insight" ? "suggested" : "active",
       confidence: args.confidence,
+      promoted: args.promoted || undefined,
       attempt_count: 0,
       retry_count: 0,
       max_retries: args.max_retries ?? 3,
@@ -759,6 +772,7 @@ export const update = mutation({
     description: v.optional(v.string()),
     assignee: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
+    promoted: v.optional(v.boolean()),
     project_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
@@ -799,6 +813,7 @@ export const update = mutation({
     if (args.description !== undefined) updates.description = args.description;
     if (args.assignee !== undefined) updates.assignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId) || args.assignee;
     if (args.labels) updates.labels = args.labels;
+    if (args.promoted !== undefined) updates.promoted = args.promoted;
     const targetWorkspace = args.team_id
       ? { type: "team" as const, teamId: args.team_id }
       : task.team_id

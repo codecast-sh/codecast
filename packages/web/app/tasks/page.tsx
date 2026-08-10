@@ -703,22 +703,28 @@ export function TaskListContent() {
   }, [tasksList]);
 
   // Source filtering applied before other filters.
-  // Active tasks = not suggested-insight and not dismissed.
-  // "human" = created via web UI, "agent" = created via cast CLI in a session.
-  // Insight suggestions are tucked away behind a separate triage link.
-  const isActive = (t: TaskItem) => t.triage_status !== "suggested" && t.triage_status !== "dismissed" && t.source !== "insight";
+  // Active tasks = not suggested-insight and not dismissed. A promoted mined
+  // task counts as active — promote is what lifts it out of triage.
+  // The default view is the human's board: web-created tasks plus anything
+  // promoted onto it (cast task create --human, or a triage accept). Every
+  // machine-made unpromoted task (agent, plan_mode, todo_sync, import) sits
+  // behind the Agent segment; "all" shows both. Insight suggestions stay
+  // behind the separate triage link.
+  const isActive = (t: TaskItem) => t.triage_status !== "suggested" && t.triage_status !== "dismissed" && (t.source !== "insight" || !!t.promoted);
   const isTriage = (t: TaskItem) => t.source === "insight" ? t.triage_status !== "dismissed" : t.triage_status === "suggested";
+  const onHumanBoard = (t: TaskItem) => t.source === "human" || !!t.promoted;
   const sourceFilteredTasks = useMemo(() => {
-    if (sourceFilter === "human") {
-      return tasksList.filter((t) => t.source === "human" && isActive(t));
-    } else if (sourceFilter === "agent") {
-      return tasksList.filter((t) => t.source === "agent" && isActive(t));
+    if (sourceFilter === "agent") {
+      return tasksList.filter((t) => !onHumanBoard(t) && isActive(t));
+    } else if (sourceFilter === "all") {
+      return tasksList.filter(isActive);
     } else if (sourceFilter === "triage") {
       return tasksList.filter(isTriage);
     } else if (sourceFilter === "dismissed") {
       return tasksList.filter((t) => t.triage_status === "dismissed");
     } else {
-      return tasksList.filter(isActive);
+      // "" (default) and legacy "human" links both mean the human's board.
+      return tasksList.filter((t) => onHumanBoard(t) && isActive(t));
     }
   }, [tasksList, sourceFilter]);
 
@@ -1194,9 +1200,9 @@ export function TaskListContent() {
                 value={sourceFilter}
                 onChange={(v) => setParam({ source: v })}
                 items={[
-                  { key: "", label: "All", title: "All tasks" },
-                  { key: "human", icon: User, title: "Created via web UI" },
-                  { key: "agent", icon: Bot, title: "Created via cast CLI in a session" },
+                  { key: "", icon: User, title: "Your board — human-created tasks and tasks flagged for you" },
+                  { key: "agent", icon: Bot, title: "Agent-internal tasks (created by agents for their own work)" },
+                  { key: "all", label: "All", title: "All active tasks" },
                 ]}
               />
               {suggestedCount > 0 && (
