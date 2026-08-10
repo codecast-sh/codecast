@@ -133,6 +133,8 @@ export function accessSummary(a: Doc<"artifacts">) {
     email_gate: !!a.email_gate,
     expires_at: a.expires_at ?? null,
     edit_mode: a.edit_mode ?? "owner",
+    show_session: !a.hide_session,
+    comments_enabled: !a.comments_disabled,
   };
 }
 
@@ -396,6 +398,9 @@ export const ownerPanel = internalQuery({
           .sort((a, b) => b.version - a.version),
       ],
       access: accessSummary(artifact),
+      // Lets the manage sheet offer the session-link toggle only when there is
+      // a publishing session to link to.
+      session_short_id: artifact.session_short_id ?? null,
       edit_url: artifact.edit_mode === "link" && artifact.edit_key ? `${artifactUrl(artifact.slug)}#ed=${artifact.edit_key}` : null,
       stats: { views: stats?.view_count ?? 0, last_viewed_at: stats?.last_viewed_at ?? null },
       viewers: viewers
@@ -429,6 +434,8 @@ const accessPatchValidator = v.object({
   expires_at: v.optional(v.union(v.number(), v.null())),
   edit_mode: v.optional(v.string()),
   edit_key: v.optional(v.string()),
+  hide_session: v.optional(v.boolean()),
+  comments_disabled: v.optional(v.boolean()),
 });
 
 type AccessPatch = {
@@ -437,6 +444,8 @@ type AccessPatch = {
   expires_at?: number | null;
   edit_mode?: string;
   edit_key?: string;
+  hide_session?: boolean;
+  comments_disabled?: boolean;
 };
 
 function buildAccessPatch(set: AccessPatch): Partial<Doc<"artifacts">> {
@@ -448,6 +457,8 @@ function buildAccessPatch(set: AccessPatch): Partial<Doc<"artifacts">> {
     patch.edit_mode = set.edit_mode === "owner" ? undefined : set.edit_mode;
     if (set.edit_key !== undefined) patch.edit_key = set.edit_key;
   }
+  if (set.hide_session !== undefined) patch.hide_session = set.hide_session || undefined;
+  if (set.comments_disabled !== undefined) patch.comments_disabled = set.comments_disabled || undefined;
   return patch as Partial<Doc<"artifacts">>;
 }
 
@@ -756,6 +767,8 @@ export const applyManage = internalMutation({
         expires_at: v.optional(v.union(v.number(), v.null())),
         edit_mode: v.optional(v.string()),
         edit_key: v.optional(v.string()),
+        hide_session: v.optional(v.boolean()),
+        comments_disabled: v.optional(v.boolean()),
       }),
     ),
     resolve_comment_id: v.optional(v.id("artifact_comments")),
@@ -908,10 +921,12 @@ async function deliverCommentsToSession(
   }
 }
 
-// One viewer's batch of comments → stored, and (unless deliver:false) sent to
-// the publishing session as a single message under the artifact owner's
-// identity. deliver:false is the pending path: the comments live on the page
-// for every viewer, and a later "send all" delivers them in one batch.
+// One viewer's batch of comments → stored as the page's discussion, visible
+// to every viewer. Delivery into the publishing session is OWNER-ONLY: it
+// happens in the same call only when deliver is requested with a matching
+// owner_key. Anyone else's comments always land as the discussion, no matter
+// what the request claims — unauthenticated text must not be able to message
+// a live agent session directly.
 export const submitComments = mutation({
   args: {
     slug: v.string(),
@@ -919,6 +934,7 @@ export const submitComments = mutation({
     author_email: v.optional(v.string()),
     version: v.number(),
     deliver: v.optional(v.boolean()),
+    owner_key: v.optional(v.string()),
     comments: v.array(v.object({ text: v.string(), anchor: v.optional(v.string()) })),
   },
   handler: async (ctx, args) => {
@@ -927,6 +943,8 @@ export const submitComments = mutation({
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
     if (!artifact) return { error: "Not found" };
+    if (artifact.comments_disabled) return { error: "Comments are off on this page" };
+    const isOwner = !!artifact.owner_key && args.owner_key === artifact.owner_key;
     const list = args.comments
       .slice(0, MAX_COMMENT_BATCH)
       .map((c) => ({
@@ -942,9 +960,9 @@ export const submitComments = mutation({
 
     // Deliver first (as one message), then store rows stamped with the
     // outcome. A failed delivery still stores the comments — the owner sees
-    // them in the manage panel and any viewer can re-send via "send all".
+    // them in the discussion and can re-send via "send all".
     const delivered =
-      args.deliver === false
+      args.deliver === false || !isOwner
         ? false
         : await deliverCommentsToSession(
             ctx,
@@ -971,17 +989,20 @@ export const submitComments = mutation({
 });
 
 // "Send all": deliver every stored-but-undelivered open comment to the
-// publishing session as one batch message. Slug-keyed and unauthenticated
-// like submitComments — the slug is the access gate, and the endpoint is
-// rate-limited at the HTTP layer.
+// publishing session as one batch message. Owner-only — the owner_key is the
+// gate, because this pushes viewer text into a live agent session. Works even
+// with comments turned off, so the owner can still flush an old backlog.
 export const deliverPendingComments = mutation({
-  args: { slug: v.string() },
+  args: { slug: v.string(), owner_key: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const artifact = await ctx.db
       .query("artifacts")
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
     if (!artifact) return { error: "Not found" };
+    if (!artifact.owner_key || args.owner_key !== artifact.owner_key) {
+      return { error: "Only the page owner can send comments to the session" };
+    }
     const rows = await ctx.db
       .query("artifact_comments")
       .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))

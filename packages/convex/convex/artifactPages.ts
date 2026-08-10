@@ -48,6 +48,7 @@ export interface BrandOpts {
   sessionTitle?: string | null;
   views?: number;
   commentCount?: number;
+  commentsEnabled?: boolean;
   gated?: { password: boolean; email: boolean };
   editMode?: string;
   live?: boolean;
@@ -61,10 +62,10 @@ export interface BrandOpts {
 //
 // Panels (history / menu / comments / manage) are anchored dropdowns on
 // desktop and become drag-handle bottom sheets under 640px. The comments
-// panel collects MULTIPLE draft comments (pinned by tapping the page, or
-// anchored to a text selection); a batch can go straight to the author's
-// session or be saved as PENDING — stored, listed on the page for every
-// viewer, and delivered later in one shot via "Send all".
+// panel is a DISCUSSION every viewer can read and post to (drafts pinned by
+// tapping the page, or anchored to a text selection). Pushing the discussion
+// into the author's session is owner-only: with the #o= key the panel adds
+// "Send to session" / "Send all", and the server enforces the same rule.
 // ---------------------------------------------------------------------------
 function barHtml(o: BrandOpts): string {
   const when = new Date(o.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -85,10 +86,12 @@ function barHtml(o: BrandOpts): string {
   const sessionLink = o.sessionShortId
     ? `<a class="__cc_sess" href="https://codecast.sh/conversation/${escAttr(o.sessionShortId)}" target="_blank" rel="noopener noreferrer" title="Open the session that published this (${escAttr(o.sessionShortId)})">${escAttr(o.sessionTitle || `by ${o.sessionShortId}`)}</a>`
     : "";
-  const commentsBtn = interactive
-    ? `<button id="__cc_cbtn" type="button" title="Comment on this page">${bubbleSvg}<span id="__cc_ccount">${o.commentCount || ""}</span></button>`
+  const commentsBtn = interactive && o.commentsEnabled !== false
+    ? `<button id="__cc_cbtn" type="button" title="Discuss this page">${bubbleSvg}<span id="__cc_ccount">${o.commentCount || ""}</span></button>`
     : "";
   const menuBtn = interactive ? `<button id="__cc_menu" type="button" title="More">${dotsSvg}</button>` : "";
+  const collapseSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 14-5-5-5 5"/></svg>`;
+  const hideBtn = `<button id="__cc_hide" type="button" title="Hide this bar">${collapseSvg}</button>`;
   const cfg = {
     metaUrl: o.metaUrl ?? "",
     apiBase: o.apiBase ?? "",
@@ -114,12 +117,16 @@ function barHtml(o: BrandOpts): string {
      artifact's measured background luminance) flips the whole palette so the
      bar reads as part of the page instead of a white strip over a dark one. */
   html { margin-top: 40px !important; }
-  #__cc_bar, .__cc_panel, #__cc_hint {
+  /* Minimized: the bar slides away and a small corner pill brings it back. */
+  html.__cc_min { margin-top: 0 !important; }
+  html.__cc_min #__cc_bar { transform: translateY(-100%); box-shadow: none; pointer-events: none; }
+  html.__cc_min #__cc_pill { display: inline-flex; }
+  #__cc_bar, .__cc_panel, #__cc_hint, #__cc_pill {
     --cc-bg: rgba(253,252,250,.9); --cc-ink: #002b36; --cc-mut: #586e75; --cc-dim: rgba(0,43,54,.48);
     --cc-line: rgba(88,110,117,.22); --cc-hov: rgba(0,43,54,.06); --cc-card: #ffffff; --cc-soft: #faf9f7;
     --cc-inbd: rgba(0,43,54,.22); --cc-blue: #268bd2; --cc-green: #859900; --cc-coral: #e86c5d;
     --cc-shadow: rgba(0,43,54,.16); }
-  html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint {
+  html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint, html.__cc_dark #__cc_pill {
     --cc-bg: rgba(0,43,54,.85); --cc-ink: #fdf6e3; --cc-mut: #93a1a1; --cc-dim: rgba(253,246,227,.45);
     --cc-line: rgba(147,161,161,.18); --cc-hov: rgba(147,161,161,.1); --cc-card: #08404e; --cc-soft: #073642;
     --cc-inbd: rgba(147,161,161,.32); --cc-blue: #268bd2; --cc-green: #859900;
@@ -132,7 +139,15 @@ function barHtml(o: BrandOpts): string {
     background: var(--cc-bg); color: var(--cc-mut);
     -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
     border-bottom: 1px solid var(--cc-line); box-shadow: 0 1px 8px rgba(0,0,0,.05);
-    text-align: left; }
+    text-align: left; transition: transform .22s ease; }
+  #__cc_pill { position: fixed; top: 8px; right: calc(8px + env(safe-area-inset-right)); z-index: 2147483647;
+    display: none; align-items: center; justify-content: center; width: 30px; height: 30px;
+    border: 1px solid var(--cc-line); border-radius: 999px; background: var(--cc-bg); color: var(--cc-ink);
+    -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
+    cursor: pointer; padding: 0; margin: 0; opacity: .55; transition: opacity .15s ease, transform .15s ease;
+    -webkit-tap-highlight-color: transparent; }
+  #__cc_pill:hover { opacity: 1; transform: scale(1.06); }
+  #__cc_pill svg { display: block; }
   #__cc_bar .__cc_brand { color: var(--cc-ink); text-decoration: none; display: inline-flex; align-items: center;
     opacity: .85; margin-right: 8px; }
   #__cc_bar .__cc_brand:hover { opacity: 1; }
@@ -158,9 +173,7 @@ function barHtml(o: BrandOpts): string {
   #__cc_bar #__cc_latest { color: var(--cc-blue); text-decoration: none; padding: 5px 8px; border-radius: 7px; white-space: nowrap;
     display: inline-flex; align-items: center; gap: 3px; }
   #__cc_bar #__cc_latest:hover { background: var(--cc-hov); }
-  #__cc_bar #__cc_ccount { background: rgba(232,108,93,.16); color: #c2543f; border-radius: 999px; padding: 2px 6px;
-    font-size: 10px; font-weight: 600; }
-  html.__cc_dark #__cc_bar #__cc_ccount { color: #f0937f; }
+  #__cc_bar #__cc_ccount { color: var(--cc-dim); font-size: 10px; font-weight: 600; }
   #__cc_bar #__cc_ccount:empty { display: none; }
   .__cc_panel { position: fixed; top: 46px; right: 10px; z-index: 2147483647; min-width: 272px; max-width: min(92vw, 400px);
     max-height: 72vh; overflow-y: auto; overscroll-behavior: contain;
@@ -206,9 +219,9 @@ function barHtml(o: BrandOpts): string {
     color: var(--cc-ink); background: var(--cc-card); outline: none; box-sizing: border-box; }
   .__cc_panel .__cc_in2::placeholder { color: var(--cc-dim); }
   .__cc_panel .__cc_in2:focus { border-color: var(--cc-coral); box-shadow: 0 0 0 3px rgba(232,108,93,.15); }
-  .__cc_panel .__cc_draft { margin: 6px 8px; border: 1px solid var(--cc-line); border-radius: 8px; padding: 8px; background: var(--cc-soft); }
+  .__cc_panel .__cc_draft { margin: 2px 8px 8px; padding: 0; }
   .__cc_panel .__cc_dtop { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .__cc_panel .__cc_dnum { width: 20px; height: 20px; border-radius: 50% 50% 50% 4px; background: var(--cc-coral); color: #ffffff; font-weight: 600;
+  .__cc_panel .__cc_dnum { width: 18px; height: 18px; border-radius: 50% 50% 50% 4px; background: var(--cc-coral); color: #ffffff; font-weight: 600;
     font-size: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
   .__cc_panel .__cc_dsnip { color: var(--cc-dim); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .__cc_panel .__cc_x { all: unset; cursor: pointer; padding: 2px 7px; border-radius: 6px; opacity: .5; font-size: 14px; }
@@ -220,13 +233,13 @@ function barHtml(o: BrandOpts): string {
   .__cc_panel .__cc_addrow { display: flex; gap: 6px; padding: 6px 8px; }
   .__cc_panel .__cc_who { padding: 2px 8px 6px; display: flex; }
   .__cc_panel .__cc_actions { display: flex; gap: 6px; margin: 2px 8px 6px; }
-  .__cc_panel .__cc_send { all: unset; cursor: pointer; flex: 1; text-align: center; padding: 9px 12px;
+  .__cc_panel .__cc_send { all: unset; cursor: pointer; flex: 1; text-align: center; padding: 8px 12px;
     border-radius: 8px; background: var(--cc-coral); color: #ffffff; font-weight: 600; -webkit-tap-highlight-color: transparent; }
   .__cc_panel .__cc_send:hover { background: #d85b4c; }
   .__cc_panel .__cc_send:disabled { opacity: .45; cursor: default; }
-  .__cc_panel .__cc_ghost { all: unset; cursor: pointer; text-align: center; padding: 9px 12px; border-radius: 8px;
-    border: 1px solid var(--cc-inbd); color: var(--cc-ink); font-weight: 500; -webkit-tap-highlight-color: transparent; }
-  .__cc_panel .__cc_ghost:hover { background: var(--cc-hov); }
+  .__cc_panel .__cc_ghost { all: unset; cursor: pointer; text-align: center; padding: 8px 12px; border-radius: 8px;
+    color: var(--cc-mut); -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_ghost:hover { background: var(--cc-hov); color: var(--cc-ink); }
   .__cc_panel .__cc_ghost:disabled { opacity: .45; cursor: default; }
   .__cc_panel .__cc_cerr { color: #c25446; padding: 0 8px 6px; }
   .__cc_panel .__cc_okwrap { text-align: center; padding: 22px 12px 26px; }
@@ -234,31 +247,30 @@ function barHtml(o: BrandOpts): string {
     color: var(--cc-green); font-size: 18px; line-height: 36px; }
   .__cc_panel .__cc_okt { font-weight: 600; color: var(--cc-ink); margin-bottom: 4px; }
   .__cc_panel .__cc_oks { color: var(--cc-dim); }
-  .__cc_panel .__cc_cmt { margin: 4px 8px 8px; padding: 8px; border: 1px solid var(--cc-line); border-radius: 8px; }
+  .__cc_panel .__cc_cmt { margin: 0 8px; padding: 9px 2px; border-top: 1px solid var(--cc-line); }
   .__cc_panel .__cc_cmeta { color: var(--cc-dim); margin-bottom: 2px; }
   .__cc_panel .__cc_ctext { color: var(--cc-ink); margin: 4px 0 8px; white-space: pre-wrap; word-break: break-word; }
-  /* Saved comments (everyone sees these; "pending" = not yet sent to the session) */
-  .__cc_panel .__cc_scmt { margin: 6px 8px; padding: 8px; border: 1px solid var(--cc-line); border-radius: 8px; cursor: default; }
+  /* The discussion: flat rows separated by hairlines, no nested cards. */
+  .__cc_panel .__cc_scmt { margin: 0 8px; padding: 9px 2px; border-top: 1px solid var(--cc-line); cursor: default; }
   .__cc_panel .__cc_scmt.__cc_hasloc { cursor: pointer; }
-  .__cc_panel .__cc_scmt.__cc_hasloc:hover { background: var(--cc-hov); }
+  .__cc_panel .__cc_scmt.__cc_hasloc:hover { background: var(--cc-hov); border-radius: 7px; }
   .__cc_panel .__cc_scmt .__cc_ctext { margin: 4px 0 0; }
-  .__cc_panel .__cc_stag { border-radius: 999px; padding: 1px 7px; font-size: 10px; font-weight: 600; white-space: nowrap; }
-  .__cc_panel .__cc_stag.__cc_pend { background: rgba(192,122,40,.15); color: #c07a28; }
-  .__cc_panel .__cc_stag.__cc_sent { background: rgba(61,138,61,.13); color: var(--cc-green); }
-  .__cc_panel .__cc_pendrow { display: flex; align-items: center; gap: 8px; margin: 8px 8px 2px; padding: 7px 9px;
-    border-radius: 8px; background: rgba(192,122,40,.09); color: #c07a28; }
+  .__cc_panel .__cc_stag { font-size: 10px; font-weight: 600; white-space: nowrap; }
+  .__cc_panel .__cc_stag.__cc_pend { color: #c07a28; }
+  .__cc_panel .__cc_stag.__cc_sent { color: var(--cc-dim); }
+  .__cc_panel .__cc_pendrow { display: flex; align-items: center; gap: 8px; margin: 6px 8px 0; padding: 5px 2px;
+    color: var(--cc-dim); }
   .__cc_panel .__cc_pendrow .__cc_sendall { all: unset; cursor: pointer; padding: 4px 10px; border-radius: 7px;
-    background: var(--cc-coral); color: #ffffff; font-weight: 600; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
-  .__cc_panel .__cc_pendrow .__cc_sendall:hover { background: #d85b4c; }
+    color: var(--cc-coral); font-weight: 600; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_pendrow .__cc_sendall:hover { background: var(--cc-hov); }
   .__cc_panel .__cc_pendrow .__cc_sendall:disabled { opacity: .5; cursor: default; }
-  .__cc_panel .__cc_div { height: 1px; background: var(--cc-line); margin: 8px 8px 2px; }
   #__cc_pins { position: absolute; top: 0; left: 0; width: 100%; height: 0; overflow: visible; z-index: 2147483645; pointer-events: none; }
-  #__cc_pins .__cc_pin { position: absolute; transform: translate(-50%,-100%); width: 22px; height: 22px;
-    border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 11px/22px "JetBrains Mono", ui-monospace, Menlo, monospace;
-    text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,.25); pointer-events: auto; cursor: pointer;
+  #__cc_pins .__cc_pin { position: absolute; transform: translate(-50%,-100%); width: 18px; height: 18px;
+    border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 10px/18px "JetBrains Mono", ui-monospace, Menlo, monospace;
+    text-align: center; box-shadow: 0 1px 5px rgba(0,0,0,.2); pointer-events: auto; cursor: pointer;
     animation: __cc_pop .18s ease; }
-  #__cc_pins .__cc_pin.__cc_spin { width: 14px; height: 14px; background: #ffffff; border: 3px solid #e86c5d;
-    box-sizing: border-box; border-radius: 50% 50% 50% 3px; font-size: 0; opacity: .85; }
+  #__cc_pins .__cc_pin.__cc_spin { width: 12px; height: 12px; background: #ffffff; border: 2px solid #e86c5d;
+    box-sizing: border-box; border-radius: 50% 50% 50% 3px; font-size: 0; opacity: .6; }
   #__cc_pins .__cc_pin.__cc_spin:hover { opacity: 1; transform: translate(-50%,-100%) scale(1.25); }
   #__cc_pins .__cc_pin.__cc_flash { animation: __cc_pulse .9s ease 2; }
   @keyframes __cc_pop { from { transform: translate(-50%,-100%) scale(.6); opacity: 0; } }
@@ -310,7 +322,9 @@ function barHtml(o: BrandOpts): string {
   ${verChip}
   ${commentsBtn}
   ${menuBtn}
+  ${hideBtn}
 </div>
+<button id="__cc_pill" type="button" title="Show the codecast bar">${logoSvg(15)}</button>
 <div id="__cc_hist" class="__cc_panel" hidden></div>
 <div id="__cc_menupanel" class="__cc_panel" hidden></div>
 <div id="__cc_cpanel" class="__cc_panel" hidden></div>
@@ -358,6 +372,19 @@ function barHtml(o: BrandOpts): string {
     if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(u).then(done,fallback);}else{fallback();}
   };
   var flashLabel=function(btn,label,back){btn.textContent=label;setTimeout(function(){btn.textContent=back;},1400);};
+  // Minimize: bar slides away, the corner pill brings it back. Per-page
+  // persistence (best effort — the opaque origin usually has no storage).
+  var minKey="__cc_min:"+(CC.slug||location.pathname);
+  var setMin=function(on){
+    document.documentElement.classList.toggle("__cc_min",on);
+    sSet(minKey,on?"1":"");
+    if(on&&typeof closeAll==="function")closeAll();
+  };
+  var hideB=document.getElementById("__cc_hide");
+  var pillB=document.getElementById("__cc_pill");
+  if(hideB)hideB.addEventListener("click",function(e){e.stopPropagation();setMin(true);});
+  if(pillB)pillB.addEventListener("click",function(e){e.stopPropagation();setMin(false);});
+  if(sGet(minKey)==="1")setMin(true);
   if(!CC.metaUrl)return;
   var api=function(path,body){return fetch(CC.apiBase+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});};
   // View beacon — one per page load; carries the gate email when present.
@@ -536,12 +563,13 @@ function barHtml(o: BrandOpts): string {
   var syncSend=function(){
     var n=drafts.filter(function(d){return d.text.trim();}).length;
     var b=document.getElementById("__cc_sendbtn");
-    if(b){b.disabled=!n;b.textContent=n>1?("Send "+n+" to session"):"Send to session";}
+    if(b){b.disabled=!n;b.textContent=ownerKey?(n>1?"Send "+n+" to session":"Send to session"):(n>1?"Post "+n+" comments":"Comment");}
     var g=document.getElementById("__cc_savebtn");
-    if(g){g.disabled=!n;g.textContent="Save as pending";}
+    if(g){g.disabled=!n;}
   };
-  // deliver=true → straight to the author's session. deliver=false → stored
-  // as pending: on the page for every viewer, sent later via "Send all".
+  // deliver=false → post into the page's discussion. deliver=true is the
+  // owner's gesture (needs the #o= key; the server enforces it too): the
+  // batch goes into the publishing session as one message.
   var doSend=function(name,deliver){
     var ready=drafts.filter(function(d){return d.text.trim();});
     if(!ready.length)return;
@@ -554,6 +582,7 @@ function barHtml(o: BrandOpts): string {
     api("/cli/artifacts/comment",{slug:CC.slug,author_name:(name||"").trim()||"anonymous",
       author_email:gateEmail||undefined,version:CC.version,
       deliver:deliver?undefined:false,
+      owner_key:ownerKey||undefined,
       comments:ready.map(function(d){var c={text:d.text.trim()};if(d.anchor)c.anchor=JSON.stringify(d.anchor);return c;})})
     .then(function(r){
       if(!r||r.error){if(errBox)errBox.textContent=(r&&r.error)||"Send failed — try again";syncSend();return;}
@@ -561,19 +590,19 @@ function barHtml(o: BrandOpts): string {
       cpanel.innerHTML="";
       var ok=el("div","__cc_okwrap");
       ok.appendChild(el("div","__cc_okmark","✓"));
-      ok.appendChild(el("div","__cc_okt",(deliver?"Sent ":"Saved ")+ready.length+(ready.length===1?" comment":" comments")));
+      ok.appendChild(el("div","__cc_okt",(deliver?"Sent ":"Posted ")+ready.length+(ready.length===1?" comment":" comments")));
       ok.appendChild(el("div","__cc_oks",deliver
-        ?(r.delivered?"Delivered to the author's session.":"Saved — the author will see them.")
-        :"Pending on this page — use \\u201CSend all\\u201D to deliver to the author's session."));
+        ?(r.delivered?"Delivered to your session.":"Posted — the session could not be reached, use \\u201CSend all\\u201D later.")
+        :"Now part of this page's discussion."));
       cpanel.appendChild(ok);
       refreshSaved(function(){setTimeout(function(){if(!cpanel.hidden)renderC();},1600);});
     },function(){if(errBox)errBox.textContent="Network error — your drafts are kept";syncSend();});
   };
-  // "Send all": flush every stored-but-unsent comment (any viewer's) to the
+  // "Send all" (owner-only): flush the discussion's unsent comments to the
   // session in one batch message.
   var sendAll=function(btn){
     btn.disabled=true;btn.textContent="Sending…";
-    api("/cli/artifacts/comment",{slug:CC.slug,deliver_pending:true})
+    api("/cli/artifacts/comment",{slug:CC.slug,deliver_pending:true,owner_key:ownerKey})
     .then(function(r){
       if(!r||r.error){btn.textContent="Failed";setTimeout(function(){if(!cpanel.hidden)renderC();},1600);return;}
       refreshSaved(function(){if(!cpanel.hidden)renderC();});
@@ -582,11 +611,11 @@ function barHtml(o: BrandOpts): string {
   var renderC=function(focusIdx,scrollToCid){
     cpanel.innerHTML="";
     var head=el("div","__cc_ph");
-    head.appendChild(el("span","__cc_pht","Comments"));
+    head.appendChild(el("span","__cc_pht","Discussion"));
     if(saved.length>0)head.appendChild(el("span","__cc_phn",String(saved.length)));
     cpanel.appendChild(head);
     if(!drafts.length&&!saved.length){
-      cpanel.appendChild(el("div","__cc_note","Pin notes anywhere on the page (or select text first). Save them as pending, or send them straight to the author's session."));
+      cpanel.appendChild(el("div","__cc_note","No comments yet. Pin a note anywhere on the page, or select text to comment on it."));
     }
     drafts.forEach(function(d,i){
       var card=el("div","__cc_draft");card.setAttribute("data-i",String(i));
@@ -618,29 +647,39 @@ function barHtml(o: BrandOpts): string {
       who.appendChild(nm);cpanel.appendChild(who);
       cpanel.appendChild(el("div","__cc_cerr",""));
       var actions=el("div","__cc_actions");
-      var save=el("button","__cc_ghost","Save as pending");save.type="button";save.id="__cc_savebtn";
-      save.title="Keep on this page without messaging the author's session";
-      save.addEventListener("click",function(){doSend(nm.value,false);});
-      var send=el("button","__cc_send","Send to session");send.type="button";send.id="__cc_sendbtn";
-      send.title="Deliver to the author's session now";
-      send.addEventListener("click",function(){doSend(nm.value,true);});
-      actions.appendChild(save);actions.appendChild(send);
+      if(ownerKey){
+        // Owner: the primary gesture is pushing the batch into the session;
+        // posting to the discussion only is the quiet alternative.
+        var save=el("button","__cc_ghost","Post without sending");save.type="button";save.id="__cc_savebtn";
+        save.title="Add to the discussion without messaging your session";
+        save.addEventListener("click",function(){doSend(nm.value,false);});
+        var send=el("button","__cc_send","Send to session");send.type="button";send.id="__cc_sendbtn";
+        send.title="Deliver to your session now";
+        send.addEventListener("click",function(){doSend(nm.value,true);});
+        actions.appendChild(save);actions.appendChild(send);
+      }else{
+        // Viewers post into the discussion; only the owner can message the
+        // session (the server enforces this regardless of the request).
+        var post=el("button","__cc_send","Comment");post.type="button";post.id="__cc_sendbtn";
+        post.title="Post to this page's discussion";
+        post.addEventListener("click",function(){doSend(nm.value,false);});
+        actions.appendChild(post);
+      }
       cpanel.appendChild(actions);
     }
-    // Saved comments — pending first as a call to action, then the list.
+    // Owner call to action: comments not yet flushed into the session.
     var pend=pendingCount();
-    if(pend>0){
+    if(pend>0&&ownerKey){
       var pr=el("div","__cc_pendrow");
-      pr.appendChild(el("span",null,pend+" pending — not sent yet"));
+      pr.appendChild(el("span",null,pend+" not in your session yet"));
       pr.appendChild(el("span","__cc_sp"));
       var sa=el("button","__cc_sendall","Send all");sa.type="button";
-      sa.title="Deliver every pending comment to the author's session as one batch";
+      sa.title="Deliver every unsent comment to your session as one batch";
       sa.addEventListener("click",function(){sendAll(sa);});
       pr.appendChild(sa);
       cpanel.appendChild(pr);
     }
     if(saved.length){
-      if(drafts.length||pend>0)cpanel.appendChild(el("div","__cc_div",""));
       saved.slice().reverse().forEach(function(c){
         var an=parseAnchor(c);
         var hasLoc=!!posFor(an);
@@ -650,7 +689,9 @@ function barHtml(o: BrandOpts): string {
         var top=el("div","__cc_dtop");
         top.appendChild(el("span","__cc_cmeta",c.author_name+" · "+rel(c.created_at)));
         top.appendChild(el("span","__cc_sp"));
-        top.appendChild(el("span","__cc_stag "+(c.delivered?"__cc_sent":"__cc_pend"),c.delivered?"sent":"pending"));
+        // Delivery state is session bookkeeping — meaningful to the owner,
+        // noise to everyone else.
+        if(ownerKey)top.appendChild(el("span","__cc_stag "+(c.delivered?"__cc_sent":"__cc_pend"),c.delivered?"sent":"unsent"));
         card.appendChild(top);
         if(an&&an.snippet)card.appendChild(el("div","__cc_dsnip","\\u201C"+String(an.snippet).slice(0,60)+(String(an.snippet).length>60?"…":"")+"\\u201D"));
         card.appendChild(el("div","__cc_ctext",c.text));
@@ -755,6 +796,26 @@ function barHtml(o: BrandOpts): string {
     tg.addEventListener("click",function(){tg.disabled=true;mset({email_gate:!ac.email_gate});});
     eg.appendChild(tg);
     mgr.appendChild(eg);
+    if(j.session_short_id){
+      var sl=el("div","__cc_kv");
+      sl.appendChild(el("span","__cc_k","Session link"));
+      sl.appendChild(el("span","__cc_v"+(ac.show_session?" __cc_on":""),ac.show_session?"shown":"hidden"));
+      sl.appendChild(el("span","__cc_sp"));
+      var sb=el("button","__cc_btn",ac.show_session?"Hide":"Show");sb.type="button";
+      sb.title=ac.show_session?"Remove the link to your session from the page":"Let viewers open the session that published this page";
+      sb.addEventListener("click",function(){sb.disabled=true;mset({show_session:!ac.show_session});});
+      sl.appendChild(sb);
+      mgr.appendChild(sl);
+    }
+    var co=el("div","__cc_kv");
+    co.appendChild(el("span","__cc_k","Comments"));
+    co.appendChild(el("span","__cc_v"+(ac.comments_enabled?" __cc_on":""),ac.comments_enabled?"on":"off"));
+    co.appendChild(el("span","__cc_sp"));
+    var cb2=el("button","__cc_btn"+(ac.comments_enabled?" __cc_danger":""),ac.comments_enabled?"Turn off":"Turn on");cb2.type="button";
+    cb2.title=ac.comments_enabled?"Viewers can no longer comment; the existing discussion is hidden":"Let viewers discuss this page";
+    cb2.addEventListener("click",function(){cb2.disabled=true;mset({comments:!ac.comments_enabled});});
+    co.appendChild(cb2);
+    mgr.appendChild(co);
     var ex=el("div","__cc_kv");
     ex.appendChild(el("span","__cc_k","Expires"));
     ex.appendChild(el("span","__cc_v",ac.expires_at?inFmt(ac.expires_at):"never"));

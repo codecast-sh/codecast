@@ -203,6 +203,8 @@ type AccessInput = {
   email_gate?: boolean;
   expires_in_ms?: number | null;
   edit_mode?: string;
+  show_session?: boolean;
+  comments?: boolean;
 };
 
 /** Plain access flags → the pre-hashed patch the mutations accept. */
@@ -224,6 +226,8 @@ async function buildAccessSet(
     set.edit_mode = access.edit_mode;
     if (access.edit_mode === "link" && !existingEditUrl) set.edit_key = newSecret();
   }
+  if (access.show_session !== undefined) set.hide_session = !access.show_session;
+  if (access.comments !== undefined) set.comments_disabled = !access.comments;
   return set;
 }
 
@@ -727,8 +731,12 @@ export const comment = httpAction(async (ctx, request) => {
     const limited = await slugRateLimited(ctx, String(body.slug ?? ""), "artifact-comment", 6, 60_000);
     if (limited) return limited;
     // "Send all": flush stored-but-undelivered comments to the session.
+    // Owner-only — the mutation checks the key.
     if (body.deliver_pending === true) {
-      const flushed = await ctx.runMutation(api.artifacts.deliverPendingComments, { slug: String(body.slug ?? "") });
+      const flushed = await ctx.runMutation(api.artifacts.deliverPendingComments, {
+        slug: String(body.slug ?? ""),
+        owner_key: typeof body.owner_key === "string" ? body.owner_key : undefined,
+      });
       return json(flushed);
     }
     const result = await ctx.runMutation(api.artifacts.submitComments, {
@@ -736,8 +744,10 @@ export const comment = httpAction(async (ctx, request) => {
       author_name: String(body.author_name ?? ""),
       author_email: typeof body.author_email === "string" ? body.author_email : undefined,
       version: typeof body.version === "number" ? body.version : 0,
-      // deliver:false = pending (stored + visible on the page, no session message)
+      // deliver:false = discussion only. Delivery additionally needs the
+      // owner_key — without it the mutation stores the comments as discussion.
       deliver: body.deliver === false ? false : undefined,
+      owner_key: typeof body.owner_key === "string" ? body.owner_key : undefined,
       comments: Array.isArray(body.comments)
         ? body.comments.map((c: { text?: unknown; anchor?: unknown }) => ({
             text: String(c?.text ?? ""),
@@ -848,9 +858,9 @@ export const serve = httpAction(async (ctx, request) => {
         updated_at: art.updated_at,
         kind,
         views: art.views,
-        comment_count: artifact.comment_count,
-        comments: artifact.open_comments,
-        session: art.session_short_id ? { short_id: art.session_short_id, title: artifact.session_title } : null,
+        comment_count: art.comments_disabled ? 0 : artifact.comment_count,
+        comments: art.comments_disabled ? [] : artifact.open_comments,
+        session: art.session_short_id && !art.hide_session ? { short_id: art.session_short_id, title: artifact.session_title } : null,
         gated: { password: !!art.password_hash, email: !!art.email_gate },
         versions: art.versions.map((x) => ({
           version: x.version,
@@ -1044,10 +1054,11 @@ export const serve = httpAction(async (ctx, request) => {
     apiBase,
     slug: artifact.slug,
     kind,
-    sessionShortId: artifact.session_short_id ?? null,
-    sessionTitle: artifact.session_title,
+    sessionShortId: artifact.hide_session ? null : (artifact.session_short_id ?? null),
+    sessionTitle: artifact.hide_session ? null : artifact.session_title,
     views: artifact.views,
-    commentCount: artifact.comment_count,
+    commentCount: artifact.comments_disabled ? 0 : artifact.comment_count,
+    commentsEnabled: !artifact.comments_disabled,
     gated: { password: !!artifact.password_hash, email: !!artifact.email_gate },
     editMode: artifact.edit_mode ?? "owner",
     live: q.get("live") === "1",

@@ -2542,6 +2542,11 @@ export default defineSchema({
     // Provenance: the session that published this artifact.
     session_short_id: v.optional(v.string()),
     session_conversation_id: v.optional(v.id("conversations")),
+    // Owner choice: keep the publishing session off the public page (bar chip
+    // and ?meta=1). Absent = the session link is shown.
+    hide_session: v.optional(v.boolean()),
+    // Owner choice: no viewer discussion on this page. Absent = comments on.
+    comments_disabled: v.optional(v.boolean()),
     // Secrets. owner_key grants in-page management (travels only in the URL
     // fragment, #o=). edit_key grants collaborative editing when edit_mode is
     // "link". Both are unguessable random strings, like the slug itself.
