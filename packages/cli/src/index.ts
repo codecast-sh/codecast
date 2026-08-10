@@ -41,7 +41,7 @@ import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
 import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet } from "./snippets.js";
-import { installStableHook, removeStableHook, runStableContextHook } from "./stableContext.js";
+import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
@@ -122,7 +122,8 @@ import { buildMatcher, contextWindow, matchingLines, resolveLineRange } from "./
 
 const program = new Command();
 const isStableContextFastPath =
-  process.argv.length === 3 && process.argv[2] === "stable-context";
+  process.argv[2] === "stable-context" &&
+  (process.argv.length === 3 || (process.argv.length === 5 && process.argv[3] === "--client"));
 
 // Get the real cwd - CODECAST_CWD is set by the dev wrapper script
 // to preserve the original directory when running via bun run
@@ -15574,20 +15575,22 @@ plan
 // Hook script + installer live in stableContext.ts (imported at top) so the
 // daemon can refresh an already-installed hook file on boot.
 
-// Apply a stable-mode choice: persist config keys and sync the SessionStart hook.
+// Apply a stable-mode choice: persist config keys and sync the session-start
+// hooks (Claude settings hook, Codex/Cursor hooks.json entries, opencode
+// plugin — each a no-op for clients not present on this machine).
 // Shared by the `cast stable` command and the `cast install` flow.
 function applyStableMode(config: Config, mode: "solo" | "team" | "off", isGlobal: boolean): void {
   if (mode === "off") {
     delete (config as any).stable_mode;
     delete (config as any).stable_global;
     writeConfig(config);
-    removeStableHook();
+    removeAllStableHooks();
     return;
   }
   (config as any).stable_mode = mode;
   (config as any).stable_global = isGlobal;
   writeConfig(config);
-  installStableHook();
+  installAllStableHooks();
 }
 
 program
@@ -15737,12 +15740,17 @@ program
       console.log(`  ${fmt.muted("Each session will start with team's recent 15 sessions (14d)")}`);
     }
     console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast stable off")} ${fmt.muted("to disable")}`);
+    if (fs.existsSync(path.join(os.homedir(), ".codex"))) {
+      console.log(`  ${fmt.muted("Codex asks once to trust new hooks — run /hooks inside codex if the feed doesn't appear there")}`);
+    }
   });
 
 program
   .command("stable-context", { hidden: true })
-  .description("SessionStart hook: print the stable-context feed and record what was injected (internal use)")
-  .action(async () => runStableContextHook(readConfig()));
+  .description("Session-start hook: print the stable-context feed and record what was injected (internal use)")
+  .option("--client <client>", "output envelope: claude | codex | cursor | opencode", "claude")
+  .action(async (options: { client?: string }) =>
+    runStableContextHook(readConfig(), parseStableHookClient(options.client)));
 
 program
   .command("snippets-refresh", { hidden: true })
@@ -16287,7 +16295,7 @@ if (isStableContextFastPath) {
   // Bypass Commander, preAction logging/daemon startup, alias repair, env
   // autobinding, and every other global CLI side effect. Hook stdout must be
   // exactly one stable-context block (or empty).
-  runStableContextHook(readConfig()).catch(() => {});
+  runStableContextHook(readConfig(), parseStableHookClient(process.argv[4])).catch(() => {});
 } else if (process.argv[2] === "_disclaimed") {
   // Agent-launch wrapper (see disclaim.ts): exec the rest of argv as a TCC
   // self-responsible process so privacy prompts name the agent, not codecast.

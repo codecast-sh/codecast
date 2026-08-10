@@ -121,6 +121,83 @@ Use --mine for only your sessions, -g for all teams.
     }
   }, 20_000);
 
+  test("per-client envelopes: codex and cursor wrap the block in their hook JSON; off is silent", async () => {
+    const home = scratchHome();
+    const server = http.createServer((req, res) => {
+      req.resume();
+      res.setHeader("Content-Type", "application/json");
+      res.end(req.url === "/cli/feed" ? JSON.stringify({ conversations: [] }) : "{}");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("missing test server address");
+      fs.writeFileSync(path.join(home, ".codecast", "config.json"), JSON.stringify({
+        auth_token: "test-token",
+        convex_url: `http://127.0.0.1:${address.port}`,
+        stable_mode: "solo",
+        auto_update: false,
+      }));
+
+      const codex = await runCli(
+        home,
+        ["stable-context", "--client", "codex"],
+        JSON.stringify({ session_id: "codex-thread-1", cwd: "/tmp/project" }),
+      );
+      expect(codex.code).toBe(0);
+      const codexOut = JSON.parse(codex.stdout);
+      expect(codexOut.hookSpecificOutput.hookEventName).toBe("SessionStart");
+      expect(codexOut.hookSpecificOutput.additionalContext).toContain('<stable-context mode="solo">');
+
+      // Cursor's payload has no cwd — workspace_roots[0] takes its place.
+      const cursor = await runCli(
+        home,
+        ["stable-context", "--client", "cursor"],
+        JSON.stringify({ session_id: "cursor-1", workspace_roots: ["/tmp/project"] }),
+      );
+      expect(cursor.code).toBe(0);
+      const cursorOut = JSON.parse(cursor.stdout);
+      expect(cursorOut.additional_context).toContain('<stable-context mode="solo">');
+
+      // opencode consumes raw text (the plugin pushes stdout into the system prompt).
+      const opencode = await runCli(
+        home,
+        ["stable-context", "--client", "opencode"],
+        JSON.stringify({ session_id: "oc-1", cwd: "/tmp/project" }),
+      );
+      expect(opencode.code).toBe(0);
+      expect(opencode.stdout).toStartWith('<stable-context mode="solo">');
+
+      // Cursor imports Claude user hooks and runs them with its own payload
+      // (marked by cursor_version). The Claude envelope must stay silent there
+      // — Cursor's native sessionStart hook already injects the feed.
+      const claudeUnderCursor = await runCli(
+        home,
+        ["stable-context"],
+        JSON.stringify({ session_id: "cursor-1", cursor_version: "3.14.27", workspace_roots: [] }),
+      );
+      expect(claudeUnderCursor.code).toBe(0);
+      expect(claudeUnderCursor.stdout).toBe("");
+
+      // The daemon exports CODECAST_STABLE_MODE=off into the codex app-server
+      // (threads there already get the feed via developerInstructions) — the
+      // hook must print nothing so a thread is never injected twice.
+      const suppressed = await runCli(
+        home,
+        ["stable-context", "--client", "codex"],
+        JSON.stringify({ session_id: "codex-thread-2", cwd: "/tmp/project" }),
+        { CODECAST_STABLE_MODE: "off" },
+      );
+      expect(suppressed.code).toBe(0);
+      expect(suppressed.stdout).toBe("");
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => err ? reject(err) : resolve()),
+      );
+    }
+  }, 20_000);
+
   test("source guard keeps update checks and global CLI effects out of the fast path", () => {
     const source = fs.readFileSync(cliEntry, "utf8");
     expect(source).toContain("if (!isStableContextFastPath) checkForUpdates()");
@@ -129,7 +206,9 @@ Use --mine for only your sessions, -g for all teams.
     const fastPath = source.slice(source.indexOf("if (isStableContextFastPath) {"));
     const fallback = fastPath.indexOf("} else if (process.argv[2] === \"__fugitive_blame@@\")");
     expect(fallback).toBeGreaterThan(0);
-    expect(fastPath.slice(0, fallback)).toContain("runStableContextHook(readConfig())");
+    expect(fastPath.slice(0, fallback)).toContain(
+      "runStableContextHook(readConfig(), parseStableHookClient(process.argv[4]))",
+    );
     expect(fastPath.slice(0, fallback)).not.toContain("ensureCastAlias()");
     expect(fastPath.slice(0, fallback)).not.toContain("autoBindFromEnv()");
     expect(fastPath.slice(0, fallback)).not.toContain("program.parse()");
