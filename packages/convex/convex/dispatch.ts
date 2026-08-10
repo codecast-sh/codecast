@@ -1068,81 +1068,27 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     }
   },
 
+  // Delegate to tasks.webCreate so every workspace rule lives in one place:
+  // team_id membership enforcement (createDataContext.resolveWorkspace),
+  // plan access + same-workspace checks, and plan-workspace inheritance. The
+  // old inline insert took a client-supplied team_id unchecked (any team) and
+  // linked any plan by short_id without access control. Pass an explicit
+  // allowlist of args — dispatch opts come straight from the client.
   createTask: async (ctx, userId, [opts]: [any]) => {
-    let teamId: Id<"teams"> | undefined;
-    if (opts.workspace === "personal") {
-      teamId = undefined;
-    } else if (opts.team_id) {
-      teamId = opts.team_id as Id<"teams">;
-    } else {
-      // Directory mapping is the whole rule: unmapped ("Only Me") paths — and
-      // no path at all — stay personal. The old active-team fallback here is
-      // how tasks from private directories leaked to the team (ct-38419).
-      const mappings = await ctx.db
-        .query("directory_team_mappings")
-        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-        .collect();
-      teamId = resolveTeamForPath(mappings, opts.project_path, undefined).teamId;
-    }
-
-    const shortId = await nextShortId(ctx.db, "ct");
-
-    let projectId;
-    if (opts.project_id) {
-      const pid = ctx.db.normalizeId("projects", opts.project_id);
-      if (pid && (await ctx.db.get(pid))) projectId = pid;
-    }
-
-    const resolvedAssignee = await resolveAssigneeStr(ctx, opts.assignee, userId);
-
-    let planId: Id<"plans"> | undefined;
-    if (opts.plan_id) {
-      const plan = await ctx.db
-        .query("plans")
-        .withIndex("by_short_id", (q: any) => q.eq("short_id", opts.plan_id))
-        .first();
-      if (plan) planId = plan._id;
-    }
-
-    const now = Date.now();
-    const id = await ctx.db.insert("tasks", {
-      user_id: userId,
-      team_id: teamId,
-      project_id: projectId,
-      plan_id: planId,
-      short_id: shortId,
+    return await (ctx as any).runMutation(api.tasks.webCreate, {
       title: opts.title,
       description: opts.description,
-      task_type: opts.task_type || "task",
-      status: opts.status || "open",
-      priority: opts.priority || "medium",
+      task_type: opts.task_type,
+      status: opts.status,
+      priority: opts.priority,
+      project_id: opts.project_id,
       labels: opts.labels,
-      assignee: resolvedAssignee,
-      source: "human" as const,
-      attempt_count: 0,
-      retry_count: 0,
-      max_retries: 3,
-      created_at: now,
-      updated_at: now,
+      plan_id: opts.plan_id,
+      team_id: opts.team_id,
+      workspace: opts.workspace,
+      assignee: opts.assignee,
+      project_path: opts.project_path,
     });
-
-    if (planId) {
-      const plan = await ctx.db.get(planId);
-      if (plan) {
-        const taskIds = plan.task_ids || [];
-        await ctx.db.patch(planId, { task_ids: [...taskIds, id], updated_at: now });
-      }
-    }
-
-    await ctx.db.insert("task_history", {
-      task_id: id,
-      user_id: userId,
-      actor_type: "user" as const,
-      action: "created",
-      created_at: now,
-    });
-
-    return { id, short_id: shortId };
   },
 
   // Delegate to tasks.webAddComment so the local-first path keeps image

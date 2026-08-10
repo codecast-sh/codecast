@@ -97,6 +97,15 @@ export async function resolveTaskGitContext(
     if (!git_root) git_root = project_path;
   }
 
+  // A git_root that isn't an ancestor of the resolved project_path describes a
+  // DIFFERENT repo — typically the viewer's currently-open conversation stamped
+  // alongside a task-derived path. The daemon prefers git_root when picking a
+  // cwd, so an unrelated root that happens to exist on the target machine would
+  // launch the session in the wrong repo. Drop it; the project_path routes.
+  if (git_root && project_path && project_path !== git_root && !project_path.startsWith(git_root.replace(/\/+$/, "") + "/")) {
+    git_root = undefined;
+  }
+
   // A task stores project_path but never git_remote_url; recover it from the
   // task's source conversations (which a daemon stamped git metadata onto) so a
   // daemon on a different machine can remap a foreign path to the local checkout.
@@ -289,6 +298,9 @@ export const create = mutation({
     blocked_by: v.optional(v.array(v.string())),
     source: v.optional(v.string()),
     confidence: v.optional(v.number()),
+    // Agent-created tasks are internal by default; promoted:true puts the task
+    // on the human's default board (same field the triage promote flow sets).
+    promoted: v.optional(v.boolean()),
     conversation_id: v.optional(v.string()),
     insight_id: v.optional(v.string()),
     plan_id: v.optional(v.string()),
@@ -384,6 +396,7 @@ export const create = mutation({
       source: (args.source || "human") as any,
       triage_status: args.source === "insight" ? "suggested" : "active",
       confidence: args.confidence,
+      promoted: args.promoted || undefined,
       attempt_count: 0,
       retry_count: 0,
       max_retries: args.max_retries ?? 3,
@@ -759,6 +772,7 @@ export const update = mutation({
     description: v.optional(v.string()),
     assignee: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
+    promoted: v.optional(v.boolean()),
     project_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
@@ -799,6 +813,7 @@ export const update = mutation({
     if (args.description !== undefined) updates.description = args.description;
     if (args.assignee !== undefined) updates.assignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId) || args.assignee;
     if (args.labels) updates.labels = args.labels;
+    if (args.promoted !== undefined) updates.promoted = args.promoted;
     const targetWorkspace = args.team_id
       ? { type: "team" as const, teamId: args.team_id }
       : task.team_id
@@ -1349,19 +1364,13 @@ export const webList = query({
       if (args.workspace === "team" && args.team_id) {
         // TEAM VIEW: fetch ALL tasks for this team — no per-status limits.
         // Client does all filtering (status, source, assignee, priority).
-        const [teamTasks, assignedTasks] = await Promise.all([
-          collectByTeam(args.team_id),
-          collectByAssignee(String(userId)),
-        ]);
+        // STRICTLY this team's tasks: a teamless task lives in its owner's
+        // personal workspace only, even when assigned to the viewer — the old
+        // "rescue orphans assigned to me" union here is exactly how personal
+        // tasks leaked into team views. Teamless assigned tasks stay reachable
+        // in the personal view, whose assignee union below covers them.
+        const teamTasks = await collectByTeam(args.team_id);
         for (const t of teamTasks) pushUnique(t);
-
-        // Also rescue orphan tasks (no team_id) assigned to me — CLI-created
-        // tasks that never got a team would otherwise be invisible in every
-        // view. Do NOT pull in tasks belonging to *other* teams: a task whose
-        // team_id is set to another team must not leak into this team's list.
-        for (const t of assignedTasks) {
-          if (!t.team_id || String(t.team_id) === String(args.team_id)) pushUnique(t);
-        }
       } else if (args.workspace === "all") {
         // GLOBAL VIEW: every team the user belongs to + personal tasks
         // (creator or assignee with no team). Used by the client to keep
@@ -1541,6 +1550,10 @@ export const webListPaginated = query({
     // must flow through as a status="dropped" overlay so this client's read-time
     // filter hides it — otherwise it would linger in the cache forever.
     let rows = isDelta ? result.page : result.page.filter((t: any) => t.status !== "dropped");
+    // Strict workspace boundary: the personal crawl walks by_user_updated, which
+    // also holds the user's team-tagged tasks — those belong to their team
+    // workspaces and must not ship in a personal-scoped response.
+    if (args.workspace === "personal") rows = rows.filter((t: any) => !t.team_id);
     if (args.project_path) rows = scopeByProject(rows, args.project_path);
     await enrichTasks(ctx, userId, rows);
 
@@ -2110,10 +2123,29 @@ export const webCreate = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    // Workspace comes from the client's explicit picker or the directory
-    // mapping — never from the user's active team. An unmapped project_path
-    // with no explicit workspace lands personal ("Only Me"), matching sessions.
-    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path });
+    // A task created onto a plan lives in the plan's workspace: when the
+    // caller names a plan but no explicit workspace, inherit the plan's
+    // (canAccessPlan already proves membership for a team plan). An explicit
+    // workspace still has to match the plan — requireSameWorkspace below.
+    let plan: any = null;
+    if (args.plan_id) {
+      plan = await ctx.db
+        .query("plans")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
+        .first();
+      if (!plan || !(await canAccessPlan(ctx, userId, plan))) notFound("Plan not found");
+    }
+    const inheritFromPlan = plan && !args.workspace && !args.team_id;
+
+    // Otherwise the workspace comes from the client's explicit picker or the
+    // directory mapping — never from the user's active team. An unmapped
+    // project_path with no explicit workspace lands personal ("Only Me"),
+    // matching sessions.
+    const db = await createDataContext(ctx, inheritFromPlan
+      ? (plan.team_id
+          ? { userId, workspace: "team", team_id: plan.team_id }
+          : { userId, workspace: "personal" })
+      : { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path });
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
@@ -2125,12 +2157,7 @@ export const webCreate = mutation({
     }
 
     let plan_id: Id<"plans"> | undefined;
-    if (args.plan_id) {
-      const plan = await ctx.db
-        .query("plans")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
-        .first();
-      if (!plan || !(await canAccessPlan(ctx, userId, plan))) notFound("Plan not found");
+    if (plan) {
       requireSameWorkspace(plan, db.workspace, "plan");
       plan_id = plan._id;
     }

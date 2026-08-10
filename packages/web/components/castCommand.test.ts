@@ -200,6 +200,25 @@ describe("extractSendBody", () => {
     expect(extractSendBody("done --from jx7abcd")).toEqual({ body: "done", kind: "literal" });
   });
 
+  test("a chained command after the closing quote does not poison a literal send", () => {
+    // Real-world shape: `cast send <id> "…"; cast disown <id> 2>/dev/null | tail -1`
+    expect(extractSendBody('"Nothing from me blocks it."; cast disown jx7av85 2>/dev/null | tail -1')).toEqual({
+      body: "Nothing from me blocks it.",
+      kind: "literal",
+    });
+    expect(extractSendBody('"ship it"|tail -1')).toEqual({ body: "ship it", kind: "literal" });
+    expect(extractSendBody('"ship it">/dev/null')).toEqual({ body: "ship it", kind: "literal" });
+    expect(extractSendBody("done;echo ok")).toEqual({ body: "done", kind: "literal" });
+  });
+
+  test("expansion inside the word stays dynamic even with a trailing chain", () => {
+    expect(extractSendBody('"$(cat reply.md)"; echo sent').kind).toBe("dynamic");
+  });
+
+  test("an operator with no word before it never claims literal delivery", () => {
+    expect(extractSendBody("< notes.md").kind).toBe("dynamic");
+  });
+
   test("full pipeline: heredoc send parses through parseCastCommandString", () => {
     const raw = "cast send jx7c6zk - <<'EOF'\nline one\nline two\nEOF";
     const parsed = parseCastCommandString(raw)!;

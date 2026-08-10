@@ -4,7 +4,7 @@ import { Id, type Doc } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext, scopedFetch, resolveEffectiveTeam } from "./data";
+import { createDataContext, scopedFetch, resolveEffectiveTeam, stampEffectiveTeam } from "./data";
 import { resolveTeamForPath, isTeamMember, createTeamFeedFilter, teamVisibleConvTeam } from "./privacy";
 import {
   webDocsNeedsUserDoc,
@@ -954,6 +954,11 @@ export const webGetByIds = query({
       if (!doc || !(await canAccessDoc(ctx, userId, doc))) continue;
       rows.push(doc);
     }
+    // These rows merge into the same client cache as the list queries, which
+    // ship the EFFECTIVE team as team_id — stamp here too so a doc doesn't
+    // flap between raw and resolved team depending on which channel last
+    // delivered it.
+    stampEffectiveTeam(rows, await buildConvMapForPage(ctx, rows));
     const userMap = new Map<string, any>();
     for (const d of rows) {
       const uid = d.user_id ? String(d.user_id) : null;
@@ -1054,14 +1059,18 @@ export const webListPaginated = query({
       const stripped = result.page.map(stripDoc);
       const convMap = await buildConvMapForPage(ctx, stripped);
 
+      // Strict workspace boundary: team view keeps ONLY docs whose effective
+      // team is this team; personal keeps ONLY docs with no effective team. A
+      // doc tagged to this team but linked to a PRIVATE conversation resolves
+      // personal (conversation privacy wins) and is excluded from the team
+      // stream — the old "keep my untagged rows" fallback here leaked personal
+      // docs into team views.
       const filtered = stripped.filter((r) => {
         const eff = resolveEffectiveTeam(r, convMap);
-        if (isTeamView) {
-          if (eff) return String(eff) === String(resolvedTeamId);
-          return String(r.user_id) === String(userId);
-        }
+        if (isTeamView) return !!eff && String(eff) === String(resolvedTeamId);
         return !eff;
       });
+      stampEffectiveTeam(filtered, convMap);
 
       const page = await enrichPage(ctx, userId, filtered, convMap, args);
 
@@ -1073,38 +1082,13 @@ export const webListPaginated = query({
           continueCursor: encodeCursor({ phase: "primary", inner: result.continueCursor }),
         };
       }
-      // Primary done. Team view has a second phase for orphans; personal does not.
-      if (isTeamView) {
-        return {
-          page,
-          isDone: false,
-          continueCursor: encodeCursor({ phase: "orphans", inner: null }),
-        };
-      }
       return { page, isDone: true, continueCursor: "" };
     }
 
-    // Phase: orphan stream (team view only).
-    //   Paginate user's records, keep ones with no effective team. Records we
-    //   already returned in the primary phase have team_id == resolvedTeamId,
-    //   so the no-effective-team filter naturally excludes them.
-    const orphanQuery = ctx.db
-      .query("docs")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .order("desc");
-    const result = await orphanQuery.paginate({ ...paginationOpts, cursor: cursor.inner });
-    const stripped = result.page.map(stripDoc);
-    const convMap = await buildConvMapForPage(ctx, stripped);
-    const orphans = stripped.filter((r) => !resolveEffectiveTeam(r, convMap));
-    const page = await enrichPage(ctx, userId, orphans, convMap, args);
-
-    return {
-      page,
-      isDone: result.isDone,
-      continueCursor: result.isDone
-        ? ""
-        : encodeCursor({ phase: "orphans", inner: result.continueCursor }),
-    };
+    // Phase: orphan stream — RETIRED. Personal docs no longer ship into team
+    // view (strict workspace boundaries); the phase only survives so a client
+    // holding a pre-deploy mid-crawl cursor completes cleanly.
+    return { page: [], isDone: true, continueCursor: "" };
   },
 });
 
@@ -1127,12 +1111,11 @@ export const webGet = query({
     if (!docId) return null;
     const doc = await ctx.db.get(docId);
     if (!doc) return null;
-    // Creator OR any member of the doc's team — same access rule as
-    // tasks.webGet. Creator-only made a teammate's embedded doc reference
-    // (inline pill / hover preview) resolve to nothing.
-    const hasAccess = doc.user_id === userId
-      || (doc.team_id ? await isTeamMember(ctx, userId, doc.team_id) : false);
-    if (!hasAccess) return null;
+    // Creator OR any member of the doc's EFFECTIVE team (canAccessDoc — the
+    // one access rule, conversation privacy included). Creator-only made a
+    // teammate's embedded doc reference (inline pill / hover preview) resolve
+    // to nothing.
+    if (!(await canAccessDoc(ctx, userId, doc))) return null;
 
     const convIds = doc.related_conversation_ids || (doc.conversation_id ? [doc.conversation_id] : []);
     const relatedConversations: WebDocRelatedConversation[] = [];

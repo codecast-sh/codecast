@@ -260,7 +260,7 @@ export const list = query({
             _id: actor._id,
             name: actor.name,
             github_username: actor.github_username,
-            github_avatar_url: actor.github_avatar_url,
+            github_avatar_url: actor.github_avatar_url || actor.image,
           } : null,
           conversation: conversation ? {
             title: conversation.title,
@@ -430,7 +430,7 @@ async function deliverSessionNotification(
 // the notification to them — same prefs gates, their own row+push. Reads the
 // canonical owner SET: a session can have several owners, and they all need to
 // hear about it, not just the one cached in owner_user_id.
-async function deliverSessionNotificationToParties(
+export async function deliverSessionNotificationToParties(
   ctx: any,
   conversation: { _id: any; user_id: any; owner_user_id?: any },
   type: SessionNotifType,

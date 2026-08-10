@@ -206,6 +206,19 @@ export function resolveLocalRepoPath(input: LocalRepoInput): string | null {
   return null;
 }
 
+// Choose which path seeds the convention resolver: the recorded repo root only
+// when the requested path actually lives under it, otherwise the requested path
+// itself. A git_root recorded off an UNRELATED conversation (the web client
+// used to stamp the viewer's open repo alongside a task-derived path) can
+// exist locally, and resolveLocalRepoPath returns an existing input verbatim —
+// so a mismatched root would win instantly and swallow the real project path.
+export function conventionSeed(rawPath: string, recordedRoot?: string | null): string {
+  if (recordedRoot && (rawPath === recordedRoot || rawPath.startsWith(recordedRoot.replace(/\/+$/, "") + "/"))) {
+    return recordedRoot;
+  }
+  return rawPath;
+}
+
 export interface ResumeCwdInput {
   /** Explicit caller override (e.g. a `cast remote move` worktree path). Wins if it exists. */
   cwdOverride?: string | null;

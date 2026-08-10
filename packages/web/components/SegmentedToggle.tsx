@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 
 /** A compact segmented pill group — the bordered "All / 👤 / 🤖" style control
  *  shared across list headers (source filters, the List/Board view switch, etc.).
@@ -36,11 +37,10 @@ export function SegmentedToggle({
       {items.map((it, i) => {
         const Icon = it.icon;
         const selected = value === it.key;
-        return (
+        const btn = (
           <button
             key={it.key}
             onClick={() => onChange(it.key)}
-            title={it.title}
             className={`h-full flex items-center justify-center gap-1.5 px-2.5 text-xs transition-colors ${
               fullWidth ? "flex-1" : ""
             } ${i > 0 ? "border-l border-sol-border/40" : ""} ${
@@ -51,6 +51,11 @@ export function SegmentedToggle({
             {it.label && <span>{it.label}</span>}
           </button>
         );
+        // JS tooltip instead of a native title attr (matches the app's other
+        // icon buttons; native titles are slow and unstyled).
+        return it.title ? (
+          <ShortcutTooltip key={it.key} label={it.title}>{btn}</ShortcutTooltip>
+        ) : btn;
       })}
     </div>
   );

@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
-import { ccAccountsValidator, ccAutoSwitchStateValidator } from "./ccAccountsShared";
+import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
@@ -73,8 +73,17 @@ export default defineSchema({
       task_activity: v.optional(v.boolean()),
       doc_activity: v.optional(v.boolean()),
       plan_activity: v.optional(v.boolean()),
+      artifact_activity: v.optional(v.boolean()),
     })),
     pr_auto_comment_enabled: v.optional(v.boolean()),
+    // Dedupe/cooldown state for the aggregated "sessions blocked" notification
+    // (accountSwitch.blockedNotifyCheck). One write per incident, not per park.
+    blocked_notify_state: v.optional(v.object({
+      last_notified_at: v.number(),
+      // Newest pending_api_error park covered by that notification; a park
+      // newer than this is a fresh casualty worth announcing again.
+      last_park_ts: v.number(),
+    })),
     bio: v.optional(v.string()),
     title: v.optional(v.string()),
     status: v.optional(v.union(v.literal("available"), v.literal("busy"), v.literal("away"))),
@@ -782,12 +791,26 @@ export default defineSchema({
     // `timestamp` (client event time): imported old transcripts get fresh
     // creation times and should be searchable, not instantly GC'd.
     source_created_at: v.number(),
+    // Owner/team of the conversation at mirror time, for SCOPED search
+    // lookups (fetchMessageSearchPool): the global BM25 pool truncates at 512
+    // rows BEFORE visibility filtering, so one user's term-heavy private
+    // sessions can starve everyone else's hits out of the pool entirely.
+    // Scoped lookups make the caller's own (and their teams') rows immune to
+    // that flood. Stamps are snapshots — visibility is still enforced
+    // post-pool against the live conversation doc, so a stale team_id costs
+    // recall only, never leaks.
+    user_id: v.optional(v.id("users")),
+    team_id: v.optional(v.id("teams")),
   })
     .index("by_message_id", ["message_id"])
     .index("by_source_created_at", ["source_created_at"])
-    .searchIndex("search_content", {
+    // "_r2" because renaming a search index is convex's drop-and-rebuild: the
+    // original "search_content" segment set was damaged beyond compaction
+    // (2026-08-10 mass-patch incident — a segment blob went missing and the
+    // TextCompactor crash-looped on it).
+    .searchIndex("search_content_r2", {
       searchField: "content",
-      filterFields: ["conversation_id"],
+      filterFields: ["conversation_id", "user_id", "team_id"],
     }),
 
   // Single row: the searchMirror walker's watermark. `cursor` = _creationTime
@@ -1420,6 +1443,9 @@ export default defineSchema({
     // Web-set (setAutoSwitchAccounts); the heartbeat never writes these.
     cc_auto_switch: v.optional(v.boolean()),
     cc_auto_switch_state: v.optional(ccAutoSwitchStateValidator),
+    // The in-flight browser sign-in round trip (web CTA → daemon `claude auth
+    // login` → outcome). Web-set to pending; daemon-set to confirmed/rejected.
+    cc_login_flow: v.optional(ccLoginFlowValidator),
     // Installed agent-feature snippets (by slug) + stable mode on this machine
     // — heartbeat-reported, drives the web Settings page (per-device toggles).
     settings: v.optional(deviceSettingsValidator),
@@ -1740,18 +1766,28 @@ export default defineSchema({
       v.literal("doc_updated"),
       v.literal("doc_commented"),
       v.literal("plan_status_changed"),
-      v.literal("plan_task_completed")
+      v.literal("plan_task_completed"),
+      v.literal("artifact_commented")
     ),
     actor_user_id: v.optional(v.id("users")),
+    // Display identity for actors without an account (an anonymous artifact
+    // commenter): name + avatar snapshot, used when actor_user_id is absent.
+    actor_name: v.optional(v.string()),
+    actor_avatar: v.optional(v.string()),
     comment_id: v.optional(v.id("comments")),
     conversation_id: v.optional(v.id("conversations")),
     entity_type: v.optional(v.union(
       v.literal("task"),
       v.literal("doc"),
       v.literal("plan"),
-      v.literal("conversation")
+      v.literal("conversation"),
+      v.literal("artifact")
     )),
     entity_id: v.optional(v.string()),
+    // Deep link the notification opens (e.g. codecast.sh/a/<slug>?c=<comment>
+    // — the artifact page opens that comment thread). Takes precedence over
+    // the entity_type route when present.
+    link: v.optional(v.string()),
     message: v.string(),
     read: v.boolean(),
     created_at: v.number(),
@@ -1904,6 +1940,9 @@ export default defineSchema({
     context_after: v.optional(v.number()),
     message_ids: v.optional(v.array(v.id("messages"))),
     note: v.optional(v.string()),
+    // When set, the shared page links to the full conversation via its public
+    // share_token (minted at share time if the sharer owns the conversation).
+    include_conversation_link: v.optional(v.boolean()),
     created_at: v.number(),
   })
     .index("by_share_token", ["share_token"])
@@ -2542,6 +2581,11 @@ export default defineSchema({
     // Provenance: the session that published this artifact.
     session_short_id: v.optional(v.string()),
     session_conversation_id: v.optional(v.id("conversations")),
+    // Owner choice: keep the publishing session off the public page (bar chip
+    // and ?meta=1). Absent = the session link is shown.
+    hide_session: v.optional(v.boolean()),
+    // Owner choice: no viewer discussion on this page. Absent = comments on.
+    comments_disabled: v.optional(v.boolean()),
     // Secrets. owner_key grants in-page management (travels only in the URL
     // fragment, #o=). edit_key grants collaborative editing when edit_mode is
     // "link". Both are unguessable random strings, like the slug itself.
@@ -2604,6 +2648,15 @@ export default defineSchema({
     batch_id: v.string(),
     author_name: v.string(),
     author_email: v.optional(v.string()),
+    // Verified identity: set when the comment arrived with a valid identity
+    // token (artifact_identities), never from viewer-supplied text. The
+    // avatar is snapshotted at comment time so the public ?meta=1 shape never
+    // needs a user-table join.
+    author_user_id: v.optional(v.id("users")),
+    author_avatar: v.optional(v.string()),
+    // Reply threading: top-level comments have no parent; replies point at a
+    // top-level comment (one level deep, like the session comment threads).
+    parent_comment_id: v.optional(v.id("artifact_comments")),
     text: v.string(),
     // Opaque anchor JSON from the viewer page (selector/snippet/position);
     // the server never interprets it.
@@ -2621,6 +2674,21 @@ export default defineSchema({
     view_count: v.number(),
     last_viewed_at: v.number(),
   }).index("by_artifact", ["artifact_id"]),
+
+  // Signed-in commenter identity for the sandboxed artifact pages. The pages
+  // are an opaque origin (CSP sandbox) and can never read codecast.sh auth, so
+  // the web app mints an unguessable token per (user, artifact) that travels
+  // back to the page in the #i= fragment — same transport as the owner key.
+  // Holding the token lets its bearer comment AS that user on that one
+  // artifact, nothing else; it grants no read access and no other writes.
+  artifact_identities: defineTable({
+    token: v.string(),
+    user_id: v.id("users"),
+    artifact_id: v.id("artifacts"),
+    created_at: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_user_artifact", ["user_id", "artifact_id"]),
 
   // Email-gate audit: who has seen a gated artifact, per email.
   artifact_viewers: defineTable({
@@ -2952,7 +3020,8 @@ export default defineSchema({
       v.literal("task"),
       v.literal("doc"),
       v.literal("plan"),
-      v.literal("conversation")
+      v.literal("conversation"),
+      v.literal("artifact")
     ),
     entity_id: v.string(),
     reason: v.union(

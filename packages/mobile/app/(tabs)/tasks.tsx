@@ -213,9 +213,13 @@ export default function TasksScreen() {
   const plansList = useMemo(() => Object.values(plans), [plans]);
   const docsList = useMemo(() => Object.values(docs), [docs]);
 
-  const applySourceFilter = useCallback(<T extends { source?: string }>(list: T[]): T[] => {
-    if (sourceFilter === "human") return list.filter((i) => i.source === "human");
-    if (sourceFilter === "bot") return list.filter((i) => i.source !== "human");
+  // "human" = the human's board: human-created plus anything promoted onto it
+  // (cast task create --human, triage accept). "bot" = machine-created tasks
+  // that stay internal to agent work. Plans/docs have no promoted field, so
+  // for them this stays a plain source split.
+  const applySourceFilter = useCallback(<T extends { source?: string; promoted?: boolean }>(list: T[]): T[] => {
+    if (sourceFilter === "human") return list.filter((i) => i.source === "human" || i.promoted);
+    if (sourceFilter === "bot") return list.filter((i) => i.source !== "human" && !i.promoted);
     return list;
   }, [sourceFilter]);
 
