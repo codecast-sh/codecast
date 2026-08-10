@@ -260,7 +260,7 @@ export const list = query({
             _id: actor._id,
             name: actor.name,
             github_username: actor.github_username,
-            github_avatar_url: actor.github_avatar_url,
+            github_avatar_url: actor.github_avatar_url || actor.image,
           } : null,
           conversation: conversation ? {
             title: conversation.title,

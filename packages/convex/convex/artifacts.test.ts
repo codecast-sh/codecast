@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { newSlug, newSecret, upsertFromPublish, deleteFromCLI, lineDiff } from "./artifacts";
+import {
+  newSlug,
+  newSecret,
+  upsertFromPublish,
+  deleteFromCLI,
+  lineDiff,
+  accessSummary,
+  submitComments,
+  deliverPendingComments,
+} from "./artifacts";
 import { brandArtifactHtml } from "./artifactPages";
 import { normalizeAssetPath } from "./artifactsHttp";
 
@@ -320,6 +329,40 @@ describe("deleteFromCLI", () => {
   });
 });
 
+describe("comment discussion gating", () => {
+  const artRow = { ...existingRow, owner_key: "sekrit", session_conversation_id: "conv1" };
+  const batch = { author_name: "Viewer", version: 3, comments: [{ text: "nice page" }] };
+
+  test("a viewer's comment is stored as discussion, never delivered", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    const result = await (submitComments as any)._handler(ctx, { slug: artRow.slug, ...batch });
+    expect(result).toEqual({ delivered: false, count: 1 });
+    expect(inserts[0]).toMatchObject({ table: "artifact_comments", text: "nice page", delivered: false });
+  });
+
+  test("a forged deliver request without the owner key still lands as discussion", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    const result = await (submitComments as any)._handler(ctx, { slug: artRow.slug, deliver: true, owner_key: "wrong", ...batch });
+    expect(result.delivered).toBe(false);
+    expect(inserts[0]).toMatchObject({ delivered: false });
+  });
+
+  test("comments off rejects new posts", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow, comments_disabled: true }]);
+    const result = await (submitComments as any)._handler(ctx, { slug: artRow.slug, ...batch });
+    expect(result.error).toContain("Comments are off");
+    expect(inserts).toEqual([]);
+  });
+
+  test("send-all is owner-only", async () => {
+    const { ctx } = makeCtx([{ ...artRow }]);
+    const noKey = await (deliverPendingComments as any)._handler(ctx, { slug: artRow.slug });
+    expect(noKey.error).toContain("owner");
+    const wrongKey = await (deliverPendingComments as any)._handler(ctx, { slug: artRow.slug, owner_key: "wrong" });
+    expect(wrongKey.error).toContain("owner");
+  });
+});
+
 describe("brandArtifactHtml", () => {
   const opts = { title: "Q3 <Report>", author: "Ashot", updatedAt: 1700000000000, shareUrl: "https://codecast.sh/a/x1" };
 
@@ -343,6 +386,26 @@ describe("brandArtifactHtml", () => {
     expect(out.startsWith("\n<style id=\"__cc_style\">")).toBe(true);
     expect(out).toContain("<div>fragment</div>");
     expect(out).not.toContain("og:title");
+  });
+
+  test("always renders the minimize control and the restore pill", () => {
+    const out = brandArtifactHtml("<body></body>", opts);
+    expect(out).toContain('id="__cc_hide"');
+    expect(out).toContain('id="__cc_pill"');
+  });
+
+  test("session chip renders only when a session is exposed", () => {
+    const shown = brandArtifactHtml("<body></body>", { ...opts, sessionShortId: "jx1abcd", sessionTitle: "My session" });
+    expect(shown).toContain('class="__cc_sess"');
+    expect(shown).toContain("My session");
+    const hidden = brandArtifactHtml("<body></body>", { ...opts, sessionShortId: null });
+    expect(hidden).not.toContain('class="__cc_sess"');
+  });
+
+  test("accessSummary reports the session-link toggle", () => {
+    const base = { password_hash: undefined, email_gate: undefined, expires_at: undefined, edit_mode: undefined };
+    expect(accessSummary({ ...base } as never).show_session).toBe(true);
+    expect(accessSummary({ ...base, hide_session: true } as never).show_session).toBe(false);
   });
 
   test("carries the share url into the bar config (no copy button on the bar)", () => {
