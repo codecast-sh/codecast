@@ -38,16 +38,24 @@ export type OwnersEnv = {
   notify?: (msg: string, kind: "success" | "error") => void;
 };
 
+/**
+ * Whether the live listOwners subscription should run. Skipped while the row
+ * is an optimistic stub (client UUID, no server row yet) — the query resolves
+ * null for a ref the server doesn't know — and whenever there is no current
+ * user: listOwners requires auth, so an unauthenticated subscriber (a guest on
+ * a share link) gets a thrown query error that crashes the view, and every
+ * feature this hook powers is per-user anyway.
+ */
+export function shouldQueryOwners(conversationId: string, currentUser: unknown): boolean {
+  return Boolean(conversationId && isConvexId(conversationId) && currentUser);
+}
+
 export function useOwners(conversationId: string, env: OwnersEnv) {
   const { teamMembers, currentUser, notify } = env;
 
-  // Live owner set for THIS open session. Skipped while the row is an
-  // optimistic stub (client UUID, no server row yet) — the query resolves null
-  // for a ref the server doesn't know, so there's nothing to fetch until the
-  // real id syncs back and re-keys the row.
   const data = useQuery(
     api.sessionOwnership.listOwners,
-    conversationId && isConvexId(conversationId) ? { session_id: conversationId } : "skip",
+    shouldQueryOwners(conversationId, currentUser) ? { session_id: conversationId } : "skip",
   );
   const addOwner = useMutation(api.sessionOwnership.addSessionOwner);
   const removeOwner = useMutation(api.sessionOwnership.removeSessionOwner);
