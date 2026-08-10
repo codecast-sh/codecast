@@ -1277,11 +1277,17 @@ pre[class*="language-"] {
   font-weight: 600;
 }
 
-/* The "N files changed" pill floats over the message body, so it must be
-   opaque — and it must shrink to the COLUMN, not the window. The conversation
-   header is the query container (cq-container on [data-sv-convhead]). */
+/* The "N files changed" pill floats over the message body: NO background —
+   fully transparent by design — with a backdrop blur so text sliding under it
+   can't garble the label. It must also shrink to the COLUMN, not the window:
+   the conversation header is the query container (cq-container on
+   [data-sv-convhead]). */
 .cc-changes-pill {
-  background: var(--sol-bg-alt);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.cc-changes-pill:hover {
+  background: color-mix(in srgb, var(--sol-bg-alt) 90%, transparent);
 }
 @container (max-width: 560px) {
   .cc-changes-pill__label { display: none; }
