@@ -1805,6 +1805,7 @@ export const generateMessageShareLink = mutation({
     context_after: v.optional(v.number()),
     message_ids: v.optional(v.array(v.id("messages"))),
     note: v.optional(v.string()),
+    include_conversation_link: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1829,6 +1830,21 @@ export const generateMessageShareLink = mutation({
       }
     }
 
+    // Linking the full conversation requires a public share_token on it. Only
+    // the owner may mint one (making a conversation public is the owner's
+    // consent); a team member can link it only if it is already public.
+    let includeConversationLink = false;
+    if (args.include_conversation_link) {
+      if (conversation.share_token) {
+        includeConversationLink = true;
+      } else if (isOwner) {
+        await ctx.db.patch(conversation._id, { share_token: generateShareToken() });
+        includeConversationLink = true;
+      } else {
+        throw new Error("Only the conversation owner can make the full conversation public");
+      }
+    }
+
     const shareToken = generateShareToken();
     await ctx.db.insert("message_shares", {
       share_token: shareToken,
@@ -1838,6 +1854,7 @@ export const generateMessageShareLink = mutation({
       context_after: args.context_after,
       message_ids: args.message_ids,
       note: args.note,
+      include_conversation_link: includeConversationLink || undefined,
       created_at: Date.now(),
     });
 
@@ -2043,6 +2060,10 @@ export const getSharedMessage = query({
         project_path: conversation.project_path,
         agent_type: conversation.agent_type,
       },
+      // Read live from the conversation (not copied onto the share row) so the
+      // link keeps working if the token is minted later, and only when the
+      // sharer opted in.
+      conversationShareToken: share.include_conversation_link ? (conversation.share_token ?? null) : null,
       user: user ? { name: user.name, image: user.image } : null,
       note: share.note,
       sharedAt: share.created_at,

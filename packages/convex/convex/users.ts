@@ -850,6 +850,7 @@ export const updateNotificationPreferences = mutation({
       task_activity: v.optional(v.boolean()),
       doc_activity: v.optional(v.boolean()),
       plan_activity: v.optional(v.boolean()),
+      artifact_activity: v.optional(v.boolean()),
     })),
     muted_members: v.optional(v.array(v.id("users"))),
     machine_wide_presence: v.optional(v.boolean()),

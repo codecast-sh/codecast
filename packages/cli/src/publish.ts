@@ -244,6 +244,8 @@ function accessFromOptions(options: {
   emailGate?: boolean;
   expires?: string;
   editMode?: string;
+  session?: boolean;
+  comments?: boolean;
 }): Record<string, unknown> | undefined {
   const flags: AccessFlagValues = {};
   // commander: undefined = untouched, string = --password P, false = --no-password.
@@ -260,6 +262,8 @@ function accessFromOptions(options: {
     flags.expiresMs = parsed.ms;
   }
   if (options.editMode !== undefined) flags.editMode = options.editMode;
+  if (options.session !== undefined) flags.session = options.session;
+  if (options.comments !== undefined) flags.comments = options.comments;
   const built = buildAccessPayload(flags);
   if (built.error) {
     console.error(fmt.error(built.error));
@@ -386,6 +390,8 @@ function describeGates(access: any): string {
     bits.push(when);
   }
   bits.push(`edit: ${access.edit_mode ?? "owner"}`);
+  if (access.show_session === false) bits.push("session link hidden");
+  if (access.comments_enabled === false) bits.push("comments off");
   return bits.join(" · ");
 }
 
@@ -398,6 +404,8 @@ async function runSet(deps: PublishDeps, target: string, options: PublishOptions
   else if (options.password !== undefined) set.password = options.password === false ? null : options.password;
   if (options.emailGate !== undefined) set.email_gate = options.emailGate;
   if (options.editMode !== undefined) set.edit_mode = options.editMode;
+  if (options.session !== undefined) set.show_session = options.session;
+  if (options.comments !== undefined) set.comments = options.comments;
   if (options.title !== undefined) set.title = options.title;
   if (options.expires !== undefined) {
     const parsed = parseExpires(options.expires);
@@ -408,7 +416,7 @@ async function runSet(deps: PublishDeps, target: string, options: PublishOptions
     set.expires_in_ms = parsed.ms;
   }
   if (!Object.keys(set).length) {
-    console.error(fmt.error("Nothing to set — pass e.g. --password X, --no-password, --email-gate, --expires 7d, --edit-mode team, --title T"));
+    console.error(fmt.error("Nothing to set — pass e.g. --password X, --no-password, --email-gate, --expires 7d, --edit-mode team, --no-session, --title T"));
     process.exit(1);
   }
   const result = await callManage(deps, row, { set });
@@ -533,6 +541,8 @@ interface PublishOptions {
   emailGate?: boolean;
   expires?: string;
   editMode?: string;
+  session?: boolean;
+  comments?: boolean;
   thumb?: boolean;
   open?: boolean;
 }
@@ -689,6 +699,10 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     .option("--no-email-gate", "Clear the email gate")
     .option("--expires <duration>", "Expire the link after e.g. 30m, 24h, 7d — or never")
     .option("--edit-mode <mode>", "Who can edit in the browser: owner | link | team")
+    .option("--session", "Show the link to the publishing session on the page (default)")
+    .option("--no-session", "Hide the publishing-session link from the page")
+    .option("--comments", "Let viewers discuss the page (default)")
+    .option("--no-comments", "Turn off the viewer discussion")
     .option("--no-thumb", "Skip the headless-Chrome thumbnail screenshot")
     .option("--open", "Open the published URL in the browser")
     .option("--resolve <id>", "comments: mark one comment resolved")

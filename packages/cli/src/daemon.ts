@@ -14873,6 +14873,34 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
   let repaired = 0;
   let checked = 0;
 
+  // updateProjectPath only consumes the repo root, and the full getGitInfo
+  // (status + both diffs, 8 subprocesses) per FILE starved the event loop for
+  // minutes on a large ~/.claude/projects — the watchdog then killed the daemon
+  // mid-boot as "wedged". One cheap subprocess per unique project path instead.
+  const repoRootCache = new Map<string, string | undefined>();
+  const resolveRepoRoot = (projectPath: string): string | undefined => {
+    if (repoRootCache.has(projectPath)) return repoRootCache.get(projectPath);
+    let root: string | undefined;
+    try {
+      const commonDir = execSync("git rev-parse --path-format=absolute --git-common-dir", {
+        cwd: projectPath,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "ignore"],
+      }).trim();
+      root = commonDir.endsWith("/.git")
+        ? commonDir.slice(0, -5)
+        : execSync("git rev-parse --show-toplevel", {
+            cwd: projectPath,
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "ignore"],
+          }).trim() || undefined;
+    } catch {
+      root = undefined;
+    }
+    repoRootCache.set(projectPath, root);
+    return root;
+  };
+
   for (const dir of projectDirs) {
     const dirPath = path.join(claudeProjectsDir, dir);
     const sessionFiles = fs.readdirSync(dirPath)
@@ -14886,6 +14914,10 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
     if (resolvedDir) recordProjectMapping(path.basename(resolvedDir), resolvedDir);
 
     for (const file of sessionFiles) {
+      // Let the event loop breathe between files: this sweep runs during boot,
+      // and back-to-back synchronous transcript reads starve the heartbeat tick
+      // the watchdog uses to tell alive from wedged.
+      await new Promise(resolve => setImmediate(resolve));
       const filePath = path.join(dirPath, file);
       const sessionId = resolveSessionId(filePath);
 
@@ -14898,8 +14930,7 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(filePath, dir);
         if (!projectPath) continue;
 
-        const gitInfo = getGitInfo(projectPath);
-        const result = await syncService.updateProjectPath(sessionId, projectPath, gitInfo?.repoRoot || gitInfo?.root);
+        const result = await syncService.updateProjectPath(sessionId, projectPath, resolveRepoRoot(projectPath));
         if (result?.updated) {
           repaired++;
           log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
@@ -14939,7 +14970,11 @@ async function backfillPlanModeFromJSONL(syncService: SyncService): Promise<void
       if (planModeSynced.has(sessionId)) continue;
 
       try {
-        const content = fs.readFileSync(filePath, "utf-8");
+        // Async read + a yield per file: this walks every transcript (gigabytes
+        // here) at boot, and readFileSync back-to-back starved the event loop —
+        // the watchdog then killed the daemon mid-boot as "wedged".
+        await new Promise(resolve => setImmediate(resolve));
+        const content = await fs.promises.readFile(filePath, "utf-8");
         if (!content.includes("ExitPlanMode")) continue;
 
         let planContent: string | undefined;
@@ -19004,11 +19039,17 @@ export async function runWatchdog(): Promise<void> {
       const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
       const staleness = passNow - lastTick;
       if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
-        if (daemonTickStale(staleness, passGap)) {
+        // A busy boot starves the tick stamper but keeps writing daemon.log; a
+        // truly wedged loop runs no JS and cannot log (see daemonTickStale).
+        let logAgeMs: number | null = null;
+        try { logAgeMs = passNow - fs.statSync(path.join(CONFIG_DIR, "daemon.log")).mtimeMs; } catch {}
+        if (daemonTickStale(staleness, passGap, logAgeMs)) {
           logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
           try { process.kill(daemonPid, 9); } catch {}
           await new Promise(resolve => setTimeout(resolve, 1000));
           daemonAlive = false;
+        } else if (logAgeMs !== null && logAgeMs <= DAEMON_HEARTBEAT_STALE_MS) {
+          logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but daemon.log written ${Math.round(logAgeMs / 1000)}s ago — busy, not wedged`);
         } else {
           logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but watchdog pass gap ${passGap === null ? "unknown" : Math.round(passGap / 1000) + "s"} implies system sleep — deferring one cycle`);
         }
