@@ -62,6 +62,7 @@ function WindowChrome({ title }: { title: string }) {
 
 const HERO_SESSIONS = [
   { status: "needs-input" as const, title: "Migrate billing webhooks", note: "Allow running npm test?", agent: "claude", time: "now", active: true },
+  { status: "working" as const, title: "Dashboard rewrite", note: "sarah · merging the dashboard half", agent: "claude", time: "1m", active: false },
   { status: "working" as const, title: "Fix flaky auth test", note: "Reproduced — writing regression test", agent: "codex", time: "2m", active: false },
   { status: "working" as const, title: "Ship dark mode", note: "Applying tokens across settings", agent: "cursor", time: "9m", active: false },
   { status: "working" as const, title: "Investigate p95 latency", note: "Profiling the sync endpoint", agent: "opencode", time: "14m", active: false },
@@ -129,14 +130,64 @@ export function InboxHeroMock() {
             </span>
           </div>
           <div className="flex flex-1 flex-col gap-3 px-5 py-4 text-[12px]" style={{ color: "#657b83" }}>
-            <div className="self-end max-w-[85%] rounded-lg px-3 py-2" style={{ backgroundColor: "#eee8d5", color: "#002b36" }}>
-              switch us to the new Stripe webhook API and update the tests
+            {/* User prompt — real UserPrompt chrome: blue-tinted card, name header */}
+            <div className="rounded-lg px-3 py-2" style={{ backgroundColor: "rgba(38,139,210,0.1)", border: "1px solid rgba(38,139,210,0.3)" }}>
+              <div className="mb-1 flex items-center gap-1.5">
+                <Avatar initials="A" color="#cb4b16" />
+                <span className="text-[11px] font-medium" style={{ color: "#268bd2" }}>Ashot</span>
+              </div>
+              <div style={{ color: "#002b36" }}>
+                switch us to the new Stripe webhook API — <span style={{ color: "#6c71c4" }}>@sarah</span> owns the dashboard side
+              </div>
             </div>
-            <div className="max-w-[92%] leading-relaxed">
-              Done with <span style={{ color: "#002b36" }}>14 of 16 endpoints</span>. Tests green so far.
-              One command needs approval before I can verify the last two:
+
+            {/* Agent prose with live task + session references */}
+            <div className="leading-relaxed">
+              Done with <span style={{ color: "#002b36" }}>14 of 16 endpoints</span>. Filed{" "}
+              <TaskPill id="ct-901" /> for the retry queue and handed the dashboard half to{" "}
+              <SessionPill title="Dashboard rewrite" />. Latency after the switch:
             </div>
-            <div className="max-w-[92%] rounded-lg p-3" style={{ backgroundColor: "#fdf6e3", border: "1px solid #b58900" }}>
+
+            {/* cast-canvas + inline image, side by side */}
+            <div className="flex gap-2.5">
+              <div className="min-w-0 flex-1 rounded-lg overflow-hidden" style={{ border: "1px solid rgba(147,161,161,0.25)", backgroundColor: "#ffffff" }}>
+                <div className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px]" style={{ color: "#93a1a1", borderBottom: "1px solid rgba(147,161,161,0.12)" }}>
+                  Webhook p95 by endpoint
+                  <svg className="ml-auto h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>
+                </div>
+                <svg viewBox="0 0 120 40" className="block w-full px-2 py-1.5">
+                  {[
+                    { x: 6, h: 26, c: "#93a1a1" }, { x: 25, h: 20, c: "#93a1a1" }, { x: 44, h: 22, c: "#93a1a1" },
+                    { x: 63, h: 12, c: "#268bd2" }, { x: 82, h: 9, c: "#268bd2" }, { x: 101, h: 7, c: "#859900" },
+                  ].map(b => <rect key={b.x} x={b.x} y={36 - b.h} width={13} height={b.h} rx={1.5} fill={b.c} />)}
+                  <line x1="2" y1="36.5" x2="118" y2="36.5" stroke="#eee8d5" strokeWidth="1" />
+                </svg>
+              </div>
+              <div className="w-[34%] shrink-0 rounded-lg overflow-hidden" style={{ border: "1px solid rgba(147,161,161,0.25)" }}>
+                <div className="h-2.5" style={{ backgroundColor: "#002b36" }} />
+                <div className="space-y-1 px-2 py-1.5" style={{ backgroundColor: "#fdf6e3" }}>
+                  <div className="h-1.5 w-3/4 rounded-full" style={{ backgroundColor: "#e4ddc8" }} />
+                  <div className="h-1.5 w-1/2 rounded-full" style={{ backgroundColor: "#e4ddc8" }} />
+                  <div className="h-4 w-full rounded" style={{ backgroundColor: "rgba(133,153,0,0.25)" }} />
+                </div>
+                <div className="px-2 py-1 text-[9px]" style={{ color: "#93a1a1", backgroundColor: "#ffffff" }}>checkout — after</div>
+              </div>
+            </div>
+
+            {/* Another session reports in — SessionMessageBlock chrome */}
+            <div className="rounded" style={{ borderLeft: "2px solid rgba(42,161,152,0.6)", backgroundColor: "rgba(42,161,152,0.05)" }}>
+              <div className="flex items-center gap-2 px-2.5 pt-1.5 pb-0.5">
+                <CornerDownRightIcon color="rgba(42,161,152,0.7)" />
+                <span className="text-[9px] font-medium uppercase tracking-wide" style={{ color: "rgba(42,161,152,0.8)" }}>Message from</span>
+                <SessionPill title="Dashboard rewrite" />
+              </div>
+              <div className="px-2.5 pb-1.5 text-[11px]" style={{ color: "#002b36" }}>
+                dashboard half merged — staging green on my end
+              </div>
+            </div>
+
+            {/* Permission prompt */}
+            <div className="rounded-lg p-3" style={{ backgroundColor: "#fdf6e3", border: "1px solid #b58900" }}>
               <div className="mb-2 flex items-center gap-2 text-[11px] font-medium" style={{ color: "#b58900" }}>
                 <StatusDot kind="needs-input" /> Permission
               </div>
@@ -148,6 +199,7 @@ export function InboxHeroMock() {
                 <span className="rounded-md px-3 py-1 text-[11px]" style={{ border: "1px solid #e4ddc8", color: "#657b83" }}>Deny</span>
               </div>
             </div>
+
             <div className="mt-auto flex items-center gap-2 rounded-lg px-3 py-2 text-[11px]" style={{ border: "1px solid #eee8d5", color: "#93a1a1" }}>
               Send a message…
               <span className="ml-auto rounded px-1.5" style={{ backgroundColor: "#eee8d5" }}>↵</span>
@@ -181,6 +233,29 @@ function BotIcon({ color }: { color: string }) {
 }
 function CornerDownRightIcon({ color }: { color: string }) {
   return <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2}><path d="M4 4v7a4 4 0 0 0 4 4h12" /><path d="M15 10l5 5-5 5" /></svg>;
+}
+function MessageSquareIcon({ color }: { color: string }) {
+  return <svg className="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>;
+}
+
+/** Mirrors EntityIdPill for sessions: blue tint, message icon, the session TITLE (never the raw id). */
+function SessionPill({ title }: { title: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] align-baseline" style={{ backgroundColor: "rgba(38,139,210,0.1)", color: "#268bd2", borderColor: "rgba(38,139,210,0.2)" }}>
+      <MessageSquareIcon color="#268bd2" />
+      {title}
+    </span>
+  );
+}
+
+/** Mirrors EntityIdPill for tasks: ct- ids stay compact, yellow tint, status glyph. */
+function TaskPill({ id }: { id: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] align-baseline" style={{ backgroundColor: "rgba(181,137,0,0.1)", color: "#b58900", borderColor: "rgba(181,137,0,0.2)" }}>
+      <svg className="h-2.5 w-2.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="#b58900" strokeWidth={2.5}><circle cx="12" cy="12" r="10" /></svg>
+      {id}
+    </span>
+  );
 }
 
 /**
@@ -254,7 +329,7 @@ export function DocsMock() {
         <div>2. Migrate refresh flow behind a flag</div>
         <div className="rounded px-1 -mx-1" style={{ backgroundColor: "rgba(38,139,210,0.12)" }}>3. Rollback: flip the flag, tokens stay valid<span className="inline-block ml-0.5 h-3.5 w-0.5 align-middle" style={{ backgroundColor: "#268bd2" }} /></div>
         <div className="mt-1 rounded-lg p-2.5 text-[11px]" style={{ backgroundColor: "#ffffff", border: "1px solid rgba(147,161,161,0.2)" }}>
-          <span style={{ color: "#268bd2" }}>claude</span> — added the rollback section from session <span className="rounded border px-1 text-[10px]" style={{ borderColor: "rgba(42,161,152,0.4)", color: "#2aa198" }}>jx7c6zk</span>. Review?
+          <span style={{ color: "#268bd2" }}>claude</span> — added the rollback section from <SessionPill title="Token store migration" />. Review?
         </div>
       </div>
     </div>
@@ -281,7 +356,7 @@ export function AgentChatMock() {
           <div className="flex items-center gap-2 px-3 pt-2 pb-1">
             <CornerDownRightIcon color="rgba(42,161,152,0.7)" />
             <span className="text-[10px] font-medium uppercase tracking-wide" style={{ color: "rgba(42,161,152,0.8)" }}>Message from</span>
-            <span className="rounded border px-1.5 py-0.5 text-[10px]" style={{ borderColor: "rgba(42,161,152,0.4)", color: "#2aa198" }}>jx71ejx</span>
+            <SessionPill title="Auth race — client half" />
             <span className="ml-auto text-[10px]" style={{ color: "#93a1a1" }}>2m</span>
           </div>
           <div className="px-3 pb-2" style={{ color: "#002b36" }}>
@@ -289,7 +364,7 @@ export function AgentChatMock() {
           </div>
         </div>
         <div className="leading-relaxed" style={{ color: "#657b83" }}>
-          Claimed <span className="rounded border px-1 text-[11px]" style={{ borderColor: "rgba(181,137,0,0.4)", color: "#b58900" }}>ct-641</span>.
+          Claimed <TaskPill id="ct-641" />.
           API half done, deploying to staging — I&apos;ll message you when the integration test is green.
         </div>
         <div className="rounded px-2.5 py-1.5 text-[11px]" style={{ backgroundColor: "#eee8d5", color: "#586e75" }}>
