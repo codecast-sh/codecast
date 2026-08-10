@@ -42,6 +42,7 @@ interface ConversationDiffLayoutProps {
   targetMessageId?: string;
   isJumpingToTarget?: boolean;
   isOwner?: boolean;
+  guest?: boolean;
   showMessageInput?: boolean;
   onSendAndAdvance?: () => void;
   onSendAndDismiss?: () => void;
@@ -74,6 +75,7 @@ export function ConversationDiffLayout({
   isJumpingToTarget,
   onClearHighlight,
   isOwner,
+  guest,
   showMessageInput,
   onSendAndAdvance,
   onSendAndDismiss,
@@ -194,6 +196,7 @@ export function ConversationDiffLayout({
     targetMessageId,
     isJumpingToTarget,
     isOwner,
+    guest,
     showMessageInput,
     onSendAndAdvance,
     onSendAndDismiss,

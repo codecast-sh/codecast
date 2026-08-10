@@ -67,6 +67,16 @@ function schedulePersist() {
   }, 1000);
 }
 
+// ── Guest share scope ────────────────────────────────────────────────────────
+// Unauthenticated share-link viewers can't resolve storage ids bare — the
+// server only serves them ids it can verify belong to a shared conversation.
+// The guest conversation page declares that scope here; every batched request
+// carries it. Authenticated sessions never need it (the server ignores it).
+let guestImageScope: string | null = null;
+export function setGuestImageScope(conversationId: string | null) {
+  guestImageScope = conversationId;
+}
+
 // ── Batched resolution queue ─────────────────────────────────────────────────
 const pendingIds = new Set<string>();
 const waiters = new Map<string, Set<() => void>>();
@@ -99,6 +109,7 @@ function scheduleFlush(convex: ReturnType<typeof useConvex>, delayMs = 0) {
     try {
       const urls: Record<string, string | null> | null = await convex.query(api.images.getImageUrls, {
         storageIds: ids,
+        ...(guestImageScope ? { conversation_id: guestImageScope } : {}),
       });
       const unresolved: string[] = [];
       for (const id of ids) {

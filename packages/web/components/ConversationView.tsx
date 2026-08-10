@@ -453,6 +453,33 @@ const DENSITY_OPTIONS: Array<{ value: ConversationDensity; label: string; descri
   { value: "story", label: "Story", description: "A timeline retelling, each reply condensed in its own voice", icon: GitCommitVertical, ai: true },
   { value: "summary", label: "Summary", description: "One short narrative of the whole session", icon: BookOpenText, ai: true },
 ];
+
+// The density dropdown's option list. Guests (unauthenticated share-link
+// viewers) get the local render densities only — the AI retellings need an
+// account to read or generate (storyMode auth-gates both).
+function DensityMenuOptions({ density, setDensity, guest }: { density: ConversationDensity; setDensity: (d: ConversationDensity) => void; guest: boolean }) {
+  const options = guest ? DENSITY_OPTIONS.filter((o) => !o.ai) : DENSITY_OPTIONS;
+  return (
+    <>
+      {options.map((opt, i) => (
+        <Fragment key={opt.value}>
+          {opt.ai && !options[i - 1]?.ai && <DropdownMenuSeparator />}
+          <DropdownMenuItem onSelect={() => setDensity(opt.value)} className="items-start gap-2.5 py-2">
+            <opt.icon className={`w-4 h-4 mt-0.5 shrink-0 ${density === opt.value ? "text-sol-cyan" : "text-sol-text-dim"}`} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-[13px]">
+                <span className={density === opt.value ? "text-sol-cyan font-medium" : ""}>{opt.label}</span>
+                {opt.ai && <span className="text-[9px] uppercase tracking-wider px-1 py-px rounded bg-sol-violet/15 text-sol-violet">AI</span>}
+              </div>
+              <div className="text-[11px] text-sol-text-dim leading-snug">{opt.description}</div>
+            </div>
+            {density === opt.value && <Check className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-cyan" />}
+          </DropdownMenuItem>
+        </Fragment>
+      ))}
+    </>
+  );
+}
 function recordVirtHeight(key: string, size: number) {
   if (size <= 0) return; // 0-height rows are already exact via the heuristic; don't cache
   if (VIRT_HEIGHT_CACHE.size >= VIRT_HEIGHT_CACHE_MAX && !VIRT_HEIGHT_CACHE.has(key)) {
@@ -709,6 +736,9 @@ type ConversationViewProps = {
    * "Jumping to message..." indicator so mid-conversation jumps aren't silent. */
   isJumpingToTarget?: boolean;
   isOwner?: boolean;
+  // Anonymous share-link viewer: simplified defaults (condensed density, no AI
+  // density modes). Distinct from !isOwner, which also covers signed-in teammates.
+  guest?: boolean;
   onSendAndAdvance?: () => void;
   onSendAndDismiss?: () => void;
   autoFocusInput?: boolean;
@@ -11054,7 +11084,7 @@ function settleTimelineItemAtOffset(
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isJumpingToTarget, isOwner = true, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
@@ -11065,7 +11095,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // showed the down arrow on a 2px nudge while still parked at the bottom.
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isScrollable, setIsScrollable] = useState(false);
-  const [density, setDensityState] = useState<ConversationDensity>(defaultDensity);
+  // Guests read in simple view (DashboardLayout's guest branch), so they get
+  // its calmer condensed default too — without owning a simple_view pref.
+  const resolveDefaultDensity = useCallback(
+    (): ConversationDensity => (guest ? "condensed" : defaultDensity()),
+    [guest]
+  );
+  const [density, setDensityState] = useState<ConversationDensity>(resolveDefaultDensity);
   const setDensity = useCallback((d: ConversationDensity) => {
     setDensityState(d);
     if (conversation?._id) DENSITY_BY_CONVERSATION.set(conversation._id, d);
@@ -11075,7 +11111,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const simpleViewPref = useInboxStore((st) => st.clientState.ui?.simple_view === true);
   useWatchEffect(() => {
     if (conversation?._id && DENSITY_BY_CONVERSATION.has(conversation._id)) return;
-    setDensityState(defaultDensity());
+    setDensityState(resolveDefaultDensity());
   }, [simpleViewPref]);
   // Feed-rendering density: story/summary swap the feed out entirely, so the
   // virtualizer (and its height cache keys) only ever sees the first three.
@@ -11231,7 +11267,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     userScrolledRef.current = false;
     setIsNearTop(true);
     setIsNearBottom(true);
-    setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || defaultDensity());
+    setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || resolveDefaultDensity());
     setExpandedTurns(new Set());
     setDiffExpanded(false);
     setShowThinking(false);
@@ -14681,22 +14717,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </DropdownMenuTrigger>
                   </ShortcutTooltip>
                   <DropdownMenuContent align="end" className="w-72">
-                    {DENSITY_OPTIONS.map((opt, i) => (
-                      <Fragment key={opt.value}>
-                        {i === 3 && <DropdownMenuSeparator />}
-                        <DropdownMenuItem onSelect={() => setDensity(opt.value)} className="items-start gap-2.5 py-2">
-                          <opt.icon className={`w-4 h-4 mt-0.5 shrink-0 ${density === opt.value ? "text-sol-cyan" : "text-sol-text-dim"}`} />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 text-[13px]">
-                              <span className={density === opt.value ? "text-sol-cyan font-medium" : ""}>{opt.label}</span>
-                              {opt.ai && <span className="text-[9px] uppercase tracking-wider px-1 py-px rounded bg-sol-violet/15 text-sol-violet">AI</span>}
-                            </div>
-                            <div className="text-[11px] text-sol-text-dim leading-snug">{opt.description}</div>
-                          </div>
-                          {density === opt.value && <Check className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-cyan" />}
-                        </DropdownMenuItem>
-                      </Fragment>
-                    ))}
+                    <DensityMenuOptions density={density} setDensity={setDensity} guest={guest} />
                   </DropdownMenuContent>
                 </DropdownMenu>
 

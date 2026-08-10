@@ -755,10 +755,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     }
   }, [showSessionList]);
 
-  // Guest/unauthenticated: minimal layout, no top header — branding lives in the bottom bar
+  // Guest/unauthenticated: minimal layout, no top header — branding lives in the
+  // bottom bar. Always simple-view: anonymous share viewers get the calm reading
+  // chrome without owning a simple_view pref (writing one could outlive the visit
+  // and clobber a later sign-in's stamped preference).
   if (isGuest) {
     return (
-      <div className="bg-sol-bg flex flex-col overflow-hidden" style={{ height: '100vh' }}>
+      <div className="bg-sol-bg flex flex-col overflow-hidden simple-view" style={{ height: '100vh' }}>
         <div className="flex-1 min-h-0">
           <div className="h-full">{children}</div>
         </div>

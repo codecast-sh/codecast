@@ -3,6 +3,8 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { useMountEffect } from "../../../hooks/useMountEffect";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { setGuestImageScope } from "../../../hooks/useStorageImageUrl";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
 import { ConversationData } from "../../../components/ConversationView";
@@ -88,6 +90,26 @@ function GuestConversationView({
   highlightQuery?: string;
 }) {
   const router = useRouter();
+  // Storage-backed transcript images resolve through the batched getImageUrls
+  // queue, which needs this conversation as its share scope while the viewer
+  // is anonymous (the server only serves guests ids it can verify belong to
+  // the shared conversation).
+  useMountEffect(() => {
+    setGuestImageScope(id);
+    return () => setGuestImageScope(null);
+  });
+  // Jumps to messages outside the loaded window (message browser, minimap)
+  // travel through the store's navigate request — the same codepath the inbox
+  // uses. Its consumer (QueuePageClient) isn't mounted on this page, so consume
+  // requests aimed at this conversation and re-target the message hook directly.
+  const [jumpTargetId, setJumpTargetId] = useState<string | undefined>(undefined);
+  const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
+  useWatchEffect(() => {
+    if (pendingNavigateId !== id) return;
+    const msgId = useInboxStore.getState().pendingScrollToMessageId;
+    useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null, pendingHighlightQuery: null });
+    if (msgId) setJumpTargetId(msgId);
+  }, [pendingNavigateId, id]);
   const {
     conversation,
     hasMoreAbove,
@@ -101,7 +123,7 @@ function GuestConversationView({
     jumpToTimestamp,
     effectiveTargetMessageId,
     isJumpingToTarget,
-  } = useConversationMessages(id, targetMessageId, highlightQuery);
+  } = useConversationMessages(id, jumpTargetId ?? targetMessageId, highlightQuery);
 
   if (!conversation) return <ConversationLoadingSkeleton />;
 
@@ -122,6 +144,7 @@ function GuestConversationView({
             onJumpToEnd={jumpToEnd}
             onJumpToTimestamp={jumpToTimestamp}
             isOwner={false}
+            guest
             showMessageInput={false}
             targetMessageId={effectiveTargetMessageId}
             isJumpingToTarget={isJumpingToTarget}
