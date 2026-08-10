@@ -80,6 +80,8 @@ ONBOARDING.md
 app_spec.txt
 
 # Agent session artifacts
+.codex/
+.playwright-mcp/
 SESSION_SUMMARY_*.md
 VERIFICATION-*.md
 COMMENT-SYNC-VERIFICATION.md
@@ -99,3 +101,7 @@ dist-ssr/
 
 # Private production bundles built for CPU profiling (hundreds of MB)
 packages/web/dist-perf/
+
+# Social posting tooling (private ops, keys and account workflow)
+scripts/publora.mjs
+docs/social-posting.md
