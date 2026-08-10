@@ -12063,6 +12063,14 @@ trigger
   });
 
 trigger
+  .command("resume")
+  .description("Resume a paused trigger")
+  .argument("<id>", "Trigger ID (full or last 8 chars)")
+  .action(async (id) => {
+    await taskAction("resume", id, "Resumed");
+  });
+
+trigger
   .command("run")
   .description("Fire a trigger immediately")
   .argument("<id>", "Trigger ID (full or last 8 chars)")
