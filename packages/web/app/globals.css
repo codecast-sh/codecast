@@ -978,6 +978,43 @@ pre[class*="language-"] {
   }
 }
 
+/* Blocked-sessions banner: gentle entrance whenever it appears; when the
+   blocked set goes 0→N LIVE (a fresh incident, not page-load hydration) the
+   glow variant adds a two-beat amber pulse, and the header pill scales in
+   sympathy (GlobalSessionPanel keys both on the incident timestamp so each
+   new incident replays them). */
+@keyframes ccBlockedBannerIn {
+  from { opacity: 0; transform: translateY(-8px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ccBlockedGlow {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sol-yellow, #b58900) 45%, transparent); }
+  60% { box-shadow: 0 0 0 7px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.cc-blocked-banner-in {
+  animation: ccBlockedBannerIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.cc-blocked-banner-glow {
+  animation:
+    ccBlockedBannerIn 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    ccBlockedGlow 1s ease-out 0.25s 2;
+}
+@keyframes ccBlockedPillPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.22); }
+}
+.cc-blocked-pill-pulse {
+  animation: ccBlockedPillPulse 0.55s ease-in-out 0.3s 3;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-blocked-banner-in,
+  .cc-blocked-banner-glow,
+  .cc-blocked-pill-pulse {
+    animation: none;
+  }
+}
+
 /* Pending message diagonal stripes */
 .pending-stripes {
   background-image: repeating-linear-gradient(

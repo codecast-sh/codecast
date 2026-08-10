@@ -74,15 +74,22 @@ export const WATCHDOG_AWAKE_GAP_MS = WATCHDOG_INTERVAL_SECONDS * 1000 + 30_000;
 // Pure verdict shared by both watchdog forms (dev shell inline check, compiled
 // `_watchdog` pass). gapMs is the watchdog's time since its own previous pass;
 // null (first pass, missing stamp) defers — a fresh watchdog has no baseline.
+// logAgeMs is the time since the daemon last wrote daemon.log (null = unknown):
+// a wedged event loop runs no JS and cannot log, while a busy-but-alive boot
+// (transcript sweeps, git subprocesses) starves the tick stamper yet keeps
+// logging — killing it just restarts the same slow boot and loops the outage.
 export function daemonTickStale(
   tickAgeMs: number,
   gapMs: number | null,
+  logAgeMs: number | null = null,
   thresholdMs: number = DAEMON_HEARTBEAT_STALE_MS,
   awakeGapMs: number = WATCHDOG_AWAKE_GAP_MS,
 ): boolean {
   if (tickAgeMs <= thresholdMs) return false;
   if (gapMs === null || gapMs < 0) return false;
-  return gapMs < awakeGapMs;
+  if (gapMs >= awakeGapMs) return false;
+  if (logAgeMs !== null && logAgeMs >= 0 && logAgeMs <= thresholdMs) return false;
+  return true;
 }
 
 export function buildDaemonPlistXml(opts: { scriptPath: string; configDir: string }): string {
@@ -264,8 +271,17 @@ check_once() {
         # wedged event loop. A large gap in our OWN loop = the machine slept and
         # the daemon may simply not have re-stamped yet — give it one cycle.
         if [ "\$LOOP_GAP" -ge 0 ] && [ "\$LOOP_GAP" -lt ${WATCHDOG_AWAKE_GAP_MS} ]; then
-          STALE=1
-          log "Daemon alive but heartbeat stale (\${AGE}ms) - event loop wedged, forcing restart"
+          # A wedged event loop runs no JS and cannot write daemon.log. A busy
+          # boot starves the tick stamper but keeps logging — killing it only
+          # restarts the same slow boot. Kill when the log is ALSO silent.
+          LOG_MTIME=\$(stat -f %m "\${HOME}/.codecast/daemon.log" 2>/dev/null || echo 0)
+          LOG_AGE=\$(( NOW_MS - LOG_MTIME * 1000 ))
+          if [ "\$LOG_MTIME" -gt 0 ] && [ "\$LOG_AGE" -le ${DAEMON_HEARTBEAT_STALE_MS} ]; then
+            log "Daemon tick stale (\${AGE}ms) but daemon.log written \${LOG_AGE}ms ago - busy, not wedged"
+          else
+            STALE=1
+            log "Daemon alive but heartbeat stale (\${AGE}ms) - event loop wedged, forcing restart"
+          fi
         else
           log "Daemon heartbeat stale (\${AGE}ms) but watchdog loop gap (\${LOOP_GAP}ms) implies system sleep - deferring one cycle"
         fi

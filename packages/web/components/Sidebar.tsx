@@ -427,8 +427,13 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             onMobileClose={onMobileClose}
             addTitle="New page"
             onAdd={async () => {
+              // Stamp the active workspace so the doc lives where it was created.
               await createDoc(
-                { title: "", doc_type: "note" },
+                {
+                  title: "",
+                  doc_type: "note",
+                  ...(activeTeamId ? { workspace: "team" as const, team_id: activeTeamId } : { workspace: "personal" as const }),
+                },
                 { version: 1, kind: "navigate" },
               );
             }}

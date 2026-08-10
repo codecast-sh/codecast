@@ -36,6 +36,12 @@ const JOIN_POLICY_OPTIONS = [
 export function CreateDocModal({ onClose, initialType }: { onClose: () => void; initialType?: string }) {
   const createDoc = useInboxStore((s) => s.createDoc);
   const createPlan = useInboxStore((s) => s.createPlan);
+  // Stamp the active workspace: a doc/plan created in a team space belongs to
+  // that team; one created in the personal space stays personal.
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  const workspaceStamp = activeTeamId
+    ? { workspace: "team" as const, team_id: activeTeamId }
+    : { workspace: "personal" as const };
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
 
@@ -74,13 +80,14 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
           join_policy: joinPolicy || undefined,
           join_k: joinPolicy === "k_of_n" && joinK ? parseInt(joinK, 10) : undefined,
           acceptance_criteria: criteria,
+          ...workspaceStamp,
         }, { version: 1, kind: "navigate" });
         toast.success("Plan created");
         onClose();
       } else {
         const content = contentRef.current.trim();
         await createDoc(
-          { title: title.trim(), content, doc_type: docType },
+          { title: title.trim(), content, doc_type: docType, ...workspaceStamp },
           { version: 1, kind: "navigate" },
         );
         toast.success(`Created: ${title.trim()}`);

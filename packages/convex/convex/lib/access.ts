@@ -85,6 +85,34 @@ export type AuthorizedWorkspace =
   | { type: "personal"; userId: Id<"users"> }
   | { type: "team"; teamId: Id<"teams"> };
 
+/** The conversation a record inherits workspace visibility from, if any. */
+export function linkedConversationId(record: any): string | undefined {
+  if (record.conversation_id) return String(record.conversation_id);
+  if (record.created_from_conversation) return String(record.created_from_conversation);
+  if (record.related_conversation_ids?.[0]) return String(record.related_conversation_ids[0]);
+  if (record.conversation_ids?.[0]) return String(record.conversation_ids[0]);
+  return undefined;
+}
+
+/**
+ * The team a record EFFECTIVELY belongs to. A record that links a conversation
+ * inherits that conversation's team visibility — a private conversation makes
+ * the record personal regardless of its raw team_id tag. This is the same rule
+ * the list queries scope by (data.ts resolveEffectiveTeam); access checks must
+ * use it too, or a record the lists correctly hide stays fetchable by id.
+ */
+export async function effectiveTeamForResource(
+  ctx: AccessCtx,
+  record: { team_id?: Id<"teams"> },
+): Promise<Id<"teams"> | undefined> {
+  const cid = linkedConversationId(record);
+  if (cid) {
+    const conv = await ctx.db.get(cid);
+    if (conv) return teamVisibleConvTeam(conv);
+  }
+  return record.team_id;
+}
+
 export function workspaceForResource(
   resource: { user_id: Id<"users">; team_id?: Id<"teams"> },
 ): AuthorizedWorkspace {
@@ -220,8 +248,12 @@ export async function canAccessDoc(
   doc: { user_id: Id<"users">; team_id?: Id<"teams"> },
 ): Promise<boolean> {
   if (doc.user_id === userId) return true;
-  if (!doc.team_id) return false;
-  return await isTeamMember(ctx, userId, doc.team_id);
+  // Team access follows the doc's EFFECTIVE team: a doc linked to a private
+  // conversation is personal even when team-tagged, so only its owner may
+  // read it. This keeps id-targeted access consistent with list scoping.
+  const effectiveTeam = await effectiveTeamForResource(ctx, doc);
+  if (!effectiveTeam) return false;
+  return await isTeamMember(ctx, userId, effectiveTeam);
 }
 
 export async function canAccessPlan(

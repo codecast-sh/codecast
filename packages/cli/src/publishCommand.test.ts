@@ -158,6 +158,16 @@ describe("buildAccessPayload", () => {
   it("rejects unknown edit modes", () => {
     expect(buildAccessPayload({ editMode: "everyone" }).error).toContain("everyone");
   });
+
+  it("maps the session-link toggle both ways", () => {
+    expect(buildAccessPayload({ session: false }).payload).toEqual({ show_session: false });
+    expect(buildAccessPayload({ session: true }).payload).toEqual({ show_session: true });
+  });
+
+  it("maps the comments toggle both ways", () => {
+    expect(buildAccessPayload({ comments: false }).payload).toEqual({ comments: false });
+    expect(buildAccessPayload({ comments: true }).payload).toEqual({ comments: true });
+  });
 });
 
 describe("describeAccess", () => {
@@ -168,6 +178,16 @@ describe("describeAccess", () => {
 
   it("names clears explicitly", () => {
     expect(describeAccess({ password: null, expires_in_ms: null })).toBe("password cleared · never expires");
+  });
+
+  it("names the session-link toggle", () => {
+    expect(describeAccess({ show_session: false })).toBe("session link hidden");
+    expect(describeAccess({ show_session: true })).toBe("session link shown");
+  });
+
+  it("names the comments toggle", () => {
+    expect(describeAccess({ comments: false })).toBe("comments off");
+    expect(describeAccess({ comments: true })).toBe("comments on");
   });
 });
 

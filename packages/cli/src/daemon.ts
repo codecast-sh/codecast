@@ -27,6 +27,9 @@ import {
   resnapshotIfActiveFresher,
   refreshUsageSnapshots,
   deleteProfile,
+  readActiveCredential,
+  credentialHealth,
+  activeAccountSummary,
 } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
@@ -149,7 +152,7 @@ import {
   resumeTmuxPrefix,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
-import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
+import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID } from "@codecast/shared/contracts";
@@ -1864,6 +1867,119 @@ async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChang
   }
 }
 
+// ---------------------------------------------------------------------------
+// Browser sign-in flow (start_login): the web banner's "Sign in as <email>"
+// CTA. `claude auth login` is a first-class CLI subcommand that opens the
+// machine's browser on the OAuth page (pre-filled via --email) and writes the
+// fresh credential to the keychain on completion — so the flow needs no TUI
+// injection at all. It runs in a utility tmux pane (the CLI wants a TTY, and
+// a stuck flow stays attachable), and the watcher below decides the outcome
+// from the credential store itself: a CHANGED, healthy blob is the one signal
+// that cannot lie. Outcome goes back through completeLoginFlow, which flips
+// the device row's cc_login_flow (the web's reactive state channel) and, on
+// confirmed, kicks the auth-blocked revive server-side.
+// ---------------------------------------------------------------------------
+
+const LOGIN_FLOW_TMUX = "cc-login-flow";
+const LOGIN_FLOW_TIMEOUT_MS = 5 * 60 * 1000;
+const LOGIN_FLOW_POLL_MS = 2000;
+let loginFlowActive = false;
+
+function credentialHashOf(raw: string | null): string | null {
+  return raw ? createHash("sha256").update(raw).digest("hex") : null;
+}
+
+// The last meaningful line of the dying pane — the CLI's own error is the most
+// honest "why" we can report ("Login cancelled", a network error, …).
+export function summarizeLoginPaneTail(pane: string): string | null {
+  const lines = pane
+    .split("\n")
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter((l) => l.length > 0);
+  const tail = lines[lines.length - 1];
+  return tail ? tail.slice(0, 160) : null;
+}
+
+async function startLoginFlow(email: string | undefined): Promise<string> {
+  // A second click while a flow is live joins it — the browser tab is already
+  // open, and a second `claude auth login` would fight it for the callback port.
+  if (loginFlowActive) return "login_flow_already_running";
+  loginFlowActive = true;
+  try {
+    const baselineHash = credentialHashOf(readActiveCredential());
+    await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
+    const cmd = `claude auth login --claudeai${email ? ` --email ${shellEscapeForSh(email)}` : ""}`;
+    tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", LOGIN_FLOW_TMUX, cmd], { timeout: 5000 });
+    log(`[LOGIN-FLOW] started browser sign-in${email ? ` for ${email}` : ""} (tmux ${LOGIN_FLOW_TMUX})`);
+    void watchLoginFlow(baselineHash, email)
+      .catch((err) => log(`[LOGIN-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => { loginFlowActive = false; });
+    return "login_flow_started";
+  } catch (err) {
+    loginFlowActive = false;
+    throw err;
+  }
+}
+
+// Poll until the credential store proves the sign-in (hash changed + healthy),
+// the pane dies (the CLI exited — success or failure, the grace re-check
+// tells them apart), or the timeout lapses (abandoned browser tab).
+async function watchLoginFlow(baselineHash: string | null, requestedEmail: string | undefined): Promise<void> {
+  const deadline = Date.now() + LOGIN_FLOW_TIMEOUT_MS;
+  let lastPane = "";
+
+  const confirmedNow = (): boolean => {
+    const raw = readActiveCredential();
+    if (!raw) return false;
+    const health = credentialHealth(raw, Date.now());
+    return credentialHashOf(raw) !== baselineHash && health.pushable;
+  };
+
+  const finishConfirmed = async (): Promise<void> => {
+    const email = activeAccountSummary()?.email ?? requestedEmail;
+    log(`[LOGIN-FLOW] confirmed${email ? ` — signed in as ${email}` : ""}`);
+    await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
+    // Fold the fresh login into its saved profile + the web's inventory now,
+    // not on the next beat.
+    try { resnapshotIfActiveFresher(); } catch {}
+    sendHeartbeat().catch(() => {});
+    // Remote Macs ride the push rail: a CHANGED blob push triggers the
+    // remote auth-blocked revive on its own.
+    pushCredentialToRemoteHosts("login_flow").catch(() => {});
+    const revived = await syncServiceRef?.completeLoginFlow("confirmed", email).catch((err) => {
+      log(`[LOGIN-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    });
+    if (revived) log(`[LOGIN-FLOW] server queued revive for ${revived} auth-blocked session(s)`);
+  };
+
+  const finishRejected = async (reason: string): Promise<void> => {
+    log(`[LOGIN-FLOW] rejected: ${reason}`);
+    await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
+    await syncServiceRef?.completeLoginFlow("rejected", requestedEmail, reason).catch((err) => {
+      log(`[LOGIN-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    });
+  };
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, LOGIN_FLOW_POLL_MS));
+    if (confirmedNow()) return finishConfirmed();
+    // Keep the freshest pane content so a dying CLI still leaves us its last
+    // words; a capture failure means the pane (= the CLI) is gone.
+    try {
+      lastPane = tmuxExecSync(["capture-pane", "-p", "-t", LOGIN_FLOW_TMUX], { timeout: 3000 });
+    } catch {
+      // The CLI writes the credential and exits — give the store one more read
+      // before calling the exit a failure.
+      if (confirmedNow()) return finishConfirmed();
+      const tail = summarizeLoginPaneTail(lastPane);
+      return finishRejected(tail ?? "the sign-in window closed before completing");
+    }
+  }
+  return finishRejected("timed out waiting for the browser sign-in");
+}
+
 // Keep THIS machine's Claude Code login from lapsing. A running `claude`
 // self-refreshes its ~8h access token from the stored refresh token; nothing
 // does when no session runs, so an idle grant eventually expires ("Login
@@ -2870,9 +2986,14 @@ async function executeRemoteCommand(
           // re-append the in-repo subpath. start_session lacked this step, so a
           // foreign recorded path that resume could repair still refused here.
           if (!resolved) {
-            const localRepoRoot = resolveLocalRepo(recordedRoot ?? rawPath);
+            // Seed with the recorded git_root only when rawPath lives under it
+            // (conventionSeed): a root stamped off an unrelated conversation
+            // that exists locally would otherwise win verbatim and launch the
+            // session in the wrong repo.
+            const rootSeed = conventionSeed(rawPath, recordedRoot);
+            const localRepoRoot = resolveLocalRepo(rootSeed);
             if (localRepoRoot) {
-              const subpath = recordedRoot && rawPath.startsWith(recordedRoot) ? rawPath.slice(recordedRoot.length) : "";
+              const subpath = rootSeed !== rawPath ? rawPath.slice(rootSeed.length) : "";
               const full = subpath ? path.join(localRepoRoot, subpath) : localRepoRoot;
               const placed = validatePath(full) ?? localRepoRoot;
               resolved = { path: placed, remapped: true, reason: `convention-resolved ${rawPath} → ${placed}` };
@@ -3601,6 +3722,28 @@ async function executeRemoteCommand(
         }
         result = JSON.stringify({ switched, killed, continued });
         log(`[ACCOUNTS] switch_account done: switched=${switched ?? "none"} killed=${killed}/${conversationIds.length} continued=${continued}`);
+        break;
+      }
+      // Web sign-in CTA: run the browser OAuth flow via `claude auth login` and
+      // report the outcome through completeLoginFlow (see the LOGIN-FLOW block).
+      // Returns immediately — the flow takes as long as the user's browser
+      // dance, far past any command TTL, so a detached watcher owns the rest.
+      case "start_login": {
+        if (isRemoteDevice()) {
+          error = "Remote devices run a pushed copy of the primary's credential — sign in on the primary machine";
+          break;
+        }
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const email: string | undefined =
+          typeof parsed.email === "string" && parsed.email ? parsed.email : undefined;
+        try {
+          result = await startLoginFlow(email);
+        } catch (err) {
+          error = `Sign-in launch failed: ${err instanceof Error ? err.message : String(err)}`;
+          // The web is watching cc_login_flow, not command errors — report the
+          // failure there too so the CTA comes back instead of spinning.
+          syncServiceRef?.completeLoginFlow("rejected", email, error).catch(() => {});
+        }
         break;
       }
       // fork_session = resume_session whose JSONL is materialized by the fork
@@ -9752,16 +9895,33 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
 const TMUX_WINDOW_WIDTH = "220";
 const TMUX_WINDOW_HEIGHT = "50";
 const TMUX_SIZE_ARGS = ["-x", TMUX_WINDOW_WIDTH, "-y", TMUX_WINDOW_HEIGHT];
+// When teammate panes split the 220-column window, give the lead pane 130 and
+// leave 89 for the side stack — both sides stay above the 80-column TUI floor.
+const TMUX_LEAD_PANE_WIDTH = "130";
 
-// Self-heal for sessions created before the daemon sized its windows (or
-// re-squeezed by a small attached client that detached): a lead pane under 80
-// columns cannot render the markers the classifier needs, so widen the window
-// before reading it. Best-effort — classification proceeds either way.
+// Self-heal for a lead pane under 80 columns — too narrow to render the markers
+// the classifier needs (and mirrored at that width by the web terminal). Two
+// distinct squeezes: a window that was never sized (created before the daemon
+// sized its windows, or re-squeezed by a small attached client that detached),
+// fixed by resize-window; and a window SPLIT by Claude Code's teammate panes,
+// where resize-window is a no-op — the total is already right, only the pane
+// tiling is wrong — so the lead pane must be widened directly. Returns the tmux
+// commands to run (without target); empty when the pane is healthy.
+export function planLeadPaneHeal(paneWidth: number, windowPanes: number): string[][] {
+  if (paneWidth >= 80) return [];
+  const cmds: string[][] = [["resize-window", "-x", TMUX_WINDOW_WIDTH, "-y", TMUX_WINDOW_HEIGHT]];
+  if (windowPanes > 1) cmds.push(["resize-pane", "-x", TMUX_LEAD_PANE_WIDTH]);
+  return cmds;
+}
+
+// Best-effort — classification proceeds either way.
 async function ensureTmuxPaneWide(target: string): Promise<void> {
   try {
-    const { stdout } = await tmuxExec(["display-message", "-p", "-t", target, "#{pane_width}"]);
-    if (parseInt(stdout.trim(), 10) >= 80) return;
-    await tmuxExec(["resize-window", "-t", target, "-x", TMUX_WINDOW_WIDTH, "-y", TMUX_WINDOW_HEIGHT]);
+    const { stdout } = await tmuxExec(["display-message", "-p", "-t", target, "#{pane_width}|#{window_panes}"]);
+    const [paneWidth, windowPanes] = stdout.trim().split("|").map((part) => parseInt(part, 10));
+    const heals = planLeadPaneHeal(paneWidth, windowPanes);
+    if (!heals.length) return;
+    for (const [cmd, ...rest] of heals) await tmuxExec([cmd, "-t", target, ...rest]);
     // Give the TUI a beat to reflow before the first capture.
     await new Promise(resolve => setTimeout(resolve, 500));
   } catch {}
@@ -14286,7 +14446,7 @@ async function startFreshSessionForDelivery(
   const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${["claude", ...safeBlankArgs].join(" ")}`;
 
   try {
-    tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
+    tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
     await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
     await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", "claude").catch(() => {});
     await setTmuxSessionOption(tmuxSession, "@codecast_project_path", projectPath).catch(() => {});
@@ -14873,6 +15033,34 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
   let repaired = 0;
   let checked = 0;
 
+  // updateProjectPath only consumes the repo root, and the full getGitInfo
+  // (status + both diffs, 8 subprocesses) per FILE starved the event loop for
+  // minutes on a large ~/.claude/projects — the watchdog then killed the daemon
+  // mid-boot as "wedged". One cheap subprocess per unique project path instead.
+  const repoRootCache = new Map<string, string | undefined>();
+  const resolveRepoRoot = (projectPath: string): string | undefined => {
+    if (repoRootCache.has(projectPath)) return repoRootCache.get(projectPath);
+    let root: string | undefined;
+    try {
+      const commonDir = execSync("git rev-parse --path-format=absolute --git-common-dir", {
+        cwd: projectPath,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "ignore"],
+      }).trim();
+      root = commonDir.endsWith("/.git")
+        ? commonDir.slice(0, -5)
+        : execSync("git rev-parse --show-toplevel", {
+            cwd: projectPath,
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "ignore"],
+          }).trim() || undefined;
+    } catch {
+      root = undefined;
+    }
+    repoRootCache.set(projectPath, root);
+    return root;
+  };
+
   for (const dir of projectDirs) {
     const dirPath = path.join(claudeProjectsDir, dir);
     const sessionFiles = fs.readdirSync(dirPath)
@@ -14886,6 +15074,10 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
     if (resolvedDir) recordProjectMapping(path.basename(resolvedDir), resolvedDir);
 
     for (const file of sessionFiles) {
+      // Let the event loop breathe between files: this sweep runs during boot,
+      // and back-to-back synchronous transcript reads starve the heartbeat tick
+      // the watchdog uses to tell alive from wedged.
+      await new Promise(resolve => setImmediate(resolve));
       const filePath = path.join(dirPath, file);
       const sessionId = resolveSessionId(filePath);
 
@@ -14898,8 +15090,7 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(filePath, dir);
         if (!projectPath) continue;
 
-        const gitInfo = getGitInfo(projectPath);
-        const result = await syncService.updateProjectPath(sessionId, projectPath, gitInfo?.repoRoot || gitInfo?.root);
+        const result = await syncService.updateProjectPath(sessionId, projectPath, resolveRepoRoot(projectPath));
         if (result?.updated) {
           repaired++;
           log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
@@ -14939,7 +15130,11 @@ async function backfillPlanModeFromJSONL(syncService: SyncService): Promise<void
       if (planModeSynced.has(sessionId)) continue;
 
       try {
-        const content = fs.readFileSync(filePath, "utf-8");
+        // Async read + a yield per file: this walks every transcript (gigabytes
+        // here) at boot, and readFileSync back-to-back starved the event loop —
+        // the watchdog then killed the daemon mid-boot as "wedged".
+        await new Promise(resolve => setImmediate(resolve));
+        const content = await fs.promises.readFile(filePath, "utf-8");
         if (!content.includes("ExitPlanMode")) continue;
 
         let planContent: string | undefined;
@@ -18175,7 +18370,7 @@ async function main(): Promise<void> {
           registry.register(new ManagedTmuxRuntimeDriver({
             io: {
               async createSession({ tmuxSession, cwd }) {
-                await tmuxExec(["new-session", "-d", "-s", tmuxSession, "-c", cwd]);
+                await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd]);
               },
               async setSessionOption({ tmuxSession, name, value }) {
                 await setTmuxSessionOption(tmuxSession, name, value);
@@ -19004,11 +19199,17 @@ export async function runWatchdog(): Promise<void> {
       const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
       const staleness = passNow - lastTick;
       if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
-        if (daemonTickStale(staleness, passGap)) {
+        // A busy boot starves the tick stamper but keeps writing daemon.log; a
+        // truly wedged loop runs no JS and cannot log (see daemonTickStale).
+        let logAgeMs: number | null = null;
+        try { logAgeMs = passNow - fs.statSync(path.join(CONFIG_DIR, "daemon.log")).mtimeMs; } catch {}
+        if (daemonTickStale(staleness, passGap, logAgeMs)) {
           logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
           try { process.kill(daemonPid, 9); } catch {}
           await new Promise(resolve => setTimeout(resolve, 1000));
           daemonAlive = false;
+        } else if (logAgeMs !== null && logAgeMs <= DAEMON_HEARTBEAT_STALE_MS) {
+          logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but daemon.log written ${Math.round(logAgeMs / 1000)}s ago — busy, not wedged`);
         } else {
           logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but watchdog pass gap ${passGap === null ? "unknown" : Math.round(passGap / 1000) + "s"} implies system sleep — deferring one cycle`);
         }

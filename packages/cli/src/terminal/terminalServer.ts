@@ -366,8 +366,12 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions): void {
         opts.log(`[TERM] ${hello.mode} ${sessionName} (${c}x${r}${client?.isReadOnly ? ", read-only" : ""})`);
       })
       .catch((err) => {
-        opts.log(`[TERM] start failed: ${err?.message ?? err}`);
-        fail("failed to start terminal");
+        const message = typeof err?.message === "string" && err.message ? err.message : "failed to start terminal";
+        opts.log(`[TERM] start failed: ${message}`);
+        fail(message);
+        // Reap the control client now — a hung tmux child would otherwise
+        // linger until the ws close event wanders in.
+        cleanup();
       });
 
     ws.on("message", (data, isBinary) => {
