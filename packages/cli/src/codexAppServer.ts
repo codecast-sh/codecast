@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { spawn, type ChildProcess } from "./proc.js";
 import * as readline from "readline";
+import { STABLE_ENV_MODE } from "@codecast/shared/contracts";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import type { ParsedMessage, ToolCall, ToolResult, ImageBlock } from "./parser.js";
 
@@ -281,6 +282,10 @@ export class CodexAppServer extends EventEmitter {
         env: {
           ...process.env,
           PATH: agentSpawnPath(),
+          // App-server threads get stable context via developerInstructions at
+          // threadStart. Suppress the Codex SessionStart hook in this process
+          // so a thread can never be injected twice.
+          [STABLE_ENV_MODE]: "off",
         },
       });
     } catch (err: any) {

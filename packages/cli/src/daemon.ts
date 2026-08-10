@@ -16512,14 +16512,15 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // Refresh the SessionStart hook script on boot when stable mode is enabled:
-  // the script's contents ship with the CLI (it delegates to `codecast
-  // stable-context`), so an installed copy from an older CLI must be rewritten
-  // without waiting for the user to re-run `cast stable`. Idempotent.
+  // Refresh the session-start hooks on boot when stable mode is enabled: the
+  // scripts and the opencode plugin ship with the CLI (they delegate to
+  // `codecast stable-context`), so installed copies from an older CLI must be
+  // rewritten without waiting for the user to re-run `cast stable`. Also
+  // covers a client installed after `cast stable` ran. Idempotent.
   try {
     if (readConfig()?.stable_mode) {
-      const { installStableHook } = await import("./stableContext.js");
-      installStableHook();
+      const { installAllStableHooks } = await import("./stableContext.js");
+      installAllStableHooks();
     }
   } catch {}
 
