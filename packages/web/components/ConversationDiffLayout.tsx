@@ -560,10 +560,9 @@ function ChangesBar({ changes }: { changes: FileChange[] }) {
         top: "calc(100% + var(--conv-sticky-h, 0px))",
         right: "calc(0.75rem + min(var(--conv-sticky-h, 0px), 2.5rem))",
       }}
-      // OPAQUE on purpose: this floats over message text, and at 80% the line
-      // behind it bled through and became unreadable — invisible in a wide
-      // column where it lands in whitespace, obvious at ~290px where body text
-      // runs the full width.
+      // No background by design (globals.css .cc-changes-pill): the pill is
+      // fully transparent, and its backdrop blur is what keeps the label
+      // readable when it floats over body text in a narrow column.
       className="cc-changes-pill absolute mt-2 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md border border-sol-border/50 shadow-sm hover:border-sol-border/80 transition-all group cursor-pointer select-none"
     >
       <div className="flex items-center gap-1">
