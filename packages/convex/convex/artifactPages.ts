@@ -48,6 +48,7 @@ export interface BrandOpts {
   sessionTitle?: string | null;
   views?: number;
   commentCount?: number;
+  commentsEnabled?: boolean;
   gated?: { password: boolean; email: boolean };
   editMode?: string;
   live?: boolean;
@@ -61,10 +62,10 @@ export interface BrandOpts {
 //
 // Panels (history / menu / comments / manage) are anchored dropdowns on
 // desktop and become drag-handle bottom sheets under 640px. The comments
-// panel collects MULTIPLE draft comments (pinned by tapping the page, or
-// anchored to a text selection); a batch can go straight to the author's
-// session or be saved as PENDING — stored, listed on the page for every
-// viewer, and delivered later in one shot via "Send all".
+// panel is a DISCUSSION every viewer can read and post to (drafts pinned by
+// tapping the page, or anchored to a text selection). Pushing the discussion
+// into the author's session is owner-only: with the #o= key the panel adds
+// "Send to session" / "Send all", and the server enforces the same rule.
 // ---------------------------------------------------------------------------
 function barHtml(o: BrandOpts): string {
   const when = new Date(o.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -85,10 +86,12 @@ function barHtml(o: BrandOpts): string {
   const sessionLink = o.sessionShortId
     ? `<a class="__cc_sess" href="https://codecast.sh/conversation/${escAttr(o.sessionShortId)}" target="_blank" rel="noopener noreferrer" title="Open the session that published this (${escAttr(o.sessionShortId)})">${escAttr(o.sessionTitle || `by ${o.sessionShortId}`)}</a>`
     : "";
-  const commentsBtn = interactive
-    ? `<button id="__cc_cbtn" type="button" title="Comment on this page">${bubbleSvg}<span id="__cc_ccount">${o.commentCount || ""}</span></button>`
+  const commentsBtn = interactive && o.commentsEnabled !== false
+    ? `<button id="__cc_cbtn" type="button" title="Discuss this page">${bubbleSvg}<span id="__cc_ccount">${o.commentCount || ""}</span></button>`
     : "";
   const menuBtn = interactive ? `<button id="__cc_menu" type="button" title="More">${dotsSvg}</button>` : "";
+  const collapseSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 14-5-5-5 5"/></svg>`;
+  const hideBtn = `<button id="__cc_hide" type="button" title="Hide this bar">${collapseSvg}</button>`;
   const cfg = {
     metaUrl: o.metaUrl ?? "",
     apiBase: o.apiBase ?? "",
@@ -114,12 +117,16 @@ function barHtml(o: BrandOpts): string {
      artifact's measured background luminance) flips the whole palette so the
      bar reads as part of the page instead of a white strip over a dark one. */
   html { margin-top: 40px !important; }
-  #__cc_bar, .__cc_panel, #__cc_hint {
+  /* Minimized: the bar slides away and a small corner pill brings it back. */
+  html.__cc_min { margin-top: 0 !important; }
+  html.__cc_min #__cc_bar { transform: translateY(-100%); box-shadow: none; pointer-events: none; }
+  html.__cc_min #__cc_pill { display: inline-flex; }
+  #__cc_bar, .__cc_panel, #__cc_hint, #__cc_pill, #__cc_mlist {
     --cc-bg: rgba(253,252,250,.9); --cc-ink: #002b36; --cc-mut: #586e75; --cc-dim: rgba(0,43,54,.48);
     --cc-line: rgba(88,110,117,.22); --cc-hov: rgba(0,43,54,.06); --cc-card: #ffffff; --cc-soft: #faf9f7;
     --cc-inbd: rgba(0,43,54,.22); --cc-blue: #268bd2; --cc-green: #859900; --cc-coral: #e86c5d;
     --cc-shadow: rgba(0,43,54,.16); }
-  html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint {
+  html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint, html.__cc_dark #__cc_pill, html.__cc_dark #__cc_mlist {
     --cc-bg: rgba(0,43,54,.85); --cc-ink: #fdf6e3; --cc-mut: #93a1a1; --cc-dim: rgba(253,246,227,.45);
     --cc-line: rgba(147,161,161,.18); --cc-hov: rgba(147,161,161,.1); --cc-card: #08404e; --cc-soft: #073642;
     --cc-inbd: rgba(147,161,161,.32); --cc-blue: #268bd2; --cc-green: #859900;
@@ -132,7 +139,15 @@ function barHtml(o: BrandOpts): string {
     background: var(--cc-bg); color: var(--cc-mut);
     -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
     border-bottom: 1px solid var(--cc-line); box-shadow: 0 1px 8px rgba(0,0,0,.05);
-    text-align: left; }
+    text-align: left; transition: transform .22s ease; }
+  #__cc_pill { position: fixed; top: 8px; right: calc(8px + env(safe-area-inset-right)); z-index: 2147483647;
+    display: none; align-items: center; justify-content: center; width: 30px; height: 30px;
+    border: 1px solid var(--cc-line); border-radius: 999px; background: var(--cc-bg); color: var(--cc-ink);
+    -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
+    cursor: pointer; padding: 0; margin: 0; opacity: .55; transition: opacity .15s ease, transform .15s ease;
+    -webkit-tap-highlight-color: transparent; }
+  #__cc_pill:hover { opacity: 1; transform: scale(1.06); }
+  #__cc_pill svg { display: block; }
   #__cc_bar .__cc_brand { color: var(--cc-ink); text-decoration: none; display: inline-flex; align-items: center;
     opacity: .85; margin-right: 8px; }
   #__cc_bar .__cc_brand:hover { opacity: 1; }
@@ -158,9 +173,7 @@ function barHtml(o: BrandOpts): string {
   #__cc_bar #__cc_latest { color: var(--cc-blue); text-decoration: none; padding: 5px 8px; border-radius: 7px; white-space: nowrap;
     display: inline-flex; align-items: center; gap: 3px; }
   #__cc_bar #__cc_latest:hover { background: var(--cc-hov); }
-  #__cc_bar #__cc_ccount { background: rgba(232,108,93,.16); color: #c2543f; border-radius: 999px; padding: 2px 6px;
-    font-size: 10px; font-weight: 600; }
-  html.__cc_dark #__cc_bar #__cc_ccount { color: #f0937f; }
+  #__cc_bar #__cc_ccount { color: var(--cc-dim); font-size: 10px; font-weight: 600; }
   #__cc_bar #__cc_ccount:empty { display: none; }
   .__cc_panel { position: fixed; top: 46px; right: 10px; z-index: 2147483647; min-width: 272px; max-width: min(92vw, 400px);
     max-height: 72vh; overflow-y: auto; overscroll-behavior: contain;
@@ -206,9 +219,9 @@ function barHtml(o: BrandOpts): string {
     color: var(--cc-ink); background: var(--cc-card); outline: none; box-sizing: border-box; }
   .__cc_panel .__cc_in2::placeholder { color: var(--cc-dim); }
   .__cc_panel .__cc_in2:focus { border-color: var(--cc-coral); box-shadow: 0 0 0 3px rgba(232,108,93,.15); }
-  .__cc_panel .__cc_draft { margin: 6px 8px; border: 1px solid var(--cc-line); border-radius: 8px; padding: 8px; background: var(--cc-soft); }
+  .__cc_panel .__cc_draft { margin: 2px 8px 8px; padding: 0; }
   .__cc_panel .__cc_dtop { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .__cc_panel .__cc_dnum { width: 20px; height: 20px; border-radius: 50% 50% 50% 4px; background: var(--cc-coral); color: #ffffff; font-weight: 600;
+  .__cc_panel .__cc_dnum { width: 18px; height: 18px; border-radius: 50% 50% 50% 4px; background: var(--cc-coral); color: #ffffff; font-weight: 600;
     font-size: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
   .__cc_panel .__cc_dsnip { color: var(--cc-dim); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .__cc_panel .__cc_x { all: unset; cursor: pointer; padding: 2px 7px; border-radius: 6px; opacity: .5; font-size: 14px; }
@@ -220,13 +233,13 @@ function barHtml(o: BrandOpts): string {
   .__cc_panel .__cc_addrow { display: flex; gap: 6px; padding: 6px 8px; }
   .__cc_panel .__cc_who { padding: 2px 8px 6px; display: flex; }
   .__cc_panel .__cc_actions { display: flex; gap: 6px; margin: 2px 8px 6px; }
-  .__cc_panel .__cc_send { all: unset; cursor: pointer; flex: 1; text-align: center; padding: 9px 12px;
+  .__cc_panel .__cc_send { all: unset; cursor: pointer; flex: 1; text-align: center; padding: 8px 12px;
     border-radius: 8px; background: var(--cc-coral); color: #ffffff; font-weight: 600; -webkit-tap-highlight-color: transparent; }
   .__cc_panel .__cc_send:hover { background: #d85b4c; }
   .__cc_panel .__cc_send:disabled { opacity: .45; cursor: default; }
-  .__cc_panel .__cc_ghost { all: unset; cursor: pointer; text-align: center; padding: 9px 12px; border-radius: 8px;
-    border: 1px solid var(--cc-inbd); color: var(--cc-ink); font-weight: 500; -webkit-tap-highlight-color: transparent; }
-  .__cc_panel .__cc_ghost:hover { background: var(--cc-hov); }
+  .__cc_panel .__cc_ghost { all: unset; cursor: pointer; text-align: center; padding: 8px 12px; border-radius: 8px;
+    color: var(--cc-mut); -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_ghost:hover { background: var(--cc-hov); color: var(--cc-ink); }
   .__cc_panel .__cc_ghost:disabled { opacity: .45; cursor: default; }
   .__cc_panel .__cc_cerr { color: #c25446; padding: 0 8px 6px; }
   .__cc_panel .__cc_okwrap { text-align: center; padding: 22px 12px 26px; }
@@ -234,31 +247,125 @@ function barHtml(o: BrandOpts): string {
     color: var(--cc-green); font-size: 18px; line-height: 36px; }
   .__cc_panel .__cc_okt { font-weight: 600; color: var(--cc-ink); margin-bottom: 4px; }
   .__cc_panel .__cc_oks { color: var(--cc-dim); }
-  .__cc_panel .__cc_cmt { margin: 4px 8px 8px; padding: 8px; border: 1px solid var(--cc-line); border-radius: 8px; }
+  .__cc_panel .__cc_cmt { margin: 0 8px; padding: 9px 2px; border-top: 1px solid var(--cc-line); }
   .__cc_panel .__cc_cmeta { color: var(--cc-dim); margin-bottom: 2px; }
   .__cc_panel .__cc_ctext { color: var(--cc-ink); margin: 4px 0 8px; white-space: pre-wrap; word-break: break-word; }
-  /* Saved comments (everyone sees these; "pending" = not yet sent to the session) */
-  .__cc_panel .__cc_scmt { margin: 6px 8px; padding: 8px; border: 1px solid var(--cc-line); border-radius: 8px; cursor: default; }
-  .__cc_panel .__cc_scmt.__cc_hasloc { cursor: pointer; }
-  .__cc_panel .__cc_scmt.__cc_hasloc:hover { background: var(--cc-hov); }
-  .__cc_panel .__cc_scmt .__cc_ctext { margin: 4px 0 0; }
-  .__cc_panel .__cc_stag { border-radius: 999px; padding: 1px 7px; font-size: 10px; font-weight: 600; white-space: nowrap; }
-  .__cc_panel .__cc_stag.__cc_pend { background: rgba(192,122,40,.15); color: #c07a28; }
-  .__cc_panel .__cc_stag.__cc_sent { background: rgba(61,138,61,.13); color: var(--cc-green); }
-  .__cc_panel .__cc_pendrow { display: flex; align-items: center; gap: 8px; margin: 8px 8px 2px; padding: 7px 9px;
-    border-radius: 8px; background: rgba(192,122,40,.09); color: #c07a28; }
+  .__cc_panel .__cc_stag { font-size: 10px; font-weight: 600; white-space: nowrap; }
+  .__cc_panel .__cc_stag.__cc_pend { color: #c07a28; }
+  .__cc_panel .__cc_stag.__cc_sent { color: var(--cc-dim); }
+  /* Avatars (shared by the panel and the fixed mention layer). */
+  .__cc_panel .__cc_av, #__cc_mlist .__cc_av { width: 20px; height: 20px; border-radius: 50%; flex: none; object-fit: cover; display: block; }
+  .__cc_panel .__cc_avi, #__cc_mlist .__cc_avi { width: 20px; height: 20px; border-radius: 50%; flex: none; background: var(--cc-hov); color: var(--cc-mut);
+    font-size: 10px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; text-transform: uppercase; }
+  /* ------------------------------------------------------------------ */
+  /* Discussion panel: its own layout — sticky header, flush sections.  */
+  /* ------------------------------------------------------------------ */
+  #__cc_cpanel { padding: 0; min-width: 316px; max-width: min(92vw, 420px); }
+  #__cc_cpanel .__cc_phdr { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px;
+    padding: 11px 14px 10px; background: var(--cc-card); border-bottom: 1px solid var(--cc-line); border-radius: 12px 12px 0 0; }
+  #__cc_cpanel .__cc_phdr .__cc_pht { font-weight: 600; color: var(--cc-ink); font-size: 13px; letter-spacing: .01em; }
+  #__cc_cpanel .__cc_phdr .__cc_phn { color: var(--cc-dim); font-size: 10px; font-weight: 600; background: var(--cc-hov);
+    padding: 2px 7px; border-radius: 999px; }
+  #__cc_cpanel .__cc_meid { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px;
+    border: 1px solid var(--cc-line); border-radius: 999px; color: var(--cc-mut); font-size: 11px; max-width: 18ch; }
+  #__cc_cpanel .__cc_meid .__cc_mename { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #__cc_cpanel .__cc_meid .__cc_av, #__cc_cpanel .__cc_meid .__cc_avi { width: 16px; height: 16px; font-size: 8px; }
+  #__cc_cpanel a.__cc_signin { color: var(--cc-blue); cursor: pointer; font-size: 11px; padding: 4px 8px; border-radius: 7px; }
+  #__cc_cpanel a.__cc_signin:hover { background: var(--cc-hov); }
+  #__cc_cpanel .__cc_pbody { padding: 10px 10px 0; }
+  #__cc_cpanel .__cc_pbody > :last-child { margin-bottom: 10px; }
+  #__cc_cpanel .__cc_pbody > .__cc_threads:last-child { margin-bottom: 0; }
+  /* Sheet mode keeps the flush layout; the home-indicator inset rides on the
+     last row instead of panel padding. */
+  #__cc_cpanel.__cc_sheet { padding: 0; }
+  #__cc_cpanel.__cc_sheet .__cc_phdr { border-radius: 0; }
+  #__cc_cpanel.__cc_sheet .__cc_pbody > :last-child { margin-bottom: calc(14px + env(safe-area-inset-bottom)); }
+  #__cc_cpanel.__cc_sheet .__cc_pbody > .__cc_threads:last-child { margin-bottom: 0; }
+  #__cc_cpanel.__cc_sheet .__cc_thread:last-child { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+  #__cc_cpanel .__cc_empty { text-align: center; padding: 26px 18px 24px; color: var(--cc-dim); }
+  #__cc_cpanel .__cc_empty svg { opacity: .4; margin-bottom: 8px; }
+  #__cc_cpanel .__cc_empty .__cc_e1 { color: var(--cc-mut); font-weight: 600; margin-bottom: 3px; }
+  #__cc_cpanel .__cc_empty .__cc_e2 { font-size: 11px; }
+  /* Composer. One container (the panel) — interior structure comes from
+     whitespace and hairlines, never nested outlined boxes. The only "box" is
+     the input itself: a flat soft slab with no border. */
+  #__cc_cpanel .__cc_draft { margin: 0 0 10px; padding: 0; }
+  #__cc_cpanel .__cc_draft .__cc_dtop { margin-bottom: 5px; }
+  #__cc_cpanel .__cc_dlabel { color: var(--cc-dim); font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
+  #__cc_cpanel .__cc_ta, #__cc_cpanel .__cc_in2 { background: var(--cc-soft); border: none; border-radius: 8px;
+    padding: 8px 10px; box-shadow: none; }
+  html.__cc_dark #__cc_cpanel .__cc_ta, html.__cc_dark #__cc_cpanel .__cc_in2 { background: rgba(147,161,161,.08); }
+  #__cc_cpanel .__cc_ta { min-height: 52px; }
+  #__cc_cpanel .__cc_ta:focus, #__cc_cpanel .__cc_in2:focus { border: none;
+    box-shadow: inset 0 0 0 1.5px rgba(232,108,93,.38); }
+  #__cc_cpanel .__cc_addrow { display: flex; gap: 2px; padding: 0; margin-left: -7px; }
+  #__cc_cpanel .__cc_addrow .__cc_btn { display: inline-flex; align-items: center; gap: 6px; background: none; border: none;
+    border-radius: 7px; padding: 5px 9px; color: var(--cc-mut); font-size: 11px; }
+  #__cc_cpanel .__cc_addrow .__cc_btn:hover { color: var(--cc-ink); background: var(--cc-hov); filter: none; }
+  #__cc_cpanel .__cc_addrow .__cc_btn svg { opacity: .65; flex: none; }
+  #__cc_cpanel .__cc_asme { display: flex; align-items: center; gap: 6px; padding: 6px 1px 0; color: var(--cc-dim); font-size: 11px; }
+  #__cc_cpanel .__cc_asme .__cc_av, #__cc_cpanel .__cc_asme .__cc_avi { width: 15px; height: 15px; font-size: 8px; }
+  #__cc_cpanel .__cc_who { padding: 6px 0 0; display: flex; }
+  #__cc_cpanel .__cc_actions { display: flex; gap: 6px; margin: 8px 0 2px; }
+  #__cc_cpanel .__cc_cerr { padding: 4px 1px 0; }
+  #__cc_cpanel .__cc_cerr:empty { display: none; }
+  #__cc_cpanel .__cc_pendrow { margin: 10px 0 0; padding: 8px 1px 0; border-top: 1px solid var(--cc-line); font-size: 11px; }
+  /* Threads: avatar-column grid, replies on a connector line. */
+  #__cc_cpanel .__cc_threads { margin: 4px -10px -10px; }
+  #__cc_cpanel .__cc_thread { position: relative; padding: 10px 14px 9px; border-top: 1px solid var(--cc-line); }
+  #__cc_cpanel .__cc_thread:last-child { border-radius: 0 0 12px 12px; }
+  #__cc_cpanel .__cc_thread.__cc_sel { background: rgba(38,139,210,.07); }
+  #__cc_cpanel .__cc_thread.__cc_sel::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px;
+    border-radius: 2px; background: var(--cc-blue); }
+  #__cc_cpanel .__cc_cmt2 { display: grid; grid-template-columns: 22px 1fr auto; column-gap: 9px; align-items: start; }
+  #__cc_cpanel .__cc_cmt2 .__cc_av, #__cc_cpanel .__cc_cmt2 .__cc_avi { width: 22px; height: 22px; margin-top: 1px; }
+  #__cc_cpanel .__cc_cmhead { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding-top: 3px; }
+  #__cc_cpanel .__cc_cname { font-weight: 600; color: var(--cc-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #__cc_cpanel .__cc_vck { color: var(--cc-green); font-size: 10px; flex: none; }
+  #__cc_cpanel .__cc_ctime { color: var(--cc-dim); font-size: 10px; white-space: nowrap; flex: none; }
+  #__cc_cpanel .__cc_cbody { grid-column: 2 / 4; min-width: 0; }
+  #__cc_cpanel .__cc_ctext { margin: 3px 0 0; font-size: 12px; }
+  #__cc_cpanel .__cc_csnip { margin: 4px 0 1px; padding: 1px 0 1px 8px; border-left: 2px solid var(--cc-inbd);
+    color: var(--cc-dim); font-style: italic; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #__cc_cpanel .__cc_jump { all: unset; cursor: pointer; color: var(--cc-dim); flex: none; padding: 3px 5px; border-radius: 6px;
+    opacity: 0; transition: opacity .12s ease; margin-top: 1px; }
+  #__cc_cpanel .__cc_thread:hover .__cc_jump { opacity: .7; }
+  #__cc_cpanel .__cc_jump:hover { background: var(--cc-hov); color: var(--cc-blue); opacity: 1 !important; }
+  #__cc_cpanel .__cc_replies { margin: 6px 0 0 10px; padding-left: 19px; border-left: 2px solid var(--cc-line); }
+  #__cc_cpanel .__cc_reply { padding: 7px 0 0; }
+  #__cc_cpanel .__cc_reply .__cc_cmt2 { grid-template-columns: 18px 1fr auto; column-gap: 8px; }
+  #__cc_cpanel .__cc_reply .__cc_av, #__cc_cpanel .__cc_reply .__cc_avi { width: 18px; height: 18px; font-size: 9px; }
+  #__cc_cpanel .__cc_rbtn { all: unset; cursor: pointer; color: var(--cc-dim); font-size: 11px; padding: 3px 7px;
+    border-radius: 6px; margin: 5px 0 0 24px; opacity: .55; transition: opacity .12s ease; }
+  #__cc_cpanel .__cc_rwrap, #__cc_cpanel .__cc_rbtn { margin-left: 31px; }
+  #__cc_cpanel .__cc_thread:hover .__cc_rbtn { opacity: 1; }
+  #__cc_cpanel .__cc_rbtn:hover { background: var(--cc-hov); color: var(--cc-ink); }
+  #__cc_cpanel .__cc_rwrap { margin: 8px 0 2px 24px; padding: 0; }
+  #__cc_cpanel .__cc_rwrap .__cc_actions { margin: 6px 0 0; }
+  #__cc_cpanel .__cc_rwrap .__cc_who { padding: 0 0 6px; }
+  /* @mention autocomplete: a fixed top layer on <body>, immune to panel
+     scroll/stacking (the in-panel version lost z-order fights with buttons). */
+  #__cc_mlist { position: fixed; z-index: 2147483647; background: var(--cc-card); border: 1px solid var(--cc-line);
+    border-radius: 10px; box-shadow: 0 12px 32px var(--cc-shadow); padding: 4px; min-width: 224px; max-width: 320px;
+    max-height: 218px; overflow-y: auto; overscroll-behavior: contain;
+    font: 400 12px/1.45 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  #__cc_mlist .__cc_mrow { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px; cursor: pointer;
+    color: var(--cc-ink); }
+  #__cc_mlist .__cc_mrow .__cc_mh { color: var(--cc-dim); margin-left: auto; font-size: 10px; padding-left: 10px; flex: none; }
+  #__cc_mlist .__cc_mrow.__cc_mon { background: var(--cc-hov); }
+  .__cc_panel .__cc_pendrow { display: flex; align-items: center; gap: 8px; margin: 6px 8px 0; padding: 5px 2px;
+    color: var(--cc-dim); }
   .__cc_panel .__cc_pendrow .__cc_sendall { all: unset; cursor: pointer; padding: 4px 10px; border-radius: 7px;
-    background: var(--cc-coral); color: #ffffff; font-weight: 600; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
-  .__cc_panel .__cc_pendrow .__cc_sendall:hover { background: #d85b4c; }
+    color: var(--cc-coral); font-weight: 600; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_pendrow .__cc_sendall:hover { background: var(--cc-hov); }
   .__cc_panel .__cc_pendrow .__cc_sendall:disabled { opacity: .5; cursor: default; }
-  .__cc_panel .__cc_div { height: 1px; background: var(--cc-line); margin: 8px 8px 2px; }
   #__cc_pins { position: absolute; top: 0; left: 0; width: 100%; height: 0; overflow: visible; z-index: 2147483645; pointer-events: none; }
-  #__cc_pins .__cc_pin { position: absolute; transform: translate(-50%,-100%); width: 22px; height: 22px;
-    border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 11px/22px "JetBrains Mono", ui-monospace, Menlo, monospace;
-    text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,.25); pointer-events: auto; cursor: pointer;
+  #__cc_pins .__cc_pin { position: absolute; transform: translate(-50%,-100%); width: 18px; height: 18px;
+    border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 10px/18px "JetBrains Mono", ui-monospace, Menlo, monospace;
+    text-align: center; box-shadow: 0 1px 5px rgba(0,0,0,.2); pointer-events: auto; cursor: pointer;
     animation: __cc_pop .18s ease; }
-  #__cc_pins .__cc_pin.__cc_spin { width: 14px; height: 14px; background: #ffffff; border: 3px solid #e86c5d;
-    box-sizing: border-box; border-radius: 50% 50% 50% 3px; font-size: 0; opacity: .85; }
+  #__cc_pins .__cc_pin.__cc_spin { width: 12px; height: 12px; background: #ffffff; border: 2px solid #e86c5d;
+    box-sizing: border-box; border-radius: 50% 50% 50% 3px; font-size: 0; opacity: .6; }
   #__cc_pins .__cc_pin.__cc_spin:hover { opacity: 1; transform: translate(-50%,-100%) scale(1.25); }
   #__cc_pins .__cc_pin.__cc_flash { animation: __cc_pulse .9s ease 2; }
   @keyframes __cc_pop { from { transform: translate(-50%,-100%) scale(.6); opacity: 0; } }
@@ -310,7 +417,9 @@ function barHtml(o: BrandOpts): string {
   ${verChip}
   ${commentsBtn}
   ${menuBtn}
+  ${hideBtn}
 </div>
+<button id="__cc_pill" type="button" title="Show the codecast bar">${logoSvg(15)}</button>
 <div id="__cc_hist" class="__cc_panel" hidden></div>
 <div id="__cc_menupanel" class="__cc_panel" hidden></div>
 <div id="__cc_cpanel" class="__cc_panel" hidden></div>
@@ -321,6 +430,10 @@ function barHtml(o: BrandOpts): string {
   var ownerKey=frag.get("o")||"";
   var editKey=frag.get("ed")||"";
   var gateEmail=frag.get("em")||"";
+  // Signed-in commenter identity, minted by codecast.sh/pages/auth and carried
+  // back here in the fragment (the sandbox's opaque origin has no storage that
+  // survives navigation, so the fragment IS the session).
+  var idTok=frag.get("i")||"";
   // Opaque-origin storage: localStorage throws under the sandbox CSP, so every
   // touch is guarded and falls back to page-lifetime memory.
   var mem={};
@@ -358,10 +471,43 @@ function barHtml(o: BrandOpts): string {
     if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(u).then(done,fallback);}else{fallback();}
   };
   var flashLabel=function(btn,label,back){btn.textContent=label;setTimeout(function(){btn.textContent=back;},1400);};
+  // Minimize: bar slides away, the corner pill brings it back. Per-page
+  // persistence (best effort — the opaque origin usually has no storage).
+  var minKey="__cc_min:"+(CC.slug||location.pathname);
+  var setMin=function(on){
+    document.documentElement.classList.toggle("__cc_min",on);
+    sSet(minKey,on?"1":"");
+    if(on&&typeof closeAll==="function")closeAll();
+  };
+  var hideB=document.getElementById("__cc_hide");
+  var pillB=document.getElementById("__cc_pill");
+  if(hideB)hideB.addEventListener("click",function(e){e.stopPropagation();setMin(true);});
+  if(pillB)pillB.addEventListener("click",function(e){e.stopPropagation();setMin(false);});
+  if(sGet(minKey)==="1")setMin(true);
   if(!CC.metaUrl)return;
   var api=function(path,body){return fetch(CC.apiBase+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});};
   // View beacon — one per page load; carries the gate email when present.
   try{api("/cli/artifacts/view",{slug:CC.slug,email:gateEmail||undefined});}catch(e){}
+  // Resolve the identity token to a display identity (+ @mention roster for
+  // teammates). Server-authoritative: a bad token silently degrades the page
+  // back to anonymous commenting.
+  var me=null,meLoaded=!idTok;
+  if(idTok){
+    api("/cli/artifacts/identity",{slug:CC.slug,token:idTok}).then(function(r){
+      meLoaded=true;
+      if(r&&!r.error&&r.name){me=r;}else{idTok="";}
+      if(typeof renderC==="function"&&cpanel&&!cpanel.hidden)renderC();
+    },function(){meLoaded=true;});
+  }
+  var signinUrl=function(){
+    var origin="https://codecast.sh";
+    try{origin=new URL(CC.shareUrl).origin;}catch(e){}
+    return origin+"/pages/auth?slug="+encodeURIComponent(CC.slug)+"&back="+encodeURIComponent(location.href);
+  };
+  var avatarNode=function(x){
+    if(x&&x.avatar){var im=document.createElement("img");im.className="__cc_av";im.src=x.avatar;im.alt="";im.referrerPolicy="no-referrer";return im;}
+    return el("span","__cc_avi",((x&&x.name)||"?").slice(0,1));
+  };
   // Version links stay on whatever host serves this document. r is a
   // cache-buster (new URL → new cache key past the 60s edge/browser cache).
   // EVERY navigation must carry the gate tokens (k/e) and live flag forward,
@@ -450,7 +596,80 @@ function barHtml(o: BrandOpts): string {
   var cpanel=document.getElementById("__cc_cpanel");
   var drafts=[];
   var saved=[],savedLoaded=false;
+  // Inline reply composers: which thread is open, and per-thread draft text
+  // (kept out of the DOM so meta refreshes don't eat what's being typed).
+  var replyState={open:null,text:{}};
   var pendingCount=function(){return saved.filter(function(c){return !c.delivered;}).length;};
+  // @mention autocomplete on a textarea — teammates only (me.roster is empty
+  // for everyone else, which disables this entirely).
+  var wireMentions=function(ta){
+    if(!me||!me.roster||!me.roster.length)return;
+    // The list is a FIXED layer on <body>, never inside the scrolling panel:
+    // in-panel absolute positioning lost stacking fights with later siblings
+    // (the send button rendered on top) and clipped at the panel edge.
+    var list=null,items=[],sel=0,start=-1;
+    var close=function(){if(list){list.remove();list=null;}items=[];start=-1;};
+    var restyle=function(){if(!list)return;[].forEach.call(list.children,function(n,i){n.className="__cc_mrow"+(i===sel?" __cc_mon":"");});};
+    var pick=function(u){
+      var handle=u.username||u.name;
+      var v=ta.value,pos=ta.selectionStart;
+      ta.value=v.slice(0,start)+"@"+handle+" "+v.slice(pos);
+      var np=start+handle.length+2;
+      ta.setSelectionRange(np,np);
+      ta.dispatchEvent(new Event("input",{bubbles:false}));
+      close();ta.focus();
+    };
+    var place=function(){
+      if(!list)return;
+      var tr=ta.getBoundingClientRect();
+      var lw=Math.min(Math.max(224,tr.width),320);
+      var left=Math.min(Math.max(8,tr.left),window.innerWidth-lw-8);
+      list.style.left=left+"px";list.style.width=lw+"px";
+      // Below the textarea when it fits, above when it doesn't.
+      var lh=Math.min(list.scrollHeight+2,218);
+      if(tr.bottom+lh+12<window.innerHeight){list.style.top=(tr.bottom+4)+"px";list.style.bottom="auto";}
+      else{list.style.top="auto";list.style.bottom=(window.innerHeight-tr.top+4)+"px";}
+    };
+    var update=function(){
+      var pos=ta.selectionStart,vv=ta.value.slice(0,pos);
+      var m=vv.match(/@([A-Za-z0-9_.-]*)$/);
+      if(!m){close();return;}
+      start=pos-m[0].length;
+      var qq=m[1].toLowerCase();
+      var hits=me.roster.filter(function(u){
+        return (u.username||"").toLowerCase().indexOf(qq)===0||(u.name||"").toLowerCase().indexOf(qq)===0;
+      }).slice(0,6);
+      if(!hits.length){close();return;}
+      if(!list){
+        list=el("div",null);list.id="__cc_mlist";
+        list.addEventListener("click",function(e){e.stopPropagation();});
+        host().appendChild(list);
+      }
+      list.innerHTML="";items=hits;sel=0;
+      hits.forEach(function(u,i){
+        var r=el("div","__cc_mrow"+(i===0?" __cc_mon":""));
+        r.appendChild(avatarNode(u));
+        var nm2=el("span",null,u.name);nm2.style.overflow="hidden";nm2.style.textOverflow="ellipsis";nm2.style.whiteSpace="nowrap";
+        r.appendChild(nm2);
+        if(u.username)r.appendChild(el("span","__cc_mh","@"+u.username));
+        r.addEventListener("mousedown",function(e){e.preventDefault();pick(u);});
+        list.appendChild(r);
+      });
+      place();
+    };
+    ta.addEventListener("input",update);
+    ta.addEventListener("keydown",function(e){
+      if(!list)return;
+      if(e.key==="ArrowDown"){e.preventDefault();sel=(sel+1)%items.length;restyle();}
+      else if(e.key==="ArrowUp"){e.preventDefault();sel=(sel-1+items.length)%items.length;restyle();}
+      else if(e.key==="Enter"||e.key==="Tab"){e.preventDefault();pick(items[sel]);}
+      else if(e.key==="Escape"){e.stopPropagation();close();}
+    });
+    ta.addEventListener("blur",function(){setTimeout(close,150);});
+    // The anchor moves under panel scroll / window resize; keep up or fold.
+    cpanel.addEventListener("scroll",place);
+    window.addEventListener("resize",close);
+  };
   var parseAnchor=function(c){if(c.__a!==undefined)return c.__a;try{c.__a=c.anchor?JSON.parse(c.anchor):null;}catch(e){c.__a=null;}return c.__a;};
   // Where a saved comment's pin goes. Prefer the recorded page-fraction point
   // (exact if the content hasn't changed), then the element selector, then a
@@ -476,7 +695,7 @@ function barHtml(o: BrandOpts): string {
       p.style.left=s.p.x+"px";p.style.top=s.p.y+"px";
       p.title=s.c.author_name+": "+s.c.text.slice(0,80);
       p.setAttribute("data-cid",s.c.id);
-      p.addEventListener("click",function(e){e.stopPropagation();openC(null,s.c.id);});
+      p.addEventListener("click",function(e){e.stopPropagation();openC(null,s.c.id,true);});
       pinLayer.appendChild(p);
     });
     drafts.forEach(function(d,i){
@@ -495,7 +714,23 @@ function barHtml(o: BrandOpts): string {
     setCount();renderPins();
     if(cb)cb();
   });};
-  if(CC.comments>0)refreshSaved();
+  // ?c=<comment id> — a notification deep link: open the discussion with that
+  // comment's thread selected, and jump the page to its pin when it has one.
+  var focusCid=(new URLSearchParams(location.search)).get("c")||"";
+  if(focusCid){
+    refreshSaved(function(){
+      var target=null;saved.forEach(function(x){if(x.id===focusCid)target=x;});
+      var tid=target&&target.parent_id?target.parent_id:focusCid;
+      openC(null,tid,true);
+      var p=target?posFor(parseAnchor(target)):null;
+      if(!p){var top2=null;saved.forEach(function(x){if(x.id===tid)top2=x;});if(top2)p=posFor(parseAnchor(top2));}
+      if(p){
+        window.scrollTo({top:Math.max(0,p.y-140),behavior:"smooth"});
+        var pin=pinLayer&&pinLayer.querySelector('[data-cid="'+tid+'"]');
+        if(pin){pin.classList.remove("__cc_flash");void pin.offsetWidth;pin.classList.add("__cc_flash");}
+      }
+    });
+  }else if(CC.comments>0)refreshSaved();
   // Fraction-based pin positions depend on the laid-out document size.
   var rszT=null;
   window.addEventListener("resize",function(){clearTimeout(rszT);rszT=setTimeout(renderPins,150);});
@@ -536,12 +771,13 @@ function barHtml(o: BrandOpts): string {
   var syncSend=function(){
     var n=drafts.filter(function(d){return d.text.trim();}).length;
     var b=document.getElementById("__cc_sendbtn");
-    if(b){b.disabled=!n;b.textContent=n>1?("Send "+n+" to session"):"Send to session";}
+    if(b){b.disabled=!n;b.textContent=ownerKey?(n>1?"Send "+n+" to session":"Send to session"):(n>1?"Post "+n+" comments":"Comment");}
     var g=document.getElementById("__cc_savebtn");
-    if(g){g.disabled=!n;g.textContent="Save as pending";}
+    if(g){g.disabled=!n;}
   };
-  // deliver=true → straight to the author's session. deliver=false → stored
-  // as pending: on the page for every viewer, sent later via "Send all".
+  // deliver=false → post into the page's discussion. deliver=true is the
+  // owner's gesture (needs the #o= key; the server enforces it too): the
+  // batch goes into the publishing session as one message.
   var doSend=function(name,deliver){
     var ready=drafts.filter(function(d){return d.text.trim();});
     if(!ready.length)return;
@@ -551,9 +787,11 @@ function barHtml(o: BrandOpts): string {
     if(b){b.disabled=true;if(deliver)b.textContent="Sending…";}
     if(g){g.disabled=true;if(!deliver)g.textContent="Saving…";}
     sSet("__cc_name",name||"");
-    api("/cli/artifacts/comment",{slug:CC.slug,author_name:(name||"").trim()||"anonymous",
+    api("/cli/artifacts/comment",{slug:CC.slug,author_name:me?me.name:((name||"").trim()||"anonymous"),
       author_email:gateEmail||undefined,version:CC.version,
       deliver:deliver?undefined:false,
+      owner_key:ownerKey||undefined,
+      identity_token:idTok||undefined,
       comments:ready.map(function(d){var c={text:d.text.trim()};if(d.anchor)c.anchor=JSON.stringify(d.anchor);return c;})})
     .then(function(r){
       if(!r||r.error){if(errBox)errBox.textContent=(r&&r.error)||"Send failed — try again";syncSend();return;}
@@ -561,38 +799,70 @@ function barHtml(o: BrandOpts): string {
       cpanel.innerHTML="";
       var ok=el("div","__cc_okwrap");
       ok.appendChild(el("div","__cc_okmark","✓"));
-      ok.appendChild(el("div","__cc_okt",(deliver?"Sent ":"Saved ")+ready.length+(ready.length===1?" comment":" comments")));
+      ok.appendChild(el("div","__cc_okt",(deliver?"Sent ":"Posted ")+ready.length+(ready.length===1?" comment":" comments")));
       ok.appendChild(el("div","__cc_oks",deliver
-        ?(r.delivered?"Delivered to the author's session.":"Saved — the author will see them.")
-        :"Pending on this page — use \\u201CSend all\\u201D to deliver to the author's session."));
+        ?(r.delivered?"Delivered to your session.":"Posted — the session could not be reached, use \\u201CSend all\\u201D later.")
+        :"Now part of this page's discussion."));
       cpanel.appendChild(ok);
       refreshSaved(function(){setTimeout(function(){if(!cpanel.hidden)renderC();},1600);});
     },function(){if(errBox)errBox.textContent="Network error — your drafts are kept";syncSend();});
   };
-  // "Send all": flush every stored-but-unsent comment (any viewer's) to the
+  // "Send all" (owner-only): flush the discussion's unsent comments to the
   // session in one batch message.
   var sendAll=function(btn){
     btn.disabled=true;btn.textContent="Sending…";
-    api("/cli/artifacts/comment",{slug:CC.slug,deliver_pending:true})
+    api("/cli/artifacts/comment",{slug:CC.slug,deliver_pending:true,owner_key:ownerKey})
     .then(function(r){
       if(!r||r.error){btn.textContent="Failed";setTimeout(function(){if(!cpanel.hidden)renderC();},1600);return;}
       refreshSaved(function(){if(!cpanel.hidden)renderC();});
     },function(){btn.textContent="Network error";setTimeout(function(){if(!cpanel.hidden)renderC();},1600);});
   };
-  var renderC=function(focusIdx,scrollToCid){
+  var pinSvg='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>';
+  var noteSvg='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>';
+  var jumpSvg='<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>';
+  var bigBubbleSvg='<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+  var iconBtn=function(cls,svg,label){var b=el("button",cls);b.type="button";b.innerHTML=svg;b.appendChild(document.createTextNode(label));return b;};
+  // renderC(focusIdx, scrollToCid, highlightCid): focusIdx focuses a draft's
+  // textarea; scrollToCid scrolls a comment into view; highlightCid paints the
+  // selected state (deep links and pin jumps — NOT reply-opens).
+  var renderC=function(focusIdx,scrollToCid,highlightCid){
     cpanel.innerHTML="";
-    var head=el("div","__cc_ph");
-    head.appendChild(el("span","__cc_pht","Comments"));
+    var head=el("div","__cc_phdr");
+    head.appendChild(el("span","__cc_pht","Discussion"));
     if(saved.length>0)head.appendChild(el("span","__cc_phn",String(saved.length)));
+    head.appendChild(el("span","__cc_sp"));
+    if(me){
+      var mh=el("span","__cc_meid");mh.title="Commenting as "+me.name;
+      mh.appendChild(avatarNode(me));
+      mh.appendChild(el("span","__cc_mename",me.name.split(" ")[0]));
+      head.appendChild(mh);
+    }else if(meLoaded){
+      var sa=document.createElement("a");sa.className="__cc_signin";sa.href=signinUrl();
+      sa.textContent="Sign in";sa.title="Comment with your codecast profile \\u2014 hops to codecast.sh and comes right back";
+      head.appendChild(sa);
+    }
     cpanel.appendChild(head);
+    var body=el("div","__cc_pbody");
+    cpanel.appendChild(body);
     if(!drafts.length&&!saved.length){
-      cpanel.appendChild(el("div","__cc_note","Pin notes anywhere on the page (or select text first). Save them as pending, or send them straight to the author's session."));
+      var em=el("div","__cc_empty");
+      var ei=el("div");ei.innerHTML=bigBubbleSvg;em.appendChild(ei);
+      em.appendChild(el("div","__cc_e1","No comments yet"));
+      em.appendChild(el("div","__cc_e2","Pin a note on the page, or select text to comment on it."));
+      body.appendChild(em);
     }
     drafts.forEach(function(d,i){
       var card=el("div","__cc_draft");card.setAttribute("data-i",String(i));
       var top=el("div","__cc_dtop");
-      top.appendChild(el("span","__cc_dnum",d.px!=null?String(i+1):"•"));
-      if(d.anchor&&d.anchor.snippet)top.appendChild(el("span","__cc_dsnip","\\u201C"+d.anchor.snippet.slice(0,60)+(d.anchor.snippet.length>60?"…":"")+"\\u201D"));
+      if(d.px!=null){
+        top.appendChild(el("span","__cc_dnum",String(i+1)));
+        if(d.anchor&&d.anchor.snippet)top.appendChild(el("span","__cc_dsnip","\\u201C"+d.anchor.snippet.slice(0,60)+(d.anchor.snippet.length>60?"…":"")+"\\u201D"));
+        else top.appendChild(el("span","__cc_dlabel","Pinned"));
+      }else if(d.anchor&&d.anchor.snippet){
+        top.appendChild(el("span","__cc_dsnip","\\u201C"+d.anchor.snippet.slice(0,60)+(d.anchor.snippet.length>60?"…":"")+"\\u201D"));
+      }else{
+        top.appendChild(el("span","__cc_dlabel","Note"));
+      }
       top.appendChild(el("span","__cc_sp"));
       var rm=el("button","__cc_x","×");rm.type="button";rm.title="Remove this draft";
       rm.addEventListener("click",function(){drafts.splice(i,1);renderPins();renderC();});
@@ -600,78 +870,185 @@ function barHtml(o: BrandOpts): string {
       card.appendChild(top);
       var ta=document.createElement("textarea");ta.className="__cc_ta";ta.placeholder="Write your comment…";ta.value=d.text;ta.rows=2;
       ta.addEventListener("input",function(){d.text=ta.value;syncSend();});
+      wireMentions(ta);
       card.appendChild(ta);
-      cpanel.appendChild(card);
+      body.appendChild(card);
     });
     var addrow=el("div","__cc_addrow");
-    var pinB=el("button","__cc_btn","+ Pin on page");pinB.type="button";
+    var pinB=iconBtn("__cc_btn",pinSvg,"Pin on page");
+    pinB.title="Tap a spot on the page and comment on it";
     pinB.addEventListener("click",function(){enterPin();});
-    var genB=el("button","__cc_btn","+ General note");genB.type="button";
+    var genB=iconBtn("__cc_btn",noteSvg,"General note");
+    genB.title="A comment about the whole page";
     genB.addEventListener("click",function(){drafts.push({text:"",anchor:null,px:null,py:null});renderC(drafts.length-1);});
     addrow.appendChild(pinB);addrow.appendChild(genB);
-    cpanel.appendChild(addrow);
+    body.appendChild(addrow);
     if(drafts.length){
-      var who=el("div","__cc_who");
-      var nm=document.createElement("input");nm.type="text";nm.className="__cc_in2";nm.placeholder="Your name";
-      nm.value=sGet("__cc_name")||(gateEmail?gateEmail.split("@")[0]:"");
-      nm.addEventListener("input",function(){sSet("__cc_name",nm.value);});
-      who.appendChild(nm);cpanel.appendChild(who);
-      cpanel.appendChild(el("div","__cc_cerr",""));
+      var nm={value:sGet("__cc_name")||(gateEmail?gateEmail.split("@")[0]:"")};
+      if(me){
+        // Verified identity: comments post under the account's name/avatar.
+        var as=el("div","__cc_asme");
+        as.appendChild(avatarNode(me));
+        as.appendChild(el("span",null,"Commenting as "+me.name));
+        body.appendChild(as);
+      }else{
+        var who=el("div","__cc_who");
+        var nmi=document.createElement("input");nmi.type="text";nmi.className="__cc_in2";nmi.placeholder="Your name";
+        nmi.value=nm.value;
+        nmi.addEventListener("input",function(){nm.value=nmi.value;sSet("__cc_name",nmi.value);});
+        who.appendChild(nmi);body.appendChild(who);
+      }
+      body.appendChild(el("div","__cc_cerr",""));
       var actions=el("div","__cc_actions");
-      var save=el("button","__cc_ghost","Save as pending");save.type="button";save.id="__cc_savebtn";
-      save.title="Keep on this page without messaging the author's session";
-      save.addEventListener("click",function(){doSend(nm.value,false);});
-      var send=el("button","__cc_send","Send to session");send.type="button";send.id="__cc_sendbtn";
-      send.title="Deliver to the author's session now";
-      send.addEventListener("click",function(){doSend(nm.value,true);});
-      actions.appendChild(save);actions.appendChild(send);
-      cpanel.appendChild(actions);
+      if(ownerKey){
+        // Owner: the primary gesture is pushing the batch into the session;
+        // posting to the discussion only is the quiet alternative.
+        var save=el("button","__cc_ghost","Post without sending");save.type="button";save.id="__cc_savebtn";
+        save.title="Add to the discussion without messaging your session";
+        save.addEventListener("click",function(){doSend(nm.value,false);});
+        var send=el("button","__cc_send","Send to session");send.type="button";send.id="__cc_sendbtn";
+        send.title="Deliver to your session now";
+        send.addEventListener("click",function(){doSend(nm.value,true);});
+        actions.appendChild(save);actions.appendChild(send);
+      }else{
+        // Viewers post into the discussion; only the owner can message the
+        // session (the server enforces this regardless of the request).
+        var post=el("button","__cc_send","Comment");post.type="button";post.id="__cc_sendbtn";
+        post.title="Post to this page's discussion";
+        post.addEventListener("click",function(){doSend(nm.value,false);});
+        actions.appendChild(post);
+      }
+      body.appendChild(actions);
     }
-    // Saved comments — pending first as a call to action, then the list.
+    // Owner call to action: comments not yet flushed into the session.
     var pend=pendingCount();
-    if(pend>0){
+    if(pend>0&&ownerKey){
       var pr=el("div","__cc_pendrow");
-      pr.appendChild(el("span",null,pend+" pending — not sent yet"));
+      pr.style.display="flex";pr.style.alignItems="center";pr.style.gap="8px";pr.style.color="var(--cc-dim)";
+      pr.appendChild(el("span",null,pend+" not in your session yet"));
       pr.appendChild(el("span","__cc_sp"));
-      var sa=el("button","__cc_sendall","Send all");sa.type="button";
-      sa.title="Deliver every pending comment to the author's session as one batch";
-      sa.addEventListener("click",function(){sendAll(sa);});
-      pr.appendChild(sa);
-      cpanel.appendChild(pr);
+      var sa2=el("button","__cc_sendall","Send all");sa2.type="button";
+      sa2.title="Deliver every unsent comment to your session as one batch";
+      sa2.addEventListener("click",function(){sendAll(sa2);});
+      pr.appendChild(sa2);
+      body.appendChild(pr);
     }
     if(saved.length){
-      if(drafts.length||pend>0)cpanel.appendChild(el("div","__cc_div",""));
-      saved.slice().reverse().forEach(function(c){
-        var an=parseAnchor(c);
-        var hasLoc=!!posFor(an);
-        var card=el("div","__cc_scmt"+(hasLoc?" __cc_hasloc":""));
-        card.setAttribute("data-cid",c.id);
-        if(hasLoc)card.title="Jump to this comment's spot on the page";
-        var top=el("div","__cc_dtop");
-        top.appendChild(el("span","__cc_cmeta",c.author_name+" · "+rel(c.created_at)));
-        top.appendChild(el("span","__cc_sp"));
-        top.appendChild(el("span","__cc_stag "+(c.delivered?"__cc_sent":"__cc_pend"),c.delivered?"sent":"pending"));
-        card.appendChild(top);
-        if(an&&an.snippet)card.appendChild(el("div","__cc_dsnip","\\u201C"+String(an.snippet).slice(0,60)+(String(an.snippet).length>60?"…":"")+"\\u201D"));
-        card.appendChild(el("div","__cc_ctext",c.text));
-        if(hasLoc)card.addEventListener("click",function(){
-          var p=posFor(parseAnchor(c));
-          if(p)window.scrollTo({top:Math.max(0,p.y-140),behavior:"smooth"});
-          var pin=pinLayer&&pinLayer.querySelector('[data-cid="'+c.id+'"]');
-          if(pin){pin.classList.remove("__cc_flash");void pin.offsetWidth;pin.classList.add("__cc_flash");}
-        });
-        cpanel.appendChild(card);
+      // Threads: top-level comments newest-first, replies chronological
+      // under their comment. A reply whose thread got resolved away renders
+      // as its own top-level row instead of vanishing.
+      var topIds={};
+      saved.forEach(function(c){if(!c.parent_id)topIds[c.id]=1;});
+      var tops=[],repl={};
+      saved.forEach(function(c){
+        if(c.parent_id&&topIds[c.parent_id]){(repl[c.parent_id]=repl[c.parent_id]||[]).push(c);}
+        else tops.push(c);
       });
+      var jumpTo=function(c){
+        var p=posFor(parseAnchor(c));
+        if(p)window.scrollTo({top:Math.max(0,p.y-140),behavior:"smooth"});
+        var pin=pinLayer&&pinLayer.querySelector('[data-cid="'+c.id+'"]');
+        if(pin){pin.classList.remove("__cc_flash");void pin.offsetWidth;pin.classList.add("__cc_flash");}
+      };
+      // One comment (or reply) as an avatar-column grid row.
+      var cmtRow=function(c,isReply){
+        var row=el("div","__cc_cmt2");
+        row.appendChild(avatarNode({name:c.author_name,avatar:c.author_avatar}));
+        var hd=el("div","__cc_cmhead");
+        hd.appendChild(el("span","__cc_cname",c.author_name));
+        if(c.verified){var ck=el("span","__cc_vck","\\u2713");ck.title="Signed-in codecast user";hd.appendChild(ck);}
+        hd.appendChild(el("span","__cc_ctime",rel(c.created_at)));
+        // Delivery state is session bookkeeping — meaningful to the owner,
+        // noise to everyone else.
+        if(ownerKey&&!c.delivered)hd.appendChild(el("span","__cc_stag __cc_pend","unsent"));
+        row.appendChild(hd);
+        if(!isReply&&posFor(parseAnchor(c))){
+          var jb=el("button","__cc_jump");jb.type="button";jb.innerHTML=jumpSvg;
+          jb.title="Jump to this comment's spot on the page";
+          jb.addEventListener("click",function(e){e.stopPropagation();jumpTo(c);});
+          row.appendChild(jb);
+        }
+        var bd=el("div","__cc_cbody");
+        var an=parseAnchor(c);
+        if(an&&an.snippet)bd.appendChild(el("div","__cc_csnip","\\u201C"+String(an.snippet).slice(0,72)+(String(an.snippet).length>72?"…":"")+"\\u201D"));
+        bd.appendChild(el("div","__cc_ctext",c.text));
+        row.appendChild(bd);
+        return row;
+      };
+      var replyComposer=function(tid){
+        var wrap=el("div","__cc_rwrap");
+        if(!me){
+          var rw=el("div","__cc_who");
+          var rn=document.createElement("input");rn.type="text";rn.className="__cc_in2";rn.placeholder="Your name";
+          rn.value=sGet("__cc_name")||(gateEmail?gateEmail.split("@")[0]:"");
+          rn.addEventListener("input",function(){sSet("__cc_name",rn.value);});
+          rw.appendChild(rn);wrap.appendChild(rw);
+        }
+        var ta=document.createElement("textarea");ta.className="__cc_ta";ta.rows=2;ta.placeholder="Reply\\u2026";
+        ta.value=replyState.text[tid]||"";
+        ta.addEventListener("input",function(){replyState.text[tid]=ta.value;});
+        wireMentions(ta);
+        wrap.appendChild(ta);
+        var acts=el("div","__cc_actions");
+        var cx=el("button","__cc_ghost","Cancel");cx.type="button";
+        cx.addEventListener("click",function(){replyState.open=null;renderC();});
+        var rb=el("button","__cc_send","Reply");rb.type="button";
+        rb.addEventListener("click",function(){
+          var txt=(replyState.text[tid]||"").trim();
+          if(!txt)return;
+          rb.disabled=true;rb.textContent="Posting\\u2026";
+          api("/cli/artifacts/comment",{slug:CC.slug,
+            author_name:me?me.name:(sGet("__cc_name")||"anonymous"),
+            author_email:gateEmail||undefined,version:CC.version,
+            deliver:false,owner_key:ownerKey||undefined,identity_token:idTok||undefined,
+            parent_id:tid,comments:[{text:txt}]})
+          .then(function(r){
+            if(!r||r.error){rb.disabled=false;rb.textContent="Reply";return;}
+            replyState.open=null;delete replyState.text[tid];
+            refreshSaved(function(){if(!cpanel.hidden)renderC(null,tid);});
+          },function(){rb.disabled=false;rb.textContent="Reply";});
+        });
+        acts.appendChild(cx);acts.appendChild(rb);
+        wrap.appendChild(acts);
+        return wrap;
+      };
+      var threads=el("div","__cc_threads");
+      tops.slice().reverse().forEach(function(c){
+        var card=el("div","__cc_thread"+(highlightCid===c.id?" __cc_sel":""));
+        card.setAttribute("data-cid",c.id);
+        card.appendChild(cmtRow(c,false));
+        var kids=repl[c.id]||[];
+        if(kids.length){
+          var rlist=el("div","__cc_replies");
+          kids.sort(function(a,b){return a.created_at-b.created_at;}).forEach(function(k){
+            var rc=el("div","__cc_reply");
+            rc.setAttribute("data-cid",k.id);
+            rc.appendChild(cmtRow(k,true));
+            rlist.appendChild(rc);
+          });
+          card.appendChild(rlist);
+        }
+        if(replyState.open===c.id){
+          card.appendChild(replyComposer(c.id));
+        }else{
+          var rbn=el("button","__cc_rbtn","Reply");rbn.type="button";
+          rbn.addEventListener("click",function(e){e.stopPropagation();replyState.open=c.id;renderC(null,c.id);
+            var t2=cpanel.querySelector('[data-cid="'+c.id+'"] textarea');if(t2)t2.focus();});
+          card.appendChild(rbn);
+        }
+        threads.appendChild(card);
+      });
+      body.appendChild(threads);
     }
     syncSend();
     if(focusIdx!=null){var t=cpanel.querySelector('[data-i="'+focusIdx+'"] textarea');if(t)t.focus();}
     if(scrollToCid){var sc=cpanel.querySelector('[data-cid="'+scrollToCid+'"]');if(sc)sc.scrollIntoView({block:"nearest"});}
   };
-  var openC=function(focusIdx,scrollToCid){
-    show(cpanel);renderC(focusIdx,scrollToCid);
+  var openC=function(focusIdx,scrollToCid,highlight){
+    show(cpanel);renderC(focusIdx,scrollToCid,highlight?scrollToCid:null);
     // First open: the saved list may not be loaded yet (count of 0 skips the
     // boot fetch). Refresh, then re-render only if nothing is being typed.
-    if(!savedLoaded)refreshSaved(function(){if(!cpanel.hidden&&!drafts.length)renderC(null,scrollToCid);});
+    if(!savedLoaded)refreshSaved(function(){if(!cpanel.hidden&&!drafts.length)renderC(null,scrollToCid,highlight?scrollToCid:null);});
   };
   if(cbtn&&cpanel){
     cbtn.addEventListener("click",function(e){
@@ -755,6 +1132,26 @@ function barHtml(o: BrandOpts): string {
     tg.addEventListener("click",function(){tg.disabled=true;mset({email_gate:!ac.email_gate});});
     eg.appendChild(tg);
     mgr.appendChild(eg);
+    if(j.session_short_id){
+      var sl=el("div","__cc_kv");
+      sl.appendChild(el("span","__cc_k","Session link"));
+      sl.appendChild(el("span","__cc_v"+(ac.show_session?" __cc_on":""),ac.show_session?"shown":"hidden"));
+      sl.appendChild(el("span","__cc_sp"));
+      var sb=el("button","__cc_btn",ac.show_session?"Hide":"Show");sb.type="button";
+      sb.title=ac.show_session?"Remove the link to your session from the page":"Let viewers open the session that published this page";
+      sb.addEventListener("click",function(){sb.disabled=true;mset({show_session:!ac.show_session});});
+      sl.appendChild(sb);
+      mgr.appendChild(sl);
+    }
+    var co=el("div","__cc_kv");
+    co.appendChild(el("span","__cc_k","Comments"));
+    co.appendChild(el("span","__cc_v"+(ac.comments_enabled?" __cc_on":""),ac.comments_enabled?"on":"off"));
+    co.appendChild(el("span","__cc_sp"));
+    var cb2=el("button","__cc_btn"+(ac.comments_enabled?" __cc_danger":""),ac.comments_enabled?"Turn off":"Turn on");cb2.type="button";
+    cb2.title=ac.comments_enabled?"Viewers can no longer comment; the existing discussion is hidden":"Let viewers discuss this page";
+    cb2.addEventListener("click",function(){cb2.disabled=true;mset({comments:!ac.comments_enabled});});
+    co.appendChild(cb2);
+    mgr.appendChild(co);
     var ex=el("div","__cc_kv");
     ex.appendChild(el("span","__cc_k","Expires"));
     ex.appendChild(el("span","__cc_v",ac.expires_at?inFmt(ac.expires_at):"never"));
@@ -799,7 +1196,7 @@ function barHtml(o: BrandOpts): string {
       mgr.appendChild(el("div","__cc_h2","Open comments ("+openC2.length+")"));
       openC2.forEach(function(c){
         var row=el("div","__cc_cmt");
-        row.appendChild(el("div","__cc_cmeta",c.author_name+(c.author_email?" <"+c.author_email+">":"")+" · v"+c.version+" · "+rel(c.created_at)));
+        row.appendChild(el("div","__cc_cmeta",c.author_name+(c.verified?" \\u2713":"")+(c.author_email?" <"+c.author_email+">":"")+" · v"+c.version+" · "+rel(c.created_at)));
         var an=null;try{an=c.anchor?JSON.parse(c.anchor):null;}catch(e){}
         if(an&&an.snippet)row.appendChild(el("div","__cc_dsnip","\\u201C"+String(an.snippet).slice(0,80)+"\\u201D"));
         row.appendChild(el("div","__cc_ctext",c.text));
