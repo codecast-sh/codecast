@@ -89,6 +89,8 @@ function barHtml(o: BrandOpts): string {
     ? `<button id="__cc_cbtn" type="button" title="Comment on this page">${bubbleSvg}<span id="__cc_ccount">${o.commentCount || ""}</span></button>`
     : "";
   const menuBtn = interactive ? `<button id="__cc_menu" type="button" title="More">${dotsSvg}</button>` : "";
+  const collapseSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 14-5-5-5 5"/></svg>`;
+  const hideBtn = `<button id="__cc_hide" type="button" title="Hide this bar">${collapseSvg}</button>`;
   const cfg = {
     metaUrl: o.metaUrl ?? "",
     apiBase: o.apiBase ?? "",
@@ -114,12 +116,16 @@ function barHtml(o: BrandOpts): string {
      artifact's measured background luminance) flips the whole palette so the
      bar reads as part of the page instead of a white strip over a dark one. */
   html { margin-top: 40px !important; }
-  #__cc_bar, .__cc_panel, #__cc_hint {
+  /* Minimized: the bar slides away and a small corner pill brings it back. */
+  html.__cc_min { margin-top: 0 !important; }
+  html.__cc_min #__cc_bar { transform: translateY(-100%); box-shadow: none; pointer-events: none; }
+  html.__cc_min #__cc_pill { display: inline-flex; }
+  #__cc_bar, .__cc_panel, #__cc_hint, #__cc_pill {
     --cc-bg: rgba(253,252,250,.9); --cc-ink: #002b36; --cc-mut: #586e75; --cc-dim: rgba(0,43,54,.48);
     --cc-line: rgba(88,110,117,.22); --cc-hov: rgba(0,43,54,.06); --cc-card: #ffffff; --cc-soft: #faf9f7;
     --cc-inbd: rgba(0,43,54,.22); --cc-blue: #268bd2; --cc-green: #859900; --cc-coral: #e86c5d;
     --cc-shadow: rgba(0,43,54,.16); }
-  html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint {
+  html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint, html.__cc_dark #__cc_pill {
     --cc-bg: rgba(0,43,54,.85); --cc-ink: #fdf6e3; --cc-mut: #93a1a1; --cc-dim: rgba(253,246,227,.45);
     --cc-line: rgba(147,161,161,.18); --cc-hov: rgba(147,161,161,.1); --cc-card: #08404e; --cc-soft: #073642;
     --cc-inbd: rgba(147,161,161,.32); --cc-blue: #268bd2; --cc-green: #859900;
@@ -132,7 +138,15 @@ function barHtml(o: BrandOpts): string {
     background: var(--cc-bg); color: var(--cc-mut);
     -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
     border-bottom: 1px solid var(--cc-line); box-shadow: 0 1px 8px rgba(0,0,0,.05);
-    text-align: left; }
+    text-align: left; transition: transform .22s ease; }
+  #__cc_pill { position: fixed; top: 8px; right: calc(8px + env(safe-area-inset-right)); z-index: 2147483647;
+    display: none; align-items: center; justify-content: center; width: 30px; height: 30px;
+    border: 1px solid var(--cc-line); border-radius: 999px; background: var(--cc-bg); color: var(--cc-ink);
+    -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
+    cursor: pointer; padding: 0; margin: 0; opacity: .55; transition: opacity .15s ease, transform .15s ease;
+    -webkit-tap-highlight-color: transparent; }
+  #__cc_pill:hover { opacity: 1; transform: scale(1.06); }
+  #__cc_pill svg { display: block; }
   #__cc_bar .__cc_brand { color: var(--cc-ink); text-decoration: none; display: inline-flex; align-items: center;
     opacity: .85; margin-right: 8px; }
   #__cc_bar .__cc_brand:hover { opacity: 1; }
@@ -158,9 +172,7 @@ function barHtml(o: BrandOpts): string {
   #__cc_bar #__cc_latest { color: var(--cc-blue); text-decoration: none; padding: 5px 8px; border-radius: 7px; white-space: nowrap;
     display: inline-flex; align-items: center; gap: 3px; }
   #__cc_bar #__cc_latest:hover { background: var(--cc-hov); }
-  #__cc_bar #__cc_ccount { background: rgba(232,108,93,.16); color: #c2543f; border-radius: 999px; padding: 2px 6px;
-    font-size: 10px; font-weight: 600; }
-  html.__cc_dark #__cc_bar #__cc_ccount { color: #f0937f; }
+  #__cc_bar #__cc_ccount { color: var(--cc-dim); font-size: 10px; font-weight: 600; }
   #__cc_bar #__cc_ccount:empty { display: none; }
   .__cc_panel { position: fixed; top: 46px; right: 10px; z-index: 2147483647; min-width: 272px; max-width: min(92vw, 400px);
     max-height: 72vh; overflow-y: auto; overscroll-behavior: contain;
@@ -206,9 +218,9 @@ function barHtml(o: BrandOpts): string {
     color: var(--cc-ink); background: var(--cc-card); outline: none; box-sizing: border-box; }
   .__cc_panel .__cc_in2::placeholder { color: var(--cc-dim); }
   .__cc_panel .__cc_in2:focus { border-color: var(--cc-coral); box-shadow: 0 0 0 3px rgba(232,108,93,.15); }
-  .__cc_panel .__cc_draft { margin: 6px 8px; border: 1px solid var(--cc-line); border-radius: 8px; padding: 8px; background: var(--cc-soft); }
+  .__cc_panel .__cc_draft { margin: 6px 8px; border: 1px solid var(--cc-line); border-radius: 8px; padding: 8px; }
   .__cc_panel .__cc_dtop { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .__cc_panel .__cc_dnum { width: 20px; height: 20px; border-radius: 50% 50% 50% 4px; background: var(--cc-coral); color: #ffffff; font-weight: 600;
+  .__cc_panel .__cc_dnum { width: 18px; height: 18px; border-radius: 50% 50% 50% 4px; background: var(--cc-coral); color: #ffffff; font-weight: 600;
     font-size: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
   .__cc_panel .__cc_dsnip { color: var(--cc-dim); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .__cc_panel .__cc_x { all: unset; cursor: pointer; padding: 2px 7px; border-radius: 6px; opacity: .5; font-size: 14px; }
@@ -220,13 +232,13 @@ function barHtml(o: BrandOpts): string {
   .__cc_panel .__cc_addrow { display: flex; gap: 6px; padding: 6px 8px; }
   .__cc_panel .__cc_who { padding: 2px 8px 6px; display: flex; }
   .__cc_panel .__cc_actions { display: flex; gap: 6px; margin: 2px 8px 6px; }
-  .__cc_panel .__cc_send { all: unset; cursor: pointer; flex: 1; text-align: center; padding: 9px 12px;
+  .__cc_panel .__cc_send { all: unset; cursor: pointer; flex: 1; text-align: center; padding: 8px 12px;
     border-radius: 8px; background: var(--cc-coral); color: #ffffff; font-weight: 600; -webkit-tap-highlight-color: transparent; }
   .__cc_panel .__cc_send:hover { background: #d85b4c; }
   .__cc_panel .__cc_send:disabled { opacity: .45; cursor: default; }
-  .__cc_panel .__cc_ghost { all: unset; cursor: pointer; text-align: center; padding: 9px 12px; border-radius: 8px;
-    border: 1px solid var(--cc-inbd); color: var(--cc-ink); font-weight: 500; -webkit-tap-highlight-color: transparent; }
-  .__cc_panel .__cc_ghost:hover { background: var(--cc-hov); }
+  .__cc_panel .__cc_ghost { all: unset; cursor: pointer; text-align: center; padding: 8px 12px; border-radius: 8px;
+    color: var(--cc-mut); -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_ghost:hover { background: var(--cc-hov); color: var(--cc-ink); }
   .__cc_panel .__cc_ghost:disabled { opacity: .45; cursor: default; }
   .__cc_panel .__cc_cerr { color: #c25446; padding: 0 8px 6px; }
   .__cc_panel .__cc_okwrap { text-align: center; padding: 22px 12px 26px; }
@@ -242,23 +254,23 @@ function barHtml(o: BrandOpts): string {
   .__cc_panel .__cc_scmt.__cc_hasloc { cursor: pointer; }
   .__cc_panel .__cc_scmt.__cc_hasloc:hover { background: var(--cc-hov); }
   .__cc_panel .__cc_scmt .__cc_ctext { margin: 4px 0 0; }
-  .__cc_panel .__cc_stag { border-radius: 999px; padding: 1px 7px; font-size: 10px; font-weight: 600; white-space: nowrap; }
-  .__cc_panel .__cc_stag.__cc_pend { background: rgba(192,122,40,.15); color: #c07a28; }
-  .__cc_panel .__cc_stag.__cc_sent { background: rgba(61,138,61,.13); color: var(--cc-green); }
-  .__cc_panel .__cc_pendrow { display: flex; align-items: center; gap: 8px; margin: 8px 8px 2px; padding: 7px 9px;
-    border-radius: 8px; background: rgba(192,122,40,.09); color: #c07a28; }
+  .__cc_panel .__cc_stag { font-size: 10px; font-weight: 600; white-space: nowrap; }
+  .__cc_panel .__cc_stag.__cc_pend { color: #c07a28; }
+  .__cc_panel .__cc_stag.__cc_sent { color: var(--cc-dim); }
+  .__cc_panel .__cc_pendrow { display: flex; align-items: center; gap: 8px; margin: 8px 8px 2px; padding: 6px 9px;
+    border-radius: 8px; background: var(--cc-soft); color: var(--cc-mut); }
   .__cc_panel .__cc_pendrow .__cc_sendall { all: unset; cursor: pointer; padding: 4px 10px; border-radius: 7px;
-    background: var(--cc-coral); color: #ffffff; font-weight: 600; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
-  .__cc_panel .__cc_pendrow .__cc_sendall:hover { background: #d85b4c; }
+    color: var(--cc-coral); font-weight: 600; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_pendrow .__cc_sendall:hover { background: var(--cc-hov); }
   .__cc_panel .__cc_pendrow .__cc_sendall:disabled { opacity: .5; cursor: default; }
   .__cc_panel .__cc_div { height: 1px; background: var(--cc-line); margin: 8px 8px 2px; }
   #__cc_pins { position: absolute; top: 0; left: 0; width: 100%; height: 0; overflow: visible; z-index: 2147483645; pointer-events: none; }
-  #__cc_pins .__cc_pin { position: absolute; transform: translate(-50%,-100%); width: 22px; height: 22px;
-    border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 11px/22px "JetBrains Mono", ui-monospace, Menlo, monospace;
-    text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,.25); pointer-events: auto; cursor: pointer;
+  #__cc_pins .__cc_pin { position: absolute; transform: translate(-50%,-100%); width: 18px; height: 18px;
+    border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 10px/18px "JetBrains Mono", ui-monospace, Menlo, monospace;
+    text-align: center; box-shadow: 0 1px 5px rgba(0,0,0,.2); pointer-events: auto; cursor: pointer;
     animation: __cc_pop .18s ease; }
-  #__cc_pins .__cc_pin.__cc_spin { width: 14px; height: 14px; background: #ffffff; border: 3px solid #e86c5d;
-    box-sizing: border-box; border-radius: 50% 50% 50% 3px; font-size: 0; opacity: .85; }
+  #__cc_pins .__cc_pin.__cc_spin { width: 12px; height: 12px; background: #ffffff; border: 2px solid #e86c5d;
+    box-sizing: border-box; border-radius: 50% 50% 50% 3px; font-size: 0; opacity: .6; }
   #__cc_pins .__cc_pin.__cc_spin:hover { opacity: 1; transform: translate(-50%,-100%) scale(1.25); }
   #__cc_pins .__cc_pin.__cc_flash { animation: __cc_pulse .9s ease 2; }
   @keyframes __cc_pop { from { transform: translate(-50%,-100%) scale(.6); opacity: 0; } }
@@ -310,7 +322,9 @@ function barHtml(o: BrandOpts): string {
   ${verChip}
   ${commentsBtn}
   ${menuBtn}
+  ${hideBtn}
 </div>
+<button id="__cc_pill" type="button" title="Show the codecast bar">${logoSvg(15)}</button>
 <div id="__cc_hist" class="__cc_panel" hidden></div>
 <div id="__cc_menupanel" class="__cc_panel" hidden></div>
 <div id="__cc_cpanel" class="__cc_panel" hidden></div>
@@ -358,6 +372,19 @@ function barHtml(o: BrandOpts): string {
     if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(u).then(done,fallback);}else{fallback();}
   };
   var flashLabel=function(btn,label,back){btn.textContent=label;setTimeout(function(){btn.textContent=back;},1400);};
+  // Minimize: bar slides away, the corner pill brings it back. Per-page
+  // persistence (best effort — the opaque origin usually has no storage).
+  var minKey="__cc_min:"+(CC.slug||location.pathname);
+  var setMin=function(on){
+    document.documentElement.classList.toggle("__cc_min",on);
+    sSet(minKey,on?"1":"");
+    if(on&&typeof closeAll==="function")closeAll();
+  };
+  var hideB=document.getElementById("__cc_hide");
+  var pillB=document.getElementById("__cc_pill");
+  if(hideB)hideB.addEventListener("click",function(e){e.stopPropagation();setMin(true);});
+  if(pillB)pillB.addEventListener("click",function(e){e.stopPropagation();setMin(false);});
+  if(sGet(minKey)==="1")setMin(true);
   if(!CC.metaUrl)return;
   var api=function(path,body){return fetch(CC.apiBase+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});};
   // View beacon — one per page load; carries the gate email when present.
@@ -586,7 +613,7 @@ function barHtml(o: BrandOpts): string {
     if(saved.length>0)head.appendChild(el("span","__cc_phn",String(saved.length)));
     cpanel.appendChild(head);
     if(!drafts.length&&!saved.length){
-      cpanel.appendChild(el("div","__cc_note","Pin notes anywhere on the page (or select text first). Save them as pending, or send them straight to the author's session."));
+      cpanel.appendChild(el("div","__cc_note","Pin a note anywhere on the page, or select text to comment on it."));
     }
     drafts.forEach(function(d,i){
       var card=el("div","__cc_draft");card.setAttribute("data-i",String(i));
@@ -755,6 +782,17 @@ function barHtml(o: BrandOpts): string {
     tg.addEventListener("click",function(){tg.disabled=true;mset({email_gate:!ac.email_gate});});
     eg.appendChild(tg);
     mgr.appendChild(eg);
+    if(j.session_short_id){
+      var sl=el("div","__cc_kv");
+      sl.appendChild(el("span","__cc_k","Session link"));
+      sl.appendChild(el("span","__cc_v"+(ac.show_session?" __cc_on":""),ac.show_session?"shown":"hidden"));
+      sl.appendChild(el("span","__cc_sp"));
+      var sb=el("button","__cc_btn",ac.show_session?"Hide":"Show");sb.type="button";
+      sb.title=ac.show_session?"Remove the link to your session from the page":"Let viewers open the session that published this page";
+      sb.addEventListener("click",function(){sb.disabled=true;mset({show_session:!ac.show_session});});
+      sl.appendChild(sb);
+      mgr.appendChild(sl);
+    }
     var ex=el("div","__cc_kv");
     ex.appendChild(el("span","__cc_k","Expires"));
     ex.appendChild(el("span","__cc_v",ac.expires_at?inFmt(ac.expires_at):"never"));

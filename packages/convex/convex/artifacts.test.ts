@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { newSlug, newSecret, upsertFromPublish, deleteFromCLI, lineDiff } from "./artifacts";
+import { newSlug, newSecret, upsertFromPublish, deleteFromCLI, lineDiff, accessSummary } from "./artifacts";
 import { brandArtifactHtml } from "./artifactPages";
 import { normalizeAssetPath } from "./artifactsHttp";
 
@@ -343,6 +343,26 @@ describe("brandArtifactHtml", () => {
     expect(out.startsWith("\n<style id=\"__cc_style\">")).toBe(true);
     expect(out).toContain("<div>fragment</div>");
     expect(out).not.toContain("og:title");
+  });
+
+  test("always renders the minimize control and the restore pill", () => {
+    const out = brandArtifactHtml("<body></body>", opts);
+    expect(out).toContain('id="__cc_hide"');
+    expect(out).toContain('id="__cc_pill"');
+  });
+
+  test("session chip renders only when a session is exposed", () => {
+    const shown = brandArtifactHtml("<body></body>", { ...opts, sessionShortId: "jx1abcd", sessionTitle: "My session" });
+    expect(shown).toContain('class="__cc_sess"');
+    expect(shown).toContain("My session");
+    const hidden = brandArtifactHtml("<body></body>", { ...opts, sessionShortId: null });
+    expect(hidden).not.toContain('class="__cc_sess"');
+  });
+
+  test("accessSummary reports the session-link toggle", () => {
+    const base = { password_hash: undefined, email_gate: undefined, expires_at: undefined, edit_mode: undefined };
+    expect(accessSummary({ ...base } as never).show_session).toBe(true);
+    expect(accessSummary({ ...base, hide_session: true } as never).show_session).toBe(false);
   });
 
   test("carries the share url into the bar config (no copy button on the bar)", () => {

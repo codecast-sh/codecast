@@ -203,6 +203,7 @@ type AccessInput = {
   email_gate?: boolean;
   expires_in_ms?: number | null;
   edit_mode?: string;
+  show_session?: boolean;
 };
 
 /** Plain access flags → the pre-hashed patch the mutations accept. */
@@ -224,6 +225,7 @@ async function buildAccessSet(
     set.edit_mode = access.edit_mode;
     if (access.edit_mode === "link" && !existingEditUrl) set.edit_key = newSecret();
   }
+  if (access.show_session !== undefined) set.hide_session = !access.show_session;
   return set;
 }
 
@@ -850,7 +852,7 @@ export const serve = httpAction(async (ctx, request) => {
         views: art.views,
         comment_count: artifact.comment_count,
         comments: artifact.open_comments,
-        session: art.session_short_id ? { short_id: art.session_short_id, title: artifact.session_title } : null,
+        session: art.session_short_id && !art.hide_session ? { short_id: art.session_short_id, title: artifact.session_title } : null,
         gated: { password: !!art.password_hash, email: !!art.email_gate },
         versions: art.versions.map((x) => ({
           version: x.version,
@@ -1044,8 +1046,8 @@ export const serve = httpAction(async (ctx, request) => {
     apiBase,
     slug: artifact.slug,
     kind,
-    sessionShortId: artifact.session_short_id ?? null,
-    sessionTitle: artifact.session_title,
+    sessionShortId: artifact.hide_session ? null : (artifact.session_short_id ?? null),
+    sessionTitle: artifact.hide_session ? null : artifact.session_title,
     views: artifact.views,
     commentCount: artifact.comment_count,
     gated: { password: !!artifact.password_hash, email: !!artifact.email_gate },

@@ -103,7 +103,7 @@ cast publish set <target> --password p      # change gates or --title WITHOUT re
 
 Re-publishing the same path updates the same URL and keeps version history — past versions stay viewable (\`?v=N\`), diffable (\`?diff=A..B\`), and restorable with \`rollback\`. \`--new\` mints a separate URL; \`--title\` overrides the title. Any command takes \`--json\` for machine-readable output.
 
-Access gates: \`--password <p>\` (\`--password-stdin\` keeps it out of the process list; \`--no-password\` clears), \`--email-gate\` asks viewers for their email (\`--no-email-gate\` clears), \`--expires 7d|24h|30m|never\`. \`--edit-mode owner|link|team\` controls in-browser editing. Use \`cast publish set\` to change any of these on an existing page.
+Access gates: \`--password <p>\` (\`--password-stdin\` keeps it out of the process list; \`--no-password\` clears), \`--email-gate\` asks viewers for their email (\`--no-email-gate\` clears), \`--expires 7d|24h|30m|never\`. \`--edit-mode owner|link|team\` controls in-browser editing. \`--no-session\` hides the link back to this session from the page (\`--session\` restores it). Use \`cast publish set\` to change any of these on an existing page.
 
 The publish output includes a manage URL (the \`#o=\` owner link — full owner powers: stats, seen-by, gates, rollback; keep it private) and, in link edit mode, an edit URL that grants editing to whoever holds it. \`cast publish links\` reprints them.
 

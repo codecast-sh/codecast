@@ -133,6 +133,7 @@ export function accessSummary(a: Doc<"artifacts">) {
     email_gate: !!a.email_gate,
     expires_at: a.expires_at ?? null,
     edit_mode: a.edit_mode ?? "owner",
+    show_session: !a.hide_session,
   };
 }
 
@@ -396,6 +397,9 @@ export const ownerPanel = internalQuery({
           .sort((a, b) => b.version - a.version),
       ],
       access: accessSummary(artifact),
+      // Lets the manage sheet offer the session-link toggle only when there is
+      // a publishing session to link to.
+      session_short_id: artifact.session_short_id ?? null,
       edit_url: artifact.edit_mode === "link" && artifact.edit_key ? `${artifactUrl(artifact.slug)}#ed=${artifact.edit_key}` : null,
       stats: { views: stats?.view_count ?? 0, last_viewed_at: stats?.last_viewed_at ?? null },
       viewers: viewers
@@ -429,6 +433,7 @@ const accessPatchValidator = v.object({
   expires_at: v.optional(v.union(v.number(), v.null())),
   edit_mode: v.optional(v.string()),
   edit_key: v.optional(v.string()),
+  hide_session: v.optional(v.boolean()),
 });
 
 type AccessPatch = {
@@ -437,6 +442,7 @@ type AccessPatch = {
   expires_at?: number | null;
   edit_mode?: string;
   edit_key?: string;
+  hide_session?: boolean;
 };
 
 function buildAccessPatch(set: AccessPatch): Partial<Doc<"artifacts">> {
@@ -448,6 +454,7 @@ function buildAccessPatch(set: AccessPatch): Partial<Doc<"artifacts">> {
     patch.edit_mode = set.edit_mode === "owner" ? undefined : set.edit_mode;
     if (set.edit_key !== undefined) patch.edit_key = set.edit_key;
   }
+  if (set.hide_session !== undefined) patch.hide_session = set.hide_session || undefined;
   return patch as Partial<Doc<"artifacts">>;
 }
 
@@ -756,6 +763,7 @@ export const applyManage = internalMutation({
         expires_at: v.optional(v.union(v.number(), v.null())),
         edit_mode: v.optional(v.string()),
         edit_key: v.optional(v.string()),
+        hide_session: v.optional(v.boolean()),
       }),
     ),
     resolve_comment_id: v.optional(v.id("artifact_comments")),
