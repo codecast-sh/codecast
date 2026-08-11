@@ -165,7 +165,7 @@ import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor"
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 import { sessionStartupState } from "../lib/sessionLifecycle";
-import { messageRowKey } from "../lib/messageRowKey";
+import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type RestartProgressRow, type RestartPhase, type RestartStage } from "../hooks/useSessionRestart";
 
@@ -12801,22 +12801,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // monolith no longer re-renders every time getConversationToolStats re-scans a streaming
   // conversation. (See useConversationTaskStats.)
 
-  const getItemKey = useCallback((index: number) => {
-    const item = timeline[index];
-    if (!item) return index;
-    // Key a message row by its STABLE client id (present on both the optimistic
-    // copy as `_clientId` and the server echo as `client_id`, equal by
-    // construction) so the pending→synced handoff reuses the SAME DOM node
-    // instead of unmounting the optimistic row and mounting a fresh server row.
-    // The `_id` flips at that handoff (clientId → Convex id); keying on it makes
-    // the virtualizer destroy+recreate+re-measure the row — a one-frame blank
-    // that, in a brand-new session where this is the only row, reads as the
-    // message disappearing for a beat before it "syncs in". The timeline dedup
-    // keeps only one of the two copies present at a time, so this never collides.
+  // Key a message row by its STABLE client id (present on both the optimistic
+  // copy as `_clientId` and the server echo as `client_id`, equal by
+  // construction) so the pending→synced handoff reuses the SAME DOM node
+  // instead of unmounting the optimistic row and mounting a fresh server row.
+  // The `_id` flips at that handoff (clientId → Convex id); keying on it makes
+  // the virtualizer destroy+recreate+re-measure the row — a one-frame blank
+  // that, in a brand-new session where this is the only row, reads as the
+  // message disappearing for a beat before it "syncs in".
+  // uniqueRowKeys then de-collides the full set: synced data CAN carry the same
+  // client_id on two messages (a delivery ack once stamped it on the harness's
+  // boot <task-notification> turn AND on the real echo), and rows sharing a key
+  // garble the virtualizer — overlapping ghost copies accreting on re-renders.
+  const rowKeys = useMemo(() => uniqueRowKeys(timeline.map((item) => {
     if (item.type === 'message') return messageRowKey(item.data as Message);
     if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
     return `pr-${(item.data as any)._id}`;
-  }, [timeline]);
+  })), [timeline]);
+  const getItemKey = useCallback((index: number) => rowKeys[index] ?? index, [rowKeys]);
 
   // Height-cache discriminator. In compact and condensed a row's height depends
   // on whether its turn is expanded (compact: card vs full; condensed: absorbed

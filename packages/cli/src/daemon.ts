@@ -1970,9 +1970,14 @@ async function watchLoginFlow(baselineHash: string | null, requestedEmail: strin
     try {
       lastPane = tmuxExecSync(["capture-pane", "-p", "-t", LOGIN_FLOW_TMUX], { timeout: 3000 });
     } catch {
-      // The CLI writes the credential and exits — give the store one more read
-      // before calling the exit a failure.
-      if (confirmedNow()) return finishConfirmed();
+      // The CLI exited. The credential store is the arbiter now — and not by
+      // the changed-hash test alone: a re-login into the SAME still-valid
+      // account can leave the blob byte-identical (verified live 2026-08-11 —
+      // the CLI printed "Login successful." and exited with an unchanged
+      // keychain item). A healthy pushable credential after a clean exit
+      // means the machine is signed in, whatever the hash says.
+      const health = credentialHealth(readActiveCredential(), Date.now());
+      if (health.pushable) return finishConfirmed();
       const tail = summarizeLoginPaneTail(lastPane);
       return finishRejected(tail ?? "the sign-in window closed before completing");
     }
