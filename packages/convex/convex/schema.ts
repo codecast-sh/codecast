@@ -778,8 +778,8 @@ export default defineSchema({
     timestamp: v.number(),
     tool_calls_count: v.optional(v.number()),
     tool_results_count: v.optional(v.number()),
-    // Written only by the unpushed search_content_r2 work — see the
-    // COEXISTENCE note on that index below.
+    // Scope stamps for search_content_r2 (ct-42039): let content search filter
+    // by team/user without a join. Written by the r2 mirror path.
     team_id: v.optional(v.id("teams")),
     user_id: v.optional(v.id("users")),
     // _creationTime of the SOURCE message — the window/GC axis. Distinct from
@@ -789,14 +789,19 @@ export default defineSchema({
   })
     .index("by_message_id", ["message_id"])
     .index("by_source_created_at", ["source_created_at"])
+    // DEPLOY HAZARD until ct-42039 merges: prod no longer carries this index —
+    // the r2 rename dropped it, and prod's live search functions query r2.
+    // Deploying main as-is re-creates it (a pointless ~636k-doc backfill) and
+    // reverts prod to the search_content-querying functions below. Land
+    // ct-42039 first; it deletes this index and migrates the query in
+    // conversations.ts.
     .searchIndex("search_content", {
       searchField: "content",
       filterFields: ["conversation_id"],
     })
-    // COEXISTENCE (2026-08-11): prod carries an evolved search index deployed
-    // from an unpushed tree. Declaring it (and the optional fields it filters
-    // on) keeps a deploy from this tree additive — dropping it would force a
-    // ~626k-doc backfill when the owner redeploys. Remove when that work merges.
+    // The real definition (ct-42039), confirmed against the author's tree on
+    // 2026-08-11 — no longer a coexistence stub. Convex normalizes filterFields
+    // to a set, so their order here is not load-bearing.
     .searchIndex("search_content_r2", {
       searchField: "content",
       filterFields: ["conversation_id", "team_id", "user_id"],
