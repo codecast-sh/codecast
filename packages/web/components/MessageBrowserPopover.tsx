@@ -24,19 +24,30 @@ function processUserMessage(content: string): { display: string; isCmd: boolean 
   return { display: cleanContent(content), isCmd: false };
 }
 
-const MACHINE_KIND_LABEL: Record<MachineDeliveredKind, string> = {
+// Row kinds hidden behind the "other" chip: machine-delivered messages plus
+// bare "continue" nudges the human typed — navigation noise either way.
+type HiddenKind = MachineDeliveredKind | "continue";
+
+const MACHINE_KIND_LABEL: Record<HiddenKind, string> = {
   schedule: "trigger", // user-facing vocabulary is "trigger" (ct-38953); the kind key mirrors the wire tag
   session: "session",
   teammate: "teammate",
+  continue: "continue",
 };
+
+// A bare continuation nudge ("continue", "Continue.") — real content to the
+// agent, noise in a message navigator.
+function isBareContinue(display: string): boolean {
+  return /^continue[.!…]*$/i.test(display.trim());
+}
 
 // Chip/tooltip noun for the machine-delivered rows: precise when they're all
 // one kind ("2 sessions", "1 trigger"), neutral when mixed — "automated" would
 // mislabel a teammate or another session messaging in.
-function machineNoun(machines: { kind: "user" | MachineDeliveredKind }[]): string {
+function machineNoun(machines: { kind: "user" | HiddenKind }[]): string {
   const kinds = new Set(machines.map((m) => m.kind));
   if (kinds.size === 1) {
-    const noun = MACHINE_KIND_LABEL[machines[0].kind as MachineDeliveredKind];
+    const noun = MACHINE_KIND_LABEL[machines[0].kind as HiddenKind];
     return machines.length === 1 ? noun : `${noun}s`;
   }
   return "other";
@@ -60,18 +71,20 @@ const SHORT_ID_RE = /^[a-z0-9]{7}$/;
 // Source label for a machine-delivered row. A session source that the store
 // couldn't resolve (sender pruned/dismissed locally) still renders as a bare
 // short id here — resolve it server-side the same way EntityIdPill does.
-function MachineSourceLabel({ kind, source }: { kind: MachineDeliveredKind; source: string }) {
+function MachineSourceLabel({ kind, source }: { kind: HiddenKind; source: string }) {
   const needsLookup = kind === "session" && SHORT_ID_RE.test(source);
   const resolved = useQuery(api.conversations.webGet, needsLookup ? { short_id: source } : "skip");
   return <>{(needsLookup && resolved?.title) || source}</>;
 }
 
-function MachineKindIcon({ kind }: { kind: MachineDeliveredKind }) {
+function MachineKindIcon({ kind }: { kind: HiddenKind }) {
   const d =
     kind === "schedule"
       ? "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
       : kind === "session"
       ? "M13 7l5 5m0 0l-5 5m5-5H6"
+      : kind === "continue"
+      ? "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
       : "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z";
   return (
     <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -98,7 +111,7 @@ type PM = {
   isCmd: boolean;
   timestamp: number;
   commentCount: number;
-  kind: "user" | MachineDeliveredKind;
+  kind: "user" | HiddenKind;
   source?: string;
 };
 
@@ -193,8 +206,9 @@ function NavDropdown({
 }) {
   const [mounted, setMounted] = useState(false);
   const [search, setSearch] = useState("");
-  // Automated rows (triggers, sessions, teammates) start hidden — the list is
-  // primarily a human-message navigator; the chip reveals them on demand.
+  // Automated rows (triggers, sessions, teammates) and bare "continue" nudges
+  // start hidden — the list is primarily a human-message navigator; the chip
+  // reveals them on demand.
   const [showMachine, setShowMachine] = useState(false);
   const [focusIndex, setFocusIndex] = useState(-1);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -339,7 +353,7 @@ function NavDropdown({
               <button
                 onClick={(e) => { e.stopPropagation(); setShowMachine(v => !v); }}
                 aria-pressed={showMachine}
-                title={`${showMachine ? "Hide" : "Show"} ${machineCount} message${machineCount !== 1 ? "s" : ""} delivered by triggers, other sessions, or teammates`}
+                title={`${showMachine ? "Hide" : "Show"} ${machineCount} message${machineCount !== 1 ? "s" : ""} delivered by triggers, other sessions, or teammates, plus bare "continue" messages`}
                 className={`flex items-center gap-1 px-2 py-1.5 rounded-lg border text-[11px] tabular-nums transition-colors flex-shrink-0 ${
                   showMachine
                     ? "bg-sol-violet/15 border-sol-violet/40 text-sol-violet hover:bg-sol-violet/20"
@@ -646,9 +660,23 @@ export function MessageNavButton({
               source,
             };
           }
+          const user = processUserMessage(content);
+          // Bare "continue" nudges bucket with the machine rows: unnumbered,
+          // hidden until the "other" chip reveals them. The kind label carries
+          // the word, so the body would be pure repetition — drop it.
+          if (!user.isCmd && isBareContinue(user.display)) {
+            return {
+              _id: m._id,
+              display: "",
+              isCmd: false,
+              timestamp: m.timestamp,
+              commentCount,
+              kind: "continue" as const,
+            };
+          }
           return {
             _id: m._id,
-            ...processUserMessage(content),
+            ...user,
             timestamp: m.timestamp,
             commentCount,
             kind: "user" as const,

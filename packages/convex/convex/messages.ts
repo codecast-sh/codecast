@@ -773,7 +773,8 @@ export async function latestImagePreviewUrl(
 // pending row's storage id verbatim.
 export function injectedImageStorageIds(content: string): string[] {
   const ids: string[] = [];
-  const re = /\/codecast\/images\/([^/\s.\]]+)\.png/g;
+  // Every extension downloadImage can write (named by the object's content type).
+  const re = /\/codecast\/images\/([^/\s.\]]+)\.(?:png|webp|jpe?g|gif)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(content)) !== null) ids.push(m[1]);
   return ids;
@@ -834,7 +835,14 @@ export function findEchoedPendingMessage<
   const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
   const cFlat = c.replace(/\s+/g, " ").trim();
   const contentMatches = (pm: T) => {
-    const pc = redactSecrets(pm.content).replace(/\[image\]/gi, "").trim();
+    // Strip image tokens from BOTH sides: the composer stamps "[Image N]" into
+    // the draft text for each attachment, so the pending content carries the
+    // token exactly like the echo does. Stripping only the echo side left a
+    // text+image send permanently unmatched (no thumbnail, no client_id).
+    const pc = redactSecrets(pm.content)
+      .replace(/\[Image[:\s][^\]]*\]/gi, "")
+      .replace(/\[image\]/gi, "")
+      .trim();
     const pcFlat = pc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
     const contentMatch = cFlat === pcFlat || c === pc;
     if (!contentMatch) return false;

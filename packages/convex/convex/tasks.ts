@@ -858,6 +858,8 @@ export const update = mutation({
     project_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
+    // Short id of the parent task; empty string detaches back to the top level.
+    parent: v.optional(v.string()),
     plan_id: v.optional(v.string()),
     blocked_by: v.optional(v.array(v.string())),
     blocks: v.optional(v.array(v.string())),
