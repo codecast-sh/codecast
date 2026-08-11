@@ -32,6 +32,7 @@ import {
   maskProviderKey,
   type VaultInfo,
 } from "@codecast/shared/contracts";
+import { buildTaskTree } from "@codecast/shared/tasks";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -2250,6 +2251,10 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **Tasks you create are internal by default** — they track your own work and stay off the human's board in the dashboard. Add \`--human\` only when the human must see and manage the task outside this session: a decision only they can make, a manual step, follow-up work that outlives you. Use it rarely; when in doubt, leave it off.
 
+**Nest execution work under the goal it serves.** When you split a task into steps you will actually file, create them with \`--parent <task_id>\` so they sit under the larger piece of work instead of competing with it in a flat list. Nest one level where you can; the views emphasise the top two.
+
+**\`--from-meeting\` is for tasks people decided, not tasks you decided.** Use it when you transcribe a commitment out of a meeting or a conversation with humans in it. Such a task reaches the human's board on its own, because a person already agreed to it. Never use it for your own work.
+
 **Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run \`cast plan create "Title" -g "goal"\` and add tasks with \`cast task create "Title" --plan <plan_id>\`. Don't create plans for single-task work.
 
 **Bind before you build.** For any larger piece of work, default to working under a task or plan with your session bound to it — \`cast task start <id>\` claims a task, \`cast plan bind <plan_id>\` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; sizable work done unbound is invisible to the human tracking it.
@@ -2290,8 +2295,11 @@ cast task start/done/comment <id>           # Task lifecycle
 cast task create "Title" -t task -p high    # Create task (internal to agent work by default)
 cast task create "Title" --plan <plan_id>   # Create task bound to plan
 cast task create "Title" --human            # Put it on the human's board (rare — see above)
+cast task create "Title" --parent <task_id> # File it as a subtask of larger work
+cast task create "Title" --from-meeting     # People decided this in a meeting; you only wrote it down
 cast task update <id> --plan <plan_id>      # Bind existing task to plan
 cast task update <id> --human               # Move an existing task onto the human's board
+cast task update <id> --parent <task_id>    # Re-nest a task (--parent '' moves it back to the top level)
 cast task context <id>                      # Full context for a task
 cast task context --current                 # Context for session's current task
 cast plan create "Title" -g "goal" -b "body"  # Create plan with inline body
@@ -12402,16 +12410,22 @@ const STATUS_ICONS: Record<string, string> = {
   dropped: "✕",
 };
 
-function formatWorkItem(t: any, verbose = false): string {
+function formatWorkItem(t: any, verbose = false, indent = 0): string {
   const icon = STATUS_ICONS[t.status] || "?";
   const pcolor = PRIORITY_COLORS[t.priority] || "";
   const pri = t.priority !== "medium" ? ` ${pcolor}${t.priority}${c.reset}` : "";
   const labels = t.labels?.length ? ` ${c.dim}[${t.labels.join(", ")}]${c.reset}` : "";
   const blocked = t.blocked_by?.length ? ` ${c.red}blocked${c.reset}` : "";
   const assignee = t.assignee_name ? ` ${c.dim}@${t.assignee_name}${c.reset}` : "";
-  let line = `  ${icon} ${c.cyan}${t.short_id}${c.reset} ${t.title}${pri}${assignee}${labels}${blocked}`;
+  // A meeting task was decided by people; an agent only wrote it down. Marking
+  // it here is what lets a reader tell it apart from agent bookkeeping.
+  const origin = t.source === "meeting" ? ` ${c.magenta}meeting${c.reset}` : "";
+  // Subtasks indent under their parent, with a guide so the nesting survives
+  // the eye scanning a long list.
+  const pad = indent > 0 ? `${"  ".repeat(indent)}${c.dim}└ ${c.reset}` : "";
+  let line = `  ${pad}${icon} ${c.cyan}${t.short_id}${c.reset} ${t.title}${pri}${assignee}${labels}${blocked}${origin}`;
   if (verbose && t.description) {
-    line += `\n    ${c.dim}${t.description.slice(0, 120)}${c.reset}`;
+    line += `\n    ${"  ".repeat(indent)}${c.dim}${t.description.slice(0, 120)}${c.reset}`;
   }
   return line;
 }
@@ -12665,7 +12679,9 @@ work
   .option("--assignee <name>", "Assignee")
   .option("--status <status>", "Initial status (default: open)", "open")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
+  .option("--parent <task_id>", "Nest this task under a parent task (e.g. ct-4102)")
   .option("--human", "Put the task on the human's board — for work the human must see and manage (rare)")
+  .option("--from-meeting", "This task came out of a meeting with people in it, not from your own work")
   .action(async (title: string, options: any) => {
     const body: Record<string, any> = {
       title,
@@ -12680,12 +12696,17 @@ work
     if (options.blockedBy) body.blocked_by = options.blockedBy.split(",").map((s: string) => s.trim());
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
     if (options.plan) body.plan_id = options.plan;
+    if (options.parent) body.parent_id = options.parent;
 
     const sessionId = detectCurrentSessionId();
     if (sessionId) {
       body.conversation_id = sessionId;
       body.source = "agent";
     }
+    // A meeting task is something PEOPLE decided; the agent only transcribed
+    // it. It belongs on the human board on its own, with no promotion stamp —
+    // so this overrides the "agent" default a session would otherwise set.
+    if (options.fromMeeting) body.source = "meeting";
     body.project_path = getRealCwd();
 
     const result = await cliPost("/cli/work/create", body);
@@ -12722,8 +12743,11 @@ work
       console.log(fmt.muted("No tasks found."));
       return;
     }
-    for (const t of tasks) {
-      console.log(formatWorkItem(t, options.verbose));
+    // Nest subtasks under their parents (shared with the web list so the two
+    // read the same). A subtask whose parent isn't in this response — filtered
+    // out by status, or past the limit — renders as a root, never dropped.
+    for (const row of buildTaskTree(tasks)) {
+      console.log(formatWorkItem(row.task, options.verbose, row.indent));
     }
     const suffix = options.all || options.status ? "" : fmt.muted(" (active only, use --all to see all)");
     console.log(fmt.muted(`\n  ${tasks.length} items`) + suffix);
@@ -12868,6 +12892,7 @@ work
   .option("--project <id>", "Project ID")
   .option("--project-path <path>", "Project directory path")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
+  .option("--parent <task_id>", "Nest under a parent task; pass '' to move it back to the top level")
   .option("--human", "Put the task on the human's board (rare)")
   .option("--no-human", "Take the task off the human's board")
   .action(async (shortId: string, options: any) => {
@@ -12875,6 +12900,7 @@ work
     const body: Record<string, any> = { short_id: shortId };
     if (sessionId) body.conversation_id = sessionId;
     if (options.human !== undefined) body.promoted = options.human;
+    if (options.parent !== undefined) body.parent = options.parent;
     if (options.status) body.status = options.status;
     if (options.priority) body.priority = options.priority;
     if (options.title) body.title = options.title;
