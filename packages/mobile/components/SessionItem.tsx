@@ -212,11 +212,27 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
         </RNView>
       </RNView>
 
-      {(session.idle_summary || session.subtitle) && (
+      {stateView ? (
+        // The agent's pinned "where this stands" line (cast state) replaces the
+        // generated summary — same rule as the web card. The pin marks it as
+        // the agent's own account, and turns orange once the thread has run far
+        // past the write, so a neglected line stops reading as current.
+        <RNView style={styles.stateRow}>
+          <FontAwesome
+            name="thumb-tack"
+            size={9}
+            color={stateView.freshness === 'fresh' ? Theme.cyan : Theme.orange}
+            style={styles.statePin}
+          />
+          <RNText style={styles.stateText} numberOfLines={2}>
+            {stateView.headline}
+          </RNText>
+        </RNView>
+      ) : (session.idle_summary || session.subtitle) ? (
         <RNText style={styles.summaryText} numberOfLines={2}>
           {session.idle_summary || session.subtitle}
         </RNText>
-      )}
+      ) : null}
 
       {userMessage && (
         <RNText style={styles.userMessage} numberOfLines={1}>
@@ -550,6 +566,22 @@ export const styles = StyleSheet.create({
     color: Theme.textMuted,
     marginLeft: 14,
     marginBottom: 2,
+    lineHeight: 17,
+  },
+  stateRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginLeft: 14,
+    marginBottom: 2,
+    gap: 5,
+  },
+  statePin: {
+    marginTop: 3,
+  },
+  stateText: {
+    flex: 1,
+    fontSize: 12,
+    color: Theme.textSecondary,
     lineHeight: 17,
   },
   conversationMeta: {

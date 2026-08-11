@@ -19,6 +19,8 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
 import { Mono } from "@/constants/fonts";
 import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
+import { directChildren, isActiveTask, subtaskProgressOf } from "@codecast/shared/tasks";
+import { createTaskAndAdopt, openSubtasksOf } from "@codecast/web/lib/taskActions";
 import { useSyncTaskDetail } from "@codecast/web/hooks/useSyncTasks";
 import { useSyncTasks } from "@/hooks/useSyncTasks";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
@@ -56,6 +58,28 @@ export default function TaskDetailScreen() {
   const [titleDraft, setTitleDraft] = useState("");
   const titleInputRef = useRef<RNTextInput>(null);
   const [commentText, setCommentText] = useState("");
+  const [subtaskTitle, setSubtaskTitle] = useState("");
+
+  const parentRow = useMemo(() => {
+    const pid = (task as any)?.parent_id;
+    return pid ? (tasks[String(pid)] as TaskItem | undefined) : undefined;
+  }, [tasks, (task as any)?.parent_id]);
+  const subtasks = useMemo(() => {
+    if (!task) return [] as TaskItem[];
+    return directChildren(Object.values(tasks) as TaskItem[], task._id)
+      .filter((t: any) => isActiveTask(t))
+      .sort((a: any, b: any) => (a.created_at || 0) - (b.created_at || 0));
+  }, [tasks, task?._id]);
+  const subtaskProgress = useMemo(() => subtaskProgressOf(subtasks as any[]), [subtasks]);
+  const addSubtask = useCallback(() => {
+    const t = subtaskTitle.trim();
+    if (!t || !task) return;
+    setSubtaskTitle("");
+    // Shared create helper: mints a client_key so the stub altKey-supersedes to
+    // the real row (the tasks collection rekeys it), instead of stranding a
+    // permanent ghost. Refusals are toasted and the stub removed.
+    void createTaskAndAdopt({ title: t, parent: task.short_id });
+  }, [subtaskTitle, task]);
 
   useEffect(() => {
     if (editingTitle) {
@@ -80,6 +104,26 @@ export default function TaskDetailScreen() {
   const status = task ? (STATUS_CONFIG[task.status as TaskStatus] ?? STATUS_CONFIG.open) : STATUS_CONFIG.open;
   const priority = task ? (PRIORITY_CONFIG[task.priority as TaskPriority] ?? PRIORITY_CONFIG.medium) : PRIORITY_CONFIG.medium;
 
+  // Terminal move with open subtasks → three-way close prompt (mobile's
+  // equivalent of the web CloseGuardDialog), so mobile can't strand a parent
+  // in a "done" state the server refuses.
+  const closeWithGuard = useCallback((shortId: string, next: "done" | "dropped") => {
+    const open = openSubtasksOf(shortId);
+    if (open.length === 0) { updateTask(shortId, { status: next }); return; }
+    const verb = next === "done" ? "Close" : "Drop";
+    ActionSheetIOS.showActionSheetWithOptions(
+      {
+        options: [`${verb} subtasks too`, `${verb} only this`, "Cancel"],
+        cancelButtonIndex: 2,
+        title: `${open.length} open subtask${open.length === 1 ? "" : "s"}`,
+      },
+      (i) => {
+        if (i === 0) updateTask(shortId, { status: next, subtask_resolution: "cascade" });
+        else if (i === 1) updateTask(shortId, { status: next, subtask_resolution: "only_parent" });
+      },
+    );
+  }, [updateTask]);
+
   const handleStatusPress = useCallback(() => {
     if (!task) return;
     const available = STATUS_ORDER.filter((s) => s !== task.status);
@@ -88,12 +132,13 @@ export default function TaskDetailScreen() {
     ActionSheetIOS.showActionSheetWithOptions(
       { options, cancelButtonIndex: options.length - 1, title: "Change Status" },
       (idx) => {
-        if (idx < available.length) {
-          updateTask(task.short_id, { status: available[idx] });
-        }
+        if (idx >= available.length) return;
+        const next = available[idx];
+        if (next === "done" || next === "dropped") closeWithGuard(task.short_id, next);
+        else updateTask(task.short_id, { status: next });
       },
     );
-  }, [task, updateTask]);
+  }, [task, updateTask, closeWithGuard]);
 
   const handlePriorityPress = useCallback(() => {
     if (!task) return;
@@ -203,12 +248,71 @@ export default function TaskDetailScreen() {
           )}
         </RNView>
 
+        {/* Render whenever the task HAS a parent, mirroring web — a subtask must
+            never appear context-free even if the parent row isn't cached yet
+            (deep link / cold start). The press is disabled until it resolves. */}
+        {(task as any).parent_id && (
+          <TouchableOpacity
+            style={styles.parentLink}
+            onPress={() => parentRow && router.push(`/task/${parentRow.short_id}` as any)}
+            disabled={!parentRow}
+            activeOpacity={0.6}
+          >
+            <FontAwesome name="level-up" size={11} color={Theme.textMuted0} />
+            <RNText style={styles.parentLinkLabel}>Subtask of {parentRow?.short_id ?? "…"}</RNText>
+            {parentRow && <RNText style={styles.parentLinkTitle} numberOfLines={1}>{parentRow.title}</RNText>}
+          </TouchableOpacity>
+        )}
+
         {task.description && (
           <RNView style={styles.section}>
             <RNText style={styles.sectionLabel}>Description</RNText>
             <RNText style={styles.description}>{task.description}</RNText>
           </RNView>
         )}
+
+        <RNView style={styles.section}>
+          <RNView style={styles.subtaskHeader}>
+            <RNText style={styles.sectionLabel}>Subtasks</RNText>
+            {subtaskProgress.total > 0 && (
+              <RNText style={styles.subtaskProgress}>{subtaskProgress.done}/{subtaskProgress.total}</RNText>
+            )}
+          </RNView>
+          {subtaskProgress.total > 0 && (
+            <RNView style={styles.subtaskBarTrack}>
+              <RNView style={[styles.subtaskBarFill, { width: `${Math.round((subtaskProgress.done / subtaskProgress.total) * 100)}%` }]} />
+            </RNView>
+          )}
+          {subtasks.map((s: any) => {
+            const cfg = STATUS_CONFIG[s.status as TaskStatus] ?? STATUS_CONFIG.open;
+            const closed = s.status === "done" || s.status === "dropped";
+            return (
+              <TouchableOpacity
+                key={s._id}
+                style={styles.subtaskRow}
+                onPress={() => router.push(`/task/${s.short_id}` as any)}
+                activeOpacity={0.6}
+              >
+                <FontAwesome name={cfg.icon} size={12} color={cfg.color} />
+                <RNText style={styles.subtaskId}>{s.short_id}</RNText>
+                <RNText style={[styles.subtaskTitle, closed && styles.subtaskTitleDone]} numberOfLines={1}>{s.title}</RNText>
+              </TouchableOpacity>
+            );
+          })}
+          <RNView style={styles.subtaskInputRow}>
+            <FontAwesome name="plus" size={11} color={Theme.textMuted0} />
+            <TextInput
+              style={styles.subtaskInput}
+              value={subtaskTitle}
+              onChangeText={setSubtaskTitle}
+              placeholder="Add subtask..."
+              placeholderTextColor={Theme.textMuted0}
+              returnKeyType="done"
+              onSubmitEditing={addSubtask}
+              blurOnSubmit={false}
+            />
+          </RNView>
+        </RNView>
 
         {task.plan && (
           <RNView style={styles.section}>
@@ -450,6 +554,77 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     color: Theme.cyan,
     flex: 1,
+  },
+  parentLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 6,
+    marginBottom: 4,
+  },
+  parentLinkLabel: {
+    fontSize: 12,
+    color: Theme.textMuted0,
+  },
+  parentLinkTitle: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    flex: 1,
+  },
+  subtaskHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  subtaskProgress: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    fontFamily: Mono.regular,
+  },
+  subtaskBarTrack: {
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: Theme.borderLight,
+    overflow: "hidden",
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  subtaskBarFill: {
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: Theme.green,
+  },
+  subtaskRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 7,
+  },
+  subtaskId: {
+    fontSize: 11,
+    color: Theme.textMuted0,
+    fontFamily: Mono.regular,
+  },
+  subtaskTitle: {
+    fontSize: 13,
+    color: Theme.text,
+    flex: 1,
+  },
+  subtaskTitleDone: {
+    color: Theme.textMuted0,
+    textDecorationLine: "line-through",
+  },
+  subtaskInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 7,
+  },
+  subtaskInput: {
+    flex: 1,
+    fontSize: 13,
+    color: Theme.text,
+    padding: 0,
   },
   labelRow: {
     flexDirection: "row",

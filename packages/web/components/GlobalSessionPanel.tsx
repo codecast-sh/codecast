@@ -11,6 +11,7 @@ import { AppLoader } from "./AppLoader";
 import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
+import { threadStateView } from "../lib/threadState";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
@@ -28,7 +29,7 @@ import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
 import { SlotActions } from "./workspace/Slot";
-import { partitionTriggerInbox, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
+import { partitionTriggerInbox, groupSessionsByTrigger, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
@@ -40,7 +41,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, Pin } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -760,7 +761,12 @@ function BlockedSessionsBanner({
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      {authCount > 0 && loginDevice && (
+      {/* The big sign-in CTA belongs only to a LOGIN incident — the same
+          condition that makes the headline read "blocked on login". In a
+          mixed fleet (limits + a few signed out) the remedy the banner leads
+          with is continue/switch; a loud sign-in button under a "usage
+          limits" headline reads as the wrong fix. */}
+      {authCount > 0 && limitCount === 0 && connCount === 0 && loginDevice && (
         <SignInCta device={loginDevice} authSessionIds={actedAuthIds} disabled={busy !== null} />
       )}
       {expanded && (
@@ -1167,7 +1173,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
           so revealing it never changes the row's height. Pseudo rows (loops,
           subagents) have no rail: their verbs live inside the session itself. */}
       {!isPseudo && (
-      <div className="absolute top-0 bottom-0 right-0 flex items-center gap-0.5 pl-12 pr-2 opacity-0 group-hover/schedrow:opacity-100 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] bg-gradient-to-r from-transparent via-sol-bg-alt/80 to-sol-bg-alt">
+      <div className="absolute top-0 bottom-0 right-0 flex items-center gap-0.5 pl-12 pr-2 opacity-0 group-hover/schedrow:opacity-100 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_80%,transparent)] to-sol-bg-alt">
         <ShortcutTooltip label={runsOpen ? "Hide run history" : "Run history"} hint="every run links to its trigger message" side="top">
           <button
             aria-label={runsOpen ? "Hide run history" : "Show run history"}
@@ -1276,7 +1282,10 @@ function MonitorBars({ session, isActive, onOpen }: {
   const rows = useMemo(() => monitorRowsFor(messages), [messages]);
   const [expanded, setExpanded] = useState(false);
   if (session.agent_status === "stopped" || isLivenessStale(session, now)) return null;
-  const watching = rows.filter((r) => effectiveMonitorStatus(r, now) === "watching");
+  // A live session can still be showing watches armed by a process it has since
+  // replaced (a restart takes its background shells with it but leaves the rows
+  // un-notified) — fence those out rather than stacking dead bars.
+  const watching = rows.filter((r) => effectiveMonitorStatus(r, now, session.agent_started_at ?? undefined) === "watching");
   if (watching.length === 0) return null;
   const shown = expanded ? watching : watching.slice(0, MAX_MONITOR_BARS);
   const hiddenCount = watching.length - shown.length;
@@ -1579,6 +1588,7 @@ export const SessionCard = memo(function SessionCard({
   forkColorKey,
   sessionLabel,
   isFavorite,
+  subRow,
 }: {
   session: InboxSession;
   isActive: boolean;
@@ -1594,6 +1604,11 @@ export const SessionCard = memo(function SessionCard({
   onNavigateToSession?: (id: string) => void;
   variant?: "default" | "working" | "dismissed" | "stashed";
   forkColorKey?: string;
+  // Force the compact child-row look for a session that isn't itself a
+  // subagent — the trigger view renders a trigger's sessions as sub rows under
+  // the trigger's own row. The ↳ arrow goes schedule-amber there (child of a
+  // trigger, not of a parent session).
+  subRow?: "trigger";
   // Label + favorite state are derived ONCE in the parent (SessionListPanel) and
   // passed as scalar props, so a card does O(1) work per render instead of the two
   // selectors scanning the whole bucketAssignments / favorites collection on every
@@ -1607,7 +1622,7 @@ export const SessionCard = memo(function SessionCard({
   // structural signature), subscribe to a shared 30s clock so those stay fresh on
   // their own cadence instead of riding data churn. One timer total for all cards
   // (see useCoarseNow); 30s granularity is plenty for a minutes-scale idle counter.
-  useCoarseNow(30_000);
+  const coarseNow = useCoarseNow(30_000);
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
   const isStashed = variant === "stashed";
@@ -1619,7 +1634,7 @@ export const SessionCard = memo(function SessionCard({
   // nestParentIdOf) plus worktree workers. Teammates render this way even when
   // floating top-level (lead absent) — same as worktree rows, the ↳ arrow
   // carries the "child of something" reading on its own.
-  const isSubagent = !!session.is_subagent || !!nestParentIdOf(session) || !!session.worktree_name;
+  const isSubagent = !!subRow || !!session.is_subagent || !!nestParentIdOf(session) || !!session.worktree_name;
   // Local-first "pending working": a message has been sent but the daemon
   // hasn't confirmed delivery yet (status not active). Reading the durable
   // pendingMessages map directly returns a stable boolean, so only this card
@@ -1670,6 +1685,12 @@ export const SessionCard = memo(function SessionCard({
     session._hasDraft ? (st.drafts[session._id]?.draft_message as string | undefined) ?? "" : ""
   ));
   const cardSummary = sessionCardSummary(session);
+  // The agent's pinned thread state, when it wrote one. It REPLACES the
+  // generated summary on the card rather than stacking with it: one is what the
+  // agent says is true right now, the other is a description of the session, and
+  // two summary lines on a card is one too many. Ages on the coarse clock, so a
+  // state the thread has run past reads dim instead of confident.
+  const stateView = threadStateView(session, session.message_count, coarseNow);
   // "Working" = the agent is actively running right now (mirrors
   // sessionLivenessState's "active"). The green pulse keys off this ACTUAL state
   // rather than the section the card lives in, so pinned and flat-view cards —
@@ -1848,8 +1869,8 @@ export const SessionCard = memo(function SessionCard({
                 only when the parent is directly above; this makes the
                 sub-of-parent relationship explicit even for a subagent floating
                 as its own top-level row (flat view, or parent off-screen). */}
-            <svg className="w-3 h-3 text-violet-400/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label="Subagent">
-              <title>Subagent — child of its parent session</title>
+            <svg className={`w-3 h-3 flex-shrink-0 ${subRow ? "text-sol-amber/60" : "text-violet-400/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow ? "Trigger session" : "Subagent"}>
+              <title>{subRow ? "Session driven by the trigger above" : "Subagent — child of its parent session"}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
             </svg>
@@ -1893,6 +1914,17 @@ export const SessionCard = memo(function SessionCard({
               </span>
             </div>
           </div>
+          {stateView && (
+            <div className="mt-0.5 flex items-start gap-1" title={stateView.text}>
+              <Pin
+                className={`w-2 h-2 mt-[3px] shrink-0 ${stateView.freshness === "stale" ? "text-sol-orange/60" : "text-sol-cyan/60"}`}
+                strokeWidth={2.4}
+              />
+              <span className="text-[10px] text-sol-text-secondary truncate leading-snug">
+                {stateView.headline}
+              </span>
+            </div>
+          )}
           {cleanedUserMsg && (
             <div className="text-[10px] text-gray-500 mt-0.5 truncate leading-snug">
               <span className="text-gray-600 mr-0.5">&gt;</span>
@@ -2023,7 +2055,18 @@ export const SessionCard = memo(function SessionCard({
             </div>
           </div>
         )}
-        {cardSummary && !session.implementation_session && (
+        {stateView && !session.implementation_session && (
+          <div className="mt-0.5 flex items-start gap-1" title={stateView.text}>
+            <Pin
+              className={`w-2.5 h-2.5 mt-[3px] shrink-0 ${stateView.freshness === "fresh" ? "text-sol-cyan/70" : stateView.freshness === "aging" ? "text-sol-yellow/70" : "text-sol-orange/70"}`}
+              strokeWidth={2.4}
+            />
+            <span className={`text-[11px] truncate leading-snug ${stateView.freshness === "stale" ? "text-sol-text-dim" : "text-sol-text-secondary"}`}>
+              {stateView.headline}
+            </span>
+          </div>
+        )}
+        {cardSummary && !stateView && !session.implementation_session && (
           <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
             <FormattedSummary text={cardSummary} />
           </div>
@@ -2269,7 +2312,7 @@ export const SessionCard = memo(function SessionCard({
         </div>
       )}
       {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
-        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/50 to-sol-bg-alt/85'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 50%, transparent), color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 85%, transparent))' } : undefined}>
+        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${isActive ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 50%, transparent), color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 85%, transparent))' } : undefined}>
           {/* Pin slot, first so it anchors the top of the toolbar. When the row is
               already pinned, the persistent badge above IS the pin — here we render
               only an invisible spacer the same size, so the remaining actions sit
@@ -2672,14 +2715,8 @@ export function SessionListPanel({
   // Publish the absorbed set for keyboard nav (computeVisualOrder reads it from
   // the store). Content-keyed so Set identity churn from recomputes doesn't
   // spam store notifications.
-  const navSetsKey = useMemo(
-    () => [...schedulePartition.absorbedIds].sort().join(","),
-    [schedulePartition.absorbedIds],
-  );
-  useEffect(() => {
-    useInboxStore.getState().setScheduleNavSets({ absorbed: schedulePartition.absorbedIds });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navSetsKey]);
+  // (The setScheduleNavSets publish lives below, after the trigger-view
+  // grouping it also carries is computed.)
 
   // Corner shown when the session is in a fork tree (has forks, or is one);
   // colored by the tree's root so the whole tree matches.
@@ -2820,6 +2857,18 @@ export function SessionListPanel({
       })
       .catch(() => {});
   }, [handleSelect, router, convex]);
+  // Trigger view header click: the trigger IS the citizen there, so its row
+  // opens the trigger's own page (/triggers?task= arrives expanded and scrolled
+  // into view) — the sessions it drives are already sub rows right below.
+  // Pseudo rows (loops, live subagents) have no agent_tasks row for that page
+  // to show, so they keep the conversation-open path.
+  const openTriggerPage = useCallback((row: TriggerRow) => {
+    if (row.kind) {
+      openScheduleTarget(row);
+      return;
+    }
+    router.push(`/triggers?task=${row.task._id}`);
+  }, [router, openScheduleTarget]);
   // Schedule bars under cards: the schedules bound to a VISIBLE session — the
   // ones it originates (inject, any type), the spawn triggers it created
   // (attribution, not routing), plus, for a run card, the schedule that
@@ -2863,6 +2912,44 @@ export function SessionListPanel({
     );
     return filtered.sort((a, b) => (b.inbox_stashed_at || b.updated_at || 0) - (a.inbox_stashed_at || a.updated_at || 0));
   }, [filterByChip, stashedList]);
+
+  // "By trigger" lens — the roster's rows promoted to first-class rows, each
+  // with the sessions it drives as sub rows beneath (home conversation /
+  // runs), the rest falling to project groups. Grouped over the UNabsorbed
+  // filtered lists PLUS the stashed/killed buckets: a standing trigger's home
+  // typically rests in the stash, and this lens exists precisely to show each
+  // trigger's work — claimed hidden sessions render as muted sub rows, while
+  // unclaimed hidden ones stay in their buckets. Computed in every mode (one
+  // cheap pass) so the nav bridge and the view switcher know whether triggers
+  // exist before the user ever enters the mode.
+  const triggerView = useMemo(() => {
+    // Pinned flows into the pool like everything else — this view has exactly
+    // two tiers, triggers then other sessions, with no status/pinned chrome.
+    const { triggerGroups, rest } = groupSessionsByTrigger(
+      scheduleRowsView,
+      [...filteredPinned, ...filteredNew, ...filteredNeedsInput, ...filteredWorking],
+      { hidden: [...filteredStashed, ...filteredDismissed] },
+    );
+    return { triggerGroups, projectGroups: groupSessionsForLabelView(rest, {}, {}).projectGroups };
+  }, [scheduleRowsView, filteredPinned, filteredNew, filteredNeedsInput, filteredWorking, filteredStashed, filteredDismissed]);
+  // Publish the schedule projections for keyboard nav (computeVisualOrder reads
+  // them from the store): the absorbed set (status view) and the trigger view's
+  // group order. Content-keyed so identity churn from recomputes doesn't spam
+  // store notifications.
+  const triggerOrder = useMemo(
+    () => triggerView.triggerGroups.map((g) => ({ key: g.key, ids: g.items.map((i) => i._id) })),
+    [triggerView.triggerGroups],
+  );
+  const navSetsKey = useMemo(
+    () =>
+      [...schedulePartition.absorbedIds].sort().join(",") +
+      "|" + triggerOrder.map((g) => `${g.key}:${g.ids.join("+")}`).join(","),
+    [schedulePartition.absorbedIds, triggerOrder],
+  );
+  useEffect(() => {
+    useInboxStore.getState().setScheduleNavSets({ absorbed: schedulePartition.absorbedIds, triggerOrder });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navSetsKey]);
 
   // Stale working set: EVERY non-hidden session untouched for >30d, minus
   // pinned (explicit keep) and the one you're viewing. Stashed sessions are an
@@ -2908,6 +2995,13 @@ export function SessionListPanel({
         (sess.updated_at ?? 0) > since,
     );
   }, [s.sessions, s.blockedReviveRequestedAt, coarseNow]);
+  // A fleet of nothing but blocked subagent workers doesn't earn the amber
+  // pill: their parents have moved on, so there's no one waiting on a revive.
+  // The banner itself still handles the all-subs case when it's forced open.
+  const blockedHasNonSub = useMemo(
+    () => blockedSessions.some((sess) => !isSubagentConversation(sess)),
+    [blockedSessions],
+  );
   // A LIVE 0→N transition of the blocked set is a fresh incident: replay the
   // banner entrance with the attention glow and pulse the header pill so the
   // moment registers. Hydration also walks 0→N right after mount, so the
@@ -3234,6 +3328,12 @@ export function SessionListPanel({
             [filteredPinned, "pinned"],
             ...planView.planGroups.map(({ key, items }) => [items, `plan_${key}`] as [InboxSession[], string]),
             ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
+          ]
+        : viewMode === "trigger"
+        ? [
+            // Trigger sub rows are always visible (their rows don't collapse),
+            // so only the project fallthrough tier can need a reveal here.
+            ...triggerView.projectGroups.map(({ name, items }) => [items, `trigproj_${name}`] as [InboxSession[], string]),
           ]
         : [
             [filteredPinned, "pinned"], [filteredNew, "new"],
@@ -3565,8 +3665,10 @@ export function SessionListPanel({
                     gist, cadence, countdown, hover verbs). Click selects the
                     session with its schedule strip expanded (openScheduleTarget
                     — the strip re-expands even if the session is already
-                    active). */}
-                {scheduleBarRowsFor(session).map((r) => (
+                    active). The trigger view skips them: there every armed
+                    trigger is already a first-class group header, so a bar
+                    under a card would repeat the header just above it. */}
+                {viewMode !== "trigger" && scheduleBarRowsFor(session).map((r) => (
                   <TriggerRowItem
                     key={r.task._id}
                     row={{ ...r, openId: session._id }}
@@ -3652,7 +3754,7 @@ export function SessionListPanel({
           {/* Permanent trigger for the blocked-fleet actions: visible whenever
               ANY session is parked on a limit/login banner, no matter how the
               banner itself was snoozed. Panel chrome, so it never scrolls away. */}
-          {blockedSessions.length > 0 && (
+          {blockedSessions.length > 0 && blockedHasNonSub && (
             <button
               key={blockedIncidentTs}
               onClick={openBlockedBanner}
@@ -3691,6 +3793,7 @@ export function SessionListPanel({
               { key: "time", label: "By created", icon: Clock },
               ...(visibleBuckets.length > 0 ? [{ key: "bucket", label: "By label", icon: Tag }] : []),
               ...(hasPlanSessions ? [{ key: "plan", label: "By plan", icon: Workflow }] : []),
+              ...(scheduleRowsView.length > 0 ? [{ key: "trigger", label: "By trigger", icon: Zap }] : []),
             ];
             const current = viewModeOptions.find((o) => o.key === viewMode) ?? viewModeOptions[0];
             const CurrentIcon = current.icon;
@@ -3881,6 +3984,49 @@ export function SessionListPanel({
           </div>
         ))}
         </>
+        ) : viewMode === "trigger" ? (
+        <>
+        {/* Trigger-first: every roster row (armed trigger, loop, live subagent)
+            is a primary row — the SAME rich row the dock shows, verbs and all —
+            and the sessions it drives render as compact SUB ROWS beneath it
+            (the ↳ child idiom, schedule-amber). Clicking the trigger opens its
+            dedicated page; clicking a sub row opens that session. A trigger
+            with no visible sessions keeps its row: the trigger is the citizen,
+            its work may be folded away or not yet run. */}
+        {triggerView.triggerGroups.map(({ key, row, items }) => (
+          <div key={key}>
+            <TriggerRowItem row={row} activeSessionId={activeSessionId} onOpen={openTriggerPage} />
+            {items.map((session) => (
+              <div key={session._id} className="border-b border-sol-border/30">
+                <SessionCard
+                  session={session}
+                  isActive={session._id === activeSessionId}
+                  globalIndex={0}
+                  onSelect={handleSelect}
+                  onDismiss={handleAnimatedDismiss}
+                  onStash={handleAnimatedStash}
+                  onDefer={s.deferSession}
+                  onPin={s.pinSession}
+                  forkColorKey={forkColorKeyOf(session)}
+                  sessionLabel={labelByConv[session._id] ?? null}
+                  isFavorite={cardIsFavorite(session)}
+                  subRow="trigger"
+                  // A claimed stashed/killed home renders muted — resting is
+                  // its normal state under a standing trigger.
+                  variant={isSessionHidden(session) ? "stashed" : "default"}
+                />
+              </div>
+            ))}
+          </div>
+        ))}
+        {/* Sessions no trigger drives group by project — the same fallback tier
+            the label and plan views use. */}
+        {triggerView.projectGroups.map(({ name, items }) => (
+          <div key={`trigproj-${name}`}>
+            {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `trigproj_${name}` })}
+          </div>
+        ))}
+        </>
         ) : (
         <>
         {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
@@ -3940,14 +4086,17 @@ export function SessionListPanel({
         </>)}
       </div>
       {/* The schedule dock is panel chrome, not list content: it renders under
-          the scroll area in EVERY view mode — the robots' one home. */}
-      <TriggerDock
-        rows={scheduleRowsView}
-        unreadCount={schedulePartition.unreadCount}
-        nextRunAt={schedulePartition.nextRunAt}
-        activeSessionId={activeSessionId}
-        onOpen={openScheduleTarget}
-      />
+          the scroll area in every view mode EXCEPT "by trigger" — there the
+          whole list already IS the roster, so the dock would double it. */}
+      {viewMode !== "trigger" && (
+        <TriggerDock
+          rows={scheduleRowsView}
+          unreadCount={schedulePartition.unreadCount}
+          nextRunAt={schedulePartition.nextRunAt}
+          activeSessionId={activeSessionId}
+          onOpen={openScheduleTarget}
+        />
+      )}
     </div>
   );
 }

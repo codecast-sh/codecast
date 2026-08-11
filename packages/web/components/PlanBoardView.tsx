@@ -1,6 +1,7 @@
 import { useState, useCallback, DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
+import { closeTaskWithGuard } from "../lib/taskActions";
 import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
 import { toast } from "sonner";
 import {
@@ -58,8 +59,16 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
       return;
     }
 
-    updateTask(shortId, { status: targetStatus });
-    toast.success(`${shortId} → ${targetStatus.replace("_", " ")}`);
+    // Plan cards are the parents (subtasks are excluded from the board), so a
+    // drag to Done is the guarded case — route it through the close gateway.
+    if (targetStatus === "done" || targetStatus === "dropped") {
+      if (!closeTaskWithGuard(shortId, targetStatus as "done" | "dropped").needsConfirm) {
+        toast.success(`${shortId} → ${targetStatus.replace("_", " ")}`);
+      }
+    } else {
+      updateTask(shortId, { status: targetStatus });
+      toast.success(`${shortId} → ${targetStatus.replace("_", " ")}`);
+    }
     setDragging(null);
   }, [tasks, updateTask]);
 

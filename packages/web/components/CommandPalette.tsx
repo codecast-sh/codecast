@@ -76,11 +76,13 @@ import {
   Focus,
   Repeat,
   Zap,
+  CornerDownRight,
 } from "lucide-react";
+import { setTaskParent, closeTaskWithGuard } from "../lib/taskActions";
 
 const api = _api as any;
 
-type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "bucket" | "model" | "view";
+type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "bucket" | "model" | "view" | "parent";
 
 const DEFAULT_AGENT_RUN_MESSAGE = "lets do this task";
 
@@ -438,6 +440,21 @@ function ActionSubmenu({
         .filter((o) => o.label.toLowerCase().includes(q))
         .map((a) => ({ ...a, type: "agent" as const, image: undefined }));
     }
+    if (mode === "parent") {
+      // Candidate parents: same-workspace, open, not the targets themselves.
+      const targetIds = new Set(targets.map((t: any) => String(t._id)));
+      const teamKey = isTask(target) ? (target.team_id ?? null) : null;
+      const all = Object.values(useInboxStore.getState().tasks) as TaskItem[];
+      return all
+        .filter((t: any) =>
+          !targetIds.has(String(t._id)) &&
+          (t.team_id ?? null) === teamKey &&
+          t.status !== "done" && t.status !== "dropped" &&
+          !String(t._id).startsWith("temp_") &&
+          (q === "" || t.title?.toLowerCase().includes(q) || t.short_id?.toLowerCase().includes(q)))
+        .slice(0, 8)
+        .map((t: any) => ({ key: t.short_id, label: `${t.short_id}  ${t.title}`, active: false }));
+    }
     if (mode === "plan_status") {
       return PLAN_STATUS_OPTIONS
         .filter((o) => o.label.toLowerCase().includes(q))
@@ -636,8 +653,19 @@ function ActionSubmenu({
       const label = count === 1 ? (targets[0] as TaskItem).short_id : `${count} tasks`;
 
       if (mode === "status") {
-        applyTaskUpdate({ status: item.key });
-        toast.success(`${label} \u2192 ${item.label}`);
+        // Terminal moves route through the single close gateway so a parent
+        // with open subtasks opens the shared dialog instead of writing Done
+        // and stranding a doomed local state the server refuses.
+        if (item.key === "done" || item.key === "dropped") {
+          let deferred = false;
+          for (const t of targets as TaskItem[]) {
+            if (closeTaskWithGuard(t.short_id, item.key as "done" | "dropped").needsConfirm) deferred = true;
+          }
+          if (!deferred) toast.success(`${label} \u2192 ${item.label}`);
+        } else {
+          applyTaskUpdate({ status: item.key });
+          toast.success(`${label} \u2192 ${item.label}`);
+        }
       } else if (mode === "priority") {
         applyTaskUpdate({ priority: item.key });
         toast.success(`${label} priority \u2192 ${item.label}`);
@@ -651,6 +679,14 @@ function ActionSubmenu({
         applyTaskUpdate({ assignee: item.key });
         const member = (teamMembers || []).find((m: any) => m._id === item.key);
         toast.success(`Assigned to ${member?.name || "user"}`);
+      } else if (mode === "parent") {
+        let failed = 0;
+        for (const t of targets as TaskItem[]) {
+          const res = setTaskParent(t.short_id, item.key);
+          if (!res.ok) failed++;
+        }
+        if (failed === 0) toast.success(`Nested under ${item.key}`);
+        else toast.error(`${failed} could not be nested (cycle, depth, or workspace)`);
       }
     } else if (targetType === "plan") {
       if (mode === "plan_status") {
@@ -775,6 +811,7 @@ function ActionSubmenu({
     mode === "bucket" ? "Label session — type to filter or create..." :
     mode === "model" ? "Change model & effort..." :
     mode === "view" ? "Switch view — filter by label or project..." :
+    mode === "parent" ? "Set parent — search tasks..." :
     "Select...";
 
   const itemClass = (i: number) =>
@@ -1521,9 +1558,18 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "bucket", "model"].includes(actionKey)) {
+    if (["status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "bucket", "model", "parent"].includes(actionKey)) {
       setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);
+      return;
+    }
+
+    if (actionKey === "remove_parent" && targetType === "task") {
+      for (const t of targets as TaskItem[]) {
+        if ((t as any).parent_id) setTaskParent(t.short_id, "");
+      }
+      toast.success("Parent removed");
+      closePalette();
       return;
     }
 
@@ -1543,10 +1589,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     }
 
     if (actionKey === "drop" && targetType === "task") {
+      let deferred = false;
       for (const t of targets as TaskItem[]) {
-        updateTask(t.short_id, { status: "dropped" });
+        if (closeTaskWithGuard(t.short_id, "dropped").needsConfirm) deferred = true;
       }
-      toast.success("Task dropped");
+      if (!deferred) toast.success("Task dropped");
       closePalette();
       return;
     }
@@ -1636,10 +1683,12 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     { key: "priority", label: "Set priority...", icon: ArrowUp },
     { key: "labels", label: "Add labels...", icon: Tag },
     { key: "assign", label: "Assign to...", icon: User },
+    { key: "parent", label: "Set parent...", icon: CornerDownRight },
+    ...(targets.some((t: any) => t?.parent_id) ? [{ key: "remove_parent", label: "Remove parent", icon: CornerDownRight }] : []),
     { key: "agent_run", label: "Start agent run...", icon: Bot },
     { key: "copy", label: "Copy task ID", icon: Copy },
     { key: "drop", label: "Drop task", icon: Trash2 },
-  ], []);
+  ], [targets]);
 
   const docActions = useMemo((): ContextActionRow[] => {
     const isPinned = target?.pinned;

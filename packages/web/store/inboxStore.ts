@@ -302,6 +302,13 @@ export type InboxSession = {
   stable_exclude?: string[];
   message_count: number;
   idle_summary?: string;
+  // The agent's pinned "where this thread stands" line (`cast state`), with the
+  // clock and message_count from when it was written. The card renders its
+  // headline in place of idle_summary and dims it as the gap grows — see
+  // shared/contracts/threadState.
+  thread_state?: string | null;
+  thread_state_at?: number | null;
+  thread_state_msg_count?: number | null;
   is_idle: boolean;
   // True when an AskUserQuestion poll is open and unanswered. The agent is
   // blocked on the user, so this always means "needs input" regardless of the
@@ -313,6 +320,10 @@ export type InboxSession = {
   agent_status?: AgentStatus;
   tmux_session?: string | null;
   permission_mode?: string | null;
+  // When the agent process behind this session started. Background watches and
+  // monitors armed before it belong to a process that has been replaced, so
+  // they are dead however alive the session is (see monitorRows).
+  agent_started_at?: number | null;
   is_deferred?: boolean;
   is_pinned?: boolean;
   // When the user pinned this session (Date.now() ms). Drives a stable order in
@@ -561,6 +572,12 @@ export type TaskItem = {
   // True = on the human's board: set by triage promote or `cast task create
   // --human`. Machine-created tasks without it are agent-internal.
   promoted?: boolean;
+  // Idempotency key on optimistic create-stubs; altKey-supersedes to the real row.
+  client_key?: string;
+  // Subtask edge: the task this one is filed under. Always a task in the SAME
+  // workspace (convex resolveParentTask enforces that), so nesting can never
+  // pull a row across the workspace boundary the views scope by.
+  parent_id?: string | null;
   labels?: string[];
   blocked_by?: string[];
   blocks?: string[];
@@ -636,6 +653,27 @@ export function convBucketMap(assignments: Record<string, BucketAssignmentItem>)
   const map: Record<string, string | undefined> = {};
   for (const a of Object.values(winner)) map[a.conversation_id] = a.bucket_id ?? undefined;
   return map;
+}
+
+// Close the open subtree under a parent in the draft — the optimistic mirror
+// of the server's cascadeClose, so a "close subtasks too" choice renders
+// instantly. Statuses are raw fields and reconcile cleanly with the echo.
+function cascadeCloseDraft(draft: { tasks: Record<string, TaskItem> }, parentId: string, status: string) {
+  const all = Object.values(draft.tasks) as any[];
+  const queue = [String(parentId)];
+  let guard = 0;
+  while (queue.length > 0 && guard++ < 500) {
+    const cur = queue.shift()!;
+    for (const t of all) {
+      if (!t.parent_id || String(t.parent_id) !== cur) continue;
+      queue.push(String(t._id));
+      // Only stamp `status` — the render reads status alone. A locally-stamped
+      // closed_at/updated_at would become a pending field lock the server's own
+      // timestamp never echoes, and a frozen updated_at drops later delta pushes
+      // (it is the collection version key). The server sets those on echo.
+      if (t.status !== "done" && t.status !== "dropped") t.status = status;
+    }
+  }
 }
 
 export type TaskDetail = TaskItem & {
@@ -721,8 +759,10 @@ export type SavedView = {
 // The inbox panel's session-ordering modes. "grouped" = status sections;
 // "recent" = flat, newest-first by last activity (updated_at) — reshuffles as
 // sessions work; "time" = flat, newest-first by creation (started_at) — a
-// stable chronology that doesn't move; "bucket" = sections per manual label.
-export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan";
+// stable chronology that doesn't move; "bucket" = sections per manual label;
+// "plan" = sections per plan; "trigger" = trigger-first — every armed trigger
+// (and loop/subagent) is a group header with the sessions it drives beneath.
+export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan" | "trigger";
 
 
 export type ClientUI = {
@@ -772,6 +812,11 @@ export type ClientUI = {
   // header toggle when a conversation has none yet). Off by default — you still
   // SEE and can reply to comments others leave regardless of this.
   comments_enabled?: boolean;
+  // Fold the pinned thread-state panel above the composer down to its headline
+  // row. Expanded by default — the panel exists to be read on arrival — and
+  // left unstamped, so it stays a per-device reading preference like the other
+  // layout toggles.
+  thread_state_collapsed?: boolean;
   // Inbox session panel view mode. When true, the panel drops the
   // Pinned/New/Needs-Input/Working grouping and shows every session as one flat
   // list sorted newest-first by creation time (started_at). Toggled by Ctrl+,.
@@ -1466,6 +1511,11 @@ export function sessionStructuralSig(s: InboxSession): string {
     // lands in the session — never on heartbeats — so folding it in is cheap
     // and keeps the thumb from waiting on the coarse ticker.
     s.image_preview_url || "",
+    // The agent's pinned thread state replaces the card's summary line. The
+    // TIMESTAMP stands in for the text: every write stamps a new one, so the
+    // signature stays short while still waking the card on a rewrite. Set by
+    // `cast state` only — a few times per session, never on heartbeats.
+    s.thread_state_at || 0,
   ].join("\x1f");
 }
 
@@ -2023,6 +2073,15 @@ export function favoritesVisualOrder(
   return [...pinned, ...projectGroups.flatMap((g) => g.items)];
 }
 
+// The panel→store bridge for schedule-derived nav data. Trigger rows live in a
+// per-component Convex subscription (agentTasks.webList), so the panel
+// publishes the projections nav needs: the absorbed set (status view) and the
+// trigger view's ordered groups (session ids per trigger, roster order).
+export type ScheduleNavSets = {
+  absorbed: ReadonlySet<string>;
+  triggerOrder?: Array<{ key: string; ids: string[] }>;
+};
+
 // Resolve the active inbox view mode from client UI state. Shared by the
 // inboxViewMode getter and computeVisualOrder so every consumer agrees on
 // which ordering is on screen.
@@ -2207,8 +2266,10 @@ export function computeVisualOrder(state: {
   collapsedSections?: Record<string, boolean>;
   // Ephemeral schedule projection published by GlobalSessionPanel (see
   // setScheduleNavSets) so grouped-mode nav skips sessions absorbed behind
-  // TRIGGERS rows. Null until the panel has schedule data.
-  scheduleNavSets?: { absorbed: ReadonlySet<string> } | null;
+  // TRIGGERS rows, and so trigger-mode nav walks the panel's trigger-group
+  // order (trigger data lives in a component Convex subscription, never the
+  // store). Null until the panel has schedule data.
+  scheduleNavSets?: ScheduleNavSets | null;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
@@ -2291,6 +2352,36 @@ export function computeVisualOrder(state: {
       ...pinned,
       ...planGroups.flatMap((g) => (collapsed[`plan_${g.key}`] ? [] : g.items)),
       ...projectGroups.flatMap((g) => (collapsed[`planproj_${g.name}`] ? [] : g.items)),
+    ];
+  }
+  if (mode === "trigger") {
+    // Trigger-first: walk the panel's published group order (the grouping needs
+    // the trigger subscription only the panel has — see ScheduleNavSets). No
+    // absorption in this mode: a trigger's sessions render under its row, so
+    // nav walks them there. Two tiers only — no pinned/status chrome: pinned
+    // sessions flow into groups or the project fallthrough like everything
+    // else. Trigger groups don't collapse; the project tier does. Before the
+    // panel publishes, fall back to base.
+    const groups = state.scheduleNavSets?.triggerOrder;
+    if (!groups) return base;
+    const byId = new Map(base.map((s) => [s._id, s]));
+    const walked: InboxSession[] = [];
+    const grouped = new Set<string>();
+    for (const g of groups) {
+      for (const id of g.ids) {
+        const sess = byId.get(id);
+        if (sess && !grouped.has(id)) {
+          grouped.add(id);
+          walked.push(sess);
+        }
+      }
+    }
+    const { projectGroups } = groupSessionsForLabelView(
+      base.filter((s) => !grouped.has(s._id)), {}, {},
+    );
+    return [
+      ...walked,
+      ...projectGroups.flatMap((g) => (collapsed[`trigproj_${g.name}`] ? [] : g.items)),
     ];
   }
   return base;
@@ -2376,9 +2467,10 @@ interface InboxStoreState {
   // live (re-sorts freely). Ephemeral: never persisted or synced.
   recentFreezeOrder: string[] | null;
   // Schedule projection for keyboard nav (standing sessions + runs collapsed
-  // under a schedule group row), published by GlobalSessionPanel from its
-  // agentTasks.webList subscription. Ephemeral: never persisted or synced.
-  scheduleNavSets: { absorbed: ReadonlySet<string> } | null;
+  // under a schedule group row, and the trigger view's group order), published
+  // by GlobalSessionPanel from its agentTasks.webList subscription. Ephemeral:
+  // never persisted or synced.
+  scheduleNavSets: ScheduleNavSets | null;
   // One-shot request to open the schedule strip above a conversation, published
   // by schedule-surface clicks (dock rows, bars under cards) so navigating FROM
   // a schedule lands with the prompt already visible. Nonce-keyed: the strip
@@ -2550,6 +2642,12 @@ interface InboxStoreState {
   openCreateModal: (type: 'task' | 'plan' | 'doc') => void;
   closeCreateModal: () => void;
 
+  // -- Close-guard: one shared dialog for "close a parent with open subtasks".
+  // Any surface (list, kanban, palette, plan board, detail) sets this via
+  // closeTaskWithGuard; a single CloseGuardDialog in DashboardLayout renders it.
+  taskCloseGuard: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[] } | null;
+  setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[] } | null) => void;
+
   // -- Fork navigation --
   // Forks are first-class conversations; we navigate to them by URL. No overlay state.
   optimisticForkChildren: ForkChild[];
@@ -2692,7 +2790,7 @@ interface InboxStoreState {
   // Publish the schedule projection (standing sessions, runs grouped under a
   // schedule row) for keyboard nav. Ephemeral raw-set state — the schedule data
   // itself lives in the agentTasks.webList Convex subscription, never the store.
-  setScheduleNavSets: (sets: { absorbed: ReadonlySet<string> } | null) => void;
+  setScheduleNavSets: (sets: ScheduleNavSets | null) => void;
   setScheduleStripExpand: (req: { convId: string; nonce: number } | null) => void;
   setComposerPrefill: (req: { convId: string; text: string } | null) => void;
   setViewingDismissedId: (id: string | null) => void;
@@ -2967,9 +3065,10 @@ interface InboxStoreState {
 
 
   // -- Task / Doc mutations (action + side effect) --
-  updateTaskStatus: (shortId: string, status: string) => Promise<any>;
-  updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string }) => Promise<any>;
-  createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string }) => Promise<any>;
+  updateTaskStatus: (shortId: string, status: string, subtaskResolution?: "cascade" | "only_parent") => Promise<any>;
+  updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string; parent?: string; subtask_resolution?: "cascade" | "only_parent" }) => Promise<any>;
+  createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string; parent?: string; client_key?: string }) => Promise<any>;
+  removeTaskStub: (clientKey: string) => void;
   createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[]; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
@@ -3347,7 +3446,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     // value here instead of clobbering it between overlay ticks.
     preserveFields: [
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
-      "is_connected", "tmux_session", "permission_mode",
+      "is_connected", "tmux_session", "permission_mode", "agent_started_at",
       "_postCreateBucketId",
     ],
     transform(draft, table, incoming) {
@@ -3388,7 +3487,13 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // locally; deletions arrive as deltas (status="dropped" etc.) and are hidden by
   // read-time filters. This is the systemic guarantee that nothing can snapshot-
   // gut the cache — the root of the "tasks vanish then stream back" collapses.
-  tasks: { isDelta: true },
+  // altKey "client_key" supersedes an optimistic create-stub: the quick-add
+  // writes a stub keyed by a non-Convex id carrying a minted client_key, and
+  // when the server row syncs back with the same client_key the delta rekeys
+  // the stub onto the real _id and drops the stub (moving its pending tombstone
+  // too). webCreate is idempotent on client_key, so a retry never doubles the
+  // server row either. Replaces the manual stub-adopt path.
+  tasks: { isDelta: true, altKey: "client_key" },
   docs: { isDelta: true },
   plans: { isDelta: true },
   // Like the others: a liberal delta cache. useSyncProjects' call site passes no
@@ -4520,6 +4625,9 @@ export const useInboxStore = create<InboxStoreState>(
   openCreateModal: (type: 'task' | 'plan' | 'doc') => set({ createModal: type }),
   closeCreateModal: () => set({ createModal: null }),
 
+  taskCloseGuard: null,
+  setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[] } | null) => set({ taskCloseGuard: g }),
+
   optimisticForkChildren: [],
   recentProjects: [],
   setRecentProjects: action(function (this: Draft, projects: Array<{ path: string; count: number; lastActive: number }>) {
@@ -4578,10 +4686,14 @@ export const useInboxStore = create<InboxStoreState>(
     const current = state.inboxViewMode();
     const hasBuckets = (Object.values(state.buckets) as BucketItem[]).some((b) => !b.archived_at);
     const hasPlans = (Object.values(state.sessions) as InboxSession[]).some((s) => !!s.active_plan);
+    // Trigger data lives in the panel's Convex subscription; its published nav
+    // bridge is the store's only sight of whether any triggers exist.
+    const hasTriggers = (state.scheduleNavSets?.triggerOrder?.length ?? 0) > 0;
     const cycle: Array<InboxViewMode> = [
       "grouped", "recent", "time",
       ...(hasBuckets ? ["bucket" as const] : []),
       ...(hasPlans ? ["plan" as const] : []),
+      ...(hasTriggers ? ["trigger" as const] : []),
     ];
     state.setInboxViewMode(cycle[(cycle.indexOf(current) + 1) % cycle.length]);
   },
@@ -5825,7 +5937,7 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   // Raw set: ephemeral nav bookkeeping — no draft, no persistence, no dispatch.
-  setScheduleNavSets: (sets: { absorbed: ReadonlySet<string> } | null) =>
+  setScheduleNavSets: (sets: ScheduleNavSets | null) =>
     set({ scheduleNavSets: sets }),
 
   // Raw set: one-shot strip-expand request (see the state field's comment).
@@ -6626,13 +6738,16 @@ export const useInboxStore = create<InboxStoreState>(
     }));
   },
 
-  updateTaskStatus: action(function (this: Draft, shortId: string, status: string) {
+  // The optional resolution rides to dispatch.updateTaskStatus → webUpdate's
+  // close-guard; on "cascade" the open local subtree closes optimistically too.
+  updateTaskStatus: action(function (this: Draft, shortId: string, status: string, subtaskResolution?: "cascade" | "only_parent") {
     const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as TaskItem | undefined;
     if (task) {
       task.status = status;
       task.updated_at = Date.now();
       if (status === "done" || status === "dropped") {
         (task as any).closed_at = Date.now();
+        if (subtaskResolution === "cascade") cascadeCloseDraft(this, task._id, status);
       }
     }
   }),
@@ -6640,7 +6755,22 @@ export const useInboxStore = create<InboxStoreState>(
   updateTask: action(function (this: Draft, shortId: string, fields: Record<string, any>) {
     const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as TaskItem | undefined;
     if (task) {
-      Object.assign(task, fields, { updated_at: Date.now() });
+      // `parent` is a short id (or "" to detach) for the server; the draft
+      // mirrors it onto parent_id so the row re-nests instantly. The caller
+      // (setTaskParent) has already run the shared cycle/workspace guards.
+      const { parent, subtask_resolution, ...rest } = fields;
+      Object.assign(task, rest, { updated_at: Date.now() });
+      if (parent !== undefined) {
+        if (!parent) {
+          (task as any).parent_id = undefined;
+        } else {
+          const parentRow = Object.values(this.tasks).find((t: any) => t.short_id === parent || t._id === parent) as TaskItem | undefined;
+          if (parentRow) (task as any).parent_id = parentRow._id;
+        }
+      }
+      if ((fields.status === "done" || fields.status === "dropped") && subtask_resolution === "cascade") {
+        cascadeCloseDraft(this, task._id, fields.status);
+      }
     }
   }),
 
@@ -6658,12 +6788,26 @@ export const useInboxStore = create<InboxStoreState>(
     if (project) Object.assign(project, fields, { updated_at: Date.now() });
   }),
 
-  createTask: action(function (this: Draft, opts: any) {
-    const tempId = `temp_${Date.now()}`;
-    const tempShortId = `ct-new`;
+  // Local-first create: an optimistic stub renders the row instantly (the
+  // quick-add loop on task detail fires several per second). The stub carries a
+  // minted client_key and is keyed by `temp_task_<key>`; when the server row
+  // syncs back with the same client_key, the tasks altKey supersede rekeys the
+  // stub onto the real _id and prunes it (SYNC_REGISTRY.tasks). The dispatch
+  // forwards client_key to the idempotent webCreate, so a retry can't double
+  // the server row. opts.client_key is always set by callers (createTaskAndAdopt);
+  // a fallback keeps a bare call safe.
+  createTask: asyncAction(function (this: Draft, opts: any) {
+    if (!opts.client_key) opts.client_key = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const tempId = `temp_task_${opts.client_key}`;
+    // A subtask stub inherits its parent's containers so it renders in place
+    // (same group, same board scope) instead of jumping on the server echo.
+    const parentRow = opts.parent
+      ? (Object.values(this.tasks).find((t: any) => t.short_id === opts.parent || t._id === opts.parent) as TaskItem | undefined)
+      : undefined;
     this.tasks[tempId] = {
       _id: tempId,
-      short_id: tempShortId,
+      client_key: opts.client_key,
+      short_id: "ct-…",
       title: opts.title,
       description: opts.description,
       task_type: opts.task_type || "task",
@@ -6671,9 +6815,26 @@ export const useInboxStore = create<InboxStoreState>(
       priority: opts.priority || "medium",
       source: "human",
       labels: opts.labels,
+      assignee: opts.assignee,
+      parent_id: parentRow?._id ?? undefined,
+      plan_id: opts.plan_id ?? (parentRow as any)?.plan_id,
+      project_id: opts.project_id ?? (parentRow as any)?.project_id,
+      team_id: opts.team_id ?? parentRow?.team_id,
       created_at: Date.now(),
       updated_at: Date.now(),
-    } as TaskItem;
+    } as any as TaskItem;
+  }),
+
+  // Remove a create-stub whose server create was permanently refused (depth
+  // cap, workspace/plan access) — no server row will ever sync back to
+  // supersede it, so without this the stub strands as a durable ghost. Plants
+  // the exclude tombstone so the IDB diff is authorised to delete the row.
+  removeTaskStub: sync(function (this: Draft, clientKey: string) {
+    const tempId = `temp_task_${clientKey}`;
+    if (!this.tasks[tempId]) return;
+    delete this.tasks[tempId];
+    delete (this.pending as any)[`tasks:${tempId}`];
+    (this.pending as any)[`tasks:${tempId}`] = { type: "exclude", ts: Date.now() };
   }),
 
   // Creates route through the single dispatch path (no direct useMutation) and

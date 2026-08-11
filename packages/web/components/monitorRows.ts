@@ -172,9 +172,11 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
           description: (input?.description && String(input.description)) || (kind === "monitor" ? "background watch" : "background command"),
           command: (input?.command && String(input.command)) || "",
           persistent: !!input?.persistent,
-          // Background tasks carry no timeout — they run until they exit or
-          // are stopped, so the defensive expiry below never applies to them.
-          timeoutMs: kind === "monitor" && typeof input?.timeout_ms === "number" ? input.timeout_ms : undefined,
+          // Background tasks carry no timeout, and a persistent monitor's
+          // timeout_ms is ignored by the harness (required input, but the
+          // watch runs until TaskStop or session end) — neither gets one
+          // here, so the defensive expiry below never applies to them.
+          timeoutMs: kind === "monitor" && !input?.persistent && typeof input?.timeout_ms === "number" ? input.timeout_ms : undefined,
           startedAt: msg.timestamp,
           status: "watching",
           eventCount: 0,
@@ -247,13 +249,35 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
 // (tail not loaded/synced): past its own timeout plus slack it can't still be
 // running. Time-dependent, so it lives OUTSIDE the memoized scan.
 const TIMEOUT_SLACK_MS = 2 * 60_000;
-export function effectiveMonitorStatus(row: MonitorRow, now: number): MonitorStatus {
-  if (row.status === "watching" && row.timeoutMs !== undefined && now - row.startedAt > row.timeoutMs + TIMEOUT_SLACK_MS) {
+
+// A watch is a child of the agent process that armed it, so it cannot outlive
+// that process. When the agent restarts (`claude --resume` after a crash, a
+// kill, an account switch), every shell it was babysitting dies with it — but
+// the new process inherits only the transcript, so no completion notification
+// is ever written for them and the scan above leaves the rows "watching"
+// forever. Two dead `until grep` loops sat at a green "running for 19h" in the
+// inbox this way while their siblings, armed after the restart, were genuinely
+// alive: age can't tell them apart, but boot generation can.
+//
+// `agentStartedAt` is when the CURRENT agent process booted. A row armed
+// before it belongs to a process that is gone, so the watch was cut, not
+// finished — "stopped", the same verdict a kill notice produces. The slack
+// absorbs clock skew between the transcript's timestamps and the reported boot
+// (both come from the agent's own machine, so it only needs to be small); a
+// row armed after the boot is left entirely alone.
+const BOOT_SKEW_SLACK_MS = 60_000;
+
+export function effectiveMonitorStatus(row: MonitorRow, now: number, agentStartedAt?: number): MonitorStatus {
+  if (row.status !== "watching") return row.status;
+  if (agentStartedAt !== undefined && row.startedAt < agentStartedAt - BOOT_SKEW_SLACK_MS) {
+    return "stopped";
+  }
+  if (row.timeoutMs !== undefined && now - row.startedAt > row.timeoutMs + TIMEOUT_SLACK_MS) {
     return "timed_out";
   }
   return row.status;
 }
 
-export function watchingMonitors(rows: MonitorRow[], now: number): MonitorRow[] {
-  return rows.filter((r) => effectiveMonitorStatus(r, now) === "watching");
+export function watchingMonitors(rows: MonitorRow[], now: number, agentStartedAt?: number): MonitorRow[] {
+  return rows.filter((r) => effectiveMonitorStatus(r, now, agentStartedAt) === "watching");
 }

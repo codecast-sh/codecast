@@ -15,7 +15,7 @@ import { latestImagePreviewUrl } from "./messages";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, findModelOption, fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, findModelOption, fromConvexAgentType, toConvexAgentType, normalizeThreadState } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, ACTIVE_AGENT_STATUSES, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
@@ -7392,6 +7392,7 @@ type InboxSessionMaps = {
   agentStatusUpdatedAtMap: Map<string, number>;
   tmuxSessionMap: Map<string, string>;
   permissionModeMap: Map<string, string>;
+  agentStartedAtMap: Map<string, number>;
   liveConvIds: Set<string>;
   userDaemonAlive: boolean;
 };
@@ -7417,11 +7418,16 @@ async function buildUserSessionMaps(
   const agentStatusUpdatedAtMap = new Map<string, number>();
   const tmuxSessionMap = new Map<string, string>();
   const permissionModeMap = new Map<string, string>();
+  const agentStartedAtMap = new Map<string, number>();
   for (const s of managedSessions) {
     if (!s.conversation_id) continue;
     const cid = s.conversation_id.toString();
     if (s.tmux_session) tmuxSessionMap.set(cid, s.tmux_session);
     if (s.permission_mode) permissionModeMap.set(cid, s.permission_mode);
+    // Above the agent_status guard on purpose: a session whose status hasn't
+    // been reported yet still has a process generation, and that is exactly
+    // what decides whether its standing watches are real.
+    if (s.agent_started_at !== undefined) agentStartedAtMap.set(cid, s.agent_started_at);
     if (!s.agent_status) continue;
     if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
     // Raw status. The heartbeat-staleness coercion lives in trustedAgentStatus
@@ -7435,7 +7441,7 @@ async function buildUserSessionMaps(
     (s: any) => now - s.last_heartbeat < 6 * 60 * 1000
   );
 
-  return { agentStatusMap, agentStatusUpdatedAtMap, tmuxSessionMap, permissionModeMap, liveConvIds, userDaemonAlive };
+  return { agentStatusMap, agentStatusUpdatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, liveConvIds, userDaemonAlive };
 }
 
 // Empty maps for the liveness-excluded path: computeInboxSessions({includeLiveness:false})
@@ -7447,6 +7453,7 @@ const EMPTY_INBOX_MAPS: InboxSessionMaps = {
   agentStatusUpdatedAtMap: new Map(),
   tmuxSessionMap: new Map(),
   permissionModeMap: new Map(),
+  agentStartedAtMap: new Map(),
   liveConvIds: new Set(),
   userDaemonAlive: false,
 };
@@ -7473,6 +7480,7 @@ async function mergeForeignConversationLiveness(
     if (heartbeatAlive) maps.liveConvIds.add(cid);
     if (managed.tmux_session) maps.tmuxSessionMap.set(cid, managed.tmux_session);
     if (managed.permission_mode) maps.permissionModeMap.set(cid, managed.permission_mode);
+    if (managed.agent_started_at !== undefined) maps.agentStartedAtMap.set(cid, managed.agent_started_at);
     if (!managed.agent_status) continue;
     if (managed.agent_status_updated_at !== undefined) {
       maps.agentStatusUpdatedAtMap.set(cid, managed.agent_status_updated_at);
@@ -7488,7 +7496,7 @@ async function mergeForeignConversationLiveness(
 // the overlay merges (it overlays these back, keyed by id, via syncOverlay).
 const INBOX_LIVENESS_FIELDS = [
   "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
-  "is_connected", "tmux_session", "permission_mode",
+  "is_connected", "tmux_session", "permission_mode", "agent_started_at",
 ] as const;
 function stripInboxLiveness(row: any): void {
   for (const f of INBOX_LIVENESS_FIELDS) row[f] = null;
@@ -7681,6 +7689,12 @@ async function enrichInboxSessionRow(
     message_count: conv.message_count,
     transcript_revision: conv.transcript_revision ?? 0,
     idle_summary: conv.idle_summary,
+    // The agent's pinned "where this stands" line; the card shows its headline
+    // in place of the generated summary. msg_count rides along so the card can
+    // say how far the thread has moved since the agent wrote it.
+    thread_state: conv.thread_state ?? null,
+    thread_state_at: conv.thread_state_at ?? null,
+    thread_state_msg_count: conv.thread_state_msg_count ?? null,
     is_idle: isIdle,
     awaiting_input: awaitingInput,
     is_unresponsive: isUnresponsive,
@@ -7697,6 +7711,7 @@ async function enrichInboxSessionRow(
     agent_status: agentStatus,
     tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
+    agent_started_at: maps.agentStartedAtMap.get(conv._id.toString()) ?? null,
     last_user_message: lastUserMessage,
     // Newest image in the conversation (see schema) — the inbox row thumbnail.
     // Presence doubles as "this session has images".
@@ -7795,6 +7810,9 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     message_count: child.message_count,
     transcript_revision: child.transcript_revision ?? 0,
     idle_summary: child.idle_summary,
+    thread_state: child.thread_state ?? null,
+    thread_state_at: child.thread_state_at ?? null,
+    thread_state_msg_count: child.thread_state_msg_count ?? null,
     is_idle: childIsIdle,
     awaiting_input: false,
     is_unresponsive: false,
@@ -7809,6 +7827,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     agent_status: childAgentStatus,
     tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
+    agent_started_at: maps.agentStartedAtMap.get(child._id.toString()) ?? null,
     last_user_message: null,
     session_error: child.session_error,
     pending_api_error: child.pending_api_error === true,
@@ -8215,7 +8234,7 @@ export const listTeamInboxSessions = query({
   },
 });
 
-// The 7 heartbeat-derived fields the sessionsLiveness overlay ships — the exact set the
+// The 8 heartbeat-derived fields the sessionsLiveness overlay ships — the exact set the
 // full row (enrichInboxSessionRow) exposes and the web client merges via syncOverlay.
 type LivenessFields = {
   agent_status: any;
@@ -8225,6 +8244,10 @@ type LivenessFields = {
   is_connected: boolean;
   tmux_session: string | null;
   permission_mode: string | null;
+  // Start of the agent process currently behind this conversation. Rides the
+  // overlay rather than the base row because it changes on restart, exactly
+  // when the rest of the liveness picture does.
+  agent_started_at: number | null;
 };
 
 // The parents that a producing subagent child should keep in "working", derived ONCE
@@ -8410,6 +8433,7 @@ async function enrichLivenessFields(
     is_connected: !!daemonAlive,
     tmux_session: maps.tmuxSessionMap.get(cid) ?? null,
     permission_mode: maps.permissionModeMap.get(cid) ?? null,
+    agent_started_at: maps.agentStartedAtMap.get(cid) ?? null,
   };
 }
 
@@ -8516,6 +8540,7 @@ export function tallyInboxRows(
     is_unresponsive: boolean;
     awaiting_input: boolean;
     idle_summary: string | null;
+    thread_state: string | null;
     last_user_message: string | null;
     label: string | null;
     active_plan: { short_id: string; title: string } | null;
@@ -8588,6 +8613,9 @@ export function tallyInboxRows(
       is_unresponsive: !!s.is_unresponsive,
       awaiting_input: !!s.awaiting_input,
       idle_summary: s.idle_summary || null,
+      // The agent's own pinned state beats the generated blurb when both exist:
+      // one is what the agent says is true now, the other is a description.
+      thread_state: s.thread_state || null,
       last_user_message: s.last_user_message || null,
       label: rowLabel,
       active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
@@ -9251,6 +9279,98 @@ export const cliRenameSession = mutation({
     const previous = conv.title ?? null;
     await ctx.db.patch(conv._id, { title, title_is_custom: true });
     return { ok: true as const, short_id: shortId, title, previous_title: previous };
+  },
+});
+
+// The pinned thread state (cast state via /cli/sessions/state). The agent writes
+// its own standing "where does this stand?" line here and rewrites it as the
+// work moves; the human reads it pinned above the composer and truncated on the
+// inbox card, instead of reading back through the thread.
+//
+// Empty text is a CLEAR, so `cast state ""` and `cast state clear` land on the
+// same path. We stamp message_count alongside the text because that gap — not
+// the clock — is what tells the reader how far the thread has moved since the
+// agent last vouched for this (see shared/contracts/threadState).
+// The CLI writes it over /cli/sessions/state/set; the web's clear control goes
+// through the store's generic patchConversation rail instead, so the panel
+// disappears on click without waiting for a round-trip.
+// Access: the runner or the second-party owner — same rule as cliRenameSession.
+export const setThreadState = mutation({
+  args: {
+    session: v.string(),
+    text: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      c.user_id?.toString() === userId.toString() ||
+      c.owner_user_id?.toString() === userId.toString()
+    );
+    if (!conv) {
+      throw new Error(
+        `No session found for "${args.session}" (you can only set state on sessions you run or own)`
+      );
+    }
+
+    const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
+    const previous = conv.thread_state ?? null;
+    const text = normalizeThreadState(args.text ?? "");
+
+    if (!text) {
+      await ctx.db.patch(conv._id, {
+        thread_state: undefined,
+        thread_state_at: undefined,
+        thread_state_msg_count: undefined,
+      });
+      return { ok: true as const, short_id: shortId, cleared: true as const, state: null, previous_state: previous };
+    }
+
+    const at = Date.now();
+    await ctx.db.patch(conv._id, {
+      thread_state: text,
+      thread_state_at: at,
+      thread_state_msg_count: conv.message_count ?? 0,
+    });
+    return { ok: true as const, short_id: shortId, cleared: false as const, state: text, previous_state: previous, at };
+  },
+});
+
+// Read side of the same field (cast state / cast state show <session>). Same
+// access rule as the write: a session you run or own.
+export const getThreadState = query({
+  args: {
+    session: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      c.user_id?.toString() === userId.toString() ||
+      c.owner_user_id?.toString() === userId.toString()
+    );
+    if (!conv) {
+      throw new Error(
+        `No session found for "${args.session}" (you can only read state on sessions you run or own)`
+      );
+    }
+    return {
+      ok: true as const,
+      short_id: conv.short_id ?? conv._id.toString().slice(0, 7),
+      title: conv.title ?? null,
+      state: conv.thread_state ?? null,
+      at: conv.thread_state_at ?? null,
+      msg_count_at_write: conv.thread_state_msg_count ?? null,
+      message_count: conv.message_count ?? 0,
+    };
   },
 });
 
