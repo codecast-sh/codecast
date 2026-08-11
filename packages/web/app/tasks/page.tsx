@@ -667,12 +667,12 @@ export function TaskListContent() {
   // owned solely by the throttled reconcile crawl, so after switching teams the
   // previously-viewed team's tasks linger here (and survive reloads via IDB)
   // until that crawl catches up. Mirror the server's workspace scoping at read
-  // time: in a team view keep this team's tasks plus server-rescued teamless
-  // orphans; in the personal view keep only teamless tasks.
+  // time: in a team view keep only this team's tasks (exact match — untagged
+  // tasks are personal); in the personal view keep only teamless tasks.
   const tasksList = useMemo(() => {
     const all = Object.values(tasks);
     const scoped = all.filter((t) =>
-      activeTeamId ? (!t.team_id || t.team_id === activeTeamId) : !t.team_id
+      activeTeamId ? t.team_id === activeTeamId : !t.team_id
     );
     // Derive the dormant session badge fields here — the single entry point of
     // the page's task pipeline — so every downstream filter/group/badge keeps
