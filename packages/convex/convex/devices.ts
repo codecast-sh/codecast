@@ -5,6 +5,7 @@ import type { AgentClientId } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { isSessionOwner } from "./sessionOwners";
+import { canAccessConversation } from "./lib/access";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
   DEVICE_ONLINE_MS,
@@ -828,6 +829,8 @@ export const listDevices = query({
         device_id: d.device_id,
         label: d.label,
         platform: d.platform,
+        hostname: d.hostname ?? undefined,
+        ssh_host: d.ssh_host ?? undefined,
         last_seen: d.last_seen,
         is_remote: d.is_remote ?? false,
         local_project_roots: d.local_project_roots ?? [],
@@ -862,6 +865,123 @@ export const listDevices = query({
  *   - the stable hook: `{ snippet: "stable", mode: "solo"|"team"|"off", global }`
  *     (tri-state, so it carries a mode instead of a bare boolean).
  */
+/**
+ * Which machine a conversation's agent actually runs on, for the attach pill.
+ *
+ * Deliberately its own query rather than a field on the inbox row: `last_seen`
+ * is rewritten on every heartbeat, so reading the devices table inside
+ * enrichInboxSessionRow would re-invalidate the entire inbox subscription every
+ * beat — precisely the cost the INBOX_LIVENESS_FIELDS split exists to avoid.
+ * One open conversation reads one device. The returned shape holds no
+ * heartbeat-varying field, so Convex's result-diffing means the routine beats
+ * re-execute this and push nothing.
+ *
+ * `ssh_host` is returned ONLY for the viewer's own machines. A session running
+ * on a teammate's box (a second-party-owned row: conv.user_id is the running
+ * account, not the viewer) resolves to a name and nothing else, so the UI
+ * cannot offer an attach command for a machine the viewer may not reach. That
+ * guarantee lives here, not in the component.
+ */
+export const getConversationMachine = query({
+  args: { conversation_id: v.id("conversations"), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return null;
+    if (!(await canAccessConversation(ctx, userId, conv))) return null;
+
+    const deviceId = (conv as any).owner_device_id;
+    if (!deviceId) return null;
+
+    // The device is registered under the account whose daemon runs the session
+    // (conv.user_id), which is the viewer only for first-party rows. That pair
+    // is exactly the by_user_device index, so no device_id-only index is needed.
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) =>
+        q.eq("user_id", conv.user_id).eq("device_id", deviceId),
+      )
+      .first();
+    if (!device) return null;
+
+    const isMine = conv.user_id === userId;
+    return {
+      device_id: device.device_id,
+      label: device.label,
+      platform: device.platform,
+      is_remote: device.is_remote ?? false,
+      is_mine: isMine,
+      ssh_host: isMine ? (device.ssh_host ?? null) : null,
+    };
+  },
+});
+
+/** Longest ssh target we accept — comfortably fits "user@some.long.host.name". */
+const MAX_SSH_HOST_LENGTH = 128;
+
+/**
+ * Validate an SSH target, or return null for "no target".
+ *
+ * This string is concatenated into a shell command the user is invited to copy
+ * and paste into their own terminal, so an ALLOWLIST is the only safe policy:
+ * a blocklist of `;`/`$`/backtick/quote would still let through newlines,
+ * `&&`, `|`, `<(…)` and the rest. Everything a real ssh target needs —
+ * `user@host`, `host.example.com`, an IPv4/IPv6 literal, a `~/.ssh/config`
+ * alias, an optional `:port` — is covered by letters, digits, and
+ * `. - _ @ : [ ]`. Nothing in that set can end an argument or start a new
+ * command, so the copied line means exactly what it reads as.
+ *
+ * Exported for direct unit testing: this is the only thing standing between a
+ * hand-typed settings field and a command the user runs without reading.
+ */
+export function sanitizeSshHost(raw: string | undefined | null): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > MAX_SSH_HOST_LENGTH) return null;
+  if (!/^[A-Za-z0-9._@:\-[\]]+$/.test(trimmed)) return null;
+  // A leading "-" would be read by ssh as a flag rather than a destination.
+  if (trimmed.startsWith("-")) return null;
+  return trimmed;
+}
+
+/**
+ * Set (or clear, with an empty string) how to reach a device over SSH. Web-set
+ * only — an ssh alias resolves against the viewer's ~/.ssh/config, which the
+ * daemon on the target machine has no way to know. Scoped to the caller's own
+ * devices by the by_user_device lookup, so nobody can annotate a teammate's
+ * machine with an ssh target that then gets rendered as copyable.
+ */
+export const setDeviceSshHost = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+    ssh_host: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    if (!device) throw new Error("Unknown device");
+
+    const cleaned = sanitizeSshHost(args.ssh_host);
+    // Distinguish "cleared" from "rejected": an empty input means the user wants
+    // no target (a legitimate state — the pill falls back to a bare attach),
+    // whereas a non-empty input that failed validation is a typo worth surfacing.
+    if (cleaned === null && args.ssh_host.trim()) {
+      throw new Error(
+        "Invalid SSH host. Use letters, digits, and . - _ @ : only — e.g. \"nose\" or \"m1@10.0.0.4\".",
+      );
+    }
+    await ctx.db.patch(device._id, { ssh_host: cleaned ?? undefined });
+    return { ssh_host: cleaned };
+  },
+});
+
 export const setDeviceSnippet = mutation({
   args: {
     api_token: v.optional(v.string()),

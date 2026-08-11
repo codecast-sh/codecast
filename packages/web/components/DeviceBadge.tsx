@@ -25,6 +25,10 @@ export type Device = {
   device_id: string;
   label: string;
   platform: string;
+  /** Heartbeat-reported machine name. Only ever a placeholder for ssh_host. */
+  hostname?: string;
+  /** User-set SSH target (Settings → Devices); absent = no way to reach it. */
+  ssh_host?: string;
   last_seen: number;
   is_remote: boolean;
   local_project_roots: string[];

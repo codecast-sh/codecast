@@ -11,14 +11,30 @@
  * Click opens a live read-only terminal view of the pane, split into THIS
  * conversation (ConversationTerminalSplit) — the copy-attach-command escape
  * hatch is the small secondary button.
+ *
+ * A pane exists on exactly ONE machine, and it is routinely not the machine the
+ * browser is on — a session owned by a teammate's box, or by your own Linux
+ * server. So what the copy button offers depends on where the pane lives:
+ *
+ *   your machine, ssh_host set   → ssh <host> -t "tmux attach -t '<pane>'"
+ *   your machine, no ssh_host    → tmux attach -t '<pane>'   (+ a nudge to set one)
+ *   someone else's machine       → the machine's name, not copyable at all
+ *
+ * The last case is the point: `tmux attach` for a pane on another host is not a
+ * command that can ever work, and handing it over as if it could is what made
+ * this pill actively misleading. The terminal split still works for foreign
+ * panes — it routes through the owning daemon, not the viewer's shell.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useQuery } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { Copy } from "lucide-react";
 import { copyToClipboard } from "../lib/utils";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { DeviceDot } from "./DeviceBadge";
+import { DeviceDot, deviceDisplayName } from "./DeviceBadge";
+import { attachCommand, type SessionMachine } from "./tmuxAttach";
 import {
   isConversationTerminalOpen,
   toggleConversationTerminal,
@@ -31,12 +47,17 @@ export function TmuxAttachPill({
 }: {
   tmuxSession?: string | null;
   isLive: boolean;
-  /** Enables open-as-split; without it the pill falls back to copy-only. */
+  /** Enables open-as-split and the machine lookup; without it the pill falls back to copy-only. */
   conversationKey?: string;
 }) {
   // undefined = first render: never animate what was already there on mount.
   const prev = useRef<string | null | undefined>(undefined);
   const [anim, setAnim] = useState<"tmux-pill-in" | "tmux-pill-change" | null>(null);
+
+  const machine = useQuery(
+    api.devices.getConversationMachine,
+    tmuxSession && conversationKey ? { conversation_id: conversationKey as any } : "skip",
+  ) as SessionMachine | null | undefined;
 
   useEffect(() => {
     const p = prev.current;
@@ -48,10 +69,25 @@ export function TmuxAttachPill({
 
   if (!tmuxSession) return null;
 
-  const attach = `tmux attach -t '${tmuxSession}'`;
+  const attach = attachCommand(tmuxSession, machine);
+  const machineName = machine ? deviceDisplayName(machine as any) : null;
+  const foreign = !!machine && !machine.is_mine;
+
+  // The pane is on a machine that isn't yours: name it, don't pretend it's
+  // reachable. The terminal split still works — it routes through the owning
+  // daemon rather than through the viewer's shell.
+  const copyLabel = foreign
+    ? `Runs on ${machineName} — not your machine, so there's no attach command to copy. Watch it via the terminal split.`
+    : attach && machine?.ssh_host
+      ? `Copy ${attach}`
+      : attach && machine
+        ? `Copy ${attach} — set an SSH host for ${machineName} in Settings → Devices to get a remote-ready command`
+        : `Copy ${attach}`;
+
   const copyAttach = () => {
+    if (!attach) return;
     copyToClipboard(attach)
-      .then(() => toast.success("tmux attach copied"))
+      .then(() => toast.success(machine?.ssh_host ? "ssh + tmux attach copied" : "tmux attach copied"))
       .catch(() => toast.error("Failed to copy"));
   };
   // Attachability is NOT is_connected: that flag is a liveness heuristic
@@ -76,7 +112,7 @@ export function TmuxAttachPill({
             ? splitOpen
               ? "Hide this agent's terminal"
               : "Watch this agent's terminal (read-only, opens above the conversation)"
-            : `Copy ${attach}`
+            : copyLabel
         }
         side="bottom"
       >
@@ -90,16 +126,22 @@ export function TmuxAttachPill({
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
-          tmux
+          {/* Naming the machine is what makes the pill honest at a glance — a
+              bare "tmux" reads as "here" no matter where the pane really is. */}
+          {foreign ? machineName : "tmux"}
           <DeviceDot online={isLive} />
         </button>
       </ShortcutTooltip>
       {canSplit && (
-        <ShortcutTooltip label={`Copy ${attach}`} side="bottom">
+        <ShortcutTooltip label={copyLabel} side="bottom">
+          {/* aria-disabled, NOT disabled: a truly disabled button suppresses the
+              pointer events the tooltip needs, and in the foreign-machine case
+              that tooltip is the entire explanation for why nothing copies. */}
           <button
             data-simple-hide
             onClick={copyAttach}
-            className={`inline-flex items-center px-1 py-0.5 text-[10px] transition-colors border-0 border-l ${borderColor.replace("border-", "border-l-")} ${pillColors}`}
+            aria-disabled={!attach}
+            className={`inline-flex items-center px-1 py-0.5 text-[10px] transition-colors border-0 border-l ${borderColor.replace("border-", "border-l-")} ${pillColors} ${attach ? "" : "cursor-default"}`}
             aria-label="Copy tmux attach command"
           >
             <Copy className="w-2.5 h-2.5" />
