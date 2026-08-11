@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext } from "./data";
+import { createDataContext, scopedFetch } from "./data";
 import { isTeamMember } from "./privacy";
 import {
   canAccessDoc,
@@ -48,19 +48,16 @@ export const list = query({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
 
-    let projects;
+    // Own projects plus every project of a team the caller belongs to — the
+    // web's workspace-"all" scope, so teammates share one project list. No
+    // path scoping: projects are org units that span repos.
+    const { records } = await scopedFetch(ctx, "projects", {
+      userId: auth.userId,
+      workspace: "all",
+    });
+    let projects = records;
     if (args.status) {
-      projects = await ctx.db
-        .query("projects")
-        .withIndex("by_user_status", (q) =>
-          q.eq("user_id", auth.userId).eq("status", args.status as any)
-        )
-        .collect();
-    } else {
-      projects = await ctx.db
-        .query("projects")
-        .withIndex("by_user_id", (q) => q.eq("user_id", auth.userId))
-        .collect();
+      projects = projects.filter((p: any) => p.status === args.status);
     }
 
     // Enrich with task counts
@@ -95,7 +92,12 @@ export const get = query({
     if (!auth) throw new Error("Unauthorized");
 
     const project = await ctx.db.get(args.id);
-    if (!project || project.user_id !== auth.userId) return null;
+    if (!project) return null;
+    // Owner, or a member of the project's team — mirrors webGet.
+    const isOwner = String(project.user_id) === String(auth.userId);
+    if (!isOwner && (!project.team_id || !(await isTeamMember(ctx, auth.userId, project.team_id)))) {
+      return null;
+    }
 
     const tasks = await ctx.db
       .query("tasks")
