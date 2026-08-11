@@ -25,6 +25,17 @@ describe("injectedImageStorageIds", () => {
     expect(injectedImageStorageIds("just some text")).toEqual([]);
     expect(injectedImageStorageIds("")).toEqual([]);
   });
+
+  // downloadImage names the file by content type — webp/jpg/gif as well as png
+  // (clients compress uploads to WebP). The extractor must accept every
+  // extension downloadImage can write, or those echoes never ack.
+  test("extracts ids from webp/jpg/jpeg/gif echo paths", () => {
+    for (const ext of ["webp", "jpg", "jpeg", "gif"]) {
+      expect(injectedImageStorageIds(`[Image /tmp/codecast/images/${STORAGE_ID}.${ext}]`)).toEqual([
+        STORAGE_ID,
+      ]);
+    }
+  });
 });
 
 describe("imageEchoMatchesPending", () => {
