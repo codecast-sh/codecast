@@ -165,7 +165,7 @@ import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor"
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 import { sessionStartupState } from "../lib/sessionLifecycle";
-import { messageRowKey } from "../lib/messageRowKey";
+import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type RestartProgressRow, type RestartPhase, type RestartStage } from "../hooks/useSessionRestart";
 
@@ -9836,28 +9836,39 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Drop a numbered token into the draft text for each attached image so the
   // user can refer to attachments in prose ("crop it like [Image 2]"). Numbers
   // follow attach order, which is the order the agent receives the images in.
-  const insertImagePlaceholder = useCallback((n: number) => {
-    const token = `[Image ${n}]`;
+  const addImagePlaceholder = useCallback((n: number) => {
     if (composeMode && composeRef.current) {
-      composeRef.current.insertText(`${token} `);
+      composeRef.current.insertText(`${imagePlaceholderToken(n)} `);
       return;
     }
     const current = messageRef.current;
     const el = textareaRef.current;
-    const pos = el && document.activeElement === el ? (el.selectionEnd ?? current.length) : current.length;
-    const before = current.slice(0, pos);
-    const after = current.slice(pos);
-    const inserted = `${before && !/\s$/.test(before) ? " " : ""}${token}${after.startsWith(" ") ? "" : " "}`;
-    const newVal = before + inserted + after;
-    setMessage(newVal);
+    const caret = el && document.activeElement === el ? (el.selectionEnd ?? current.length) : current.length;
+    const next = insertImagePlaceholder(current, caret, n);
+    setMessage(next.text);
     // Sync so a draft snapshot taken later this tick carries the placeholder.
-    messageRef.current = newVal;
-    const newCursor = before.length + inserted.length;
+    messageRef.current = next.text;
     setTimeout(() => {
       if (textareaRef.current) {
-        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newCursor;
+        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = next.caret;
       }
     }, 0);
+  }, [composeMode, setMessage]);
+
+  // The nth image is gone: drop its token and renumber the rest, so what's left
+  // still points at the attachments the agent will actually receive. The
+  // compose editor owns its own text, so it renumbers over its markdown.
+  const removeImagePlaceholder = useCallback((n: number) => {
+    if (composeMode && composeRef.current) {
+      const md = composeRef.current.getMarkdown();
+      const next = dropImagePlaceholder(md, n);
+      if (next !== md) composeRef.current.setMarkdown(next);
+      return;
+    }
+    const next = dropImagePlaceholder(messageRef.current, n);
+    if (next === messageRef.current) return;
+    setMessage(next);
+    messageRef.current = next;
   }, [composeMode, setMessage]);
 
   const uploadImage = useCallback((file: File) => {
@@ -9866,7 +9877,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // Ref-first so several images attached in one tick number sequentially —
     // the render-time ref sync hasn't happened yet.
     pastedImagesRef.current = [...pastedImagesRef.current, entry];
-    insertImagePlaceholder(pastedImagesRef.current.length);
+    addImagePlaceholder(pastedImagesRef.current.length);
     setPastedImages(prev => {
       const next = [...prev, entry];
       // Sacred from the moment of paste: the draft row (uploading, blob
@@ -9903,7 +9914,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     })();
     pendingImageUploads.set(previewUrl, promise);
     return previewUrl;
-  }, [generateUploadUrl, conversationId, insertImagePlaceholder]);
+  }, [generateUploadUrl, conversationId, addImagePlaceholder]);
 
   useWatchEffect(() => {
     if (onDropFiles) {
@@ -12801,22 +12812,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // monolith no longer re-renders every time getConversationToolStats re-scans a streaming
   // conversation. (See useConversationTaskStats.)
 
-  const getItemKey = useCallback((index: number) => {
-    const item = timeline[index];
-    if (!item) return index;
-    // Key a message row by its STABLE client id (present on both the optimistic
-    // copy as `_clientId` and the server echo as `client_id`, equal by
-    // construction) so the pending→synced handoff reuses the SAME DOM node
-    // instead of unmounting the optimistic row and mounting a fresh server row.
-    // The `_id` flips at that handoff (clientId → Convex id); keying on it makes
-    // the virtualizer destroy+recreate+re-measure the row — a one-frame blank
-    // that, in a brand-new session where this is the only row, reads as the
-    // message disappearing for a beat before it "syncs in". The timeline dedup
-    // keeps only one of the two copies present at a time, so this never collides.
+  // Key a message row by its STABLE client id (present on both the optimistic
+  // copy as `_clientId` and the server echo as `client_id`, equal by
+  // construction) so the pending→synced handoff reuses the SAME DOM node
+  // instead of unmounting the optimistic row and mounting a fresh server row.
+  // The `_id` flips at that handoff (clientId → Convex id); keying on it makes
+  // the virtualizer destroy+recreate+re-measure the row — a one-frame blank
+  // that, in a brand-new session where this is the only row, reads as the
+  // message disappearing for a beat before it "syncs in".
+  // uniqueRowKeys then de-collides the full set: synced data CAN carry the same
+  // client_id on two messages (a delivery ack once stamped it on the harness's
+  // boot <task-notification> turn AND on the real echo), and rows sharing a key
+  // garble the virtualizer — overlapping ghost copies accreting on re-renders.
+  const rowKeys = useMemo(() => uniqueRowKeys(timeline.map((item) => {
     if (item.type === 'message') return messageRowKey(item.data as Message);
     if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
     return `pr-${(item.data as any)._id}`;
-  }, [timeline]);
+  })), [timeline]);
+  const getItemKey = useCallback((index: number) => rowKeys[index] ?? index, [rowKeys]);
 
   // Height-cache discriminator. In compact and condensed a row's height depends
   // on whether its turn is expanded (compact: card vs full; condensed: absorbed
