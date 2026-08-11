@@ -1970,9 +1970,14 @@ async function watchLoginFlow(baselineHash: string | null, requestedEmail: strin
     try {
       lastPane = tmuxExecSync(["capture-pane", "-p", "-t", LOGIN_FLOW_TMUX], { timeout: 3000 });
     } catch {
-      // The CLI writes the credential and exits — give the store one more read
-      // before calling the exit a failure.
-      if (confirmedNow()) return finishConfirmed();
+      // The CLI exited. The credential store is the arbiter now — and not by
+      // the changed-hash test alone: a re-login into the SAME still-valid
+      // account can leave the blob byte-identical (verified live 2026-08-11 —
+      // the CLI printed "Login successful." and exited with an unchanged
+      // keychain item). A healthy pushable credential after a clean exit
+      // means the machine is signed in, whatever the hash says.
+      const health = credentialHealth(readActiveCredential(), Date.now());
+      if (health.pushable) return finishConfirmed();
       const tail = summarizeLoginPaneTail(lastPane);
       return finishRejected(tail ?? "the sign-in window closed before completing");
     }
@@ -5087,6 +5092,17 @@ export function buildCodexUserTurnMessage(
   return { uuid: `codex-user-${pendingMessageId}`, role: "user", content, timestamp };
 }
 
+// A user-role turn the HARNESS emits on its own — the boot <task-notification>
+// bundle about background tasks from the previous session — is never the echo
+// of a pasted pending message. The positional delivery-ack pairing in
+// syncMessagesBatch must skip these: pairing one with a pasted row stamps the
+// row's client_id onto the notification turn, and the real echo later re-adopts
+// the same client_id by content match — two transcript messages sharing one
+// client id, which the web timeline renders as overlapping duplicate rows.
+export function isHarnessEmittedUserTurn(content: string | undefined): boolean {
+  return !!content && content.trimStart().startsWith("<task-notification>");
+}
+
 async function syncMessagesBatch(
   messages: RawMessage[],
   conversationId: string,
@@ -5123,7 +5139,8 @@ async function syncMessagesBatch(
     // position 0 — from terminalizing rows that never landed (DEC-01).
     if (messages.some(m => m.role === "user")) {
       const pastedIds = collectPastedInjectedIds(conversationId);
-      const transcriptIds = synced.ids.filter((_, index) => messages[index]?.role === "user");
+      const transcriptIds = synced.ids.filter((_, index) =>
+        messages[index]?.role === "user" && !isHarnessEmittedUserTurn(messages[index]?.content));
       // The rows this process pasted and the user turns just committed are both
       // ordered. Pair the newest common suffix: older un-echoed pastes remain
       // injected for healing, while each daemon-vouched echo can stamp the

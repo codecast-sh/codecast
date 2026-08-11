@@ -19,3 +19,22 @@ export function messageRowKey(m: {
 }): string {
   return m.client_id ?? m._clientId ?? m._id;
 }
+
+// Force uniqueness across one timeline's row keys. The client id is SUPPOSED to
+// be unique per message, but the delivery-ack path has stamped one pending
+// row's client_id onto two transcript messages (the harness's boot
+// <task-notification> turn adopted positionally, then the real echo adopted by
+// content match). Rows sharing a React/virtualizer key don't reconcile — the
+// virtualizer files heights under one slot and React accretes ghost DOM copies
+// painted on top of neighboring rows. Those double-stamped pairs exist in
+// synced data, so the renderer must survive them: every duplicate after the
+// first gets a stable positional suffix. Order-stable input (the timeline is
+// timestamp-sorted) makes the suffix stable across renders.
+export function uniqueRowKeys(keys: readonly string[]): string[] {
+  const seen = new Map<string, number>();
+  return keys.map((key) => {
+    const n = seen.get(key) ?? 0;
+    seen.set(key, n + 1);
+    return n === 0 ? key : `${key}~dup${n}`;
+  });
+}

@@ -59,7 +59,7 @@ import { tags as t } from "@lezer/highlight";
 import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { entityRefRoute, parseEntityRefHref } from "@codecast/shared/vault";
 import { useRouter } from "next/navigation";
-import { useMentionQuery } from "../../hooks/useMentionQuery";
+import { useMentionQuery, useActiveMentionScope } from "../../hooks/useMentionQuery";
 import {
   entityCompletions,
   wikiCompletionContext,
@@ -466,7 +466,7 @@ export function VaultEditor({
   const router = useRouter();
   const routerRef = useRef(router);
   routerRef.current = router;
-  const mentionQuery = useMentionQuery();
+  const mentionQuery = useMentionQuery(useActiveMentionScope());
   const mentionQueryRef = useRef(mentionQuery);
   mentionQueryRef.current = mentionQuery;
   // Built once and kept: CodeMirror resolves a reconfiguration by extension

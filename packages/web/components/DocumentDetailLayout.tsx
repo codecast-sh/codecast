@@ -2,7 +2,7 @@
 import { useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { CollabDocEditor } from "./editor/CollabDocEditor";
-import { useMentionQuery } from "../hooks/useMentionQuery";
+import { useMentionQuery, useActiveMentionScope } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ContextChatInput } from "./ContextChatInput";
@@ -72,7 +72,7 @@ export function DocumentDetailLayout({
   const reviewKey = `doc:${docId}`;
   const [showMeta, setShowMeta] = useState(false);
   const [copied, setCopied] = useState(false);
-  const handleMentionQuery = useMentionQuery();
+  const handleMentionQuery = useMentionQuery(useActiveMentionScope());
   const handleImageUpload = useImageUpload();
   const getMarkdownRef = useRef<(() => string) | null>(null);
   const getContextBody = useCallback(

@@ -10,6 +10,7 @@ export interface ComposeEditorHandle {
   focus: () => void;
   clear: () => void;
   insertText: (text: string) => void;
+  setMarkdown: (markdown: string) => void;
 }
 
 interface ComposeEditorProps {
@@ -129,6 +130,9 @@ export const ComposeEditor = forwardRef<ComposeEditorHandle, ComposeEditorProps>
       focus: () => editor?.commands.focus("end"),
       clear: () => editor?.commands.clearContent(),
       insertText: (text: string) => { editor?.chain().focus().insertContent(text).run(); },
+      // Replaces the whole document, so it keeps the caret at the end rather
+      // than trying to preserve a position that the new text may not have.
+      setMarkdown: (markdown: string) => { editor?.commands.setContent(markdown); },
     }));
 
     if (!editor) return null;

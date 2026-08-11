@@ -262,6 +262,11 @@ export interface ListFilterDef {
   options: { key: string; label: string; icon?: any; color?: string }[];
   onChange: (v: string) => void;
   multi?: boolean;
+  /** Show the empty-key option in the add-menu too. For most filters "" means
+   *  "any" and is noise there, but when "" names a real default view (e.g. the
+   *  tasks Source filter's board), hiding it leaves the menu with no current
+   *  state — the reader can't tell the options are departures from a default. */
+  showEmptyOption?: boolean;
 }
 
 /** Add-filter menu: a two-level popover (category → that category's options) for
@@ -348,7 +353,7 @@ function AddFilterMenu({
                 <ChevronLeft className="w-3 h-3" /> {cat.label}
               </button>
               <FilterOptionList
-                options={cat.options.filter((o) => o.key !== "")}
+                options={cat.showEmptyOption ? cat.options : cat.options.filter((o) => o.key !== "")}
                 value={cat.value}
                 multi={cat.multi}
                 onChange={cat.onChange}

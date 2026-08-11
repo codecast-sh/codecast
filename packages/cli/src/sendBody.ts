@@ -31,10 +31,9 @@ export function readStdinBody(readStdin: () => string = readStdinRaw): string {
  *
  * Multiple '-' arguments split the one stdin body into sections on lines that
  * contain only `---`, one section per '-' in order. This is what lets a whole
- * fork/spawn fan-out of multi-line briefs travel in ONE invocation (a fork
- * fan-out must be one invocation so every branch's seed can name its sibling
- * roster). A single '-' never splits — a lone `---` line there is content
- * (e.g. a markdown rule), not a separator.
+ * fork/spawn fan-out of multi-line briefs travel in ONE invocation. A single
+ * '-' never splits — a lone `---` line there is content (e.g. a markdown
+ * rule), not a separator.
  */
 export function expandStdinArgs(args: string[], readStdin: () => string = readStdinRaw): string[] {
   const dashCount = args.filter((a) => a === "-").length;

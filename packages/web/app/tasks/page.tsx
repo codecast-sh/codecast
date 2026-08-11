@@ -23,7 +23,6 @@ import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { filterToWorkspace } from "../../lib/workspaceScope";
 import { AgentTypeIcon, formatAgentType } from "../../components/AgentTypeIcon";
-import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
 import {
   Plus,
   Circle,
@@ -728,15 +727,6 @@ export function TaskListContent() {
     }
   }, [tasksList, sourceFilter]);
 
-  const suggestedCount = useMemo(() => {
-    return tasksList.filter(isTriage).length;
-  }, [tasksList]);
-
-  // Count for the tucked-away agent chip: non-terminal agent-internal tasks,
-  // i.e. what the chip's view shows on its default status tab.
-  const agentCount = useMemo(() => {
-    return tasksList.filter((t) => !onHumanBoard(t) && isActive(t) && t.status !== "done" && t.status !== "dropped").length;
-  }, [tasksList]);
 
   const baseFilteredTasks = useMemo(() => {
     let list = sourceFilteredTasks;
@@ -1172,6 +1162,20 @@ export function TaskListContent() {
                 ],
                 onChange: (v: string) => setParam({ session: v }),
               },
+              // Agent-internal work, mined suggestions, and the combined view
+              // live here, tucked in the filter popover — the board is the
+              // default and gets no header control of its own.
+              {
+                key: "source", label: "Source", icon: <Bot className="w-3 h-3" />, value: sourceFilter, showEmptyOption: true,
+                options: [
+                  { key: "", label: "Your board (default)", icon: User },
+                  { key: "agent", label: "Agent-internal", icon: Bot, color: "text-sol-cyan" },
+                  { key: "all", label: "All active", icon: Layers },
+                  { key: "triage", label: "Suggested", icon: Lightbulb, color: "text-sol-yellow" },
+                  { key: "dismissed", label: "Dismissed", icon: EyeOff, color: "text-sol-text-dim" },
+                ],
+                onChange: (v: string) => setParam({ source: v }),
+              },
             ],
             onClear: () => setParam({ statuses: "", priority: "", label: "", assignee: "", source: "", session: "" }),
             onSaveView: handleSaveView,
@@ -1199,36 +1203,6 @@ export function TaskListContent() {
           onItemEdit={handleTitleEdit}
           listFooter={undefined}
           syncScope="tasks"
-          headerExtra={
-            <>
-              {/* The board (human-created + flagged tasks) is the default view
-                  with no control of its own. Agent-internal work and insight
-                  suggestions are tucked behind small count chips that only
-                  appear when they have contents. */}
-              {agentCount > 0 && (
-                <ShortcutTooltip label="Agent-internal tasks — created by agents for their own work">
-                  <button
-                    onClick={() => setParam({ source: sourceFilter === "agent" ? "" : "agent" })}
-                    className={`cq-header-collapse flex items-center gap-1.5 h-7 px-2 text-xs rounded-md border transition-colors ${sourceFilter === "agent" ? "border-sol-cyan/40 bg-sol-cyan/10 text-sol-cyan" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text"}`}
-                  >
-                    <Bot className="w-3.5 h-3.5" />
-                    <span>{agentCount}</span>
-                  </button>
-                </ShortcutTooltip>
-              )}
-              {suggestedCount > 0 && (
-                <ShortcutTooltip label="Review suggested insights">
-                  <button
-                    onClick={() => setParam({ source: sourceFilter === "triage" ? "" : "triage" })}
-                    className={`cq-header-collapse flex items-center gap-1.5 h-7 px-2 text-xs rounded-md border transition-colors ${sourceFilter === "triage" ? "border-sol-yellow/40 bg-sol-yellow/10 text-sol-yellow" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text"}`}
-                  >
-                    <Lightbulb className="w-3.5 h-3.5" />
-                    <span>{suggestedCount}</span>
-                  </button>
-                </ShortcutTooltip>
-              )}
-            </>
-          }
           displayExtra={
             <div>
               <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">View</div>

@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { useMentionQuery } from "../hooks/useMentionQuery";
+import { useMentionQuery, useActiveMentionScope } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
 import { useWorkspaceArgs, workspaceStamp } from "../hooks/useWorkspaceArgs";
 import { useInboxStore } from "../store/inboxStore";
@@ -37,7 +37,9 @@ const JOIN_POLICY_OPTIONS = [
 export function CreateDocModal({ onClose, initialType }: { onClose: () => void; initialType?: string }) {
   const createDoc = useInboxStore((s) => s.createDoc);
   const createPlan = useInboxStore((s) => s.createPlan);
-  const handleMentionQuery = useMentionQuery();
+  // Mentions offered while composing follow the ACTIVE workspace, same strict
+  // boundary as the doc itself.
+  const handleMentionQuery = useMentionQuery(useActiveMentionScope());
   const handleImageUpload = useImageUpload();
   // Stamp the active workspace: a doc/plan created in a team space belongs to
   // that team; one created in the personal space stays personal.

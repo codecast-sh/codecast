@@ -13,6 +13,7 @@ import Feather from '@expo/vector-icons/Feather';
 import Svg, { Path } from 'react-native-svg';
 import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { extractSessionImages } from '@codecast/web/lib/sessionImages';
+import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isScheduledTaskMessage } from '@codecast/web/components/sessionMessage';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
@@ -3215,11 +3216,16 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
   const insets = useSafeAreaInsets();
   // Seed from the local-first store draft first (survives the stub→real rekey on
   // freshly-created sessions), then fall back to the server-synced draft prop.
-  const [message, setMessage] = useState(
+  const [message, setMessage] = useState<string>(
     () => useInboxStore.getState().getDraft(conversationId)?.draft_message ?? draft ?? '',
   );
   const [error, setError] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<{ uri: string; storageId?: string; uploading: boolean }[]>([]);
+  // Mirrors the web composer's pastedImagesRef: the `[Image N]` token paths
+  // need each image's current position, and a state read inside an async
+  // callback or a state updater would be stale (or double-fire in StrictMode).
+  const selectedImagesRef = useRef(selectedImages);
+  selectedImagesRef.current = selectedImages;
   const managedSessionQ = useQuery(
     api.managedSessions.isSessionManaged,
     isConvexId(conversationId as string) ? { conversation_id: conversationId } : "skip"
@@ -3268,6 +3274,16 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
     return storageId as string;
   };
 
+  // Drops the image and its `[Image N]` token, renumbering the tokens above it
+  // so what's left still points at the attachments the agent will receive.
+  const removeImage = (uri: string) => {
+    const index = selectedImagesRef.current.findIndex(img => img.uri === uri);
+    if (index < 0) return;
+    selectedImagesRef.current = selectedImagesRef.current.filter(img => img.uri !== uri);
+    setSelectedImages(selectedImagesRef.current);
+    setMessage(m => dropImagePlaceholder(m, index + 1));
+  };
+
   const pickImage = async () => {
     if (!ImagePicker) {
       Alert.alert('Not available', 'Image uploads require a development build with expo-image-picker.');
@@ -3287,11 +3303,17 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
       if (!result.canceled && result.assets) {
         for (const asset of result.assets) {
           const uri = asset.uri;
-          setSelectedImages(prev => [...prev, { uri, uploading: true }]);
+          // Ref-first so a multi-pick batch numbers sequentially: the state
+          // updates are async, so `selectedImages` is still the old array here.
+          selectedImagesRef.current = [...selectedImagesRef.current, { uri, uploading: true }];
+          setSelectedImages(selectedImagesRef.current);
+          // Token numbers follow attach order, which is the order the agent
+          // receives the images in — so `[Image 2]` is a real reference.
+          setMessage(m => insertImagePlaceholder(m, m.length, selectedImagesRef.current.length).text);
           uploadToStorage(uri).then(storageId => {
             setSelectedImages(prev => prev.map(img => img.uri === uri ? { ...img, storageId, uploading: false } : img));
           }).catch(() => {
-            setSelectedImages(prev => prev.filter(img => img.uri !== uri));
+            removeImage(uri);
             Alert.alert('Upload failed', 'Could not upload image');
           });
         }
@@ -3299,10 +3321,6 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
     } catch (err) {
       console.error('Image picker error:', err);
     }
-  };
-
-  const removeImage = (uri: string) => {
-    setSelectedImages(prev => prev.filter(img => img.uri !== uri));
   };
 
   // Optimistic, non-blocking send (mirrors web ContextChatInput). The message
