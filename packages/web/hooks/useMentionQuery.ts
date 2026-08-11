@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../components/editor/MentionList";
@@ -27,6 +27,32 @@ const EMPTY_SERVER_ITEMS: MentionItem[] = [];
 // cache is windowed and therefore worth re-querying server-side on @-mention.
 export const SERVER_MENTION_TYPES = ["session", "task", "doc", "plan"];
 
+/** Scope for a surface tied to a specific entity/conversation workspace. */
+export function mentionScopeFor(
+  teamId: string | null | undefined,
+  userId: string | null | undefined,
+): MentionScope {
+  if (teamId) return { kind: "team", teamId: String(teamId) };
+  if (userId) return { kind: "personal", userId: String(userId) };
+  return { kind: "any" };
+}
+
+/**
+ * The ACTIVE workspace as a mention scope. Mentions follow the same strict
+ * boundary as every other list (lib/workspaceScope): in a team space the @
+ * popover offers only that team's items; in the personal space only teamless
+ * ones. Generic surfaces (doc editors, create modals, the vault) use this;
+ * the conversation composer scopes to its conversation's workspace instead.
+ */
+export function useActiveMentionScope(): MentionScope {
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  const userId = useInboxStore((s) => s.currentUser?._id);
+  return useMemo(
+    () => mentionScopeFor(activeTeamId ? String(activeTeamId) : null, userId ? String(userId) : null),
+    [activeTeamId, userId],
+  );
+}
+
 /**
  * Debounced server-side mention lookup that reaches past the local cache —
  * sessions older than the inbox sync window, entities never pulled down.
@@ -47,6 +73,9 @@ export function useMentionServerSearch(
     wantNow && settled
       ? {
           query: current,
+          // Explicit workspace either way: without it the server falls back to
+          // the active team, which would leak team items into personal surfaces.
+          workspace: opts?.teamId ? ("team" as const) : ("personal" as const),
           ...(opts?.teamId ? { teamId: opts.teamId } : {}),
           ...(opts?.types ? { types: opts.types } : {}),
         }

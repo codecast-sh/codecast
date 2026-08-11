@@ -12,7 +12,7 @@ import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout, PeekLayoutControls } from "../../../components/DetailSplitLayout";
 import { AppLoader } from "../../../components/AppLoader";
 import { TaskListContent } from "../page";
-import { useMentionQuery } from "../../../hooks/useMentionQuery";
+import { useMentionQuery, useActiveMentionScope } from "../../../hooks/useMentionQuery";
 import { useImageUpload } from "../../../hooks/useImageUpload";
 // TaskCommandPalette replaced by unified CommandPalette
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
@@ -418,7 +418,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
       router.replace(`/conversation/${id}`);
     }
   }, [isInline, directData, sessionForBadId, id, router]);
-  const handleMentionQuery = useMentionQuery();
+  const handleMentionQuery = useMentionQuery(useActiveMentionScope());
   const handleImageUpload = useImageUpload();
   const updateTask = useInboxStore((s) => s.updateTask);
   const addTaskComment = useInboxStore((s) => s.addTaskComment);

@@ -1537,6 +1537,10 @@ export const mentionSearch = query({
     limit: v.optional(v.number()),
     projectPath: v.optional(v.string()),
     teamId: v.optional(v.string()),
+    // Explicit workspace: "personal" pins the search to teamless items and
+    // disables every team fallback below. Older clients omit it and get the
+    // legacy resolution (explicit teamId, else mapping/active team).
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1547,12 +1551,22 @@ export const mentionSearch = query({
       userId,
       project_path: args.projectPath,
     });
-    // Read-path scoping, not creation: falling back to the active team here
-    // only widens what the member themselves can search, so it stays.
-    const teamId = args.teamId
-      || (db.workspace.type === "team" ? db.workspace.teamId : undefined)
-      || user?.active_team_id
-      || (user as any)?.team_id;
+    const teamId = args.workspace === "personal"
+      ? undefined
+      : (args.teamId
+          || (db.workspace.type === "team" ? db.workspace.teamId : undefined)
+          || user?.active_team_id
+          || (user as any)?.team_id);
+    // teamId can be client-supplied: every team-scoped branch below reads that
+    // team's rows directly (members, task/doc/plan titles), so membership is
+    // mandatory — without this check any authenticated user holding a team id
+    // could enumerate a foreign team's roster and titles.
+    if (teamId) await requireTeamMembership(ctx, userId, teamId as any);
+    // Strict personal semantics: the by_user_id scans below return the user's
+    // own rows INCLUDING team-tagged ones; the personal workspace shows only
+    // teamless items, so filter those out when no team scope applies.
+    const personalOnly = <T extends { team_id?: any }>(rows: T[]): T[] =>
+      rows.filter((r) => !r.team_id);
     const q = args.query.toLowerCase();
     const limit = args.limit || 10;
     const types = args.types || ["person", "doc", "task", "session", "plan"];
@@ -1632,6 +1646,7 @@ export const mentionSearch = query({
           .order("desc")
           .take(perType * 5);
       }
+      if (!teamId) tasks = personalOnly(tasks);
       for (const task of tasks.slice(0, perType)) {
         results.push({
           id: String(task._id),
@@ -1700,6 +1715,7 @@ export const mentionSearch = query({
           .order("desc")
           .take(perType * 5);
       }
+      if (!teamId) docs = personalOnly(docs);
       for (const doc of docs.filter((d: any) => !d.archived_at).slice(0, perType)) {
         results.push({
           id: String(doc._id),
@@ -1731,7 +1747,7 @@ export const mentionSearch = query({
       const filtered = q
         ? plans.filter((p: any) => p.title?.toLowerCase().includes(q))
         : plans;
-      for (const plan of filtered.slice(0, perType)) {
+      for (const plan of (teamId ? filtered : personalOnly(filtered)).slice(0, perType)) {
         results.push({
           id: String(plan._id),
           type: "plan",
@@ -1789,11 +1805,20 @@ export const mentionSearch = query({
         }
       }
       if (teamId) {
-        // team_id is routing, not visibility — without this gate teammates'
-        // private session titles would surface in mention results.
+        // team_id is routing, not visibility. Two gates: the session must be
+        // EFFECTIVELY this team's (a private session routed here belongs to
+        // its owner's personal scope, even for the owner), and a teammate's
+        // session must pass the feed visibility filter.
         const feedFilter = await createTeamFeedFilter(ctx, teamId as any);
-        filtered = filtered.filter((c: any) =>
-          String(c.user_id) === String(userId) || feedFilter.isVisible(c));
+        filtered = filtered.filter((c: any) => {
+          if (String(teamVisibleConvTeam(c) ?? "") !== String(teamId)) return false;
+          return String(c.user_id) === String(userId) || feedFilter.isVisible(c);
+        });
+      } else {
+        // Personal scope: only sessions that are EFFECTIVELY personal. A
+        // session's team_id is routing — a private session routed to a team
+        // still belongs here, while a team-visible one belongs to team scope.
+        filtered = filtered.filter((c: any) => !teamVisibleConvTeam(c));
       }
       for (const sess of filtered.slice(0, perType)) {
         results.push({

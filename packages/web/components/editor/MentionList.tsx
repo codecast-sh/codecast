@@ -1,5 +1,5 @@
 import { forwardRef, useImperativeHandle, useState, useCallback, useRef, useMemo } from "react";
-import { useMentionServerSearch, SERVER_MENTION_TYPES } from "../../hooks/useMentionQuery";
+import { useMentionServerSearch, useActiveMentionScope, SERVER_MENTION_TYPES } from "../../hooks/useMentionQuery";
 import {
   User,
   FileText,
@@ -187,10 +187,15 @@ export const MentionList = forwardRef<any, MentionListProps>(
     // Reach past the local cache while the user types — older sessions and
     // never-synced entities come back from the server and are appended below
     // the cache hits, regrouped so each type stays one contiguous run (the
-    // selection index math below depends on that).
+    // selection index math below depends on that). Scoped to the ACTIVE
+    // workspace, matching the local items the callers build.
+    const activeScope = useActiveMentionScope();
     const { items: serverItems, loading: serverLoading } = useMentionServerSearch(
       query ?? null,
-      { types: SERVER_MENTION_TYPES },
+      {
+        teamId: activeScope.kind === "team" ? activeScope.teamId : null,
+        types: SERVER_MENTION_TYPES,
+      },
     );
     const allItems = useMemo(() => {
       if (!serverItems.length) return items;

@@ -1645,6 +1645,13 @@ export async function ackInjectedForDaemon(
         (!transcript.client_id || transcript.client_id === msg.client_id)
       ) {
         await ctx.db.patch(transcriptMessageId, { client_id: msg.client_id });
+        // The row now HAS its transcript relation — record it, or the
+        // delivered-tier match in findEchoedPendingMessage stays open and a
+        // later content-matched echo adopts the same client_id onto a SECOND
+        // message (two rows sharing a client id garbles the web timeline).
+        if (!msg.echo_message_id) {
+          await ctx.db.patch(msg._id, { echo_message_id: transcriptMessageId });
+        }
       }
     }
     if (await markPendingDelivered(ctx, msg)) acked++;

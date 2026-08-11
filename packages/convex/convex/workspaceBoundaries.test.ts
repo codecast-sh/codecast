@@ -20,6 +20,7 @@ import {
   webListPaginated as webDocListPaginated,
   webGet as webDocGet,
   webCreate as webDocCreate,
+  mentionSearch,
 } from "./docs";
 
 function auth(userId: string | null) {
@@ -237,6 +238,60 @@ describe("docs: strict workspace boundaries on the effective team", () => {
     // A genuinely team-visible doc stays reachable for teammates.
     const teamDoc = await (webDocGet as any)._handler(ctx(MEMBER, docTables()), { id: "d_convteam" });
     expect(teamDoc?._id).toBe("d_convteam");
+  });
+});
+
+describe("mentionSearch: workspace-scoped and membership-enforced", () => {
+  const mentionTables = () => baseTables({
+    tasks: [
+      { _id: "t_team", short_id: "ct-team", title: "Team task", user_id: MEMBER, team_id: TEAM, ...taskDefaults },
+      { _id: "t_personal", short_id: "ct-personal", title: "Personal task", user_id: OWNER, ...taskDefaults },
+    ],
+    docs: [
+      { _id: "d_team", title: "Team doc", user_id: MEMBER, team_id: TEAM, ...docDefaults },
+      { _id: "d_personal", title: "Personal doc", user_id: OWNER, ...docDefaults },
+    ],
+    plans: [
+      { _id: "p_team", short_id: "pl-team", title: "Team plan", user_id: MEMBER, team_id: TEAM, status: "active", source: "human", created_at: 1, updated_at: 1, task_ids: [] },
+      { _id: "p_personal", short_id: "pl-personal", title: "Personal plan", user_id: OWNER, status: "active", source: "human", created_at: 1, updated_at: 1, task_ids: [] },
+    ],
+    conversations: [
+      // Team-visible session vs a private one ROUTED to the team (routing is
+      // not visibility): personal scope must return only the private one.
+      { _id: "c_team", user_id: OWNER, team_id: TEAM, is_private: false, title: "Team session", updated_at: 2 },
+      { _id: "c_private", user_id: OWNER, team_id: TEAM, is_private: true, title: "Private session", updated_at: 1 },
+    ],
+    directory_team_mappings: [],
+  });
+
+  test("a foreign team id is rejected, not searched", async () => {
+    await expect((mentionSearch as any)._handler(ctx(STRANGER, mentionTables()), {
+      query: "",
+      teamId: TEAM,
+      workspace: "team",
+    })).rejects.toThrow("Forbidden");
+  });
+
+  test("personal scope returns only effectively-personal items despite an active team", async () => {
+    const results = await (mentionSearch as any)._handler(ctx(OWNER, mentionTables()), {
+      query: "",
+      workspace: "personal",
+    });
+    const ids = results.map((r: any) => r.id).sort();
+    // The user's active_team_id is TEAM (baseTables), but personal scope must
+    // not fall back to it: no team task/doc/plan, no team-visible session.
+    expect(ids).toEqual(["c_private", "d_personal", "p_personal", "t_personal"]);
+  });
+
+  test("team scope returns only that team's items", async () => {
+    const results = await (mentionSearch as any)._handler(ctx(OWNER, mentionTables()), {
+      query: "",
+      teamId: TEAM,
+      workspace: "team",
+      types: ["task", "doc", "plan", "session"],
+    });
+    const ids = results.map((r: any) => r.id).sort();
+    expect(ids).toEqual(["c_team", "d_team", "p_team", "t_team"]);
   });
 });
 
