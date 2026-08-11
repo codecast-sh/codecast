@@ -1,6 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { toast } from "sonner";
 import { Card } from "../../../components/ui/card";
 import {
   useDevices,
@@ -119,6 +122,88 @@ function PlatformGlyph({ d }: { d: Device }) {
   );
 }
 
+/**
+ * The SSH target for reaching this machine's tmux panes from elsewhere.
+ *
+ * Kept user-set rather than derived: an alias like "nose" only means anything
+ * against the ~/.ssh/config of the machine you're sitting at, which no daemon
+ * on the TARGET can see. The reported hostname is offered as a placeholder
+ * because it's usually right, never as a silent default.
+ */
+function SshHostField({ d }: { d: Device }) {
+  const setSshHost = useMutation(api.devices.setDeviceSshHost);
+  const [value, setValue] = useState(d.ssh_host ?? "");
+  const [saving, setSaving] = useState(false);
+  // Server value wins whenever it changes under us (another tab, another
+  // device), but never while the field is dirty — that would eat keystrokes.
+  const [committed, setCommitted] = useState(d.ssh_host ?? "");
+  if ((d.ssh_host ?? "") !== committed && value === committed) {
+    setCommitted(d.ssh_host ?? "");
+    setValue(d.ssh_host ?? "");
+  }
+
+  const dirty = value.trim() !== committed;
+  const save = async () => {
+    if (!dirty || saving) return;
+    setSaving(true);
+    try {
+      const res = await setSshHost({ device_id: d.device_id, ssh_host: value.trim() });
+      const next = res?.ssh_host ?? "";
+      setCommitted(next);
+      setValue(next);
+      toast.success(next ? `SSH host set to ${next}` : "SSH host cleared");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't save SSH host");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-3">
+      <label className="block text-[11px] text-gray-400" htmlFor={`ssh-${d.device_id}`}>
+        SSH host
+      </label>
+      <div className="mt-1 flex items-center gap-2">
+        <input
+          id={`ssh-${d.device_id}`}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void save();
+            if (e.key === "Escape") setValue(committed);
+          }}
+          placeholder={d.hostname || "e.g. nose"}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          className="flex-1 min-w-0 px-2 py-1 rounded border border-gray-500/25 bg-transparent text-[11px] font-mono placeholder:text-gray-600 focus:outline-none focus:border-sol-blue/50"
+        />
+        {dirty && (
+          <button
+            onClick={save}
+            disabled={saving}
+            className="px-2 py-1 rounded text-[11px] border border-sol-blue/30 bg-sol-blue/10 text-sol-blue hover:bg-sol-blue/20 disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-[11px] text-gray-500">
+        {committed ? (
+          <>
+            A session on this machine copies{" "}
+            <code className="font-mono text-gray-400">ssh {committed} -t &quot;tmux attach …&quot;</code>
+          </>
+        ) : (
+          <>Set this to get a ready-to-paste attach command for sessions running here. Leave blank if you only ever attach while sitting at this machine.</>
+        )}
+      </p>
+    </div>
+  );
+}
+
 function DeviceRow({ d }: { d: Device }) {
   const accent = d.is_remote ? "text-sol-violet" : /linux/i.test(d.platform) ? "text-sol-orange" : "text-sol-blue";
   return (
@@ -174,6 +259,7 @@ function DeviceRow({ d }: { d: Device }) {
               </ul>
             </details>
           )}
+          <SshHostField d={d} />
         </div>
       </div>
     </Card>

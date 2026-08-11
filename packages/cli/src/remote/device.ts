@@ -150,7 +150,7 @@ export function isRemoteDevice(): boolean {
  *
  * Linux/Windows keep os.hostname() — they don't adopt DHCP names this way.
  */
-function stableHostname(): string {
+export function stableHostname(): string {
   if (cachedHostname) return cachedHostname;
   cachedHostname = resolveStableHostname({
     platform: process.platform,

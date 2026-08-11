@@ -1360,6 +1360,18 @@ export default defineSchema({
     device_id: v.string(),
     label: v.string(),
     platform: v.string(),
+    // The machine's own hostname, heartbeat-reported. Distinct from `label`,
+    // which is a display name a human can override to anything ("Cloud Mac").
+    // Only ever a SUGGESTION for ssh_host — never interpolated into a command
+    // on its own, because a hostname is not necessarily a reachable ssh target.
+    hostname: v.optional(v.string()),
+    // How to reach this machine over SSH from elsewhere, e.g. "nose" or
+    // "m1@1.2.3.4". User-set in Settings → Devices (never heartbeat-written):
+    // an ssh alias resolves against the VIEWER's ~/.ssh/config, which no daemon
+    // can know. Absent = no target, and the UI then refuses to hand out an
+    // attach command it can't stand behind. Shell-safe by construction — see
+    // sanitizeSshHost in devices.ts, which is what makes it safe to paste.
+    ssh_host: v.optional(v.string()),
     last_seen: v.number(),
     // When a human last touched THIS machine's keyboard/mouse — computed
     // server-side as (heartbeat arrival − the daemon's reported input idle), so
