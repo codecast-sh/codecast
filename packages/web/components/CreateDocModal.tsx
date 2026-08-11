@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
+import { useWorkspaceArgs, workspaceStamp } from "../hooks/useWorkspaceArgs";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
 import { ChevronRight } from "lucide-react";
@@ -38,6 +39,7 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
   const createPlan = useInboxStore((s) => s.createPlan);
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
+  const wsStamp = workspaceStamp(useWorkspaceArgs());
 
   const [title, setTitle] = useState("");
   const [docType, setDocType] = useState(initialType || "note");
@@ -74,13 +76,14 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
           join_policy: joinPolicy || undefined,
           join_k: joinPolicy === "k_of_n" && joinK ? parseInt(joinK, 10) : undefined,
           acceptance_criteria: criteria,
+          ...wsStamp,
         }, { version: 1, kind: "navigate" });
         toast.success("Plan created");
         onClose();
       } else {
         const content = contentRef.current.trim();
         await createDoc(
-          { title: title.trim(), content, doc_type: docType },
+          { title: title.trim(), content, doc_type: docType, ...wsStamp },
           { version: 1, kind: "navigate" },
         );
         toast.success(`Created: ${title.trim()}`);
