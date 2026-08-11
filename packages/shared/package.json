@@ -3,6 +3,9 @@
   "version": "0.0.1",
   "private": true,
   "license": "MIT",
+  "scripts": {
+    "test": "bun test"
+  },
   "main": "./index.ts",
   "types": "./index.ts",
   "exports": {
@@ -11,6 +14,7 @@
     "./contracts": "./contracts/index.ts",
     "./entities": "./entities/index.ts",
     "./render": "./render/index.ts",
+    "./tasks": "./tasks/index.ts",
     "./vault": "./vault/index.ts"
   }
 }

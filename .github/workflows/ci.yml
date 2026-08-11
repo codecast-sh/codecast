@@ -90,6 +90,10 @@ jobs:
         working-directory: packages/web
         run: bun test
 
+      - name: Unit tests (shared package)
+        working-directory: packages/shared
+        run: bun test
+
   test-cli:
     runs-on: ubuntu-latest
     steps:

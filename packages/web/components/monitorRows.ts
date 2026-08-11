@@ -172,9 +172,11 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
           description: (input?.description && String(input.description)) || (kind === "monitor" ? "background watch" : "background command"),
           command: (input?.command && String(input.command)) || "",
           persistent: !!input?.persistent,
-          // Background tasks carry no timeout — they run until they exit or
-          // are stopped, so the defensive expiry below never applies to them.
-          timeoutMs: kind === "monitor" && typeof input?.timeout_ms === "number" ? input.timeout_ms : undefined,
+          // Background tasks carry no timeout, and a persistent monitor's
+          // timeout_ms is ignored by the harness (required input, but the
+          // watch runs until TaskStop or session end) — neither gets one
+          // here, so the defensive expiry below never applies to them.
+          timeoutMs: kind === "monitor" && !input?.persistent && typeof input?.timeout_ms === "number" ? input.timeout_ms : undefined,
           startedAt: msg.timestamp,
           status: "watching",
           eventCount: 0,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cleanPromptSliceTitle, isTriggerFailing, latestLoadedTriggerMessage, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
+import { cleanPromptSliceTitle, groupSessionsByTrigger, isTriggerFailing, latestLoadedTriggerMessage, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
 import { isSessionHardBlocked, visualOrderSessions, type InboxSession } from "../store/inboxStore";
 
 describe("taskDisplayTitle / cleanPromptSliceTitle", () => {
@@ -472,5 +472,78 @@ describe("loop and subagent pseudo rows", () => {
     );
     // running subagent first, then soonest fire (the loop at +20m), then t1.
     expect(p.rows.map((r) => r.kind ?? "trigger")).toEqual(["subagent", "loop", "trigger"]);
+  });
+});
+
+// The "By trigger" lens: roster rows become group headers, each claiming the
+// sessions it drives; unclaimed sessions return as `rest` for the project tier.
+describe("groupSessionsByTrigger", () => {
+  const row = (t: TaskRow, kind?: "loop" | "subagent") => ({ task: t, unread: false, kind });
+
+  it("an inject trigger claims its home conversation", () => {
+    const home = session("home");
+    const other = session("other");
+    const { triggerGroups, rest } = groupSessionsByTrigger(
+      [row(task("t1", { originating_conversation_id: "home" }))],
+      [home, other],
+    );
+    expect(triggerGroups).toHaveLength(1);
+    expect(triggerGroups[0].items.map((s) => s._id)).toEqual(["home"]);
+    expect(rest.map((s) => s._id)).toEqual(["other"]);
+  });
+
+  it("a spawn trigger claims its runs, newest activity first", () => {
+    const run1 = session("run1", { agent_task_id: "t1", updated_at: 100 });
+    const run2 = session("run2", { agent_task_id: "t1", updated_at: 200 });
+    const { triggerGroups, rest } = groupSessionsByTrigger([row(task("t1"))], [run1, run2]);
+    expect(triggerGroups[0].items.map((s) => s._id)).toEqual(["run2", "run1"]);
+    expect(rest).toEqual([]);
+  });
+
+  it("first roster row wins a contested session; groups keep roster order", () => {
+    const home = session("home");
+    const { triggerGroups } = groupSessionsByTrigger(
+      [
+        row(task("t1", { originating_conversation_id: "home" })),
+        row(task("t2", { originating_conversation_id: "home" })),
+      ],
+      [home],
+    );
+    expect(triggerGroups.map((g) => g.key)).toEqual(["t1", "t2"]);
+    expect(triggerGroups[0].items.map((s) => s._id)).toEqual(["home"]);
+    expect(triggerGroups[1].items).toEqual([]);
+  });
+
+  it("a trigger with no visible sessions keeps its (empty) group", () => {
+    const { triggerGroups, rest } = groupSessionsByTrigger(
+      [row(task("t1", { originating_conversation_id: "gone" }))],
+      [session("loose")],
+    );
+    expect(triggerGroups).toHaveLength(1);
+    expect(triggerGroups[0].items).toEqual([]);
+    expect(rest.map((s) => s._id)).toEqual(["loose"]);
+  });
+
+  it("claims a stashed home from the hidden pool without leaking hidden sessions into rest", () => {
+    const stashedHome = session("home", { inbox_stashed_at: 1 });
+    const stashedLoose = session("loose", { inbox_stashed_at: 1 });
+    const { triggerGroups, rest } = groupSessionsByTrigger(
+      [row(task("t1", { originating_conversation_id: "home" }))],
+      [session("active")],
+      { hidden: [stashedHome, stashedLoose] },
+    );
+    expect(triggerGroups[0].items.map((s) => s._id)).toEqual(["home"]);
+    // Unclaimed hidden stays in its bucket; unclaimed active falls to rest.
+    expect(rest.map((s) => s._id)).toEqual(["active"]);
+  });
+
+  it("loop/subagent pseudo rows claim their own session like inject homes", () => {
+    const home = session("home");
+    const { triggerGroups, rest } = groupSessionsByTrigger(
+      [row(task("loop:home", { originating_conversation_id: "home" }), "loop")],
+      [home],
+    );
+    expect(triggerGroups[0].items.map((s) => s._id)).toEqual(["home"]);
+    expect(rest).toEqual([]);
   });
 });

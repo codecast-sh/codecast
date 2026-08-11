@@ -1,5 +1,5 @@
 "use client";
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { copyToClipboard, canonicalUrl } from "../../../lib/utils";
 import { compressImage } from "../../../lib/compressImage";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -25,6 +25,7 @@ import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
 import { FeedCard } from "../../../components/ActivityFeed";
+import { AgentIcon } from "../../../components/ConversationList";
 import { WatchButton } from "../../../components/WatchButton";
 
 const api = _api as any;
@@ -55,7 +56,12 @@ import {
   MessageSquare,
   X,
   ExternalLink,
+  MoreHorizontal,
+  Plus,
+  CornerDownRight,
 } from "lucide-react";
+import { directChildren, isActiveTask, subtaskProgressOf } from "@codecast/shared/tasks";
+import { closeTaskWithGuard, createTaskAndAdopt, setTaskParent } from "../../../lib/taskActions";
 
 const STATUS_OPTIONS = [
   { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
@@ -216,6 +222,42 @@ function Dropdown({
   );
 }
 
+
+// Header ⋯ menu for secondary actions that don't earn a slot in the narrow
+// header row (watch state lives here). Clicking an item closes the menu.
+function OverflowMenu({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useWatchEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className={`p-1 rounded-md transition-colors hover:bg-sol-bg-alt ${open ? "text-sol-text bg-sol-bg-alt" : "text-sol-text-dim hover:text-sol-text"}`}
+        title="More actions"
+      >
+        <MoreHorizontal className="w-4 h-4" />
+      </button>
+      {open && (
+        <div
+          className="absolute top-full right-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-50 py-1 overflow-hidden"
+          onClick={() => setOpen(false)}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function UserBadge({ name, image, username }: { name: string; image?: string; username?: string }) {
   const content = (
@@ -396,6 +438,150 @@ export default function TaskDetailPage() {
   );
 }
 
+// The shared three-way close dialog (panel decision 3): every human path to
+// done/dropped on a parent with open subtasks lands here — the backend guard
+// refuses anything that bypasses it, so this dialog IS the resolution UI.
+export function CloseGuardDialog({ guard, onResolve, onCancel }: {
+  guard: { shortId: string; status: "done" | "dropped"; open: TaskItem[] };
+  onResolve: (resolution: "cascade" | "only_parent") => void;
+  onCancel: () => void;
+}) {
+  const verb = guard.status === "done" ? "Close" : "Drop";
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40" onClick={onCancel}>
+      <div className="w-[26rem] max-w-[90vw] rounded-lg border border-sol-border bg-sol-bg shadow-xl p-4" onClick={(e) => e.stopPropagation()}>
+        <div className="text-sm font-medium text-sol-text mb-1">
+          {guard.open.length} open subtask{guard.open.length === 1 ? "" : "s"}
+        </div>
+        <div className="text-xs text-sol-text-muted mb-3">
+          {verb}ing {guard.shortId} leaves these unfinished:
+        </div>
+        <div className="max-h-40 overflow-y-auto mb-4 space-y-1">
+          {guard.open.map((t) => (
+            <div key={t._id} className="flex items-center gap-2 text-xs">
+              <span className="font-mono text-sol-text-dim">{t.short_id}</span>
+              <span className="text-sol-text truncate">{t.title}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          <button onClick={onCancel} className="h-7 px-2.5 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={() => onResolve("only_parent")}
+            className="h-7 px-2.5 text-xs rounded-md border border-sol-border/40 text-sol-text-muted hover:text-sol-text transition-colors"
+          >
+            {verb} only this
+          </button>
+          <button
+            onClick={() => onResolve("cascade")}
+            className="h-7 px-2.5 text-xs rounded-md border border-sol-cyan/40 bg-sol-cyan/10 text-sol-cyan hover:bg-sol-cyan/20 transition-colors"
+          >
+            {verb} subtasks too
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Linear's sub-issue section, store-driven: progress header, live rows, and a
+// quick-add whose focus survives Enter so decomposing into five subtasks is
+// five titles and five Enters. Always rendered — an empty parent shows the
+// input, otherwise the feature can never bootstrap from the UI.
+function SubtasksSection({ task, requestClose, onNavigate }: {
+  task: TaskDetail;
+  requestClose: (shortId: string, status: "done" | "dropped") => void;
+  onNavigate: (id: string) => void;
+}) {
+  const allTasks = useInboxStore((s) => s.tasks);
+  const updateTask = useInboxStore((s) => s.updateTask);
+  const [title, setTitle] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const children = useMemo(
+    () =>
+      directChildren(Object.values(allTasks) as TaskItem[], task._id)
+        .filter((t: any) => isActiveTask(t))
+        .sort((a: any, b: any) => (a.created_at || 0) - (b.created_at || 0)),
+    [allTasks, task._id],
+  );
+  const progress = useMemo(() => subtaskProgressOf(children as any[]), [children]);
+  const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+
+  const submit = () => {
+    const t = title.trim();
+    if (!t) return;
+    setTitle("");
+    // Fire-and-adopt: the stub renders instantly, identity arrives on the ack.
+    void createTaskAndAdopt({ title: t, parent: task.short_id });
+    inputRef.current?.focus();
+  };
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center gap-2 mb-2">
+        <div className="text-xs font-medium text-sol-text-dim">Subtasks</div>
+        {progress.total > 0 && (
+          <>
+            <span className="text-[11px] font-mono text-sol-text-muted">{progress.done}/{progress.total}</span>
+            <div className="flex-1 max-w-[8rem] h-1 rounded-full bg-sol-border/30 overflow-hidden">
+              <div className="h-full bg-sol-green transition-all" style={{ width: `${pct}%` }} />
+            </div>
+          </>
+        )}
+      </div>
+      <div className="space-y-0.5">
+        {children.map((t: any) => {
+          const cfg = STATUS_MAP[t.status] || STATUS_MAP.open;
+          const RowIcon = cfg.icon;
+          const closed = t.status === "done" || t.status === "dropped";
+          return (
+            <div key={t._id} className="group flex items-center gap-2 px-1.5 py-1 rounded-md hover:bg-sol-bg-alt/50 transition-colors">
+              <button
+                onClick={() => (closed ? updateTask(t.short_id, { status: "open" }) : requestClose(t.short_id, "done"))}
+                className="flex-shrink-0 hover:scale-125 transition-transform"
+                title={closed ? "Reopen" : "Mark done"}
+              >
+                <RowIcon className={`w-3.5 h-3.5 ${cfg.color}`} />
+              </button>
+              <span className="text-[11px] font-mono text-sol-text-dim flex-shrink-0">{t.short_id}</span>
+              <button
+                onClick={() => onNavigate(t._id)}
+                className={`flex-1 min-w-0 text-left text-xs truncate transition-colors ${closed ? "text-sol-text-dim line-through" : "text-sol-text hover:text-sol-cyan"}`}
+              >
+                {t.title}
+              </button>
+              {t.source !== "human" && t.source !== "meeting" && (
+                <Bot className="w-3 h-3 text-sol-text-dim/60 flex-shrink-0" />
+              )}
+              {t.assignee_info?.name && (
+                <span className="text-[10px] text-sol-text-dim flex-shrink-0">{t.assignee_info.name}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex items-center gap-2 px-1.5 py-1 mt-0.5">
+        <Plus className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0" />
+        <input
+          ref={inputRef}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+            if (e.key === "Escape") { setTitle(""); (e.target as HTMLInputElement).blur(); }
+            e.stopPropagation();
+          }}
+          placeholder="Add subtask…"
+          className="flex-1 bg-transparent text-xs text-sol-text placeholder:text-sol-text-dim outline-none py-0.5"
+        />
+      </div>
+    </div>
+  );
+}
+
 export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }: { taskId?: string; variant?: "page" | "inline"; onClose?: () => void; onOpen?: () => void } = {}) {
   const params = useParams();
   const router = useRouter();
@@ -445,6 +631,47 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     if (!data?.short_id) return;
     updateTask(data.short_id, fields);
   }, [data?.short_id, updateTask]);
+
+  // Close-guard flow: any human move to done/dropped goes through the gateway;
+  // a parent with open subtasks opens the shared three-way dialog instead of
+  // writing anything.
+  const [closeGuard, setCloseGuard] = useState<{ shortId: string; status: "done" | "dropped"; open: TaskItem[] } | null>(null);
+  const requestClose = useCallback((shortId: string, status: "done" | "dropped") => {
+    const res = closeTaskWithGuard(shortId, status);
+    if (res.needsConfirm) setCloseGuard({ shortId, status, open: res.openSubtasks });
+  }, []);
+  const handleStatusChange = useCallback((v: string) => {
+    if (!data?.short_id) return;
+    if (v === "done" || v === "dropped") requestClose(data.short_id, v);
+    else handleUpdate({ status: v });
+  }, [data?.short_id, requestClose, handleUpdate]);
+
+  // Parent breadcrumb + set-parent state. The parent row resolves live from
+  // the store so a re-parent elsewhere updates the chip instantly.
+  const parentRow = useMemo(() => {
+    const pid = (data as any)?.parent_id;
+    if (!pid) return null;
+    return (allTasks[String(pid)] as TaskItem | undefined) ?? null;
+  }, [allTasks, (data as any)?.parent_id]);
+  const [parentQuery, setParentQuery] = useState<string | null>(null);
+  const parentCandidates = useMemo(() => {
+    if (parentQuery === null || !data) return [];
+    const q = parentQuery.toLowerCase();
+    return (Object.values(allTasks) as TaskItem[])
+      .filter((t: any) =>
+        t._id !== data._id &&
+        (t.team_id ?? null) === ((data as any).team_id ?? null) &&
+        t.status !== "done" && t.status !== "dropped" &&
+        !String(t._id).startsWith("temp_") &&
+        (q === "" || t.title?.toLowerCase().includes(q) || t.short_id?.toLowerCase().includes(q)))
+      .slice(0, 8);
+  }, [parentQuery, allTasks, data]);
+  const pickParent = useCallback((candidate: TaskItem) => {
+    if (!data?.short_id) return;
+    const res = setTaskParent(data.short_id, candidate.short_id);
+    if (!res.ok) toast.error(res.reason);
+    setParentQuery(null);
+  }, [data?.short_id]);
 
   const uploadCommentImage = useCallback(async (file: File) => {
     const previewUrl = URL.createObjectURL(file);
@@ -618,24 +845,23 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
         <div className={isInline ? "flex-1 px-4 py-4 w-full" : "flex-1 max-w-4xl mx-auto px-6 py-6 w-full"}>
           {/* Card header: id + badges + watch, with actions */}
           <div className="flex items-center justify-between mb-3 gap-2">
-            <div className="flex items-center gap-2 min-w-0 text-xs text-sol-text-dim">
+            <div className="flex items-center gap-2 min-w-0 overflow-hidden text-xs text-sol-text-dim">
               <button
                 onClick={() => { copyToClipboard(data.short_id); toast.success("Task ID copied"); }}
-                className="font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 hover:border-sol-cyan/40 hover:text-sol-cyan transition-colors cursor-copy"
+                className="font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 hover:border-sol-cyan/40 hover:text-sol-cyan transition-colors cursor-copy whitespace-nowrap flex-shrink-0"
                 title="Click to copy ID"
               >
                 {data.short_id}
               </button>
               {teamInfo && (
-                <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px]">{teamInfo.name}</span>
+                <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px] truncate min-w-0">{teamInfo.name}</span>
               )}
               {!taskTeamId && (
-                <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-[10px]">Personal</span>
+                <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-[10px] whitespace-nowrap flex-shrink-0">Personal</span>
               )}
               {data.source === "insight" && (
-                <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 text-[10px]">mined</span>
+                <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 text-[10px] whitespace-nowrap flex-shrink-0">mined</span>
               )}
-              <WatchButton entityType="task" entityId={data._id} />
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
               {isInline && onOpen && (
@@ -651,6 +877,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                 </svg>
               </button>
               <PeekLayoutControls />
+              <OverflowMenu>
+                <WatchButton entityType="task" entityId={data._id} variant="menuItem" />
+              </OverflowMenu>
               <button
                 onClick={() => { if (isInline && onClose) onClose(); else router.push("/tasks"); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
@@ -660,6 +889,20 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               </button>
             </div>
           </div>
+
+          {/* Parent breadcrumb — a subtask never renders context-free */}
+          {(data as any).parent_id && (
+            <button
+              onClick={() => parentRow && router.push(`/tasks/${parentRow._id}`)}
+              className="flex items-center gap-1.5 mb-2 text-xs text-sol-text-dim hover:text-sol-cyan transition-colors group"
+              title={parentRow ? `Open ${parentRow.short_id}` : "Parent task"}
+            >
+              <CornerDownRight className="w-3 h-3 flex-shrink-0" />
+              <span>Subtask of</span>
+              <span className="font-mono">{parentRow?.short_id ?? "…"}</span>
+              {parentRow && <span className="text-sol-text-muted group-hover:text-sol-cyan truncate max-w-[24rem]">{parentRow.title}</span>}
+            </button>
+          )}
 
           {/* Title */}
           <div className="flex items-start gap-2.5 mb-3">
@@ -691,7 +934,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
           {/* Primary properties — inline, editable (the card look) */}
           <div className="flex items-center gap-1 flex-wrap mb-4 -ml-1">
-            <Dropdown value={data.status} options={STATUS_OPTIONS} onChange={(v) => handleUpdate({ status: v })} shortcutHint="s to cycle" />
+            <Dropdown value={data.status} options={STATUS_OPTIONS} onChange={handleStatusChange} shortcutHint="s to cycle" />
             <Dropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
             <button
               onClick={() => openCmd("assign")}
@@ -782,7 +1025,74 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                 </div>
               </div>
             )}
+
+            {/* Parent — set, change, or detach */}
+            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+              <span className="text-xs text-sol-text-dim">Parent</span>
+              {parentQuery !== null ? (
+                <div className="relative">
+                  <input
+                    autoFocus
+                    value={parentQuery}
+                    onChange={(e) => setParentQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setParentQuery(null);
+                      if (e.key === "Enter" && parentCandidates[0]) pickParent(parentCandidates[0]);
+                      e.stopPropagation();
+                    }}
+                    placeholder="Search tasks…"
+                    className="w-full bg-transparent text-xs text-sol-text placeholder:text-sol-text-dim outline-none border-b border-sol-cyan/40 py-0.5"
+                  />
+                  {parentCandidates.length > 0 && (
+                    <div className="absolute top-full left-0 mt-1 w-full max-w-[24rem] bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-56 overflow-y-auto">
+                      {parentCandidates.map((c: any) => (
+                        <button
+                          key={c._id}
+                          onClick={() => pickParent(c)}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sol-text-muted hover:bg-sol-bg-alt transition-colors"
+                        >
+                          <span className="font-mono text-sol-text-dim flex-shrink-0">{c.short_id}</span>
+                          <span className="truncate text-left">{c.title}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (data as any).parent_id ? (
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => parentRow && router.push(`/tasks/${parentRow._id}`)} className="text-xs font-mono text-sol-cyan hover:underline">
+                    {parentRow?.short_id ?? "…"}
+                  </button>
+                  {parentRow && <span className="text-xs text-sol-text-muted truncate max-w-[16rem]">{parentRow.title}</span>}
+                  <button
+                    onClick={() => { if (data.short_id) { const r = setTaskParent(data.short_id, ""); if (!r.ok) toast.error(r.reason); } }}
+                    className="p-0.5 rounded text-sol-text-dim hover:text-sol-red transition-colors"
+                    title="Remove parent"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <button onClick={() => setParentQuery("")} className="text-xs text-sol-text-dim hover:text-sol-text text-left transition-colors">
+                  Set parent…
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Subtasks — Linear's sub-issue section, always present */}
+          <SubtasksSection task={data} requestClose={requestClose} onNavigate={(tid) => router.push(`/tasks/${tid}`)} />
+
+          {closeGuard && (
+            <CloseGuardDialog
+              guard={closeGuard}
+              onResolve={(resolution) => {
+                closeTaskWithGuard(closeGuard.shortId, closeGuard.status, resolution);
+                setCloseGuard(null);
+              }}
+              onCancel={() => setCloseGuard(null)}
+            />
+          )}
 
           {/* Source session */}
           {(data.source === "agent" || data.source === "insight") && data.created_from_conversation && (
@@ -905,18 +1215,23 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                     ) : (
                       <div key={item.data._id} className="py-2.5 relative">
                         <div className="flex items-center gap-2 mb-1.5">
-                          <UserBadge name={item.data.author} image={item.data.author_image} />
+                          {item.data.session_info ? (
+                            <button
+                              type="button"
+                              onClick={() => openLinkedSession(item.data.session_info)}
+                              className="inline-flex items-center gap-1.5 flex-shrink-0 min-w-0 hover:opacity-80 cursor-pointer"
+                              title={item.data.author}
+                            >
+                              <AgentIcon agentType={item.data.session_info.agent_type || "claude_code"} className="w-5 h-5" />
+                              <span className="text-xs text-sol-text font-medium truncate max-w-[260px]">
+                                {item.data.session_info.title || item.data.author}
+                              </span>
+                            </button>
+                          ) : (
+                            <UserBadge name={item.data.author} image={item.data.author_image} />
+                          )}
                           {item.data.comment_type !== "note" && (
                             <Badge variant="outline" className="text-[10px] px-1">{item.data.comment_type}</Badge>
-                          )}
-                          {item.data.session_info && (
-                            <Link
-                              href={`/conversation/${item.data.session_info.session_id}`}
-                              className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors truncate max-w-[200px]"
-                            >
-                              <Zap className="w-3 h-3 text-sol-violet flex-shrink-0" />
-                              <span className="truncate">{item.data.session_info.title || "session"}</span>
-                            </Link>
                           )}
                           <TimeAgo ts={item.data.created_at} className="text-[11px] text-gray-400" />
                         </div>
