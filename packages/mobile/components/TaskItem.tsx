@@ -44,10 +44,19 @@ export function TaskItemRow({
   task,
   onPress,
   onLongPress,
+  indent = 0,
+  descendantCount = 0,
+  hiddenDescendantCount = 0,
 }: {
   task: TaskItemType;
   onPress: () => void;
   onLongPress?: () => void;
+  /** Nesting depth, already clamped to the emphasised top levels by buildTaskTree. */
+  indent?: number;
+  /** Live subtasks below this one across the workspace, not just this view. */
+  descendantCount?: number;
+  /** How many of those this view isn't rendering (agent-internal ones, usually). */
+  hiddenDescendantCount?: number;
 }) {
   const status = STATUS_CONFIG[task.status as TaskStatus] ?? STATUS_CONFIG.open;
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] ?? PRIORITY_CONFIG.medium;
@@ -58,7 +67,15 @@ export function TaskItemRow({
     <TouchableOpacity
       onPress={onPress}
       onLongPress={onLongPress}
-      style={styles.row}
+      // Indent a subtask and hang a rail off its left edge, matching web.
+      style={[
+        styles.row,
+        indent > 0 && {
+          paddingLeft: Spacing.lg + indent * 14,
+          borderLeftWidth: StyleSheet.hairlineWidth,
+          borderLeftColor: Theme.bgHighlight,
+        },
+      ]}
       activeOpacity={0.6}
     >
       <RNView style={styles.topLine}>
@@ -69,6 +86,17 @@ export function TaskItemRow({
           </RNText>
         </RNView>
         <RNView style={styles.rightGroup}>
+          {descendantCount > 0 && (
+            // The count comes from the whole workspace, so a parent still
+            // reports agent work filed under it even when the board hides
+            // those rows. The robot marks that some of them are hidden here.
+            <RNView style={styles.subtaskChip}>
+              {hiddenDescendantCount > 0 && (
+                <FontAwesome name="android" size={8} color={Theme.cyan} style={{ marginRight: 3 }} />
+              )}
+              <RNText style={styles.subtaskCount}>{descendantCount}</RNText>
+            </RNView>
+          )}
           <FontAwesome name={priority.icon} size={10} color={priority.color} />
           <RNText style={styles.age}>{formatRelativeTime(task.updated_at)}</RNText>
         </RNView>
@@ -189,6 +217,20 @@ const styles = StyleSheet.create({
   },
   age: {
     fontSize: 11,
+    color: Theme.textMuted0,
+    fontVariant: ["tabular-nums"],
+  },
+  subtaskChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.bgHighlight,
+  },
+  subtaskCount: {
+    fontSize: 10,
     color: Theme.textMuted0,
     fontVariant: ["tabular-nums"],
   },
