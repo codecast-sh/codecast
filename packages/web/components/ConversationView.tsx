@@ -18,7 +18,7 @@ import { useStorageImageUrl, useStorageImageUrls, hasDecodedSrc, markSrcDecoded 
 import { extractSessionImages } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import {
@@ -48,7 +48,7 @@ import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { tryRenderCastDiff, MessageIdentityProvider } from "./InlineDiff";
 import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
-import { tryRenderCanvas, tryRenderHtmlMessage, looksLikeHtml } from "./HtmlSnippet";
+import { tryRenderCanvas, tryRenderHtmlMessage } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
@@ -112,6 +112,7 @@ import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
 import { FormattedSummary } from "./FormattedSummary";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
+import remarkBreaks from "remark-breaks";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, type ParsedCastCommand } from "./castCommand";
@@ -336,6 +337,29 @@ const MD_COMPONENTS_CODE_LINK = { code: MESSAGE_MD_COMPONENTS.code, a: MESSAGE_M
 const MD_COMPONENTS_NO_IMG = { ...MD_COMPONENTS_CODE_LINK, pre: MESSAGE_MD_COMPONENTS.pre, img: () => null };
 const MD_COMPONENTS_NO_PRE = { ...MD_COMPONENTS_CODE_LINK, img: MESSAGE_MD_COMPONENTS.img };
 
+// User messages are typed (or pasted) as plain text, not authored markdown: a
+// single newline is a real line break, and a literal <tag> is content, not
+// markup. remark-breaks keeps the newlines; the html→text pass keeps pasted
+// tags visible (react-markdown drops raw html nodes, which would otherwise
+// silently eat snippets like `<div className=…>` from the rendered message).
+function remarkUserHtmlAsText() {
+  const walk = (node: any, isRoot: boolean) => {
+    if (!Array.isArray(node.children)) return;
+    node.children = node.children.map((child: any) => {
+      if (child.type === "html") {
+        const text = { type: "text", value: child.value };
+        // A block-level html node sits directly under root, where a bare text
+        // node isn't valid flow content — rewrap it as a paragraph.
+        return isRoot ? { type: "paragraph", children: [text] } : text;
+      }
+      walk(child, false);
+      return child;
+    });
+  };
+  return (tree: any) => walk(tree, true);
+}
+const USER_MD_REMARK = [...entityRemarkPlugins, remarkBreaks, remarkUserHtmlAsText];
+
 // Cross-mount markdown render cache. React.memo only helps while a component
 // stays MOUNTED — but the message virtualizer constantly unmounts and remounts
 // rows (conversation switch, bottom-anchor correction walk, scroll-back), and
@@ -347,20 +371,21 @@ const MD_COMPONENTS_NO_PRE = { ...MD_COMPONENTS_CODE_LINK, img: MESSAGE_MD_COMPO
 // costs only element instantiation. Map insertion order doubles as LRU.
 const MD_RENDER_CACHE = new Map<string, ReactElement>();
 const MD_RENDER_CACHE_MAX = 500;
-function renderMessageMarkdownCached(content: string): ReactElement {
-  const hit = MD_RENDER_CACHE.get(content);
+function renderMessageMarkdownCached(content: string, userText?: boolean): ReactElement {
+  const key = userText ? "\u0000u" + content : content;
+  const hit = MD_RENDER_CACHE.get(key);
   if (hit) {
-    MD_RENDER_CACHE.delete(content);
-    MD_RENDER_CACHE.set(content, hit);
+    MD_RENDER_CACHE.delete(key);
+    MD_RENDER_CACHE.set(key, hit);
     return hit;
   }
   const el = ReactMarkdownBase({
     children: content,
-    remarkPlugins: entityRemarkPlugins,
+    remarkPlugins: userText ? USER_MD_REMARK : entityRemarkPlugins,
     rehypePlugins: MESSAGE_MD_REHYPE,
     components: MESSAGE_MD_COMPONENTS,
   });
-  MD_RENDER_CACHE.set(content, el);
+  MD_RENDER_CACHE.set(key, el);
   if (MD_RENDER_CACHE.size > MD_RENDER_CACHE_MAX) {
     MD_RENDER_CACHE.delete(MD_RENDER_CACHE.keys().next().value!);
   }
@@ -371,7 +396,7 @@ function renderMessageMarkdownCached(content: string): ReactElement {
 // cross-mount cache above. An active search query changes the rendered output
 // (rehypeSearchHighlight), so that rare path bypasses the cache and goes
 // through the context-aware ReactMarkdown wrapper instead.
-const MessageMarkdown = memo(function MessageMarkdown({ content }: { content: string }) {
+const MessageMarkdown = memo(function MessageMarkdown({ content, userText }: { content: string; userText?: boolean }) {
   const query = useContext(HighlightContext);
   // An all-HTML body renders as a sanitized canvas — the markdown pipeline
   // escapes raw tags into garbled source.
@@ -379,12 +404,12 @@ const MessageMarkdown = memo(function MessageMarkdown({ content }: { content: st
   if (html) return html;
   if (query) {
     return (
-      <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
+      <ReactMarkdown remarkPlugins={userText ? USER_MD_REMARK : entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
         {content}
       </ReactMarkdown>
     );
   }
-  return renderMessageMarkdownCached(content);
+  return renderMessageMarkdownCached(content, userText);
 });
 
 // Renders an assistant message body as a flat run of block elements: ★ Insight
@@ -2660,9 +2685,9 @@ function classifyUserMessage(
   }
   if (isCompactionPromptMessage(t)) return { kind: 'compaction_prompt' };
   if (t.startsWith('Read the output file to retrieve the result:') || t.startsWith('Full transcript available at:')) return { kind: 'noise' };
-  if (immediatePrev?.role === 'user' && immediatePrev?.content && isCommandMessage(immediatePrev.content) && t.length > 200) {
-    const cmdMatch = immediatePrev.content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
-    return { kind: 'skill_expansion', cmdName: cmdMatch?.[1]?.replace(/^\//, "") };
+  if (immediatePrev?.role === 'user') {
+    const echoCmd = commandExpansionName(immediatePrev, msg);
+    if (echoCmd !== null) return { kind: 'skill_expansion', cmdName: echoCmd };
   }
   if (contextPrev?.role === 'system' && contextPrev?.subtype === 'compact_boundary') {
     if (!tStripped) return { kind: 'noise' };
@@ -6307,13 +6332,11 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
         <span className="text-xs text-sol-text-muted truncate">{title}</span>
         <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
-      {spawned ? (
-        <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
-          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
-        </div>
-      ) : (
-        <div className="px-3 pb-2 text-sm text-sol-text">{prompt}</div>
-      )}
+      {/* The prompt is authored markdown in both wire formats (spawn header
+          and <scheduled-task> inject) — render it as prose either way. */}
+      <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
+      </div>
       {spawned?.contextSummary && (
         <div className="mx-3 mb-2 rounded border border-sol-border/30 bg-sol-bg/40 px-2 py-1.5 text-[11px] leading-relaxed text-sol-text-muted">
           <span className="font-medium text-sol-text-dim">Context from originating session: </span>
@@ -6787,9 +6810,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     .replace(/\[image\]/gi, "")
     .trim();
   const { contexts: contextBlocks, remaining: displayContent } = parseContextBlocks(rawContent);
-  // HTML bodies take the markdown branch so MessageMarkdown can dispatch them
-  // to the sanitized canvas renderer.
-  const isMarkdown = hasRichMarkdown(displayContent) || looksLikeHtml(displayContent);
 
   const effectivelyCollapsed = collapsed && !isExpanded;
 
@@ -6981,7 +7001,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 -mx-4 px-4 py-4 rounded-lg ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/15 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : "bg-sol-blue/10 border border-sol-blue/30"} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined}>
       <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
         {onStartShareSelection && (
           <button
@@ -7062,7 +7082,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       )}
       {displayContent ? <div
         ref={contentRef}
-        className={`text-sol-text text-sm pl-8 break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : isMarkdown ? "prose prose-invert prose-sm max-w-none" : "whitespace-pre-wrap"}`}
+        className={`text-sol-text text-sm pl-8 break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}
         style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? { maxHeight: USER_CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
       >
         {(() => {
@@ -7084,9 +7104,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
               <div className="space-y-1">
                 {tmParts.map((part, i) => part.type === 'teammate' ? (
                   <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
-                ) : hasRichMarkdown(part.content) ? (
-                  <MessageMarkdown key={i} content={part.content} />
-                ) : <span key={i} className="whitespace-pre-wrap">{renderWithMentions(part.content)}</span>)}
+                ) : <MessageMarkdown key={i} content={part.content} userText />)}
               </div>
             );
           }
@@ -7097,15 +7115,11 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
               <div className="space-y-2">
                 {parts.map((part, i) => part.type === 'skill' ? (
                   <SkillCard key={i} name={part.skillName} description={part.skillDesc} path={part.skillPath} />
-                ) : isMarkdown || hasRichMarkdown(part.content) ? (
-                  <MessageMarkdown key={i} content={part.content} />
-                ) : <span key={i}>{renderWithMentions(part.content)}</span>)}
+                ) : <MessageMarkdown key={i} content={part.content} userText />)}
               </div>
             );
           }
-          return isMarkdown ? (
-            <MessageMarkdown content={displayContent} />
-          ) : <>{renderWithMentions(displayContent)}</>;
+          return <MessageMarkdown content={displayContent} userText />;
         })()}
         {!effectivelyCollapsed && !contentExpanded && isOverflowing && (
           <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[color-mix(in_srgb,var(--sol-blue)_10%,var(--sol-bg))]" />
@@ -7216,16 +7230,14 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
                 </svg>
               </button>
             </div>
-            <div className={isMarkdown ? "prose prose-invert prose-sm max-w-none text-sol-text" : "text-sol-text text-sm whitespace-pre-wrap"}>
-              {isMarkdown ? (
-                <ReactMarkdown
-                  remarkPlugins={entityRemarkPlugins}
-                  rehypePlugins={MESSAGE_MD_REHYPE}
-                  components={MESSAGE_MD_COMPONENTS}
-                >
-                  {content}
-                </ReactMarkdown>
-              ) : content}
+            <div className="prose prose-invert prose-sm max-w-none text-sol-text">
+              <ReactMarkdown
+                remarkPlugins={USER_MD_REMARK}
+                rehypePlugins={MESSAGE_MD_REHYPE}
+                components={MESSAGE_MD_COMPONENTS}
+              >
+                {content}
+              </ReactMarkdown>
             </div>
           </div>
         </div>,
@@ -9821,10 +9833,42 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     setLightboxImageIndex(null);
   }, [pastedImages]);
 
+  // Drop a numbered token into the draft text for each attached image so the
+  // user can refer to attachments in prose ("crop it like [Image 2]"). Numbers
+  // follow attach order, which is the order the agent receives the images in.
+  const insertImagePlaceholder = useCallback((n: number) => {
+    const token = `[Image ${n}]`;
+    if (composeMode && composeRef.current) {
+      composeRef.current.insertText(`${token} `);
+      return;
+    }
+    const current = messageRef.current;
+    const el = textareaRef.current;
+    const pos = el && document.activeElement === el ? (el.selectionEnd ?? current.length) : current.length;
+    const before = current.slice(0, pos);
+    const after = current.slice(pos);
+    const inserted = `${before && !/\s$/.test(before) ? " " : ""}${token}${after.startsWith(" ") ? "" : " "}`;
+    const newVal = before + inserted + after;
+    setMessage(newVal);
+    // Sync so a draft snapshot taken later this tick carries the placeholder.
+    messageRef.current = newVal;
+    const newCursor = before.length + inserted.length;
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newCursor;
+      }
+    }, 0);
+  }, [composeMode, setMessage]);
+
   const uploadImage = useCallback((file: File) => {
     const previewUrl = URL.createObjectURL(file);
+    const entry = { file, previewUrl, uploading: true };
+    // Ref-first so several images attached in one tick number sequentially —
+    // the render-time ref sync hasn't happened yet.
+    pastedImagesRef.current = [...pastedImagesRef.current, entry];
+    insertImagePlaceholder(pastedImagesRef.current.length);
     setPastedImages(prev => {
-      const next = [...prev, { file, previewUrl, uploading: true }];
+      const next = [...prev, entry];
       // Sacred from the moment of paste: the draft row (uploading, blob
       // preview) is what survives the composer remount that follows session
       // registration, before the upload has produced a storageId.
@@ -9859,7 +9903,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     })();
     pendingImageUploads.set(previewUrl, promise);
     return previewUrl;
-  }, [generateUploadUrl, conversationId]);
+  }, [generateUploadUrl, conversationId, insertImagePlaceholder]);
 
   useWatchEffect(() => {
     if (onDropFiles) {
@@ -11232,6 +11276,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [shareSelectionMode, setShareSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
+  const [shareIncludeConversation, setShareIncludeConversation] = useState(false);
   const [isImageLightboxActive, setIsImageLightboxActive] = useState(false);
   const [stickyMsgVisible, setStickyMsgVisible] = useState(false);
   const [stickyExpanded, setStickyExpanded] = useState(false);
@@ -11630,6 +11675,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const handleCancelShareSelection = useCallback(() => {
     setShareSelectionMode(false);
     setSelectedMessageIds(new Set());
+    setShareIncludeConversation(false);
   }, []);
 
   const handleConfirmShare = useCallback(async () => {
@@ -11648,19 +11694,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         context_before: 0,
         context_after: 0,
         message_ids: sortedIds as Id<"messages">[],
+        include_conversation_link: shareIncludeConversation || undefined,
       });
 
       const url = `${shareOrigin()}/share/message/${token}`;
       await copyToClipboard(url);
-      toast.success("Share link copied!");
+      toast.success(shareIncludeConversation ? "Share link copied! The full conversation is now public via its link." : "Share link copied!");
       setShareSelectionMode(false);
       setSelectedMessageIds(new Set());
+      setShareIncludeConversation(false);
     } catch (err) {
       toast.error("Failed to create share link");
     } finally {
       setIsCreatingShareLink(false);
     }
-  }, [selectedMessageIds, messages, generateShareLink]);
+  }, [selectedMessageIds, messages, generateShareLink, shareIncludeConversation]);
 
   const toolCallChangeSelectionMap = useMemo(() => {
     const fileChanges = extractFileChanges(messages as any);
@@ -15571,6 +15619,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           <span className="text-sm text-sol-text-secondary">
             {selectedMessageIds.size} message{selectedMessageIds.size !== 1 ? "s" : ""} selected
           </span>
+          <label
+            className="flex items-center gap-1.5 text-sm text-sol-text-secondary cursor-pointer select-none"
+            title="Add a link to the full conversation on the shared page. This makes the conversation viewable by anyone with that link."
+          >
+            <input
+              type="checkbox"
+              checked={shareIncludeConversation}
+              onChange={(e) => setShareIncludeConversation(e.target.checked)}
+              className="accent-[var(--sol-cyan)]"
+            />
+            Link full conversation
+            {shareIncludeConversation && <span className="text-xs text-sol-text-dim">(becomes public)</span>}
+          </label>
           <button
             onClick={handleCancelShareSelection}
             className="px-3 py-1.5 text-sm text-sol-text-dim hover:text-sol-text-secondary transition-colors"

@@ -43,6 +43,10 @@ export function makeFakeDb(tables: Record<string, any[]>) {
         async paginate(_opts: any) {
           return { page: apply(), isDone: true, continueCursor: "" };
         },
+        // The streaming read path (scopedFetch's stripFields `for await`).
+        async *[Symbol.asyncIterator]() {
+          for (const r of apply()) yield r;
+        },
       };
       return builder;
     },

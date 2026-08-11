@@ -1,7 +1,7 @@
 import { Id } from "./_generated/dataModel";
 import { resolveTeamForPath, DirectoryMapping, isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { invalidScope, forbidden } from "./lib/auth";
-import { requireTeamMembership } from "./lib/access";
+import { linkedConversationId, requireTeamMembership } from "./lib/access";
 
 type Workspace =
   | { type: "team"; teamId: Id<"teams"> }
@@ -33,16 +33,10 @@ type ScopedFetchOpts = {
   stripFields?: string[];
 };
 
-function getLinkedConvId(record: any): string | undefined {
-  if (record.conversation_id) return String(record.conversation_id);
-  if (record.created_from_conversation) return String(record.created_from_conversation);
-  if (record.related_conversation_ids?.[0]) return String(record.related_conversation_ids[0]);
-  if (record.conversation_ids?.[0]) return String(record.conversation_ids[0]);
-  return undefined;
-}
-
+// Batch variant of lib/access.ts effectiveTeamForResource: same rule, resolved
+// against a pre-fetched conversation map instead of per-record db reads.
 export function resolveEffectiveTeam(record: any, convMap: Map<string, any>): Id<"teams"> | undefined {
-  const cid = getLinkedConvId(record);
+  const cid = linkedConversationId(record);
   const conv = cid ? convMap.get(cid) : undefined;
   if (conv) return teamVisibleConvTeam(conv);
   return record.team_id;
@@ -132,7 +126,7 @@ export async function scopedFetch(
   // (title_embedding, git_diff, git_diff_staged) that blow the 64MB limit.
   const convIds = new Set<string>();
   for (const r of all) {
-    const cid = getLinkedConvId(r);
+    const cid = linkedConversationId(r);
     if (cid) convIds.add(cid);
   }
   const convMap = new Map<string, any>();
@@ -149,10 +143,12 @@ export async function scopedFetch(
     });
   }
 
-  // Filter by effective team. In team view, also include the user's own
-  // untagged records (no conv-derived team and no team_id) — orphans created
-  // before any team was active follow the user into their active workspace
-  // rather than vanishing.
+  // Filter by effective team. Workspace boundaries are strict: a team view
+  // returns ONLY records whose effective team is that team, and the personal
+  // view returns ONLY records with no effective team. A teamless record lives
+  // in its owner's personal workspace and nowhere else — it must never follow
+  // the user into a team space (that was the "personal task shows up in the
+  // Union team view" leak).
   let records: any[];
   if (workspace === "all") {
     // No team filter — caller wants every record the user can see across
@@ -161,8 +157,7 @@ export async function scopedFetch(
   } else if ((workspace === "team" || !workspace) && teamId) {
     records = all.filter(r => {
       const eff = resolveEffectiveTeam(r, convMap);
-      if (eff) return String(eff) === String(teamId);
-      return String(r.user_id) === String(userId);
+      return !!eff && String(eff) === String(teamId);
     });
   } else if (workspace === "personal") {
     records = all.filter(r => !resolveEffectiveTeam(r, convMap));
@@ -170,7 +165,20 @@ export async function scopedFetch(
     records = all;
   }
 
+  stampEffectiveTeam(records, convMap);
   return { records, convMap };
+}
+
+// Normalize workspace truth onto rows we ship to clients: team_id becomes the
+// EFFECTIVE team (conversation-derived when the record links a conversation,
+// the raw tag otherwise). Client-side workspace filters and the docs crawl's
+// absent-prune all key on row.team_id, so shipping the resolved value keeps
+// every layer — server filter, client filter, prune scope — agreeing on one
+// field. Mutates in place (rows are per-request copies, same as enrichTasks).
+export function stampEffectiveTeam(records: any[], convMap: Map<string, any>): void {
+  for (const r of records) {
+    r.team_id = resolveEffectiveTeam(r, convMap);
+  }
 }
 
 export function scopeByProject<T extends Record<string, any>>(

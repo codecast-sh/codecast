@@ -78,6 +78,32 @@ export function isCommandMessage(content: string): boolean {
   return COMMAND_PATTERNS.some(pattern => pattern.test(trimmed));
 }
 
+// Recognize a custom slash command's expanded prompt. Claude Code echoes the
+// expansion as a separate user message directly after the tagged invocation,
+// written in the same batch — so it shares the invocation's timestamp. The
+// expansion text itself has no markers, so that proximity is the whole signal,
+// and it must be checked strictly: `isCommandMessage` also matches command
+// *output* (<local-command-stdout>), and a long message the user typed minutes
+// after running a command must stay a normal message, not get swallowed into a
+// collapsed "/skill" block. Returns the command name (no leading slash), or
+// null when the message is not an expansion echo.
+export function commandExpansionName(
+  prev: { content?: string | null; timestamp?: number } | null | undefined,
+  msg: { content?: string | null; timestamp?: number },
+): string | null {
+  const prevContent = prev?.content?.trim();
+  if (!prevContent || !msg.content || msg.content.trim().length <= 200) return null;
+  // The invocation record leads with its tags (name/message order varies by CC version).
+  const cmdMatch = /^<command-(?:name|message)>/.test(prevContent)
+    ? prevContent.match(/<command-name>([^<]*)<\/command-name>/) ||
+      prevContent.match(/<command-message>([^<]*)<\/command-message>/)
+    : null;
+  if (!cmdMatch?.[1]) return null;
+  if (prev?.timestamp == null || msg.timestamp == null) return null;
+  if (Math.abs(msg.timestamp - prev.timestamp) >= 10_000) return null;
+  return cmdMatch[1].replace(/^\//, "");
+}
+
 export function getCommandType(content: string): string | undefined {
   const trimmed = content.trim();
   if (/^<command-name>/.test(trimmed)) return "cmd";

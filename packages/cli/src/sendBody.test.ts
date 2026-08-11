@@ -60,9 +60,23 @@ describe("expandStdinArgs", () => {
     expect(expandStdinArgs(["--", "a-b"], () => "unused")).toEqual(["--", "a-b"]);
   });
 
-  test("rejects a second '-' — stdin holds only one body", () => {
-    expect(() => expandStdinArgs(["-", "-"], () => "body")).toThrow(
-      "Only one argument can be read from stdin",
+  test("a single '-' never splits — a lone --- line is content, not a separator", () => {
+    expect(expandStdinArgs(["-"], () => "intro\n---\noutro\n")).toEqual(["intro\n---\noutro"]);
+  });
+
+  test("multiple '-' args split stdin into sections on --- lines, in order", () => {
+    expect(
+      expandStdinArgs(["keep", "-", "-", "-"], () => "brief one\nline two\n---\nbrief two\n---\nbrief three\n"),
+    ).toEqual(["keep", "brief one\nline two", "brief two", "brief three"]);
+  });
+
+  test("splits on CRLF-delimited --- lines too", () => {
+    expect(expandStdinArgs(["-", "-"], () => "a\r\n---\r\nb\r\n")).toEqual(["a", "b"]);
+  });
+
+  test("rejects a section count that does not match the '-' count", () => {
+    expect(() => expandStdinArgs(["-", "-", "-"], () => "one\n---\ntwo\n")).toThrow(
+      `3 '-' arguments need 3 stdin sections`,
     );
   });
 });

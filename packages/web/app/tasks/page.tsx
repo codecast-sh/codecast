@@ -21,7 +21,9 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
+import { filterToWorkspace } from "../../lib/workspaceScope";
 import { AgentTypeIcon, formatAgentType } from "../../components/AgentTypeIcon";
+import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
 import {
   Plus,
   Circle,
@@ -661,19 +663,17 @@ export function TaskListContent() {
     [updateTask]
   );
 
-  // Defensive team scoping. `store.tasks` is a single global collection shared
+  // Strict team scoping. `store.tasks` is a single global collection shared
   // across teams; it is NOT cleared on team switch, and the live sync only
   // overlays (never prunes — see useSyncTasks). Pruning of other-team rows is
   // owned solely by the throttled reconcile crawl, so after switching teams the
   // previously-viewed team's tasks linger here (and survive reloads via IDB)
-  // until that crawl catches up. Mirror the server's workspace scoping at read
-  // time: in a team view keep this team's tasks plus server-rescued teamless
-  // orphans; in the personal view keep only teamless tasks.
+  // until that crawl catches up. Re-assert the workspace boundary at read time
+  // (lib/workspaceScope): a team view shows ONLY that team's tasks — personal
+  // (teamless) tasks live in the personal view alone.
   const tasksList = useMemo(() => {
     const all = Object.values(tasks);
-    const scoped = all.filter((t) =>
-      activeTeamId ? (!t.team_id || t.team_id === activeTeamId) : !t.team_id
-    );
+    const scoped = filterToWorkspace(all, activeTeamId);
     // Derive the dormant session badge fields here — the single entry point of
     // the page's task pipeline — so every downstream filter/group/badge keeps
     // reading t.origin_session / t.source_agent_type unchanged. Server rows no
@@ -703,27 +703,39 @@ export function TaskListContent() {
   }, [tasksList]);
 
   // Source filtering applied before other filters.
-  // Active tasks = not suggested-insight and not dismissed.
-  // "human" = created via web UI, "agent" = created via cast CLI in a session.
-  // Insight suggestions are tucked away behind a separate triage link.
-  const isActive = (t: TaskItem) => t.triage_status !== "suggested" && t.triage_status !== "dismissed" && t.source !== "insight";
+  // Active tasks = not suggested-insight and not dismissed. A promoted mined
+  // task counts as active — promote is what lifts it out of triage.
+  // The default view is the human's board: web-created tasks plus anything
+  // promoted onto it (cast task create --human, or a triage accept). Every
+  // machine-made unpromoted task (agent, plan_mode, todo_sync, import) sits
+  // behind the Agent segment; "all" shows both. Insight suggestions stay
+  // behind the separate triage link.
+  const isActive = (t: TaskItem) => t.triage_status !== "suggested" && t.triage_status !== "dismissed" && (t.source !== "insight" || !!t.promoted);
   const isTriage = (t: TaskItem) => t.source === "insight" ? t.triage_status !== "dismissed" : t.triage_status === "suggested";
+  const onHumanBoard = (t: TaskItem) => t.source === "human" || !!t.promoted;
   const sourceFilteredTasks = useMemo(() => {
-    if (sourceFilter === "human") {
-      return tasksList.filter((t) => t.source === "human" && isActive(t));
-    } else if (sourceFilter === "agent") {
-      return tasksList.filter((t) => t.source === "agent" && isActive(t));
+    if (sourceFilter === "agent") {
+      return tasksList.filter((t) => !onHumanBoard(t) && isActive(t));
+    } else if (sourceFilter === "all") {
+      return tasksList.filter(isActive);
     } else if (sourceFilter === "triage") {
       return tasksList.filter(isTriage);
     } else if (sourceFilter === "dismissed") {
       return tasksList.filter((t) => t.triage_status === "dismissed");
     } else {
-      return tasksList.filter(isActive);
+      // "" (default) and legacy "human" links both mean the human's board.
+      return tasksList.filter((t) => onHumanBoard(t) && isActive(t));
     }
   }, [tasksList, sourceFilter]);
 
   const suggestedCount = useMemo(() => {
     return tasksList.filter(isTriage).length;
+  }, [tasksList]);
+
+  // Count for the tucked-away agent chip: non-terminal agent-internal tasks,
+  // i.e. what the chip's view shows on its default status tab.
+  const agentCount = useMemo(() => {
+    return tasksList.filter((t) => !onHumanBoard(t) && isActive(t) && t.status !== "done" && t.status !== "dropped").length;
   }, [tasksList]);
 
   const baseFilteredTasks = useMemo(() => {
@@ -1189,25 +1201,31 @@ export function TaskListContent() {
           syncScope="tasks"
           headerExtra={
             <>
-              <SegmentedToggle
-                collapse
-                value={sourceFilter}
-                onChange={(v) => setParam({ source: v })}
-                items={[
-                  { key: "", label: "All", title: "All tasks" },
-                  { key: "human", icon: User, title: "Created via web UI" },
-                  { key: "agent", icon: Bot, title: "Created via cast CLI in a session" },
-                ]}
-              />
+              {/* The board (human-created + flagged tasks) is the default view
+                  with no control of its own. Agent-internal work and insight
+                  suggestions are tucked behind small count chips that only
+                  appear when they have contents. */}
+              {agentCount > 0 && (
+                <ShortcutTooltip label="Agent-internal tasks — created by agents for their own work">
+                  <button
+                    onClick={() => setParam({ source: sourceFilter === "agent" ? "" : "agent" })}
+                    className={`cq-header-collapse flex items-center gap-1.5 h-7 px-2 text-xs rounded-md border transition-colors ${sourceFilter === "agent" ? "border-sol-cyan/40 bg-sol-cyan/10 text-sol-cyan" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text"}`}
+                  >
+                    <Bot className="w-3.5 h-3.5" />
+                    <span>{agentCount}</span>
+                  </button>
+                </ShortcutTooltip>
+              )}
               {suggestedCount > 0 && (
-                <button
-                  onClick={() => setParam({ source: sourceFilter === "triage" ? "" : "triage" })}
-                  className={`cq-header-collapse flex items-center gap-1.5 h-7 px-2 text-xs rounded-md border transition-colors ${sourceFilter === "triage" ? "border-sol-yellow/40 bg-sol-yellow/10 text-sol-yellow" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text"}`}
-                  title="Review suggested insights"
-                >
-                  <Lightbulb className="w-3.5 h-3.5" />
-                  <span>{suggestedCount}</span>
-                </button>
+                <ShortcutTooltip label="Review suggested insights">
+                  <button
+                    onClick={() => setParam({ source: sourceFilter === "triage" ? "" : "triage" })}
+                    className={`cq-header-collapse flex items-center gap-1.5 h-7 px-2 text-xs rounded-md border transition-colors ${sourceFilter === "triage" ? "border-sol-yellow/40 bg-sol-yellow/10 text-sol-yellow" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text"}`}
+                  >
+                    <Lightbulb className="w-3.5 h-3.5" />
+                    <span>{suggestedCount}</span>
+                  </button>
+                </ShortcutTooltip>
               )}
             </>
           }
