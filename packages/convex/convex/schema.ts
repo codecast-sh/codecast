@@ -778,6 +778,10 @@ export default defineSchema({
     timestamp: v.number(),
     tool_calls_count: v.optional(v.number()),
     tool_results_count: v.optional(v.number()),
+    // Written only by the unpushed search_content_r2 work — see the
+    // COEXISTENCE note on that index below.
+    team_id: v.optional(v.id("teams")),
+    user_id: v.optional(v.id("users")),
     // _creationTime of the SOURCE message — the window/GC axis. Distinct from
     // `timestamp` (client event time): imported old transcripts get fresh
     // creation times and should be searchable, not instantly GC'd.
@@ -788,6 +792,14 @@ export default defineSchema({
     .searchIndex("search_content", {
       searchField: "content",
       filterFields: ["conversation_id"],
+    })
+    // COEXISTENCE (2026-08-11): prod carries an evolved search index deployed
+    // from an unpushed tree. Declaring it (and the optional fields it filters
+    // on) keeps a deploy from this tree additive — dropping it would force a
+    // ~626k-doc backfill when the owner redeploys. Remove when that work merges.
+    .searchIndex("search_content_r2", {
+      searchField: "content",
+      filterFields: ["conversation_id", "team_id", "user_id"],
     }),
 
   // Single row: the searchMirror walker's watermark. `cursor` = _creationTime
@@ -2578,6 +2590,19 @@ export default defineSchema({
     .index("by_slug", ["slug"])
     .index("by_user", ["user_id"])
     .index("by_user_path", ["user_id", "source_path"]),
+
+  // COEXISTENCE (2026-08-11): live in prod but deployed from an unpushed tree
+  // (fields sampled from the prod row; all optional on purpose). Declared so a
+  // deploy from this tree keeps the data and indexes instead of dropping them.
+  // Remove when that work merges to main.
+  artifact_identities: defineTable({
+    artifact_id: v.optional(v.string()),
+    user_id: v.optional(v.string()),
+    token: v.optional(v.string()),
+    created_at: v.optional(v.number()),
+  })
+    .index("by_user_artifact", ["user_id", "artifact_id"])
+    .index("by_token", ["token"]),
 
   // Superseded artifact versions: on republish the previous blob is snapshotted
   // here (instead of deleted) so past versions stay openable. Bounded — see
