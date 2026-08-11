@@ -221,6 +221,8 @@ export type PlanItem = {
   goal?: string;
   status: string;
   source: string;
+  // Workspace: set = that team's plan, unset = personal (lib/workspaceScope).
+  team_id?: string;
   progress?: { total: number; done: number; in_progress: number; open: number };
   task_count?: number;
   session_count?: number;
@@ -556,6 +558,9 @@ export type TaskItem = {
   priority: string;
   source: string;
   triage_status?: string;
+  // True = on the human's board: set by triage promote or `cast task create
+  // --human`. Machine-created tasks without it are agent-internal.
+  promoted?: boolean;
   labels?: string[];
   blocked_by?: string[];
   blocks?: string[];
@@ -651,6 +656,10 @@ export type DocItem = {
   doc_type: string;
   source: string;
   source_file?: string;
+  // Workspace: set = that team's doc, unset = personal. The server ships the
+  // EFFECTIVE team here (conversation-derived — convex data.ts
+  // stampEffectiveTeam), so views filter on it directly (lib/workspaceScope).
+  team_id?: string;
   labels?: string[];
   pinned?: boolean;
   plan_id?: string;
@@ -2961,7 +2970,7 @@ interface InboxStoreState {
   updateTaskStatus: (shortId: string, status: string) => Promise<any>;
   updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string }) => Promise<any>;
   createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string }) => Promise<any>;
-  createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[] }, continuation?: DurableCreateContinuation) => Promise<any>;
+  createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[]; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   promoteDocToPlan: (docId: string) => Promise<any>;

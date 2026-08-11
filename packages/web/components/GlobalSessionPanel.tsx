@@ -19,7 +19,7 @@ import { sessionsWakeSig, resolveShowOld } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { isBlockedConversation, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
+import { isBlockedConversation, isSubagentConversation, nestParentIdOf, LOGIN_FLOW_STALE_MS } from "@codecast/convex/convex/ccAccountsShared";
 import { isLivenessStale } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
@@ -362,6 +362,138 @@ function AuthErrorBadge({ kind, agentType }: { kind?: string | null; agentType?:
   );
 }
 
+// The login flow's device-row state, as listAccountProfiles reports it.
+type LoginFlowState = {
+  status: "pending" | "confirmed" | "rejected";
+  email?: string;
+  reason?: string;
+  started_at: number;
+  finished_at?: number;
+  revived?: number;
+};
+
+// The big sign-in call to action for auth-blocked sessions. Clicking asks the
+// primary daemon to run `claude auth login` (requestLoginFlow), which pops the
+// OAuth page in the machine's browser pre-filled with the expired account's
+// email. The device row's cc_login_flow field is the whole state channel:
+// pending renders the waiting spinner, confirmed announces the revive the
+// server already kicked off, rejected says why and brings the button back.
+function SignInCta({
+  device,
+  authSessionIds,
+  disabled,
+}: {
+  device: { device_id: string; label?: string; active_email?: string; login_flow?: LoginFlowState };
+  authSessionIds: string[];
+  disabled: boolean;
+}) {
+  const requestLogin = useMutation(api.accountSwitch.requestLoginFlow);
+  const [launching, setLaunching] = useState(false);
+  const now = useCoarseNow(5_000);
+  const flow = device.login_flow;
+
+  // The moment the daemon confirms, mirror the server's revive locally: stamp
+  // the auth-blocked sessions as revive-in-flight so the counts drop on the
+  // spot instead of on the kill/continue round trip.
+  const handledConfirmRef = useRef(0);
+  useEffect(() => {
+    if (flow?.status !== "confirmed" || !flow.finished_at) return;
+    if (handledConfirmRef.current === flow.finished_at) return;
+    handledConfirmRef.current = flow.finished_at;
+    // Only a confirm from THIS incident revives — an old row from last week's
+    // flow must not clear a fresh outage's counts.
+    if (now - flow.finished_at < 3 * 60 * 1000) {
+      useInboxStore.getState().markBlockedReviveRequested(authSessionIds);
+    }
+  }, [flow?.status, flow?.finished_at, now, authSessionIds]);
+
+  const pending =
+    (flow?.status === "pending" && now - flow.started_at < LOGIN_FLOW_STALE_MS) || launching;
+  const confirmedRecent =
+    flow?.status === "confirmed" && !!flow.finished_at && now - flow.finished_at < 3 * 60 * 1000;
+  const rejectedRecent =
+    flow?.status === "rejected" && !!flow.finished_at && now - flow.finished_at < 10 * 60 * 1000;
+
+  const email = flow?.email ?? device.active_email;
+  const who = email ?? "your Claude account";
+
+  const handleClick = async () => {
+    setLaunching(true);
+    try {
+      await requestLogin({ device_id: device.device_id });
+      // The device row's pending stamp echoes back through listAccountProfiles;
+      // keep the local flag briefly so the button can't double-fire meanwhile.
+      setTimeout(() => setLaunching(false), 5_000);
+    } catch (err) {
+      setLaunching(false);
+      toast.error(err instanceof Error ? err.message : "Couldn't start the sign-in");
+    }
+  };
+
+  if (pending) {
+    return (
+      <div className="mt-2 flex items-center gap-2.5 rounded-md border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2.5">
+        <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-500" aria-hidden />
+        <div className="min-w-0 text-[11px] leading-snug">
+          <div className="font-semibold text-sol-text">Finish signing in as {who} in your browser</div>
+          <div className="text-sol-text-dim">
+            The sign-in page opened on {device.label || "your machine"} — the blocked sessions restart on their own once it completes.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (confirmedRecent) {
+    const revived = flow?.revived ?? authSessionIds.length;
+    return (
+      <div className="mt-2 flex items-center gap-2.5 rounded-md border border-sol-green/30 bg-sol-green/[0.08] px-3 py-2.5">
+        <svg className="h-3.5 w-3.5 shrink-0 text-sol-green" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
+          <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <div className="min-w-0 text-[11px] leading-snug">
+          <div className="font-semibold text-sol-text">Signed in{flow?.email ? ` as ${flow.email}` : ""}</div>
+          <div className="text-sol-text-dim">
+            {revived > 0
+              ? `Restarting ${revived} blocked session${revived === 1 ? "" : "s"} on the fresh login.`
+              : "The blocked sessions restart on their own."}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2.5">
+      {rejectedRecent && (
+        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-sol-red">
+          <X className="h-3 w-3 shrink-0" />
+          <span className="min-w-0 truncate">
+            Sign-in didn&apos;t complete{flow?.reason ? ` — ${flow.reason}` : ""}
+          </span>
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <button
+          onClick={handleClick}
+          disabled={disabled}
+          title={`Run /login on ${device.label || "your machine"} — opens the browser sign-in${email ? ` for ${email}` : ""}`}
+          className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-3.5 py-1.5 text-[12px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
+        >
+          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
+            <circle cx="7.5" cy="15.5" r="3.5" />
+            <path d="M10 13L20 3M17 6l2 2M14 9l2 2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          {rejectedRecent ? `Try signing in as ${who} again` : `Sign in as ${who}`}
+        </button>
+        <span className="text-[11px] leading-snug text-sol-text-dim">
+          Opens your browser to re-authenticate, then restarts the signed-out session{authSessionIds.length === 1 ? "" : "s"} automatically.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // When several sessions are parked on an API-error banner at once (the classic
 // "the whole fleet hit the Max usage limit together"), surface ONE fleet-level
 // action instead of N per-card errors: nudge them all with "continue" (right
@@ -377,6 +509,7 @@ function BlockedSessionsBanner({
   onOpen,
   forced,
   onClearForced,
+  fresh,
 }: {
   blocked: InboxSession[];
   onOpen?: (session: InboxSession) => void;
@@ -386,6 +519,9 @@ function BlockedSessionsBanner({
   // transient — it snoozes on X and after acting).
   forced?: boolean;
   onClearForced?: () => void;
+  // A live 0→N transition of the blocked set (not a page-load hydration):
+  // replay the entrance with the attention glow so the incident lands.
+  fresh?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [includeSubs, setIncludeSubs] = useState(false);
@@ -436,6 +572,14 @@ function BlockedSessionsBanner({
       if (!switchTargets.some((t) => t.name === p.name)) switchTargets.push({ name: p.name, email: p.email });
     }
   }
+
+  // The sign-in CTA's executor: the online primary (non-remote) machine — the
+  // one whose keychain holds the login and whose browser the OAuth flow opens
+  // in. Remotes run a pushed credential copy and can never sign in themselves.
+  const loginDevice = (accountData?.devices ?? []).find((d) => d.online && !d.is_remote);
+  const actedAuthIds = acted
+    .filter((sess) => sess.pending_api_error_kind === "auth")
+    .map((sess) => sess._id);
 
   // Every way the banner closes goes through here: snooze 24h AND drop the
   // forced-open flag, so the header pill (which never hides while sessions
@@ -557,7 +701,7 @@ function BlockedSessionsBanner({
   };
 
   return (
-    <div className="m-2 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2.5">
+    <div className={`m-2 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2.5 cc-blocked-banner-in ${fresh ? "cc-blocked-banner-glow" : ""}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <button
@@ -616,6 +760,9 @@ function BlockedSessionsBanner({
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
+      {authCount > 0 && loginDevice && (
+        <SignInCta device={loginDevice} authSessionIds={actedAuthIds} disabled={busy !== null} />
+      )}
       {expanded && (
         <div className="mt-2 max-h-56 overflow-y-auto scrollbar-auto rounded border border-amber-500/15 bg-sol-bg/40 divide-y divide-sol-border/30">
           {blockedSorted.map((sess) => (
@@ -2761,6 +2908,21 @@ export function SessionListPanel({
         (sess.updated_at ?? 0) > since,
     );
   }, [s.sessions, s.blockedReviveRequestedAt, coarseNow]);
+  // A LIVE 0→N transition of the blocked set is a fresh incident: replay the
+  // banner entrance with the attention glow and pulse the header pill so the
+  // moment registers. Hydration also walks 0→N right after mount, so the
+  // first seconds don't count — a reload with existing casualties gets the
+  // plain entrance only.
+  const blockedMountedAtRef = useRef(Date.now());
+  const prevBlockedCountRef = useRef(0);
+  const [blockedIncidentTs, setBlockedIncidentTs] = useState(0);
+  useEffect(() => {
+    const prev = prevBlockedCountRef.current;
+    prevBlockedCountRef.current = blockedSessions.length;
+    if (prev === 0 && blockedSessions.length > 0 && Date.now() - blockedMountedAtRef.current > 5000) {
+      setBlockedIncidentTs(Date.now());
+    }
+  }, [blockedSessions.length]);
   // The banner is transient (snoozes on X and after acting); the header pill is
   // the permanent trigger. Clicking it force-opens the banner — past the snooze
   // and even for a single blocked session — and scrolls it into view.
@@ -3492,9 +3654,10 @@ export function SessionListPanel({
               banner itself was snoozed. Panel chrome, so it never scrolls away. */}
           {blockedSessions.length > 0 && (
             <button
+              key={blockedIncidentTs}
               onClick={openBlockedBanner}
               title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on a usage limit, login, or dropped connection — restart them all`}
-              className="flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors"
+              className={`flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""}`}
             >
               <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />
@@ -3638,10 +3801,12 @@ export function SessionListPanel({
           )
         ) : (<>
         <BlockedSessionsBanner
+          key={blockedIncidentTs}
           blocked={blockedSessions}
           onOpen={handleSelect}
           forced={blockedBannerForced}
           onClearForced={() => setBlockedBannerForced(false)}
+          fresh={blockedIncidentTs > 0}
         />
         {showStalePrompt && (
           <div className="m-2 rounded-md border border-sol-yellow/30 bg-sol-yellow/[0.06] px-3 py-2.5">

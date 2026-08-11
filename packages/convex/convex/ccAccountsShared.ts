@@ -87,6 +87,29 @@ export const ccAutoSwitchStateValidator = v.object({
   next_check_at: v.optional(v.number()),
 });
 
+// The browser sign-in round trip, stored on the device row that runs it. The
+// web writes "pending" (requestLoginFlow) when the user clicks the sign-in
+// CTA; the daemon runs `claude auth login`, watches the keychain, and reports
+// the outcome (completeLoginFlow). The web watches this field reactively via
+// listAccountProfiles — it is the whole UI state channel for the flow.
+export const ccLoginFlowValidator = v.object({
+  status: v.union(v.literal("pending"), v.literal("confirmed"), v.literal("rejected")),
+  // pending: the account we asked the user to sign into (pre-filled in the
+  // browser). confirmed: the account that actually signed in.
+  email: v.optional(v.string()),
+  reason: v.optional(v.string()), // rejected: why (timeout, CLI error tail)
+  started_at: v.number(),
+  finished_at: v.optional(v.number()),
+  // confirmed: how many auth-blocked sessions the server kicked off.
+  revived: v.optional(v.number()),
+});
+
+// A pending flow older than this is dead weight — the daemon's own watcher
+// times out well before (5 min), so a pending row this stale means the daemon
+// died mid-flow. Both the web (render the CTA again) and requestLoginFlow
+// (allow a fresh start) treat it as no-flow.
+export const LOGIN_FLOW_STALE_MS = 6 * 60 * 1000;
+
 /** The worst (highest) utilization across an account's limit windows — what a
  * single summary meter should show. Null when no usage data exists. */
 export function worstUsagePercent(usage: CcUsage | undefined | null): number | null {

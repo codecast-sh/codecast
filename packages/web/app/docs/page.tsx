@@ -12,6 +12,7 @@ import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
+import { filterToWorkspace } from "../../lib/workspaceScope";
 import { docSearchText } from "../../lib/liveEntities";
 import {
   FileText,
@@ -211,6 +212,7 @@ export function DocListContent() {
   const createDoc = useInboxStore((s) => s.createDoc);
   const wsStamp = workspaceStamp(useWorkspaceArgs());
   const docs = useInboxStore((s) => s.docs);
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const projects = useInboxStore((s) => s.projects);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
   const saveView = useInboxStore((s) => s.saveView);
@@ -219,7 +221,14 @@ export function DocListContent() {
     saveView({ name, page: "docs", prefs: { ...docView, doc_type: docType } as DocViewPrefs });
   }, [saveView, docView, docType]);
 
-  const docsList = useMemo(() => Object.values(docs), [docs]);
+  // Strict workspace boundary at read time: `store.docs` caches rows from every
+  // workspace (the sync overlay never prunes on team switch, IDB persists them
+  // across reloads), so the view must re-assert the active workspace — a team
+  // view shows only that team's docs, personal shows only teamless docs.
+  const docsList = useMemo(
+    () => filterToWorkspace(Object.values(docs), activeTeamId),
+    [docs, activeTeamId]
+  );
 
   const allLabels = useMemo(() => {
     const set = new Set<string>(DEFAULT_LABELS);
@@ -460,6 +469,8 @@ export function DocListContent() {
       emptyIcon={<FileText className="w-8 h-8 opacity-30" />}
       emptyMessage="No documents found"
       onCreate={async () => {
+        // Stamp the active workspace so the new doc lives where it was created
+        // (a doc made in a team space belongs to that team).
         await createDoc(
           { title: "", doc_type: docType || "note", ...wsStamp },
           { version: 1, kind: "navigate" },

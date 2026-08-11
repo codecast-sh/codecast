@@ -429,6 +429,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             onMobileClose={onMobileClose}
             addTitle="New page"
             onAdd={async () => {
+              // Stamp the active workspace so the doc lives where it was created.
               await createDoc(
                 { title: "", doc_type: "note", ...wsStamp },
                 { version: 1, kind: "navigate" },

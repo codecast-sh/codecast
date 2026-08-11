@@ -109,7 +109,12 @@ export class TmuxControlClient {
 
     // Control mode emits one (empty) %begin/%end reply block on startup.
     // Consume it before issuing commands or every reply pairs off-by-one.
-    await this.expectReply();
+    // A wedged tmux server never sends it — fail loudly rather than limping
+    // on to a "ready" the client renders as a silently blank pane.
+    const startup = await this.expectReply();
+    if (!startup.ok) {
+      throw new Error(startup.lines.join(" ").trim() || "tmux did not respond — the tmux server may be hung");
+    }
 
     // A brand-new session has no history to seed, so stream from the very
     // first byte instead of capture-seeding. Waiting for the capture would
@@ -137,6 +142,10 @@ export class TmuxControlClient {
     );
     const parts = (info.lines[0] ?? "").split("|");
     this.paneId = parts[0] || null;
+    // No pane means the attach didn't take (hung server, vanished session).
+    // Resolving anyway would seed nothing and render as a blank pane with a
+    // healthy status dot — surface the failure instead.
+    if (!info.ok || !this.paneId) throw new Error("tmux attach failed — could not read the pane");
     const paneCols = parseInt(parts[1] ?? "", 10) || cols;
     const paneRows = parseInt(parts[2] ?? "", 10) || rows;
     const sessionName = parts[3] || (this.mode.kind === "create" ? this.mode.sessionName : this.mode.target);
