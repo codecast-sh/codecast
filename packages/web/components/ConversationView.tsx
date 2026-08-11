@@ -14504,12 +14504,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
 
             {(conversation as any)?.active_plan && (
-              <span data-simple-hide className="contents">
+              <span data-simple-hide className="cq-header-collapse contents">
                 <PlanBadge plan={(conversation as any).active_plan} />
               </span>
             )}
             {(conversation as any)?.active_task && (
-              <span data-simple-hide className="contents">
+              <span data-simple-hide className="cq-header-collapse contents">
                 <TaskBadge task={(conversation as any).active_task} />
               </span>
             )}
