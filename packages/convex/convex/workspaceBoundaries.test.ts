@@ -250,6 +250,9 @@ describe("mentionSearch: workspace-scoped and membership-enforced", () => {
     docs: [
       { _id: "d_team", title: "Team doc", user_id: MEMBER, team_id: TEAM, ...docDefaults },
       { _id: "d_personal", title: "Personal doc", user_id: OWNER, ...docDefaults },
+      // Raw-teamless but born from a team-visible conversation: effectively
+      // TEAM's — personal mention scope must not offer it.
+      { _id: "d_convteam", title: "Conv team doc", user_id: OWNER, conversation_id: "c_team", ...docDefaults },
     ],
     plans: [
       { _id: "p_team", short_id: "pl-team", title: "Team plan", user_id: MEMBER, team_id: TEAM, status: "active", source: "human", created_at: 1, updated_at: 1, task_ids: [] },

@@ -1715,7 +1715,15 @@ export const mentionSearch = query({
           .order("desc")
           .take(perType * 5);
       }
-      if (!teamId) docs = personalOnly(docs);
+      if (!teamId) {
+        // Docs derive their workspace from a linked conversation: a raw-teamless
+        // doc born from a team-visible session is EFFECTIVELY that team's and
+        // must not surface in personal scope. Raw pass first (cheap), then the
+        // effective filter over the bounded remainder.
+        docs = personalOnly(docs);
+        const convMap = await buildConvMapForPage(ctx, docs);
+        docs = docs.filter((d: any) => !resolveEffectiveTeam(d, convMap));
+      }
       for (const doc of docs.filter((d: any) => !d.archived_at).slice(0, perType)) {
         results.push({
           id: String(doc._id),
