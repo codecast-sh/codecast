@@ -12321,6 +12321,24 @@ async function cliPost(urlPath: string, body: Record<string, any>): Promise<any>
   return result;
 }
 
+// Best-effort variant of cliPost for optional enrichment: returns null on any
+// failure instead of exiting, so a missing/forbidden record can't kill the
+// command that only wanted to decorate its output.
+async function tryCliPost(urlPath: string, body: Record<string, any>): Promise<any | null> {
+  try {
+    const { siteUrl, apiToken } = getCliEndpoint();
+    const response = await cliFetch(`${siteUrl}${urlPath}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: apiToken, ...body }),
+    });
+    const result = JSON.parse(await response.text());
+    return result?.error ? null : result;
+  } catch {
+    return null;
+  }
+}
+
 async function emitOrchEvent(planShortId: string, eventType: string, taskShortId?: string, detail?: string, metadata?: any) {
   try {
     await cliPost("/cli/orchestration/emit", {
@@ -12718,7 +12736,7 @@ work
   .command("ls")
   .alias("list")
   .description("List work items (default: active only)")
-  .option("-p, --project <id>", "Filter by project ID")
+  .option("-p, --project <ref>", "Filter by project ID or title substring")
   .option("-s, --status <status>", "Filter by status")
   .option("-r, --ready", "Show only ready items (open, no blockers)")
   .option("-a, --all", "Include done/dropped tasks")
@@ -12729,7 +12747,7 @@ work
   .option("-v, --verbose", "Show descriptions")
   .action(async (options: any) => {
     const body: Record<string, any> = { limit: parseInt(options.limit) };
-    if (options.project) body.project_id = options.project;
+    if (options.project) body.project_id = await resolveProjectId(options.project);
     if (options.all) body.include_done = true;
     if (options.status) body.status = options.status;
     if (options.ready) body.ready = true;
@@ -12772,6 +12790,11 @@ work
     console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status} | ${pri} | ${t.task_type}`);
     if (t.execution_status && t.execution_status !== t.status) {
       console.log(`  ${c.dim}Execution: ${t.execution_status}${c.reset}`);
+    }
+    if (t.project_id) {
+      const proj = await tryCliPost("/cli/projects/get", { id: t.project_id });
+      const projLabel = proj?.title ? `${proj.title} ${c.dim}(${t.project_id})${c.reset}` : t.project_id;
+      console.log(`  ${c.dim}Project:${c.reset} ${projLabel}`);
     }
     if (t.description) console.log(`\n  ${t.description}`);
     if (t.acceptance_criteria?.length) {
@@ -13094,6 +13117,136 @@ work
     } else {
       console.log("Work snippet is up to date.");
     }
+  });
+
+// --- Projects ---
+
+const PROJECT_STATUS_ICONS: Record<string, string> = {
+  planning: "○",
+  active: "◉",
+  paused: "◫",
+  done: "●",
+};
+
+function looksLikeConvexId(ref: string): boolean {
+  return /^[a-z0-9]{28,36}$/.test(ref);
+}
+
+// Resolve a project reference — a convex id, or a title substring / short_id of
+// a project visible to the caller (own or team workspace).
+async function resolveProjectId(ref: string): Promise<string> {
+  if (looksLikeConvexId(ref)) return ref;
+  const projects = await cliPost("/cli/projects/list", {});
+  const needle = ref.toLowerCase();
+  const matches = (Array.isArray(projects) ? projects : []).filter(
+    (p: any) => p.short_id === ref || p.title?.toLowerCase().includes(needle)
+  );
+  if (matches.length === 1) return matches[0]._id;
+  if (matches.length === 0) {
+    console.error(`No project matching "${ref}" in your workspace`);
+    process.exit(1);
+  }
+  console.error(`Ambiguous project "${ref}" — matches:`);
+  for (const p of matches) console.error(`  ${p._id}  ${p.title}`);
+  process.exit(1);
+}
+
+const projectCmd = program
+  .command("project")
+  .alias("pj")
+  .description("Manage projects (group tasks, plans, docs)")
+  .showHelpAfterError(true);
+
+projectCmd
+  .command("create")
+  .description("Create a project")
+  .argument("<title>", "Project title")
+  .option("-d, --description <text>", "Description")
+  .option("--labels <labels>", "Comma-separated labels")
+  .option("--path <dir>", "Project path used for workspace/team resolution (default: cwd)")
+  .action(async (title: string, options: any) => {
+    const body: Record<string, any> = { title, project_path: options.path || getRealCwd() };
+    if (options.description) body.description = options.description;
+    if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
+    const result = await cliPost("/cli/projects/create", body);
+    console.log(`${c.green}ok${c.reset} Created project ${c.cyan}${result.id}${c.reset}: ${title}`);
+    const created = await tryCliPost("/cli/projects/get", { id: result.id });
+    if (created && !created.team_id) {
+      console.log(`${c.yellow}note${c.reset} Created in your personal workspace (path has no team mapping) — tasks in a team workspace cannot bind to it.`);
+    }
+  });
+
+projectCmd
+  .command("ls")
+  .alias("list")
+  .description("List projects in your workspace")
+  .option("-s, --status <status>", "Filter by status: planning, active, paused, done")
+  .action(async (options: any) => {
+    const body: Record<string, any> = {};
+    if (options.status) body.status = options.status;
+    const projects = await cliPost("/cli/projects/list", body);
+    if (!Array.isArray(projects) || projects.length === 0) {
+      console.log(fmt.muted("No projects found."));
+      return;
+    }
+    for (const p of projects) {
+      const icon = PROJECT_STATUS_ICONS[p.status] || "?";
+      const tc = p.task_counts || { total: 0, in_progress: 0, done: 0 };
+      const counts = `${tc.done}/${tc.total} done${tc.in_progress ? `, ${tc.in_progress} in progress` : ""}`;
+      console.log(`  ${icon} ${c.cyan}${p._id}${c.reset} ${c.bold}${p.title}${c.reset} ${c.dim}${p.status} | ${counts}${c.reset}`);
+    }
+    console.log(fmt.muted(`\n  ${projects.length} projects`));
+  });
+
+projectCmd
+  .command("show")
+  .description("Show project details and its tasks")
+  .argument("<id>", "Project ID or title substring")
+  .action(async (ref: string) => {
+    const id = await resolveProjectId(ref);
+    const p = await cliPost("/cli/projects/get", { id });
+    if (!p) {
+      console.error("Project not found (or not visible to you)");
+      process.exit(1);
+    }
+    const icon = PROJECT_STATUS_ICONS[p.status] || "?";
+    console.log(`\n  ${icon} ${c.bold}${p.title}${c.reset}`);
+    console.log(`  ${c.cyan}${p._id}${c.reset} | ${p.status}`);
+    if (p.description) console.log(`\n  ${p.description}`);
+    if (p.labels?.length) console.log(`  ${c.dim}Labels: ${p.labels.join(", ")}${c.reset}`);
+    if (p.project_path) console.log(`  ${c.dim}Path: ${p.project_path}${c.reset}`);
+    if (p.tasks?.length) {
+      console.log(`\n  ${c.bold}Tasks (${p.tasks.length})${c.reset}`);
+      for (const t of p.tasks) {
+        const ticon = STATUS_ICONS[t.status] || "?";
+        console.log(`  ${ticon} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}${t.status}${c.reset}`);
+      }
+    } else {
+      console.log(fmt.muted("\n  No tasks bound to this project."));
+    }
+    console.log();
+  });
+
+projectCmd
+  .command("update")
+  .description("Update a project")
+  .argument("<id>", "Project ID or title substring")
+  .option("--title <text>", "New title")
+  .option("--description <text>", "New description")
+  .option("--status <status>", "New status: planning, active, paused, done")
+  .option("--labels <labels>", "Comma-separated labels (replaces existing)")
+  .action(async (ref: string, options: any) => {
+    const body: Record<string, any> = { id: await resolveProjectId(ref) };
+    if (options.title) body.title = options.title;
+    if (options.description !== undefined) body.description = options.description;
+    if (options.status) body.status = options.status;
+    if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
+    if (Object.keys(body).length === 1) {
+      console.error("Nothing to update — pass --title, --description, --status, or --labels");
+      process.exit(1);
+    }
+    await cliPost("/cli/projects/update", body);
+    console.log(`${c.green}ok${c.reset} Updated project ${c.cyan}${body.id}${c.reset}`);
   });
 
 // --- Plans ---
