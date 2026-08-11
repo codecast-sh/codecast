@@ -3,6 +3,7 @@ import { Text as RNText } from '@/components/Themed';
 import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { threadStateView } from '@codecast/web/lib/threadState';
 import { gestureHandler } from '@/lib/gestureHandler';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -29,6 +30,11 @@ export type SessionData = {
   is_pinned?: boolean;
   last_user_message?: string | null;
   idle_summary?: string | null;
+  // The agent's pinned "where this stands" line (cast state) and its
+  // provenance: when it was written, and the message count it was written at.
+  thread_state?: string | null;
+  thread_state_at?: number | null;
+  thread_state_msg_count?: number | null;
   session_error?: string;
   author_name?: string | null;
   is_own?: boolean;
@@ -172,6 +178,11 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
   // (cast send, teammate broadcasts, scheduled tasks) and harness noise never
   // surface as "what the human said".
   const userMessage = cleanUserMessage(session.last_user_message);
+  // The agent's pinned thread state, shared with the web card so both surfaces
+  // agree on the headline and on when a state has gone stale. Read at render
+  // rather than on a ticker: a row re-renders on every list update, and the
+  // freshness only drives a colour.
+  const stateView = threadStateView(session, session.message_count ?? 0, Date.now());
   // Row thumbnail for sessions that contain images — same pref as web
   // (inbox_image_thumbs, stamped LWW so the toggle follows the user).
   // Tapping it zooms the image in a modal instead of opening the session
@@ -212,11 +223,27 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
         </RNView>
       </RNView>
 
-      {(session.idle_summary || session.subtitle) && (
+      {stateView ? (
+        // The agent's pinned "where this stands" line (cast state) replaces the
+        // generated summary — same rule as the web card. The pin marks it as
+        // the agent's own account, and turns orange once the thread has run far
+        // past the write, so a neglected line stops reading as current.
+        <RNView style={styles.stateRow}>
+          <FontAwesome
+            name="thumb-tack"
+            size={9}
+            color={stateView.freshness === 'fresh' ? Theme.cyan : Theme.orange}
+            style={styles.statePin}
+          />
+          <RNText style={styles.stateText} numberOfLines={2}>
+            {stateView.headline}
+          </RNText>
+        </RNView>
+      ) : (session.idle_summary || session.subtitle) ? (
         <RNText style={styles.summaryText} numberOfLines={2}>
           {session.idle_summary || session.subtitle}
         </RNText>
-      )}
+      ) : null}
 
       {userMessage && (
         <RNText style={styles.userMessage} numberOfLines={1}>
@@ -550,6 +577,22 @@ export const styles = StyleSheet.create({
     color: Theme.textMuted,
     marginLeft: 14,
     marginBottom: 2,
+    lineHeight: 17,
+  },
+  stateRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginLeft: 14,
+    marginBottom: 2,
+    gap: 5,
+  },
+  statePin: {
+    marginTop: 3,
+  },
+  stateText: {
+    flex: 1,
+    fontSize: 12,
+    color: Theme.textSecondary,
     lineHeight: 17,
   },
   conversationMeta: {

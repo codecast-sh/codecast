@@ -44,10 +44,22 @@ export function TaskItemRow({
   task,
   onPress,
   onLongPress,
+  indent = 0,
+  progress,
+  hiddenDescendantCount = 0,
+  parentChip,
 }: {
   task: TaskItemType;
   onPress: () => void;
   onLongPress?: () => void;
+  /** Nesting depth, already clamped to the emphasised top levels by buildTaskTree. */
+  indent?: number;
+  /** Direct-children progress (done/total) — the SAME metric web shows. */
+  progress?: { total: number; done: number; inProgress: number };
+  /** How many of this parent's subtasks this view isn't rendering (agent-internal). */
+  hiddenDescendantCount?: number;
+  /** Set on a floated subtask (parent filtered out) so the row names its parent. */
+  parentChip?: { short_id: string } | null;
 }) {
   const status = STATUS_CONFIG[task.status as TaskStatus] ?? STATUS_CONFIG.open;
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] ?? PRIORITY_CONFIG.medium;
@@ -58,7 +70,17 @@ export function TaskItemRow({
     <TouchableOpacity
       onPress={onPress}
       onLongPress={onLongPress}
-      style={styles.row}
+      // Indent a subtask and hang a rail off its left edge, matching web.
+      style={[
+        styles.row,
+        indent > 0 && {
+          // 12px per level, matching web's indent rail so the two surfaces
+          // read the same depth.
+          paddingLeft: Spacing.lg + indent * 12,
+          borderLeftWidth: StyleSheet.hairlineWidth,
+          borderLeftColor: Theme.bgHighlight,
+        },
+      ]}
       activeOpacity={0.6}
     >
       <RNView style={styles.topLine}>
@@ -69,6 +91,23 @@ export function TaskItemRow({
           </RNText>
         </RNView>
         <RNView style={styles.rightGroup}>
+          {parentChip && (
+            // Floated subtask: parent filtered out of this view, so name it.
+            <RNView style={styles.parentChip}>
+              <FontAwesome name="level-up" size={8} color={Theme.textMuted0} style={{ marginRight: 3 }} />
+              <RNText style={styles.subtaskCount}>{parentChip.short_id}</RNText>
+            </RNView>
+          )}
+          {progress && progress.total > 0 && (
+            // Direct-children progress — the same done/total number web shows.
+            // The robot marks that some subtasks are agent-internal, hidden here.
+            <RNView style={styles.subtaskChip}>
+              {hiddenDescendantCount > 0 && (
+                <FontAwesome name="android" size={8} color={Theme.cyan} style={{ marginRight: 3 }} />
+              )}
+              <RNText style={styles.subtaskCount}>{progress.done}/{progress.total}</RNText>
+            </RNView>
+          )}
           <FontAwesome name={priority.icon} size={10} color={priority.color} />
           <RNText style={styles.age}>{formatRelativeTime(task.updated_at)}</RNText>
         </RNView>
@@ -189,6 +228,29 @@ const styles = StyleSheet.create({
   },
   age: {
     fontSize: 11,
+    color: Theme.textMuted0,
+    fontVariant: ["tabular-nums"],
+  },
+  subtaskChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.bgHighlight,
+  },
+  parentChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.bgHighlight,
+  },
+  subtaskCount: {
+    fontSize: 10,
     color: Theme.textMuted0,
     fontVariant: ["tabular-nums"],
   },

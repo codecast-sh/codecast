@@ -1,5 +1,6 @@
 import { c, fmt } from "./colors.js";
 import { structuredPayloadSummary, structuredPayloadKeysFromRaw } from "@codecast/shared/render";
+import { threadStateHeadline } from "@codecast/shared/contracts";
 
 /** Worktree name embedded in a path (".codecast/worktrees/<name>/…"), if any.
  * Lets a feed card reveal worktree residence even when the session never
@@ -973,6 +974,8 @@ interface MonitorSession {
   is_live: boolean;
   awaiting_input: boolean;
   idle_summary: string | null;
+  /** The agent's own pinned "where this stands" line (cast state), when set. */
+  thread_state?: string | null;
   last_user_message: string | null;
   label?: string | null;
   active_plan: { short_id: string; title: string } | null;
@@ -1128,8 +1131,16 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
         : "";
     if (ctx) lines.push(`   ${ctx}`);
 
-    const snippet = (s.idle_summary || s.last_user_message || "").replace(/\s+/g, " ").trim().slice(0, 88);
-    if (snippet) lines.push(`   ${c.dim}${snippet}${c.reset}`);
+    // A pinned state is the agent's own account of where the row stands, so it
+    // outranks the generated summary and the last user message. Marked with a
+    // pin so a reader can tell the two apart at a glance.
+    const pinned = threadStateHeadline(s.thread_state || "");
+    if (pinned) {
+      lines.push(`   ${c.cyan}▪${c.reset} ${pinned.replace(/\s+/g, " ").slice(0, 86)}`);
+    } else {
+      const snippet = (s.idle_summary || s.last_user_message || "").replace(/\s+/g, " ").trim().slice(0, 88);
+      if (snippet) lines.push(`   ${c.dim}${snippet}${c.reset}`);
+    }
     lines.push("");
   };
 

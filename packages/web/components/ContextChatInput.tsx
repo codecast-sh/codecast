@@ -174,7 +174,7 @@ export function ContextChatInput({
 
   return (
     <div className="shrink-0 pointer-events-none sticky bottom-0 z-10">
-      <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
+      <div className="h-16 bg-gradient-to-t from-sol-bg via-[color-mix(in_srgb,var(--sol-bg)_80%,transparent)] to-transparent -mt-16 relative" />
       <div className={`pb-4 pointer-events-auto bg-sol-bg`}>
       <div className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-xs"}`}>
       {isExpanded && (

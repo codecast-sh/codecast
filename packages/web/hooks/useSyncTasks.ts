@@ -242,8 +242,12 @@ export function useSyncTaskDetail(id?: string) {
     // Only persist genuine tasks. The detail route can be loaded with a foreign
     // id (/tasks/<conversationId>); storing whatever comes back plants a phantom
     // task in the never-pruned cache (see validRow in clientSyncRegistry).
-    if (id && d && collectionRowValidator("tasks")!(d)) syncRecord("tasks", id, d);
-  }, [id, syncRecord]));
+    // Key by the record's OWN _id, never the URL param: canonical task links
+    // use short ids (/tasks/ct-123), and syncRecord(key=short_id) would store a
+    // second copy of the row under that key — the never-pruned duplicate then
+    // double-counts in subtaskProgressOf / taskFamilyIndex.
+    if (d && collectionRowValidator("tasks")!(d)) syncRecord("tasks", String(d._id), d);
+  }, [syncRecord]));
 
   return data;
 }

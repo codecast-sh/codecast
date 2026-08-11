@@ -47,6 +47,9 @@ async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
   for (const tid of taskIds) {
     const task = await ctx.db.get(tid);
     if (!task || task.status === "dropped") continue;
+    // A subtask is never a plan's unit of progress (the parent is). Exclude any
+    // that slipped into task_ids before that rule — matches tasks.recalcPlanProgress.
+    if (task.parent_id) continue;
     total++;
     if (task.status === "done") done++;
     else if (task.status === "in_progress" || task.status === "in_review") in_progress++;
@@ -1368,7 +1371,9 @@ export const webGet = query({
     if (plan.task_ids) {
       for (const tid of plan.task_ids) {
         const task = await ctx.db.get(tid);
-        if (task && (await canReadPlanTask(ctx, userId, plan, task))) {
+        // Subtasks aren't plan units — keep them off the plan board so a
+        // decomposition never appears as flat peers of its parent.
+        if (task && !task.parent_id && (await canReadPlanTask(ctx, userId, plan, task))) {
           tasks.push({
             ...task,
             activeSession: activeTaskMap.get(task._id.toString()) || null,
@@ -1735,7 +1740,8 @@ export const webPlanContext = query({
     if (plan.task_ids) {
       for (const tid of plan.task_ids) {
         const t = await ctx.db.get(tid);
-        if (t && (await canReadPlanTask(ctx, userId, plan, t))) {
+        // Subtasks are not a plan's units of work — exclude any that slipped in.
+        if (t && !t.parent_id && (await canReadPlanTask(ctx, userId, plan, t))) {
           tasks.push({
             _id: t._id,
             short_id: t.short_id,

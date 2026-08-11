@@ -65,6 +65,7 @@ import { TerminalDock } from "./terminal/TerminalDock";
 import { VaultQuickSwitcherDock } from "./vault/VaultQuickSwitcherDock";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { useTipActions } from "../tips";
+import { GlobalCloseGuardDialog } from "./CloseGuardDialog";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -1117,6 +1118,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       <ErrorBoundary name="CommandPalette" level="inline">
         <CommandPalette />
       </ErrorBoundary>
+      <GlobalCloseGuardDialog />
       {s.compose.open && (
         <div
           className="fixed inset-0 z-[200] flex items-start justify-center pt-[12vh] bg-black/50 backdrop-blur-sm"

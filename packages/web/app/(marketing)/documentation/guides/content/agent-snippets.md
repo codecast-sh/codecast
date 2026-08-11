@@ -1,6 +1,6 @@
 Codecast's agent features share one delivery mechanism: a **snippet** is a markdown section that `cast install` writes into the instruction files your coding agents already read. Claude Code reads `~/.claude/CLAUDE.md`. Codex reads `~/.codex/AGENTS.md`. Cursor reads rules files under `~/.cursor/rules/`. A snippet teaches the agent a capability — "you can message other sessions", "you can set a trigger", "track your work as tasks" — in the place the agent already looks for instructions.
 
-This guide explains the mechanism. Each capability has its own guide: [memory](/documentation/memory), [messaging](/documentation/messaging), [ambient awareness](/documentation/ambient-awareness), [forks and spawn](/documentation/forks-and-spawn), [tasks and plans](/documentation/tasks-and-plans), [triggers](/documentation/triggers), [workflows](/documentation/workflows), [orchestration](/documentation/orchestration), [the visual canvas](/documentation/visual-canvas), and [published pages](/documentation/publish).
+This guide explains the mechanism. Each capability has its own guide: [memory](/documentation/memory), [messaging](/documentation/messaging), [pinned thread state](/documentation/thread-state), [ambient awareness](/documentation/ambient-awareness), [forks and spawn](/documentation/forks-and-spawn), [tasks and plans](/documentation/tasks-and-plans), [triggers](/documentation/triggers), [workflows](/documentation/workflows), [orchestration](/documentation/orchestration), [the visual canvas](/documentation/visual-canvas), and [published pages](/documentation/publish).
 
 ## The install flow
 
@@ -16,7 +16,7 @@ $ cast install --disable  # turn everything off
 
 The single-snippet form is what the web Settings page shells out to when you toggle a snippet for a device, so the CLI and the web control are the same code path.
 
-The catalog today: `memory`, `messaging`, `forks`, `tasks`, `triggers`, `workflows`, `visual`, `publish`, `orchestration`, plus `stable`. Stable is the odd one out — it is a session start hook rather than a markdown section, and it has three states (solo, team, off) instead of on and off. The [ambient awareness guide](/documentation/ambient-awareness) covers it.
+The catalog today: `memory`, `messaging`, `state`, `forks`, `tasks`, `triggers`, `workflows`, `visual`, `publish`, `orchestration`, plus `stable`. Stable is the odd one out — it is a session start hook rather than a markdown section, and it has three states (solo, team, off) instead of on and off. The [ambient awareness guide](/documentation/ambient-awareness) covers it.
 
 ## Where snippets are written
 

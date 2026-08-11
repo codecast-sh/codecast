@@ -354,6 +354,16 @@ describe("resourceMonitor", () => {
       expect(shouldReportMetrics({ cur: { ...cur, agentPid: 99 }, prev: base, status: "idle", now: base.at + 30_000 })).toBe(true);
     });
 
+    it("reports a restart immediately, even on an idle session with a reused pid", () => {
+      // The web fences background watches on this timestamp, so sitting on the
+      // idle throttle would leave dead watchers showing as running for minutes.
+      const prev: ReportedMetrics = { ...base, agentStartedAt: 900_000 };
+      const restarted = { ...cur, agentStartedAt: 999_000 };
+      expect(shouldReportMetrics({ cur: restarted, prev, status: "idle", now: base.at + 30_000 })).toBe(true);
+      // Same process, same everything: still throttled.
+      expect(shouldReportMetrics({ cur: { ...cur, agentStartedAt: 900_000 }, prev, status: "idle", now: base.at + 30_000 })).toBe(false);
+    });
+
     it("re-reports an idle session on the slow keep-alive cadence", () => {
       expect(shouldReportMetrics({ cur, prev: base, status: "idle", now: base.at + IDLE_METRICS_REFRESH_MS - 1 })).toBe(false);
       expect(shouldReportMetrics({ cur, prev: base, status: "idle", now: base.at + IDLE_METRICS_REFRESH_MS })).toBe(true);

@@ -8,6 +8,7 @@ import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, hasOpenModal, altChordDirection, type ShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
 import ReactMarkdownBase from "react-markdown";
@@ -64,6 +65,7 @@ import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
 import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
+import { CollapsibleBody } from "./CollapsibleBody";
 import { monitorRowsFor, effectiveMonitorStatus, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
@@ -112,11 +114,12 @@ import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
 import { FormattedSummary } from "./FormattedSummary";
+import { ThreadStatePanel } from "./ThreadStatePanel";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractMessageFlag, extractCommentBody, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -4574,6 +4577,24 @@ function DocTitleLink({ convexId }: { convexId: string }) {
   );
 }
 
+// Resolved title of a task/plan, rendered inline after its id pill in a cast
+// command row. `struck` crosses it out — a `task done` row reads as the task
+// being checked off. Enrichment only: the row is honest without it, so the
+// queries go through useQueryNoThrow and an unresolved title renders nothing.
+function InlineEntityTitle({ shortId, struck }: { shortId: string; struck?: boolean }) {
+  const isPlan = shortId.startsWith("pl-");
+  const { data: task } = useQueryNoThrow(api.tasks.webGet, !isPlan ? { short_id: shortId } : "skip");
+  const { data: plan } = useQueryNoThrow(api.plans.webGet, isPlan ? { short_id: shortId } : "skip");
+  const entity: any = isPlan ? plan : task;
+  const title = entity?.display_title || entity?.title;
+  if (!title) return null;
+  return (
+    <span className={`truncate max-w-[280px] ${struck ? "line-through decoration-sol-text-dim/70 text-sol-text-dim" : "text-sol-text-muted"}`}>
+      {title}
+    </span>
+  );
+}
+
 function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "doc"; shortId?: string; convexId?: string }) {
   const router = useRouter();
   const task = useQuery(api.tasks.webGet, type === "task" && shortId ? { short_id: shortId } : "skip");
@@ -4850,6 +4871,12 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
     const isSearch = subcommand === "search" || cat === "search";
     const isStatusChange = ["start", "done", "drop", "pause", "activate", "bind", "unbind"].includes(subcommand);
     const isIdCommand = ["edit", "get", "show", "status", "context", "comment", "start", "done", "drop", "pause", "activate", "bind", "unbind", "update", "decide", "discover", "pointer", "decompose", "orchestrate", "autopilot", "wave", "progress", "agents", "kill", "retry"].includes(subcommand);
+    // A done/drop row reads as the task being crossed out: resolved title struck
+    // through, no redundant status badge (the row label already says "task done").
+    const isDoneLike = subcommand === "done" || subcommand === "drop";
+    const argEntityId = /^(ct|pl)-[a-z0-9]+$/i.test(firstArg) ? firstArg.toLowerCase() : null;
+    const commentPreview = subcommand === "comment" ? extractCommentBody(args) : null;
+    const doneNote = isDoneLike ? extractMessageFlag(args) : null;
 
     const statusColors: Record<string, string> = {
       start: "bg-amber-500/15 text-amber-400",
@@ -4886,6 +4913,22 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
           <EntityIdPill key={id} shortId={id} />
         ))}
 
+        {argEntityId && (isStatusChange || subcommand === "comment") && (
+          <InlineEntityTitle shortId={argEntityId} struck={isDoneLike} />
+        )}
+
+        {commentPreview && (
+          <span className="text-sol-text-muted italic truncate max-w-[360px]">
+            “{truncateStr(commentPreview.replace(/\s+/g, " ").trim(), 90)}”
+          </span>
+        )}
+
+        {doneNote && (
+          <span className="text-sol-text-dim italic truncate max-w-[300px]">
+            {truncateStr(doneNote.replace(/\s+/g, " ").trim(), 80)}
+          </span>
+        )}
+
         {isCreate && !entityIds.length && firstArg && (
           <span className="text-sol-text-muted truncate">{truncateStr(firstArg, 50)}</span>
         )}
@@ -4898,7 +4941,7 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
           <span className="text-sol-text-dim font-mono">{firstArg}</span>
         )}
 
-        {isStatusChange && (
+        {isStatusChange && !isDoneLike && (
           <span className={`px-1 py-0.5 rounded text-[10px] font-mono ${statusColors[subcommand] || "bg-gray-500/15 text-gray-400"}`}>
             {subcommand}
           </span>
@@ -5098,7 +5141,13 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
     const sess = s.sessions[conversationId];
     return !!sess && (sess.agent_status === "stopped" || isLivenessStale(sess, now));
   });
-  const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now) : "watching";
+  // Start of the process currently behind this session. A watch armed before it
+  // died with the process that armed it — the session being alive says nothing
+  // about a shell owned by its predecessor. Narrow numeric subscription.
+  const agentStartedAt = useInboxStore((s) =>
+    (conversationId ? s.sessions[conversationId]?.agent_started_at : undefined) ?? undefined,
+  );
+  const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now, agentStartedAt) : "watching";
   const status: MonitorStatus = rawStatus === "watching" && sessionDead ? "stopped" : rawStatus;
   const failed = isBackground && status === "ended" && (row?.exitCode ?? 0) > 0;
   const badge = failed
@@ -6334,10 +6383,13 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
         <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
       {/* The prompt is authored markdown in both wire formats (spawn header
-          and <scheduled-task> inject) — render it as prose either way. */}
-      <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
-        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
-      </div>
+          and <scheduled-task> inject) — render it as prose either way. A trigger
+          briefing is often long, so it starts clipped behind an Expand. */}
+      <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
+        <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
+        </div>
+      </CollapsibleBody>
       {spawned?.contextSummary && (
         <div className="mx-3 mb-2 rounded border border-sol-border/30 bg-sol-bg/40 px-2 py-1.5 text-[11px] leading-relaxed text-sol-text-muted">
           <span className="font-medium text-sol-text-dim">Context from originating session: </span>
@@ -6495,11 +6547,15 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
           <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         )}
       </div>
-      <div className={`px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
-        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
-          components={MESSAGE_MD_COMPONENTS}
-        >{body}</ReactMarkdown>
-      </div>
+      {/* A message from another session is someone else's context, not this
+          thread's — it starts clipped so a long handoff doesn't bury the reply. */}
+      <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
+        <div className={`text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+            components={MESSAGE_MD_COMPONENTS}
+          >{body}</ReactMarkdown>
+        </div>
+      </CollapsibleBody>
     </div>
   );
 }
@@ -7389,7 +7445,7 @@ function StoryTimelineView({ conversationId, userName, avatarUrl, onJump }: { co
   return (
     <div className="py-7">
       <div className="relative">
-        <div className="absolute left-[9px] top-2 bottom-6 w-px bg-gradient-to-b from-sol-border via-sol-border/60 to-transparent" />
+        <div className="absolute left-[9px] top-2 bottom-6 w-px bg-gradient-to-b from-sol-border via-[color-mix(in_srgb,var(--sol-border)_60%,transparent)] to-transparent" />
         {items.map((b) => (
           <BeatRow key={b.anchor_message_id} beat={b} userName={userName} avatarUrl={avatarUrl} showPrompt accent="blue" onJump={onJump} />
         ))}
@@ -7407,7 +7463,7 @@ function ThreadSummaryView({ conversationId, userName, avatarUrl, onJump }: { co
   return (
     <div className="py-7">
       <div className="relative">
-        <div className="absolute left-[9px] top-2 bottom-6 w-px bg-gradient-to-b from-sol-violet/50 via-sol-border/60 to-transparent" />
+        <div className="absolute left-[9px] top-2 bottom-6 w-px bg-gradient-to-b from-sol-violet/50 via-[color-mix(in_srgb,var(--sol-border)_60%,transparent)] to-transparent" />
         {items.map((b) => (
           <BeatRow key={b.anchor_message_id} beat={b} userName={userName} avatarUrl={avatarUrl} showPrompt accent="violet" onJump={onJump} />
         ))}
@@ -10507,7 +10563,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   return (
     <div data-sv-composer className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
-      {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />}
+      {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-[color-mix(in_srgb,var(--sol-bg)_80%,transparent)] to-transparent -mt-16 relative" />}
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
           {serverDeleted && !isRestarting && (
@@ -15488,6 +15544,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       </div>
+
+      {/* The pinned thread state sits between the feed and the composer, outside
+          data-sv-feed so it can't perturb the virtualizer, and outside the
+          composer's own condition so it stays readable while a permission
+          prompt owns the input. It renders nothing when the agent has not
+          pinned a state. */}
+      {conversation && (
+        <ThreadStatePanel
+          conversationId={conversation._id.toString()}
+          threadState={conversation.thread_state}
+          threadStateAt={conversation.thread_state_at}
+          threadStateMsgCount={conversation.thread_state_msg_count}
+          messageCount={conversation.message_count}
+          canClear={effectiveIsOwner}
+        />
+      )}
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">

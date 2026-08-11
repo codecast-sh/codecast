@@ -15,7 +15,10 @@ export function FormattedSummary({ text }: { text: string }) {
     <>
       {parts.map((part, i) =>
         i % 2 === 1 ? (
-          <span key={i} className="font-semibold text-sol-text-primary">{i > 1 ? '\n' : ''}{part}: </span>
+          // Start each label on its own line — unless the text already broke
+          // there, which would otherwise open a blank line between every
+          // section (multi-line states written by `cast state` do break there).
+          <span key={i} className="font-semibold text-sol-text-primary">{i > 1 && !/\n\s*$/.test(parts[i - 1] ?? "") ? '\n' : ''}{part}: </span>
         ) : (
           <span key={i}>{part}</span>
         )

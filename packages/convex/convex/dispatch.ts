@@ -959,112 +959,44 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  updateTaskStatus: async (ctx, userId, [shortId, newStatus]: [string, string]) => {
-    const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
-    if (!task) throw new Error("Task not found");
-    const user = await ctx.db.get(userId);
-    const teamId = user?.active_team_id || user?.team_id;
-    if (task.user_id !== userId && task.team_id !== teamId) throw new Error("Not authorized");
-
-    const now = Date.now();
-    const updates: any = { status: newStatus, updated_at: now };
-    if (newStatus === "done" || newStatus === "dropped") updates.closed_at = now;
-    if (newStatus === "in_progress") {
-      updates.attempt_count = (task.attempt_count || 0) + 1;
-      updates.last_attempted_at = now;
-    }
-
-    if (newStatus !== task.status) {
-      await ctx.db.insert("task_history", {
-        task_id: task._id,
-        user_id: userId,
-        actor_type: "user" as const,
-        action: "updated",
-        field: "status",
-        old_value: task.status,
-        new_value: newStatus,
-        created_at: now,
-      });
-    }
-    await ctx.db.patch(task._id, updates);
+  // Delegate to tasks.webUpdate so every task-write rule lives in one place:
+  // canAccessTask (stronger than the old active-team check), the parent
+  // machinery (resolveParentTask: access + workspace + cycle + depth), the
+  // close-guard on parents with open subtasks, the in_progress rollup, plan
+  // progress recalc, and subscriber notifications — the old inline fork had
+  // already drifted (it skipped recalc + notify on status-only changes).
+  // The optional third element carries the close-guard resolution.
+  updateTaskStatus: async (ctx, userId, [shortId, newStatus, resolution]: [string, string, string?]) => {
+    await (ctx as any).runMutation(api.tasks.webUpdate, {
+      short_id: shortId,
+      status: newStatus,
+      subtask_resolution: resolution === "cascade" || resolution === "only_parent" ? resolution : undefined,
+    });
   },
 
+  // Same delegation, with an explicit allowlist — dispatch fields come straight
+  // from the client, and an unknown key must never silently become a write.
+  // `parent` goes through here so resolveParentTask stays the ONLY entry point
+  // for nesting writes; never copy it into a dispatch-side patch.
   updateTask: async (ctx, userId, [shortId, fields]: [string, Record<string, any>]) => {
-    const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
-    if (!task) throw new Error("Task not found");
-    const user = await ctx.db.get(userId);
-    const teamId = user?.active_team_id || user?.team_id;
-    if (task.user_id !== userId && task.team_id !== teamId) throw new Error("Not authorized");
-
-    const now = Date.now();
-    const updates: any = { updated_at: now };
-    const trackFields: [string, any, any][] = [];
-
-    for (const [key, val] of Object.entries(fields)) {
-      if (key === "status") {
-        updates.status = val;
-        if (val === "done" || val === "dropped") updates.closed_at = now;
-        if (val === "in_progress") {
-          updates.attempt_count = (task.attempt_count || 0) + 1;
-          updates.last_attempted_at = now;
-        }
-        if (val !== task.status) trackFields.push(["status", task.status, val]);
-      } else if (key === "priority" && val !== task.priority) {
-        updates.priority = val;
-        trackFields.push(["priority", task.priority, val]);
-      } else if (key === "title" && val !== task.title) {
-        updates.title = val;
-        trackFields.push(["title", task.title, val]);
-      } else if (key === "description") {
-        updates.description = val;
-      } else if (key === "labels") {
-        updates.labels = val;
-      } else if (key === "assignee") {
-        updates.assignee = val === "me" ? userId : val;
-        if (updates.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", updates.assignee || ""]);
-      } else if (key === "triage_status") {
-        updates.triage_status = val;
-        if (val === "active") updates.promoted = true;
-      } else if (key === "execution_status") {
-        updates.execution_status = val || undefined;
-        if (val !== (task.execution_status || "")) trackFields.push(["execution_status", task.execution_status || "", val || ""]);
-      } else if (key === "project_id") {
-        updates.project_id = val || undefined;
-      } else if (key === "project_path") {
-        updates.project_path = val || undefined;
-      }
-    }
-
-    for (const [field, oldVal, newVal] of trackFields) {
-      await ctx.db.insert("task_history", {
-        task_id: task._id, user_id: userId, actor_type: "user" as const,
-        action: "updated", field, old_value: String(oldVal), new_value: String(newVal),
-        created_at: now,
-      });
-    }
-
-    await ctx.db.patch(task._id, updates);
-
-    if (fields.status && fields.status !== task.status) {
-      if (task.plan_id) {
-        await recalcPlanProgress(ctx, task.plan_id, task._id, fields.status);
-      }
-      await notifySubscribers(ctx, "task_status_changed", userId, task as any, `changed ${task.short_id} to ${fields.status}`);
-    }
-
-    if (fields.assignee !== undefined && updates.assignee !== task.assignee) {
-      const assigneeUserId = await resolveAssigneeToUserId(ctx, updates.assignee || "", task.team_id);
-      if (assigneeUserId && assigneeUserId.toString() !== userId.toString()) {
-        await subscribeUser(ctx, assigneeUserId, task._id, "assignee");
-        await ctx.runMutation(internal.notificationRouter.emit, {
-          event_type: "task_assigned",
-          actor_user_id: userId,
-          entity_type: "task",
-          entity_id: task._id.toString(),
-          message: `assigned ${task.short_id} to you`,
-        });
-      }
-    }
+    await (ctx as any).runMutation(api.tasks.webUpdate, {
+      short_id: shortId,
+      status: fields.status,
+      priority: fields.priority,
+      title: fields.title,
+      description: fields.description,
+      labels: fields.labels,
+      assignee: fields.assignee,
+      triage_status: fields.triage_status,
+      execution_status: fields.execution_status,
+      project_id: fields.project_id,
+      project_path: fields.project_path,
+      parent: fields.parent,
+      subtask_resolution:
+        fields.subtask_resolution === "cascade" || fields.subtask_resolution === "only_parent"
+          ? fields.subtask_resolution
+          : undefined,
+    });
   },
 
   // Delegate to tasks.webCreate so every workspace rule lives in one place:
@@ -1087,6 +1019,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       workspace: opts.workspace,
       assignee: opts.assignee,
       project_path: opts.project_path,
+      // Subtask create — resolved server-side by resolveParentTask.
+      parent: opts.parent,
+      // Idempotency key: a retried/replayed create returns the same row.
+      client_key: opts.client_key,
     });
   },
 

@@ -125,7 +125,7 @@ import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOpti
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { enumerateProjectRoots, MAX_PROJECT_ROOTS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
-import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
+import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -3065,8 +3065,17 @@ async function executeRemoteCommand(
         // agent-agnostic, so it also clears stale delivery/resume state for the
         // Codex path, which previously only the tmux path did.
         if (conversationId) {
-          await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true });
-          await clearConversationDeliveryAndResumeState(conversationId, undefined, "RECONFIG");
+          const torn = await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true });
+          // Reset delivery/resume state only when a live backend was actually
+          // torn down (a real reconfigure/restart). A brand-new conversation
+          // (cast spawn) has nothing to tear down, and its FIRST message is
+          // typically already in flight waiting for this very start_session to
+          // register the tmux — wiping the in-flight/dedup state here let the
+          // subscription re-process that message and inject the briefing twice
+          // (ct-40212 incident, msg ns74720h).
+          if (torn.killedAppServer || torn.killedTmux) {
+            await clearConversationDeliveryAndResumeState(conversationId, undefined, "RECONFIG");
+          }
         }
 
         let worktreeResult: WorktreeResult | null = null;
@@ -10205,14 +10214,20 @@ export type TmuxSubmitVerifyIO = {
 export async function verifyTmuxSubmitAfterPaste(
   io: TmuxSubmitVerifyIO,
   opts: { prePaste: string; pasteConfirmed: boolean; contentPrefix: string; multiline?: boolean; deadlineMs?: number },
-): Promise<{ outcome: "submitted" | "timeout" | "exited"; rePasted: boolean }> {
+): Promise<{ outcome: "submitted" | "timeout" | "exited"; rePasted: boolean; payloadSeen: boolean; payloadCheckable: boolean }> {
   const TICK = 400;
   const deadlineMs = opts.deadlineMs ?? 15_000;
   const normalizedPrefix = opts.contentPrefix.replace(/\s+/g, " ").trim();
   const prefixWasVisibleBefore =
     !!normalizedPrefix && opts.prePaste.replace(/\s+/g, " ").includes(normalizedPrefix);
+  // Whether "our payload is on screen" is a checkable question at all: with an
+  // empty prefix, or one that was already visible pre-paste (a redelivery of
+  // text still in the transcript), absence of the prefix proves nothing. In
+  // those ambiguous cases the loop keeps its legacy activity-based exits.
+  const payloadCheckable = !!normalizedPrefix && !prefixWasVisibleBefore;
   let rePasted = false;
   let pasteSeen = false; // we watched our text sit in the input box
+  let payloadSeen = false; // any trace of our text: in the box, or as transcript
   let idleEnters = 0;
   let liveNoTextTicks = 0;
   for (let elapsed = 0; elapsed < deadlineMs; elapsed += TICK) {
@@ -10221,18 +10236,28 @@ export async function verifyTmuxSubmitAfterPaste(
     try {
       pane = await io.capture();
     } catch {
-      return { outcome: "timeout", rePasted };
+      return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
     }
     const lastLines = pane.split("\n").slice(-15).join("\n");
     const hasPrompt = /[❯›]/.test(lastLines);
     const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
+    if (payloadCheckable && pane.replace(/\s+/g, " ").includes(normalizedPrefix)) {
+      payloadSeen = true;
+    }
+    // Activity (or a promptless pane) only proves that A turn is running — not
+    // that it is OUR turn. On a cold-boot pane whose paste was dropped, the
+    // buffered clearing bytes submit as a garbage message and start a turn that
+    // looks exactly like success (ct-40212). So when the paste was unconfirmed
+    // AND our payload is checkable but has never been seen, activity is not
+    // accepted as evidence — fall through to the content-based checks instead.
+    const foreignTurnPossible = !opts.pasteConfirmed && payloadCheckable && !pasteSeen && !payloadSeen;
 
     if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(lastLines) ||
         /Resume this session with:/i.test(pane)) {
-      return { outcome: "exited", rePasted };
+      return { outcome: "exited", rePasted, payloadSeen, payloadCheckable };
     }
 
-    if (hasActivity) return { outcome: "submitted", rePasted };
+    if (hasActivity && !foreignTurnPossible) return { outcome: "submitted", rePasted, payloadSeen, payloadCheckable };
 
     // Frozen pane = the agent hasn't consumed the pty buffer yet (cold boot).
     // No evidence either way — keep waiting. Critically, do NOT re-paste or
@@ -10251,13 +10276,17 @@ export async function verifyTmuxSubmitAfterPaste(
       continue;
     }
 
-    if (!hasPrompt) return { outcome: "submitted", rePasted }; // no prompt + text not in input = processing
+    if (!hasPrompt) {
+      // No prompt + text not in input = processing — unless a foreign turn
+      // (garbage submit) could explain it; then keep watching for content.
+      if (!foreignTurnPossible) return { outcome: "submitted", rePasted, payloadSeen, payloadCheckable };
+      continue;
+    }
 
-    if (pasteSeen || (!prefixWasVisibleBefore && !!normalizedPrefix &&
-        pane.replace(/\s+/g, " ").includes(normalizedPrefix))) {
+    if (pasteSeen || payloadSeen) {
       // Our text left the input box (we watched it go after an Enter, or it
       // now shows above the box as transcript) — submitted.
-      return { outcome: "submitted", rePasted };
+      return { outcome: "submitted", rePasted, payloadSeen: true, payloadCheckable };
     }
 
     if (opts.pasteConfirmed) {
@@ -10265,7 +10294,7 @@ export async function verifyTmuxSubmitAfterPaste(
       // (unrecognized prompt glyph, or TUI wrapping broke the 40-char match).
       // Enter is safe — the box holds nothing but our message — but bounded
       // so an idle false-positive can't spin until the deadline.
-      if (++idleEnters > 5) return { outcome: "timeout", rePasted };
+      if (++idleEnters > 5) return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
       io.log("paste confirmed but not visible at prompt, pressing Enter");
       await io.sendEnter();
       continue;
@@ -10280,14 +10309,74 @@ export async function verifyTmuxSubmitAfterPaste(
       const promptLine = lastLines.split("\n").find((l) => /[❯›]/.test(l));
       const m = promptLine?.match(/[❯›]/);
       const afterPrompt = promptLine && m ? promptLine.slice(m.index! + 1).trim() : "";
-      if (afterPrompt) return { outcome: "timeout", rePasted }; // someone else's text at the prompt — don't stomp it
+      if (afterPrompt) return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable }; // someone else's text at the prompt — don't stomp it
       io.log("paste likely dropped (live empty prompt), re-pasting once");
       await io.rePaste();
       rePasted = true;
       liveNoTextTicks = 0;
     }
   }
-  return { outcome: "timeout", rePasted };
+  return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
+}
+
+// A TUI paints its composer seconds before it starts reading stdin: on a cold
+// boot under load, Claude Code's ❯ box is visible while every key sent to the
+// pty still lands in a buffer the input handler later mishandles — the paste
+// is dropped wholesale and the C-a/C-k clearing bytes surface as literal
+// \x01/\x0b INSIDE a submitted message (ct-40212; measured gap up to ~7s on a
+// loaded host). A painted prompt is therefore NOT proof of readiness. This
+// probe proves consumption the way daemon.inject-clear.test.ts does: type one
+// inert character and wait until it renders in the composer region. The
+// caller's C-a/C-k drain then removes the probe along with any stale draft.
+//
+// Scope: only panes showing a ❯/› composer glyph (Claude/cursor style); for
+// glyphless clients there is no line to watch, so behavior is unchanged.
+// Throws AGENT_STDIN_NOT_READY when the TUI never consumes within the budget —
+// the delivery layer's retry/backoff redelivers later instead of pasting into
+// a deaf pane and acking a message the agent never saw.
+const STDIN_PROBE_CHAR = "q"; // inert in the composer; absent from CC's footer/status text
+export async function proveTmuxStdinConsumption(
+  target: string,
+  budgetMs = 20_000,
+  exec: typeof tmuxExec = tmuxExec,
+): Promise<void> {
+  const composerRegion = (pane: string): string | null => {
+    const lines = pane.replace(/[\s\n]+$/, "").split("\n");
+    let glyphIdx = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (/[❯›]/.test(lines[i])) { glyphIdx = i; break; }
+    }
+    // Composer region = glyph line plus everything below it (a multi-line
+    // draft puts the cursor below the glyph line).
+    return glyphIdx === -1 ? null : lines.slice(glyphIdx).join("\n");
+  };
+  const countProbes = (region: string): number => region.split(STDIN_PROBE_CHAR).length - 1;
+
+  let before: string | null = null;
+  try {
+    ({ stdout: before } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+  } catch {
+    return; // capture problems are diagnosed by the paste path itself
+  }
+  const beforeRegion = composerRegion(before);
+  if (beforeRegion === null) return; // no composer glyph to watch — glyphless client or unusual pane
+  const baseline = countProbes(beforeRegion);
+
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    await exec(["send-keys", "-t", target, "-l", STDIN_PROBE_CHAR]);
+    // Poll briefly for this probe to render; if the TUI is deaf, send another
+    // probe next lap (accumulated probes all clear in the C-a/C-k drain).
+    for (let i = 0; i < 8 && Date.now() < deadline; i++) {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      try {
+        const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]);
+        const region = composerRegion(stdout);
+        if (region !== null && countProbes(region) > baseline) return;
+      } catch {}
+    }
+  }
+  throw new Error(`AGENT_STDIN_NOT_READY: composer never consumed a probe key within ${Math.round(budgetMs / 1000)}s`);
 }
 
 export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId): Promise<void> {
@@ -10369,6 +10458,13 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // dialog. `busy` = agent mid-turn with a live type-ahead box; we paste into its
   // native queue rather than waiting for the turn to finish.
   const { busy } = await ensureTmuxReady(target, agentType);
+
+  // A visible prompt is not proof the TUI reads stdin yet (cold boot, ct-40212):
+  // prove consumption with a probe key before sending the clear/paste sequence.
+  // A busy agent is consuming by definition (it is mid-turn), so skip there.
+  if (!busy) {
+    await proveTmuxStdinConsumption(target);
+  }
 
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(30, contentLines + Math.ceil(sanitized.length / 60) + 10);
@@ -10473,6 +10569,15 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     // Propagates to deliverMessage's transient-failure backoff (the old
     // in-loop throw was swallowed by its own catch and never reached anyone).
     throw new Error("SESSION_EXITED: message was pasted into a bare shell");
+  }
+  if (verify.outcome === "timeout" && !pasteConfirmed && verify.payloadCheckable && !verify.payloadSeen) {
+    // The full verify window produced zero trace of the payload: the paste
+    // never rendered, never sat in the box, never appeared as transcript.
+    // Returning normally here would ack a message the agent never saw — the
+    // ct-40212 silent briefing drop. Throw instead so the delivery layer's
+    // retry/backoff redelivers; the pre-paste C-a/C-k drain on the retry
+    // clears any residue if the pty buffer drains late.
+    throw new Error("INJECT_UNVERIFIED: paste unconfirmed and payload never appeared, leaving message pending for retry");
   }
 
   log(`Injected via tmux to ${target}${pasteConfirmed ? "" : " (unconfirmed)"}${verify.rePasted ? " (re-pasted)" : ""}${verify.outcome === "timeout" ? " (submit unverified)" : ""}`)
@@ -13327,14 +13432,17 @@ async function collectResourceSnapshot(): Promise<void> {
           // Skip flat, idle, recently-reported sessions: this is what keeps the
           // per-tick write burst proportional to ACTIVE sessions rather than the
           // whole fleet, leaving socket headroom for message sync.
-          if (!shouldReportMetrics({ cur: { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid }, prev: lastReportedMetrics.get(sessionId), status, now })) {
+          // Hold the previously reported start across ps's one-second
+          // resolution, so only a real restart changes the value we send.
+          const agentStartedAt = stableAgentStartedAt(r.agentStartedAt, lastReportedMetrics.get(sessionId)?.agentStartedAt);
+          if (!shouldReportMetrics({ cur: { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, agentStartedAt }, prev: lastReportedMetrics.get(sessionId), status, now })) {
             metricsSkipped++;
             continue;
           }
           metricsReported++;
-          lastReportedMetrics.set(sessionId, { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, at: now });
+          lastReportedMetrics.set(sessionId, { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, agentStartedAt, at: now });
           await syncServiceRef!.reportSessionMetrics(
-            sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId) ?? 0,
+            sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId) ?? 0, agentStartedAt,
           ).catch(() => {});
         }
       };
@@ -14788,13 +14896,11 @@ async function deliverMessage(
         if (!ready) {
           log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
         }
-        // Extra settle time: Claude Code's input handler may not be ready
-        // immediately after the prompt is visible. Original budget was 1.5s
-        // (speculative — no documented incident at lower values); the e2e
-        // suite covers this exact race (Scenario 1: inject right after
-        // first prompt). 500ms keeps a safety margin while shaving a full
-        // second off cold-start delivery. If injects start failing
-        // intermittently for fresh sessions, raise this back up first.
+        // Brief settle after the prompt paints. This is NOT the readiness
+        // guarantee — injectViaTmux now proves stdin consumption with a probe
+        // key before sending anything (proveTmuxStdinConsumption, ct-40212),
+        // so a slow input handler stalls the probe, not the paste. The 500ms
+        // just lets the freshly painted frame stop redrawing.
         await new Promise(resolve => setTimeout(resolve, 500));
         const startedTmuxTarget = entry.tmuxSession + ":0.0";
         // Mark "injected" best-effort (non-blocking) BEFORE the paste. The mark is fire-and-forget
@@ -14815,7 +14921,16 @@ async function deliverMessage(
         }
         return true;
       } catch (err) {
-        log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        // A deaf-but-painted composer (probe never consumed) or a paste that
+        // provably never reached the agent are conditions of THIS healthy,
+        // still-booting pane. Falling through would start a SECOND instance
+        // beside it (the incident's duplicated-backend shape) — rethrow so the
+        // delivery layer retries into the same pane after backoff instead.
+        if (msg.startsWith("AGENT_STDIN_NOT_READY") || msg.startsWith("INJECT_UNVERIFIED")) {
+          throw err;
+        }
+        log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${msg}`);
         // Only clear if session is old (>60s). Fresh sessions may just need more startup time.
         if (Date.now() - entry.startedAt > 60_000) {
           deleteStartedSession(conversationId);
@@ -14942,7 +15057,15 @@ async function deliverMessage(
         return true;
       }
     } catch (err) {
-      logDelivery(`tmux injection failed for ${injectTarget}: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      // Same reasoning as tryStartedTmux: these two mean a live pane exists
+      // but hasn't consumed our payload yet. Fall-through would auto-resume a
+      // parallel instance beside it — rethrow and let the retry re-enter this
+      // same pane after backoff.
+      if (msg.startsWith("AGENT_STDIN_NOT_READY") || msg.startsWith("INJECT_UNVERIFIED")) {
+        throw err;
+      }
+      logDelivery(`tmux injection failed for ${injectTarget}: ${msg}`);
     }
   }
 
