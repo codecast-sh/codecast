@@ -149,10 +149,9 @@ export async function scopedFetch(
     });
   }
 
-  // Filter by effective team. In team view, also include the user's own
-  // untagged records (no conv-derived team and no team_id) — orphans created
-  // before any team was active follow the user into their active workspace
-  // rather than vanishing.
+  // Filter by effective team. Team view is an exact match: untagged records
+  // (no conv-derived team and no team_id) are personal and belong to the
+  // personal view only.
   let records: any[];
   if (workspace === "all") {
     // No team filter — caller wants every record the user can see across
@@ -161,8 +160,7 @@ export async function scopedFetch(
   } else if ((workspace === "team" || !workspace) && teamId) {
     records = all.filter(r => {
       const eff = resolveEffectiveTeam(r, convMap);
-      if (eff) return String(eff) === String(teamId);
-      return String(r.user_id) === String(userId);
+      return eff ? String(eff) === String(teamId) : false;
     });
   } else if (workspace === "personal") {
     records = all.filter(r => !resolveEffectiveTeam(r, convMap));

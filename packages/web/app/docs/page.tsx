@@ -11,6 +11,7 @@ import { GenericListView, ListGroup, ItemRowState } from "../../components/Gener
 import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
+import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
 import { docSearchText } from "../../lib/liveEntities";
 import {
   FileText,
@@ -208,6 +209,7 @@ export function DocListContent() {
   const { docType, group, sort, dir, project: projectFilter, label: labelFilter, source: sourceFilter, setParam, setGroup, setSort, toggleSortDir, buildShareUrl } = useDocUrlState();
   const router = useRouter();
   const createDoc = useInboxStore((s) => s.createDoc);
+  const wsStamp = workspaceStamp(useWorkspaceArgs());
   const docs = useInboxStore((s) => s.docs);
   const projects = useInboxStore((s) => s.projects);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
@@ -459,7 +461,7 @@ export function DocListContent() {
       emptyMessage="No documents found"
       onCreate={async () => {
         await createDoc(
-          { title: "", doc_type: docType || "note" },
+          { title: "", doc_type: docType || "note", ...wsStamp },
           { version: 1, kind: "navigate" },
         );
       }}
