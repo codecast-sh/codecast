@@ -8,6 +8,7 @@ import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, hasOpenModal, altChordDirection, type ShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
 import ReactMarkdownBase from "react-markdown";
@@ -116,7 +117,7 @@ import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractMessageFlag, extractCommentBody, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -4574,6 +4575,24 @@ function DocTitleLink({ convexId }: { convexId: string }) {
   );
 }
 
+// Resolved title of a task/plan, rendered inline after its id pill in a cast
+// command row. `struck` crosses it out — a `task done` row reads as the task
+// being checked off. Enrichment only: the row is honest without it, so the
+// queries go through useQueryNoThrow and an unresolved title renders nothing.
+function InlineEntityTitle({ shortId, struck }: { shortId: string; struck?: boolean }) {
+  const isPlan = shortId.startsWith("pl-");
+  const { data: task } = useQueryNoThrow(api.tasks.webGet, !isPlan ? { short_id: shortId } : "skip");
+  const { data: plan } = useQueryNoThrow(api.plans.webGet, isPlan ? { short_id: shortId } : "skip");
+  const entity: any = isPlan ? plan : task;
+  const title = entity?.display_title || entity?.title;
+  if (!title) return null;
+  return (
+    <span className={`truncate max-w-[280px] ${struck ? "line-through decoration-sol-text-dim/70 text-sol-text-dim" : "text-sol-text-muted"}`}>
+      {title}
+    </span>
+  );
+}
+
 function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "doc"; shortId?: string; convexId?: string }) {
   const router = useRouter();
   const task = useQuery(api.tasks.webGet, type === "task" && shortId ? { short_id: shortId } : "skip");
@@ -4850,6 +4869,12 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
     const isSearch = subcommand === "search" || cat === "search";
     const isStatusChange = ["start", "done", "drop", "pause", "activate", "bind", "unbind"].includes(subcommand);
     const isIdCommand = ["edit", "get", "show", "status", "context", "comment", "start", "done", "drop", "pause", "activate", "bind", "unbind", "update", "decide", "discover", "pointer", "decompose", "orchestrate", "autopilot", "wave", "progress", "agents", "kill", "retry"].includes(subcommand);
+    // A done/drop row reads as the task being crossed out: resolved title struck
+    // through, no redundant status badge (the row label already says "task done").
+    const isDoneLike = subcommand === "done" || subcommand === "drop";
+    const argEntityId = /^(ct|pl)-[a-z0-9]+$/i.test(firstArg) ? firstArg.toLowerCase() : null;
+    const commentPreview = subcommand === "comment" ? extractCommentBody(args) : null;
+    const doneNote = isDoneLike ? extractMessageFlag(args) : null;
 
     const statusColors: Record<string, string> = {
       start: "bg-amber-500/15 text-amber-400",
@@ -4886,6 +4911,22 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
           <EntityIdPill key={id} shortId={id} />
         ))}
 
+        {argEntityId && (isStatusChange || subcommand === "comment") && (
+          <InlineEntityTitle shortId={argEntityId} struck={isDoneLike} />
+        )}
+
+        {commentPreview && (
+          <span className="text-sol-text-muted italic truncate max-w-[360px]">
+            “{truncateStr(commentPreview.replace(/\s+/g, " ").trim(), 90)}”
+          </span>
+        )}
+
+        {doneNote && (
+          <span className="text-sol-text-dim italic truncate max-w-[300px]">
+            {truncateStr(doneNote.replace(/\s+/g, " ").trim(), 80)}
+          </span>
+        )}
+
         {isCreate && !entityIds.length && firstArg && (
           <span className="text-sol-text-muted truncate">{truncateStr(firstArg, 50)}</span>
         )}
@@ -4898,7 +4939,7 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
           <span className="text-sol-text-dim font-mono">{firstArg}</span>
         )}
 
-        {isStatusChange && (
+        {isStatusChange && !isDoneLike && (
           <span className={`px-1 py-0.5 rounded text-[10px] font-mono ${statusColors[subcommand] || "bg-gray-500/15 text-gray-400"}`}>
             {subcommand}
           </span>
@@ -5098,7 +5139,13 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
     const sess = s.sessions[conversationId];
     return !!sess && (sess.agent_status === "stopped" || isLivenessStale(sess, now));
   });
-  const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now) : "watching";
+  // Start of the process currently behind this session. A watch armed before it
+  // died with the process that armed it — the session being alive says nothing
+  // about a shell owned by its predecessor. Narrow numeric subscription.
+  const agentStartedAt = useInboxStore((s) =>
+    (conversationId ? s.sessions[conversationId]?.agent_started_at : undefined) ?? undefined,
+  );
+  const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now, agentStartedAt) : "watching";
   const status: MonitorStatus = rawStatus === "watching" && sessionDead ? "stopped" : rawStatus;
   const failed = isBackground && status === "ended" && (row?.exitCode ?? 0) > 0;
   const badge = failed

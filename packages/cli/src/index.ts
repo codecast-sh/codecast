@@ -780,6 +780,14 @@ function clearTaskPulse(sessionId: string): void {
   } catch {}
 }
 
+// Clear the pulse ONLY when the closed task is the one the session is bound to.
+// Closing a subtask under a still-claimed parent must not unbind the session —
+// that would silence the reminder and break `cast task context --current`.
+function clearTaskPulseIfBound(sessionId: string, closedShortId: string): void {
+  const pulse = readTaskPulse();
+  if (pulse?.task === closedShortId) clearTaskPulse(sessionId);
+}
+
 function readTaskPulse(): { task?: string; plan?: string } | null {
   const sessionId = detectCurrentSessionId();
   if (!sessionId) return null;
@@ -2251,7 +2259,9 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **Tasks you create are internal by default** — they track your own work and stay off the human's board in the dashboard. Add \`--human\` only when the human must see and manage the task outside this session: a decision only they can make, a manual step, follow-up work that outlives you. Use it rarely; when in doubt, leave it off.
 
-**Nest execution work under the goal it serves.** When you split a task into steps you will actually file, create them with \`--parent <task_id>\` so they sit under the larger piece of work instead of competing with it in a flat list. Nest one level where you can; the views emphasise the top two.
+**Nest execution work under the goal it serves.** When you split a task into steps you will actually file, create them with \`--parent <task_id>\` so they sit under the larger piece of work instead of competing with it in a flat list. Decompose in one command — \`cast task create --parent <task_id> -\` with one title per line on stdin. Keep trees shallow (the system caps depth at two below the top) and small — a handful of real steps, not a transcript of your thinking. Subtasks vs plans: a plan orchestrates work across sessions; subtasks decompose ONE task's scope inside your session. Never mirror a plan as a subtask tree.
+
+**The decomposition loop: claim the parent once.** \`cast task start\` the parent, decompose under it, then advance subtasks with \`cast task update/done <sub_id>\` — never \`task start\` your own subtasks (that would unbind you from the parent). Open subtasks of a parent being actively worked are excluded from \`cast task ready\`, so no other session will grab them mid-flight. Closing a parent with open subtasks is refused: finish them, or pass \`--cascade\` (close them too) / \`--only-parent\` (leave them open) to \`cast task done\`.
 
 **\`--from-meeting\` is for tasks people decided, not tasks you decided.** Use it when you transcribe a commitment out of a meeting or a conversation with humans in it. Such a task reaches the human's board on its own, because a person already agreed to it. Never use it for your own work.
 
@@ -2296,6 +2306,11 @@ cast task create "Title" -t task -p high    # Create task (internal to agent wor
 cast task create "Title" --plan <plan_id>   # Create task bound to plan
 cast task create "Title" --human            # Put it on the human's board (rare — see above)
 cast task create "Title" --parent <task_id> # File it as a subtask of larger work
+cast task create --parent <task_id> - <<'EOF'  # Bulk decomposition: one subtask per line
+First step
+Second step
+EOF
+cast task done <id> --cascade               # Close a parent and its open subtasks together
 cast task create "Title" --from-meeting     # People decided this in a meeting; you only wrote it down
 cast task update <id> --plan <plan_id>      # Bind existing task to plan
 cast task update <id> --human               # Move an existing task onto the human's board
@@ -12315,10 +12330,34 @@ async function cliPost(urlPath: string, body: Record<string, any>): Promise<any>
     process.exit(1);
   }
   if (result?.error) {
-    console.error(`Error: ${result.error}`);
+    console.error(`Error: ${cleanConvexError(result.error)}`);
     process.exit(1);
   }
   return result;
+}
+
+// Convex surfaces a thrown error in three shapes: a plain Error ("Uncaught
+// Error: <msg>\n    at …"), a ConvexError whose message is a stringified data
+// object ({"code":…,"message":…}), and an ArgumentValidationError that DUMPS
+// the whole args object — which includes the api_token. This normalises all
+// three to the human message AND redacts the token before it can reach a
+// terminal, a transcript, or `cast read`.
+function cleanConvexError(raw: any): string {
+  let msg = String(raw);
+  // Redact the api_token wherever it appears (arg dumps print `api_token: "…"`
+  // or `"api_token":"…"`), before any other handling.
+  msg = msg.replace(/("?api_token"?\s*:\s*)"[^"]*"/g, '$1"***"');
+  msg = msg.split(/\n\s*at\s/)[0];
+  msg = msg.replace(/^\s*(Uncaught\s+)?(Convex|ArgumentValidation)?Error:\s*/i, "");
+  // ConvexError data object: pull out its .message when present.
+  const brace = msg.indexOf("{");
+  if (brace >= 0) {
+    try {
+      const obj = JSON.parse(msg.slice(brace));
+      if (obj && typeof obj.message === "string") return obj.message;
+    } catch { /* not JSON — fall through to the stripped text */ }
+  }
+  return msg.trim() || "Unknown error";
 }
 
 // Best-effort variant of cliPost for optional enrichment: returns null on any
@@ -12701,35 +12740,50 @@ work
   .option("--human", "Put the task on the human's board — for work the human must see and manage (rare)")
   .option("--from-meeting", "This task came out of a meeting with people in it, not from your own work")
   .action(async (title: string, options: any) => {
-    const body: Record<string, any> = {
-      title,
-      task_type: options.type,
-      status: options.status,
-      priority: options.priority,
-    };
-    if (options.description) body.description = options.description;
-    if (options.human) body.promoted = true;
-    if (options.project) body.project_id = options.project;
-    if (options.assignee) body.assignee = options.assignee;
-    if (options.blockedBy) body.blocked_by = options.blockedBy.split(",").map((s: string) => s.trim());
-    if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
-    if (options.plan) body.plan_id = options.plan;
-    if (options.parent) body.parent_id = options.parent;
+    // Bulk decomposition: `cast task create --parent ct-x -` reads one subtask
+    // title per line from stdin (heredoc-friendly, the fork/spawn convention),
+    // so a whole decomposition is one command instead of N round-trips.
+    const titles = title === "-"
+      ? expandStdinPromptArgs([title])[0].split("\n").map((s) => s.trim()).filter(Boolean)
+      : [title];
+    if (titles.length === 0) {
+      console.error("No titles given on stdin");
+      process.exit(1);
+    }
 
     const sessionId = detectCurrentSessionId();
-    if (sessionId) {
-      body.conversation_id = sessionId;
-      body.source = "agent";
-    }
-    // A meeting task is something PEOPLE decided; the agent only transcribed
-    // it. It belongs on the human board on its own, with no promotion stamp —
-    // so this overrides the "agent" default a session would otherwise set.
-    if (options.fromMeeting) body.source = "meeting";
-    body.project_path = getRealCwd();
+    for (const t of titles) {
+      const body: Record<string, any> = {
+        title: t,
+        task_type: options.type,
+        status: options.status,
+        priority: options.priority,
+      };
+      if (options.description && titles.length === 1) body.description = options.description;
+      if (options.human) body.promoted = true;
+      if (options.project) body.project_id = options.project;
+      if (options.assignee) body.assignee = options.assignee;
+      if (options.blockedBy) body.blocked_by = options.blockedBy.split(",").map((s: string) => s.trim());
+      if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
+      if (options.plan) body.plan_id = options.plan;
+      if (options.parent) body.parent_id = options.parent;
 
-    const result = await cliPost("/cli/work/create", body);
-    console.log(`${c.green}ok${c.reset} Created ${c.cyan}${result.short_id}${c.reset}: ${title}`);
-    if (sessionId) writeTaskPulse(sessionId, result.short_id, options.plan);
+      if (sessionId) {
+        body.conversation_id = sessionId;
+        body.source = "agent";
+      }
+      // A meeting task is something PEOPLE decided; the agent only transcribed
+      // it. It belongs on the human board on its own, with no promotion stamp —
+      // so this overrides the "agent" default a session would otherwise set.
+      if (options.fromMeeting) body.source = "meeting";
+      body.project_path = getRealCwd();
+
+      const result = await cliPost("/cli/work/create", body);
+      console.log(`${c.green}ok${c.reset} Created ${c.cyan}${result.short_id}${c.reset}: ${t}`);
+      // Subtasks never rebind the session's task pulse — the loop is "claim
+      // the parent once, advance subtasks under it".
+      if (sessionId && !options.parent) writeTaskPulse(sessionId, result.short_id, options.plan);
+    }
   });
 
 work
@@ -12788,6 +12842,9 @@ work
     const pri = pcolor ? `${pcolor}${t.priority}${c.reset}` : t.priority;
     console.log(`\n  ${icon} ${c.bold}${t.title}${c.reset}`);
     console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status} | ${pri} | ${t.task_type}`);
+    if (t.parent) {
+      console.log(`  ${c.dim}Subtask of ${c.reset}${c.cyan}${t.parent.short_id}${c.reset} ${c.dim}${t.parent.title}${c.reset}`);
+    }
     if (t.execution_status && t.execution_status !== t.status) {
       console.log(`  ${c.dim}Execution: ${t.execution_status}${c.reset}`);
     }
@@ -12808,6 +12865,13 @@ work
       for (const s of t.steps) {
         const check = s.done ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
         console.log(`  ${check} ${s.title}`);
+      }
+    }
+    if (t.subtasks?.length) {
+      console.log(`\n  ${c.bold}Subtasks (${t.subtasks.length})${c.reset}`);
+      for (const st of t.subtasks) {
+        const sIcon = STATUS_ICONS[st.status] || "?";
+        console.log(`  ${sIcon} ${c.cyan}${st.short_id}${c.reset} ${st.title}`);
       }
     }
     if (t.labels?.length) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
@@ -12862,9 +12926,13 @@ work
   .argument("<short_id>", "Task short ID")
   .option("-m, --message <text>", "Completion comment")
   .option("--concerns <text>", "Mark done with concerns")
+  .option("--cascade", "Also close this task's open subtasks")
+  .option("--only-parent", "Close just this task, leaving open subtasks in place")
   .action(async (shortId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId, status: "done" };
+    if (options.cascade) body.subtask_resolution = "cascade";
+    else if (options.onlyParent) body.subtask_resolution = "only_parent";
     if (sessionId) body.conversation_id = sessionId;
     if (options.concerns) {
       body.execution_status = "done_with_concerns";
@@ -12880,7 +12948,7 @@ work
       await cliPost("/cli/work/comment", commentBody);
     }
     console.log(`${c.green}ok${c.reset} Completed ${c.cyan}${shortId}${c.reset}`);
-    if (sessionId) clearTaskPulse(sessionId);
+    if (sessionId) clearTaskPulseIfBound(sessionId, shortId);
   });
 
 work
@@ -12888,12 +12956,16 @@ work
   .description("Drop/cancel a task")
   .argument("<short_id>", "Task short ID")
   .option("-m, --message <text>", "Reason for dropping")
+  .option("--cascade", "Also drop this task's open subtasks")
+  .option("--only-parent", "Drop just this task, leaving open subtasks in place")
   .action(async (shortId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId, status: "dropped" };
+    if (options.cascade) body.subtask_resolution = "cascade";
+    else if (options.onlyParent) body.subtask_resolution = "only_parent";
     if (sessionId) body.conversation_id = sessionId;
     await cliPost("/cli/work/update", body);
-    if (sessionId) clearTaskPulse(sessionId);
+    if (sessionId) clearTaskPulseIfBound(sessionId, shortId);
     if (options.message) {
       const commentBody: Record<string, any> = { short_id: shortId, text: options.message, comment_type: "note" };
       if (sessionId) commentBody.conversation_id = sessionId;
@@ -12916,6 +12988,8 @@ work
   .option("--project-path <path>", "Project directory path")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
   .option("--parent <task_id>", "Nest under a parent task; pass '' to move it back to the top level")
+  .option("--cascade", "When closing: also close this task's open subtasks")
+  .option("--only-parent", "When closing: close just this task, leaving open subtasks")
   .option("--human", "Put the task on the human's board (rare)")
   .option("--no-human", "Take the task off the human's board")
   .action(async (shortId: string, options: any) => {
@@ -12924,6 +12998,8 @@ work
     if (sessionId) body.conversation_id = sessionId;
     if (options.human !== undefined) body.promoted = options.human;
     if (options.parent !== undefined) body.parent = options.parent;
+    if (options.cascade) body.subtask_resolution = "cascade";
+    else if (options.onlyParent) body.subtask_resolution = "only_parent";
     if (options.status) body.status = options.status;
     if (options.priority) body.priority = options.priority;
     if (options.title) body.title = options.title;
@@ -13010,10 +13086,23 @@ work
     const t = result.task;
     console.log(`\n# ${t.title}`);
     console.log(`ID: ${t.short_id} | Status: ${t.status} | Priority: ${t.priority} | Type: ${t.task_type}`);
+    if (result.parent) {
+      console.log(`Subtask of: ${result.parent.short_id} ${result.parent.title} [${result.parent.status}]`);
+    }
     if (t.description) console.log(`\n${t.description}`);
     if (result.project) {
       console.log(`\nProject: ${result.project.title}`);
       if (result.project.description) console.log(result.project.description);
+    }
+    if (result.subtasks?.length) {
+      const p = result.subtaskProgress;
+      console.log(`\n## Subtasks${p ? ` (${p.done}/${p.total} done)` : ""}`);
+      const printSub = (sub: any, indent: string) => {
+        const who = sub.assignee_name ? ` @${sub.assignee_name}` : "";
+        console.log(`${indent}- ${sub.short_id}: ${sub.title} [${sub.status}]${who}`);
+        for (const child of sub.subtasks || []) printSub(child, indent + "  ");
+      };
+      for (const sub of result.subtasks) printSub(sub, "");
     }
     if (t.blocked_by?.length) console.log(`\nBlocked by: ${t.blocked_by.join(", ")}`);
     if (t.blocks?.length) console.log(`Blocks: ${t.blocks.join(", ")}`);
@@ -13045,11 +13134,13 @@ work
   .option("-p, --project <id>", "Filter by project")
   .option("--plan <plan_id>", "Filter by plan")
   .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
+  .option("--subtasks", "Include open subtasks of in-progress parents (rescue an abandoned tree)")
   .action(async (options: any) => {
     const body: Record<string, any> = { ready: true };
     if (options.project) body.project_id = options.project;
     if (options.plan) body.plan_id = options.plan;
     if (options.query) body.query = options.query;
+    if (options.subtasks) body.include_subtasks = true;
     body.project_path = getRealCwd();
     const tasks = await cliPost("/cli/work/list", body);
     if (!Array.isArray(tasks) || tasks.length === 0) {
@@ -13057,7 +13148,10 @@ work
       return;
     }
     for (const t of tasks) {
-      console.log(formatWorkItem(t));
+      // A ready subtask can't nest (its parent isn't in the set), so mark it
+      // so a claiming agent knows it is stepping into someone's decomposition.
+      const suffix = t.parent_id ? fmt.muted(`  ↳ subtask of ${t.parent_short_id || "a parent task"}`) : "";
+      console.log(formatWorkItem(t) + suffix);
     }
     console.log(fmt.muted(`\n  ${tasks.length} ready`));
   });

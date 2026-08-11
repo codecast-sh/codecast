@@ -4,6 +4,7 @@ import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
+import { MAX_TASK_DEPTH, isActiveTask, subtaskProgressOf } from "@codecast/shared/tasks";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopeByProject } from "./data";
@@ -266,7 +267,11 @@ export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedT
     const t = tid === updatedTaskId
       ? { ...updatedTask, status: newStatus }
       : await ctx.db.get(tid);
-    if (t && isSameWorkspace(t, workspaceForResource(plan))) {
+    // Subtasks never count toward plan progress — the parent is the plan's
+    // unit of work. New subtasks are kept out of task_ids at create time; this
+    // guard also excludes any that landed there before that rule existed, so
+    // one agent decomposition can never inflate a plan bar or auto-close it.
+    if (t && !t.parent_id && isSameWorkspace(t, workspaceForResource(plan))) {
       total++;
       if (t.status === "done") done++;
       else if (t.status === "in_progress" || t.status === "in_review") in_progress++;
@@ -280,6 +285,32 @@ export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedT
     updates.status = "done";
   }
   await ctx.db.patch(plan._id, updates);
+}
+
+/**
+ * Keep plan.task_ids honest when a task's subtask-ness changes (reparent or
+ * detach). A subtask is never in task_ids (the parent is the plan's unit of
+ * work); a top-level task with a plan always is. Called after the parent_id
+ * patch, with the FINAL parent state. Recalcs plan progress so the bar and the
+ * auto-done flag never drift off a stale total.
+ */
+async function reconcilePlanMembership(
+  ctx: any,
+  taskId: Id<"tasks">,
+  planId: Id<"plans"> | undefined,
+  nowSubtask: boolean,
+) {
+  if (!planId) return;
+  const plan: any = await ctx.db.get(planId);
+  if (!plan) return;
+  const ids: any[] = plan.task_ids || [];
+  const has = ids.some((id: any) => String(id) === String(taskId));
+  if (nowSubtask && has) {
+    await ctx.db.patch(planId, { task_ids: ids.filter((id: any) => String(id) !== String(taskId)), updated_at: Date.now() });
+  } else if (!nowSubtask && !has) {
+    await ctx.db.patch(planId, { task_ids: [...ids, taskId], updated_at: Date.now() });
+  }
+  await recalcPlanProgress(ctx, planId, taskId, (await ctx.db.get(taskId))?.status ?? "open");
 }
 
 // ---------------------------------------------------------------------------
@@ -344,16 +375,182 @@ export async function resolveParentTask(
   if (!parent || !(await canAccessTask(ctx, userId, parent))) notFound("Parent task not found");
   requireSameWorkspace(parent, opts.workspace, "parent task");
 
+  const ancestors = await taskAncestorIds(ctx, parent);
   if (opts.child) {
     if (String(parent._id) === String(opts.child._id)) {
       throw new Error("A task cannot be its own parent");
     }
-    const ancestors = await taskAncestorIds(ctx, parent);
     if (ancestors.includes(String(opts.child._id))) {
       throw new Error(`Cycle: ${parent.short_id} is already below ${opts.child.short_id}`);
     }
   }
+
+  // Depth is a product cap, not just a render clamp: the views emphasise the
+  // top levels, so writes deeper than the UI can express are refused with
+  // advice instead of silently flattening on screen. Re-parenting a task that
+  // has its own subtree must fit the whole subtree under the cap.
+  const childHeight = opts.child ? await taskSubtreeHeight(ctx, opts.child._id) : 0;
+  const newDepth = ancestors.length + 1 + childHeight;
+  if (newDepth > MAX_TASK_DEPTH) {
+    throw new Error(
+      `Too deep: ${parent.short_id} sits ${ancestors.length} level(s) down and the move needs ${newDepth} (max ${MAX_TASK_DEPTH}). ` +
+      `Nest under a higher-level task, or promote this work to a plan.`,
+    );
+  }
   return parent;
+}
+
+/**
+ * Height of a task's subtree: 0 for a leaf, 1 with children, 2 with
+ * grandchildren. Only the depth cap needs this, and the cap is tiny
+ * (MAX_TASK_DEPTH), so we stop descending once height already exceeds it —
+ * that both bounds the walk and avoids the pathological-fan-out miscount where
+ * a node budget could exit mid-level and under-report height (letting a move
+ * slip past the cap). Returns Infinity if a level can't be fully expanded
+ * within the budget, so resolveParentTask refuses rather than guesses.
+ */
+async function taskSubtreeHeight(ctx: any, taskId: Id<"tasks">, maxNodes = 2000): Promise<number> {
+  let height = 0;
+  let frontier: Id<"tasks">[] = [taskId];
+  let visited = 0;
+  while (frontier.length > 0) {
+    const next: Id<"tasks">[] = [];
+    for (const id of frontier) {
+      if (visited >= maxNodes) return Infinity; // budget exhausted mid-level → unknown, refuse
+      const children = await ctx.db
+        .query("tasks")
+        .withIndex("by_parent_id", (q: any) => q.eq("parent_id", id))
+        .collect();
+      visited += children.length;
+      for (const c of children) next.push(c._id);
+    }
+    if (next.length === 0) break;
+    height += 1;
+    if (height > MAX_TASK_DEPTH) return height; // already too deep; no need to descend further
+    frontier = next;
+  }
+  return height;
+}
+
+// ---------------------------------------------------------------------------
+// Close-guard + start rollup: the two status rules every write surface shares.
+// ---------------------------------------------------------------------------
+
+/** Direct children still open (active and unfinished). */
+async function openDirectSubtasks(ctx: any, taskId: Id<"tasks">): Promise<any[]> {
+  const children = await ctx.db
+    .query("tasks")
+    .withIndex("by_parent_id", (q: any) => q.eq("parent_id", taskId))
+    .collect();
+  return children.filter((c: any) => isActiveTask(c) && c.status !== "done" && c.status !== "dropped");
+}
+
+/**
+ * The close-guard (never auto-close): moving a parent to done/dropped with
+ * open subtasks is refused unless the caller resolves it — "cascade" closes
+ * the open subtree with the parent, "only_parent" closes just the parent and
+ * leaves the children where they are. Lives in the mutation path so the CLI
+ * (`cast task done --cascade | --only-parent`) and every web surface hit the
+ * same rule; the web dialog is just one client of this refusal.
+ * Returns the ids to cascade-close alongside the parent.
+ */
+export async function guardParentClose(
+  ctx: any,
+  task: any,
+  newStatus: string | undefined,
+  resolution: string | undefined,
+): Promise<Id<"tasks">[]> {
+  if (newStatus !== "done" && newStatus !== "dropped") return [];
+  const open = await openDirectSubtasks(ctx, task._id);
+  if (open.length === 0 || resolution === "only_parent") return [];
+  if (resolution === "cascade") {
+    const out: Id<"tasks">[] = [];
+    const queue = [...open];
+    let guard = 0;
+    while (queue.length > 0 && guard++ < 500) {
+      const cur: any = queue.shift();
+      out.push(cur._id);
+      queue.push(...(await openDirectSubtasks(ctx, cur._id)));
+    }
+    return out;
+  }
+  const ids = open.map((c: any) => c.short_id).join(", ");
+  throw new Error(
+    `${task.short_id} has ${open.length} open subtask${open.length === 1 ? "" : "s"} (${ids}). ` +
+    `Close them first, or pass --cascade to close them too, or --only-parent to close just this task.`,
+  );
+}
+
+/**
+ * Cascade-close the subtree ids guardParentClose returned. `parent` scopes the
+ * writes: only same-workspace descendants are touched (a pre-guard row could
+ * carry a cross-workspace edge — `create` once wrote parent_id raw — and a
+ * user must not close another workspace's task through --cascade). Each closed
+ * child also releases any session bound to it, matching the single-task path.
+ */
+async function cascadeClose(ctx: any, ids: Id<"tasks">[], newStatus: string, userId: Id<"users">, parent: any) {
+  const now = Date.now();
+  const scope = workspaceForResource(parent);
+  for (const id of ids) {
+    const t: any = await ctx.db.get(id);
+    if (!t || !isSameWorkspace(t, scope)) continue;
+    await ctx.db.patch(id, { status: newStatus, closed_at: now, updated_at: now });
+    // Release a session bound to this child so it isn't stuck on a closed task.
+    for (const convId of t.conversation_ids ?? []) {
+      const conv: any = await ctx.db.get(convId);
+      if (conv && conv.active_task_id && String(conv.active_task_id) === String(id)) {
+        await ctx.db.patch(convId, { active_task_id: undefined });
+      }
+    }
+    await ctx.db.insert("task_history", {
+      task_id: id,
+      user_id: userId,
+      actor_type: "system" as const,
+      action: "updated",
+      field: "status",
+      old_value: t.status,
+      new_value: newStatus,
+      created_at: now,
+    });
+  }
+}
+
+/**
+ * One-way honesty rollup: the first subtask entering in_progress/in_review
+ * flips an open/backlog ancestor chain to in_progress, so a parent never sits
+ * "open" while work visibly advances under it. Never runs the other way and
+ * never closes anything.
+ */
+async function rollUpParentStart(ctx: any, task: any, newStatus: string | undefined) {
+  if (newStatus !== "in_progress" && newStatus !== "in_review") return;
+  const now = Date.now();
+  let cursor: Id<"tasks"> | undefined = task.parent_id;
+  for (let hops = 0; cursor && hops < MAX_TASK_ANCESTOR_WALK; hops++) {
+    const parent: any = await ctx.db.get(cursor);
+    if (!parent) break;
+    if (parent.status !== "open" && parent.status !== "backlog") break;
+    await ctx.db.patch(parent._id, {
+      status: "in_progress",
+      updated_at: now,
+      last_attempted_at: now,
+      attempt_count: (parent.attempt_count || 0) + 1,
+    });
+    await ctx.db.insert("task_history", {
+      task_id: parent._id,
+      user_id: task.user_id,
+      actor_type: "system" as const,
+      action: "updated",
+      field: "status",
+      old_value: parent.status,
+      new_value: "in_progress",
+      created_at: now,
+    });
+    // A top-level parent may sit on a plan; keep the plan bar honest.
+    if (parent.plan_id && !parent.parent_id) {
+      await recalcPlanProgress(ctx, parent.plan_id, parent._id, "in_progress");
+    }
+    cursor = parent.parent_id;
+  }
 }
 
 export const create = mutation({
@@ -449,10 +646,14 @@ export const create = mutation({
 
     // Subtask: `--parent ct-123`. Resolved (not written raw) so the stored
     // value is a real task id in this workspace — see resolveParentTask.
+    // Decomposition stays inside the parent's container: a subtask created
+    // without an explicit plan/project inherits the parent's.
     let parent_id: Id<"tasks"> | undefined;
     if (args.parent_id) {
       const parent = await resolveParentTask(ctx, auth.userId, args.parent_id, { workspace: db.workspace });
       parent_id = parent._id;
+      if (!plan_id && parent.plan_id) plan_id = parent.plan_id;
+      if (!project_id && parent.project_id) project_id = parent.project_id;
     }
 
     const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId);
@@ -494,7 +695,10 @@ export const create = mutation({
       estimated_minutes: args.estimated_minutes,
     } as any);
 
-    if (plan_id) {
+    // Subtasks carry plan_id for context but never join plan.task_ids — the
+    // parent is the plan's unit of progress, so a decomposition can't inflate
+    // the plan bar or flip its auto-done.
+    if (plan_id && !parent_id) {
       const plan = await ctx.db.get(plan_id);
       if (plan) {
         const taskIds = plan.task_ids || [];
@@ -514,6 +718,11 @@ export const create = mutation({
     }
 
     await subscribeUser(ctx, auth.userId, id, "creator");
+    // A subtask created directly in progress flips its parent chain, same as a
+    // later start would — the parent must never sit "open" under running work.
+    if (parent_id) {
+      await rollUpParentStart(ctx, { parent_id, user_id: auth.userId }, args.status);
+    }
     if (resolvedAssignee) {
       const createdTask = await ctx.db.get(id) as any;
       const assigneeId = await resolveAssigneeToUserId(ctx, resolvedAssignee, createdTask?.team_id);
@@ -622,7 +831,8 @@ export const snippet = query({
             if (plan.task_ids) {
               for (const tid of plan.task_ids.slice(0, 10)) {
                 const t = await ctx.db.get(tid);
-                if (t) planLines.push(`  - ${t.short_id}: ${t.title} [${t.status}]`);
+                // Skip subtasks that predate the task_ids exclusion rule.
+                if (t && !t.parent_id) planLines.push(`  - ${t.short_id}: ${t.title} [${t.status}]`);
               }
             }
             activePlanSnippet = planLines.join("\n");
@@ -633,14 +843,32 @@ export const snippet = query({
 
     const lines: string[] = [];
     if (activeTasks.length > 0) {
-      const inProgress = activeTasks.filter((t: any) => t.status === "in_progress");
-      const open = activeTasks.filter((t: any) => t.status === "open");
+      // The capped lists show TOP-LEVEL tasks only — one agent's decomposition
+      // must never evict every other task from every agent's injected context.
+      // A parent summarises its subtasks as done/total; the full tree renders
+      // only for this session's own bound task below.
+      const childrenByParent = new Map<string, any[]>();
+      for (const t of tasks as any[]) {
+        if (!t.parent_id) continue;
+        const key = String(t.parent_id);
+        const bucket = childrenByParent.get(key);
+        if (bucket) bucket.push(t);
+        else childrenByParent.set(key, [t]);
+      }
+      const progressNote = (t: any) => {
+        const children = childrenByParent.get(String(t._id));
+        if (!children || children.length === 0) return "";
+        const p = subtaskProgressOf(children);
+        return p.total > 0 ? ` — ${p.done}/${p.total} subtasks done` : "";
+      };
+      const inProgress = activeTasks.filter((t: any) => t.status === "in_progress" && !t.parent_id);
+      const open = activeTasks.filter((t: any) => t.status === "open" && !t.parent_id);
 
       if (inProgress.length > 0) {
         lines.push("In Progress:");
         for (const t of inProgress.slice(0, 10)) {
           const owner = userMap.get(t.user_id.toString()) || "";
-          lines.push(`- ${t.short_id}: ${t.title}${owner ? ` (${owner})` : ""}${t.labels?.length ? ` [${t.labels.join(", ")}]` : ""}`);
+          lines.push(`- ${t.short_id}: ${t.title}${owner ? ` (${owner})` : ""}${t.labels?.length ? ` [${t.labels.join(", ")}]` : ""}${progressNote(t)}`);
         }
       }
 
@@ -648,7 +876,40 @@ export const snippet = query({
         lines.push("Open:");
         for (const t of open.slice(0, 10)) {
           const owner = userMap.get(t.user_id.toString()) || "";
-          lines.push(`- ${t.short_id}: ${t.title}${owner ? ` (${owner})` : ""}${t.priority === "high" || t.priority === "urgent" ? ` [${t.priority}]` : ""}`);
+          lines.push(`- ${t.short_id}: ${t.title}${owner ? ` (${owner})` : ""}${t.priority === "high" || t.priority === "urgent" ? ` [${t.priority}]` : ""}${progressNote(t)}`);
+        }
+      }
+
+      // This session's bound task gets its full subtask tree — the one place
+      // the whole decomposition belongs in agent context.
+      if (args.conversation_id) {
+        const conv = await ctx.db
+          .query("conversations")
+          .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
+          .first();
+        const boundId = conv?.active_task_id ? String(conv.active_task_id) : null;
+        const bound = boundId ? (tasks as any[]).find((t) => String(t._id) === boundId) : null;
+        if (bound) {
+          const renderTree = (parentKey: string, indent: string, depth: number) => {
+            if (depth > 2) return;
+            for (const c of childrenByParent.get(parentKey) ?? []) {
+              if (c.status === "done" || c.status === "dropped") continue;
+              lines.push(`${indent}- ${c.short_id}: ${c.title} [${c.status}]`);
+              renderTree(String(c._id), indent + "  ", depth + 1);
+            }
+          };
+          const boundKey = String(bound._id);
+          const p = subtaskProgressOf(childrenByParent.get(boundKey) ?? []);
+          // Always name the session's own task — the capped lists filter out
+          // subtasks, so a session that claimed a leaf subtask would otherwise
+          // never see the row it is working. Show its parent breadcrumb too.
+          if (bound.parent_id) {
+            const bp: any = await ctx.db.get(bound.parent_id);
+            lines.push(`Your task ${bound.short_id}: ${bound.title} [${bound.status}]${bp ? ` — subtask of ${bp.short_id} ${bp.title}` : ""}`);
+          } else if (p.total > 0) {
+            lines.push(`Your task ${bound.short_id} — ${p.done}/${p.total} subtasks done, open ones:`);
+          }
+          if (p.total > 0) renderTree(boundKey, "  ", 1);
         }
       }
     }
@@ -666,7 +927,9 @@ export const snippet = query({
 
     return {
       snippet: lines.join("\n"),
-      task_count: activeTasks.length,
+      // Count the same rows the snippet prints — top-level active tasks — so
+      // the number beside the snippet matches the list it summarises.
+      task_count: activeTasks.filter((t: any) => !t.parent_id).length,
       plan_count: sessionPlans.length,
     };
   },
@@ -679,6 +942,8 @@ export const list = query({
     status: v.optional(v.string()),
     execution_status: v.optional(v.string()),
     ready: v.optional(v.boolean()),
+    // With ready: also surface open subtasks of actively-worked parents.
+    include_subtasks: v.optional(v.boolean()),
     limit: v.optional(v.number()),
     team: v.optional(v.boolean()),
     include_derived: v.optional(v.boolean()),
@@ -686,6 +951,7 @@ export const list = query({
     project_path: v.optional(v.string()),
     query: v.optional(v.string()),
     assignee: v.optional(v.string()),
+    plan_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -765,6 +1031,15 @@ export const list = query({
       tasks = tasks.filter((t: any) => t.execution_status === args.execution_status);
     }
 
+    if (args.plan_id) {
+      const plan = await ctx.db
+        .query("plans")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
+        .first();
+      const planTaskIds = new Set((plan?.task_ids || []).map((id: any) => String(id)));
+      tasks = tasks.filter((t: any) => planTaskIds.has(String(t._id)));
+    }
+
     if (args.query) {
       const q = args.query.toLowerCase();
       tasks = tasks.filter((t: any) =>
@@ -774,10 +1049,32 @@ export const list = query({
       );
     }
 
-    // Ready = open + no blockers
+    // Ready = open + no blockers. Subtasks of a parent that is actively being
+    // worked are NOT ready by default: that decomposition belongs to the
+    // session driving the parent, and a second agent claiming one mid-flight
+    // splits the work. Orphaned subtasks (parent open/closed/absent) stay
+    // ready — that is the rescue path for abandoned trees. `include_subtasks`
+    // (CLI --subtasks) lifts the rule. The parent status is resolved by db.get,
+    // NOT from the filtered page: a query/assignee/project filter could have
+    // dropped the parent, and inferring "orphan" from its absence would leak an
+    // in-flight subtask back into ready.
+    let readyParentShortIds: Map<string, string> | undefined;
     if (args.ready) {
+      const parentStatus = new Map<string, string | null>();
+      readyParentShortIds = new Map<string, string>();
+      for (const t of tasks) {
+        if (t.parent_id && !parentStatus.has(String(t.parent_id))) {
+          const p: any = await ctx.db.get(t.parent_id);
+          parentStatus.set(String(t.parent_id), p ? p.status : null);
+          if (p) readyParentShortIds.set(String(t.parent_id), p.short_id);
+        }
+      }
       tasks = tasks.filter((t: any) => {
         if (t.status !== "open") return false;
+        if (t.parent_id && !args.include_subtasks) {
+          const ps = parentStatus.get(String(t.parent_id));
+          if (ps === "in_progress" || ps === "in_review") return false;
+        }
         if (!t.blocked_by || t.blocked_by.length === 0) return true;
         // Check if all blockers are done
         return t.blocked_by.every((bid: string) => {
@@ -805,6 +1102,7 @@ export const list = query({
     return result.map((t: any) => ({
       ...t,
       assignee_name: t.assignee ? (assigneeNames[t.assignee] || t.assignee) : undefined,
+      parent_short_id: t.parent_id ? readyParentShortIds?.get(String(t.parent_id)) : undefined,
     }));
   },
 });
@@ -840,7 +1138,31 @@ export const get = query({
       .withIndex("by_task_id", (q) => q.eq("task_id", task!._id))
       .collect();
 
-    return { ...task, comments };
+    // Nesting context, so `cast task show` answers both "what larger work is
+    // this part of" and "what did I break this into". Children come off the
+    // by_parent_id index; both sides are already same-workspace by
+    // construction (resolveParentTask), so no extra access check is needed.
+    const parent = task.parent_id ? await ctx.db.get(task.parent_id) : null;
+    const allChildren = await ctx.db
+      .query("tasks")
+      .withIndex("by_parent_id", (q) => q.eq("parent_id", task!._id))
+      .collect();
+    // Same active predicate as every other surface (chip, context, close-guard)
+    // so the count `cast task show` prints matches them all.
+    const children = allChildren.filter((c: any) => isActiveTask(c));
+
+    return {
+      ...task,
+      comments,
+      parent: parent ? { short_id: parent.short_id, title: parent.title, status: parent.status } : null,
+      subtask_progress: subtaskProgressOf(children as any[]),
+      subtasks: children.map((child) => ({
+        short_id: child.short_id,
+        title: child.title,
+        status: child.status,
+        priority: child.priority,
+      })),
+    };
   },
 });
 
@@ -860,6 +1182,9 @@ export const update = mutation({
     team_id: v.optional(v.id("teams")),
     // Short id of the parent task; empty string detaches back to the top level.
     parent: v.optional(v.string()),
+    // Close-guard resolution when closing a parent with open subtasks:
+    // "cascade" closes the open subtree too, "only_parent" closes just this task.
+    subtask_resolution: v.optional(v.union(v.literal("cascade"), v.literal("only_parent"))),
     plan_id: v.optional(v.string()),
     blocked_by: v.optional(v.array(v.string())),
     blocks: v.optional(v.array(v.string())),
@@ -942,8 +1267,13 @@ export const update = mutation({
       if (!plan || !(await canAccessPlan(ctx, auth.userId, plan))) notFound("Plan not found");
       requireSameWorkspace(plan, targetWorkspace, "plan");
       updates.plan_id = plan._id;
+      // Subtasks carry plan_id for context but never join plan.task_ids — the
+      // parent is the plan's unit of progress. Branch on key PRESENCE, not
+      // value: `updates.parent_id === undefined` is also how detach is
+      // expressed, so a value test would mistake a detach for "unchanged".
+      const willBeSubtask = "parent_id" in updates ? !!updates.parent_id : !!task.parent_id;
       const taskIds = plan.task_ids || [];
-      if (!taskIds.some((id: any) => id === task._id)) {
+      if (!willBeSubtask && !taskIds.some((id: any) => id === task._id)) {
         taskIds.push(task._id);
         await ctx.db.patch(plan._id, { task_ids: taskIds, updated_at: now });
       }
@@ -1024,12 +1354,20 @@ export const update = mutation({
       updates.actual_minutes = Math.round((now - task.started_at) / 60000);
     }
 
+    // Close-guard: refuses done/dropped on a parent with open subtasks unless
+    // resolved; returns the subtree to cascade-close. Runs before any write.
+    const cascadeIds = await guardParentClose(ctx, task, args.status, args.subtask_resolution);
+
+    // Did the parent actually change? (Reparent/detach need history + plan reconcile.)
+    const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
+
     // Record history for changed fields
     const trackFields: [string, any, any][] = [];
     if (args.status && args.status !== task.status) trackFields.push(["status", task.status, args.status]);
     if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
     if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
     if (args.assignee !== undefined && updates.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", updates.assignee || ""]);
+    if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);
 
     for (const [field, oldVal, newVal] of trackFields) {
       await ctx.db.insert("task_history", {
@@ -1046,6 +1384,17 @@ export const update = mutation({
     }
 
     await ctx.db.patch(task._id, updates);
+    if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, args.status!, auth.userId, task);
+    // Rollup walks the EFFECTIVE parent (the new one on a reparent+start), not
+    // the pre-patch parent, so the task's actual parent flips to in_progress.
+    await rollUpParentStart(ctx, { ...task, parent_id: "parent_id" in updates ? updates.parent_id : task.parent_id }, args.status);
+
+    // Reparent/detach changed the task's subtask-ness: reconcile plan.task_ids
+    // and progress on the plan it now belongs to (its own or its new parent's).
+    if (parentChanged) {
+      const finalPlan = (updates.plan_id ?? task.plan_id) as Id<"plans"> | undefined;
+      await reconcilePlanMembership(ctx, task._id, finalPlan, !!updates.parent_id);
+    }
 
     if (args.status && args.status !== task.status) {
       if (task.plan_id) {
@@ -1317,8 +1666,55 @@ export const context = query({
       }
     }
 
+    // Parent + subtask tree: the surface a resumed/compacted agent regrounds
+    // from, so it must see the tree it (or a sibling) already built rather
+    // than re-decomposing. Two levels — direct children and grandchildren —
+    // matching the depth cap. Assignee names included so a second agent can
+    // tell which open subtasks are already claimed.
+    let parent: { short_id: string; title: string; status: string } | null = null;
+    if (task.parent_id) {
+      const p: any = await ctx.db.get(task.parent_id);
+      if (p && isSameWorkspace(p, workspaceForResource(task))) {
+        parent = { short_id: p.short_id, title: p.title, status: p.status };
+      }
+    }
+    const nameOf = async (uid: any): Promise<string | undefined> => {
+      if (!uid) return undefined;
+      const u: any = await ctx.db.get(uid).catch(() => null);
+      return u?.name || u?.github_username || undefined;
+    };
+    const describeChildren = async (parentId: Id<"tasks">, depth: number): Promise<any[]> => {
+      const children = await ctx.db
+        .query("tasks")
+        .withIndex("by_parent_id", (q: any) => q.eq("parent_id", parentId))
+        .collect();
+      const out: any[] = [];
+      for (const c of children) {
+        if (!isActiveTask(c)) continue;
+        out.push({
+          short_id: c.short_id,
+          title: c.title,
+          status: c.status,
+          priority: c.priority,
+          assignee_name: await nameOf(c.assignee && /^[a-z0-9]{32}$/.test(c.assignee) ? c.assignee : null),
+          subtasks: depth > 0 ? await describeChildren(c._id, depth - 1) : [],
+        });
+      }
+      return out;
+    };
+    const subtasks = await describeChildren(task._id, 1);
+    const subtaskProgress = subtasks.length > 0
+      ? subtaskProgressOf(await ctx.db
+          .query("tasks")
+          .withIndex("by_parent_id", (q: any) => q.eq("parent_id", task._id))
+          .collect())
+      : null;
+
     return {
       task,
+      parent,
+      subtasks,
+      subtaskProgress,
       comments,
       sessionSummaries,
       project: project ? { title: project.title, description: project.description } : null,
@@ -1585,8 +1981,22 @@ export const webList = query({
     }
 
     if (args.ready) {
+      // Same subtask rule as the CLI list: open subtasks of an actively-worked
+      // parent are that session's decomposition, not up-for-grabs work. Parent
+      // status resolved by db.get, not from the filtered page (see list()).
+      const parentStatus = new Map<string, string | null>();
+      for (const t of tasks) {
+        if (t.parent_id && !parentStatus.has(String(t.parent_id))) {
+          const p: any = await ctx.db.get(t.parent_id);
+          parentStatus.set(String(t.parent_id), p ? p.status : null);
+        }
+      }
       tasks = tasks.filter((t) => {
         if (t.status !== "open") return false;
+        if (t.parent_id) {
+          const ps = parentStatus.get(String(t.parent_id));
+          if (ps === "in_progress" || ps === "in_review") return false;
+        }
         if (!t.blocked_by || t.blocked_by.length === 0) return true;
         return t.blocked_by.every((bid: string) => {
           const blocker = tasks.find((bt: any) => bt.short_id === bid);
@@ -1978,6 +2388,10 @@ export const webUpdate = mutation({
     project_path: v.optional(v.string()),
     execution_status: v.optional(v.string()),
     triage_status: v.optional(v.string()),
+    // Short id of the parent task; empty string detaches back to the top level.
+    parent: v.optional(v.string()),
+    // Close-guard resolution when closing a parent with open subtasks.
+    subtask_resolution: v.optional(v.union(v.literal("cascade"), v.literal("only_parent"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1992,6 +2406,22 @@ export const webUpdate = mutation({
 
     const now = Date.now();
     const updates: any = { updated_at: now };
+    // Reparent through the single entry point (access, workspace, cycle,
+    // depth). Same semantics as the CLI path: "" detaches.
+    if (args.parent !== undefined) {
+      if (!args.parent) {
+        updates.parent_id = undefined;
+      } else {
+        const taskWorkspace = task.team_id
+          ? { type: "team" as const, teamId: task.team_id }
+          : { type: "personal" as const, userId: task.user_id };
+        const parent = await resolveParentTask(ctx, userId, args.parent, {
+          workspace: taskWorkspace,
+          child: task,
+        });
+        updates.parent_id = parent._id;
+      }
+    }
     if (args.status) updates.status = args.status;
     if (args.priority) updates.priority = args.priority;
     if (args.title) updates.title = args.title;
@@ -2029,6 +2459,10 @@ export const webUpdate = mutation({
       updates.last_attempted_at = now;
     }
 
+    // Close-guard: refuses done/dropped on a parent with open subtasks unless
+    // resolved; returns the subtree to cascade-close. Runs before any write.
+    const cascadeIds = await guardParentClose(ctx, task, args.status, args.subtask_resolution);
+
     const resolvedAssignee = updates.assignee || args.assignee;
     // Record history for changed fields
     const trackFields: [string, any, any][] = [];
@@ -2037,6 +2471,8 @@ export const webUpdate = mutation({
     if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
     if (args.assignee !== undefined && resolvedAssignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", resolvedAssignee || ""]);
     if (args.execution_status !== undefined && args.execution_status !== (task.execution_status || "")) trackFields.push(["execution_status", task.execution_status || "", args.execution_status || ""]);
+    const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
+    if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);
 
     for (const [field, oldVal, newVal] of trackFields) {
       await ctx.db.insert("task_history", {
@@ -2052,6 +2488,11 @@ export const webUpdate = mutation({
     }
 
     await ctx.db.patch(task._id, updates);
+    if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, args.status!, userId, task);
+    await rollUpParentStart(ctx, { ...task, parent_id: "parent_id" in updates ? updates.parent_id : task.parent_id }, args.status);
+    if (parentChanged) {
+      await reconcilePlanMembership(ctx, task._id, task.plan_id as Id<"plans"> | undefined, !!updates.parent_id);
+    }
 
     if (args.status && args.status !== task.status) {
       if (task.plan_id) {
@@ -2267,10 +2708,25 @@ export const webCreate = mutation({
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
     assignee: v.optional(v.string()),
     project_path: v.optional(v.string()),
+    // Short id (or id) of the parent task — the web quick-add / create-modal
+    // subtask path. Resolved through resolveParentTask like every surface.
+    parent: v.optional(v.string()),
+    // Optimistic-create idempotency key (see schema.tasks.client_key).
+    client_key: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
+
+    // Idempotency: a retried or replayed create carries the same client_key,
+    // so return the row it already made instead of inserting a duplicate.
+    if (args.client_key) {
+      const existing = await ctx.db
+        .query("tasks")
+        .withIndex("by_client_key", (q) => q.eq("user_id", userId).eq("client_key", args.client_key))
+        .first();
+      if (existing) return { id: existing._id, short_id: existing.short_id };
+    }
 
     // A task created onto a plan lives in the plan's workspace: when the
     // caller names a plan but no explicit workspace, inherit the plan's
@@ -2286,6 +2742,22 @@ export const webCreate = mutation({
     }
     const inheritFromPlan = plan && !args.workspace && !args.team_id;
 
+    // A subtask lives in its parent's workspace: with no explicit workspace or
+    // plan, the parent row decides. resolveParentTask below re-validates the
+    // final workspace, so a mismatched explicit workspace still fails.
+    let parentPeek: any = null;
+    if (args.parent) {
+      parentPeek = await ctx.db
+        .query("tasks")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.parent!))
+        .first()
+        ?? await (async () => {
+          const id = ctx.db.normalizeId("tasks", args.parent!);
+          return id ? await ctx.db.get(id) : null;
+        })();
+    }
+    const inheritFromParent = parentPeek && !inheritFromPlan && !args.workspace && !args.team_id;
+
     // Otherwise the workspace comes from the client's explicit picker or the
     // directory mapping — never from the user's active team. An unmapped
     // project_path with no explicit workspace lands personal ("Only Me"),
@@ -2294,7 +2766,17 @@ export const webCreate = mutation({
       ? (plan.team_id
           ? { userId, workspace: "team", team_id: plan.team_id }
           : { userId, workspace: "personal" })
-      : { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path });
+      : inheritFromParent
+        ? (parentPeek.team_id
+            ? { userId, workspace: "team", team_id: parentPeek.team_id }
+            : { userId, workspace: "personal" })
+        : { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path });
+
+    // Now the real resolution: access, same-workspace, cycle, depth.
+    let parentDoc: any = null;
+    if (args.parent) {
+      parentDoc = await resolveParentTask(ctx, userId, args.parent, { workspace: db.workspace });
+    }
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
@@ -2309,6 +2791,12 @@ export const webCreate = mutation({
     if (plan) {
       requireSameWorkspace(plan, db.workspace, "plan");
       plan_id = plan._id;
+    }
+    // Decomposition stays inside the parent's container: no explicit
+    // plan/project means the parent's.
+    if (parentDoc) {
+      if (!plan_id && parentDoc.plan_id) plan_id = parentDoc.plan_id;
+      if (!project_id && parentDoc.project_id) project_id = parentDoc.project_id;
     }
 
     const short_id = await nextShortId(ctx.db, "ct");
@@ -2326,6 +2814,8 @@ export const webCreate = mutation({
     const id = await db.insert("tasks", {
       project_id,
       plan_id,
+      parent_id: parentDoc?._id,
+      client_key: args.client_key,
       short_id,
       title: args.title,
       description: args.description,
@@ -2340,7 +2830,14 @@ export const webCreate = mutation({
       max_retries: 3,
     } as any);
 
-    if (plan_id) {
+    // A subtask created directly in progress flips its parent chain.
+    if (parentDoc) {
+      await rollUpParentStart(ctx, { parent_id: parentDoc._id, user_id: userId }, args.status);
+    }
+
+    // Subtasks carry plan_id for context but never join plan.task_ids — the
+    // parent is the plan's unit of progress.
+    if (plan_id && !parentDoc) {
       const plan = await ctx.db.get(plan_id);
       if (plan) {
         const taskIds = plan.task_ids || [];

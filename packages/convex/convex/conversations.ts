@@ -7392,6 +7392,7 @@ type InboxSessionMaps = {
   agentStatusUpdatedAtMap: Map<string, number>;
   tmuxSessionMap: Map<string, string>;
   permissionModeMap: Map<string, string>;
+  agentStartedAtMap: Map<string, number>;
   liveConvIds: Set<string>;
   userDaemonAlive: boolean;
 };
@@ -7417,11 +7418,16 @@ async function buildUserSessionMaps(
   const agentStatusUpdatedAtMap = new Map<string, number>();
   const tmuxSessionMap = new Map<string, string>();
   const permissionModeMap = new Map<string, string>();
+  const agentStartedAtMap = new Map<string, number>();
   for (const s of managedSessions) {
     if (!s.conversation_id) continue;
     const cid = s.conversation_id.toString();
     if (s.tmux_session) tmuxSessionMap.set(cid, s.tmux_session);
     if (s.permission_mode) permissionModeMap.set(cid, s.permission_mode);
+    // Above the agent_status guard on purpose: a session whose status hasn't
+    // been reported yet still has a process generation, and that is exactly
+    // what decides whether its standing watches are real.
+    if (s.agent_started_at !== undefined) agentStartedAtMap.set(cid, s.agent_started_at);
     if (!s.agent_status) continue;
     if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
     // Raw status. The heartbeat-staleness coercion lives in trustedAgentStatus
@@ -7435,7 +7441,7 @@ async function buildUserSessionMaps(
     (s: any) => now - s.last_heartbeat < 6 * 60 * 1000
   );
 
-  return { agentStatusMap, agentStatusUpdatedAtMap, tmuxSessionMap, permissionModeMap, liveConvIds, userDaemonAlive };
+  return { agentStatusMap, agentStatusUpdatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, liveConvIds, userDaemonAlive };
 }
 
 // Empty maps for the liveness-excluded path: computeInboxSessions({includeLiveness:false})
@@ -7447,6 +7453,7 @@ const EMPTY_INBOX_MAPS: InboxSessionMaps = {
   agentStatusUpdatedAtMap: new Map(),
   tmuxSessionMap: new Map(),
   permissionModeMap: new Map(),
+  agentStartedAtMap: new Map(),
   liveConvIds: new Set(),
   userDaemonAlive: false,
 };
@@ -7473,6 +7480,7 @@ async function mergeForeignConversationLiveness(
     if (heartbeatAlive) maps.liveConvIds.add(cid);
     if (managed.tmux_session) maps.tmuxSessionMap.set(cid, managed.tmux_session);
     if (managed.permission_mode) maps.permissionModeMap.set(cid, managed.permission_mode);
+    if (managed.agent_started_at !== undefined) maps.agentStartedAtMap.set(cid, managed.agent_started_at);
     if (!managed.agent_status) continue;
     if (managed.agent_status_updated_at !== undefined) {
       maps.agentStatusUpdatedAtMap.set(cid, managed.agent_status_updated_at);
@@ -7488,7 +7496,7 @@ async function mergeForeignConversationLiveness(
 // the overlay merges (it overlays these back, keyed by id, via syncOverlay).
 const INBOX_LIVENESS_FIELDS = [
   "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
-  "is_connected", "tmux_session", "permission_mode",
+  "is_connected", "tmux_session", "permission_mode", "agent_started_at",
 ] as const;
 function stripInboxLiveness(row: any): void {
   for (const f of INBOX_LIVENESS_FIELDS) row[f] = null;
@@ -7697,6 +7705,7 @@ async function enrichInboxSessionRow(
     agent_status: agentStatus,
     tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
+    agent_started_at: maps.agentStartedAtMap.get(conv._id.toString()) ?? null,
     last_user_message: lastUserMessage,
     // Newest image in the conversation (see schema) — the inbox row thumbnail.
     // Presence doubles as "this session has images".
@@ -7809,6 +7818,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     agent_status: childAgentStatus,
     tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
+    agent_started_at: maps.agentStartedAtMap.get(child._id.toString()) ?? null,
     last_user_message: null,
     session_error: child.session_error,
     pending_api_error: child.pending_api_error === true,
@@ -8215,7 +8225,7 @@ export const listTeamInboxSessions = query({
   },
 });
 
-// The 7 heartbeat-derived fields the sessionsLiveness overlay ships — the exact set the
+// The 8 heartbeat-derived fields the sessionsLiveness overlay ships — the exact set the
 // full row (enrichInboxSessionRow) exposes and the web client merges via syncOverlay.
 type LivenessFields = {
   agent_status: any;
@@ -8225,6 +8235,10 @@ type LivenessFields = {
   is_connected: boolean;
   tmux_session: string | null;
   permission_mode: string | null;
+  // Start of the agent process currently behind this conversation. Rides the
+  // overlay rather than the base row because it changes on restart, exactly
+  // when the rest of the liveness picture does.
+  agent_started_at: number | null;
 };
 
 // The parents that a producing subagent child should keep in "working", derived ONCE
@@ -8410,6 +8424,7 @@ async function enrichLivenessFields(
     is_connected: !!daemonAlive,
     tmux_session: maps.tmuxSessionMap.get(cid) ?? null,
     permission_mode: maps.permissionModeMap.get(cid) ?? null,
+    agent_started_at: maps.agentStartedAtMap.get(cid) ?? null,
   };
 }
 

@@ -776,6 +776,7 @@ export const reportMetrics = mutation({
     memory: v.number(),
     pid_count: v.number(),
     agent_pid: v.optional(v.number()),
+    agent_started_at: v.optional(v.number()),
     awake_idle_ms: v.optional(v.number()),
     api_token: v.optional(v.string()),
   },
@@ -804,13 +805,18 @@ export const reportMetrics = mutation({
     const SNAPSHOT_THROTTLE_MS = 5 * 60 * 1000;
     const snapshotStale = !session.last_metrics_at || now - session.last_metrics_at > SNAPSHOT_THROTTLE_MS;
     const agentPidChanged = args.agent_pid !== undefined && args.agent_pid !== session.agent_pid;
-    if (snapshotStale || agentPidChanged) {
+    // The agent restarted. Unlike the metric copies this one cannot wait for
+    // the throttle: until it lands, the inbox renders the dead process's
+    // background watches as running.
+    const agentRestarted = args.agent_started_at !== undefined && args.agent_started_at !== session.agent_started_at;
+    if (snapshotStale || agentPidChanged || agentRestarted) {
       await ctx.db.patch(session._id, {
         current_cpu: args.cpu,
         current_memory: args.memory,
         current_pid_count: args.pid_count,
         last_metrics_at: now,
         ...(args.agent_pid !== undefined ? { agent_pid: args.agent_pid } : {}),
+        ...(args.agent_started_at !== undefined ? { agent_started_at: args.agent_started_at } : {}),
         ...(args.awake_idle_ms !== undefined ? { awake_idle_ms: args.awake_idle_ms } : {}),
       });
 

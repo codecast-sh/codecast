@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { closeTaskWithGuard, createTaskAndAdopt } from "../lib/taskActions";
 import { mergeLiveTasks, computePlanProgress } from "../lib/liveEntities";
 import { Badge } from "./ui/badge";
 import { AppLoader } from "./AppLoader";
@@ -571,8 +572,12 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
   const cycleStatus = useCallback((shortId: string, currentStatus: string) => {
     const idx = TASK_STATUS_CYCLE.indexOf(currentStatus);
     const next = TASK_STATUS_CYCLE[(idx + 1) % TASK_STATUS_CYCLE.length];
-    updateTask(shortId, { status: next });
-    toast.success(`${shortId} -> ${next}`);
+    if (next === "done" || next === "dropped") {
+      if (!closeTaskWithGuard(shortId, next as "done" | "dropped").needsConfirm) toast.success(`${shortId} -> ${next}`);
+    } else {
+      updateTask(shortId, { status: next });
+      toast.success(`${shortId} -> ${next}`);
+    }
   }, [updateTask]);
 
   const cyclePriority = useCallback((shortId: string, currentPriority: string) => {
@@ -589,11 +594,11 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
 
   const handleAdd = useCallback(() => {
     if (!newTitle.trim()) return;
-    createTask({ title: newTitle.trim(), plan_id: planShortId });
+    void createTaskAndAdopt({ title: newTitle.trim(), plan_id: planShortId });
     setNewTitle("");
     setShowAdd(false);
     toast.success("Task created");
-  }, [newTitle, planShortId, createTask]);
+  }, [newTitle, planShortId]);
 
   const sessionsByTask = new Map<string, any[]>();
   const unlinkedSessions: any[] = [];

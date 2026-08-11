@@ -1487,6 +1487,11 @@ export default defineSchema({
     // Real PID of the agent's process tree root (distinct from the daemon's PID
     // historically stored in `pid`). Set by the resource collector.
     agent_pid: v.optional(v.number()),
+    // When that agent process started (ps etime, resolved to wall clock by the
+    // resource collector). The session id survives a restart but this does not,
+    // so it names the process GENERATION: the web fences background watches
+    // armed by an earlier one, which died with it and are never notified.
+    agent_started_at: v.optional(v.number()),
     // Accumulated time the session has been idle while the machine was AWAKE
     // (sleep gaps excluded). Reset to 0 whenever the session shows activity.
     awake_idle_ms: v.optional(v.number()),
@@ -2274,6 +2279,10 @@ export default defineSchema({
     project_id: v.optional(v.id("projects")),
     parent_id: v.optional(v.id("tasks")),
     plan_id: v.optional(v.id("plans")),
+    // Client-minted idempotency key for optimistic creates: webCreate returns
+    // the existing row for a repeat key, so a retried/replayed create (timeout
+    // after commit, lost ack) never inserts a second task.
+    client_key: v.optional(v.string()),
     short_id: v.string(),
 
     title: v.string(),
@@ -2409,6 +2418,7 @@ export default defineSchema({
     .index("by_project_status", ["project_id", "status"])
     .index("by_parent_id", ["parent_id"])
     .index("by_short_id", ["short_id"])
+    .index("by_client_key", ["user_id", "client_key"])
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])
     .index("by_team_updated", ["team_id", "updated_at"])

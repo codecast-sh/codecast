@@ -238,12 +238,73 @@ describe("isBackgroundBashToolCall", () => {
 });
 
 describe("effectiveMonitorStatus — defensive timeout expiry", () => {
+  test("persistent monitor never expires — its timeout_ms is ignored by the harness", () => {
+    // timeout_ms is a required Monitor param but documented as ignored when
+    // persistent: the watch runs until TaskStop or session end. The row must
+    // not carry it, or the expiry would hide a genuinely live watcher.
+    const [row] = monitorRowsFor([monitorCall("tuP", "reindex watch", { persistent: true, timeout_ms: 3600_000 }), startedResult("tuP", "tsk")]);
+    expect(row.timeoutMs).toBeUndefined();
+    expect(effectiveMonitorStatus(row, row.startedAt + 24 * 3600_000)).toBe("watching");
+    expect(watchingMonitors([row], row.startedAt + 24 * 3600_000).length).toBe(1);
+  });
+
   test("watching past its own timeout + slack reads timed out", () => {
     const [row] = monitorRowsFor([monitorCall("tuX", "w", { timeout_ms: 60_000 }), startedResult("tuX", "tsk")]);
     expect(effectiveMonitorStatus(row, row.startedAt + 30_000)).toBe("watching");
     expect(effectiveMonitorStatus(row, row.startedAt + 60_000 + 3 * 60_000)).toBe("timed_out");
     expect(watchingMonitors([row], row.startedAt + 30_000).length).toBe(1);
     expect(watchingMonitors([row], row.startedAt + 10 * 60_000).length).toBe(0);
+  });
+});
+
+// The real case this was built for: a session whose agent restarted while four
+// `until grep` shells were standing. The two armed before the restart died with
+// the old process and were never notified; the two armed after are alive. Only
+// the boot time separates them — both pairs are hours old and eventless.
+describe("effectiveMonitorStatus — agent restart cuts the watches it armed", () => {
+  const HOUR = 3600_000;
+  const armedAt = (ts: number) => {
+    const [row] = monitorRowsFor([
+      { ...bgBashCall("tu", "watch run"), timestamp: ts },
+      { ...bgStartedResult("tu", "tsk"), timestamp: ts + 1 },
+    ]);
+    return row;
+  };
+
+  test("a row armed before the current process booted reads stopped", () => {
+    const boot = 100 * HOUR;
+    const row = armedAt(boot - 2 * HOUR);
+    expect(effectiveMonitorStatus(row, boot + 19 * HOUR, boot)).toBe("stopped");
+    expect(watchingMonitors([row], boot + 19 * HOUR, boot).length).toBe(0);
+  });
+
+  test("a row armed after the boot stays watching, however old it gets", () => {
+    const boot = 100 * HOUR;
+    const row = armedAt(boot + HOUR);
+    expect(effectiveMonitorStatus(row, boot + 17 * HOUR, boot)).toBe("watching");
+    expect(watchingMonitors([row], boot + 17 * HOUR, boot).length).toBe(1);
+  });
+
+  test("clock skew around the boot instant does not cut a live row", () => {
+    const boot = 100 * HOUR;
+    // Armed 20s "before" the reported boot — skew, not a previous generation.
+    expect(effectiveMonitorStatus(armedAt(boot - 20_000), boot + HOUR, boot)).toBe("watching");
+  });
+
+  test("without a known boot time nothing is fenced", () => {
+    const boot = 100 * HOUR;
+    const row = armedAt(boot - 2 * HOUR);
+    expect(effectiveMonitorStatus(row, boot + 19 * HOUR)).toBe("watching");
+  });
+
+  test("a row that already ended keeps its own verdict, not the fence's", () => {
+    const boot = 100 * HOUR;
+    const [row] = monitorRowsFor([
+      { ...bgBashCall("tu", "watch run"), timestamp: boot - 2 * HOUR },
+      { ...bgStartedResult("tu", "tsk"), timestamp: boot - 2 * HOUR + 1 },
+      bgCompletedNotif("tsk", "tu", "watch run", 0, boot - HOUR),
+    ]);
+    expect(effectiveMonitorStatus(row, boot + HOUR, boot)).toBe("ended");
   });
 });
 

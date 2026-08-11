@@ -9,6 +9,22 @@ export interface ProcessInfo {
   ppid: number;
   cpu: number;
   rss: number;
+  /** Wall-clock start, derived from ps `etime` at snapshot time. Identifies the
+   *  process GENERATION: a restarted agent keeps its session id and often its
+   *  place in the tree, but never its start time. */
+  startedAt?: number;
+}
+
+/** ps `etime` — elapsed wall time as `[[dd-]hh:]mm:ss` — in seconds. One
+ *  whitespace-free token, unlike `lstart`, so it survives the column split the
+ *  snapshot parser does. Returns undefined for anything unparseable rather
+ *  than guessing: a wrong start time would fence live work as dead. */
+export function parseEtimeSeconds(etime: string): number | undefined {
+  const m = etime.trim().match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
+  if (!m) return undefined;
+  const [days, hours, minutes, seconds] = [m[1], m[2], m[3], m[4]].map((p) => (p === undefined ? 0 : parseInt(p, 10)));
+  if ([days, hours, minutes, seconds].some(isNaN)) return undefined;
+  return days * 86400 + hours * 3600 + minutes * 60 + seconds;
 }
 
 export interface SessionResources {
@@ -17,6 +33,11 @@ export interface SessionResources {
   memory: number;
   pidCount: number;
   collectedAt: number;
+  /** When this session's agent process started. The web fences background
+   *  watches against it: a watch armed before the current process booted was a
+   *  child of a process that no longer exists, so it is dead however recently
+   *  the session itself was active. */
+  agentStartedAt?: number;
   /** This session's root pid belongs to ANOTHER session, which was credited with
    *  the subtree instead. cpu/memory/pidCount are zero so a fleet total counts
    *  each process tree exactly once; the session still reports, so it keeps a
@@ -49,6 +70,7 @@ export interface ReportedMetrics {
   memory: number;
   pidCount: number;
   agentPid?: number;
+  agentStartedAt?: number;
   at: number;
 }
 
@@ -60,7 +82,7 @@ export interface ReportedMetrics {
  * slow keep-alive so the graph/liveness never goes stale.
  */
 export function shouldReportMetrics(args: {
-  cur: { cpu: number; memory: number; pidCount: number; agentPid?: number };
+  cur: { cpu: number; memory: number; pidCount: number; agentPid?: number; agentStartedAt?: number };
   prev: ReportedMetrics | undefined;
   status: string | undefined;
   now: number;
@@ -69,6 +91,11 @@ export function shouldReportMetrics(args: {
   if (!prev) return true; // never reported
   if (isSessionActive(cur.cpu, status)) return true; // working or burning CPU
   if (cur.agentPid !== prev.agentPid) return true; // feeds the server snapshot patch
+  // A restart is exactly the moment the web needs to hear about, and it can
+  // land on an idle session the throttle would otherwise sit on for minutes —
+  // during which the inbox still shows the dead process's watches as running.
+  // Checked separately from agentPid because the OS can reuse a pid.
+  if (cur.agentStartedAt !== prev.agentStartedAt) return true;
   if (cur.pidCount !== prev.pidCount) return true; // process tree changed
   if (Math.abs(cur.memory - prev.memory) >= prev.memory * METRICS_MEM_DELTA_FRAC) return true;
   return now - prev.at >= IDLE_METRICS_REFRESH_MS; // otherwise a slow keep-alive
@@ -107,11 +134,12 @@ export function nextAwakeIdleMs(params: {
 export async function captureProcessSnapshot(): Promise<Map<number, ProcessInfo>> {
   if (process.platform !== "darwin") return new Map();
 
-  const { stdout } = await execFileAsync("ps", ["-eo", "pid=,ppid=,pcpu=,rss="], {
+  const { stdout } = await execFileAsync("ps", ["-eo", "pid=,ppid=,pcpu=,rss=,etime="], {
     timeout: 5000,
     killSignal: "SIGKILL",
   });
 
+  const collectedAt = Date.now();
   const result = new Map<number, ProcessInfo>();
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim();
@@ -123,7 +151,16 @@ export async function captureProcessSnapshot(): Promise<Map<number, ProcessInfo>
     const cpu = parseFloat(parts[2]);
     const rss = parseInt(parts[3], 10);
     if (isNaN(pid) || isNaN(ppid) || isNaN(cpu) || isNaN(rss)) continue;
-    result.set(pid, { pid, ppid, cpu, rss: rss * 1024 });
+    // etime joined the column list after the other four, so an older daemon's
+    // parse of a 4-column line still works and simply carries no start time.
+    const elapsedSec = parts.length > 4 ? parseEtimeSeconds(parts[4]) : undefined;
+    result.set(pid, {
+      pid,
+      ppid,
+      cpu,
+      rss: rss * 1024,
+      ...(elapsedSec !== undefined ? { startedAt: collectedAt - elapsedSec * 1000 } : {}),
+    });
   }
   return result;
 }
@@ -217,6 +254,11 @@ export async function collectSessionResources(
   const now = Date.now();
   for (const [sessionId, rootPid] of sessionPids) {
     if (!snapshot.has(rootPid)) continue;
+    // The root pid IS the agent process, so its start time is the session's
+    // process generation — reported even by a borrower, whose cpu/memory are
+    // zeroed but whose agent is just as real.
+    const agentStartedAt = snapshot.get(rootPid)?.startedAt;
+    const startedAtField = agentStartedAt !== undefined ? { agentStartedAt } : {};
     if (ownerByRootPid.get(rootPid) !== sessionId) {
       result.set(sessionId, {
         sessionId,
@@ -225,6 +267,7 @@ export async function collectSessionResources(
         pidCount: 0,
         collectedAt: now,
         sharesRootPid: true,
+        ...startedAtField,
       });
       continue;
     }
@@ -234,6 +277,7 @@ export async function collectSessionResources(
       sessionId,
       ...resources,
       collectedAt: now,
+      ...startedAtField,
     });
   }
   return result;

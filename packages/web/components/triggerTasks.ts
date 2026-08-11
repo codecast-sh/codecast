@@ -430,3 +430,59 @@ export function partitionTriggerInbox(
 
   return { rows, absorbedIds, armedInjectByConv, unreadCount, nextRunAt };
 }
+
+// "By trigger" lens grouping: each trigger row becomes a first-class group
+// header and claims the sessions it drives — the home conversation for inject
+// triggers, loops and subagents (originating_conversation_id), the runs for
+// spawn triggers (agent_task_id). Roster order is preserved (running → soonest
+// fire → paused/event, exactly what partitionTriggerInbox sorted); the first
+// row to claim a session keeps it. A trigger keeps its group even with zero
+// sessions — the trigger is the citizen here, its work may not have run yet.
+// Unclaimed sessions return as `rest` for the same project-group fallthrough
+// the label/plan lenses use.
+//
+// opts.hidden: stashed/dismissed sessions a trigger may ALSO claim — a
+// standing trigger's home conversation typically lives in the stash (that's
+// the standing-loop workflow), and this lens exists precisely to show each
+// trigger's work. Hidden sessions claimed here render as muted sub rows;
+// hidden sessions no trigger claims never enter `rest` — they stay in their
+// stashed/killed buckets.
+export function groupSessionsByTrigger(
+  rows: TriggerRow[],
+  items: InboxSession[],
+  opts: { hidden?: InboxSession[] } = {},
+): {
+  triggerGroups: Array<{ key: string; row: TriggerRow; items: InboxSession[] }>;
+  rest: InboxSession[];
+} {
+  // Visible actives first in each pool walk, hidden appended after — so a
+  // trigger with both shows its live work above its resting home.
+  const pool = [...items, ...(opts.hidden ?? [])];
+  const byId = new Map(pool.map((s) => [s._id, s]));
+  const byTaskId = new Map<string, InboxSession[]>();
+  for (const s of pool) {
+    if (!s.agent_task_id) continue;
+    let arr = byTaskId.get(s.agent_task_id);
+    if (!arr) byTaskId.set(s.agent_task_id, (arr = []));
+    arr.push(s);
+  }
+  const claimed = new Set<string>();
+  const triggerGroups = rows.map((row) => {
+    const members: InboxSession[] = [];
+    const claim = (s: InboxSession | undefined) => {
+      if (s && !claimed.has(s._id)) {
+        claimed.add(s._id);
+        members.push(s);
+      }
+    };
+    const homeId = row.task.originating_conversation_id;
+    if (homeId) {
+      claim(byId.get(homeId));
+    } else {
+      for (const run of byTaskId.get(row.task._id) ?? []) claim(run);
+      members.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+    }
+    return { key: row.task._id, row, items: members };
+  });
+  return { triggerGroups, rest: items.filter((s) => !claimed.has(s._id)) };
+}
