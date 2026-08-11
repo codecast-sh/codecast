@@ -97,4 +97,38 @@ describe("findEchoedPendingMessage", () => {
     const b = row("cmd-b", "continue", 2_000, "injected");
     expect(findEchoedPendingMessage([a, b], "continue", 2_500)?._id).toBe("cmd-b");
   });
+
+  // The composer stamps a numbered "[Image N]" token into the draft text for
+  // every attached image, so the PENDING row's content carries the token too.
+  // Matching stripped image tokens from the echo side only, so a text+image
+  // send never matched its echo: the stored transcript row kept the raw echo
+  // content and never adopted images/client_id/from_user_id — the web bubble
+  // rendered the text with no thumbnail.
+  test("composer [Image N] token in the pending content still matches its echo", () => {
+    const pending = {
+      ...row("cmd-a", "[Image 1] this message was not a skill", 1_000, "injected"),
+      image_storage_ids: ["kg2b6ks3phj21khqs7bj94x6kn8c9c6s"],
+    };
+    const echo =
+      "[Image 1] this message was not a skill [Image /tmp/codecast/images/kg2b6ks3phj21khqs7bj94x6kn8c9c6s.png]";
+    expect(findEchoedPendingMessage([pending], echo, 2_000)?._id).toBe("cmd-a");
+  });
+
+  test("image-only send with a [Image N] token matches via the echoed storage id", () => {
+    const pending = {
+      ...row("cmd-a", "[Image 1]", 1_000, "injected"),
+      image_storage_ids: ["kg2b6ks3phj21khqs7bj94x6kn8c9c6s"],
+    };
+    const echo = "[Image /tmp/codecast/images/kg2b6ks3phj21khqs7bj94x6kn8c9c6s.png]";
+    expect(findEchoedPendingMessage([pending], echo, 2_000)?._id).toBe("cmd-a");
+  });
+
+  test("legacy [image] placeholder in the pending content still matches", () => {
+    const pending = {
+      ...row("cmd-a", "[image]", 1_000, "injected"),
+      image_storage_ids: ["kg2b6ks3phj21khqs7bj94x6kn8c9c6s"],
+    };
+    const echo = "[Image /tmp/codecast/images/kg2b6ks3phj21khqs7bj94x6kn8c9c6s.png]";
+    expect(findEchoedPendingMessage([pending], echo, 2_000)?._id).toBe("cmd-a");
+  });
 });
