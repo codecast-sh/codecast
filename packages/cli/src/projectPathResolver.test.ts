@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import {
+  conventionSeed,
   resolveLocalProjectPath,
   resolveLocalRepoPath,
   resolveResumeCwd,
@@ -420,5 +421,47 @@ describe("chooseSessionTranscript", () => {
     if (choice.action === "sync") {
       expect(choice.supersededFilePath).toBeUndefined();
     }
+  });
+});
+
+// THE WRONG-REPO LAUNCH BUG: a task-comment session carried the task's foreign
+// project_path plus a git_root stamped from the viewer's UNRELATED open
+// conversation (~/src/conv). The start_session fallback seeded the convention
+// resolver with git_root, which existed locally, so it won verbatim and the
+// session launched in ~/src/conv instead of the task's repo.
+describe("conventionSeed", () => {
+  const RAW = "/Users/ec2-user/src/union-mobile/outreach";
+
+  test("ignores a recorded root the requested path does not live under", () => {
+    expect(conventionSeed(RAW, "/Users/ashot/src/conv")).toBe(RAW);
+  });
+
+  test("uses the recorded root when the path lives under it", () => {
+    expect(conventionSeed(RAW, "/Users/ec2-user/src/union-mobile")).toBe("/Users/ec2-user/src/union-mobile");
+    expect(conventionSeed(RAW, RAW)).toBe(RAW);
+  });
+
+  test("prefix match is per path segment, not per character", () => {
+    expect(conventionSeed("/Users/ashot/src/conv-other", "/Users/ashot/src/conv")).toBe("/Users/ashot/src/conv-other");
+  });
+
+  test("no recorded root falls through to the requested path", () => {
+    expect(conventionSeed(RAW, null)).toBe(RAW);
+    expect(conventionSeed(RAW, undefined)).toBe(RAW);
+  });
+
+  test("end-to-end: mismatched root no longer hijacks resolution; the real path resolves by learned map", () => {
+    const local = new Set(["/Users/ashot/src/conv", "/Users/ashot/src/union-mobile", "/Users/ashot/src/union-mobile/outreach"]);
+    const resolve = (seed: string) =>
+      resolveLocalRepoPath({
+        remotePath: seed,
+        home: "/Users/ashot",
+        learnedMap: { outreach: "/Users/ashot/src/union-mobile/outreach" },
+        exists: (p) => local.has(p),
+      });
+    // Old behavior: seeding with the unrelated-but-existing git_root returned it verbatim.
+    expect(resolve("/Users/ashot/src/conv")).toBe("/Users/ashot/src/conv");
+    // Guarded behavior: the foreign task path seeds the walk and lands in the task's repo.
+    expect(resolve(conventionSeed(RAW, "/Users/ashot/src/conv"))).toBe("/Users/ashot/src/union-mobile/outreach");
   });
 });

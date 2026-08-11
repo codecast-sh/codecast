@@ -11,6 +11,9 @@ import { settingsSectionForPath } from "@/lib/settingsSections";
 // marketing page stays mounted until a manual reload).
 const NON_TAB_EXACT = new Set([
   "/",
+  // The published-page identity relay (redirects out to /a/<slug>; /pages
+  // itself stays a tab page, so this is exact, not a prefix).
+  "/pages/auth",
   "/about",
   "/features",
   "/privacy",

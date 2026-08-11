@@ -27,17 +27,32 @@ export function readStdinBody(readStdin: () => string = readStdinRaw): string {
 /**
  * The one convention for text-taking commands (send, spawn, fork, trigger add,
  * comments, doc content): a '-' argument reads that body from stdin,
- * heredoc-friendly. Stdin holds a single body, so only one '-' is allowed —
- * a second one throws for the CLI wrapper to report.
+ * heredoc-friendly.
+ *
+ * Multiple '-' arguments split the one stdin body into sections on lines that
+ * contain only `---`, one section per '-' in order. This is what lets a whole
+ * fork/spawn fan-out of multi-line briefs travel in ONE invocation (a fork
+ * fan-out must be one invocation so every branch's seed can name its sibling
+ * roster). A single '-' never splits — a lone `---` line there is content
+ * (e.g. a markdown rule), not a separator.
  */
 export function expandStdinArgs(args: string[], readStdin: () => string = readStdinRaw): string[] {
-  let stdinUsed = false;
-  return args.map((arg) => {
-    if (arg !== "-") return arg;
-    if (stdinUsed) {
-      throw new Error("Only one argument can be read from stdin ('-')");
+  const dashCount = args.filter((a) => a === "-").length;
+  if (dashCount === 0) return args;
+
+  const body = readStdinBody(readStdin);
+  let sections: string[];
+  if (dashCount === 1) {
+    sections = [body];
+  } else {
+    sections = body.split(/\r?\n---\r?\n/);
+    if (sections.length !== dashCount) {
+      throw new Error(
+        `${dashCount} '-' arguments need ${dashCount} stdin sections separated by lines containing only "---", but stdin has ${sections.length}`
+      );
     }
-    stdinUsed = true;
-    return readStdinBody(readStdin);
-  });
+  }
+
+  let next = 0;
+  return args.map((arg) => (arg === "-" ? sections[next++] : arg));
 }

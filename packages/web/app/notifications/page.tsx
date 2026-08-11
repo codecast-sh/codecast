@@ -118,6 +118,7 @@ const typeLabels: Record<string, string> = {
   doc_commented: "commented on doc",
   plan_status_changed: "plan updated",
   plan_task_completed: "plan task done",
+  artifact_commented: "commented on your page",
 };
 
 const typeColors: Record<string, string> = {
@@ -138,11 +139,12 @@ const typeColors: Record<string, string> = {
   doc_commented: "text-sol-cyan",
   plan_status_changed: "text-sol-green",
   plan_task_completed: "text-sol-green",
+  artifact_commented: "text-sol-cyan",
 };
 
 type FilterTab = "all" | "unread" | "sessions" | "social" | "tasks";
 
-const socialTypes = new Set(["mention", "comment_reply", "conversation_comment", "team_invite"]);
+const socialTypes = new Set(["mention", "comment_reply", "conversation_comment", "team_invite", "artifact_commented"]);
 const taskTypes = new Set(["task_assigned", "task_status_changed", "task_commented", "task_completed", "task_failed", "plan_status_changed", "plan_task_completed", "doc_updated", "doc_commented"]);
 
 function sessionLabel(conversation: { title?: string; project_path?: string; agent_type?: string } | null): string | null {
@@ -173,9 +175,16 @@ export default function NotificationsPage() {
     notificationId: Id<"notifications">,
     conversationId?: Id<"conversations">,
     entityType?: string,
-    entityId?: string
+    entityId?: string,
+    link?: string
   ) => {
     markAsRead(notificationId);
+    // A deep link wins (artifact comments: opens the published page with that
+    // comment thread selected). New tab — the page lives outside the app.
+    if (link) {
+      window.open(link, "_blank", "noopener");
+      return;
+    }
     if (entityType && entityId) {
       const routes: Record<string, string> = { task: "/tasks/", doc: "/docs/", plan: "/plans/" };
       const base = routes[entityType];
@@ -273,7 +282,10 @@ export default function NotificationsPage() {
             <div className="space-y-px rounded-lg border border-sol-border overflow-hidden">
               {filteredNotifications.map((notification: any) => {
                 const label = sessionLabel(notification.conversation);
-                const actorName = notification.actor?.name || notification.actor?.github_username;
+                // Actors without an account (anonymous page commenters) carry
+                // their display identity on the row itself.
+                const actorName = notification.actor?.name || notification.actor?.github_username || (notification as any).actor_name;
+                const actorAvatar = notification.actor?.github_avatar_url || (notification as any).actor_avatar;
                 const agentType = notification.conversation?.agent_type || "claude_code";
                 const isSessionNotif = sessionTypes.has(notification.type);
                 const typeLabel = typeLabels[notification.type] || notification.type;
@@ -282,15 +294,15 @@ export default function NotificationsPage() {
                 return (
                   <button
                     key={notification._id}
-                    onClick={() => handleNotificationClick(notification._id, notification.conversation_id, (notification as any).entity_type, (notification as any).entity_id)}
+                    onClick={() => handleNotificationClick(notification._id, notification.conversation_id, (notification as any).entity_type, (notification as any).entity_id, (notification as any).link)}
                     className={`w-full px-5 py-4 text-left border-b border-sol-border/40 last:border-b-0 hover:bg-sol-bg-alt transition-colors ${
                       !notification.read ? "bg-sol-bg-alt/40" : "bg-sol-bg"
                     }`}
                   >
                     <div className="flex items-start gap-3">
-                      {notification.actor?.github_avatar_url ? (
+                      {actorAvatar ? (
                         <img
-                          src={notification.actor.github_avatar_url}
+                          src={actorAvatar}
                           alt={actorName || ""}
                           className="w-10 h-10 rounded-full flex-shrink-0 mt-0.5"
                         />

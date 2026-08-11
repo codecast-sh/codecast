@@ -64,6 +64,12 @@ export const DAEMON_COMMANDS = [
   // sees plaintext; the daemon decrypts, updates its 0600 store, and fans out to
   // remotes. Old daemons: "Unknown command" (the key just doesn't take there).
   "set_provider_key",
+  // Web sign-in CTA: run `claude auth login` in a utility tmux pane (opens the
+  // browser OAuth flow on this machine), watch the keychain for the outcome,
+  // and report it via accountSwitch.completeLoginFlow. args: { email? } — the
+  // account to pre-fill on the login page. Old daemons: "Unknown command" (the
+  // web's pending flow goes stale and the CTA returns).
+  "start_login",
   // Integrated terminal discovery: reply with this daemon's loopback terminal
   // endpoint ({port, token, device_id, tmux}). The web sends one per live
   // device and connects to whichever endpoint answers on 127.0.0.1 — only the

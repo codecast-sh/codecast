@@ -43,6 +43,7 @@ import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemory
 import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
+import { buildForkSeedBody } from "./forkSeed.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -2248,6 +2249,8 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **Create a task** when your work will change code, fix a bug, or produce a deliverable. Run \`cast task create "Title" -p <priority>\` before you start implementing. This is the default — skip it only for simple questions, explanations, or quick lookups that don't produce changes.
 
+**Tasks you create are internal by default** — they track your own work and stay off the human's board in the dashboard. Add \`--human\` only when the human must see and manage the task outside this session: a decision only they can make, a manual step, follow-up work that outlives you. Use it rarely; when in doubt, leave it off.
+
 **Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run \`cast plan create "Title" -g "goal"\` and add tasks with \`cast task create "Title" --plan <plan_id>\`. Don't create plans for single-task work.
 
 **Bind before you build.** For any larger piece of work, default to working under a task or plan with your session bound to it — \`cast task start <id>\` claims a task, \`cast plan bind <plan_id>\` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; sizable work done unbound is invisible to the human tracking it.
@@ -2285,9 +2288,11 @@ cast task ready -q "<topic>"                # Filter ready tasks by title/descri
 cast task ls -q "<topic>"                   # Search all active tasks by title/description
 cast plan ls -q "<topic>"                   # Search active plans by title/goal
 cast task start/done/comment <id>           # Task lifecycle
-cast task create "Title" -t task -p high    # Create task
+cast task create "Title" -t task -p high    # Create task (internal to agent work by default)
 cast task create "Title" --plan <plan_id>   # Create task bound to plan
+cast task create "Title" --human            # Put it on the human's board (rare — see above)
 cast task update <id> --plan <plan_id>      # Bind existing task to plan
+cast task update <id> --human               # Move an existing task onto the human's board
 cast task context <id>                      # Full context for a task
 cast task context --current                 # Context for session's current task
 cast plan create "Title" -g "goal" -b "body"  # Create plan with inline body
@@ -2395,9 +2400,19 @@ cast spawn - <<'EOF'                          # multi-line briefing via stdin (s
 EOF
 \`\`\`
 
-For a multi-line prompt, pass \`-\` as the prompt and feed the body via heredoc — never \`"$(cat file)"\`, which mangles formatting. \`-\` works for one prompt per invocation, on both \`fork\` and \`spawn\`.
+For multi-line prompts, pass \`-\` and feed the body via heredoc — never \`"$(cat file)"\`, which mangles formatting. Several \`-\` args split one heredoc into one prompt per \`-\`, separated by lines containing only \`---\` — so a whole fan-out of multi-line briefs fits in one invocation:
+
+\`\`\`bash
+cast fork - - <<'EOF'
+…first branch's brief…
+---
+…second branch's brief…
+EOF
+\`\`\`
 
 \`cast fork\` branches the current conversation — each branch keeps the full history up to the fork point (the latest user message by default; \`--at <line>\` picks another spot, \`-s <id>\` forks a different session), then pursues its own direction. Use it when the thread splits into distinct paths worth exploring in parallel.
+
+A fork fan-out is a handoff, not an orchestration. When the human asks to run work in N forks, issue ONE \`cast fork\` with all N directions, report the roster, and return to your own thread. The branches run independently and the human steers them from the inbox — do not stage launches, monitor branches, or build coordination between them. Each branch is automatically told it is one independent branch of a completed fan-out and which direction it owns, so seeds carry the work itself, not coordination protocol.
 
 \`cast spawn\` starts fresh sessions with no shared history, in the current project (\`-C <dir>\` for elsewhere). Use it to hand off self-contained work — a parallel audit, a port, a spike — rather than research you'd fold back into your own answer.
 
@@ -10298,7 +10313,7 @@ program
     "  cast fork                                                 # legacy: one unseeded fork\n" +
     "  cast fork -s abc1234 --from 15 --resume                   # fork another session, open it locally"
   )
-  .argument("[directions...]", "One seed prompt per branch; '-' reads that prompt from stdin (heredoc-friendly)")
+  .argument("[directions...]", "One seed prompt per branch; '-' reads a prompt from stdin (several '-' split stdin on lines containing only ---)")
   .option("-s, --session <id>", "Conversation to fork (default: current session)")
   .option("--at <line>", "Fork at message line N (cast read numbering); default: the latest user message")
   .option("--tip", "Fork at the very end instead (include everything so far)")
@@ -10421,10 +10436,14 @@ program
 
     // Multi-direction fork: branch once per direction from the same anchor, then
     // seed each branch with its direction over the same pending-message rail
-    // `cast send` uses. Each lands in the inbox as its own session.
+    // `cast send` uses. Each lands in the inbox as its own session. The seed
+    // wraps the direction in the fan-out contract (buildForkSeedBody) so a
+    // branch never resumes the parent's orchestration plan from its inherited
+    // history.
     if (directions.length > 0) {
       const roster: { short_id: string; conversation_id: string; direction: string; seeded: boolean }[] = [];
-      for (const direction of directions) {
+      for (let i = 0; i < directions.length; i++) {
+        const direction = directions[i];
         // session_id = per-branch idempotency key: forkFromMessage collapses any
         // retry/redelivery carrying the same key onto the one existing row, which
         // is what makes retries safe here (a fork POST that times out may have
@@ -10451,7 +10470,7 @@ program
           const seedResp = await cliFetch(`${siteUrl}/cli/messages/send`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_token: config.auth_token, to: result.conversation_id, from: id, body: direction }),
+            body: JSON.stringify({ api_token: config.auth_token, to: result.conversation_id, from: id, body: buildForkSeedBody(i, directions) }),
           });
           seeded = seedResp.ok;
         } catch {}
@@ -10608,7 +10627,7 @@ program
     "  delivered exactly as written.\n" +
     "  EOF"
   )
-  .argument("<prompts...>", "One task per session; '-' reads that prompt from stdin (heredoc-friendly for multi-line briefings)")
+  .argument("<prompts...>", "One task per session; '-' reads a prompt from stdin (several '-' split stdin on lines containing only ---)")
   .option("-C, --dir <path>", "Working directory (default: current project)")
     .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi", "claude")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
@@ -12642,6 +12661,7 @@ work
   .option("--assignee <name>", "Assignee")
   .option("--status <status>", "Initial status (default: open)", "open")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
+  .option("--human", "Put the task on the human's board — for work the human must see and manage (rare)")
   .action(async (title: string, options: any) => {
     const body: Record<string, any> = {
       title,
@@ -12650,6 +12670,7 @@ work
       priority: options.priority,
     };
     if (options.description) body.description = options.description;
+    if (options.human) body.promoted = true;
     if (options.project) body.project_id = options.project;
     if (options.assignee) body.assignee = options.assignee;
     if (options.blockedBy) body.blocked_by = options.blockedBy.split(",").map((s: string) => s.trim());
@@ -12843,10 +12864,13 @@ work
   .option("--project <id>", "Project ID")
   .option("--project-path <path>", "Project directory path")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
+  .option("--human", "Put the task on the human's board (rare)")
+  .option("--no-human", "Take the task off the human's board")
   .action(async (shortId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId };
     if (sessionId) body.conversation_id = sessionId;
+    if (options.human !== undefined) body.promoted = options.human;
     if (options.status) body.status = options.status;
     if (options.priority) body.priority = options.priority;
     if (options.title) body.title = options.title;

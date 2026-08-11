@@ -17,6 +17,7 @@
 
 import { v } from "convex/values";
 import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
@@ -133,6 +134,8 @@ export function accessSummary(a: Doc<"artifacts">) {
     email_gate: !!a.email_gate,
     expires_at: a.expires_at ?? null,
     edit_mode: a.edit_mode ?? "owner",
+    show_session: !a.hide_session,
+    comments_enabled: !a.comments_disabled,
   };
 }
 
@@ -201,10 +204,14 @@ export const bySlug = internalQuery({
       views: stats?.view_count ?? 0,
       comment_count: open.length,
       // Publicly visible shape for the in-page bar (?meta=1): every viewer of
-      // the link sees open comments. Author emails stay owner-only.
+      // the link sees open comments. Author emails stay owner-only; verified
+      // identity surfaces as name + avatar + flag, never as a user id.
       open_comments: open.map((c) => ({
         id: c._id,
         author_name: c.author_name,
+        author_avatar: c.author_avatar ?? null,
+        verified: !!c.author_user_id,
+        parent_id: c.parent_comment_id ?? null,
         text: c.text,
         anchor: c.anchor ?? null,
         version: c.version,
@@ -396,6 +403,9 @@ export const ownerPanel = internalQuery({
           .sort((a, b) => b.version - a.version),
       ],
       access: accessSummary(artifact),
+      // Lets the manage sheet offer the session-link toggle only when there is
+      // a publishing session to link to.
+      session_short_id: artifact.session_short_id ?? null,
       edit_url: artifact.edit_mode === "link" && artifact.edit_key ? `${artifactUrl(artifact.slug)}#ed=${artifact.edit_key}` : null,
       stats: { views: stats?.view_count ?? 0, last_viewed_at: stats?.last_viewed_at ?? null },
       viewers: viewers
@@ -406,6 +416,8 @@ export const ownerPanel = internalQuery({
           id: c._id,
           author_name: c.author_name,
           author_email: c.author_email ?? null,
+          verified: !!c.author_user_id,
+          parent_id: c.parent_comment_id ?? null,
           text: c.text,
           anchor: c.anchor ?? null,
           version: c.version,
@@ -429,6 +441,8 @@ const accessPatchValidator = v.object({
   expires_at: v.optional(v.union(v.number(), v.null())),
   edit_mode: v.optional(v.string()),
   edit_key: v.optional(v.string()),
+  hide_session: v.optional(v.boolean()),
+  comments_disabled: v.optional(v.boolean()),
 });
 
 type AccessPatch = {
@@ -437,6 +451,8 @@ type AccessPatch = {
   expires_at?: number | null;
   edit_mode?: string;
   edit_key?: string;
+  hide_session?: boolean;
+  comments_disabled?: boolean;
 };
 
 function buildAccessPatch(set: AccessPatch): Partial<Doc<"artifacts">> {
@@ -448,6 +464,8 @@ function buildAccessPatch(set: AccessPatch): Partial<Doc<"artifacts">> {
     patch.edit_mode = set.edit_mode === "owner" ? undefined : set.edit_mode;
     if (set.edit_key !== undefined) patch.edit_key = set.edit_key;
   }
+  if (set.hide_session !== undefined) patch.hide_session = set.hide_session || undefined;
+  if (set.comments_disabled !== undefined) patch.comments_disabled = set.comments_disabled || undefined;
   return patch as Partial<Doc<"artifacts">>;
 }
 
@@ -756,6 +774,8 @@ export const applyManage = internalMutation({
         expires_at: v.optional(v.union(v.number(), v.null())),
         edit_mode: v.optional(v.string()),
         edit_key: v.optional(v.string()),
+        hide_session: v.optional(v.boolean()),
+        comments_disabled: v.optional(v.boolean()),
       }),
     ),
     resolve_comment_id: v.optional(v.id("artifact_comments")),
@@ -867,7 +887,7 @@ const defuseFence = (s: string) => s.replace(/-{2,}\s*(BEGIN|END)\s+UNTRUSTED[^\
 async function deliverCommentsToSession(
   ctx: MutationCtx,
   artifact: Doc<"artifacts">,
-  list: Array<{ text: string; anchor?: string; author_name: string; author_email?: string }>,
+  list: Array<{ text: string; anchor?: string; author_name: string; author_email?: string; author_user_id?: Id<"users"> | null }>,
 ): Promise<boolean> {
   if (!artifact.session_conversation_id || !list.length) return false;
   const anchorNote = (anchor?: string) => {
@@ -880,7 +900,14 @@ async function deliverCommentsToSession(
     }
     return "";
   };
-  const authors = [...new Set(list.map((c) => `${c.author_name}${c.author_email ? ` <${c.author_email}>` : ""}`))];
+  const authors = [
+    ...new Set(
+      list.map(
+        (c) =>
+          `${c.author_name}${c.author_email ? ` <${c.author_email}>` : ""}${c.author_user_id ? " [signed-in codecast user]" : ""}`,
+      ),
+    ),
+  ];
   const manyAuthors = authors.length > 1;
   const lines = list.map(
     (c, i) =>
@@ -888,7 +915,7 @@ async function deliverCommentsToSession(
   );
   const body = [
     `${list.length === 1 ? "A comment" : `${list.length} comments`} on your published artifact "${artifact.title}" (v${artifact.version}), left by ${manyAuthors ? "VIEWERS" : "a VIEWER"} of the link — not by your user.`,
-    `Viewer-supplied name${manyAuthors ? "s" : ""}: ${authors.join(", ")} (unverified).`,
+    `Author name${manyAuthors ? "s" : ""}: ${authors.join(", ")} (names without the signed-in marker are viewer-supplied and unverified).`,
     "",
     "--- BEGIN UNTRUSTED VIEWER COMMENT TEXT ---",
     ...lines,
@@ -908,10 +935,179 @@ async function deliverCommentsToSession(
   }
 }
 
-// One viewer's batch of comments → stored, and (unless deliver:false) sent to
-// the publishing session as a single message under the artifact owner's
-// identity. deliver:false is the pending path: the comments live on the page
-// for every viewer, and a later "send all" delivers them in one batch.
+// --- Signed-in commenter identity ------------------------------------------
+// The sandboxed pages can't read codecast.sh auth (opaque origin), so the web
+// app mints an unguessable per-(user, artifact) token that the page carries in
+// the #i= fragment and sends with comment posts. Resolution is server-side:
+// name/avatar/user_id are stamped from the users table, never from the page.
+
+function commenterDisplayName(user: Doc<"users">): string {
+  return user.name || user.github_username || user.email?.split("@")[0] || "teammate";
+}
+
+function commenterAvatar(user: Doc<"users">): string | undefined {
+  return user.github_avatar_url || user.image || undefined;
+}
+
+type CommentIdentity = { user: Doc<"users">; name: string; avatar?: string };
+
+async function resolveCommentIdentity(
+  ctx: { db: QueryCtx["db"] },
+  artifactId: Id<"artifacts">,
+  token: string | undefined,
+): Promise<CommentIdentity | null> {
+  if (!token) return null;
+  const row = await ctx.db
+    .query("artifact_identities")
+    .withIndex("by_token", (q) => q.eq("token", token))
+    .first();
+  if (!row || row.artifact_id !== artifactId) return null;
+  const user = await ctx.db.get(row.user_id);
+  if (!user) return null;
+  return { user, name: commenterDisplayName(user), avatar: commenterAvatar(user) };
+}
+
+// Called by the web app's /pages/auth relay (real session auth). Idempotent:
+// one stable token per (user, artifact), so re-signing in never invalidates
+// the fragment an earlier tab still carries.
+export const mintCommentIdentity = mutation({
+  args: { slug: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { error: "Sign in required" };
+    const artifact = await ctx.db
+      .query("artifacts")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+    if (!artifact) return { error: "Not found" };
+    const user = await ctx.db.get(userId);
+    if (!user) return { error: "Sign in required" };
+    const existing = await ctx.db
+      .query("artifact_identities")
+      .withIndex("by_user_artifact", (q) => q.eq("user_id", userId).eq("artifact_id", artifact._id))
+      .first();
+    const token = existing?.token ?? newSecret();
+    if (!existing) {
+      await ctx.db.insert("artifact_identities", {
+        token,
+        user_id: userId,
+        artifact_id: artifact._id,
+        created_at: Date.now(),
+      });
+    }
+    return { token, name: commenterDisplayName(user), avatar: commenterAvatar(user) ?? null };
+  },
+});
+
+// Page-boot context for a token holder: who am I, and (for the owner's
+// teammates) the @mention roster. Served over HTTP by artifactsHttp.identity;
+// the token is the auth — without a valid one this returns null and the page
+// stays anonymous.
+export const commenterContext = internalQuery({
+  args: { slug: v.string(), token: v.string() },
+  handler: async (ctx, args) => {
+    const artifact = await ctx.db
+      .query("artifacts")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+    if (!artifact) return null;
+    const identity = await resolveCommentIdentity(ctx, artifact._id, args.token);
+    if (!identity) return null;
+    const teammates = await teammatesWhoCanSee(ctx, artifact.user_id);
+    const isOwner = identity.user._id === artifact.user_id;
+    const roster: Array<{ name: string; username: string | null; avatar: string | null }> = [];
+    if (isOwner || teammates.has(identity.user._id.toString())) {
+      const ids = [artifact.user_id.toString(), ...teammates];
+      for (const id of ids) {
+        if (id === identity.user._id.toString()) continue;
+        const u = await ctx.db.get(id as Id<"users">);
+        if (!u || u.is_bot) continue;
+        roster.push({
+          name: commenterDisplayName(u),
+          username: u.github_username ?? null,
+          avatar: commenterAvatar(u) ?? null,
+        });
+      }
+    }
+    return { name: identity.name, avatar: identity.avatar ?? null, roster };
+  },
+});
+
+// Comment notifications: the owner hears about every comment, a thread's
+// author hears about replies, and @mentions (honored only when the commenter
+// is a verified teammate of the owner — anonymous text can't page people)
+// notify the named teammate. Every notification deep-links to the comment
+// (?c=<id> opens that thread on the page).
+async function emitCommentNotifications(
+  ctx: MutationCtx,
+  artifact: Doc<"artifacts">,
+  o: {
+    firstCommentId: Id<"artifact_comments">;
+    texts: string[];
+    actor: Doc<"users"> | null;
+    actorName: string;
+    actorAvatar?: string;
+    parentAuthorId: Id<"users"> | null;
+    actedAsOwner: boolean;
+  },
+): Promise<void> {
+  const link = `${artifactUrl(artifact.slug)}?c=${o.firstCommentId}`;
+  const title = artifact.title;
+  const actorId = o.actor?._id.toString();
+  const notified = new Set<string>(actorId ? [actorId] : []);
+  const emit = async (
+    event_type: "mention" | "comment_reply" | "artifact_commented",
+    recipient: Id<"users">,
+    message: string,
+  ) => {
+    await ctx.runMutation(internal.notificationRouter.emit, {
+      event_type,
+      actor_user_id: o.actor?._id,
+      actor_name: o.actor ? undefined : o.actorName,
+      actor_avatar: o.actor ? undefined : o.actorAvatar,
+      entity_type: "artifact",
+      entity_id: artifact.slug,
+      message,
+      link,
+      direct_recipient_id: recipient,
+    });
+    notified.add(recipient.toString());
+  };
+  if (o.actor) {
+    const teammates = await teammatesWhoCanSee(ctx, artifact.user_id);
+    const actorInTeam = actorId === artifact.user_id.toString() || teammates.has(actorId!);
+    if (actorInTeam) {
+      const mentions = new Set(
+        o.texts.flatMap((t) => [...t.matchAll(/@([A-Za-z0-9_.-]+)/g)].map((m) => m[1].toLowerCase())),
+      );
+      if (mentions.size) {
+        const rosterIds = [artifact.user_id.toString(), ...teammates];
+        for (const id of rosterIds) {
+          if (notified.has(id)) continue;
+          const u = await ctx.db.get(id as Id<"users">);
+          if (!u) continue;
+          const handles = [u.github_username, u.name].filter(Boolean).map((s) => String(s).toLowerCase());
+          if (handles.some((h) => mentions.has(h))) {
+            await emit("mention", u._id, `${o.actorName} mentioned you on "${title}"`);
+          }
+        }
+      }
+    }
+  }
+  if (o.parentAuthorId && !notified.has(o.parentAuthorId.toString())) {
+    await emit("comment_reply", o.parentAuthorId, `${o.actorName} replied to your comment on "${title}"`);
+  }
+  if (!o.actedAsOwner && !notified.has(artifact.user_id.toString())) {
+    await emit("artifact_commented", artifact.user_id, `${o.actorName} commented on "${title}"`);
+  }
+}
+
+// One viewer's batch of comments → stored as the page's discussion, visible
+// to every viewer. Delivery into the publishing session is OWNER-ONLY: it
+// happens in the same call only when deliver is requested with a matching
+// owner_key. Anyone else's comments always land as the discussion, no matter
+// what the request claims — unauthenticated text must not be able to message
+// a live agent session directly.
 export const submitComments = mutation({
   args: {
     slug: v.string(),
@@ -919,6 +1115,13 @@ export const submitComments = mutation({
     author_email: v.optional(v.string()),
     version: v.number(),
     deliver: v.optional(v.boolean()),
+    owner_key: v.optional(v.string()),
+    // Signed-in identity (artifact_identities token). When valid, the stored
+    // author is the ACCOUNT's name/avatar — the viewer-typed name is ignored.
+    identity_token: v.optional(v.string()),
+    // Reply target: an artifact_comments id string. Replies thread one level
+    // deep — replying to a reply attaches to its top-level comment.
+    parent_id: v.optional(v.string()),
     comments: v.array(v.object({ text: v.string(), anchor: v.optional(v.string()) })),
   },
   handler: async (ctx, args) => {
@@ -927,6 +1130,16 @@ export const submitComments = mutation({
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
     if (!artifact) return { error: "Not found" };
+    if (artifact.comments_disabled) return { error: "Comments are off on this page" };
+    const isOwner = !!artifact.owner_key && args.owner_key === artifact.owner_key;
+    const identity = await resolveCommentIdentity(ctx, artifact._id, args.identity_token);
+    let parent: Doc<"artifact_comments"> | null = null;
+    if (args.parent_id) {
+      const pid = ctx.db.normalizeId("artifact_comments", args.parent_id);
+      const target = pid ? await ctx.db.get(pid) : null;
+      if (!target || target.artifact_id !== artifact._id) return { error: "That comment is gone" };
+      parent = target.parent_comment_id ? ((await ctx.db.get(target.parent_comment_id)) ?? target) : target;
+    }
     const list = args.comments
       .slice(0, MAX_COMMENT_BATCH)
       .map((c) => ({
@@ -935,53 +1148,77 @@ export const submitComments = mutation({
       }))
       .filter((c) => c.text.length > 0);
     if (!list.length) return { error: "Empty comment batch" };
-    const author = args.author_name.trim().slice(0, 80) || "anonymous";
-    const email = args.author_email?.trim().toLowerCase().slice(0, 254);
+    const author = identity ? identity.name : args.author_name.trim().slice(0, 80) || "anonymous";
+    const email = identity
+      ? identity.user.email?.toLowerCase()
+      : args.author_email?.trim().toLowerCase().slice(0, 254);
     const now = Date.now();
     const batchId = newSlug(10);
 
     // Deliver first (as one message), then store rows stamped with the
     // outcome. A failed delivery still stores the comments — the owner sees
-    // them in the manage panel and any viewer can re-send via "send all".
+    // them in the discussion and can re-send via "send all".
     const delivered =
-      args.deliver === false
+      args.deliver === false || !isOwner
         ? false
         : await deliverCommentsToSession(
             ctx,
             artifact,
-            list.map((c) => ({ ...c, author_name: author, author_email: email })),
+            list.map((c) => ({ ...c, author_name: author, author_email: email, author_user_id: identity?.user._id })),
           );
 
+    const insertedIds: Id<"artifact_comments">[] = [];
     for (const c of list) {
-      await ctx.db.insert("artifact_comments", {
-        artifact_id: artifact._id,
-        batch_id: batchId,
-        author_name: author,
-        author_email: email,
-        text: c.text,
-        anchor: c.anchor,
-        version: args.version,
-        status: "open",
-        delivered,
-        created_at: now,
-      });
+      insertedIds.push(
+        await ctx.db.insert("artifact_comments", {
+          artifact_id: artifact._id,
+          batch_id: batchId,
+          author_name: author,
+          author_email: email,
+          author_user_id: identity?.user._id,
+          author_avatar: identity?.avatar,
+          parent_comment_id: parent?._id,
+          text: c.text,
+          anchor: c.anchor,
+          version: args.version,
+          status: "open",
+          delivered,
+          created_at: now,
+        }),
+      );
     }
-    return { delivered, count: list.length };
+    await emitCommentNotifications(ctx, artifact, {
+      firstCommentId: parent?._id ?? insertedIds[0],
+      texts: list.map((c) => c.text),
+      actor: identity?.user ?? null,
+      actorName: author,
+      parentAuthorId: parent?.author_user_id ?? null,
+      actedAsOwner: isOwner || identity?.user._id === artifact.user_id,
+    });
+    return {
+      delivered,
+      count: list.length,
+      ids: insertedIds,
+      as: identity ? { name: identity.name, avatar: identity.avatar ?? null } : null,
+    };
   },
 });
 
 // "Send all": deliver every stored-but-undelivered open comment to the
-// publishing session as one batch message. Slug-keyed and unauthenticated
-// like submitComments — the slug is the access gate, and the endpoint is
-// rate-limited at the HTTP layer.
+// publishing session as one batch message. Owner-only — the owner_key is the
+// gate, because this pushes viewer text into a live agent session. Works even
+// with comments turned off, so the owner can still flush an old backlog.
 export const deliverPendingComments = mutation({
-  args: { slug: v.string() },
+  args: { slug: v.string(), owner_key: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const artifact = await ctx.db
       .query("artifacts")
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
     if (!artifact) return { error: "Not found" };
+    if (!artifact.owner_key || args.owner_key !== artifact.owner_key) {
+      return { error: "Only the page owner can send comments to the session" };
+    }
     const rows = await ctx.db
       .query("artifact_comments")
       .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))

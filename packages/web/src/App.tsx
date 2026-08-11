@@ -31,6 +31,7 @@ const Signup = lazy(() => import("@/app/signup/page"));
 const ForgotPassword = lazy(() => import("@/app/forgot-password/page"));
 const ResetPassword = lazy(() => import("@/app/reset-password/page"));
 const AuthCli = lazy(() => import("@/app/auth/cli/page"));
+const ArtifactAuth = lazy(() => import("@/app/artifacts/auth/page"));
 const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 
 const Inbox = lazy(() => import("@/app/inbox/page"));
@@ -145,6 +146,8 @@ export function App() {
             <Route path="forgot-password" element={<E name="ForgotPassword"><ForgotPassword /></E>} />
             <Route path="reset-password" element={<E name="ResetPassword"><ResetPassword /></E>} />
             <Route path="auth/cli" element={<E name="AuthCli"><AuthCli /></E>} />
+            {/* Identity relay for published-page comments (artifact bar → sign in). */}
+            <Route path="pages/auth" element={<E name="ArtifactAuth"><ArtifactAuth /></E>} />
             <Route path="join/:code" element={<E name="JoinTeam"><JoinTeam /></E>} />
 
             {/* Dashboard tab shell — one stable layout route keeps the sidebar,

@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { useInboxStore } from "../store/inboxStore";
+import { slotPolicyFor, surfaceForPath } from "../store/workspace";
 import { isInboxSessionView, resolveSessionSelectKind, type SessionSelectKind } from "../lib/inboxRouting";
 
 // Mirrors DashboardLayout's `isMobile` threshold (window.innerWidth < 768).
@@ -24,6 +25,20 @@ export function resolveLinkedSessionOpen(kind: SessionSelectKind, narrow: boolea
   if (kind === "inboxInPlace") return "select";
   if (kind === "companion") return "companion";
   return "route";
+}
+
+/**
+ * The companion gesture in full: show the conversation beside the working page
+ * AND move the attended pointer to it. The second half is load-bearing --
+ * DashboardLayout mirrors the attended conversation into the companion pane,
+ * so a bare wsShow is snapped straight back to the previously attended
+ * session on the next effect pass. No route change: navigateToSession only
+ * moves the pointer while the working surface stays on screen.
+ */
+export function openConversationAsCompanion(id: string) {
+  const store = useInboxStore.getState();
+  store.wsShow("secondary", { kind: "conversation", ref: id }, { presentation: "split" });
+  store.navigateToSession(id);
 }
 
 /**
@@ -69,13 +84,13 @@ export function useOpenLinkedSession() {
       isOnSettingsPage: routerLocation.pathname.startsWith("/settings"),
       isOnInboxPage: isInboxSessionView(pathname, store.currentConversation?.source),
       isOnConversationPage: pathname?.includes("/conversation/") ?? false,
-      isOnWorkingPage: /^\/(tasks|docs|plans)(\/|$)/.test(pathname ?? ""),
+      isOnWorkingPage: slotPolicyFor(surfaceForPath(pathname ?? "")).secondary,
     });
     const open = resolveLinkedSessionOpen(kind, narrow);
     if (open === "route") {
       router.push(`/conversation/${sid}`);
     } else if (open === "companion") {
-      store.wsShow("secondary", { kind: "conversation", ref: sid }, { presentation: "split" });
+      openConversationAsCompanion(sid);
     } else {
       store.navigateToSession(sid);
     }

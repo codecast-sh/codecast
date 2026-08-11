@@ -101,6 +101,7 @@ const Signup = lazy(() => import("@/app/signup/page"));
 const ForgotPassword = lazy(() => import("@/app/forgot-password/page"));
 const ResetPassword = lazy(() => import("@/app/reset-password/page"));
 const AuthCli = lazy(() => import("@/app/auth/cli/page"));
+const ArtifactAuth = lazy(() => import("@/app/artifacts/auth/page"));
 const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 
 // Dashboard / tab-routable
@@ -205,6 +206,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "forgot-password", component: cast(ForgotPassword), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "reset-password", component: cast(ResetPassword), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "auth/cli", component: cast(AuthCli), layout: "auth", guestOk: true, guestKind: "public" },
+  { path: "pages/auth", component: cast(ArtifactAuth), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "join/:code", component: cast(JoinTeam), layout: "auth", guestOk: true, guestKind: "public" },
 
   // -- Dashboard tab shell (DashboardShell) — tab-routable; conversation routes are guest-OK --

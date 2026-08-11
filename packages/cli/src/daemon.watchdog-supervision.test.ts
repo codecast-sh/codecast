@@ -107,6 +107,25 @@ describe("daemonTickStale: wedged event loop vs the machine just slept", () => {
     const tickAgeNextCycle = 15 * 60 * 1000 + 60_000;
     expect(daemonTickStale(tickAgeNextCycle, 61_000)).toBe(true);
   });
+
+  // Regression: a slow boot (transcript sweeps, per-file git subprocesses over a
+  // multi-GB ~/.claude/projects) starves the tick stamper while still writing
+  // daemon.log constantly. The watchdog killed it as "wedged" 27s after the
+  // unsynced-file flush finally started, and every restart redid the same slow
+  // boot — a kill loop that froze all sessions (2026-08-10). A wedged event loop
+  // runs no JS and cannot log, so fresh log writes prove busy-not-dead.
+  test("stale tick but fresh daemon.log writes = busy boot, not wedged — spare it", () => {
+    expect(daemonTickStale(STALE, 62_000, 10_000)).toBe(false);
+    expect(daemonTickStale(STALE, 62_000, DAEMON_HEARTBEAT_STALE_MS)).toBe(false); // boundary inclusive
+  });
+
+  test("stale tick + silent daemon.log = genuinely wedged, restart", () => {
+    expect(daemonTickStale(STALE, 62_000, DAEMON_HEARTBEAT_STALE_MS + 1)).toBe(true);
+  });
+
+  test("unknown log age (stat failed) falls back to tick-only judgment", () => {
+    expect(daemonTickStale(STALE, 62_000, null)).toBe(true);
+  });
 });
 
 describe("watchdogPlistNeedsUpgrade migrates legacy installs", () => {

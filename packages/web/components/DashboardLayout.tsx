@@ -3,6 +3,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
+import { openConversationAsCompanion } from "../hooks/useOpenLinkedSession";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -373,7 +374,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // close (✕) sticks until you attend a different one.
   useWatchEffect(() => {
     const store = useInboxStore.getState();
-    const attended = s.currentSessionId ?? s.viewingDismissedId ?? null;
+    // Dismissed-peek first: navigating to a hidden session sets ONLY
+    // viewingDismissedId (currentSessionId keeps the last visible one), so the
+    // peek is what you're attending. The reverse order made clicking a stashed
+    // session on a working page a dead click — the mirror snapped the
+    // companion straight back to the stale currentSessionId.
+    const attended = s.viewingDismissedId ?? s.currentSessionId ?? null;
     const companion = companionId(s.workspace);
     if (isOnWorkingPage && !isMobile) {
       // MIRROR, don't just fill: there is exactly one conversation you're
@@ -418,7 +424,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     ? pathname.replace('/conversation/', '').split(/[/?#]/)[0]
     : null;
 
-  const sessionListActiveId = isOnInboxPage
+  // On working pages the rail highlights the attended conversation (the one
+  // the companion mirrors) — same precedence as the inbox. sidePanelSessionId
+  // is a stale persisted pointer nothing on these surfaces writes anymore;
+  // reading it left the highlight frozen on whatever it last held.
+  const sessionListActiveId = isOnInboxPage || isOnWorkingPage
     ? (s.viewingDismissedId ?? s.currentSessionId)
     : isOnConversationPage
     ? (conversationPageId ?? s.currentSessionId)
@@ -435,20 +445,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   }, [router]);
 
   const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage, isOnConversationPage, isOnWorkingPage });
-  const openAsCompanion = useCallback((id: string) => {
-    const store = useInboxStore.getState();
-    store.wsShow("secondary", { kind: "conversation", ref: id }, { presentation: "split" });
-    // Keep the attended conversation in sync: this IS the one you're now
-    // watching, so returning to the inbox lands on it rather than on whatever
-    // you had open before. No route change — navigateToSession only moves the
-    // pointer while the working surface stays on screen.
-    store.navigateToSession(id);
-  }, []);
   const sessionListOnSelect = sessionSelectKind === "leave"
     ? handleLeaveAndOpenSession
     : sessionSelectKind === "inboxInPlace"
     ? handleInboxSessionSelect
-    : openAsCompanion;
+    : openConversationAsCompanion;
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);

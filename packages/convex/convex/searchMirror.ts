@@ -35,13 +35,14 @@ export const MIRROR_LIVE_SLACK_MS = 30 * 60_000;
 const MAX_CONTENT_CHARS = 32_000;
 // Stay well under the per-mutation write budget even if every row is at cap.
 const MAX_BATCH_CONTENT_CHARS = 4_000_000;
-// Each mirrored row costs ~2 system ops (dedup .first() + insert/patch) on top
-// of the scan reads, against a ~4096 ops/transaction ceiling. Unbounded, a
-// dense-content backlog aborts the mutation atomically — the cursor never
-// advances and the cron hot-loops the same batch every 15s (found during the
-// 2026-07-13 outage postmortem). Worst case with these caps: 1200 scan reads
-// + 800×2 upsert ops + ~400 GC ≈ 3200, comfortable margin.
-const MAX_UPSERTS_PER_RUN = 800;
+// Each mirrored row costs ~2 system ops (dedup .first() + insert/patch) plus
+// at most one conversation get (cached per batch — messages cluster by
+// conversation) on top of the scan reads, against a ~4096 ops/transaction
+// ceiling. Unbounded, a dense-content backlog aborts the mutation atomically —
+// the cursor never advances and the cron hot-loops the same batch every 15s
+// (found during the 2026-07-13 outage postmortem). Worst case with these
+// caps: 1200 scan reads + 600×3 upsert ops + ~400 GC ≈ 3400, still margin.
+const MAX_UPSERTS_PER_RUN = 600;
 const MAX_BATCH_ROWS = 1200;
 const GC_BATCH = 200;
 
@@ -84,6 +85,10 @@ export async function performMirrorAdvance(
     let contentBudget = MAX_BATCH_CONTENT_CHARS;
     let newCursor = state.cursor;
     let budgetBroke = false;
+    // Conversation owner/team stamps, cached per batch — a batch's messages
+    // cluster into few conversations, so this is ~1 get per conversation,
+    // not per row.
+    const convScope = new Map<string, { user_id?: any; team_id?: any }>();
     for (const msg of rows) {
       newCursor = msg._creationTime;
       const content = msg.content?.trim() ? msg.content.slice(0, MAX_CONTENT_CHARS) : null;
@@ -100,6 +105,13 @@ export async function performMirrorAdvance(
         .query("message_search_recent")
         .withIndex("by_message_id", (q) => q.eq("message_id", msg._id))
         .first();
+      const convKey = msg.conversation_id.toString();
+      let scope = convScope.get(convKey);
+      if (!scope) {
+        const conv = await ctx.db.get(msg.conversation_id);
+        scope = { user_id: conv?.user_id, team_id: conv?.team_id };
+        convScope.set(convKey, scope);
+      }
       const doc = {
         message_id: msg._id,
         conversation_id: msg.conversation_id,
@@ -109,6 +121,8 @@ export async function performMirrorAdvance(
         tool_calls_count: msg.tool_calls?.length,
         tool_results_count: msg.tool_results?.length,
         source_created_at: msg._creationTime,
+        user_id: scope.user_id,
+        team_id: scope.team_id,
       };
       if (existing) {
         await ctx.db.patch(existing._id, doc);
@@ -175,6 +189,48 @@ export async function performMirrorAdvance(
 export const advance = internalMutation({
   args: { batch: v.optional(v.number()) },
   handler: async (ctx, args) => performMirrorAdvance(ctx, args),
+});
+
+// One-shot migration: stamp user_id/team_id onto mirror rows written before
+// those fields existed. Stateless forward cursor (source_created_at) passed in
+// and returned by the caller, so a driving loop never re-visits rows whose
+// conversation has been deleted (those stay unstamped). Safe to re-run; the
+// tail walker stamps all new rows, so once this completes it is dead code.
+export async function performBackfillScopes(
+  ctx: {
+    db: Pick<import("./_generated/server").MutationCtx["db"], "query" | "patch" | "get">;
+  },
+  args: { cursor?: number; batch?: number },
+) {
+  const batch = Math.min(Math.max(args.batch ?? 400, 1), 800);
+  const rows = await ctx.db
+    .query("message_search_recent")
+    .withIndex("by_source_created_at", (q) => q.gt("source_created_at", args.cursor ?? 0))
+    .order("asc")
+    .take(batch);
+  const convScope = new Map<string, { user_id?: any; team_id?: any }>();
+  let patched = 0;
+  let cursor = args.cursor ?? 0;
+  for (const row of rows) {
+    cursor = row.source_created_at;
+    if (row.user_id !== undefined) continue;
+    const convKey = row.conversation_id.toString();
+    let scope = convScope.get(convKey);
+    if (!scope) {
+      const conv = await ctx.db.get(row.conversation_id);
+      scope = { user_id: conv?.user_id, team_id: conv?.team_id };
+      convScope.set(convKey, scope);
+    }
+    if (scope.user_id === undefined) continue;
+    await ctx.db.patch(row._id, { user_id: scope.user_id, team_id: scope.team_id });
+    patched++;
+  }
+  return { scanned: rows.length, patched, cursor, done: rows.length < batch };
+}
+
+export const backfillScopes = internalMutation({
+  args: { cursor: v.optional(v.number()), batch: v.optional(v.number()) },
+  handler: async (ctx, args) => performBackfillScopes(ctx, args),
 });
 
 // Monitoring probe: how far behind is the mirror, and how big is it (sampled)?

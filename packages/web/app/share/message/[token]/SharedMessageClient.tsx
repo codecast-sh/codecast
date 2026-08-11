@@ -317,7 +317,10 @@ export default function SharedMessageClient() {
     );
   }
 
-  const { message, contextMessages, conversation, user, note, sharedAt } = data;
+  const { message, contextMessages, conversation, conversationShareToken, user, note, sharedAt } = data;
+  const conversationHref = conversationShareToken
+    ? `/share/${conversationShareToken}`
+    : `/conversation/${conversation._id}`;
 
   return (
     <main className="min-h-screen bg-sol-bg">
@@ -343,7 +346,7 @@ export default function SharedMessageClient() {
 
           {conversation.title && (
             <Link
-              href={`/conversation/${conversation._id}`}
+              href={conversationHref}
               className="text-sol-text-muted hover:text-sol-blue text-sm transition-colors inline-flex items-center gap-1"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -370,6 +373,20 @@ export default function SharedMessageClient() {
             />
           ))}
         </div>
+
+        {conversationShareToken && (
+          <div className="mt-4 text-center">
+            <Link
+              href={conversationHref}
+              className="text-sol-cyan hover:text-sol-cyan/80 text-sm transition-colors inline-flex items-center gap-1.5"
+            >
+              View full conversation
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+              </svg>
+            </Link>
+          </div>
+        )}
 
         <div className="mt-8 text-center">
           <Link

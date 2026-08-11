@@ -9,6 +9,7 @@ export interface ComposeEditorHandle {
   getMarkdown: () => string;
   focus: () => void;
   clear: () => void;
+  insertText: (text: string) => void;
 }
 
 interface ComposeEditorProps {
@@ -127,6 +128,7 @@ export const ComposeEditor = forwardRef<ComposeEditorHandle, ComposeEditorProps>
       },
       focus: () => editor?.commands.focus("end"),
       clear: () => editor?.commands.clearContent(),
+      insertText: (text: string) => { editor?.chain().focus().insertContent(text).run(); },
     }));
 
     if (!editor) return null;

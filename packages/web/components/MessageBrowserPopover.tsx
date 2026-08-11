@@ -30,6 +30,42 @@ const MACHINE_KIND_LABEL: Record<MachineDeliveredKind, string> = {
   teammate: "teammate",
 };
 
+// Chip/tooltip noun for the machine-delivered rows: precise when they're all
+// one kind ("2 sessions", "1 trigger"), neutral when mixed — "automated" would
+// mislabel a teammate or another session messaging in.
+function machineNoun(machines: { kind: "user" | MachineDeliveredKind }[]): string {
+  const kinds = new Set(machines.map((m) => m.kind));
+  if (kinds.size === 1) {
+    const noun = MACHINE_KIND_LABEL[machines[0].kind as MachineDeliveredKind];
+    return machines.length === 1 ? noun : `${noun}s`;
+  }
+  return "other";
+}
+
+// A `cast send` wire tag carries only the sender's 7-char short id (the prefix
+// of its conversation's Convex id). Resolve it to the session's title from the
+// local store when that session is synced; fall back to the short id.
+function resolveSessionTitle(shortId: string): string | null {
+  const s = useInboxStore.getState();
+  for (const coll of [s.sessions, s.conversations] as Record<string, { title?: string }>[]) {
+    for (const key in coll) {
+      if (key.startsWith(shortId) && coll[key].title) return coll[key].title!;
+    }
+  }
+  return null;
+}
+
+const SHORT_ID_RE = /^[a-z0-9]{7}$/;
+
+// Source label for a machine-delivered row. A session source that the store
+// couldn't resolve (sender pruned/dismissed locally) still renders as a bare
+// short id here — resolve it server-side the same way EntityIdPill does.
+function MachineSourceLabel({ kind, source }: { kind: MachineDeliveredKind; source: string }) {
+  const needsLookup = kind === "session" && SHORT_ID_RE.test(source);
+  const resolved = useQuery(api.conversations.webGet, needsLookup ? { short_id: source } : "skip");
+  return <>{(needsLookup && resolved?.title) || source}</>;
+}
+
 function MachineKindIcon({ kind }: { kind: MachineDeliveredKind }) {
   const d =
     kind === "schedule"
@@ -101,7 +137,7 @@ function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnt
           ) : (
             <span className="text-[10px] text-sol-violet/80 flex items-center gap-1">
               <MachineKindIcon kind={message.kind} />
-              {message.source}
+              {message.source && <MachineSourceLabel kind={message.kind} source={message.source} />}
             </span>
           )}
           <span className="text-sol-text-dim/30">·</span>
@@ -157,7 +193,9 @@ function NavDropdown({
 }) {
   const [mounted, setMounted] = useState(false);
   const [search, setSearch] = useState("");
-  const [showMachine, setShowMachine] = useState(true);
+  // Automated rows (triggers, sessions, teammates) start hidden — the list is
+  // primarily a human-message navigator; the chip reveals them on demand.
+  const [showMachine, setShowMachine] = useState(false);
   const [focusIndex, setFocusIndex] = useState(-1);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [hoveredRect, setHoveredRect] = useState<DOMRect | null>(null);
@@ -188,7 +226,9 @@ function NavDropdown({
     originalIndex: m.kind === "user" ? humanOrdinal++ : -1,
   }));
   const humanCount = humanOrdinal;
-  const machineCount = indexed.length - humanCount;
+  const machineRows = indexed.filter((m) => m.kind !== "user");
+  const machineCount = machineRows.length;
+  const machineChipNoun = machineNoun(machineRows);
   const pool = showMachine ? indexed : indexed.filter((m) => m.kind === "user");
   const filtered = search
     ? pool.filter(m => `${m.display} ${m.source ?? ""}`.toLowerCase().includes(search.toLowerCase()))
@@ -298,19 +338,20 @@ function NavDropdown({
             {machineCount > 0 && (
               <button
                 onClick={(e) => { e.stopPropagation(); setShowMachine(v => !v); }}
-                title={showMachine
-                  ? `Hide ${machineCount} automated message${machineCount !== 1 ? "s" : ""} (triggers, sessions, teammates)`
-                  : `Show ${machineCount} automated message${machineCount !== 1 ? "s" : ""}`}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded-lg border text-[10px] tabular-nums transition-colors flex-shrink-0 ${
+                aria-pressed={showMachine}
+                title={`${showMachine ? "Hide" : "Show"} ${machineCount} message${machineCount !== 1 ? "s" : ""} delivered by triggers, other sessions, or teammates`}
+                className={`flex items-center gap-1 px-2 py-1.5 rounded-lg border text-[11px] tabular-nums transition-colors flex-shrink-0 ${
                   showMachine
-                    ? "border-sol-violet/30 text-sol-violet/80 hover:text-sol-violet"
-                    : "border-sol-border/20 text-sol-text-dim/40 hover:text-sol-text-dim"
+                    ? "bg-sol-violet/15 border-sol-violet/40 text-sol-violet hover:bg-sol-violet/20"
+                    : "border-sol-border/30 text-sol-text-dim/60 hover:text-sol-text-muted hover:border-sol-border/50"
                 }`}
               >
-                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
-                {machineCount}
+                <span className={showMachine ? "" : "line-through decoration-[1.5px] opacity-80"}>
+                  {machineCount} {machineChipNoun}
+                </span>
               </button>
             )}
           </div>
@@ -352,8 +393,10 @@ function NavDropdown({
               const isHovered = m._id === hoveredId;
               const isActive = isFocused || isHovered;
               if (m.kind !== "user") {
-                // Machine-delivered row: one subdued line naming what delivered it
-                // and from where — the body stays behind the hover preview.
+                // Machine-delivered row: mirrors the user-row layout — a label
+                // line naming what delivered it (kind + source title), then the
+                // actual message body. Slightly subdued to keep human messages
+                // primary; the hover preview still shows the full body.
                 return (
                   <div
                     key={m._id}
@@ -361,29 +404,47 @@ function NavDropdown({
                     onMouseEnter={(e) => handleItemHover(m._id, e.currentTarget, m)}
                     onMouseLeave={handleItemLeave}
                     onClick={() => navigateToMessage(m)}
-                    className={`px-3 py-1 cursor-pointer transition-colors ${
+                    className={`px-3 py-2 cursor-pointer transition-colors ${
                       isActive ? "bg-sol-blue/15" : "hover:bg-sol-bg-highlight"
                     }`}
                   >
-                    <div className={`flex items-center gap-2 transition-opacity ${isActive ? "opacity-90" : "opacity-45"}`}>
-                      <span className="w-4 flex-shrink-0 flex justify-end text-sol-violet">
+                    <div className={`flex items-start gap-2 transition-opacity ${isActive ? "opacity-100" : "opacity-70"}`}>
+                      <span className="w-4 flex-shrink-0 flex justify-end text-sol-violet pt-[2px]">
                         <MachineKindIcon kind={m.kind} />
                       </span>
-                      <span className="text-[10px] text-sol-text-dim flex-shrink-0">
-                        {MACHINE_KIND_LABEL[m.kind]}
-                      </span>
-                      <span className="text-[11px] text-sol-text-muted truncate min-w-0">{m.source}</span>
-                      {m.commentCount > 0 && (
-                        <span className="text-[10px] text-sol-cyan flex items-center gap-0.5 flex-shrink-0">
-                          <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-                          </svg>
-                          {m.commentCount}
-                        </span>
-                      )}
-                      <span className="text-[10px] text-sol-text-dim/50 tabular-nums ml-auto flex-shrink-0">
-                        {formatTimeAgo(m.timestamp)}
-                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-sol-violet/80 flex-shrink-0">
+                            {MACHINE_KIND_LABEL[m.kind]}
+                          </span>
+                          <span className="text-[11px] text-sol-text-muted truncate min-w-0">
+                            {m.source && <MachineSourceLabel kind={m.kind} source={m.source} />}
+                          </span>
+                        </div>
+                        {m.display && (
+                          <div className={`text-[12px] leading-snug line-clamp-2 mt-0.5 ${
+                            isActive ? "text-sol-text" : "text-sol-text-secondary"
+                          }`}>
+                            {m.display}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <span className="text-[10px] text-sol-text-dim/50 tabular-nums">
+                            {formatTimeAgo(m.timestamp)}
+                          </span>
+                          {m.commentCount > 0 && (
+                            <>
+                              <span className="text-sol-text-dim/20">·</span>
+                              <span className="text-[10px] text-sol-cyan flex items-center gap-0.5">
+                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                                </svg>
+                                {m.commentCount}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 );
@@ -571,6 +632,10 @@ export function MessageNavButton({
           // human rows keep their numbering regardless.
           const machine = parseMachineDeliveredMessage(content);
           if (machine) {
+            const source =
+              machine.kind === "session"
+                ? resolveSessionTitle(machine.source) ?? machine.source
+                : machine.source;
             return {
               _id: m._id,
               display: machine.body,
@@ -578,7 +643,7 @@ export function MessageNavButton({
               timestamp: m.timestamp,
               commentCount,
               kind: machine.kind,
-              source: machine.source,
+              source,
             };
           }
           return {
@@ -682,7 +747,7 @@ export function MessageNavButton({
         className={`flex flex-col gap-[3px] items-end justify-center px-2 py-1.5 rounded transition-colors relative ${
           open ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"
         }`}
-        title={`${humanTotal} message${humanTotal !== 1 ? "s" : ""}${machineTotal > 0 ? ` / ${machineTotal} automated` : ""}${hasComments ? ` / ${topLevelComments.length} comment${topLevelComments.length !== 1 ? "s" : ""}` : ""}`}
+        title={`${humanTotal} message${humanTotal !== 1 ? "s" : ""}${machineTotal > 0 ? ` / ${machineTotal} ${machineNoun(processed.filter((m) => m.kind !== "user"))}` : ""}${hasComments ? ` / ${topLevelComments.length} comment${topLevelComments.length !== 1 ? "s" : ""}` : ""}`}
       >
         {Array.from({ length: displayCount }).map((_, i) => {
           const mappedIndex = total <= MAX_BARS ? i : Math.round((i / (displayCount - 1)) * (total - 1));

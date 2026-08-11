@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { newSlug, newSecret, upsertFromPublish, deleteFromCLI, lineDiff } from "./artifacts";
+import {
+  newSlug,
+  newSecret,
+  upsertFromPublish,
+  deleteFromCLI,
+  lineDiff,
+  accessSummary,
+  submitComments,
+  deliverPendingComments,
+} from "./artifacts";
 import { brandArtifactHtml } from "./artifactPages";
 import { normalizeAssetPath } from "./artifactsHttp";
 
@@ -11,6 +20,8 @@ function makeCtx(rows: Array<Record<string, any>>, opts: { tokenUser?: string } 
   const inserts: Array<Record<string, any>> = [];
   const deletes: string[] = [];
   const storageDeletes: string[] = [];
+  // Sub-mutations (notificationRouter.emit) recorded by args only.
+  const mutations: Array<Record<string, any>> = [];
 
   const query = (_table: string) => {
     let filtered = rows.filter((r) => !deletes.includes(r._id) && (!r._table || r._table === _table));
@@ -52,17 +63,23 @@ function makeCtx(rows: Array<Record<string, any>>, opts: { tokenUser?: string } 
         delete: async (id: string) => {
           deletes.push(id);
         },
+        normalizeId: (_table: string, id: string) =>
+          rows.some((r) => r._id === id && r._table === _table) ? id : null,
       },
       storage: {
         delete: async (id: string) => {
           storageDeletes.push(id);
         },
       },
+      runMutation: async (_fn: unknown, args: Record<string, any>) => {
+        mutations.push(args);
+      },
     },
     patches,
     inserts,
     deletes,
     storageDeletes,
+    mutations,
   };
 }
 
@@ -320,6 +337,208 @@ describe("deleteFromCLI", () => {
   });
 });
 
+describe("comment discussion gating", () => {
+  const artRow = { ...existingRow, owner_key: "sekrit", session_conversation_id: "conv1" };
+  const batch = { author_name: "Viewer", version: 3, comments: [{ text: "nice page" }] };
+
+  test("a viewer's comment is stored as discussion, never delivered", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    const result = await (submitComments as any)._handler(ctx, { slug: artRow.slug, ...batch });
+    expect(result).toMatchObject({ delivered: false, count: 1, as: null });
+    expect(inserts[0]).toMatchObject({ table: "artifact_comments", text: "nice page", delivered: false });
+  });
+
+  test("an anonymous comment notifies the owner, with the viewer name and a deep link", async () => {
+    const { ctx, inserts, mutations } = makeCtx([{ ...artRow }]);
+    await (submitComments as any)._handler(ctx, { slug: artRow.slug, ...batch });
+    expect(mutations).toHaveLength(1);
+    expect(mutations[0]).toMatchObject({
+      event_type: "artifact_commented",
+      entity_type: "artifact",
+      entity_id: artRow.slug,
+      actor_name: "Viewer",
+      direct_recipient_id: "u1",
+    });
+    expect(mutations[0].actor_user_id).toBeUndefined();
+    expect(mutations[0].link).toContain(`/a/${artRow.slug}?c=${inserts[0]._id}`);
+  });
+
+  test("a forged deliver request without the owner key still lands as discussion", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    const result = await (submitComments as any)._handler(ctx, { slug: artRow.slug, deliver: true, owner_key: "wrong", ...batch });
+    expect(result.delivered).toBe(false);
+    expect(inserts[0]).toMatchObject({ delivered: false });
+  });
+
+  test("comments off rejects new posts", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow, comments_disabled: true }]);
+    const result = await (submitComments as any)._handler(ctx, { slug: artRow.slug, ...batch });
+    expect(result.error).toContain("Comments are off");
+    expect(inserts).toEqual([]);
+  });
+
+  test("send-all is owner-only", async () => {
+    const { ctx } = makeCtx([{ ...artRow }]);
+    const noKey = await (deliverPendingComments as any)._handler(ctx, { slug: artRow.slug });
+    expect(noKey.error).toContain("owner");
+    const wrongKey = await (deliverPendingComments as any)._handler(ctx, { slug: artRow.slug, owner_key: "wrong" });
+    expect(wrongKey.error).toContain("owner");
+  });
+});
+
+describe("comment identity, threads, and notifications", () => {
+  const artRow = { ...existingRow, owner_key: "sekrit" };
+  // Owner u1 + teammates u2 (Sam, holds an identity token) and u3 (Riley).
+  const teamRows = () => [
+    { ...artRow },
+    { _table: "users", _id: "u1", name: "Owner", email: "owner@x.com" },
+    { _table: "users", _id: "u2", name: "Sam", github_username: "sam", github_avatar_url: "https://av/sam.png", email: "sam@x.com" },
+    { _table: "users", _id: "u3", name: "Riley", github_username: "riley", image: "https://av/riley.png" },
+    { _table: "team_memberships", _id: "m1", team_id: "t1", user_id: "u1" },
+    { _table: "team_memberships", _id: "m2", team_id: "t1", user_id: "u2" },
+    { _table: "team_memberships", _id: "m3", team_id: "t1", user_id: "u3" },
+    { _table: "artifact_identities", _id: "idt1", token: "tok-sam", user_id: "u2", artifact_id: "a1" },
+  ];
+
+  test("a valid identity token stamps the account's name/avatar/user onto the comment", async () => {
+    const { ctx, inserts } = makeCtx(teamRows());
+    const result = await (submitComments as any)._handler(ctx, {
+      slug: artRow.slug,
+      author_name: "Spoofed Name",
+      version: 3,
+      identity_token: "tok-sam",
+      comments: [{ text: "love this" }],
+    });
+    expect(result.as).toEqual({ name: "Sam", avatar: "https://av/sam.png" });
+    expect(inserts[0]).toMatchObject({
+      table: "artifact_comments",
+      author_name: "Sam",
+      author_user_id: "u2",
+      author_avatar: "https://av/sam.png",
+      author_email: "sam@x.com",
+    });
+  });
+
+  test("a bad identity token degrades to the viewer-typed name", async () => {
+    const { ctx, inserts } = makeCtx(teamRows());
+    const result = await (submitComments as any)._handler(ctx, {
+      slug: artRow.slug,
+      author_name: "Drive-by",
+      version: 3,
+      identity_token: "tok-forged",
+      comments: [{ text: "hello" }],
+    });
+    expect(result.as).toBeNull();
+    expect(inserts[0]).toMatchObject({ author_name: "Drive-by" });
+    expect(inserts[0].author_user_id).toBeUndefined();
+  });
+
+  test("a teammate's comment notifies the owner as that account", async () => {
+    const { ctx, mutations } = makeCtx(teamRows());
+    await (submitComments as any)._handler(ctx, {
+      slug: artRow.slug,
+      author_name: "",
+      version: 3,
+      identity_token: "tok-sam",
+      comments: [{ text: "shipping it" }],
+    });
+    expect(mutations).toHaveLength(1);
+    expect(mutations[0]).toMatchObject({
+      event_type: "artifact_commented",
+      actor_user_id: "u2",
+      direct_recipient_id: "u1",
+    });
+  });
+
+  test("@mentions from a verified teammate notify the mentioned teammate, once", async () => {
+    const { ctx, mutations } = makeCtx(teamRows());
+    await (submitComments as any)._handler(ctx, {
+      slug: artRow.slug,
+      author_name: "",
+      version: 3,
+      identity_token: "tok-sam",
+      comments: [{ text: "@riley what do you think? cc @riley" }],
+    });
+    const mention = mutations.filter((m) => m.event_type === "mention");
+    expect(mention).toHaveLength(1);
+    expect(mention[0]).toMatchObject({ direct_recipient_id: "u3", actor_user_id: "u2" });
+    expect(mention[0].message).toContain("Sam mentioned you");
+    // Owner still hears about the comment itself.
+    expect(mutations.some((m) => m.event_type === "artifact_commented" && m.direct_recipient_id === "u1")).toBe(true);
+  });
+
+  test("@mentions from an anonymous viewer are ignored", async () => {
+    const { ctx, mutations } = makeCtx(teamRows());
+    await (submitComments as any)._handler(ctx, {
+      slug: artRow.slug,
+      author_name: "Rando",
+      version: 3,
+      comments: [{ text: "@riley spam spam" }],
+    });
+    expect(mutations.filter((m) => m.event_type === "mention")).toHaveLength(0);
+    expect(mutations.filter((m) => m.event_type === "artifact_commented")).toHaveLength(1);
+  });
+
+  test("replies thread under the top-level comment and notify its author", async () => {
+    const rows = [
+      ...teamRows(),
+      {
+        _table: "artifact_comments", _id: "c1", artifact_id: "a1", batch_id: "b1",
+        author_name: "Sam", author_user_id: "u2", text: "first", version: 3,
+        status: "open", delivered: false, created_at: 10,
+      },
+    ];
+    const { ctx, inserts, mutations } = makeCtx(rows);
+    const result = await (submitComments as any)._handler(ctx, {
+      slug: artRow.slug,
+      author_name: "Guest",
+      version: 3,
+      parent_id: "c1",
+      comments: [{ text: "agreed!" }],
+    });
+    expect(result.count).toBe(1);
+    expect(inserts[0]).toMatchObject({ parent_comment_id: "c1", text: "agreed!" });
+    const reply = mutations.filter((m) => m.event_type === "comment_reply");
+    expect(reply).toHaveLength(1);
+    expect(reply[0]).toMatchObject({ direct_recipient_id: "u2", actor_name: "Guest" });
+    // Deep link targets the thread, so the page opens it selected.
+    expect(reply[0].link).toContain("?c=c1");
+    // Owner is notified too (distinct recipient from the thread author).
+    expect(mutations.some((m) => m.event_type === "artifact_commented" && m.direct_recipient_id === "u1")).toBe(true);
+  });
+
+  test("replying to a reply attaches to the thread's top-level comment", async () => {
+    const rows = [
+      ...teamRows(),
+      { _table: "artifact_comments", _id: "c1", artifact_id: "a1", batch_id: "b1", author_name: "A", text: "top", version: 3, status: "open", delivered: false, created_at: 10 },
+      { _table: "artifact_comments", _id: "c2", artifact_id: "a1", batch_id: "b2", author_name: "B", text: "mid", version: 3, status: "open", delivered: false, created_at: 11, parent_comment_id: "c1" },
+    ];
+    const { ctx, inserts } = makeCtx(rows);
+    await (submitComments as any)._handler(ctx, {
+      slug: artRow.slug, author_name: "C", version: 3, parent_id: "c2", comments: [{ text: "deep" }],
+    });
+    expect(inserts[0]).toMatchObject({ parent_comment_id: "c1" });
+  });
+
+  test("a reply to a missing comment is rejected", async () => {
+    const { ctx, inserts } = makeCtx(teamRows());
+    const result = await (submitComments as any)._handler(ctx, {
+      slug: artRow.slug, author_name: "C", version: 3, parent_id: "nope", comments: [{ text: "hi" }],
+    });
+    expect(result.error).toContain("gone");
+    expect(inserts).toEqual([]);
+  });
+
+  test("the owner commenting via owner_key does not notify themselves", async () => {
+    const { ctx, mutations } = makeCtx(teamRows());
+    await (submitComments as any)._handler(ctx, {
+      slug: artRow.slug, author_name: "Owner", version: 3, owner_key: "sekrit", deliver: false,
+      comments: [{ text: "note to self" }],
+    });
+    expect(mutations).toHaveLength(0);
+  });
+});
+
 describe("brandArtifactHtml", () => {
   const opts = { title: "Q3 <Report>", author: "Ashot", updatedAt: 1700000000000, shareUrl: "https://codecast.sh/a/x1" };
 
@@ -343,6 +562,26 @@ describe("brandArtifactHtml", () => {
     expect(out.startsWith("\n<style id=\"__cc_style\">")).toBe(true);
     expect(out).toContain("<div>fragment</div>");
     expect(out).not.toContain("og:title");
+  });
+
+  test("always renders the minimize control and the restore pill", () => {
+    const out = brandArtifactHtml("<body></body>", opts);
+    expect(out).toContain('id="__cc_hide"');
+    expect(out).toContain('id="__cc_pill"');
+  });
+
+  test("session chip renders only when a session is exposed", () => {
+    const shown = brandArtifactHtml("<body></body>", { ...opts, sessionShortId: "jx1abcd", sessionTitle: "My session" });
+    expect(shown).toContain('class="__cc_sess"');
+    expect(shown).toContain("My session");
+    const hidden = brandArtifactHtml("<body></body>", { ...opts, sessionShortId: null });
+    expect(hidden).not.toContain('class="__cc_sess"');
+  });
+
+  test("accessSummary reports the session-link toggle", () => {
+    const base = { password_hash: undefined, email_gate: undefined, expires_at: undefined, edit_mode: undefined };
+    expect(accessSummary({ ...base } as never).show_session).toBe(true);
+    expect(accessSummary({ ...base, hide_session: true } as never).show_session).toBe(false);
   });
 
   test("carries the share url into the bar config (no copy button on the bar)", () => {

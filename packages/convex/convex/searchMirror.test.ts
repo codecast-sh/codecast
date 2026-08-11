@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { performMirrorAdvance, MIRROR_WINDOW_MS, MIRROR_LIVE_SLACK_MS } from "./searchMirror";
+import { performMirrorAdvance, performBackfillScopes, MIRROR_WINDOW_MS, MIRROR_LIVE_SLACK_MS } from "./searchMirror";
 
 // ── In-memory Convex-ish ctx ─────────────────────────────────────────────────
 // Same pattern as notifications.needsInput.test.ts: a fake ctx.db faithful
@@ -154,17 +154,33 @@ describe("performMirrorAdvance", () => {
     // the cron hot-loops the same batch forever).
     const at = NOW - MIRROR_WINDOW_MS + 5_000;
     const { ctx, tables } = createCtx({
-      messages: Array.from({ length: 850 }, (_, i) => msg(`m${i}`, at + i)),
+      messages: Array.from({ length: 650 }, (_, i) => msg(`m${i}`, at + i)),
     });
     const res = await performMirrorAdvance(ctx, { now: NOW, batch: 1200 });
-    expect(res.copied).toBe(800);
+    expect(res.copied).toBe(600);
     expect(res.caught_up).toBe(false); // budget break must not read as drained
-    // Cursor parked before row 801, not bumped to the ceiling.
-    expect(res.cursor).toBeLessThan(at + 800);
-    expect(res.cursor).toBeGreaterThan(at + 799);
+    // Cursor parked before row 601, not bumped to the ceiling.
+    expect(res.cursor).toBeLessThan(at + 600);
+    expect(res.cursor).toBeGreaterThan(at + 599);
     const res2 = await performMirrorAdvance(ctx, { now: NOW, batch: 1200 });
     expect(res2.copied).toBe(50);
-    expect(tables.message_search_recent).toHaveLength(850);
+    expect(tables.message_search_recent).toHaveLength(650);
+  });
+
+  test("stamps user_id/team_id from the conversation doc; deleted conv stamps nothing", async () => {
+    const at = NOW - MIRROR_WINDOW_MS + 5_000;
+    const { ctx, tables } = createCtx({
+      conversations: [{ _id: "conv_1", user_id: "user_a", team_id: "team_x" }],
+      messages: [
+        msg("m1", at), // conv_1 exists
+        msg("m2", at + 1, { conversation_id: "conv_gone" }),
+      ],
+    });
+    const res = await performMirrorAdvance(ctx, { now: NOW });
+    expect(res.copied).toBe(2);
+    const rows = tables.message_search_recent;
+    expect(rows.find((r) => r.message_id === "m1")).toMatchObject({ user_id: "user_a", team_id: "team_x" });
+    expect(rows.find((r) => r.message_id === "m2")!.user_id).toBeUndefined();
   });
 
   test("GC deletes rows that aged out of the window", async () => {
@@ -192,6 +208,38 @@ describe("performMirrorAdvance", () => {
     const res = await performMirrorAdvance(ctx, { now: NOW });
     expect(res.expired).toBe(1);
     expect(tables.message_search_recent.map((r) => r.message_id)).toEqual(["m_new"]);
+  });
+
+  test("backfillScopes stamps unstamped rows, advances past deleted-conv rows, and reports done", async () => {
+    const mirrorRow = (id: string, at: number, over: Rec = {}): Rec => ({
+      _id: id,
+      _creationTime: at,
+      message_id: `msg_${id}`,
+      conversation_id: "conv_1",
+      role: "user",
+      content: "hi",
+      timestamp: at,
+      source_created_at: at,
+      ...over,
+    });
+    const { ctx, tables } = createCtx({
+      conversations: [{ _id: "conv_1", user_id: "user_a", team_id: "team_x" }],
+      message_search_recent: [
+        mirrorRow("r1", 100),
+        mirrorRow("r2", 200, { user_id: "user_b" }), // already stamped: untouched
+        mirrorRow("r3", 300, { conversation_id: "conv_gone" }), // deleted conv: skipped, cursor advances
+        mirrorRow("r4", 400),
+      ],
+    });
+    const res = await performBackfillScopes(ctx, { batch: 3 });
+    expect(res).toMatchObject({ scanned: 3, patched: 1, cursor: 300, done: false });
+    const res2 = await performBackfillScopes(ctx, { cursor: res.cursor, batch: 3 });
+    expect(res2).toMatchObject({ scanned: 1, patched: 1, cursor: 400, done: true });
+    const rows = tables.message_search_recent;
+    expect(rows.find((r) => r._id === "r1")).toMatchObject({ user_id: "user_a", team_id: "team_x" });
+    expect(rows.find((r) => r._id === "r2")!.user_id).toBe("user_b");
+    expect(rows.find((r) => r._id === "r3")!.user_id).toBeUndefined();
+    expect(rows.find((r) => r._id === "r4")).toMatchObject({ user_id: "user_a", team_id: "team_x" });
   });
 
   test("liveness hysteresis: dead stays dead in the half-slack band, live survives it", async () => {

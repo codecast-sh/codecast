@@ -102,8 +102,13 @@ export function ContextChatInput({
         if (t.project_path) taskDerivedPath = t.project_path;
       }
     }
-    const path = projectPathProp || taskDerivedPath || projectPath || gitRoot;
-    const resolvedGitRoot = gitRoot || path;
+    const contextPath = projectPathProp || taskDerivedPath;
+    const path = contextPath || projectPath || gitRoot;
+    // The viewer's gitRoot describes currentConversation's repo and only
+    // applies when the path came from there too. Sent alongside a task-derived
+    // path it routes the daemon into whatever repo the viewer had open — the
+    // daemon prefers git_root over project_path when resolving a cwd.
+    const resolvedGitRoot = contextPath || gitRoot || path;
     const { stubId: sid } = store.beginOptimisticSession({
       agentType: convexAgentType,
       projectPath: path,

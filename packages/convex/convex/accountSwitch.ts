@@ -26,8 +26,10 @@ import {
   isDeviceOnline,
   isValidProfileName,
   shouldSweepStaleFlag,
+  LOGIN_FLOW_STALE_MS,
   STALE_FLAG_AFTER_MS,
 } from "./ccAccountsShared";
+import { deliverSessionNotificationToParties } from "./notifications";
 
 // The freshest online NON-remote device: it holds the keychain profiles and is
 // the canonical credential source remotes are pushed from.
@@ -308,6 +310,220 @@ export const reviveAuthBlockedOnRemotes = mutation({
       });
     }
     return { continued: targets.length };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Blocked-incident notification: one aggregated bell/push per park burst
+// ---------------------------------------------------------------------------
+
+// Same debounce idea as the auto-switch check: a fleet parks over ~a minute,
+// and one notification covering the burst beats one per session.
+const BLOCKED_NOTIFY_DEBOUNCE_MS = 60 * 1000;
+// A fresh casualty inside the cooldown stays silent (the banner/pill already
+// show it); past the cooldown a new park re-announces the incident.
+const BLOCKED_NOTIFY_COOLDOWN_MS = 30 * 60 * 1000;
+
+/** The single hook the message paths call when a conversation freshly parks on
+ * a blocked-kind banner (auth/limit/connection — never statusful "error").
+ * Fans out to both reactions: the auto-switch check (limit only) and the
+ * debounced incident notification (all blocked kinds). Both are idempotent
+ * and self-gating, so over-scheduling is harmless. */
+export async function onFreshApiErrorPark(
+  ctx: { scheduler: { runAfter: (ms: number, fn: any, args: any) => Promise<any> } },
+  userId: Id<"users">,
+  kind: string,
+): Promise<void> {
+  if (kind === "limit") await scheduleAutoSwitchCheck(ctx, userId);
+  await ctx.scheduler.runAfter(BLOCKED_NOTIFY_DEBOUNCE_MS, internal.accountSwitch.blockedNotifyCheck, {
+    user_id: userId,
+  });
+}
+
+// The debounced check: recount the blocked set at fire time and notify once
+// per incident. Dedupe state lives on the user row (one write per incident):
+// a park older than last_park_ts is already covered; a newer one inside the
+// cooldown rides the existing banner; past the cooldown it announces again.
+// The notification anchors on the newest blocked conversation and uses the
+// session-STATE delivery (supersede, not stack), so the bell holds at most
+// one "blocked" row and each new episode still raises a fresh push.
+export const blockedNotifyCheck = internalMutation({
+  args: { user_id: v.id("users") },
+  handler: async (ctx, args) => {
+    const { blocked, totalBlocked, subagentCount } = await listBlockedConversations(
+      ctx,
+      args.user_id,
+      true,
+    );
+    if (blocked.length === 0) return { notified: false, reason: "nothing_blocked" };
+    const user = await ctx.db.get(args.user_id);
+    if (!user) return { notified: false, reason: "no_user" };
+
+    const now = Date.now();
+    const newestPark = Math.max(...blocked.map((c) => c.updated_at ?? 0));
+    const state = user.blocked_notify_state;
+    if (state && newestPark <= state.last_park_ts) return { notified: false, reason: "covered" };
+    if (state && now - state.last_notified_at < BLOCKED_NOTIFY_COOLDOWN_MS) {
+      return { notified: false, reason: "cooldown" };
+    }
+
+    const authCount = blocked.filter((c) => c.pending_api_error_kind === "auth").length;
+    const connCount = blocked.filter((c) => c.pending_api_error_kind === "connection").length;
+    const limitCount = blocked.length - authCount - connCount;
+    // Same headline the banner leads with.
+    const on = limitCount > 0 ? "usage limits" : connCount > 0 ? "dropped connections" : "login";
+    const title = `${totalBlocked} session${totalBlocked === 1 ? "" : "s"} blocked on ${on}`;
+    const parts = [
+      limitCount > 0 ? `${limitCount} hit a usage limit` : null,
+      connCount > 0 ? `${connCount} dropped mid-response` : null,
+      authCount > 0 ? `${authCount} signed out` : null,
+    ].filter(Boolean);
+    const hint = authCount > 0 ? "sign in to revive them" : "revive them from the inbox";
+    const message =
+      parts.join(" · ") +
+      (subagentCount > 0 ? ` (${subagentCount} subagent${subagentCount === 1 ? "" : "s"})` : "") +
+      ` — ${hint}.`;
+
+    const anchor = [...blocked].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0];
+    // Stamp BEFORE delivering so a racing duplicate check can't double-push.
+    await ctx.db.patch(user._id, {
+      blocked_notify_state: { last_notified_at: now, last_park_ts: newestPark },
+    });
+    const delivered = await deliverSessionNotificationToParties(
+      ctx,
+      anchor,
+      "session_error",
+      title,
+      message,
+    );
+    return { notified: delivered };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Browser sign-in flow: the banner's "Sign in as <email>" CTA
+// ---------------------------------------------------------------------------
+
+// The web CTA: ask the primary daemon to run `claude auth login` (which opens
+// the machine's browser on the OAuth page, pre-filled with the expired
+// account's email). The device row's cc_login_flow field is the UI's state
+// channel: this stamps it "pending"; the daemon's completeLoginFlow report
+// flips it to confirmed/rejected.
+export const requestLoginFlow = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+
+    const now = Date.now();
+    const { online, primary: freshestPrimary } = await listOnlineDevices(ctx, userId, now);
+    const target = args.device_id
+      ? online.find((d) => d.device_id === args.device_id)
+      : freshestPrimary;
+    if (!target) {
+      throw new Error(
+        args.device_id
+          ? "That device's daemon is offline"
+          : "No online daemon on a primary (non-remote) machine to run the sign-in",
+      );
+    }
+    if (target.is_remote) {
+      throw new Error(
+        "Remote devices run a pushed copy of the primary's credential — sign in on the primary machine",
+      );
+    }
+
+    // A fresh pending flow is already mid-OAuth in the browser — don't launch
+    // a second one over it. (A stale pending row means the daemon died
+    // mid-flow; starting over is exactly right.)
+    const existing = target.cc_login_flow;
+    if (existing?.status === "pending" && now - existing.started_at < LOGIN_FLOW_STALE_MS) {
+      return { device_id: target.device_id, email: existing.email, already_pending: true };
+    }
+
+    const email = target.cc_accounts?.active_email;
+    await ctx.db.patch(target._id, {
+      cc_login_flow: { status: "pending" as const, email, started_at: now },
+    });
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "start_login" as const,
+      args: JSON.stringify({ email }),
+      created_at: now,
+      target_device_id: target.device_id,
+    });
+    return { command_id: commandId, device_id: target.device_id, email };
+  },
+});
+
+// The daemon's outcome report. Confirmed additionally kicks off the recovery
+// the user was promised: kill + continue every auth-blocked session owned by
+// non-remote devices (the exact no-profile switch_account machinery the
+// banner's "continue on current account" uses). Remote-owned sessions are
+// deliberately excluded — their recovery is the credential push rail (the
+// daemon pushes the fresh blob, and reviveAuthBlockedOnRemotes nudges them
+// once it lands), and acting here would race a continue against a credential
+// that hasn't arrived yet.
+export const completeLoginFlow = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+    status: v.union(v.literal("confirmed"), v.literal("rejected")),
+    email: v.optional(v.string()),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    if (!device) return { revived: 0 };
+
+    const now = Date.now();
+    let revived = 0;
+    if (args.status === "confirmed") {
+      const allDevices: Doc<"devices">[] = await ctx.db
+        .query("devices")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .collect();
+      const remoteIds = new Set(
+        allDevices.filter((d) => d.is_remote === true).map((d) => d.device_id),
+      );
+      const online = allDevices.filter((d) => isDeviceOnline(d, now));
+      const { blocked } = await listBlockedConversations(ctx, userId, false);
+      const authBlocked = blocked.filter(
+        (c) =>
+          c.pending_api_error_kind === "auth" &&
+          !(c.owner_device_id && remoteIds.has(c.owner_device_id)),
+      );
+      const res = await insertSwitchCommands(ctx, userId, {
+        profile: undefined,
+        blocked: authBlocked,
+        online,
+        primary: device,
+        continueBlocked: true,
+        now,
+      });
+      revived = res.routed;
+    }
+
+    const prior = device.cc_login_flow;
+    await ctx.db.patch(device._id, {
+      cc_login_flow: {
+        status: args.status,
+        email: args.email ?? prior?.email,
+        ...(args.reason ? { reason: args.reason } : {}),
+        started_at: prior?.started_at ?? now,
+        finished_at: now,
+        ...(args.status === "confirmed" ? { revived } : {}),
+      },
+    });
+    return { revived };
   },
 });
 
@@ -781,6 +997,7 @@ export const listAccountProfiles = query({
           is_remote: d.is_remote === true,
           online: isDeviceOnline(d, now),
           active_email: d.cc_accounts?.active_email,
+          login_flow: d.cc_login_flow,
           profiles: d.cc_accounts?.profiles ?? [],
           codex_accounts: d.codex_accounts ?? legacyCodexAccounts(d.codex_usage),
           auto_switch: d.cc_auto_switch === true,

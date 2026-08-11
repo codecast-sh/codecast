@@ -95,6 +95,16 @@ type SearchPoolMessage = {
 async function fetchMessageSearchPool(
   ctx: QueryCtx,
   terms: ParsedTerms,
+  // Caller identity for SCOPED lookups. The global lookup truncates at 512
+  // BM25-ranked rows BEFORE any visibility filtering, so one user's
+  // term-heavy private sessions can push every hit the caller may actually
+  // see below the cutoff ("workflow" returned zero for everyone while one
+  // account's eval sessions owned 464 of the 512 pooled rows). Per-caller and
+  // per-team lookups carve out pools the flood cannot touch; the global
+  // lookup stays as the catch-all for restamped/edge rows. Scope stamps on
+  // mirror rows are snapshots — visibility is still enforced downstream
+  // against the live conversation doc.
+  scope?: { userId: Id<"users">; teamIds: Id<"teams">[] },
 ): Promise<{ pool: SearchPoolMessage[]; tier: "recent" | "deep" }> {
   if (terms.all.length === 0) return { pool: [], tier: "deep" };
   const searchQuery = terms.all.join(" ");
@@ -103,10 +113,39 @@ async function fetchMessageSearchPool(
   // must never be read here — it would re-run every open search each tick).
   const mirror = await ctx.db.query("search_mirror_live").first();
   if (mirror?.live) {
-    const rows = await ctx.db
-      .query("message_search_recent")
-      .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
-      .take(512);
+    const search = (refine?: (q: any) => any) =>
+      ctx.db
+        .query("message_search_recent")
+        .withSearchIndex("search_content_r2", (q) => {
+          const base = q.search("content", searchQuery);
+          return refine ? refine(base) : base;
+        })
+        .take(512);
+    // Scoped lookups FIRST: coverage ranking downstream is a stable sort, so
+    // within a coverage tier pool order decides who survives the candidate
+    // slice — the caller's own rows must precede the (possibly flooded)
+    // global batch.
+    const lookups = [];
+    if (scope) {
+      lookups.push(search((q) => q.eq("user_id", scope.userId)));
+      // Bounded: lookup count is what blows budgets, and the global lookup
+      // already covers whatever a capped-out team list would have added.
+      for (const teamId of scope.teamIds.slice(0, 4)) {
+        lookups.push(search((q) => q.eq("team_id", teamId)));
+      }
+    }
+    lookups.push(search());
+    const batches = await Promise.all(lookups);
+    const seen = new Set<string>();
+    const rows: Doc<"message_search_recent">[] = [];
+    for (const batch of batches) {
+      for (const r of batch) {
+        const key = r.message_id.toString();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push(r);
+      }
+    }
     return {
       tier: "recent",
       pool: rows.map((r) => ({
@@ -196,7 +235,7 @@ async function loadConversationSearchScope(
     return true;
   };
 
-  return { userById, isVisible };
+  return { userById, isVisible, effectiveTeamIds };
 }
 
 // Titles and summaries aren't covered by the message index — search them
@@ -3090,7 +3129,10 @@ export const searchConversations = query({
     const limit = args.limit ?? 20;
     const userOnly = args.userOnly ?? false;
     const terms = parseSearchTerms(searchTerm);
-    const { pool: searchResults, tier: contentTier } = await fetchMessageSearchPool(ctx, terms);
+    const { pool: searchResults, tier: contentTier } = await fetchMessageSearchPool(ctx, terms, {
+      userId,
+      teamIds: scope.effectiveTeamIds,
+    });
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -3988,7 +4030,10 @@ export const searchForCLI = query({
       };
     }
 
-    const { pool: searchResults } = await fetchMessageSearchPool(ctx, terms);
+    const { pool: searchResults } = await fetchMessageSearchPool(ctx, terms, {
+      userId: authUserId,
+      teamIds: effectiveTeamIds,
+    });
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -6177,7 +6222,10 @@ export const feedForCLI = query({
       // Single combined lookup (see fetchMessageSearchPool), then best-coverage
       // selection instead of a strict all-terms AND.
       const terms = parseSearchTerms(query);
-      const { pool: searchResults } = await fetchMessageSearchPool(ctx, terms);
+      const { pool: searchResults } = await fetchMessageSearchPool(ctx, terms, {
+        userId: authUserId,
+        teamIds: effectiveTeamIds,
+      });
 
       // Group messages by conversation, then keep the best-coverage matches
       const conversationMessages = new Map<string, typeof searchResults>();

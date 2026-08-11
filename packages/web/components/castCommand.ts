@@ -106,8 +106,18 @@ function scanShellWord(source: string): { body: string; dynamic: boolean } {
       continue;
     }
 
-    // These constructs are expanded by the shell or terminate/reshape the
-    // command. Keep the visible recipe, but never call it the delivered body.
+    // An unquoted shell operator terminates the word: everything scanned so
+    // far IS the argv the shell delivered, and the rest is a separate command
+    // (`"msg"; cast disown …`), a pipe, or a redirect. Don't let a trailing
+    // chained command poison a fully literal message into "dynamic". An
+    // operator with no word before it means the body came from elsewhere.
+    if (/[;&|<>()]/.test(ch)) {
+      if (body.length === 0) dynamic = true;
+      break;
+    }
+
+    // These constructs are expanded by the shell within the word. Keep the
+    // visible recipe, but never call it the delivered body.
     if (
       ch === "$" ||
       ch === "`" ||
@@ -115,8 +125,7 @@ function scanShellWord(source: string): { body: string; dynamic: boolean } {
       ch === "?" ||
       ch === "[" ||
       ch === "{" ||
-      (ch === "~" && body.length === 0) ||
-      /[;&|<>()]/.test(ch)
+      (ch === "~" && body.length === 0)
     ) {
       dynamic = true;
     }

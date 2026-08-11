@@ -39,6 +39,8 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
   const createPlan = useInboxStore((s) => s.createPlan);
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
+  // Stamp the active workspace: a doc/plan created in a team space belongs to
+  // that team; one created in the personal space stays personal.
   const wsStamp = workspaceStamp(useWorkspaceArgs());
 
   const [title, setTitle] = useState("");

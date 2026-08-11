@@ -24,6 +24,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
 import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
+import { filterToWorkspace } from "@codecast/web/lib/workspaceScope";
 import { useSyncTasks } from "@/hooks/useSyncTasks";
 import { useSyncPlans } from "@/hooks/useSyncPlans";
 import { useSyncDocs } from "@/hooks/useSyncDocs";
@@ -209,13 +210,21 @@ export default function TasksScreen() {
   const updateTask = useInboxStore((s) => s.updateTask);
   const createTask = useInboxStore((s) => s.createTask);
 
-  const tasksList = useMemo(() => Object.values(tasks), [tasks]);
-  const plansList = useMemo(() => Object.values(plans), [plans]);
-  const docsList = useMemo(() => Object.values(docs), [docs]);
+  // Strict workspace boundary at read time: the store caches rows from every
+  // workspace (sync never prunes on team switch), so each list re-asserts the
+  // active workspace — team view shows only that team's rows, personal shows
+  // only teamless rows. Same rule as web (lib/workspaceScope).
+  const tasksList = useMemo(() => filterToWorkspace(Object.values(tasks), teamId), [tasks, teamId]);
+  const plansList = useMemo(() => filterToWorkspace(Object.values(plans), teamId), [plans, teamId]);
+  const docsList = useMemo(() => filterToWorkspace(Object.values(docs), teamId), [docs, teamId]);
 
-  const applySourceFilter = useCallback(<T extends { source?: string }>(list: T[]): T[] => {
-    if (sourceFilter === "human") return list.filter((i) => i.source === "human");
-    if (sourceFilter === "bot") return list.filter((i) => i.source !== "human");
+  // "human" = the human's board: human-created plus anything promoted onto it
+  // (cast task create --human, triage accept). "bot" = machine-created tasks
+  // that stay internal to agent work. Plans/docs have no promoted field, so
+  // for them this stays a plain source split.
+  const applySourceFilter = useCallback(<T extends { source?: string; promoted?: boolean }>(list: T[]): T[] => {
+    if (sourceFilter === "human") return list.filter((i) => i.source === "human" || i.promoted);
+    if (sourceFilter === "bot") return list.filter((i) => i.source !== "human" && !i.promoted);
     return list;
   }, [sourceFilter]);
 
@@ -379,11 +388,18 @@ export default function TasksScreen() {
 
   const handleCreateTask = useCallback(
     (title: string, priority: string, description?: string) => {
-      createTask({ title, priority, description, status: "open" }).catch((err: Error) =>
+      // Stamp the active workspace so the task lives where it was created.
+      createTask({
+        title,
+        priority,
+        description,
+        status: "open",
+        ...(teamId ? { workspace: "team", team_id: teamId } : { workspace: "personal" }),
+      }).catch((err: Error) =>
         Alert.alert("Error", err.message),
       );
     },
-    [createTask],
+    [createTask, teamId],
   );
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);

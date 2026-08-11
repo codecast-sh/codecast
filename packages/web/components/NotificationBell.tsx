@@ -77,6 +77,7 @@ const typeLabels: Record<string, string> = {
   doc_commented: "commented on doc",
   plan_status_changed: "plan updated",
   plan_task_completed: "plan task done",
+  artifact_commented: "commented on your page",
 };
 
 const typeColors: Record<string, string> = {
@@ -97,6 +98,7 @@ const typeColors: Record<string, string> = {
   doc_commented: "text-sol-cyan",
   plan_status_changed: "text-sol-green",
   plan_task_completed: "text-sol-green",
+  artifact_commented: "text-sol-cyan",
 };
 
 function sessionLabel(conversation: { title?: string; project_path?: string; agent_type?: string } | null): string | null {
@@ -145,9 +147,17 @@ export function NotificationBell() {
     notificationId: Id<"notifications">,
     conversationId?: Id<"conversations">,
     entityType?: string,
-    entityId?: string
+    entityId?: string,
+    link?: string
   ) => {
     markAsRead(notificationId);
+    // A deep link wins (artifact comments: opens the published page with that
+    // comment thread selected). New tab — the page lives outside the app.
+    if (link) {
+      window.open(link, "_blank", "noopener");
+      setIsOpen(false);
+      return;
+    }
     if (entityType && entityId) {
       const routes: Record<string, string> = { task: "/tasks/", doc: "/docs/", plan: "/plans/" };
       const base = routes[entityType];
@@ -205,7 +215,10 @@ export function NotificationBell() {
             ) : (
               recentNotifications.map((notification: any) => {
                 const label = sessionLabel(notification.conversation);
-                const actorName = notification.actor?.name || notification.actor?.github_username;
+                // Actors without an account (anonymous page commenters) carry
+                // their display identity on the row itself.
+                const actorName = notification.actor?.name || notification.actor?.github_username || (notification as any).actor_name;
+                const actorAvatar = notification.actor?.github_avatar_url || (notification as any).actor_avatar;
                 const agentType = notification.conversation?.agent_type || "claude_code";
                 const isSessionNotif = sessionTypes.has(notification.type);
                 const typeLabel = typeLabels[notification.type] || notification.type;
@@ -214,15 +227,15 @@ export function NotificationBell() {
                 return (
                   <button
                     key={notification._id}
-                    onClick={() => handleNotificationClick(notification._id, notification.conversation_id, (notification as any).entity_type, (notification as any).entity_id)}
+                    onClick={() => handleNotificationClick(notification._id, notification.conversation_id, (notification as any).entity_type, (notification as any).entity_id, (notification as any).link)}
                     className={`w-full px-5 py-4 text-left border-b border-sol-border/50 hover:bg-sol-bg-alt transition-colors ${
                       !notification.read ? 'bg-sol-bg-alt/40' : ''
                     }`}
                   >
                     <div className="flex items-start gap-3">
-                      {notification.actor?.github_avatar_url ? (
+                      {actorAvatar ? (
                         <img
-                          src={notification.actor.github_avatar_url}
+                          src={actorAvatar}
                           alt={actorName || ''}
                           className="w-9 h-9 rounded-full flex-shrink-0 mt-0.5"
                         />

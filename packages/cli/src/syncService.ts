@@ -529,6 +529,25 @@ export class SyncService {
     return res?.continued ?? 0;
   }
 
+  // Report the browser sign-in flow's outcome (start_login command). Confirmed
+  // also makes the server kick off the auth-blocked revive; the returned count
+  // is how many sessions it queued.
+  async completeLoginFlow(
+    status: "confirmed" | "rejected",
+    email?: string,
+    reason?: string,
+  ): Promise<number> {
+    await this.throttle();
+    const res = await this.mutate("accountSwitch:completeLoginFlow" as any, {
+      api_token: this.apiToken,
+      device_id: deviceId(),
+      status,
+      ...(email ? { email } : {}),
+      ...(reason ? { reason } : {}),
+    });
+    return res?.revived ?? 0;
+  }
+
   private async existingMessageUuids(conversationId: string, messageUuids: string[]): Promise<Set<string> | null> {
     if (messageUuids.length === 0) return new Set();
     await this.throttle();

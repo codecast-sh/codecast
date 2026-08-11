@@ -19,7 +19,7 @@ import {
   missingView,
   unauthenticatedView,
 } from "./smallViewContracts";
-import { scheduleAutoSwitchCheck } from "./accountSwitch";
+import { onFreshApiErrorPark } from "./accountSwitch";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import {
@@ -1070,14 +1070,16 @@ export const addMessage = mutation({
     if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
       convPatch.pending_api_error_kind = nextBannerKind;
     }
-    // A fresh limit park is the auto-switch trigger event (the debounced check
-    // no-ops unless the user's primary device has auto-switch enabled).
+    // A fresh park on a blocked-kind banner triggers the debounced reactions:
+    // the auto-switch check (limit only) and the aggregated incident
+    // notification (any blocked kind). Statusful "error" banners self-retry
+    // and never notify.
     if (
       msgIsBanner &&
-      msgBannerKind === "limit" &&
-      (!wasPendingApiError || conversation.pending_api_error_kind !== "limit")
+      msgBannerKind !== "error" &&
+      (!wasPendingApiError || conversation.pending_api_error_kind !== msgBannerKind)
     ) {
-      await scheduleAutoSwitchCheck(ctx, conversation.user_id);
+      await onFreshApiErrorPark(ctx, conversation.user_id, msgBannerKind);
     }
     if (args.role === "user" && contentToStore?.trim()) {
       convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
@@ -1555,13 +1557,15 @@ export const addMessages = mutation({
       if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
         convPatch.pending_api_error_kind = nextBannerKind;
       }
-      // A fresh limit park is the auto-switch trigger event (see addMessage).
+      // A fresh blocked-kind park triggers the debounced reactions (see
+      // addMessage): auto-switch check + aggregated incident notification.
       if (
         nextPendingApiError &&
-        nextBannerKind === "limit" &&
-        (!wasPendingApiError || conversation.pending_api_error_kind !== "limit")
+        nextBannerKind &&
+        nextBannerKind !== "error" &&
+        (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind)
       ) {
-        await scheduleAutoSwitchCheck(ctx, conversation.user_id);
+        await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind);
       }
       const userMsgs = args.messages.filter((m) => m.role === "user");
       if (userMsgs.length > 0) {
@@ -1805,6 +1809,7 @@ export const generateMessageShareLink = mutation({
     context_after: v.optional(v.number()),
     message_ids: v.optional(v.array(v.id("messages"))),
     note: v.optional(v.string()),
+    include_conversation_link: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1829,6 +1834,21 @@ export const generateMessageShareLink = mutation({
       }
     }
 
+    // Linking the full conversation requires a public share_token on it. Only
+    // the owner may mint one (making a conversation public is the owner's
+    // consent); a team member can link it only if it is already public.
+    let includeConversationLink = false;
+    if (args.include_conversation_link) {
+      if (conversation.share_token) {
+        includeConversationLink = true;
+      } else if (isOwner) {
+        await ctx.db.patch(conversation._id, { share_token: generateShareToken() });
+        includeConversationLink = true;
+      } else {
+        throw new Error("Only the conversation owner can make the full conversation public");
+      }
+    }
+
     const shareToken = generateShareToken();
     await ctx.db.insert("message_shares", {
       share_token: shareToken,
@@ -1838,6 +1858,7 @@ export const generateMessageShareLink = mutation({
       context_after: args.context_after,
       message_ids: args.message_ids,
       note: args.note,
+      include_conversation_link: includeConversationLink || undefined,
       created_at: Date.now(),
     });
 
@@ -2043,6 +2064,10 @@ export const getSharedMessage = query({
         project_path: conversation.project_path,
         agent_type: conversation.agent_type,
       },
+      // Read live from the conversation (not copied onto the share row) so the
+      // link keeps working if the token is minted later, and only when the
+      // sharer opted in.
+      conversationShareToken: share.include_conversation_link ? (conversation.share_token ?? null) : null,
       user: user ? { name: user.name, image: user.image } : null,
       note: share.note,
       sharedAt: share.created_at,

@@ -206,21 +206,28 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
       </div>
 
       <div className="relative flex-1 min-h-0">
-        {failure ? (
-          <div className="absolute inset-0 flex items-center justify-center text-[11px] font-mono text-sol-text-dim text-center px-6">{failure}</div>
-        ) : status === "offline" ? (
-          <div className="absolute inset-0 flex items-center justify-center text-[11px] font-mono text-center px-6">
+        {failure || status === "offline" || status === "exited" || status === "error" ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-[11px] font-mono text-center px-6">
             <span>
-              <span className="text-sol-yellow">no connection</span>
-              <span className="text-sol-text-dim"> — the terminal needs the daemon reachable on this machine · </span>
-              <button onClick={reconnect} className="text-sol-cyan hover:underline">
-                retry
-              </button>
+              {failure ? (
+                <span className="text-sol-text-dim">{failure}</span>
+              ) : status === "offline" ? (
+                <>
+                  <span className="text-sol-yellow">no connection</span>
+                  <span className="text-sol-text-dim"> — the terminal needs the daemon reachable on this machine</span>
+                </>
+              ) : status === "error" ? (
+                <span className="text-sol-red">{inst?.state.statusDetail ?? "could not attach to the tmux session"}</span>
+              ) : (
+                <span className="text-sol-text-dim">{inst?.state.statusDetail ?? "session ended"}</span>
+              )}
             </span>
-          </div>
-        ) : status === "exited" || status === "error" ? (
-          <div className="absolute inset-0 flex items-center justify-center text-[11px] font-mono text-sol-text-dim text-center px-6">
-            {inst?.state.statusDetail ?? "session ended"}
+            <button
+              onClick={reconnect}
+              className="px-2 py-0.5 rounded border border-sol-border/40 text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
+            >
+              Reconnect
+            </button>
           </div>
         ) : isConnecting ? (
           <ConnectingNote label={`Attaching to ${target}…`} />

@@ -7,7 +7,8 @@ const ENTITY_TYPE = v.union(
   v.literal("task"),
   v.literal("doc"),
   v.literal("plan"),
-  v.literal("conversation")
+  v.literal("conversation"),
+  v.literal("artifact")
 );
 
 const NOTIFICATION_TYPE = v.union(
@@ -28,7 +29,8 @@ const NOTIFICATION_TYPE = v.union(
   v.literal("doc_updated"),
   v.literal("doc_commented"),
   v.literal("plan_status_changed"),
-  v.literal("plan_task_completed")
+  v.literal("plan_task_completed"),
+  v.literal("artifact_commented")
 );
 
 const PREFERENCE_MAP: Record<string, string> = {
@@ -44,6 +46,7 @@ const PREFERENCE_MAP: Record<string, string> = {
   mention: "mention",
   comment_reply: "mention",
   conversation_comment: "mention",
+  artifact_commented: "artifact_activity",
   team_session_start: "team_session_start",
   permission_request: "permission_request",
   session_idle: "session_idle",
@@ -103,25 +106,31 @@ export const ensureSubscribed = internalMutation({
 export const emit = internalMutation({
   args: {
     event_type: NOTIFICATION_TYPE,
-    actor_user_id: v.id("users"),
+    // Absent for actors without an account (an anonymous artifact commenter);
+    // actor_name/actor_avatar carry their display identity instead.
+    actor_user_id: v.optional(v.id("users")),
+    actor_name: v.optional(v.string()),
+    actor_avatar: v.optional(v.string()),
     entity_type: ENTITY_TYPE,
     entity_id: v.string(),
     message: v.string(),
+    link: v.optional(v.string()),
     conversation_id: v.optional(v.id("conversations")),
     comment_id: v.optional(v.id("comments")),
     direct_recipient_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const actor = await ctx.db.get(args.actor_user_id);
-    const actorName = actor?.name || actor?.github_username || "Someone";
+    const actor = args.actor_user_id ? await ctx.db.get(args.actor_user_id) : null;
+    const actorName = actor?.name || actor?.github_username || args.actor_name || "Someone";
 
     type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
     const recipients: UserDoc[] = [];
 
+    const actorId = args.actor_user_id?.toString();
     if (args.direct_recipient_id) {
       const u = await ctx.db.get(args.direct_recipient_id);
-      if (u && u._id.toString() !== args.actor_user_id.toString()) {
+      if (u && u._id.toString() !== actorId) {
         recipients.push(u);
       }
     } else {
@@ -138,7 +147,7 @@ export const emit = internalMutation({
       for (const sub of subs) {
         if (sub.muted) continue;
         const uid = sub.user_id.toString();
-        if (uid === args.actor_user_id.toString() || seen.has(uid)) continue;
+        if (uid === actorId || seen.has(uid)) continue;
         seen.add(uid);
         const u = await ctx.db.get(sub.user_id);
         if (u) recipients.push(u);
@@ -161,8 +170,11 @@ export const emit = internalMutation({
         recipient_user_id: recipient._id,
         type: args.event_type as any,
         actor_user_id: args.actor_user_id,
+        actor_name: args.actor_name,
+        actor_avatar: args.actor_avatar,
         entity_type: args.entity_type as any,
         entity_id: args.entity_id,
+        link: args.link,
         conversation_id: args.conversation_id,
         comment_id: args.comment_id,
         message: args.message,
@@ -184,6 +196,7 @@ export const emit = internalMutation({
             entity_id: args.entity_id,
             conversationId: args.conversation_id,
             type: args.event_type,
+            link: args.link,
           },
         });
       }
