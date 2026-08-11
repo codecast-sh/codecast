@@ -13,6 +13,7 @@ import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useConvexSync } from "../hooks/useConvexSync";
+import { useWorkspaceArgs, workspaceStamp } from "../hooks/useWorkspaceArgs";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
@@ -189,6 +190,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   );
   const teamUnreadCount = teamUnreadCountQuery ?? useInboxStore.getState().teamUnreadCount;
   const createDoc = useInboxStore((s) => s.createDoc);
+  const wsStamp = workspaceStamp(useWorkspaceArgs());
   const createModal = useInboxStore((s) => s.createModal);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
@@ -428,7 +430,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             addTitle="New page"
             onAdd={async () => {
               await createDoc(
-                { title: "", doc_type: "note" },
+                { title: "", doc_type: "note", ...wsStamp },
                 { version: 1, kind: "navigate" },
               );
             }}

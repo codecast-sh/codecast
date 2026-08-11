@@ -693,6 +693,7 @@ export const list = query({
       });
     }
 
+    tasks.sort((a: any, b: any) => (b.updated_at || b._creationTime || 0) - (a.updated_at || a._creationTime || 0));
     const limit = args.limit || 300;
     const result = tasks.slice(0, limit);
 
@@ -1400,12 +1401,11 @@ export const webList = query({
         ]);
         for (const t of teamTasks) pushUnique(t);
 
-        // Also rescue orphan tasks (no team_id) assigned to me — CLI-created
-        // tasks that never got a team would otherwise be invisible in every
-        // view. Do NOT pull in tasks belonging to *other* teams: a task whose
-        // team_id is set to another team must not leak into this team's list.
+        // The assignee scan rescues tasks assigned to me in THIS team that fell
+        // outside the team scan's MAX_INITIAL cap. Untagged (no team_id) tasks
+        // are personal — they belong to the personal view, not here.
         for (const t of assignedTasks) {
-          if (!t.team_id || String(t.team_id) === String(args.team_id)) pushUnique(t);
+          if (String(t.team_id) === String(args.team_id)) pushUnique(t);
         }
       } else if (args.workspace === "all") {
         // GLOBAL VIEW: every team the user belongs to + personal tasks
@@ -2267,6 +2267,7 @@ export const webTeamList = query({
       tasks = tasks.filter((t: any) => !t.triage_status || t.triage_status === "active");
     }
 
+    tasks.sort((a: any, b: any) => (b.updated_at || b._creationTime || 0) - (a.updated_at || a._creationTime || 0));
     return tasks.slice(0, args.limit || 300);
   },
 });

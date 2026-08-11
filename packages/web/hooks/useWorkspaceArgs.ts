@@ -6,6 +6,20 @@ export type WorkspaceArgs =
   | { workspace: "personal"; project_path?: string }
   | "skip";
 
+/**
+ * The {workspace, team_id} pair to stamp onto a created record so it lands in
+ * the workspace being viewed (team views are an exact team match — an
+ * unstamped record would only show in the personal view).
+ */
+export function workspaceStamp(
+  args: WorkspaceArgs
+): { workspace: "team"; team_id: Id<"teams"> } | { workspace: "personal" } | Record<string, never> {
+  if (args === "skip") return {};
+  return args.workspace === "team"
+    ? { workspace: "team", team_id: args.team_id }
+    : { workspace: "personal" };
+}
+
 export function useWorkspaceArgs(): WorkspaceArgs {
   const activeTeamId = useInboxStore(
     (s) => s.clientState.ui?.active_team_id
