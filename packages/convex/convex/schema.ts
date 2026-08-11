@@ -804,13 +804,6 @@ export default defineSchema({
   })
     .index("by_message_id", ["message_id"])
     .index("by_source_created_at", ["source_created_at"])
-    // COEXISTENCE: prod still carries the original index (636k docs). Keep it
-    // declared so deploys from this tree stay additive — retiring it is the
-    // search owner's explicit step, not a side effect of an unrelated deploy.
-    .searchIndex("search_content", {
-      searchField: "content",
-      filterFields: ["conversation_id"],
-    })
     // "_r2" because renaming a search index is convex's drop-and-rebuild: the
     // original "search_content" segment set was damaged beyond compaction
     // (2026-08-10 mass-patch incident — a segment blob went missing and the
