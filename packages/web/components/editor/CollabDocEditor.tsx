@@ -396,6 +396,7 @@ function EditorInner({
       focus: () => editor.commands.focus("end"),
       clear: () => editor.commands.clearContent(),
       insertText: (text: string) => { editor.chain().focus().insertContent(text).run(); },
+      setMarkdown: (markdown: string) => { editor.commands.setContent(markdown); },
     };
   }
 

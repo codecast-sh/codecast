@@ -3220,6 +3220,11 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
   );
   const [error, setError] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<{ uri: string; storageId?: string; uploading: boolean }[]>([]);
+  // Mirrors the web composer's pastedImagesRef: the `[Image N]` token paths
+  // need each image's current position, and a state read inside an async
+  // callback or a state updater would be stale (or double-fire in StrictMode).
+  const selectedImagesRef = useRef(selectedImages);
+  selectedImagesRef.current = selectedImages;
   const managedSessionQ = useQuery(
     api.managedSessions.isSessionManaged,
     isConvexId(conversationId as string) ? { conversation_id: conversationId } : "skip"
@@ -3287,11 +3292,17 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
       if (!result.canceled && result.assets) {
         for (const asset of result.assets) {
           const uri = asset.uri;
-          setSelectedImages(prev => [...prev, { uri, uploading: true }]);
+          // Ref-first so a multi-pick batch numbers sequentially: the state
+          // updates are async, so `selectedImages` is still the old array here.
+          selectedImagesRef.current = [...selectedImagesRef.current, { uri, uploading: true }];
+          setSelectedImages(selectedImagesRef.current);
+          // Token numbers follow attach order, which is the order the agent
+          // receives the images in — so `[Image 2]` is a real reference.
+          setMessage(m => insertImagePlaceholder(m, m.length, selectedImagesRef.current.length).text);
           uploadToStorage(uri).then(storageId => {
             setSelectedImages(prev => prev.map(img => img.uri === uri ? { ...img, storageId, uploading: false } : img));
           }).catch(() => {
-            setSelectedImages(prev => prev.filter(img => img.uri !== uri));
+            dropImage(uri);
             Alert.alert('Upload failed', 'Could not upload image');
           });
         }

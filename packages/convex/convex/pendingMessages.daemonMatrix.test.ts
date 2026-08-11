@@ -394,6 +394,51 @@ describe("DEC-05 — oversized message echo", () => {
     );
     expect(tables.messages[0].client_id).toBe("command_old");
   });
+
+  // Regression: the acct-switch double stamp. A recycled session boots with a
+  // harness-emitted <task-notification> user turn; the daemon's positional
+  // delivery ack paired the pasted "continue" pending row with THAT turn and
+  // stamped its client_id there. Because the ack left echo_message_id unset,
+  // the real "continue" echo (minutes later) re-adopted the row through the
+  // delivered tier — TWO transcript messages sharing one client_id, which the
+  // web timeline rendered as overlapping duplicate rows.
+  test("a vouched ack ties the row to its transcript so a later content-matched echo cannot re-adopt it", async () => {
+    const { db, tables } = createDb({
+      conversations: [{ _id: "conv_1", user_id: "user_a" }],
+      pending_messages: [{
+        _id: "pm_continue",
+        conversation_id: "conv_1",
+        from_user_id: "user_a",
+        client_id: "acct-switch-cmd1-conv_1",
+        content: "continue",
+        status: "injected",
+        created_at: NOW - 10_000,
+        retry_count: 0,
+      }],
+      messages: [{
+        _id: "message_notification",
+        conversation_id: "conv_1",
+        role: "user",
+        content: "<task-notification>\n<task-id>b1</task-id>\n<status>stopped</status>\n</task-notification>",
+        timestamp: NOW,
+      }],
+    });
+    await ackInjectedForDaemon(
+      { db } as any,
+      "conv_1" as any,
+      ["pm_continue" as any],
+      [{
+        pendingMessageId: "pm_continue" as any,
+        transcriptMessageId: "message_notification" as any,
+      }],
+    );
+    const row = tables.pending_messages[0];
+    expect(row.status).toBe("delivered");
+    expect(row.echo_message_id).toBe("message_notification");
+    // The true echo arrives later: the delivered tier must NOT re-match a row
+    // that already has its transcript relation.
+    expect(findEchoedPendingMessage([row as any], "continue", NOW + 240_000)).toBeUndefined();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

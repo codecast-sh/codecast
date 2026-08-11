@@ -43,7 +43,6 @@ import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemory
 import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
-import { buildForkSeedBody } from "./forkSeed.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -2410,9 +2409,9 @@ cast fork - - <<'EOF'
 EOF
 \`\`\`
 
-\`cast fork\` branches the current conversation — each branch keeps the full history up to the fork point (the latest user message by default; \`--at <line>\` picks another spot, \`-s <id>\` forks a different session), then pursues its own direction. Use it when the thread splits into distinct paths worth exploring in parallel.
+\`cast fork\` branches the current conversation — each branch keeps the full history up to the fork point (just before the latest user message by default, so the fork request itself never enters a branch; \`--at <line>\` picks another spot, \`-s <id>\` forks a different session), then pursues its own direction. Use it when the thread splits into distinct paths worth exploring in parallel.
 
-A fork fan-out is a handoff, not an orchestration. When the human asks to run work in N forks, issue ONE \`cast fork\` with all N directions, report the roster, and return to your own thread. The branches run independently and the human steers them from the inbox — do not stage launches, monitor branches, or build coordination between them. Each branch is automatically told it is one independent branch of a completed fan-out and which direction it owns, so seeds carry the work itself, not coordination protocol.
+A fork fan-out is a handoff, not an orchestration. When the human asks to run work in N forks, issue ONE \`cast fork\` with all N directions, report the roster, and return to your own thread. A branch doesn't know it is a fork — its history ends before the fork request, and its seed arrives as its next instruction — so write each direction as a complete, self-contained instruction for that thread. The branches run independently and the human steers them from the inbox; do not stage launches, monitor branches, or build coordination between them.
 
 \`cast spawn\` starts fresh sessions with no shared history, in the current project (\`-C <dir>\` for elsewhere). Use it to hand off self-contained work — a parallel audit, a port, a spike — rather than research you'd fold back into your own answer.
 
@@ -10315,7 +10314,7 @@ program
   )
   .argument("[directions...]", "One seed prompt per branch; '-' reads a prompt from stdin (several '-' split stdin on lines containing only ---)")
   .option("-s, --session <id>", "Conversation to fork (default: current session)")
-  .option("--at <line>", "Fork at message line N (cast read numbering); default: the latest user message")
+  .option("--at <line>", "Fork at message line N (cast read numbering); default: just before the latest user message, so the fork request stays out of the branches")
   .option("--tip", "Fork at the very end instead (include everything so far)")
   .option("--from <index>", "Alias for --at (back-compat)")
   .option("--label <name>", "File each branch under this label instead of the parent's (created if new; branches inherit the parent label by default)")
@@ -10405,9 +10404,13 @@ program
 
     // Resolve the fork anchor (message_uuid). --tip forks at the end; --at/--from
     // pick a 1-based message line; otherwise the default for a seeded fork is the
-    // latest user message, so each branch carries context through the human's last
-    // instruction but not the agent's in-flight reply. A bare legacy fork (no
-    // directions, no flags) leaves the anchor unset = fork the entire conversation.
+    // message BEFORE the latest user message. The latest user message is normally
+    // the fork request itself ("run these in N forks") — carrying it into a branch
+    // is how a restarted branch once resumed as an orchestrator and launched a
+    // duplicate fleet. Excluded, a branch never knows it is a fork: its history
+    // ends at ordinary work and the seed arrives as its next instruction. A bare
+    // legacy fork (no directions, no flags) leaves the anchor unset = fork the
+    // entire conversation.
     let messageUuid: string | undefined;
     const explicitIndex = options.at ?? options.from;
     if (!options.tip && (explicitIndex !== undefined || directions.length > 0)) {
@@ -10429,21 +10432,22 @@ program
           process.exit(1);
         }
       } else {
-        const lastUser = [...data.messages].reverse().find((m: any) => m.role === "user" && m.message_uuid);
-        messageUuid = lastUser?.message_uuid;
+        const seq = data.messages.filter((m: any) => (m.role === "user" || m.role === "assistant") && m.message_uuid);
+        const lastUserIdx = seq.map((m: any) => m.role).lastIndexOf("user");
+        // No message before the fork request (or no user message at all): fall
+        // back to anchoring at the request itself rather than forking nothing.
+        messageUuid = lastUserIdx > 0 ? seq[lastUserIdx - 1].message_uuid : seq[lastUserIdx]?.message_uuid;
       }
     }
 
     // Multi-direction fork: branch once per direction from the same anchor, then
     // seed each branch with its direction over the same pending-message rail
-    // `cast send` uses. Each lands in the inbox as its own session. The seed
-    // wraps the direction in the fan-out contract (buildForkSeedBody) so a
-    // branch never resumes the parent's orchestration plan from its inherited
-    // history.
+    // `cast send` uses. Each lands in the inbox as its own session. The seed is
+    // the direction verbatim — the branch just receives its next instruction;
+    // keeping it ignorant of the fan-out is what keeps branches independent.
     if (directions.length > 0) {
       const roster: { short_id: string; conversation_id: string; direction: string; seeded: boolean }[] = [];
-      for (let i = 0; i < directions.length; i++) {
-        const direction = directions[i];
+      for (const direction of directions) {
         // session_id = per-branch idempotency key: forkFromMessage collapses any
         // retry/redelivery carrying the same key onto the one existing row, which
         // is what makes retries safe here (a fork POST that times out may have
@@ -10470,7 +10474,7 @@ program
           const seedResp = await cliFetch(`${siteUrl}/cli/messages/send`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_token: config.auth_token, to: result.conversation_id, from: id, body: buildForkSeedBody(i, directions) }),
+            body: JSON.stringify({ api_token: config.auth_token, to: result.conversation_id, from: id, body: direction }),
           });
           seeded = seedResp.ok;
         } catch {}
@@ -10487,7 +10491,7 @@ program
         return;
       }
 
-      const anchorNote = options.tip ? "at the tip" : messageUuid ? "at the latest user message" : "(entire conversation)";
+      const anchorNote = options.tip ? "at the tip" : explicitIndex !== undefined ? `at message ${explicitIndex}` : messageUuid ? "just before the fork request" : "(entire conversation)";
       const labelNote = options.label
         ? ` ${c.dim}·${c.reset} filed under ${c.yellow}${options.label}${c.reset}${labelResult?.createdLabel ? ` ${c.dim}(new label)${c.reset}` : ""}`
         : "";
