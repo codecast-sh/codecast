@@ -25,6 +25,12 @@ export interface TerminalSessionInfo {
   attached: number;
 }
 
+// Discovery is capped tighter when we already know which machine the pane is
+// on: the only question left is "is that machine THIS one?", and a targeted
+// daemon answers in well under a second. Waiting the full budget for a machine
+// that is asleep just delays the relay fallback.
+const TARGETED_POLL_TIMEOUT_MS = 3_000;
+
 const CACHE_KEY = "cast_term_endpoint";
 // Dev override: `localStorage.CAST_TERM_ENDPOINT = "42871:dev-token"` points
 // the panel at a standalone terminal server (packages/cli terminal dev server)
@@ -34,7 +40,9 @@ const RESULT_POLL_MS = 400;
 const RESULT_POLL_TIMEOUT_MS = 10_000;
 const PROBE_TIMEOUT_MS = 1500;
 
-let inflight: Promise<TerminalEndpoint | null> | null = null;
+// Keyed by the device asked for ("" = any), so a targeted lookup can't be
+// served by an in-flight broadcast one.
+const inflight = new Map<string, Promise<TerminalEndpoint | null>>();
 
 /** Why the last discovery produced no endpoint. Callers surface cause-specific
  *  guidance: a relay that returned no devices means the daemon isn't running
@@ -42,7 +50,7 @@ let inflight: Promise<TerminalEndpoint | null> | null = null;
  *  probe means the BROWSER blocked the loopback request — on a hosted origin
  *  that's Chrome's local-network permission, which no amount of restarting the
  *  daemon will fix. */
-export type DiscoveryFailure = "none" | "no-devices" | "probe-failed";
+export type DiscoveryFailure = "none" | "no-devices" | "probe-failed" | "other-device";
 let lastFailure: DiscoveryFailure = "none";
 export function lastDiscoveryFailure(): DiscoveryFailure {
   return lastFailure;
@@ -102,8 +110,10 @@ export async function probeEndpoint(ep: TerminalEndpoint): Promise<TerminalSessi
   }
 }
 
-async function discover(convex: ConvexReactClient): Promise<TerminalEndpoint | null> {
-  const { commands } = await convex.mutation(api.users.requestTerminalEndpoints, {});
+async function discover(convex: ConvexReactClient, deviceId?: string): Promise<TerminalEndpoint | null> {
+  const { commands } = await convex.mutation(api.users.requestTerminalEndpoints, {
+    ...(deviceId ? { device_id: deviceId } : {}),
+  });
   if (!commands.length) {
     lastFailure = "no-devices";
     return null;
@@ -111,7 +121,7 @@ async function discover(convex: ConvexReactClient): Promise<TerminalEndpoint | n
   // Candidates exist; anything that goes wrong from here is the probe.
   lastFailure = "probe-failed";
 
-  const deadline = Date.now() + RESULT_POLL_TIMEOUT_MS;
+  const deadline = Date.now() + (deviceId ? TARGETED_POLL_TIMEOUT_MS : RESULT_POLL_TIMEOUT_MS);
   const unresolved = new Map(commands.map((c) => [c.command_id, c] as const));
 
   while (unresolved.size > 0 && Date.now() < deadline) {
@@ -148,29 +158,49 @@ async function discover(convex: ConvexReactClient): Promise<TerminalEndpoint | n
 /**
  * Resolve the local terminal endpoint: dev override, then session cache
  * (revalidated by probe), then full discovery through the daemon-command relay.
+ *
+ * `deviceId` narrows discovery to one machine, which is what the conversation
+ * split wants: it already knows where the pane lives, so the only question is
+ * whether that machine is THIS one. A miss there is not a failure — it is the
+ * signal to take the relay transport instead — so it reports "other-device"
+ * and returns fast rather than waiting out the broadcast budget.
  */
 export async function getTerminalEndpoint(
   convex: ConvexReactClient,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; deviceId?: string },
 ): Promise<TerminalEndpoint | null> {
   const override = readOverride();
   if (override) return override;
 
+  const want = opts?.deviceId;
   if (!opts?.force) {
     const cached = readCache();
-    if (cached && (await probeEndpoint(cached)) !== null) return cached;
+    // A cached endpoint for the WRONG machine is not a hit: the pane we were
+    // asked about isn't there, and probing it successfully would be the most
+    // misleading possible outcome.
+    if (cached && (!want || cached.deviceId === want) && (await probeEndpoint(cached)) !== null) {
+      lastFailure = "none";
+      return cached;
+    }
   }
-  if (inflight) return inflight;
 
-  inflight = discover(convex)
+  const key = want ?? "";
+  const existing = inflight.get(key);
+  if (existing) return existing;
+
+  const run = discover(convex, want)
     .then((ep) => {
-      writeCache(ep);
+      // Only the broadcast lookup owns the cache. A targeted miss says nothing
+      // about the local machine, so it must not evict a good local endpoint.
+      if (!want || ep) writeCache(ep);
+      if (!ep && want) lastFailure = "other-device";
       return ep;
     })
     .finally(() => {
-      inflight = null;
+      inflight.delete(key);
     });
-  return inflight;
+  inflight.set(key, run);
+  return run;
 }
 
 export async function killTerminalSession(ep: TerminalEndpoint, name: string): Promise<boolean> {

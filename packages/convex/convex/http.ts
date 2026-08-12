@@ -3751,6 +3751,12 @@ cliRoute("/cli/vault/register", async (ctx, body) => ctx.runMutation(api.vaultMi
 cliRoute("/cli/vault/upsert", async (ctx, body) => ctx.runMutation(api.vaultMirror.cliUpsertNotes, body));
 cliRoute("/cli/vault/upload-url", async (ctx, body) => ctx.runMutation(api.images.generateUploadUrl, body));
 
+// Remote pane watching — the daemon's frame push (packages/cli/src/terminal/
+// paneStream.ts). Only reached while a viewer holds a lease on the pane; the
+// reply carries that lease, so the capture loop learns when to stop from the
+// request it was already making.
+cliRoute("/cli/terminal/frame", async (ctx, body) => ctx.runMutation(api.terminalStream.cliPushFrame, body));
+
 // Image sharing (cast image): upload a screenshot/image to storage, then
 // resolve its stable public /api/storage/<uuid> URL for inline embedding in
 // message markdown and cast-canvas blocks. Same generic mutations as above.

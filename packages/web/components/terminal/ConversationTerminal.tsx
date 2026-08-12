@@ -1,10 +1,22 @@
 "use client";
 
-// Per-conversation terminal split: a live, read-only view of the agent's tmux
-// pane docked between the message feed and the composer — scoped to ONE
-// conversation, unlike the global bottom panel. Backed by the same terminal
-// registry (a `detached` instance: no panel tab), so theme, lifecycle and the
-// loopback transport are all shared.
+// Per-conversation terminal split: a live view of the agent's tmux pane docked
+// between the message feed and the composer — scoped to ONE conversation,
+// unlike the global bottom panel. Backed by the same terminal registry (a
+// `detached` instance: no panel tab), so theme and lifecycle are shared.
+//
+// TWO TRANSPORTS, chosen by where the pane actually lives:
+//
+//   this machine   → the loopback PTY WebSocket. Interactive, byte-exact.
+//   your other box → screens relayed through Convex (lib/terminal/remotePane).
+//                    Read-only, a few frames a second.
+//   someone else's → nothing. Relaying it would mean writing commands into
+//                    another account's daemon queue; we name the machine and
+//                    stop there.
+//
+// The pane's machine is known up front (devices.getConversationMachine), so the
+// choice needs no guessing: discovery is asked about that ONE device, and a
+// miss means the pane is elsewhere — the relay's cue, not an error.
 //
 // Open state and heights live at module level keyed by conversation, so
 // switching conversations and back preserves the split (and its xterm buffer)
@@ -12,7 +24,12 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
-import { X, RotateCw } from "lucide-react";
+import { X, RotateCw, Eye } from "lucide-react";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { deviceDisplayName } from "../DeviceBadge";
+import type { SessionMachine } from "../tmuxAttach";
 import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import {
   attachToContainer,
@@ -26,6 +43,9 @@ import { ConnectingNote } from "./TerminalPanel";
 
 const DEFAULT_HEIGHT = 260;
 const MIN_HEIGHT = 90;
+// Comfortably more than the daemon's heartbeat, so a slow round-trip doesn't
+// flicker the "paused" label on and off.
+const STALE_AFTER_MS = 12_000;
 
 interface SplitState {
   termId: string | null;
@@ -84,36 +104,76 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
   // The pane can move on session restart (tmux_session changes) — follow it.
   const target = tmuxSession ?? split.target;
 
+  // Which machine owns the pane. An enrichment, so it goes through
+  // useQueryNoThrow: if it never answers we fall back to plain local discovery,
+  // which is exactly the old behaviour.
+  const machineQuery = useQueryNoThrow(
+    api.devices.getConversationMachine,
+    convKey ? ({ conversation_id: convKey as any } as any) : "skip",
+  );
+  const machine = machineQuery.data as SessionMachine | null | undefined;
+  // "Settled" covers the error case too: if the lookup never answers we still
+  // want to try the local daemon rather than sit on a spinner forever.
+  const machineSettled = machine !== undefined || !!machineQuery.error;
+  const machineName = machine ? deviceDisplayName(machine as any) : null;
+  const foreign = !!machine && !machine.is_mine;
+
   const connect = useCallback(async () => {
     if (connecting.current) return;
     connecting.current = true;
     setFailure(null);
     try {
-      const endpoint = await getTerminalEndpoint(convex);
+      // A teammate's machine: their daemon, their account's command queue.
+      // Naming it is the honest answer.
+      if (foreign) {
+        setFailure(
+          `This pane runs on ${machineName ?? "another person's machine"}, which only its owner can stream.`,
+        );
+        return;
+      }
+
+      // Ask only the machine that owns the pane. When the pane's machine is
+      // unknown we keep the old broadcast lookup.
+      const endpoint = await getTerminalEndpoint(convex, { deviceId: machine?.device_id });
       const current = splits.get(convKey);
       if (!current) return;
-      if (!endpoint) {
+
+      if (endpoint) {
+        current.termId = openTerminal({
+          endpoint,
+          kind: "attach",
+          target,
+          title: target,
+          detached: true,
+          // Interactive, same as a manual `tmux attach` — the pill is just the
+          // safe version of it (ignore-size, no nesting).
+          interactive: true,
+        });
+      } else if (machine?.device_id) {
+        // The pane is on another of YOUR machines. No socket can reach it, so
+        // watch it through the relay instead.
+        current.termId = openTerminal({
+          remote: { convex, deviceId: machine.device_id, target },
+          kind: "attach",
+          target,
+          title: target,
+          detached: true,
+        });
+      } else {
         setFailure("No local daemon reachable — the agent runs on another machine or cast isn't running here.");
         return;
       }
-      current.termId = openTerminal({
-        endpoint,
-        kind: "attach",
-        target,
-        title: target,
-        detached: true,
-        // Interactive, same as a manual `tmux attach` — the pill is just the
-        // safe version of it (ignore-size, no nesting).
-        interactive: true,
-      });
       current.target = target;
       bump();
     } finally {
       connecting.current = false;
     }
-  }, [convex, convKey, target]);
+  }, [convex, convKey, target, machine?.device_id, foreign, machineName]);
 
   useEffect(() => {
+    // Wait for the machine lookup: connecting before it lands would broadcast
+    // to every device and then have to tear the wrong transport back down.
+    if (!machineSettled) return;
     const current = splits.get(convKey);
     if (!current) return;
     const inst = current.termId ? getInstance(current.termId) : null;
@@ -125,12 +185,24 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
       }
       if (target) void connect();
     }
-  }, [convKey, target, connect]);
+  }, [convKey, target, connect, machineSettled]);
 
   const inst = split.termId ? getInstance(split.termId) : null;
   const status = inst?.state.status;
   // No instance yet means the endpoint is still resolving — that's loading too.
   const isConnecting = !failure && (!status || status === "connecting");
+  const isRemote = !!inst?.state.remote;
+  // A relayed pane that stops sending is the one failure the socket path can't
+  // have: the picture stays perfectly readable while being minutes old. Frames
+  // arrive on a heartbeat even when the screen doesn't change, so silence means
+  // the far machine went away — say so rather than let a stale screen pass for
+  // live.
+  //
+  // Going stale is time passing, not a state change, so it needs its own tick
+  // — a frame that never arrives re-renders nothing on its own.
+  const lastFrameAt = inst?.state.lastFrameAt ?? 0;
+  const now = useCoarseNow(2000);
+  const stale = isRemote && status === "open" && lastFrameAt > 0 && now - lastFrameAt > STALE_AFTER_MS;
 
   useEffect(() => {
     if (split.termId && containerRef.current && status === "open") {
@@ -190,6 +262,20 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
           }`}
         />
         <span className="text-[10px] font-mono text-sol-text-muted truncate">{target}</span>
+        {isRemote && (
+          <span
+            className="inline-flex items-center gap-1 px-1 rounded text-[9px] font-mono text-sol-cyan bg-sol-cyan/10 flex-shrink-0"
+            title={`Relayed from ${machineName ?? "another machine"} — you can watch this pane but not type into it.`}
+          >
+            <Eye className="w-2.5 h-2.5" />
+            {machineName ?? "remote"}
+          </span>
+        )}
+        {stale && (
+          <span className="text-[9px] font-mono text-sol-yellow flex-shrink-0" title="No frames for a while — the machine may be asleep or offline.">
+            paused
+          </span>
+        )}
         <span className="flex-1" />
         {(status === "exited" || status === "error" || status === "offline" || failure) && (
           <button
@@ -230,7 +316,15 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
             </button>
           </div>
         ) : isConnecting ? (
-          <ConnectingNote label={`Attaching to ${target}…`} />
+          <ConnectingNote
+            label={
+              machine && !machine.is_mine
+                ? `Attaching to ${target}…`
+                : machine?.device_id
+                  ? `Finding ${target} on ${machineName ?? "its machine"}…`
+                  : `Attaching to ${target}…`
+            }
+          />
         ) : null}
         <div
           ref={containerRef}

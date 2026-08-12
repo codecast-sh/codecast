@@ -77,6 +77,14 @@ export const DAEMON_COMMANDS = [
   // (the web treats no-answer as "no local daemon"). See
   // packages/cli/src/terminal/.
   "get_terminal_endpoint",
+  // Watch a tmux pane on THIS device for a browser that can't reach it on
+  // loopback (the pane runs on another of the user's machines). args:
+  // StreamPaneArgs — { target }. The daemon captures the pane's screen while
+  // the viewer's lease is live and pushes changed frames to /cli/terminal/frame;
+  // the lease lapsing is what stops it. Old daemons: "Unknown command" (the
+  // split reports the machine can't stream and offers the ssh command instead).
+  // See packages/shared/contracts/terminalStream.ts.
+  "stream_pane",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];

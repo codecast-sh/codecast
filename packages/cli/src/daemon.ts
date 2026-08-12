@@ -121,6 +121,7 @@ import {
   reapStaleTerminalSessions,
   type TerminalServerOptions,
 } from "./terminal/terminalServer.js";
+import { startPaneStream, isPaneStreaming } from "./terminal/paneStream.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { enumerateProjectRoots, MAX_PROJECT_ROOTS } from "./projectRoots.js";
@@ -155,7 +156,7 @@ import {
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -2783,6 +2784,46 @@ async function executeRemoteCommand(
           tmux: hasTmux(),
         });
         log(`[REMOTE] Terminal endpoint requested (port ${hookServerPort})`);
+        break;
+      }
+      case "stream_pane": {
+        // A browser on another machine wants to watch a pane here. It can't
+        // reach the loopback PTY, so publish the pane's screen to the relay
+        // instead — read-only by construction, and it stops on its own when
+        // the viewer's lease lapses (packages/cli/src/terminal/paneStream.ts).
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const target = typeof parsed.target === "string" ? parsed.target : "";
+        if (!isValidPaneTarget(target)) {
+          error = `stream_pane: invalid target ${JSON.stringify(parsed.target)}`;
+          break;
+        }
+        if (!hasTmux()) {
+          error = "stream_pane: tmux is not installed on this machine";
+          break;
+        }
+        const alreadyRunning = isPaneStreaming(target);
+        startPaneStream(target, {
+          log,
+          push: async (msg) => {
+            try {
+              const res = await fetch(`${siteUrl}/cli/terminal/frame`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  api_token: config.auth_token,
+                  device_id: deviceId(),
+                  ...msg,
+                }),
+              });
+              if (!res.ok) return null;
+              return (await res.json()) as { stop: boolean };
+            } catch {
+              return null;
+            }
+          },
+        });
+        result = JSON.stringify({ target, streaming: true, already: alreadyRunning });
+        log(`[PANE] Streaming ${target} for a remote viewer${alreadyRunning ? " (already running)" : ""}`);
         break;
       }
       case "restart": {

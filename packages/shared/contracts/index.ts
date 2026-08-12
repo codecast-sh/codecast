@@ -17,3 +17,4 @@ export * from "./snippets";
 export * from "./stableContext";
 export * from "./vaultProtocol";
 export * from "./vaultMirror";
+export * from "./terminalStream";

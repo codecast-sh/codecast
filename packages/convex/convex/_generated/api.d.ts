@@ -121,6 +121,7 @@ import type * as tasks from "../tasks.js";
 import type * as teamActivity from "../teamActivity.js";
 import type * as teamScopeSweep from "../teamScopeSweep.js";
 import type * as teams from "../teams.js";
+import type * as terminalStream from "../terminalStream.js";
 import type * as testDb from "../testDb.js";
 import type * as titleGeneration from "../titleGeneration.js";
 import type * as userMessagesFilter from "../userMessagesFilter.js";
@@ -250,6 +251,7 @@ declare const fullApi: ApiFromModules<{
   teamActivity: typeof teamActivity;
   teamScopeSweep: typeof teamScopeSweep;
   teams: typeof teams;
+  terminalStream: typeof terminalStream;
   testDb: typeof testDb;
   titleGeneration: typeof titleGeneration;
   userMessagesFilter: typeof userMessagesFilter;

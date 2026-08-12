@@ -546,8 +546,13 @@ export const requestDesktopUpdate = mutation({
 // 127.0.0.1 (only the machine the browser is on is reachable, so multi-device
 // resolution needs no server-side smarts).
 export const requestTerminalEndpoints = mutation({
-  args: {},
-  handler: async (ctx) => {
+  // device_id narrows the ask to ONE machine. The conversation terminal knows
+  // where its pane lives, so it only needs to learn whether that machine is the
+  // one the browser is on — asking every device would queue commands on
+  // machines that can't be the answer. Optional, so older clients that send no
+  // args keep the broadcast behaviour.
+  args: { device_id: v.optional(v.string()) },
+  handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
@@ -556,7 +561,9 @@ export const requestTerminalEndpoints = mutation({
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .collect();
     const now = Date.now();
-    const live = devices.filter((d) => now - d.last_seen < 5 * 60 * 1000);
+    const live = devices
+      .filter((d) => now - d.last_seen < 5 * 60 * 1000)
+      .filter((d) => !args.device_id || d.device_id === args.device_id);
 
     const commands: Array<{ command_id: Id<"daemon_commands">; device_id: string; label: string }> = [];
     for (const device of live) {
