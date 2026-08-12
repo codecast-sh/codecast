@@ -236,6 +236,7 @@ declare const fullApi: ApiFromModules<{
   reviews: typeof reviews;
   searchCore: typeof searchCore;
   searchMirror: typeof searchMirror;
+  sessionImages: typeof sessionImages;
   sessionInitiator: typeof sessionInitiator;
   sessionInsights: typeof sessionInsights;
   sessionOwners: typeof sessionOwners;
