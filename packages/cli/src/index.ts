@@ -12376,10 +12376,34 @@ async function cliPost(urlPath: string, body: Record<string, any>): Promise<any>
     process.exit(1);
   }
   if (result?.error) {
-    console.error(`Error: ${result.error}`);
+    console.error(`Error: ${cleanConvexError(result.error)}`);
     process.exit(1);
   }
   return result;
+}
+
+// Convex surfaces a thrown error in three shapes: a plain Error ("Uncaught
+// Error: <msg>\n    at …"), a ConvexError whose message is a stringified data
+// object ({"code":…,"message":…}), and an ArgumentValidationError that DUMPS
+// the whole args object — which includes the api_token. This normalises all
+// three to the human message AND redacts the token before it can reach a
+// terminal, a transcript, or `cast read`.
+function cleanConvexError(raw: any): string {
+  let msg = String(raw);
+  // Redact the api_token wherever it appears (arg dumps print `api_token: "…"`
+  // or `"api_token":"…"`), before any other handling.
+  msg = msg.replace(/("?api_token"?\s*:\s*)"[^"]*"/g, '$1"***"');
+  msg = msg.split(/\n\s*at\s/)[0];
+  msg = msg.replace(/^\s*(Uncaught\s+)?(Convex|ArgumentValidation)?Error:\s*/i, "");
+  // ConvexError data object: pull out its .message when present.
+  const brace = msg.indexOf("{");
+  if (brace >= 0) {
+    try {
+      const obj = JSON.parse(msg.slice(brace));
+      if (obj && typeof obj.message === "string") return obj.message;
+    } catch { /* not JSON — fall through to the stripped text */ }
+  }
+  return msg.trim() || "Unknown error";
 }
 
 // Best-effort variant of cliPost for optional enrichment: returns null on any
