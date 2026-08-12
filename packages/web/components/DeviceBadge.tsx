@@ -177,10 +177,16 @@ export function useDevices() {
  * conversation id is available. Returns undefined while loading, null when
  * there is nothing to resolve.
  */
+export type ForeignOwnerDevice = Device & {
+  is_mine?: boolean;
+  /** Whose account the session's daemon runs as — null for share-token viewers. */
+  runner?: { name: string | null; is_bot: boolean } | null;
+};
+
 export function useForeignOwnerDevice(
   conversationId: string | null | undefined,
   needed: boolean,
-): (Device & { is_mine?: boolean }) | null | undefined {
+): ForeignOwnerDevice | null | undefined {
   const res = useQuery(
     api.devices.ownerDeviceDisplay,
     needed && conversationId
@@ -191,6 +197,18 @@ export function useForeignOwnerDevice(
   if (res === undefined) return undefined; // loading
   if (!res) return null;
   return { ...res, local_project_roots: [] };
+}
+
+/**
+ * One vocabulary for "whose machine is this?" across the pill tooltip and the
+ * device menu: the agent box when the runner account is a bot, the runner's
+ * first name for a teammate's machine, a generic fallback when the viewer
+ * isn't allowed the name (share-token) or the runner row is gone.
+ */
+export function foreignRunnerNote(f: ForeignOwnerDevice): string {
+  if (f.runner?.is_bot) return "the team's agent box";
+  const first = f.runner?.name?.split(" ")[0];
+  return first ? `${first}'s machine` : "a teammate's machine";
 }
 
 /**
@@ -266,7 +284,12 @@ export function RunOnDeviceItems({
           <DeviceIcon d={foreignOwner} className="w-3 h-3 mr-1.5" />
           <span className="flex-1 truncate">{deviceDisplayName(foreignOwner)}</span>
           <span className="ml-2 flex items-center gap-1 text-[10px] text-gray-400">
-            running here · shared
+            running here ·{" "}
+            {foreignOwner.runner?.is_bot
+              ? "agent box"
+              : foreignOwner.runner?.name
+                ? `${foreignOwner.runner.name.split(" ")[0]}'s`
+                : "teammate's"}
             <DeviceDot online={foreignOwner.online} />
           </span>
         </DropdownMenuItem>

@@ -1213,7 +1213,14 @@ export const ownerDeviceDisplay = query({
     if (!userId) return null;
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) return null;
-    if ((await checkConversationAccess(ctx, userId, conv as any)) === "denied") return null;
+    // Owner/team ONLY — deliberately NOT `!== "denied"`. checkConversationAccess
+    // grants "shared" on the mere EXISTENCE of a share_token (privacy.ts) without
+    // the caller presenting it, so a `!== "denied"` gate would hand any
+    // authenticated user who learns a share-linked conversation's id this
+    // cross-account device projection (hostname via label, liveness). The pill
+    // this feeds only renders for owners, so the strict gate costs nothing.
+    const access = await checkConversationAccess(ctx, userId, conv as any);
+    if (access !== "owner" && access !== "team") return null;
     const ownerDeviceId = (conv as any).owner_device_id as string | undefined;
     if (!ownerDeviceId) return null;
     const row = await ctx.db
@@ -1224,19 +1231,33 @@ export const ownerDeviceDisplay = query({
       .first();
     if (!row) return null;
     // This projection CROSSES ACCOUNTS — it reads the conversation owner's device
-    // row, and its gate (checkConversationAccess) admits share-token viewers, not
-    // just teammates. Never add `last_input_at` or anything derived from it here:
-    // that field is when a HUMAN last touched the keyboard, a different category
-    // from the machine liveness this returns, and it is currently readable only
-    // by its own owner (pushRouter.readPresence).
+    // row. Never add `last_input_at` or anything derived from it here: that field
+    // is when a HUMAN last touched the keyboard, a different category from the
+    // machine liveness this returns, and it is currently readable only by its
+    // own owner (pushRouter.readPresence). `last_seen` is bucketed to the hour —
+    // the UI renders "online" or a coarse "3h ago", and a precise cross-account
+    // heartbeat timestamp is a tracking primitive we don't want to mint.
+    //
+    // The runner identity (whose account the daemon authenticates as) lets the
+    // UI say "agent box" vs "<name>'s machine" instead of a flat "shared" —
+    // owner/team viewers are exactly who OwnersBadge already shows names to.
+    const runnerUser = await ctx.db.get((conv as any).user_id);
+    const runner = runnerUser
+      ? {
+          name: (runnerUser as any).name ?? null,
+          is_bot: (runnerUser as any).is_bot ?? false,
+        }
+      : null;
+    const HOUR_MS = 60 * 60 * 1000;
     return {
       device_id: row.device_id,
       label: row.label,
       platform: row.platform,
       is_remote: row.is_remote ?? false,
-      last_seen: row.last_seen,
+      last_seen: Math.floor(row.last_seen / HOUR_MS) * HOUR_MS,
       online: Date.now() - row.last_seen < DEVICE_ONLINE_MS,
       is_mine: row.user_id.toString() === userId.toString(),
+      runner,
     };
   },
 });
