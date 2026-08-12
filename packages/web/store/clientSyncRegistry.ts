@@ -146,6 +146,13 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "meta", key: "liveInboxIdList" },
     hydration: "manual",
   },
+  // Team-mode twin of liveInboxIdList, keyed by team id (see inboxStore's
+  // teamInboxIdSnapshot doc). Manual for the same reason: the boot block seeds
+  // the in-memory teamInboxIds Set from it, guarded by scope + active team.
+  teamInboxIdSnapshot: {
+    persistence: { kind: "meta", key: "teamInboxIdSnapshot" },
+    hydration: "manual",
+  },
   _lastViewedAt: {
     persistence: { kind: "meta", key: "_lastViewedAt" },
   },
@@ -186,13 +193,15 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "meta", key: "recentProjectsByDevice" },
     hydration: { phase: "deferred" },
   },
+  // Collapse/expand state is CRITICAL, not deferred: these are tiny boolean
+  // maps, and hydrating them after first paint meant every boot painted all
+  // sections expanded (hundreds of stashed rows) for a frame, then snapped
+  // them collapsed. The deferred phase is for heavy list-view data only.
   collapsedSections: {
     persistence: { kind: "meta", key: "collapsedSections" },
-    hydration: { phase: "deferred" },
   },
   sidebarNavExpanded: {
     persistence: { kind: "meta", key: "sidebarNavExpanded" },
-    hydration: { phase: "deferred" },
   },
   teams: {
     persistence: { kind: "meta", key: "teams" },

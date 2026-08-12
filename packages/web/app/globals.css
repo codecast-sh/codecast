@@ -1404,6 +1404,46 @@ pre[class*="language-"] {
   transition: top 140ms ease;
 }
 
+/* Rail footer: hangs under the last card and answers "now what?" — the keys that
+   move around the quotes, and the two ways to finish (write a reply around them,
+   or send them as they are). */
+.cc-rail-foot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding-left: 0.55rem;
+  border-left: 2px solid transparent;
+  transition: top 140ms ease;
+}
+.cc-rail-foot-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.1rem 0.5rem;
+  color: var(--sol-text-dim);
+  font-size: 0.66rem;
+}
+.cc-rail-foot-keys span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.18rem;
+}
+.cc-rail-foot-label {
+  margin-top: 0.35rem;
+  color: var(--sol-text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.cc-rail-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  margin-top: 0.15rem;
+  margin-left: -0.4rem; /* pull the ghost buttons' padding back to the rail edge */
+}
+
 /* Soft highlight of the block a comment points at — sits BEHIND the text. In inline
    mode the content is offset right by the rail, so shift the overlay to match. */
 .cc-active-overlay {
@@ -1597,6 +1637,31 @@ pre[class*="language-"] {
 .cc-comment-editor-footer {
   margin-top: 0.2rem;
 }
+/* Walk between your notes without leaving the keyboard. Sits above the
+   Cancel/Save row so "where am I in the batch" reads before "am I done". */
+.cc-comment-editor-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.3rem;
+  margin-top: 0.15rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+}
+.cc-comment-editor-nav .cc-comment-btn {
+  padding: 0.1rem 0.25rem;
+  gap: 0.15rem;
+}
+.cc-comment-editor-nav .cc-comment-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: transparent;
+}
+.cc-comment-editor-count {
+  color: var(--sol-text-dim);
+  font-size: 0.66rem;
+  white-space: nowrap;
+}
 .cc-comment-chip .cc-comment-actions {
   margin-top: 0.3rem;
   opacity: 0;
@@ -1659,7 +1724,10 @@ pre[class*="language-"] {
   }
 }
 .cc-sel-btn {
-  padding: 0.32rem 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.32rem 0.6rem 0.32rem 0.75rem;
   font-size: 0.78rem;
   font-weight: 600;
   color: var(--sol-text);
@@ -1710,6 +1778,23 @@ pre[class*="language-"] {
   letter-spacing: 0.07em;
   min-width: 0;
 }
+/* Destination note next to the count — lower-case and dim so the count still
+   leads. Hidden on a narrow composer where the actions need the room. */
+.cc-review-tray-dest {
+  color: var(--sol-text-dim);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .cc-review-tray-dest {
+    display: none;
+  }
+}
+
 /* Shelf actions stay light: ghost icon+text buttons quieter than the quotes
    themselves; hover (from the global cc-comment-btn rules) supplies the chrome. */
 .cc-review-tray-actions .cc-comment-btn {

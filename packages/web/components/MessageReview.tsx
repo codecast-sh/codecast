@@ -20,8 +20,10 @@ import { useInboxStore } from "../store/inboxStore";
 import type { PendingComment } from "../lib/quoteFormat";
 import { getQuoteUnits, quoteUnitAt, unitTop } from "../lib/quoteUnits";
 import { createReviewComment, exitReviewMode } from "../lib/reviewActions";
+import { quoteSelectionIntoReply } from "../lib/quoteSelection";
+import { focusComposer, sendComposer } from "../lib/composerControl";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { KeyCap } from "./KeyboardShortcutsHelp";
+import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { RightCommentRail } from "./comments/RightCommentRail";
 
 // Comment-rail sizing (px). When the empty left margin is at least MIN, float the
@@ -59,6 +61,9 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   const myComments = useInboxStore(
     useShallow((s) => (s.reviewComments[conversationId] ?? []).filter((c) => c.messageId === messageId)),
   );
+  // Whole-conversation count: the rail footer talks about the reply you're about
+  // to send, which carries every quote in the batch, not just this message's.
+  const pendingTotal = useInboxStore((s) => (s.reviewComments[conversationId] ?? []).length);
 
   // MODELESS: there is no review mode to enter or exit. Hovering any block always
   // offers Quote/Comment; the rail (and the content-shrink it causes) exists
@@ -93,6 +98,9 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   const [peekBlock, setPeekBlock] = useState<number | null>(null);
   const [rects, setRects] = useState<Rect[]>([]);
   const [stackTops, setStackTops] = useState<Record<string, number>>({});
+  // Bottom of the last stacked card — where the rail footer (what happens next
+  // with these quotes) hangs.
+  const [railBottom, setRailBottom] = useState(0);
   // Float the rail in the left margin (content keeps full width) when there's
   // room; otherwise shrink the text column with an in-flow left rail. railPx is
   // the rail width to use in margin mode (clamped to the available margin).
@@ -219,6 +227,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       const same = Object.keys(tops).length === Object.keys(prev).length && Object.entries(tops).every(([k, v]) => prev[k] === v);
       return same ? prev : tops;
     });
+    if (Number.isFinite(prevBottom)) setRailBottom(prevBottom + GAP * 2);
   }, [sortedComments, rects, engaged, editingId]);
 
   const setActiveBlock = useCallback((i: number) => useInboxStore.getState().setReviewActiveBlock(i), []);
@@ -272,6 +281,16 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       const cur = useInboxStore.getState().reviewActiveBlock;
       const blockComments = myComments.filter((c) => c.blockIndex === cur);
       const key = e.key;
+      // `r` quotes the current text selection — the same key the floating
+      // selection button advertises. The global conv.review shortcut can't reach
+      // us here: this region owns its single-letter keys (data-review-region),
+      // so the dispatcher skips it once focus is inside.
+      if (key === "r") {
+        if (quoteSelectionIntoReply(conversationId)) {
+          e.preventDefault();
+          return;
+        }
+      }
       if (key === "ArrowDown" || key === "j") {
         e.preventDefault();
         setActiveBlock(Math.min(last, cur + 1));
@@ -311,6 +330,24 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   }, [isReviewTarget, activeBlock, editingId]);
 
   const focusRegion = useCallback(() => containerRef.current?.focus({ preventScroll: true } as any), []);
+
+  // Walk between YOUR quote cards while writing notes (⌘↑ / ⌘↓ in the editor):
+  // open the neighbour's note, or close and hand focus back to the region when
+  // you step past either end. The editor saves before calling this.
+  const stepEditor = useCallback(
+    (from: number, delta: number) => {
+      const next = sortedComments[from + delta];
+      const s = useInboxStore.getState();
+      if (!next) {
+        s.setReviewEditingId(null);
+        focusRegion();
+        return;
+      }
+      s.setReviewEditingId(next.id);
+      s.setReviewActiveBlock(next.blockIndex);
+    },
+    [sortedComments, focusRegion],
+  );
 
   return (
     <div
@@ -393,7 +430,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
 
       {engaged && (
         <div ref={railRef} className="cc-rail">
-          {sortedComments.map((c) => (
+          {sortedComments.map((c, i) => (
             <div
               key={c.id}
               ref={(el) => {
@@ -404,7 +441,14 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
               style={{ top: stackTops[c.id] ?? rects[c.blockIndex]?.top ?? 0 }}
             >
               {c.id === editingId ? (
-                <CommentEditor conversationId={conversationId} comment={c} author={author} onDone={focusRegion} />
+                <CommentEditor
+                  conversationId={conversationId}
+                  comment={c}
+                  author={author}
+                  onDone={focusRegion}
+                  onStep={sortedComments.length > 1 ? (delta) => stepEditor(i, delta) : undefined}
+                  position={sortedComments.length > 1 ? { index: i, total: sortedComments.length } : undefined}
+                />
               ) : (
                 <CommentChip
                   comment={c}
@@ -418,6 +462,41 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
               )}
             </div>
           ))}
+
+          {/* What happens next with these quotes. Without it the rail states the
+              batch but never says how to finish it — the two ways out are the
+              composer (write something around the quotes) and a straight send. */}
+          {isReviewTarget && (
+            <div className="cc-rail-foot" style={{ top: railBottom }}>
+              <div className="cc-rail-foot-keys">
+                <span>
+                  <KeyCap size="xs">↑</KeyCap>
+                  <KeyCap size="xs">↓</KeyCap>
+                  move
+                </span>
+                <span>
+                  <KeyCap size="xs">N</KeyCap>
+                  note
+                </span>
+                <span>
+                  <KeyCap size="xs">⌫</KeyCap>
+                  remove
+                </span>
+              </div>
+              <div className="cc-rail-foot-label">
+                {pendingTotal} quote{pendingTotal !== 1 ? "s" : ""} on your reply
+              </div>
+              <div className="cc-rail-foot-actions">
+                <button type="button" className="cc-comment-btn" onClick={focusComposer}>
+                  Write reply
+                  <MenuKeyCaps action="compose.focus" />
+                </button>
+                <button type="button" className="cc-comment-btn cc-comment-btn-primary" onClick={sendComposer}>
+                  Send now
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -500,11 +579,16 @@ function CommentEditor({
   comment,
   author,
   onDone,
+  onStep,
+  position,
 }: {
   conversationId: string;
   comment: PendingComment;
   author: any;
   onDone: () => void;
+  // Move to the previous/next quote's note. Absent when this is the only quote.
+  onStep?: (delta: number) => void;
+  position?: { index: number; total: number };
 }) {
   const [value, setValue] = useState(comment.body);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -520,10 +604,15 @@ function CommentEditor({
     }
   }, []);
 
+  // Only close if this card still owns the editor. Stepping to the next note
+  // hands ownership over while this textarea is still mounted; a late blur must
+  // not then shut the editor that just opened.
   const close = useCallback(() => {
-    useInboxStore.getState().setReviewEditingId(null);
+    const s = useInboxStore.getState();
+    if (s.reviewEditingId !== comment.id) return;
+    s.setReviewEditingId(null);
     onDone();
-  }, [onDone]);
+  }, [comment.id, onDone]);
 
   // The quote is committed on first click, so the note editor only edits the
   // optional note: Save stores it (empty keeps it a bare quote), Cancel just
@@ -534,6 +623,16 @@ function CommentEditor({
   }, [value, conversationId, comment.id, close]);
 
   const cancel = close;
+
+  // Plain ↑/↓ belong to the caret inside the note, so stepping between notes
+  // takes the modifier: save what's typed, then open the neighbour's editor.
+  const step = useCallback(
+    (delta: number) => {
+      useInboxStore.getState().commitReviewComment(conversationId, comment.id, value.trim());
+      onStep?.(delta);
+    },
+    [value, conversationId, comment.id, onStep],
+  );
 
   return (
     <div className="cc-comment-editor">
@@ -554,6 +653,9 @@ function CommentEditor({
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               save();
+            } else if (onStep && (e.metaKey || e.ctrlKey) && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+              e.preventDefault();
+              step(e.key === "ArrowDown" ? 1 : -1);
             } else if (e.key === "Escape") {
               e.preventDefault();
               cancel();
@@ -561,6 +663,35 @@ function CommentEditor({
           }}
           onBlur={save}
         />
+        {/* Which note of how many, and the keys that walk between them — while
+            you're typing, plain ↑/↓ move the caret, so the jump needs ⌘. */}
+        {position && (
+          <div className="cc-comment-editor-nav">
+            <button
+              type="button"
+              className="cc-comment-btn"
+              disabled={position.index === 0}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => step(-1)}
+            >
+              <KeyCap size="xs">⌘</KeyCap>
+              <KeyCap size="xs">↑</KeyCap>
+            </button>
+            <span className="cc-comment-editor-count">
+              note {position.index + 1} of {position.total}
+            </span>
+            <button
+              type="button"
+              className="cc-comment-btn"
+              disabled={position.index === position.total - 1}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => step(1)}
+            >
+              <KeyCap size="xs">⌘</KeyCap>
+              <KeyCap size="xs">↓</KeyCap>
+            </button>
+          </div>
+        )}
         <div className="cc-comment-editor-footer">
           <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>
             Cancel

@@ -57,6 +57,7 @@ import { formatElapsedClock, shouldShowElapsed, deriveRunningTool } from "./work
 import { appendToDraft, formatPlanFeedback } from "../lib/quoteFormat";
 import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } from "../lib/imagePlaceholder";
 import { quoteToComposer, submitReview, attachReviewToMessage, takeReviewBatch } from "../lib/reviewActions";
+import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { MessageReview } from "./MessageReview";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
@@ -119,7 +120,7 @@ import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractMessageFlag, extractCommentBody, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, normalizeCastCategory, extractCastBodyParts, type CastBodyPart, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -649,6 +650,11 @@ export type ConversationData = {
     title?: string;
     share_token?: string;
     username: string;
+    // Triage stamps for the parent-preload seed (see inboxVisibilityFields).
+    inbox_dismissed_at?: number | null;
+    inbox_stashed_at?: number | null;
+    inbox_killed_at?: number | null;
+    inbox_pinned_at?: number | null;
   } | null;
   is_favorite?: boolean;
   profile_pinned_at?: number;
@@ -4771,6 +4777,31 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
   );
 }
 
+// The prose a cast mutation carried — a comment, a done note, a plan goal, a
+// trigger prompt. It is the content of the action, so it renders the way a
+// message body does (markdown, entity pills, code) instead of as one clipped
+// italic line: these are often written reports, and the sentence that survived a
+// 90-character cut was rarely the one worth reading. Long bodies start clipped
+// with an Expand toggle, so a row still costs a few lines in the transcript.
+function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: string }) {
+  return (
+    <div className={`mt-1 ml-1 border-l-2 pl-2.5 space-y-1.5 ${accent}`}>
+      {parts.map((part, i) => (
+        <div key={i}>
+          {part.label && (
+            <div className="text-[10px] uppercase tracking-wide text-sol-text-dim mb-0.5">{part.label}</div>
+          )}
+          <CollapsibleBody collapsedHeight={132} toggleClassName="mt-1">
+            <div className="text-[13px] text-sol-text prose prose-invert prose-sm max-w-none">
+              <MessageMarkdown content={part.text} />
+            </div>
+          </CollapsibleBody>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
   const [expanded, setExpanded] = useState(false);
   const cast = parseCastCommand(tool)!;
@@ -4778,10 +4809,12 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
   const output = result?.content || "";
   const isError = result?.is_error;
 
-  // "schedule"/"sched" are the pre-rename spellings of `cast trigger` — old
-  // transcripts replay them forever, so they normalize into the same card.
-  const cat = category === "t" ? "task" : category === "p" ? "plan" : category === "d" ? "doc" : category === "sched" || category === "schedule" ? "trigger" : category;
+  const cat = normalizeCastCategory(category);
   const isCreate = subcommand === "create" || subcommand === "add";
+  const bodyParts = useMemo(
+    () => extractCastBodyParts(category, subcommand, args),
+    [category, subcommand, args]
+  );
 
   const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
   const entityIds = useMemo(() => {
@@ -4819,38 +4852,48 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
 
   const isEntityCommand = ((cat === "task" || cat === "plan") && isCreate && entityIds.length > 0) || (cat === "doc" && !!docConvexId);
 
+  // `accent` tints the left rule of the body block, so a comment reads as
+  // belonging to the object kind named in the row above it.
   const getCategoryConfig = () => {
     switch (cat) {
       case "task": return {
         color: "text-sol-yellow/80",
+        accent: "border-sol-yellow/25",
         icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg>
       };
       case "plan": return {
         color: "text-sol-cyan/80",
+        accent: "border-sol-cyan/25",
         icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" /></svg>
       };
       case "doc": return {
         color: "text-sol-blue/80",
+        accent: "border-sol-blue/25",
         icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
       };
       case "search": return {
         color: "text-sol-violet/80",
+        accent: "border-sol-violet/25",
         icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
       };
       case "feed": return {
         color: "text-sol-green/80",
+        accent: "border-sol-green/25",
         icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
       };
       case "trigger": return {
         color: "text-sol-orange/80",
+        accent: "border-sol-orange/25",
         icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
       };
       case "diff": case "summary": case "handoff": case "context": case "ask": return {
         color: "text-sol-magenta/80",
+        accent: "border-sol-magenta/25",
         icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
       };
       default: return {
         color: "text-sol-text-dim",
+        accent: "border-sol-border/60",
         icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
       };
     }
@@ -4875,8 +4918,6 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
     // through, no redundant status badge (the row label already says "task done").
     const isDoneLike = subcommand === "done" || subcommand === "drop";
     const argEntityId = /^(ct|pl)-[a-z0-9]+$/i.test(firstArg) ? firstArg.toLowerCase() : null;
-    const commentPreview = subcommand === "comment" ? extractCommentBody(args) : null;
-    const doneNote = isDoneLike ? extractMessageFlag(args) : null;
 
     const statusColors: Record<string, string> = {
       start: "bg-amber-500/15 text-amber-400",
@@ -4915,18 +4956,6 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
 
         {argEntityId && (isStatusChange || subcommand === "comment") && (
           <InlineEntityTitle shortId={argEntityId} struck={isDoneLike} />
-        )}
-
-        {commentPreview && (
-          <span className="text-sol-text-muted italic truncate max-w-[360px]">
-            “{truncateStr(commentPreview.replace(/\s+/g, " ").trim(), 90)}”
-          </span>
-        )}
-
-        {doneNote && (
-          <span className="text-sol-text-dim italic truncate max-w-[300px]">
-            {truncateStr(doneNote.replace(/\s+/g, " ").trim(), 80)}
-          </span>
         )}
 
         {isCreate && !entityIds.length && firstArg && (
@@ -4986,6 +5015,8 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
         </span>
         {renderSummary()}
       </div>
+
+      {bodyParts.length > 0 && <CastMutationBody parts={bodyParts} accent={config.accent} />}
 
       {isEntityCommand && entityIds.length > 0 && cat !== "doc" && entityIds.map(id => (
         <CastEntityCard
@@ -6287,7 +6318,7 @@ function extractCompactionSummaryContent(content: string): string {
 // Alarm colour is reserved for outcomes the reader has to act on. A command
 // that FAILED is red; one somebody KILLED mid-flight is orange, because the
 // work it was doing stopped early. "stopped" is neither: it is the harness
-// tidying its books \u2014 background watches from a previous process that left no
+// tidying its books — background watches from a previous process that left no
 // completion record, marked closed on the way in. Nothing is wrong and nothing
 // is owed, so it wears the same quiet grey as the "monitor ended" line, and the
 // unknown-status fallback lands there too rather than crying wolf.
@@ -13347,10 +13378,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
   }, [conversation, isOwner, toggleFavoriteMutation]));
 
-  // Enter inline review on the assistant reply nearest the viewport center, so a
+  // `r` = quote. With text selected inside a reply it quotes THAT selection (the
+  // key behind the floating "Quote into reply" button); with nothing selected it
+  // enters inline review on the assistant reply nearest the viewport center, so a
   // keyboard-only user can start quoting/commenting without a mouse.
   useShortcutAction('conv.review', useCallback(() => {
     if (!conversation) return;
+    if (quoteSelectionIntoReply(conversation._id)) return;
     const regions = Array.from(document.querySelectorAll<HTMLElement>('.cc-msg-review'));
     const center = window.innerHeight / 2;
     let best: { id: string; dist: number } | null = null;

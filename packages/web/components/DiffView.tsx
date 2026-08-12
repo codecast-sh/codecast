@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, memo } from "react";
+import { useState, useMemo, useCallback, useRef, memo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { MessageSquarePlus } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
@@ -460,10 +460,65 @@ export const DiffView = memo(function DiffView({
     [commentContext],
   );
 
+  // One comment handle for the whole block instead of one per row. It glides to
+  // whatever line the cursor is on, so only a single mark is ever on screen and
+  // sweeping the diff no longer flashes a chip on every line. Moving it is
+  // imperative (a delegated mouseover writes `top` and a data attribute) because
+  // hover state in React would re-render the entire diff on every row crossed,
+  // and this component sits inside the conversation tree.
+  const handleRef = useRef<HTMLButtonElement | null>(null);
+  const hoveredLine = useRef<FlatDiffLine | null>(null);
+
+  const trackRow = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const btn = handleRef.current;
+    if (!btn) return;
+    const rowEl = (e.target as HTMLElement | null)?.closest?.("[data-diff-row]") as HTMLElement | null;
+    // Separators, comment threads and the handle itself report no row: keep the
+    // handle where it is rather than snapping it away mid-gesture.
+    if (!rowEl) return;
+    const line = displayItems[Number(rowEl.dataset.diffRow)];
+    if (!line || line.type === "separator") return;
+    hoveredLine.current = line;
+    // Appearing and moving are different gestures. Sliding into place from the
+    // row you last left looks like a glitch, so only animate `top` while the
+    // handle is already visible.
+    btn.style.transitionProperty = btn.dataset.on === "yes" ? "opacity, top" : "opacity";
+    btn.style.top = `${rowEl.offsetTop}px`;
+    btn.dataset.on = "yes";
+  }, [displayItems]);
+
+  const untrackRow = useCallback(() => {
+    hoveredLine.current = null;
+    if (handleRef.current) handleRef.current.dataset.on = "no";
+  }, []);
+
+  const commentOnHoveredRow = useCallback(() => {
+    const line = hoveredLine.current;
+    if (line) addLineComment(line.lineKey ?? 0, line.newNum ?? line.oldNum, line.content);
+  }, [addLineComment]);
+
   return (
     <div className="code-block-resizable group font-mono text-[13px] leading-[22px]">
       <div className="cb-hscroll">
-        <div className="min-w-fit">
+        <div
+          className={`min-w-fit ${commentContext ? "relative" : ""}`}
+          onMouseOver={commentContext ? trackRow : undefined}
+          onMouseLeave={commentContext ? untrackRow : undefined}
+        >
+        {commentContext && (
+          <button
+            ref={handleRef}
+            type="button"
+            data-on="no"
+            tabIndex={-1}
+            onClick={commentOnHoveredRow}
+            className="absolute left-0 top-0 z-10 flex items-center justify-center w-4 h-[22px] text-sol-blue/45 opacity-0 pointer-events-none transition-opacity duration-100 ease-out hover:text-sol-cyan data-[on=yes]:opacity-100 data-[on=yes]:pointer-events-auto"
+            title="Comment on this line"
+            aria-label="Comment on this line"
+          >
+            <MessageSquarePlus size={11} />
+          </button>
+        )}
         {displayItems.map((item, i) => {
           if (item.type === 'separator') {
             if (onExpandContext) {
@@ -501,21 +556,9 @@ export const DiffView = memo(function DiffView({
 
           const lk = line.lineKey ?? i;
           const lineComments = commentContext ? commentsByLine[lk] : undefined;
-          const lineNum = line.newNum ?? line.oldNum;
 
           const row = (
-            <div className={`${rowBg} whitespace-pre ${commentContext ? "relative group/line pl-5" : ""}`}>
-              {commentContext && (
-                <button
-                  type="button"
-                  onClick={() => addLineComment(lk, lineNum, line.content)}
-                  className="absolute left-0 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-4 h-4 rounded-sm text-sol-blue/80 bg-sol-bg-highlight/90 opacity-0 group-hover/line:opacity-100 hover:text-sol-cyan transition-opacity"
-                  title="Comment on this line"
-                  aria-label="Comment on this line"
-                >
-                  <MessageSquarePlus size={11} />
-                </button>
-              )}
+            <div data-diff-row={commentContext ? i : undefined} className={`${rowBg} whitespace-pre ${commentContext ? "pl-4" : ""}`}>
               {showLineNumbers && (
                 <span
                   className="select-none inline-block text-right font-medium text-sol-text-dim opacity-55 pl-1 pr-3 mr-3 border-r border-sol-border/30"
@@ -579,7 +622,7 @@ function DiffLineThread({
 }) {
   const editingId = useInboxStore((s) => s.reviewEditingId);
   return (
-    <div className="ml-5 my-1 border-l-2 border-sol-blue/40 pl-2.5 space-y-1 font-sans text-sol-text">
+    <div className="ml-4 my-1 border-l-2 border-sol-blue/40 pl-2.5 space-y-1 font-sans text-sol-text">
       {comments.map((c) =>
         c.id === editingId ? (
           <LineCommentEditor key={c.id} conversationId={conversationId} comment={c} onDone={onCloseEditor} />

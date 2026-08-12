@@ -36,6 +36,10 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
           <span className="cc-review-tray-title">
             <span className="cc-review-dot" />
             {count} quote{count !== 1 ? "s" : ""}
+            {/* Say where they go: the quotes ride along on the next send, even
+                with nothing typed. Without this the tray states a count and
+                leaves the user hunting for an "attach" step that doesn't exist. */}
+            <span className="cc-review-tray-dest">on your next message</span>
           </span>
           <div className="cc-review-tray-actions">
             <button

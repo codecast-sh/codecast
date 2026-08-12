@@ -3,10 +3,14 @@ import react from "@vitejs/plugin-react";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
+import { storeHmrPlugin } from "./plugins/storeHmr";
 
 export default defineConfig({
   plugins: [
     react(),
+    // Lets store edits hot-swap instead of reloading the whole app. Must run
+    // after react() so the appended accept() call is the module's last word.
+    storeHmrPlugin(),
     // codecast.sh/a/<slug> is a redirect to the branded artifact document the
     // Convex HTTP action serves (production: Hono route in server/index.ts).
     // Same behavior in dev so the path never falls through to the SPA shell.

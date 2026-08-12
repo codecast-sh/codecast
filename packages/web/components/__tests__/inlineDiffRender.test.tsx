@@ -52,7 +52,7 @@ describe("inline diff rendering", () => {
     expect(html).toContain("⋯");
   });
 
-  test("without MessageIdentity the diff is inert; with it, lines get comment buttons", () => {
+  test("without MessageIdentity the diff is inert; with it, each block gets ONE comment handle", () => {
     const inert = renderToStaticMarkup(<InlineDiff raw={DIFF} />);
     expect(inert).not.toContain("Comment on this line");
     const live = renderToStaticMarkup(
@@ -61,6 +61,13 @@ describe("inline diff rendering", () => {
       </MessageIdentityProvider>,
     );
     expect(live).toContain("Comment on this line");
+    // One handle per file diff, NOT one per line — the handle glides to the
+    // hovered row. DIFF covers two files, and each has many lines, so a
+    // per-line affordance would show up here as a much larger count.
+    const handles = live.match(/aria-label="Comment on this line"/g)?.length ?? 0;
+    expect(handles).toBe(2);
+    // Rows carry the anchor the handle tracks.
+    expect(live).toContain("data-diff-row=");
   });
 
   test("non-diff fence content falls back to a plain code block", () => {

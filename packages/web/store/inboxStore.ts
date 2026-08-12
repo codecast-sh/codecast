@@ -2542,9 +2542,17 @@ interface InboxStoreState {
   // painted frame already renders the last-known authoritative set instead of
   // flashing the whole never-prune cache until the live payload lands.
   liveInboxIdList: string[];
+  // Persisted twin of teamInboxIds, keyed by the team it belongs to. Seeded at
+  // boot (seedTeamInboxIdsFromCache) ONLY when the client is in team scope and
+  // the active team matches — so the first painted team-board frame shows the
+  // last-known membership instead of falling back to the "mine" filter for a
+  // second until the team subscription answers.
+  teamInboxIdSnapshot: { team_id: string | null; ids: string[] } | null;
   // Replace the authoritative active-inbox set (both twins) from a server
   // payload. sync(): persists, never dispatches — this is server truth.
   setLiveInboxIds: (ids: string[]) => void;
+  // Team-mode analogue; teamId keys the persisted snapshot.
+  setTeamInboxIds: (ids: string[], teamId: string | null) => void;
   // Clear stale ownership claims from cached foreign-run rows the live payload
   // no longer returns. Disowning is communicated only by ABSENCE (the server
   // stops returning the row rather than pushing an updated one), so the
@@ -4426,8 +4434,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   });
 }
 
-export const useInboxStore = create<InboxStoreState>(
-  mutativeMiddleware((set: any, get: any) => ({
+const inboxStoreConfig = (set: any, get: any) => ({
   // -- Initial state --
   sessions: {},
   pending: {},
@@ -4457,12 +4464,22 @@ export const useInboxStore = create<InboxStoreState>(
   liveInboxIds: new Set<string>(),
   teamInboxIds: new Set<string>(),
   liveInboxIdList: [],
+  teamInboxIdSnapshot: null,
   // sync(): the id set is server truth (or its persisted snapshot) — persist to
   // IDB via patches, never dispatch. Both twins move together so the persisted
   // array can never drift from what the UI filtered against.
   setLiveInboxIds: sync(function (this: Draft, ids: string[]) {
     this.liveInboxIds = new Set(ids);
     this.liveInboxIdList = ids;
+  }),
+  // Team-mode twin of setLiveInboxIds. The snapshot is keyed by team id so a
+  // boot into a DIFFERENT active team can never seed another team's stale
+  // board (seedTeamInboxIdsFromCache checks the key). sync() for the same
+  // reason as above: raw setState would bypass the patch-driven IDB
+  // write-through, leaving the snapshot forever stale.
+  setTeamInboxIds: sync(function (this: Draft, ids: string[], teamId: string | null) {
+    this.teamInboxIds = new Set(ids);
+    this.teamInboxIdSnapshot = { team_id: teamId ?? null, ids };
   }),
   // sync(): the cleared flags must persist, or the stale claim resurrects from
   // IDB on the next boot. Only foreign-run rows are touched — my own sessions
@@ -7614,7 +7631,42 @@ export const useInboxStore = create<InboxStoreState>(
     return get().sessions[id];
   },
 
-})) as any);
+});
+
+function createInboxStore() {
+  return create<InboxStoreState>(mutativeMiddleware(inboxStoreConfig) as any);
+}
+
+// -- Dev hot swap --
+//
+// This module exports a hook and actions, never components, so React Fast
+// Refresh cannot make it an update boundary. Vite then walks the importers for
+// one and finds none: lib/sounds imports the store straight back (a cycle), and
+// lib/errorToast reaches src/boot.tsx, which is the entry and has no importers
+// at all. The fallback is a full page reload, and that costs ~4s of Convex
+// WebSocket handshake before any data comes back — for editing one action.
+//
+// So the module self-accepts instead. The accept call is appended by
+// plugins/storeHmr.ts rather than written here, because Metro bundles this same
+// file for the Expo app and Hermes cannot parse `import.meta` (same reason the
+// dev console hook below reads NODE_ENV). On re-execution the surviving store is
+// reused, so every importer's `useInboxStore` reference stays valid and the
+// state stays in memory; _hotReplaceConfig swaps in the new action bodies.
+//
+// `document` is the web/native split — React Native has no document, so a Metro
+// Fast Refresh keeps the plain create() path it has always used.
+const hotSwapCapable = process.env.NODE_ENV !== "production" && typeof document !== "undefined";
+const survivingInboxStore: ReturnType<typeof createInboxStore> | undefined = hotSwapCapable
+  ? (globalThis as any).__codecastInboxStore
+  : undefined;
+
+export const useInboxStore = survivingInboxStore ?? createInboxStore();
+
+if (survivingInboxStore) {
+  (survivingInboxStore.getState() as any)._hotReplaceConfig?.(inboxStoreConfig);
+} else if (hotSwapCapable) {
+  (globalThis as any).__codecastInboxStore = useInboxStore;
+}
 
 function cloneInitialValue<T>(value: T): T {
   if (value instanceof Set) return new Set(value) as T;
@@ -7816,6 +7868,27 @@ export function seedLiveInboxIdsFromCache(cachedList: unknown) {
   useInboxStore.setState({ liveInboxIds: new Set(ids), liveInboxIdList: ids });
 }
 
+// Team-mode analogue of seedLiveInboxIdsFromCache. Extra guards: only seeds
+// when the client boots IN team scope with the SAME active team the snapshot
+// was taken for — a snapshot from another team (or a client since switched to
+// "mine") must never gate the board. Runs after clientState hydrates (the
+// scope/team prefs live there), same synchronous pass.
+export function seedTeamInboxIdsFromCache(cachedSnapshot: unknown) {
+  const snap = cachedSnapshot as { team_id?: string | null; ids?: unknown } | null | undefined;
+  if (!snap || !Array.isArray(snap.ids) || snap.ids.length === 0) return;
+  const state = useInboxStore.getState();
+  if (state.teamInboxIds.size > 0) return; // live payload raced hydration — server truth wins
+  const ui = state.clientState.ui;
+  if ((ui?.inbox_scope ?? "mine") !== "team") return;
+  if ((snap.team_id ?? null) !== (ui?.active_team_id ?? null)) return;
+  const ids = snap.ids.filter((id): id is string => typeof id === "string");
+  if (ids.length === 0) return;
+  useInboxStore.setState({
+    teamInboxIds: new Set(ids),
+    teamInboxIdSnapshot: { team_id: snap.team_id ?? null, ids },
+  });
+}
+
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 async function hydrateInboxCacheFromIDB(): Promise<boolean> {
   if (!PERSISTENCE_AVAILABLE) return false;
@@ -7965,6 +8038,7 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
     // aged-out rows. The live subscription / recovery poll replace it within
     // ~1s of connecting.
     seedLiveInboxIdsFromCache(cached.liveInboxIdList);
+    seedTeamInboxIdsFromCache(cached.teamInboxIdSnapshot);
 
     // Always mark initialized after IDB hydration completes — even if cached
     // clientState was missing — so app gates don't hang on fresh users.
@@ -8031,12 +8105,20 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
 // Persistence boots with the module: wire write-through and hydrate
 // immediately. Nothing gates on auth — cached state renders first and live
 // sync reconciles after (local-first is the law).
-if (PERSISTENCE_AVAILABLE) {
-  void hydrateInboxCacheFromIDB().catch((error) => {
-    console.error("[store] IDB hydration failed; continuing with live-only state", error);
-    setHydrating(false);
+function bootPersistence(): void {
+  if (PERSISTENCE_AVAILABLE) {
+    void hydrateInboxCacheFromIDB().catch((error) => {
+      console.error("[store] IDB hydration failed; continuing with live-only state", error);
+      setHydrating(false);
+      useInboxStore.setState({ clientStateInitialized: true });
+    });
+  } else {
     useInboxStore.setState({ clientStateInitialized: true });
-  });
-} else {
-  useInboxStore.setState({ clientStateInitialized: true });
+  }
 }
+
+// Once per store, not once per module evaluation: after a dev hot swap the
+// surviving store is already hydrated and still holds its IDB write-through and
+// outbox bindings, so running this again would re-open the database and re-seed
+// state that is live.
+if (!survivingInboxStore) bootPersistence();
