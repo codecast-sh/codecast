@@ -761,7 +761,12 @@ function BlockedSessionsBanner({
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      {authCount > 0 && loginDevice && (
+      {/* The big sign-in CTA belongs only to a LOGIN incident — the same
+          condition that makes the headline read "blocked on login". In a
+          mixed fleet (limits + a few signed out) the remedy the banner leads
+          with is continue/switch; a loud sign-in button under a "usage
+          limits" headline reads as the wrong fix. */}
+      {authCount > 0 && limitCount === 0 && connCount === 0 && loginDevice && (
         <SignInCta device={loginDevice} authSessionIds={actedAuthIds} disabled={busy !== null} />
       )}
       {expanded && (
@@ -2986,6 +2991,13 @@ export function SessionListPanel({
         (sess.updated_at ?? 0) > since,
     );
   }, [s.sessions, s.blockedReviveRequestedAt, coarseNow]);
+  // A fleet of nothing but blocked subagent workers doesn't earn the amber
+  // pill: their parents have moved on, so there's no one waiting on a revive.
+  // The banner itself still handles the all-subs case when it's forced open.
+  const blockedHasNonSub = useMemo(
+    () => blockedSessions.some((sess) => !isSubagentConversation(sess)),
+    [blockedSessions],
+  );
   // A LIVE 0→N transition of the blocked set is a fresh incident: replay the
   // banner entrance with the attention glow and pulse the header pill so the
   // moment registers. Hydration also walks 0→N right after mount, so the
@@ -3738,7 +3750,7 @@ export function SessionListPanel({
           {/* Permanent trigger for the blocked-fleet actions: visible whenever
               ANY session is parked on a limit/login banner, no matter how the
               banner itself was snoozed. Panel chrome, so it never scrolls away. */}
-          {blockedSessions.length > 0 && (
+          {blockedSessions.length > 0 && blockedHasNonSub && (
             <button
               key={blockedIncidentTs}
               onClick={openBlockedBanner}
