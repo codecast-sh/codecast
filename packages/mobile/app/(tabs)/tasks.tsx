@@ -24,6 +24,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
 import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
+import { buildTaskTree, isHumanOrigin, taskFamilyIndex } from "@codecast/shared/tasks";
 import { filterToWorkspace } from "@codecast/web/lib/workspaceScope";
 import { useSyncTasks } from "@/hooks/useSyncTasks";
 import { useSyncPlans } from "@/hooks/useSyncPlans";
@@ -218,13 +219,15 @@ export default function TasksScreen() {
   const plansList = useMemo(() => filterToWorkspace(Object.values(plans), teamId), [plans, teamId]);
   const docsList = useMemo(() => filterToWorkspace(Object.values(docs), teamId), [docs, teamId]);
 
-  // "human" = the human's board: human-created plus anything promoted onto it
-  // (cast task create --human, triage accept). "bot" = machine-created tasks
-  // that stay internal to agent work. Plans/docs have no promoted field, so
-  // for them this stays a plain source split.
+  // "human" = the human's board: human or meeting origin (shared predicate,
+  // same as the web board), plus anything promoted onto it (cast task create
+  // --human, triage accept). "bot" = machine-created tasks that stay internal
+  // to agent work. Plans/docs have no promoted field or meeting source, so for
+  // them this degrades to a plain source split.
+  const onBoard = (i: { source?: string; promoted?: boolean }) => isHumanOrigin(i) || !!i.promoted;
   const applySourceFilter = useCallback(<T extends { source?: string; promoted?: boolean }>(list: T[]): T[] => {
-    if (sourceFilter === "human") return list.filter((i) => i.source === "human" || i.promoted);
-    if (sourceFilter === "bot") return list.filter((i) => i.source !== "human" && !i.promoted);
+    if (sourceFilter === "human") return list.filter(onBoard);
+    if (sourceFilter === "bot") return list.filter((i) => !onBoard(i));
     return list;
   }, [sourceFilter]);
 
@@ -249,12 +252,18 @@ export default function TasksScreen() {
     return list;
   }, [tasksList, searchQuery, applySourceFilter, statusFilter, priorityFilter, assigneeFilter]);
 
+  // Sort, then nest: buildTaskTree reorders so each subtask follows its parent
+  // while the sort order holds within every level. Every group runs through
+  // here, so this one call nests them all. Same helper as web — one rule for
+  // what nests under what. It only reorders: a subtask whose parent was
+  // filtered out is promoted to the top level, never dropped.
   const sortTasks = useCallback((list: TaskItem[]) => {
-    return [...list].sort((a, b) => {
+    const sorted = [...list].sort((a, b) => {
       if (sortBy === "priority") return (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3) || b.updated_at - a.updated_at;
       if (sortBy === "created") return b.created_at - a.created_at;
       return b.updated_at - a.updated_at;
     });
+    return buildTaskTree(sorted).map((r) => r.task);
   }, [sortBy]);
 
   const groupedTasks = useMemo(() => {
@@ -273,6 +282,24 @@ export default function TasksScreen() {
     }
     return groups;
   }, [filteredTasks, groupBy, sortTasks]);
+
+  // View-scope pass, one tree walk per group: indent per row (nesting stays
+  // inside each group, so a parent under one header never adopts a child filed
+  // under another) plus the on-screen descendant count from the same rows.
+  const viewNesting = useMemo(() => {
+    const byId = new Map<string, { indent: number; depth: number; visibleDescendants: number }>();
+    for (const rows of Object.values(groupedTasks)) {
+      for (const row of buildTaskTree(rows)) {
+        byId.set(row.task._id, { indent: row.indent, depth: row.depth, visibleDescendants: row.descendantCount });
+      }
+    }
+    return byId;
+  }, [groupedTasks]);
+
+  // Workspace-scope pass (same shared helper and predicate as web, so the two
+  // surfaces can never disagree): TRUE deep subtask counts and direct-children
+  // progress over the whole live set, not what survived this view's filters.
+  const familyIndex = useMemo(() => taskFamilyIndex(tasksList), [tasksList]);
 
   const uniqueAssignees = useMemo(() => {
     const names = new Set<string>();
@@ -439,18 +466,31 @@ export default function TasksScreen() {
               {label} ({items.length})
             </RNText>
           </RNView>
-          {items.map((t) => (
-            <TaskItemRow
-              key={t._id}
-              task={t}
-              onPress={() => router.push(`/task/${t.short_id}` as any)}
-              onLongPress={() => showTaskActions(t, updateTask)}
-            />
-          ))}
+          {items.map((t) => {
+            const nest = viewNesting.get(t._id);
+            const total = familyIndex.descendants.get(t._id) ?? 0;
+            // Floated subtask: parent_id set but the tree kept it at depth 0
+            // (parent filtered out), so name the parent.
+            const parent = t.parent_id && (nest?.depth ?? 0) === 0
+              ? (tasks[String(t.parent_id)] as TaskItem | undefined)
+              : undefined;
+            return (
+              <TaskItemRow
+                key={t._id}
+                task={t}
+                onPress={() => router.push(`/task/${t.short_id}` as any)}
+                onLongPress={() => showTaskActions(t, updateTask)}
+                indent={nest?.indent ?? 0}
+                progress={familyIndex.progress.get(t._id)}
+                hiddenDescendantCount={Math.max(0, total - (nest?.visibleDescendants ?? 0))}
+                parentChip={parent ? { short_id: parent.short_id } : null}
+              />
+            );
+          })}
         </RNView>
       );
     },
-    [groupedTasks, groupBy, router, updateTask],
+    [groupedTasks, groupBy, router, updateTask, viewNesting, familyIndex, tasks],
   );
 
   const taskGroupOrder = useMemo(() => {

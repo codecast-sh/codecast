@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { closeTaskWithGuard, createTaskAndAdopt } from "../lib/taskActions";
 import { mergeLiveTasks, computePlanProgress } from "../lib/liveEntities";
 import { Badge } from "./ui/badge";
 import { AppLoader } from "./AppLoader";
@@ -40,6 +41,7 @@ import {
 import Markdown from "react-markdown";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
+import { clipFade } from "./CollapsibleBody";
 import { PlanBoardView } from "./PlanBoardView";
 import { PlanGraphView } from "./PlanGraphView";
 
@@ -218,7 +220,7 @@ function CollapsibleDoc({ content }: { content: string }) {
 
   return (
     <div className="mb-6 border border-sol-border/30 rounded-lg bg-sol-bg-alt/30 overflow-hidden">
-      <div className="relative overflow-hidden" style={expanded ? undefined : { maxHeight: MAX_HEIGHT }}>
+      <div className="relative overflow-hidden" style={expanded ? undefined : { maxHeight: MAX_HEIGHT, ...clipFade() }}>
         <div className="p-6 prose prose-invert prose-sm max-w-none
           prose-headings:text-sol-text prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-2
           prose-p:text-sol-text-muted prose-p:leading-relaxed
@@ -228,9 +230,6 @@ function CollapsibleDoc({ content }: { content: string }) {
           [&_pre]:overflow-x-auto [&_pre]:max-w-full">
           <Markdown remarkPlugins={entityRemarkPlugins} components={{ a: EntityAwareLink, code: EntityAwareCode }}>{content}</Markdown>
         </div>
-        {!expanded && (
-          <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-sol-bg-alt/80 to-transparent" />
-        )}
       </div>
       <button
         onClick={() => setExpanded(!expanded)}
@@ -571,8 +570,12 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
   const cycleStatus = useCallback((shortId: string, currentStatus: string) => {
     const idx = TASK_STATUS_CYCLE.indexOf(currentStatus);
     const next = TASK_STATUS_CYCLE[(idx + 1) % TASK_STATUS_CYCLE.length];
-    updateTask(shortId, { status: next });
-    toast.success(`${shortId} -> ${next}`);
+    if (next === "done" || next === "dropped") {
+      if (!closeTaskWithGuard(shortId, next as "done" | "dropped").needsConfirm) toast.success(`${shortId} -> ${next}`);
+    } else {
+      updateTask(shortId, { status: next });
+      toast.success(`${shortId} -> ${next}`);
+    }
   }, [updateTask]);
 
   const cyclePriority = useCallback((shortId: string, currentPriority: string) => {
@@ -589,11 +592,11 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
 
   const handleAdd = useCallback(() => {
     if (!newTitle.trim()) return;
-    createTask({ title: newTitle.trim(), plan_id: planShortId });
+    void createTaskAndAdopt({ title: newTitle.trim(), plan_id: planShortId });
     setNewTitle("");
     setShowAdd(false);
     toast.success("Task created");
-  }, [newTitle, planShortId, createTask]);
+  }, [newTitle, planShortId]);
 
   const sessionsByTask = new Map<string, any[]>();
   const unlinkedSessions: any[] = [];

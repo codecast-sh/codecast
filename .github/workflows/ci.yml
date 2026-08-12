@@ -90,6 +90,12 @@ jobs:
         working-directory: packages/web
         run: bun test
 
+      - name: Unit tests (shared/tasks)
+        working-directory: packages/shared
+        # Scoped to the tasks suite: the package has other pre-existing test
+        # files with unrelated failures that are not this job's concern.
+        run: bun test tasks/
+
   test-cli:
     runs-on: ubuntu-latest
     steps:

@@ -2,6 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { createTaskAndAdopt } from "../lib/taskActions";
 import { useImageUpload } from "../hooks/useImageUpload";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -252,7 +253,9 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose
       labels: labels.length > 0 ? labels : undefined,
       ...wsArgs,
     };
-    createTask(opts);
+    // Through the shared helper: mints a client_key so the stub altKey-supersedes
+    // to the real row (no lingering duplicate), and toasts on a server refusal.
+    void createTaskAndAdopt(opts);
     toast.success(`Created: ${title.trim()}`);
     if (createMore) {
       setTitle("");
