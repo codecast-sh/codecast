@@ -379,6 +379,17 @@ export function QueuePageClient() {
       // Carry the author so a deep-linked teammate session shows whose it is.
       user_id: directConv.user_id,
       author_name: directConv.user?.name ?? null,
+      // Triage/visibility state (free on the getConversation doc). Injected
+      // rows persist in the sessions cache, so dropping these seeded a
+      // stashed/dismissed session as an ACTIVE row that flashed into the
+      // inbox as a needs-input card on every boot (ct-42666). It also lets
+      // injectSession's own hidden check route the view through the peek path
+      // instead of silently resurrecting a triaged session.
+      inbox_dismissed_at: directConv.inbox_dismissed_at ?? null,
+      inbox_stashed_at: directConv.inbox_stashed_at ?? null,
+      inbox_killed_at: directConv.inbox_killed_at ?? null,
+      inbox_pinned_at: directConv.inbox_pinned_at ?? null,
+      is_pinned: !!directConv.inbox_pinned_at,
     });
     setPendingInjectId(null);
     paramProcessedRef.current = true;
