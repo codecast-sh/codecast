@@ -1128,22 +1128,17 @@ export function mutativeMiddleware(config: any, opts?: {
       }
     }
 
-    const rawStore = config(set, get, api);
-
-    const wrapped: Record<string, any> = {};
-
-    for (const [key, val] of Object.entries(rawStore)) {
+    // Wrapping one config entry. Split out of the build loop so a re-evaluated
+    // config can be rebuilt against THIS closure — see _hotReplaceConfig.
+    const wrapAction = (key: string, val: any): any => {
       const isAct = isAction(val);
       const isAsyncAct = isAsyncAction(val);
       const isReceiptAsyncAct = isReceiptAsyncAction(val);
       const isSyn = isSync(val);
 
-      if (!isAct && !isAsyncAct && !isSyn) {
-        wrapped[key] = val;
-        continue;
-      }
+      if (!isAct && !isAsyncAct && !isSyn) return val;
 
-      wrapped[key] = (...args: any[]) => {
+      return (...args: any[]) => {
         const actionArgs = normalizeZeroArgumentEventCall(val as Function, args);
         const state = get();
         let returnValue: any;
@@ -1417,7 +1412,17 @@ export function mutativeMiddleware(config: any, opts?: {
 
         return returnValue;
       };
-    }
+    };
+
+    const buildWrapped = (cfg: any): Record<string, any> => {
+      const out: Record<string, any> = {};
+      for (const [key, val] of Object.entries(cfg(set, get, api))) {
+        out[key] = wrapAction(key, val);
+      }
+      return out;
+    };
+
+    const wrapped: Record<string, any> = buildWrapped(config);
 
     wrapped._setDispatch = (
       fn: DispatchFn | null,
@@ -1539,6 +1544,22 @@ export function mutativeMiddleware(config: any, opts?: {
         }
       }
       return origSetState(partial, replace);
+    };
+
+    // Dev hot swap (see plugins/storeHmr.ts): rebuild every action from a
+    // freshly evaluated config WITHOUT rebuilding this closure, so the dispatch
+    // binding, its epoch, IDB write-through, the durable outbox and any pending
+    // receipt waiters all survive the swap. Only functions and state keys that
+    // did not exist before are applied — live data is left exactly as it is, so
+    // an edit to an action costs no reload and no refetch.
+    wrapped._hotReplaceConfig = (nextConfig: any) => {
+      const next = buildWrapped(nextConfig);
+      const current = get();
+      const patch: Record<string, any> = {};
+      for (const [key, val] of Object.entries(next)) {
+        if (typeof val === "function" || !(key in current)) patch[key] = val;
+      }
+      set(patch);
     };
 
     return wrapped;

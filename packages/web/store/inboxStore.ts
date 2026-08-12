@@ -4426,8 +4426,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   });
 }
 
-export const useInboxStore = create<InboxStoreState>(
-  mutativeMiddleware((set: any, get: any) => ({
+const inboxStoreConfig = (set: any, get: any) => ({
   // -- Initial state --
   sessions: {},
   pending: {},
@@ -7614,7 +7613,49 @@ export const useInboxStore = create<InboxStoreState>(
     return get().sessions[id];
   },
 
-})) as any);
+});
+
+function createInboxStore() {
+  return create<InboxStoreState>(mutativeMiddleware(inboxStoreConfig) as any);
+}
+
+// -- Dev hot swap --
+//
+// This module exports a hook and actions, never components, so React Fast
+// Refresh cannot make it an update boundary. Vite then walks the importers for
+// one and finds none: lib/sounds imports the store straight back (a cycle), and
+// lib/errorToast reaches src/boot.tsx, which is the entry and has no importers
+// at all. The fallback is a full page reload, and that costs ~4s of Convex
+// WebSocket handshake before any data comes back — for editing one action.
+//
+// So the module self-accepts instead. The accept call is appended by
+// plugins/storeHmr.ts rather than written here, because Metro bundles this same
+// file for the Expo app and Hermes cannot parse `import.meta` (same reason the
+// dev console hook below reads NODE_ENV). On re-execution the surviving store is
+// reused, so every importer's `useInboxStore` reference stays valid and the
+// state stays in memory; _hotReplaceConfig swaps in the new action bodies.
+//
+// That only holds for the actions. A self-accepting module leaves its importers
+// untouched, so they keep their old copy of every other export here — the
+// selectors, classifySession, sortSessions and the rest. The plugin watches for
+// exactly that: it fingerprints everything outside `inboxStoreConfig` below and
+// reloads instead of swapping when it changes, so an edit never appears to apply
+// and then quietly do nothing. Keep the two markers it splits on intact.
+//
+// `document` is the web/native split — React Native has no document, so a Metro
+// Fast Refresh keeps the plain create() path it has always used.
+const hotSwapCapable = process.env.NODE_ENV !== "production" && typeof document !== "undefined";
+const survivingInboxStore: ReturnType<typeof createInboxStore> | undefined = hotSwapCapable
+  ? (globalThis as any).__codecastInboxStore
+  : undefined;
+
+export const useInboxStore = survivingInboxStore ?? createInboxStore();
+
+if (survivingInboxStore) {
+  (survivingInboxStore.getState() as any)._hotReplaceConfig?.(inboxStoreConfig);
+} else if (hotSwapCapable) {
+  (globalThis as any).__codecastInboxStore = useInboxStore;
+}
 
 function cloneInitialValue<T>(value: T): T {
   if (value instanceof Set) return new Set(value) as T;
@@ -8031,12 +8072,21 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
 // Persistence boots with the module: wire write-through and hydrate
 // immediately. Nothing gates on auth — cached state renders first and live
 // sync reconciles after (local-first is the law).
-if (PERSISTENCE_AVAILABLE) {
-  void hydrateInboxCacheFromIDB().catch((error) => {
-    console.error("[store] IDB hydration failed; continuing with live-only state", error);
-    setHydrating(false);
+function bootPersistence(): void {
+  if (PERSISTENCE_AVAILABLE) {
+    void hydrateInboxCacheFromIDB().catch((error) => {
+      console.error("[store] IDB hydration failed; continuing with live-only state", error);
+      setHydrating(false);
+      useInboxStore.setState({ clientStateInitialized: true });
+    });
+  } else {
     useInboxStore.setState({ clientStateInitialized: true });
-  });
-} else {
-  useInboxStore.setState({ clientStateInitialized: true });
+  }
 }
+
+// Once per store, not once per module evaluation: after a dev hot swap the
+// surviving store is already hydrated and still holds its IDB write-through and
+// outbox bindings, so running this again would re-open the database and re-seed
+// state that is live.
+if (!survivingInboxStore) bootPersistence();
+
