@@ -167,6 +167,22 @@ export const AUTO_SWITCH_ATTEMPT_EVIDENCE_MS = 5 * 60 * 1000;
 // The attempt-history key for a same-account "continue" (no profile involved).
 export const AUTO_SWITCH_CONTINUE_KEY = "__continue__";
 
+/** Does the "every account is spent" stamp still describe NOW? Only a re-check
+ * clears it, and that re-check may never run — auto-switch turned off, a lost
+ * scheduler wake-up, a machine that went away. So past the rolling session
+ * window the stamp stands only while some account still shows a pegged window
+ * that hasn't rolled. Inside the window it stands on its own: a single-account
+ * machine can be spent with no usage snapshot to prove it. */
+export function isExhaustionCurrent(
+  exhaustedAt: number | undefined | null,
+  profiles: { usage?: CcUsage | null }[],
+  now: number,
+): boolean {
+  if (!exhaustedAt) return false;
+  if (now - exhaustedAt < AUTO_SWITCH_SESSION_WINDOW_MS) return true;
+  return profiles.some((p) => isUsageExhausted(p.usage, now));
+}
+
 export interface AutoSwitchProfile {
   name: string;
   email?: string;

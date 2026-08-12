@@ -7,6 +7,7 @@ import {
   isValidProfileName,
   shouldSweepStaleFlag,
   decideAutoSwitch,
+  isExhaustionCurrent,
   isUsageExhausted,
   isWindowRolled,
   worstUsagePercent,
@@ -144,6 +145,19 @@ describe("usage predicates", () => {
     expect(worstUsagePercent({ fetched_at: 1, session: { percent: 100, resets_at: now - 1 } }, now)).toBe(0);
     // A window with no known reset time can't be proven rolled.
     expect(worstUsagePercent({ fetched_at: 1, session: { percent: 100 } }, now)).toBe(100);
+  });
+
+  test("isExhaustionCurrent expires a stamp the windows have outlived", () => {
+    const pegged = [{ usage: usage(100, 30) }];
+    const rolled = [{ usage: { fetched_at: 1, session: { percent: 100, resets_at: now - 1 } } }];
+    // Fresh stamp stands alone — a single-account machine can be spent with no
+    // snapshot to prove it.
+    expect(isExhaustionCurrent(now - 60_000, [{}], now)).toBe(true);
+    // Old stamp, some account still pegged with a reset ahead — still true.
+    expect(isExhaustionCurrent(now - 20 * 3600_000, pegged, now)).toBe(true);
+    // Old stamp, every pegged window has rolled — the claim expired.
+    expect(isExhaustionCurrent(now - 20 * 3600_000, rolled, now)).toBe(false);
+    expect(isExhaustionCurrent(undefined, pegged, now)).toBe(false);
   });
 
   test("isWindowRolled needs a reset time that has actually passed", () => {

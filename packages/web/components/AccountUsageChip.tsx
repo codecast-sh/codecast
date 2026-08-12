@@ -18,6 +18,7 @@ import { ClaudeIcon, OpenAIIcon } from "./BrandIcons";
 import { Switch } from "./ui/switch";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useTrackedStore } from "../store/inboxStore";
+import { isExhaustionCurrent } from "@codecast/convex/convex/ccAccountsShared";
 import {
   AccountUsageBars,
   formatAgo,
@@ -203,7 +204,9 @@ export function AccountUsageChip() {
   const otherGroups = buildGroups(allEntries.filter((e) => !e.isActive));
   const autoOn = pendingToggle ?? device.auto_switch;
   const state = device.auto_switch_state;
-  const exhausted = !!state?.exhausted_at;
+  // Only a re-check clears the stamp, so an old one keeps claiming "everything
+  // is spent" after the windows rolled — read it against the clock.
+  const exhausted = isExhaustionCurrent(state?.exhausted_at, [...profiles, ...codexProfiles], now);
 
   const handleSwitch = async (profile: string) => {
     setSwitching(profile);

@@ -11,7 +11,11 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { isValidProfileName, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import {
+  isExhaustionCurrent,
+  isValidProfileName,
+  type CcUsage,
+} from "@codecast/convex/convex/ccAccountsShared";
 import { Card } from "../../../components/ui/card";
 import { AppLoader } from "../../../components/AppLoader";
 import { Button } from "../../../components/ui/button";
@@ -116,7 +120,9 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
 
   const enabled = pending ?? device.auto_switch;
   const state = device.auto_switch_state;
-  const exhausted = !!state?.exhausted_at;
+  // Time-aware: the stamp is only cleared by a re-check that may never run, so
+  // past the session window it needs a still-pegged account to stand on.
+  const exhausted = isExhaustionCurrent(state?.exhausted_at, device.profiles, now);
 
   const handleToggle = async (next: boolean) => {
     setPending(next);
