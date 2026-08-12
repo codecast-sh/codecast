@@ -144,7 +144,7 @@ export function InboxHeroMock() {
             {/* Agent prose with live task + session references */}
             <div className="leading-relaxed">
               Done with <span style={{ color: "#002b36" }}>14 of 16 endpoints</span>. Filed{" "}
-              <TaskPill id="ct-901" /> for the retry queue and handed the dashboard half to{" "}
+              <TaskPill title="Retry queue for failed webhooks" /> and handed the dashboard half to{" "}
               <SessionPill title="Dashboard rewrite" />. Latency after the switch:
             </div>
 
@@ -248,12 +248,12 @@ function SessionPill({ title }: { title: string }) {
   );
 }
 
-/** Mirrors EntityIdPill for tasks: ct- ids stay compact, yellow tint, status glyph. */
-function TaskPill({ id }: { id: string }) {
+/** Mirrors EntityIdPill for tasks: yellow tint, status glyph, the task TITLE (never the raw id). */
+function TaskPill({ title }: { title: string }) {
   return (
     <span className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] align-baseline" style={{ backgroundColor: "rgba(181,137,0,0.1)", color: "#b58900", borderColor: "rgba(181,137,0,0.2)" }}>
       <svg className="h-2.5 w-2.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="#b58900" strokeWidth={2.5}><circle cx="12" cy="12" r="10" /></svg>
-      {id}
+      {title}
     </span>
   );
 }
@@ -364,7 +364,7 @@ export function AgentChatMock() {
           </div>
         </div>
         <div className="leading-relaxed" style={{ color: "#657b83" }}>
-          Claimed <TaskPill id="ct-641" />.
+          Claimed <TaskPill title="Stripe webhook API" />.
           API half done, deploying to staging — I&apos;ll message you when the integration test is green.
         </div>
         <div className="rounded px-2.5 py-1.5 text-[11px]" style={{ backgroundColor: "#eee8d5", color: "#586e75" }}>

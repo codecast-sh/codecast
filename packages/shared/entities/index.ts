@@ -160,11 +160,16 @@ export function entityTypeFromId(id: string): EntityType | null {
 /** `ct|pl|tr` — the registered short-id prefixes, as a regex alternation. */
 const PREFIX_ALT = Object.keys(SHORT_ID_PREFIX).join("|");
 
-/** Bare ids as they appear in prose, widest form first. */
-const BARE_ID_SOURCE = `(?:${PREFIX_ALT})-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
+/**
+ * Bare ids as they appear in prose, widest form first. Exported as a source
+ * fragment (not a RegExp) for surfaces that must embed it inside a larger
+ * alternation — mobile's markdown tokenizer scans every inline form in one
+ * pass, so it needs the branch, not a standalone matcher.
+ */
+export const BARE_ID_SOURCE = `(?:${PREFIX_ALT})-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
 
 /** Ids as they appear inside an `@[Title id]` mention (a label is not an object). */
-const MENTION_ID_SOURCE = `(?:${PREFIX_ALT})-\\w+|jx\\w+|doc:\\w+|label:\\w+|[a-z0-9]{32}`;
+export const MENTION_ID_SOURCE = `(?:${PREFIX_ALT})-\\w+|jx\\w+|doc:\\w+|label:\\w+|[a-z0-9]{32}`;
 
 /** Scans prose for bare object ids. Word-bounded so it can't split a longer token. */
 export function bareEntityIdRegex(): RegExp {
@@ -186,6 +191,53 @@ export function entityMentionRegex(opts: { requireId?: boolean } = {}): RegExp {
 /** True when a whole string is an object id (not a scan — an exact test). */
 export function isEntityId(text: string): boolean {
   return new RegExp(`^(?:${BARE_ID_SOURCE})$`, "i").test((text || "").trim());
+}
+
+// ---------------------------------------------------------------------------
+// What a reference is CALLED
+//
+// An id names nothing. "ct-38940" mid-sentence forces the reader to hover or
+// click just to learn what is being discussed, so every reference surface —
+// web pills, mobile pills — shows the object's title and keeps the id for the
+// hover card. The rule lives here because both platforms need exactly it, and
+// the last copy of it drifted.
+// ---------------------------------------------------------------------------
+
+/** Longest title a reference shows inline before it gets clipped. */
+export const ENTITY_LABEL_MAX = 40;
+
+/**
+ * Clip a title to something that reads inline without swallowing the sentence
+ * around it. Clips on a word boundary when there is a sensible one, and leaves
+ * a title alone when clipping would save only a character or two.
+ */
+export function truncateEntityLabel(title: string, max: number = ENTITY_LABEL_MAX): string {
+  const t = title.trim();
+  if (t.length <= max + 3) return t;
+  const cut = t.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  // Only break on a space if it leaves most of the budget used — otherwise a
+  // long first word would collapse the label to almost nothing.
+  const body = lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut;
+  return body.trimEnd() + "…";
+}
+
+/**
+ * The text an inline object reference shows. The title, once the row resolves;
+ * otherwise the short id, which at least says WHICH object and stays stable.
+ * A 32-char Convex id is never readable, so it degrades to the type name.
+ */
+export function entityReferenceLabel(args: {
+  title?: string | null;
+  shortId?: string | null;
+  rawId: string;
+  typeLabel?: string | null;
+}): string {
+  const title = args.title?.trim();
+  if (title) return truncateEntityLabel(title);
+  if (args.shortId) return args.shortId;
+  if (isConvexId(args.rawId) && args.typeLabel) return args.typeLabel;
+  return args.rawId;
 }
 
 /**

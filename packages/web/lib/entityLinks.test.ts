@@ -10,6 +10,8 @@ import {
   isEntityId,
   entityMentionRegex,
   bareEntityIdRegex,
+  truncateEntityLabel,
+  entityReferenceLabel,
 } from "./entityLinks";
 
 describe("isConvexId", () => {
@@ -250,5 +252,57 @@ describe("bareEntityIdRegex", () => {
 
   test("does not match a word that merely starts with a prefix", () => {
     expect("the transaction triggered a plan".match(bareEntityIdRegex())).toBeNull();
+  });
+});
+
+describe("truncateEntityLabel", () => {
+  test("leaves an ordinary title alone", () => {
+    expect(truncateEntityLabel("Retry queue for failed webhooks")).toBe(
+      "Retry queue for failed webhooks",
+    );
+  });
+
+  test("leaves a title alone when clipping would save a character or two", () => {
+    // 42 chars — over the 40 budget, but clipping it buys nothing and costs a
+    // word, so it stays whole.
+    const title = "Move every customer to the new webhook API";
+    expect(title.length).toBeGreaterThan(40);
+    expect(truncateEntityLabel(title)).toBe(title);
+  });
+
+  test("clips a long title on a word boundary", () => {
+    expect(
+      truncateEntityLabel("Rewrite the delivery pipeline so queued sends survive a restart"),
+    ).toBe("Rewrite the delivery pipeline so queued…");
+  });
+
+  test("clips mid-word rather than collapsing to almost nothing", () => {
+    // The only space inside the budget sits at index 3. Breaking there would
+    // leave "Fix…", which names nothing — so the mid-word cut stands instead.
+    const title = "Fix theincrediblylongidentifierwithnobreaksatall in the parser";
+    const label = truncateEntityLabel(title);
+    expect(label).toBe(title.slice(0, 40) + "…");
+    expect(label.startsWith("Fix theincredibly")).toBe(true);
+  });
+});
+
+describe("entityReferenceLabel", () => {
+  test("prefers the title", () => {
+    expect(
+      entityReferenceLabel({ title: "Billing migration", shortId: "pl-88", rawId: "pl-88" }),
+    ).toBe("Billing migration");
+  });
+
+  test("falls back to the short id while the row is unresolved", () => {
+    expect(entityReferenceLabel({ title: null, shortId: null, rawId: "ct-38940" })).toBe("ct-38940");
+  });
+
+  test("never shows a raw 32-char Convex id", () => {
+    const blob = "mh73xedd7ep2nmr082mqnxts2x86kzfy";
+    expect(entityReferenceLabel({ rawId: blob, typeLabel: "Task" })).toBe("Task");
+  });
+
+  test("an empty title is not a title", () => {
+    expect(entityReferenceLabel({ title: "   ", shortId: "ct-7", rawId: "ct-7" })).toBe("ct-7");
   });
 });

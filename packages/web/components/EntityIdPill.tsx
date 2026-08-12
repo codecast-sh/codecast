@@ -30,6 +30,7 @@ import {
   isEntityId,
   entityTypeFromId,
   entityMentionRegex,
+  entityReferenceLabel,
   type EntityType,
 } from "../lib/entityLinks";
 import { DocEmbed } from "./DocEmbed";
@@ -688,20 +689,17 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
             ? "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20"
             : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
 
-  // Label rules, preserving existing inline behavior:
-  //  • full-Convex-id links (pasted URLs, docs, projects): show the resolved
-  //    title — never the 32-char id; fall back to short_id / type while loading.
-  //  • session / trigger short id: title once known, else the short id. Both
-  //    name a thing whose id says nothing about it ("tr-42" vs "Growth audit").
-  //  • ct-/pl- short ids: stay compact, always show the id.
+  // One label rule for every type, shared with mobile: the pill reads as the
+  // object's NAME, and the id moves to the hover card. A trigger prefers its
+  // display_title — the generated short name, not the whole prompt's first line.
   const resolvedTitle: string | undefined =
     (isTrigger ? entity?.display_title : undefined) || entity?.title || entity?.display_title || entity?.name;
-  const truncated = resolvedTitle && resolvedTitle.length > 30 ? resolvedTitle.slice(0, 30) + "…" : resolvedTitle;
-  const pillLabel = looksConvex
-    ? truncated || entity?.short_id || (type ? TYPE_LABEL[type] : rawId)
-    : isSession || isTrigger
-      ? truncated || rawId
-      : rawId;
+  const pillLabel = entityReferenceLabel({
+    title: resolvedTitle,
+    shortId: entity?.short_id,
+    rawId,
+    typeLabel: type ? TYPE_LABEL[type] : null,
+  });
 
   // Route that opens this entity. Prefer the resolved Convex id; fall back to
   // the raw id so the link still works in the brief window before the query

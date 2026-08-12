@@ -16,7 +16,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme } from '@/constants/Theme';
 import { CastCanvas, canvasAvailable } from './CastCanvas';
 import { EntityPill, isEntityId } from './EntityPill';
-import { parseEntityUrl } from '@codecast/shared/entities';
+import { parseEntityUrl, BARE_ID_SOURCE, MENTION_ID_SOURCE } from '@codecast/shared/entities';
 // Canonical "★ Insight ─────" parser shared with web (pure string/regex module,
 // Hermes-safe). Mobile used to carry its own narrower copy in session/[id].tsx
 // which silently missed most real-world insight forms — one parser, one truth.
@@ -70,11 +70,19 @@ export function HighlightedCodeText({ content, style }: { content: string; style
 
 // Trailing "<name> <entity-id>" inside an @[…] mention — same shape web's
 // MENTION_RE extracts (the id renders as a pill; the name is its fallback).
-const MENTION_ENTITY_RE = /^(.*?)\s*\b(ct-\w+|pl-\w+|jx[a-z0-9]{5,}|doc:\w+|[a-z0-9]{32})$/i;
+// Both id vocabularies come from @codecast/shared/entities: mobile used to keep
+// its own copies here, and they drifted (no "tr-" triggers, plus a "doc-…" form
+// that never existed).
+const MENTION_ENTITY_RE = new RegExp(`^(.*?)\\s*\\b(${MENTION_ID_SOURCE})$`, 'i');
 
 export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false): React.ReactNode[] {
   const result: React.ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+)|@\[([^\]]+)\]|@(\w+)|\b((?:ct|pl)-[a-z0-9]{4,}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|doc-[a-z0-9]{4,}|[a-z0-9]{32})\b)/g;
+  const pattern = new RegExp(
+    '(`[^`]+`|\\*\\*(.+?)\\*\\*|\\*(.+?)\\*|~~(.+?)~~|\\[([^\\]]+)\\]\\(([^)]+)\\)'
+    + '|(https?:\\/\\/[^\\s<>\\])"\',]+)|@\\[([^\\]]+)\\]|@(\\w+)'
+    + `|\\b(${BARE_ID_SOURCE})\\b)`,
+    'g',
+  );
   let lastIndex = 0;
   let match;
   let key = 0;
