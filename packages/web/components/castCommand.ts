@@ -185,6 +185,28 @@ export function extractSendBody(args: string): SendBody {
   return { body: body || t, kind: dynamic ? "dynamic" : "literal" };
 }
 
+// Pull the value of an inline message flag (`-m "…"` / `--message '…'`) out of a
+// cast command's arg string, e.g. `cast task done ct-1 -m "verified in prod"`.
+// Only literal quoted/bare values are returned — an expanded value ($VAR, $(…))
+// is a recipe, not the delivered text, so it yields null.
+export function extractMessageFlag(args: string): string | null {
+  const m = args.match(/(?:^|\s)(?:-m|--message)\s+([\s\S]+)/);
+  if (!m) return null;
+  const { body, dynamic } = scanShellWord(m[1]);
+  return !dynamic && body ? body : null;
+}
+
+// The body argument of `cast task comment <id> "…"` / `cast plan comment <id> -`:
+// everything after the leading entity id (short id, or a bare Convex id for
+// docs), decoded like a send body (quoted word or heredoc). Returns null when
+// the id is missing or the body was shell-expanded.
+export function extractCommentBody(args: string): string | null {
+  const rest = args.replace(/^(?:(?:ct|pl)-[a-z0-9]+|[a-z0-9]{20,})\s+/i, "");
+  if (rest === args) return null;
+  const { body, kind } = extractSendBody(rest);
+  return kind === "dynamic" ? null : body || null;
+}
+
 // Parse a raw shell command into its cast (category, subcommand, args), tolerating
 // a `bash -c` wrapper and a leading `cd <dir>;`/`&&` prefix. Returns null when the
 // command isn't a `cast ...` invocation.

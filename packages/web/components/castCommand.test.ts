@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody } from "./castCommand";
+import { stripCdPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag } from "./castCommand";
 
 describe("stripCdPrefix", () => {
   test("strips a leading `cd <dir>;` prefix", () => {
@@ -236,5 +236,47 @@ describe("unwrapShellCommand", () => {
 
   test("returns the command unchanged when not wrapped", () => {
     expect(unwrapShellCommand("cast send jx7a6xc hi")).toBe("cast send jx7a6xc hi");
+  });
+});
+
+describe("extractCommentBody", () => {
+  test("quoted body after a task short id", () => {
+    expect(extractCommentBody('ct-40882 "wired the parser, deploying next" -t progress')).toBe(
+      "wired the parser, deploying next",
+    );
+  });
+
+  test("heredoc body after a plan short id", () => {
+    expect(extractCommentBody("pl-88 - <<'EOF'\nline one\nline two\nEOF")).toBe("line one\nline two");
+  });
+
+  test("bare Convex id (doc comment) followed by a quoted body", () => {
+    expect(extractCommentBody('k57d2v8m1q9x3z6b4n8c0f5g7h2j4l6p "looks good"')).toBe("looks good");
+  });
+
+  test("null when there is no leading entity id", () => {
+    expect(extractCommentBody('"just a string"')).toBeNull();
+  });
+
+  test("null for a shell-expanded body (recipe, not delivered text)", () => {
+    expect(extractCommentBody('ct-40882 "$(cat notes.md)"')).toBeNull();
+  });
+});
+
+describe("extractMessageFlag", () => {
+  test("extracts a double-quoted -m value", () => {
+    expect(extractMessageFlag('ct-40882 -m "verified in prod"')).toBe("verified in prod");
+  });
+
+  test("extracts a single-quoted --message value", () => {
+    expect(extractMessageFlag("ct-40882 --message 'all tests green'")).toBe("all tests green");
+  });
+
+  test("null when the flag is absent", () => {
+    expect(extractMessageFlag("ct-40882")).toBeNull();
+  });
+
+  test("null for an expanded value", () => {
+    expect(extractMessageFlag('ct-40882 -m "$SUMMARY"')).toBeNull();
   });
 });
