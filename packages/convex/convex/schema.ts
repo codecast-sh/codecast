@@ -2745,6 +2745,55 @@ export default defineSchema({
     view_count: v.number(),
   }).index("by_artifact_email", ["artifact_id", "email"]),
 
+  // Live screen of one tmux pane on one machine — the transport that lets the
+  // terminal split watch a pane the browser cannot reach on loopback (an agent
+  // running on your Mac mini while you sit at a laptop). See
+  // convex/terminalStream.ts for the lease protocol and why this is snapshots
+  // rather than a byte stream.
+  //
+  // One row per (user, device, pane), reused forever: the daemon overwrites
+  // `frame` in place while a viewer holds the lease, and nothing writes at all
+  // once the lease lapses or the screen stops changing. A row is therefore hot
+  // only while a human is looking at it, and has exactly one writer, so the
+  // usual hot-document contention doesn't apply.
+  terminal_frames: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    // tmux target (a managed session name, e.g. "cc-abc123").
+    target: v.string(),
+    // Current screen as tmux printed it (`capture-pane -p -e`): text plus SGR
+    // escapes, no scrollback. Absent until the first capture lands.
+    frame: v.optional(v.string()),
+    // Pane geometry, so the viewer can size its xterm to the real pane instead
+    // of reflowing someone else's columns.
+    cols: v.optional(v.number()),
+    rows: v.optional(v.number()),
+    // Where tmux has the cursor. capture-pane returns text only, so without
+    // this the viewer's cursor parks at the end of the last line instead of in
+    // the agent's input box.
+    cursor_x: v.optional(v.number()),
+    cursor_y: v.optional(v.number()),
+    // Bumped on every pushed frame. The viewer repaints on change; an idle
+    // pane pushes nothing, so this is also how "still connected" is told apart
+    // from "nothing new" (that's `streamer_seen_at`).
+    seq: v.number(),
+    // Why the stream stopped producing (pane gone, tmux missing). Cleared by
+    // the next good frame.
+    error: v.optional(v.string()),
+    // Viewer lease. The daemon keeps capturing while now < watch_until and
+    // stops on its own the moment it lapses — a closed tab, a killed browser
+    // and a lost network all converge on "stop" with no teardown message.
+    watch_until: v.number(),
+    // Last time the daemon pushed anything for this pane (frame or heartbeat).
+    // The viewer shows "connecting" until this moves.
+    streamer_seen_at: v.optional(v.number()),
+    // Last time a stream_pane command was queued for the device. A viewer
+    // renews its lease every few seconds; without this stamp a machine that is
+    // asleep or offline would collect one command row per renewal forever.
+    requested_at: v.optional(v.number()),
+    updated_at: v.number(),
+  }).index("by_user_device_target", ["user_id", "device_id", "target"]),
+
   // Remote mirror of a local markdown vault: one row per registered vault the
   // user turned mirroring on for (`cast vault mirror <dir> --on`). The daemon on
   // the owning device is the only writer; the browser reads. Mirroring is opt-in
