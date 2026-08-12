@@ -280,7 +280,7 @@ function CrosstalkInner() {
       <Header model={model} />
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
             {/* Constellation */}
-            <div className="relative lg:w-[58%] h-[44vh] lg:h-auto border-b lg:border-b-0 lg:border-r border-sol-border/15 bg-gradient-to-b from-sol-bg-alt/30 to-sol-bg">
+            <div className="relative lg:w-[58%] h-[44vh] lg:h-auto border-b lg:border-b-0 lg:border-r border-sol-border/15 bg-gradient-to-b from-[color-mix(in_srgb,var(--sol-bg-alt)_30%,transparent)] to-sol-bg">
               {model && model.nodes.length > 0 ? (
                 <>
                   <SessionConstellation

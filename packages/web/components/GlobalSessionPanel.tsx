@@ -2305,7 +2305,7 @@ export const SessionCard = memo(function SessionCard({
         </div>
       )}
       {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
-        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/50 to-sol-bg-alt/85'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 50%, transparent), color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 85%, transparent))' } : undefined}>
+        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${isActive ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 50%, transparent), color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 85%, transparent))' } : undefined}>
           {/* Pin slot, first so it anchors the top of the toolbar. When the row is
               already pinned, the persistent badge above IS the pin — here we render
               only an invisible spacer the same size, so the remaining actions sit
