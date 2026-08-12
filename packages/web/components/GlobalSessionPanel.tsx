@@ -29,7 +29,7 @@ import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
 import { SlotActions } from "./workspace/Slot";
-import { partitionTriggerInbox, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
+import { partitionTriggerInbox, groupSessionsByTrigger, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
@@ -923,9 +923,9 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
   onNavigated?: () => void;
 }) {
   const { task, unread } = row;
-  // Pseudo rows (harness loops, live subagents) wear the same anatomy but
-  // carry no server verbs — there's no agent_tasks row to pause or cancel,
-  // and no run history to query. See triggerTasks.ts.
+  // Pseudo rows (harness loops) wear the same anatomy but carry no server
+  // verbs — there's no agent_tasks row to pause or cancel, and no run history
+  // to query. See triggerTasks.ts.
   const isPseudo = !!row.kind;
   const now = useCoarseNow(30_000);
   // Every verb patches the local webList cache in the same write (local-first):
@@ -1049,7 +1049,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
             </ShortcutTooltip>
           )}
           <span className="ml-auto shrink-0 text-[10px] font-medium text-sol-text-muted">
-            {row.kind === "loop" ? "loop" : row.kind === "subagent" ? "subagent" : describeTaskCadence(task)}
+            {row.kind === "loop" ? "loop" : describeTaskCadence(task)}
           </span>
           {(() => {
             const badge = (
@@ -1165,10 +1165,10 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
       {/* Hover action rail — same idiom as the inbox session cards: a right-hand
           strip that fades in over a gradient (so it reads as "revealed", not a
           box dropped on top), holding compact icon verbs. Absolute + full-height
-          so revealing it never changes the row's height. Pseudo rows (loops,
-          subagents) have no rail: their verbs live inside the session itself. */}
+          so revealing it never changes the row's height. Pseudo rows (loops)
+          have no rail: their verbs live inside the session itself. */}
       {!isPseudo && (
-      <div className="absolute top-0 bottom-0 right-0 flex items-center gap-0.5 pl-12 pr-2 opacity-0 group-hover/schedrow:opacity-100 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] bg-gradient-to-r from-transparent via-sol-bg-alt/80 to-sol-bg-alt">
+      <div className="absolute top-0 bottom-0 right-0 flex items-center gap-0.5 pl-12 pr-2 opacity-0 group-hover/schedrow:opacity-100 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_80%,transparent)] to-sol-bg-alt">
         <ShortcutTooltip label={runsOpen ? "Hide run history" : "Run history"} hint="every run links to its trigger message" side="top">
           <button
             aria-label={runsOpen ? "Hide run history" : "Show run history"}
@@ -1452,12 +1452,11 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
     if (!open) setCursor(-1);
   }, [open]);
   if (rows.length === 0) return null;
-  // Real triggers keep the recurring/one-time split; loops and subagents get
-  // their own words — calling a self-pacing loop "recurring" would be a lie
-  // about what the user can edit.
+  // Real triggers keep the recurring/one-time split; loops get their own word
+  // — calling a self-pacing loop "recurring" would be a lie about what the
+  // user can edit.
   const realRows = rows.filter((r) => !r.kind);
   const loopCount = rows.filter((r) => r.kind === "loop").length;
-  const subagentCount = rows.filter((r) => r.kind === "subagent").length;
   const recurringCount = realRows.filter((r) => r.task.schedule_type !== "once").length;
   const oneTimeCount = realRows.length - recurringCount;
   const overdueCount = rows.filter((r) => !r.kind && isTaskOverdue(r.task, now)).length;
@@ -1489,7 +1488,6 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
                 {recurringCount > 0 ? ` · ${recurringCount} recurring` : ""}
                 {oneTimeCount > 0 ? ` · ${oneTimeCount} one-time` : ""}
                 {loopCount > 0 ? ` · ${loopCount} loop${loopCount === 1 ? "" : "s"}` : ""}
-                {subagentCount > 0 ? ` · ${subagentCount} subagent${subagentCount === 1 ? "" : "s"}` : ""}
               </span>
               <span className="ml-auto flex items-center gap-2.5">
                 <Link href="/triggers?new=1" onClick={close} className="text-sol-cyan hover:underline">+ New</Link>
@@ -1583,6 +1581,7 @@ export const SessionCard = memo(function SessionCard({
   forkColorKey,
   sessionLabel,
   isFavorite,
+  subRow,
 }: {
   session: InboxSession;
   isActive: boolean;
@@ -1598,6 +1597,11 @@ export const SessionCard = memo(function SessionCard({
   onNavigateToSession?: (id: string) => void;
   variant?: "default" | "working" | "dismissed" | "stashed";
   forkColorKey?: string;
+  // Force the compact child-row look for a session that isn't itself a
+  // subagent — the trigger view renders a trigger's sessions as sub rows under
+  // the trigger's own row. The ↳ arrow goes schedule-amber there (child of a
+  // trigger, not of a parent session).
+  subRow?: "trigger";
   // Label + favorite state are derived ONCE in the parent (SessionListPanel) and
   // passed as scalar props, so a card does O(1) work per render instead of the two
   // selectors scanning the whole bucketAssignments / favorites collection on every
@@ -1623,7 +1627,7 @@ export const SessionCard = memo(function SessionCard({
   // nestParentIdOf) plus worktree workers. Teammates render this way even when
   // floating top-level (lead absent) — same as worktree rows, the ↳ arrow
   // carries the "child of something" reading on its own.
-  const isSubagent = !!session.is_subagent || !!nestParentIdOf(session) || !!session.worktree_name;
+  const isSubagent = !!subRow || !!session.is_subagent || !!nestParentIdOf(session) || !!session.worktree_name;
   // Local-first "pending working": a message has been sent but the daemon
   // hasn't confirmed delivery yet (status not active). Reading the durable
   // pendingMessages map directly returns a stable boolean, so only this card
@@ -1858,8 +1862,8 @@ export const SessionCard = memo(function SessionCard({
                 only when the parent is directly above; this makes the
                 sub-of-parent relationship explicit even for a subagent floating
                 as its own top-level row (flat view, or parent off-screen). */}
-            <svg className="w-3 h-3 text-violet-400/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label="Subagent">
-              <title>Subagent — child of its parent session</title>
+            <svg className={`w-3 h-3 flex-shrink-0 ${subRow ? "text-sol-amber/60" : "text-violet-400/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow ? "Trigger session" : "Subagent"}>
+              <title>{subRow ? "Session driven by the trigger above" : "Subagent — child of its parent session"}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
             </svg>
@@ -2704,14 +2708,8 @@ export function SessionListPanel({
   // Publish the absorbed set for keyboard nav (computeVisualOrder reads it from
   // the store). Content-keyed so Set identity churn from recomputes doesn't
   // spam store notifications.
-  const navSetsKey = useMemo(
-    () => [...schedulePartition.absorbedIds].sort().join(","),
-    [schedulePartition.absorbedIds],
-  );
-  useEffect(() => {
-    useInboxStore.getState().setScheduleNavSets({ absorbed: schedulePartition.absorbedIds });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navSetsKey]);
+  // (The setScheduleNavSets publish lives below, after the trigger-view
+  // grouping it also carries is computed.)
 
   // Corner shown when the session is in a fork tree (has forks, or is one);
   // colored by the tree's root so the whole tree matches.
@@ -2852,6 +2850,18 @@ export function SessionListPanel({
       })
       .catch(() => {});
   }, [handleSelect, router, convex]);
+  // Trigger view header click: the trigger IS the citizen there, so its row
+  // opens the trigger's own page (/triggers?task= arrives expanded and scrolled
+  // into view) — the sessions it drives are already sub rows right below.
+  // Pseudo rows (loops, live subagents) have no agent_tasks row for that page
+  // to show, so they keep the conversation-open path.
+  const openTriggerPage = useCallback((row: TriggerRow) => {
+    if (row.kind) {
+      openScheduleTarget(row);
+      return;
+    }
+    router.push(`/triggers?task=${row.task._id}`);
+  }, [router, openScheduleTarget]);
   // Schedule bars under cards: the schedules bound to a VISIBLE session — the
   // ones it originates (inject, any type), the spawn triggers it created
   // (attribution, not routing), plus, for a run card, the schedule that
@@ -2860,10 +2870,8 @@ export function SessionListPanel({
     const rows = schedulePartitionRef.current.rows;
     const out: TriggerRow[] = [];
     for (const r of rows) {
-      // Loop rows attach like inject triggers (they name this card's standing
-      // intent); a subagent row under the subagent's own card would only
-      // repeat what the card already shows — skip it.
-      if (r.kind === "subagent") continue;
+      // Loop rows attach like inject triggers — they name this card's
+      // standing intent.
       if (
         r.task.originating_conversation_id === sess._id ||
         r.task.created_by_conversation_id === sess._id ||
@@ -2895,6 +2903,44 @@ export function SessionListPanel({
     );
     return filtered.sort((a, b) => (b.inbox_stashed_at || b.updated_at || 0) - (a.inbox_stashed_at || a.updated_at || 0));
   }, [filterByChip, stashedList]);
+
+  // "By trigger" lens — the roster's rows promoted to first-class rows, each
+  // with the sessions it drives as sub rows beneath (home conversation /
+  // runs), the rest falling to project groups. Grouped over the UNabsorbed
+  // filtered lists PLUS the stashed/killed buckets: a standing trigger's home
+  // typically rests in the stash, and this lens exists precisely to show each
+  // trigger's work — claimed hidden sessions render as muted sub rows, while
+  // unclaimed hidden ones stay in their buckets. Computed in every mode (one
+  // cheap pass) so the nav bridge and the view switcher know whether triggers
+  // exist before the user ever enters the mode.
+  const triggerView = useMemo(() => {
+    // Pinned flows into the pool like everything else — this view has exactly
+    // two tiers, triggers then other sessions, with no status/pinned chrome.
+    const { triggerGroups, rest } = groupSessionsByTrigger(
+      scheduleRowsView,
+      [...filteredPinned, ...filteredNew, ...filteredNeedsInput, ...filteredWorking],
+      { hidden: [...filteredStashed, ...filteredDismissed] },
+    );
+    return { triggerGroups, projectGroups: groupSessionsForLabelView(rest, {}, {}).projectGroups };
+  }, [scheduleRowsView, filteredPinned, filteredNew, filteredNeedsInput, filteredWorking, filteredStashed, filteredDismissed]);
+  // Publish the schedule projections for keyboard nav (computeVisualOrder reads
+  // them from the store): the absorbed set (status view) and the trigger view's
+  // group order. Content-keyed so identity churn from recomputes doesn't spam
+  // store notifications.
+  const triggerOrder = useMemo(
+    () => triggerView.triggerGroups.map((g) => ({ key: g.key, ids: g.items.map((i) => i._id) })),
+    [triggerView.triggerGroups],
+  );
+  const navSetsKey = useMemo(
+    () =>
+      [...schedulePartition.absorbedIds].sort().join(",") +
+      "|" + triggerOrder.map((g) => `${g.key}:${g.ids.join("+")}`).join(","),
+    [schedulePartition.absorbedIds, triggerOrder],
+  );
+  useEffect(() => {
+    useInboxStore.getState().setScheduleNavSets({ absorbed: schedulePartition.absorbedIds, triggerOrder });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navSetsKey]);
 
   // Stale working set: EVERY non-hidden session untouched for >30d, minus
   // pinned (explicit keep) and the one you're viewing. Stashed sessions are an
@@ -3267,6 +3313,12 @@ export function SessionListPanel({
             ...planView.planGroups.map(({ key, items }) => [items, `plan_${key}`] as [InboxSession[], string]),
             ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
           ]
+        : viewMode === "trigger"
+        ? [
+            // Trigger sub rows are always visible (their rows don't collapse),
+            // so only the project fallthrough tier can need a reveal here.
+            ...triggerView.projectGroups.map(({ name, items }) => [items, `trigproj_${name}`] as [InboxSession[], string]),
+          ]
         : [
             [filteredPinned, "pinned"], [filteredNew, "new"],
             [statusNeedsInput, "needs_input"], [statusWorking, "working"],
@@ -3597,8 +3649,10 @@ export function SessionListPanel({
                     gist, cadence, countdown, hover verbs). Click selects the
                     session with its schedule strip expanded (openScheduleTarget
                     — the strip re-expands even if the session is already
-                    active). */}
-                {scheduleBarRowsFor(session).map((r) => (
+                    active). The trigger view skips them: there every armed
+                    trigger is already a first-class group header, so a bar
+                    under a card would repeat the header just above it. */}
+                {viewMode !== "trigger" && scheduleBarRowsFor(session).map((r) => (
                   <TriggerRowItem
                     key={r.task._id}
                     row={{ ...r, openId: session._id }}
@@ -3723,6 +3777,7 @@ export function SessionListPanel({
               { key: "time", label: "By created", icon: Clock },
               ...(visibleBuckets.length > 0 ? [{ key: "bucket", label: "By label", icon: Tag }] : []),
               ...(hasPlanSessions ? [{ key: "plan", label: "By plan", icon: Workflow }] : []),
+              ...(scheduleRowsView.length > 0 ? [{ key: "trigger", label: "By trigger", icon: Zap }] : []),
             ];
             const current = viewModeOptions.find((o) => o.key === viewMode) ?? viewModeOptions[0];
             const CurrentIcon = current.icon;
@@ -3913,6 +3968,49 @@ export function SessionListPanel({
           </div>
         ))}
         </>
+        ) : viewMode === "trigger" ? (
+        <>
+        {/* Trigger-first: every roster row (armed trigger, loop, live subagent)
+            is a primary row — the SAME rich row the dock shows, verbs and all —
+            and the sessions it drives render as compact SUB ROWS beneath it
+            (the ↳ child idiom, schedule-amber). Clicking the trigger opens its
+            dedicated page; clicking a sub row opens that session. A trigger
+            with no visible sessions keeps its row: the trigger is the citizen,
+            its work may be folded away or not yet run. */}
+        {triggerView.triggerGroups.map(({ key, row, items }) => (
+          <div key={key}>
+            <TriggerRowItem row={row} activeSessionId={activeSessionId} onOpen={openTriggerPage} />
+            {items.map((session) => (
+              <div key={session._id} className="border-b border-sol-border/30">
+                <SessionCard
+                  session={session}
+                  isActive={session._id === activeSessionId}
+                  globalIndex={0}
+                  onSelect={handleSelect}
+                  onDismiss={handleAnimatedDismiss}
+                  onStash={handleAnimatedStash}
+                  onDefer={s.deferSession}
+                  onPin={s.pinSession}
+                  forkColorKey={forkColorKeyOf(session)}
+                  sessionLabel={labelByConv[session._id] ?? null}
+                  isFavorite={cardIsFavorite(session)}
+                  subRow="trigger"
+                  // A claimed stashed/killed home renders muted — resting is
+                  // its normal state under a standing trigger.
+                  variant={isSessionHidden(session) ? "stashed" : "default"}
+                />
+              </div>
+            ))}
+          </div>
+        ))}
+        {/* Sessions no trigger drives group by project — the same fallback tier
+            the label and plan views use. */}
+        {triggerView.projectGroups.map(({ name, items }) => (
+          <div key={`trigproj-${name}`}>
+            {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `trigproj_${name}` })}
+          </div>
+        ))}
+        </>
         ) : (
         <>
         {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
@@ -3972,14 +4070,17 @@ export function SessionListPanel({
         </>)}
       </div>
       {/* The schedule dock is panel chrome, not list content: it renders under
-          the scroll area in EVERY view mode — the robots' one home. */}
-      <TriggerDock
-        rows={scheduleRowsView}
-        unreadCount={schedulePartition.unreadCount}
-        nextRunAt={schedulePartition.nextRunAt}
-        activeSessionId={activeSessionId}
-        onOpen={openScheduleTarget}
-      />
+          the scroll area in every view mode EXCEPT "by trigger" — there the
+          whole list already IS the roster, so the dock would double it. */}
+      {viewMode !== "trigger" && (
+        <TriggerDock
+          rows={scheduleRowsView}
+          unreadCount={schedulePartition.unreadCount}
+          nextRunAt={schedulePartition.nextRunAt}
+          activeSessionId={activeSessionId}
+          onOpen={openScheduleTarget}
+        />
+      )}
     </div>
   );
 }

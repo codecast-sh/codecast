@@ -769,8 +769,10 @@ export type SavedView = {
 // The inbox panel's session-ordering modes. "grouped" = status sections;
 // "recent" = flat, newest-first by last activity (updated_at) — reshuffles as
 // sessions work; "time" = flat, newest-first by creation (started_at) — a
-// stable chronology that doesn't move; "bucket" = sections per manual label.
-export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan";
+// stable chronology that doesn't move; "bucket" = sections per manual label;
+// "plan" = sections per plan; "trigger" = trigger-first — every armed trigger
+// (and loop/subagent) is a group header with the sessions it drives beneath.
+export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan" | "trigger";
 
 
 export type ClientUI = {
@@ -2081,6 +2083,15 @@ export function favoritesVisualOrder(
   return [...pinned, ...projectGroups.flatMap((g) => g.items)];
 }
 
+// The panel→store bridge for schedule-derived nav data. Trigger rows live in a
+// per-component Convex subscription (agentTasks.webList), so the panel
+// publishes the projections nav needs: the absorbed set (status view) and the
+// trigger view's ordered groups (session ids per trigger, roster order).
+export type ScheduleNavSets = {
+  absorbed: ReadonlySet<string>;
+  triggerOrder?: Array<{ key: string; ids: string[] }>;
+};
+
 // Resolve the active inbox view mode from client UI state. Shared by the
 // inboxViewMode getter and computeVisualOrder so every consumer agrees on
 // which ordering is on screen.
@@ -2265,8 +2276,10 @@ export function computeVisualOrder(state: {
   collapsedSections?: Record<string, boolean>;
   // Ephemeral schedule projection published by GlobalSessionPanel (see
   // setScheduleNavSets) so grouped-mode nav skips sessions absorbed behind
-  // TRIGGERS rows. Null until the panel has schedule data.
-  scheduleNavSets?: { absorbed: ReadonlySet<string> } | null;
+  // TRIGGERS rows, and so trigger-mode nav walks the panel's trigger-group
+  // order (trigger data lives in a component Convex subscription, never the
+  // store). Null until the panel has schedule data.
+  scheduleNavSets?: ScheduleNavSets | null;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
@@ -2349,6 +2362,36 @@ export function computeVisualOrder(state: {
       ...pinned,
       ...planGroups.flatMap((g) => (collapsed[`plan_${g.key}`] ? [] : g.items)),
       ...projectGroups.flatMap((g) => (collapsed[`planproj_${g.name}`] ? [] : g.items)),
+    ];
+  }
+  if (mode === "trigger") {
+    // Trigger-first: walk the panel's published group order (the grouping needs
+    // the trigger subscription only the panel has — see ScheduleNavSets). No
+    // absorption in this mode: a trigger's sessions render under its row, so
+    // nav walks them there. Two tiers only — no pinned/status chrome: pinned
+    // sessions flow into groups or the project fallthrough like everything
+    // else. Trigger groups don't collapse; the project tier does. Before the
+    // panel publishes, fall back to base.
+    const groups = state.scheduleNavSets?.triggerOrder;
+    if (!groups) return base;
+    const byId = new Map(base.map((s) => [s._id, s]));
+    const walked: InboxSession[] = [];
+    const grouped = new Set<string>();
+    for (const g of groups) {
+      for (const id of g.ids) {
+        const sess = byId.get(id);
+        if (sess && !grouped.has(id)) {
+          grouped.add(id);
+          walked.push(sess);
+        }
+      }
+    }
+    const { projectGroups } = groupSessionsForLabelView(
+      base.filter((s) => !grouped.has(s._id)), {}, {},
+    );
+    return [
+      ...walked,
+      ...projectGroups.flatMap((g) => (collapsed[`trigproj_${g.name}`] ? [] : g.items)),
     ];
   }
   return base;
@@ -2434,9 +2477,10 @@ interface InboxStoreState {
   // live (re-sorts freely). Ephemeral: never persisted or synced.
   recentFreezeOrder: string[] | null;
   // Schedule projection for keyboard nav (standing sessions + runs collapsed
-  // under a schedule group row), published by GlobalSessionPanel from its
-  // agentTasks.webList subscription. Ephemeral: never persisted or synced.
-  scheduleNavSets: { absorbed: ReadonlySet<string> } | null;
+  // under a schedule group row, and the trigger view's group order), published
+  // by GlobalSessionPanel from its agentTasks.webList subscription. Ephemeral:
+  // never persisted or synced.
+  scheduleNavSets: ScheduleNavSets | null;
   // One-shot request to open the schedule strip above a conversation, published
   // by schedule-surface clicks (dock rows, bars under cards) so navigating FROM
   // a schedule lands with the prompt already visible. Nonce-keyed: the strip
@@ -2756,7 +2800,7 @@ interface InboxStoreState {
   // Publish the schedule projection (standing sessions, runs grouped under a
   // schedule row) for keyboard nav. Ephemeral raw-set state — the schedule data
   // itself lives in the agentTasks.webList Convex subscription, never the store.
-  setScheduleNavSets: (sets: { absorbed: ReadonlySet<string> } | null) => void;
+  setScheduleNavSets: (sets: ScheduleNavSets | null) => void;
   setScheduleStripExpand: (req: { convId: string; nonce: number } | null) => void;
   setComposerPrefill: (req: { convId: string; text: string } | null) => void;
   setViewingDismissedId: (id: string | null) => void;
@@ -4652,10 +4696,14 @@ export const useInboxStore = create<InboxStoreState>(
     const current = state.inboxViewMode();
     const hasBuckets = (Object.values(state.buckets) as BucketItem[]).some((b) => !b.archived_at);
     const hasPlans = (Object.values(state.sessions) as InboxSession[]).some((s) => !!s.active_plan);
+    // Trigger data lives in the panel's Convex subscription; its published nav
+    // bridge is the store's only sight of whether any triggers exist.
+    const hasTriggers = (state.scheduleNavSets?.triggerOrder?.length ?? 0) > 0;
     const cycle: Array<InboxViewMode> = [
       "grouped", "recent", "time",
       ...(hasBuckets ? ["bucket" as const] : []),
       ...(hasPlans ? ["plan" as const] : []),
+      ...(hasTriggers ? ["trigger" as const] : []),
     ];
     state.setInboxViewMode(cycle[(cycle.indexOf(current) + 1) % cycle.length]);
   },
@@ -5899,7 +5947,7 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   // Raw set: ephemeral nav bookkeeping — no draft, no persistence, no dispatch.
-  setScheduleNavSets: (sets: { absorbed: ReadonlySet<string> } | null) =>
+  setScheduleNavSets: (sets: ScheduleNavSets | null) =>
     set({ scheduleNavSets: sets }),
 
   // Raw set: one-shot strip-expand request (see the state field's comment).

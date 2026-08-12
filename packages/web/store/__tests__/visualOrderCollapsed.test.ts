@@ -124,3 +124,61 @@ describe("computeVisualOrder respects collapse per view mode", () => {
     expect(computeVisualOrder(state).map((s) => s._id).sort()).toEqual(["ni1", "ni2", "wk1", "wk2"]);
   });
 });
+
+// Trigger view: nav walks the panel-published group order (the store can't
+// build it — trigger rows live in the panel's Convex subscription), then the
+// project fallthrough for unclaimed sessions. No absorption in this mode.
+describe("computeVisualOrder trigger view", () => {
+  const triggerState = (extra: Partial<typeof baseState> & { scheduleNavSets?: any } = {}) => ({
+    ...baseState,
+    clientState: { ui: { inbox_view_mode: "trigger" as const } },
+    ...extra,
+  });
+
+  it("walks trigger groups in published order, then the rest", () => {
+    const order = computeVisualOrder(
+      triggerState({
+        scheduleNavSets: {
+          absorbed: new Set<string>(),
+          triggerOrder: [
+            { key: "t1", ids: ["wk2"] },
+            { key: "t2", ids: ["ni1"] },
+          ],
+        },
+      }),
+    ).map((s) => s._id);
+    expect(order.slice(0, 2)).toEqual(["wk2", "ni1"]);
+    expect(order.sort()).toEqual(["ni1", "ni2", "wk1", "wk2"]);
+  });
+
+  it("falls back to the status order before the panel publishes", () => {
+    const order = computeVisualOrder(triggerState({ scheduleNavSets: null })).map((s) => s._id).sort();
+    expect(order).toEqual(["ni1", "ni2", "wk1", "wk2"]);
+  });
+
+  it("skips a published id the visible set no longer holds, without dropping the group's siblings", () => {
+    const order = computeVisualOrder(
+      triggerState({
+        scheduleNavSets: {
+          absorbed: new Set<string>(),
+          triggerOrder: [{ key: "t1", ids: ["gone", "wk1"] }],
+        },
+      }),
+    ).map((s) => s._id);
+    expect(order[0]).toBe("wk1");
+    expect(order).not.toContain("gone");
+  });
+
+  it("collapsing a project fallthrough tier hides only unclaimed sessions", () => {
+    const order = computeVisualOrder(
+      triggerState({
+        collapsedSections: { trigproj_other: true },
+        scheduleNavSets: {
+          absorbed: new Set<string>(),
+          triggerOrder: [{ key: "t1", ids: ["wk1"] }],
+        },
+      }),
+    ).map((s) => s._id);
+    expect(order).toEqual(["wk1"]);
+  });
+});

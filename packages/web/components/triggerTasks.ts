@@ -18,8 +18,6 @@
 import type { InboxSession } from "../store/inboxStore";
 import { isSessionHardBlocked, isSessionHidden } from "../store/inboxStore";
 import { isMachineDeliveredMessage } from "./sessionMessage";
-import { isLivenessStale } from "@codecast/shared/contracts";
-import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export const ARMED_STATUSES = new Set(["scheduled", "running", "paused"]);
 
@@ -165,19 +163,21 @@ export interface TriggerRow {
   // The latest outcome landed after the user's read watermark.
   unread: boolean;
   // Pseudo rows synthesized from sessions rather than agent_tasks: a harness
-  // /loop sleeping on a ScheduleWakeup, or a live subagent worker. They wear
-  // the same row anatomy but carry no server verbs (pause/run-now/cancel) —
-  // you can't reach inside a harness from here. Absent = a real trigger.
-  kind?: "loop" | "subagent";
+  // /loop sleeping on a ScheduleWakeup. They wear the same row anatomy but
+  // carry no server verbs (pause/run-now/cancel) — you can't reach inside a
+  // harness from here. Absent = a real trigger.
+  kind?: "loop";
 }
 
-// -- Pseudo rows: loops and subagents projected into the trigger set --
+// -- Pseudo rows: loops projected into the trigger set --
 //
-// The trigger set models one axis — "a machine will act here on its own" — and
-// agent_tasks are only one source of that intent. A session sleeping on a
-// ScheduleWakeup (/loop) and a live subagent worker are the same standing
-// intent, so they get rows in the same roster, mapped through the TaskRow
-// shape every trigger surface already renders.
+// The trigger set models one axis — "a machine will act here on its own on a
+// SCHEDULE" — and agent_tasks are only one source of that intent. A session
+// sleeping on a ScheduleWakeup (/loop) is the same standing intent, so it gets
+// a row in the same roster, mapped through the TaskRow shape every trigger
+// surface already renders. Subagents are deliberately NOT in this set: a
+// running worker is transient labor, not a standing trigger, and it already
+// renders nested under its parent session's card.
 
 // An armed wakeup whose fire time passed this long ago is a dead harness (the
 // fire lands within seconds normally) — drop the row instead of showing a
@@ -214,22 +214,6 @@ export function loopTaskRow(sess: InboxSession, loop: LoopStateLike): TaskRow {
     run_count: 0,
     created_at: loop.armed_at,
     last_run_at: loop.fired_at,
-    originating_conversation_id: sess._id,
-  };
-}
-
-export function subagentTaskRow(sess: InboxSession): TaskRow {
-  return {
-    _id: `sub:${sess._id}`,
-    title: sess.title || "Subagent",
-    display_summary: sess.subtitle || undefined,
-    prompt: sess.last_user_message || "",
-    status: "running",
-    mode: "apply",
-    schedule_type: "once",
-    project_path: sess.project_path,
-    run_count: 0,
-    created_at: sess.started_at ?? sess.updated_at,
     originating_conversation_id: sess._id,
   };
 }
@@ -275,10 +259,7 @@ export function partitionTriggerInbox(
   const seenAt = opts.seenAt ?? 0;
   const now = opts.now ?? Date.now();
   const sessList = Object.values(sessions);
-  if (
-    !tasks?.length &&
-    !sessList.some((s) => s.loop_state || s.is_subagent || nestParentIdOf(s))
-  ) {
+  if (!tasks?.length && !sessList.some((s) => s.loop_state)) {
     return EMPTY;
   }
 
@@ -367,8 +348,7 @@ export function partitionTriggerInbox(
     });
   }
 
-  // -- Pseudo rows: loops and live subagents from the session cache --
-  const loopRowIds = new Set<string>();
+  // -- Pseudo rows: loops from the session cache --
   for (const sess of sessList) {
     const loop = sess.loop_state;
     if (!loop || !isLoopFresh(loop, now)) continue;
@@ -380,7 +360,6 @@ export function partitionTriggerInbox(
     // inbox_dismissed_at, so a session killed that way kept a loop row for a
     // harness that no longer exists.
     if (sess.inbox_dismissed_at || sess.inbox_killed_at) continue;
-    loopRowIds.add(sess._id);
     rows.push({ task: loopTaskRow(sess, loop), openId: sess._id, unread: false, kind: "loop" });
     if (loop.status === "armed" && (nextRunAt === undefined || loop.wakeup_at < nextRunAt)) {
       nextRunAt = loop.wakeup_at;
@@ -401,17 +380,6 @@ export function partitionTriggerInbox(
       absorbedIds.add(sess._id);
     }
   }
-  // Live subagent workers: same standing-machine-intent axis. Only genuinely
-  // producing ones get a row (idle/stale children are done — their results
-  // already flowed to the parent). A subagent sleeping on its own loop is
-  // represented by its loop row above, not twice.
-  for (const sess of sessList) {
-    if (!(sess.is_subagent || nestParentIdOf(sess))) continue;
-    if (loopRowIds.has(sess._id) || isSessionHidden(sess)) continue;
-    if (sess.is_idle || sess.message_count === 0 || isLivenessStale(sess, now)) continue;
-    rows.push({ task: subagentTaskRow(sess), openId: sess._id, unread: false, kind: "subagent" });
-  }
-
   // Ordered in tiers of "what's happening now → what's happening next → what's
   // idle": live runs at the very top, then scheduled by soonest fire, then
   // paused / event / no-run_at at the bottom (newest-created first among those).
@@ -429,4 +397,60 @@ export function partitionTriggerInbox(
   });
 
   return { rows, absorbedIds, armedInjectByConv, unreadCount, nextRunAt };
+}
+
+// "By trigger" lens grouping: each trigger row becomes a first-class group
+// header and claims the sessions it drives — the home conversation for inject
+// triggers and loops (originating_conversation_id), the runs for
+// spawn triggers (agent_task_id). Roster order is preserved (running → soonest
+// fire → paused/event, exactly what partitionTriggerInbox sorted); the first
+// row to claim a session keeps it. A trigger keeps its group even with zero
+// sessions — the trigger is the citizen here, its work may not have run yet.
+// Unclaimed sessions return as `rest` for the same project-group fallthrough
+// the label/plan lenses use.
+//
+// opts.hidden: stashed/dismissed sessions a trigger may ALSO claim — a
+// standing trigger's home conversation typically lives in the stash (that's
+// the standing-loop workflow), and this lens exists precisely to show each
+// trigger's work. Hidden sessions claimed here render as muted sub rows;
+// hidden sessions no trigger claims never enter `rest` — they stay in their
+// stashed/killed buckets.
+export function groupSessionsByTrigger(
+  rows: TriggerRow[],
+  items: InboxSession[],
+  opts: { hidden?: InboxSession[] } = {},
+): {
+  triggerGroups: Array<{ key: string; row: TriggerRow; items: InboxSession[] }>;
+  rest: InboxSession[];
+} {
+  // Visible actives first in each pool walk, hidden appended after — so a
+  // trigger with both shows its live work above its resting home.
+  const pool = [...items, ...(opts.hidden ?? [])];
+  const byId = new Map(pool.map((s) => [s._id, s]));
+  const byTaskId = new Map<string, InboxSession[]>();
+  for (const s of pool) {
+    if (!s.agent_task_id) continue;
+    let arr = byTaskId.get(s.agent_task_id);
+    if (!arr) byTaskId.set(s.agent_task_id, (arr = []));
+    arr.push(s);
+  }
+  const claimed = new Set<string>();
+  const triggerGroups = rows.map((row) => {
+    const members: InboxSession[] = [];
+    const claim = (s: InboxSession | undefined) => {
+      if (s && !claimed.has(s._id)) {
+        claimed.add(s._id);
+        members.push(s);
+      }
+    };
+    const homeId = row.task.originating_conversation_id;
+    if (homeId) {
+      claim(byId.get(homeId));
+    } else {
+      for (const run of byTaskId.get(row.task._id) ?? []) claim(run);
+      members.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+    }
+    return { key: row.task._id, row, items: members };
+  });
+  return { triggerGroups, rest: items.filter((s) => !claimed.has(s._id)) };
 }
