@@ -12,7 +12,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import Svg, { Path } from 'react-native-svg';
 import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
-import { extractSessionImages } from '@codecast/web/lib/sessionImages';
+import { extractSessionImages, mergeSessionImages } from '@codecast/web/lib/sessionImages';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isScheduledTaskMessage } from '@codecast/web/components/sessionMessage';
@@ -3887,13 +3887,25 @@ export default function SessionDetailScreen() {
   // Every image in the session, in transcript order — attachments, tool
   // screenshots AND trusted markdown images in prose (same scan as the web
   // header gallery; entries carry either a storage_id or a ready src).
+  //
+  // The server list covers the whole thread (materialized at ingest), so the
+  // gallery no longer stops at the loaded message window; the window scan
+  // merges in for inline base64 images and un-swept history.
+  const serverSessionImages = useQuery(
+    api.messages.getConversationImages,
+    isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
+  );
   const allSessionImages = useMemo(() => {
-    return extractSessionImages(allMessages, isTrustedImageSrc).map((e): ImageData =>
+    const entries = mergeSessionImages(
+      serverSessionImages ?? [],
+      extractSessionImages(allMessages, isTrustedImageSrc),
+    );
+    return entries.map((e): ImageData =>
       e.storage_id
         ? { media_type: "image/png", storage_id: e.storage_id }
         : { media_type: "image", url: e.src }
     );
-  }, [allMessages]);
+  }, [allMessages, serverSessionImages]);
 
   const [galleryVisible, setGalleryVisible] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);

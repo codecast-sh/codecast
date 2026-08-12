@@ -3356,6 +3356,21 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
   }
 }
 
+// A mistyped or invented subcommand must FAIL, loudly, on stderr. The root
+// command carries an action handler (bare `cast` prints help), and commander
+// hands unrecognized operands to that handler instead of firing command:* — so
+// without this guard `cast <anything>` exits 0 with the whole help text on
+// STDOUT. Agents scrape that: `cast own $(cast codecast | grep -oE 'jx[a-z0-9]+'
+// | head -1)` picked up jx7c6zk, the placeholder short id in cast own's own
+// examples, and tried to own a session that never existed. Help goes to stderr
+// here for the same reason: nothing usable may reach stdout on a failure.
+function failUnknownCommand(operands: string[]): never {
+  logCliError("unknown-command", `Unknown command: ${operands.join(" ")}`);
+  console.error(`error: unknown command '${operands[0]}'`);
+  console.error(`Run 'cast --help' for the list of commands.`);
+  process.exit(1);
+}
+
 program
   .name("cast")
   .description(
@@ -3367,6 +3382,8 @@ program
   )
   .version(getVersion())
   .action(() => {
+    const operands = program.args.filter((a) => !a.startsWith("-"));
+    if (operands.length > 0) failUnknownCommand(operands);
     program.outputHelp();
   });
 
@@ -12798,6 +12815,9 @@ work
     }
 
     const sessionId = detectCurrentSessionId();
+    // Resolved once, not per title: a bulk decomposition writes one project to
+    // every subtask, and resolving inside the loop would be N identical lookups.
+    const projectId = options.project ? await resolveProjectId(options.project) : undefined;
     for (const t of titles) {
       const body: Record<string, any> = {
         title: t,
@@ -12807,7 +12827,7 @@ work
       };
       if (options.description && titles.length === 1) body.description = options.description;
       if (options.human) body.promoted = true;
-      if (options.project) body.project_id = options.project;
+      if (projectId) body.project_id = projectId;
       if (options.assignee) body.assignee = options.assignee;
       if (options.blockedBy) body.blocked_by = options.blockedBy.split(",").map((s: string) => s.trim());
       if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
@@ -13273,14 +13293,23 @@ function looksLikeConvexId(ref: string): boolean {
 }
 
 // Resolve a project reference — a convex id, or a title substring / short_id of
-// a project visible to the caller (own or team workspace).
+// a project visible to the caller (own or team workspace). Every --project flag
+// goes through here, readers and writers alike: agents write project names from
+// prompts, never 32-character ids, so a flag that only speaks ids is a flag that
+// always fails for them. An empty ref passes through untouched — that is the
+// "clear the project" signal on update, not a lookup.
 async function resolveProjectId(ref: string): Promise<string> {
+  if (!ref) return ref;
   if (looksLikeConvexId(ref)) return ref;
   const projects = await cliPost("/cli/projects/list", {});
   const needle = ref.toLowerCase();
   const matches = (Array.isArray(projects) ? projects : []).filter(
     (p: any) => p.short_id === ref || p.title?.toLowerCase().includes(needle)
   );
+  // An exact title wins over the substring matches it is contained in, so
+  // "Infrastructure" still resolves when "Infrastructure v2" also exists.
+  const exact = matches.filter((p: any) => p.title?.toLowerCase() === needle);
+  if (exact.length === 1) return exact[0]._id;
   if (matches.length === 1) return matches[0]._id;
   if (matches.length === 0) {
     console.error(`No project matching "${ref}" in your workspace`);

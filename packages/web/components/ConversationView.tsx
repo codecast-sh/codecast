@@ -16,7 +16,7 @@ import rehypeHighlight from "rehype-highlight";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { compressImage } from "../lib/compressImage";
 import { useStorageImageUrl, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
-import { extractSessionImages } from "../lib/sessionImages";
+import { extractSessionImages, mergeSessionImages } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
@@ -4792,9 +4792,11 @@ function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: st
             <div className="text-[10px] uppercase tracking-wide text-sol-text-dim mb-0.5">{part.label}</div>
           )}
           <CollapsibleBody collapsedHeight={132} toggleClassName="mt-1">
-            <div className="text-[13px] text-sol-text prose prose-invert prose-sm max-w-none">
-              <MessageMarkdown content={part.text} userText />
-            </div>
+            {(expanded) => (
+              <div className="text-[13px] text-sol-text prose prose-invert prose-sm max-w-none">
+                <MessageMarkdown content={expanded ? part.text : clipBody(part.text)} userText />
+              </div>
+            )}
           </CollapsibleBody>
         </div>
       ))}
@@ -14236,9 +14238,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   // Every image in the session, in transcript order — the header gallery's
   // source list (attachments, tool screenshots, trusted markdown images).
-  const sessionImageEntries = useMemo(
+  //
+  // The server list is the whole thread, materialized at ingest and independent
+  // of how many message pages are loaded; scanning the window alone counted the
+  // tail only, so a long session showed a fraction of its images. The window
+  // extraction still runs and merges in: it covers inline base64 images (never
+  // materialized) and any history the one-time sweep hasn't reached yet.
+  const { data: serverSessionImages } = useQueryNoThrow(
+    api.messages.getConversationImages,
+    deferredQueriesEnabled && conversation?._id && isConvexId(conversation._id)
+      ? { conversation_id: conversation._id as Id<"conversations"> }
+      : "skip"
+  );
+  const windowImageEntries = useMemo(
     () => extractSessionImages(conversation?.messages ?? [], (src) => !isRemoteImageSrc(src)),
     [conversation?.messages]
+  );
+  const sessionImageEntries = useMemo(
+    () => mergeSessionImages(serverSessionImages ?? [], windowImageEntries),
+    [serverSessionImages, windowImageEntries]
   );
   const sessionImageStorageIds = useMemo(
     () => sessionImageEntries.map((e) => e.storage_id),
@@ -14272,6 +14290,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     imagePreviewBackfilledRef.current = cid;
     backfillImagePreview({ conversation_id: cid as Id<"conversations"> }).catch(() => {});
   }, [conversation?._id, conversation?.is_own, sessionImageEntries.length, backfillImagePreview]);
+
+  // Sessions whose images predate conversation_images have nothing to read back,
+  // so ask the server to sweep the history once. The trigger is evidence, not a
+  // guess: the loaded window shows a storage/markdown image the server list does
+  // not have. Server-side it is idempotent and no-ops once the sweep completed.
+  const backfillConversationImages = useMutation(api.messages.backfillConversationImages);
+  const imagesBackfilledRef = useRef<string | null>(null);
+  useEffect(() => {
+    const cid = conversation?._id?.toString();
+    if (!cid || !isConvexId(cid) || !serverSessionImages || conversation?.is_own === false) return;
+    if (imagesBackfilledRef.current === cid) return;
+    const known = new Set(serverSessionImages.map((e) => e.key));
+    // data: entries are never materialized — comparing them would re-trigger forever.
+    const missing = windowImageEntries.some(
+      (e) => !e.src?.startsWith("data:") && !known.has(e.key)
+    );
+    if (!missing) return;
+    imagesBackfilledRef.current = cid;
+    backfillConversationImages({ conversation_id: cid as Id<"conversations"> }).catch(() => {});
+  }, [conversation?._id, conversation?.is_own, serverSessionImages, windowImageEntries, backfillConversationImages]);
 
   const taskSubjectMap = useMemo(() => {
     const createInputs: Record<string, string> = {};

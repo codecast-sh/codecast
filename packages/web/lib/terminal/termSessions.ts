@@ -11,6 +11,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { termWsUrl, type TerminalEndpoint } from "./endpoint";
 import { buildTerminalTheme, observeTheme } from "./theme";
+import { connectRemotePane, type RemotePaneSource } from "./remotePane";
 
 // "offline" = the socket closed before it ever opened: nothing answered, so
 // there's no terminal server to reach (daemon down / remote machine). Kept
@@ -29,6 +30,12 @@ export interface TermTabState {
   status: TermStatus;
   statusDetail?: string;
   readOnly: boolean;
+  /** Relayed from another machine (screens, not a PTY): read-only, and it can
+   *  go stale without the connection ever "closing". */
+  remote?: boolean;
+  /** remote only: when the last screen arrived, so the UI can say "paused"
+   *  instead of pretending a frozen picture is live. */
+  lastFrameAt?: number;
   cwd?: string;
 }
 
@@ -47,6 +54,9 @@ interface TermInstance {
   detached?: boolean;
   /** container scroll pinning teardown (see attachToContainer) */
   pinDispose?: { dispose(): void };
+  /** remote transport teardown: drops the lease that keeps the far daemon
+   *  capturing (see remotePane.ts) */
+  remoteDispose?: () => void;
 }
 
 const instances = new Map<string, TermInstance>();
@@ -117,7 +127,14 @@ export function applyTerminalTheme(theme: ITheme, fontFamily?: string): void {
 // mode and is easily fast enough at bottom-panel size.
 
 export interface OpenTerminalOptions {
-  endpoint: TerminalEndpoint;
+  /** Loopback transport: the daemon on THIS machine. Omitted for `remote`. */
+  endpoint?: TerminalEndpoint;
+  /**
+   * Relay transport: the pane lives on another of the user's machines, so
+   * there is no socket to open and the view is repainted from relayed screens
+   * (remotePane.ts). Always read-only.
+   */
+  remote?: RemotePaneSource;
   kind: "shell" | "attach";
   /** shell: reattach a specific cast-term session */
   name?: string;
@@ -213,7 +230,10 @@ export function openTerminal(opts: OpenTerminalOptions): string {
       sessionName: opts.name,
       title: opts.title ?? (opts.kind === "attach" ? (opts.target ?? "attach") : "shell"),
       status: "connecting",
-      readOnly: opts.kind === "attach" && !opts.interactive,
+      // A relayed pane is screens, not a PTY — there is nowhere to send a
+      // keystroke, so it is read-only whatever the caller asked for.
+      readOnly: !!opts.remote || (opts.kind === "attach" && !opts.interactive),
+      remote: !!opts.remote,
       cwd: opts.cwd,
     },
     term,
@@ -235,6 +255,16 @@ export function openTerminal(opts: OpenTerminalOptions): string {
 }
 
 function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
+  if (opts.remote) {
+    connectRemote(inst, opts.remote);
+    return;
+  }
+  if (!opts.endpoint) {
+    inst.state.status = "error";
+    inst.state.statusDetail = "no terminal transport";
+    bump();
+    return;
+  }
   const ws = new WebSocket(termWsUrl(opts.endpoint));
   ws.binaryType = "arraybuffer";
   inst.ws = ws;
@@ -354,6 +384,56 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
     } else {
       inst.pendingResize = { cols, rows };
     }
+  });
+}
+
+/**
+ * Relay transport: repaint the pane from whole screens instead of a byte
+ * stream. Nothing here writes back — a relayed pane has no input path at all.
+ *
+ * Frames only arrive when the far screen CHANGES, so "no frame for a while"
+ * means either a quiet agent or a machine that went away. The daemon's
+ * heartbeat is what tells those apart, and it lands as a `seq`-less update:
+ * hence tracking lastFrameAt off the row's own timestamp rather than off our
+ * own paint.
+ */
+function connectRemote(inst: TermInstance, src: RemotePaneSource): void {
+  let lastSeq = -1;
+  inst.remoteDispose = connectRemotePane(src, {
+    onFrame: (f) => {
+      inst.state.lastFrameAt = f.streamer_seen_at ?? f.updated_at;
+      if (f.seq === lastSeq || f.frame === null) {
+        // Heartbeat with no new screen: still proof of life, so keep the
+        // freshness stamp moving and leave the picture alone.
+        bump();
+        return;
+      }
+      lastSeq = f.seq;
+      if (f.cols && f.rows && (inst.term.cols !== f.cols || inst.term.rows !== f.rows)) {
+        inst.term.resize(f.cols, f.rows);
+      }
+      inst.term.write(
+        frameToBytes(
+          f.frame,
+          f.cursor_x !== null && f.cursor_y !== null ? { x: f.cursor_x, y: f.cursor_y } : null,
+        ),
+      );
+      inst.state.status = "open";
+      inst.state.statusDetail = undefined;
+      bump();
+    },
+    onError: (message) => {
+      // A relay error after frames have been arriving is a hiccup, not a dead
+      // view — the lease renewal restarts the far capture loop by itself. Only
+      // a failure BEFORE the first frame is worth taking the view down for.
+      if (inst.state.status === "open") {
+        inst.state.statusDetail = message;
+      } else {
+        inst.state.status = "error";
+        inst.state.statusDetail = message;
+      }
+      bump();
+    },
   });
 }
 
@@ -494,6 +574,8 @@ export function closeTab(id: string, opts?: { killSession?: boolean }): void {
   try {
     inst.ws?.close();
   } catch {}
+  // Dropping the lease is what stops the far daemon capturing.
+  inst.remoteDispose?.();
   inst.resizeObserver?.disconnect();
   inst.pinDispose?.dispose();
   inst.term.dispose();

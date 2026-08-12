@@ -47,6 +47,12 @@ crons.interval(
 );
 
 crons.interval(
+  "prune stale remote terminal frames",
+  { hours: 6 },
+  internal.terminalStream.pruneStaleFrames
+);
+
+crons.interval(
   "backfill docs and tasks from sessions",
   { hours: 6 },
   internal.taskMining.backfillAllTeams

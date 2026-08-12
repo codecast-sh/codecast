@@ -30,6 +30,7 @@ import {
   shouldUseInlineDocSnapshotFallback,
 } from "./docExtraction";
 import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
+import { extractSessionImages, type SessionImageEntry } from "./sessionImages";
 
 type DocExtractionMessage = {
   message_uuid?: string;
@@ -767,6 +768,173 @@ export async function latestImagePreviewUrl(
   return undefined;
 }
 
+// --- Session image gallery -------------------------------------------------
+//
+// The header gallery lists every image in the thread, but the client holds only
+// the loaded message window (200 messages a page), so scanning there counts the
+// tail alone — open a long session and most of its images are missing. Same
+// problem the diff viewer had with file changes, same answer: write one small
+// row per image at ingest, then read the list back independent of pagination.
+
+/** Server-side trust gate for markdown images in prose: our own storage origin
+ *  only, matching latestImagePreviewUrl. The web also trusts its own web origin
+ *  — a superset — so an image dropped here is one the client's own window
+ *  extraction can still add back through the merge. */
+function isTrustedMarkdownImageSrc(src: string): boolean {
+  const origin = trustedImageOrigin();
+  if (!origin) return false;
+  try {
+    return new URL(src).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Materialize a freshly-inserted message's images into conversation_images.
+ * Called only on genuine inserts (never the uuid/content dedup branches), and
+ * pre-filtered so an ordinary text message costs nothing. Idempotent by
+ * (conversation_id, image_key), so a re-synced message can't duplicate a row.
+ */
+async function materializeConversationImages(
+  ctx: MutationCtx,
+  conversationId: Id<"conversations">,
+  messageId: Id<"messages">,
+  timestamp: number,
+  content: string | undefined,
+  images: Array<{ media_type: string; data?: string; storage_id?: Id<"_storage"> }> | undefined,
+): Promise<void> {
+  if (!images?.some((i) => i.storage_id) && !content?.includes("![")) return;
+  for (const entry of extractSessionImages([{ content, timestamp, images }], isTrustedMarkdownImageSrc)) {
+    // Inline base64 images key on their own payload — the client window
+    // extraction surfaces those; an index table is no place for the bytes.
+    if (!entry.storage_id && (!entry.src || entry.src.startsWith("data:"))) continue;
+    const existing = await ctx.db
+      .query("conversation_images")
+      .withIndex("by_conversation_image_key", (q) =>
+        q.eq("conversation_id", conversationId).eq("image_key", entry.key),
+      )
+      .first();
+    if (existing) continue;
+    await ctx.db.insert("conversation_images", {
+      conversation_id: conversationId,
+      image_key: entry.key,
+      storage_id: entry.storage_id as Id<"_storage"> | undefined,
+      src: entry.src,
+      message_id: messageId,
+      seq: entry.seq ?? 0,
+      timestamp,
+    });
+  }
+}
+
+// Safety valve, far above any real session: the gallery reads the whole list in
+// one query, and an unbounded collect() is how a query starts failing years
+// later on a conversation nobody predicted.
+const SESSION_GALLERY_ROW_LIMIT = 2000;
+
+/**
+ * Complete, pagination-independent list of a conversation's images —
+ * the header gallery's source. Entries carry a storage id or a trusted src,
+ * never a resolved URL: the clients already batch storage-url resolution
+ * (useStorageImageUrls on web, getImageUrl on mobile), and resolving here would
+ * cost one storage call per image on every re-run of a reactive query.
+ */
+export const getConversationImages = query({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<SessionImageEntry[]> => {
+    // Same access gate as the other message readers: owner, team member, or
+    // share-token holder. The list names images in a possibly-private thread.
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return [];
+    const viewerId = await getAuthUserId(ctx);
+    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+      return [];
+    }
+    const rows = await ctx.db
+      .query("conversation_images")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .take(SESSION_GALLERY_ROW_LIMIT);
+    // Rows land in insertion order, which is transcript order for live ingest
+    // but not for a backfilled history (old images inserted after new ones).
+    // Sort by transcript position, and dedupe defensively — a concurrent
+    // backfill and live insert can race the key check.
+    const byKey = new Map<string, (typeof rows)[number]>();
+    for (const r of rows) byKey.set(r.image_key, r);
+    return Array.from(byKey.values())
+      .sort((a, b) => a.timestamp - b.timestamp || a.seq - b.seq)
+      .map((r) => ({
+        key: r.image_key,
+        storage_id: r.storage_id ?? undefined,
+        src: r.src,
+        timestamp: r.timestamp,
+        seq: r.seq,
+      }));
+  },
+});
+
+const IMAGE_BACKFILL_PAGE_SIZE = 300;
+
+/**
+ * Sweep a conversation's whole history into conversation_images. Live ingest
+ * materializes every new image, so this only catches up the history that
+ * predates the feature — once per conversation, on first open, owner-only.
+ *
+ * No in-flight claim: the completion stamp is the only guard, so a sweep that
+ * dies midway simply restarts on the next open. Two concurrent sweeps are
+ * harmless — the key check makes every insert idempotent.
+ */
+export const backfillConversationImages = mutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) throw new Error("Unauthorized");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) throw new Error("Conversation not found");
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Can only backfill your own conversations");
+    }
+    if (conversation.images_backfilled_at !== undefined) return;
+    await ctx.scheduler.runAfter(0, internal.messages.backfillConversationImagesPage, {
+      conversation_id: args.conversation_id,
+    });
+  },
+});
+
+export const backfillConversationImagesPage = internalMutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", args.conversation_id))
+      .paginate({ cursor: args.cursor ?? null, numItems: IMAGE_BACKFILL_PAGE_SIZE });
+
+    for (const msg of page.page) {
+      await materializeConversationImages(
+        ctx,
+        args.conversation_id,
+        msg._id,
+        msg.timestamp,
+        msg.content,
+        msg.images,
+      );
+    }
+
+    if (page.isDone) {
+      await ctx.db.patch(args.conversation_id, { images_backfilled_at: Date.now() });
+    } else {
+      await ctx.scheduler.runAfter(0, internal.messages.backfillConversationImagesPage, {
+        conversation_id: args.conversation_id,
+        cursor: page.continueCursor,
+      });
+    }
+    return { scanned: page.page.length, done: page.isDone };
+  },
+});
+
 // Storage ids embedded in an injected-image echo. The daemon delivers an image
 // as `[Image /tmp/codecast/images/<storageId>.png]` (downloadImage names the
 // file by its Convex storage id), so the agent's echoed user turn carries the
@@ -1145,6 +1313,7 @@ export const addMessage = mutation({
       await ctx.db.patch(matchingPending._id, { echo_message_id: messageId });
     }
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
+    await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
     const newMessageCount = conversation.message_count + 1;
     const now = Date.now();
 
@@ -1606,6 +1775,7 @@ export const addMessages = mutation({
       ids.push(messageId);
       insertedCount++;
       await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
+      await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
       if (msg.role === "user") lastUserContentStored = contentToStore;
     }
 

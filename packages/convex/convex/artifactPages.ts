@@ -17,6 +17,11 @@ const LOGO_C =
 const LOGO_ARROW =
   "M595.160889,540.159180 C602.995361,532.661072 610.436890,525.255066 618.219727,518.227051 C621.594788,515.179443 621.862915,513.288818 618.369263,510.015167 C605.976135,498.402374 593.950073,486.398682 581.638672,474.697052 C578.746277,471.947968 577.631470,469.026062 577.653381,465.050171 C577.786804,440.902161 577.692810,416.752869 577.674988,392.604004 C577.673828,390.969238 577.674927,389.334503 577.674927,387.822937 C580.475952,386.927032 581.524963,388.753571 582.754211,389.949341 C611.163818,417.584045 639.573853,445.218567 667.919434,472.919006 C680.901062,485.605255 693.661133,498.519287 706.712463,511.132599 C709.948914,514.260376 709.647461,516.128052 706.514099,519.115662 C674.820679,549.334167 643.279907,579.712769 611.649353,609.997375 C601.908936,619.323242 592.027832,628.502197 582.202148,637.738831 C581.252808,638.631287 580.419067,639.758240 578.788452,639.713379 C577.032288,638.391235 577.739929,636.409241 577.736206,634.708374 C577.682861,610.393066 577.748169,586.077332 577.625610,561.762512 C577.608215,558.319458 578.534119,555.799866 581.153076,553.487549 C585.892944,549.302612 590.338135,544.783875 595.160889,540.159180z";
 
+// Paths drawn at more than one size (bar chip + empty state, pin button + pin
+// jump), so the shape lives once and the size is the caller's choice.
+const BUBBLE_PATH = `<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>`;
+const PIN_PATH = `<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>`;
+
 export function escAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -25,8 +30,25 @@ export function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// Every icon we inject is built here, and its size rides in an INLINE STYLE,
+// never in the width/height attributes alone. The bar and its panels live in
+// the artifact's own DOM (no shadow root), so the artifact's CSS reaches them —
+// and a width attribute has zero specificity, so one bare rule wins over it.
+// A dashboard that ships `svg{display:block;width:100%;height:auto}` for its
+// charts (a normal thing to write) blew every icon up to panel width. An inline
+// style outranks any host rule short of !important, so the size holds.
+// `display` and `flex` are pinned for the same reason: a host `svg{display:block}`
+// would drop an icon onto its own line inside a text link.
+function iconStyle(size: number): string {
+  return `width:${size}px;height:${size}px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0`;
+}
+
+function iconSvg(size: number, body: string, opts?: { sw?: number; stroke?: string }): string {
+  return `<svg width="${size}" height="${size}" style="${iconStyle(size)}" viewBox="0 0 24 24" fill="none" stroke="${opts?.stroke ?? "currentColor"}" stroke-width="${opts?.sw ?? 2}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+}
+
 function logoSvg(size = 22): string {
-  return `<svg width="${size}" height="${size}" viewBox="290 340 440 340" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="${LOGO_C}"/><path fill="#e86c5d" d="${LOGO_ARROW}"/></svg>`;
+  return `<svg width="${size}" height="${size}" style="${iconStyle(size)}" viewBox="290 340 440 340" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="${LOGO_C}"/><path fill="#e86c5d" d="${LOGO_ARROW}"/></svg>`;
 }
 
 export interface BrandOpts {
@@ -73,13 +95,13 @@ function barHtml(o: BrandOpts): string {
   const currentVersion = o.currentVersion ?? version;
   const viewingOld = version < currentVersion;
   const interactive = !!o.metaUrl;
-  const chevronSvg = `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`;
-  const bubbleSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+  const chevronSvg = iconSvg(9, `<path d="m6 9 6 6 6-6"/>`, { sw: 2.6 });
+  const bubbleSvg = iconSvg(14, BUBBLE_PATH);
   const verChip = interactive
     ? `<button id="__cc_ver" type="button" title="Version history"${viewingOld ? ' class="__cc_old"' : ""}>v${version}${viewingOld ? " (old)" : ""} ${chevronSvg}</button>`
     : "";
-  const upRightSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>`;
-  const dotsSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`;
+  const upRightSvg = iconSvg(11, `<path d="M7 7h10v10"/><path d="M7 17 17 7"/>`);
+  const dotsSvg = iconSvg(15, `<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>`);
   const latestLink = viewingOld ? `<a id="__cc_latest" href="#">Latest ${upRightSvg}</a>` : "";
   // The chip reads as the session's TITLE (a short id means nothing to a
   // viewer); the id stays in the tooltip and the href.

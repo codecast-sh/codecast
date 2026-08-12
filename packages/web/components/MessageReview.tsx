@@ -478,7 +478,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
           {/* What happens next with these quotes. Without it the rail states the
               batch but never says how to finish it — the two ways out are the
               composer (write something around the quotes) and a straight send. */}
-          {isReviewTarget && (
+          {footerOwner === messageId && (
             <div className="cc-rail-foot" style={{ top: railBottom }}>
               <div className="cc-rail-foot-keys">
                 <span>
