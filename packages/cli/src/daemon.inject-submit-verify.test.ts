@@ -249,4 +249,67 @@ describe("verifyTmuxSubmitAfterPaste", () => {
     expect(res.rePasted).toBe(false);
     expect(actions).toEqual([]); // no Enter into the live box, no re-paste into a busy pane
   });
+
+  // ct-40212: on a cold-boot pane whose paste was dropped, the pty-buffered
+  // C-a/C-k clearing bytes submit as a garbage message and start a turn. That
+  // turn's activity looks exactly like success, so the old loop acked the
+  // delivery and the briefing was silently lost. Activity is only acceptable
+  // evidence when the paste was confirmed or some trace of OUR payload was
+  // seen; otherwise the loop must keep working the pane (re-paste, then honest
+  // timeout for the caller to throw on).
+  const GARBAGE_TURN_PANE = `
+> 
+
+⠹ Osmosing… (2s · ↓ 40 tokens)
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  ⏵⏵ bypass permissions on · esc to interrupt
+`;
+
+  test("garbage turn: activity without any payload trace is not accepted; re-paste recovers", async () => {
+    // 3 live ticks of a foreign turn (no payload anywhere) → one re-paste →
+    // payload renders in the box → discrete Enter → activity now counts.
+    const frames = [...Array(4).fill(GARBAGE_TURN_PANE), STUCK_PANE, WORKING_PANE];
+    const { io, actions } = scriptedIO(frames);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: BOOT_PANE,
+      pasteConfirmed: false,
+      contentPrefix: PROMPT,
+    });
+    expect(res.outcome).toBe("submitted");
+    expect(res.rePasted).toBe(true);
+    expect(actions).toEqual(["repaste", "enter"]);
+  });
+
+  test("garbage turn with payload never appearing: honest timeout with payload flags for the caller's throw", async () => {
+    const { io, actions } = scriptedIO([GARBAGE_TURN_PANE]);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: BOOT_PANE,
+      pasteConfirmed: false,
+      contentPrefix: PROMPT,
+      deadlineMs: 4000,
+    });
+    expect(res.outcome).toBe("timeout");
+    expect(res.payloadCheckable).toBe(true);
+    expect(res.payloadSeen).toBe(false);
+    expect(actions).toEqual(["repaste"]); // tried recovery once, never a blind ack
+  });
+
+  test("redelivery ambiguity (prefix already on screen pre-paste) keeps the legacy activity accept", async () => {
+    // When the prefix was visible before the paste, its absence/presence proves
+    // nothing — the loop must not hold deliveries hostage to an uncheckable
+    // question, so plain activity still acks.
+    const PRE_PASTE_WITH_PREFIX = WORKING_PANE; // transcript already shows the text
+    const ACTIVE_PANE = WORKING_PANE.replace("· Osmosing… (3s", "⠋ thinking… (4s"); // live redraw with a real activity token
+    const { io, actions } = scriptedIO([ACTIVE_PANE]);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: PRE_PASTE_WITH_PREFIX,
+      pasteConfirmed: false,
+      contentPrefix: PROMPT,
+    });
+    expect(res.outcome).toBe("submitted");
+    expect(res.payloadCheckable).toBe(false);
+    expect(actions).toEqual([]);
+  });
 });
