@@ -4136,9 +4136,9 @@ program
   .description(
     "Rename a session — set the title shown in the inbox and header\n\n" +
     "Sets a custom title that sticks: the auto-titler never overwrites a\n" +
-    "renamed session. Works on any session you run or own (including threads\n" +
-    "handed to you via cast own). With one argument, renames the CURRENT\n" +
-    "session.\n\n" +
+    "renamed session. Works on any session you can see in the feed (your own,\n" +
+    "or one shared with a team you're in). With one argument, renames the\n" +
+    "CURRENT session.\n\n" +
     "Examples:\n" +
     "  cast rename jx7c6zk \"Decide: dedupe policy for cold sends\"\n" +
     "  cast rename \"Fix flaky auth test\"     # current session"
