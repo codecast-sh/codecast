@@ -9291,8 +9291,10 @@ export const cliSetSessionVisibility = mutation({
 
 // Agent-facing rename (cast rename via /cli/sessions/rename). Stamps the same
 // title_is_custom flag as the web Rename control, so the auto-titlers
-// (titleGeneration, idleSummary, cleanup) never overwrite it. Access: the
-// runner or the second-party owner — same rule as cliSetSessionVisibility.
+// (titleGeneration, idleSummary, cleanup) never overwrite it. Access: anyone
+// with owner-or-team visibility (checkConversationAccess) — a title is shared
+// metadata like a message, so the bar matches `cast send`, not run-or-own.
+// Share-link viewers ("shared") stay read-only.
 export const cliRenameSession = mutation({
   args: {
     session: v.string(),
@@ -9308,13 +9310,13 @@ export const cliRenameSession = mutation({
     const title = args.title.trim();
     if (!title) throw new Error("Title cannot be empty");
 
-    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
-      c.user_id?.toString() === userId.toString() ||
-      c.owner_user_id?.toString() === userId.toString()
-    );
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, async (c) => {
+      const access = await checkConversationAccess(ctx, userId, c);
+      return access === "owner" || access === "team";
+    });
     if (!conv) {
       throw new Error(
-        `No session found for "${args.session}" (you can only rename sessions you run or own)`
+        `No session found for "${args.session}" (you can rename your own sessions and sessions shared with your team)`
       );
     }
     const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);

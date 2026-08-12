@@ -3,7 +3,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
-import { findConversationByAnyRef } from "./conversationSessionLookup";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { checkConversationAccess } from "./privacy";
 import { requireUser } from "./lib/auth";
 import {
   advanceLocalViewRevision,
@@ -451,8 +452,10 @@ export const webAssignV2 = mutation({
 });
 
 // ── CLI surface (api_token authenticated) ─────────────────────────────────────
-// `cast label …`. Filing is personal, so every ref resolves own-only via
-// findConversationByAnyRef (the same resolver `cast send` uses).
+// `cast label …`. Filing is personal (bucket_assignments are keyed by user), so
+// labeling a session affects only the caller's own view — which means the ref
+// may resolve to ANY session with owner-or-team visibility, same bar as `cast
+// send`/rename. Share-link viewers ("shared") stay read-only.
 
 async function requireCliUser(ctx: QueryCtx | MutationCtx, apiToken: string): Promise<Id<"users">> {
   const auth = await verifyApiToken(ctx, apiToken, false);
@@ -493,8 +496,11 @@ export const cliSetLabel = mutation({
   args: { api_token: v.string(), session: v.string(), name: v.string(), color: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await requireCliUser(ctx, args.api_token);
-    const conv = await findConversationByAnyRef(ctx, args.session, userId);
-    if (!conv) throw new Error(`No session of yours found for "${args.session}"`);
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, async (c) => {
+      const access = await checkConversationAccess(ctx, userId, c);
+      return access === "owner" || access === "team";
+    });
+    if (!conv) throw new Error(`No session found for "${args.session}" (you can label your own sessions and sessions shared with your team)`);
     const label = await resolveOrCreateBucket(ctx, userId, args.name, args.color);
     await assignConversationToBucketForUser(ctx, userId, conv._id, label.bucketId);
     return {
@@ -510,8 +516,11 @@ export const cliClearLabel = mutation({
   args: { api_token: v.string(), session: v.string() },
   handler: async (ctx, args) => {
     const userId = await requireCliUser(ctx, args.api_token);
-    const conv = await findConversationByAnyRef(ctx, args.session, userId);
-    if (!conv) throw new Error(`No session of yours found for "${args.session}"`);
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, async (c) => {
+      const access = await checkConversationAccess(ctx, userId, c);
+      return access === "owner" || access === "team";
+    });
+    if (!conv) throw new Error(`No session found for "${args.session}" (you can label your own sessions and sessions shared with your team)`);
     const prior = await ctx.db
       .query("bucket_assignments")
       .withIndex("by_user_conversation", (q) =>
