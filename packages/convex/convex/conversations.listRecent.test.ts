@@ -32,10 +32,13 @@ describe("listRecentSessions projects the killed marker", () => {
     expect(rows[0].inbox_killed_at).toBe(111);
   });
 
-  test("a live session reports the marker as undefined, not a stale value", async () => {
+  // The projection normalizes an absent stamp to null (inboxVisibilityFields),
+  // which every reader treats as "not killed". What must never happen is a
+  // stale timestamp on a live row.
+  test("a live session reports no marker, not a stale value", async () => {
     const db = fixtures([{ _id: "conv_live", title: "Working" }]);
     const rows = await performListRecentSessions({ db } as any, USER as any);
-    expect(rows[0].inbox_killed_at).toBeUndefined();
+    expect(rows[0].inbox_killed_at).toBeFalsy();
   });
 
   // Both palette sources must agree, which is the whole point of the projection.
