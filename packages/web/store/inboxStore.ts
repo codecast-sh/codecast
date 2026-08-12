@@ -1199,6 +1199,25 @@ export function freshReviveRequestIds(
   return ids;
 }
 
+// Should a blocked session still wear its amber login/limit/dropped chip? Only
+// while the user hasn't acted on it. Acting shows up as two local facts, the
+// same pair the pill count and the banner already drop a session on: a message
+// of theirs sits in the session's outbox, or a fleet revive was stamped for it.
+// The server's pending_api_error clears much later — when the resumed agent's
+// first real turn syncs back — so reading that flag alone left every row still
+// shouting "login" after the whole fleet had been told to continue. An expired
+// stamp (BLOCKED_REVIVE_TTL_MS) lets the still-set server flag resurface, so a
+// revive that never happened isn't hidden.
+export function showsBlockedBadge(
+  pendingApiError: boolean | undefined,
+  hasPendingSend: boolean,
+  reviveRequestedAt: number | undefined,
+  now: number,
+): boolean {
+  if (!pendingApiError || hasPendingSend) return false;
+  return !(reviveRequestedAt != null && now - reviveRequestedAt < BLOCKED_REVIVE_TTL_MS);
+}
+
 // A pending optimistic send is "consumed" once the daemon proves it acted on it:
 // the agent picked it up (status went active) or the session is dead (stopped,
 // won't ever pick it up). At that point the optimistic entry is stale and must be
