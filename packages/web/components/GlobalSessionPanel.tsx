@@ -16,7 +16,7 @@ import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, filterInboxScope, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { sessionsWakeSig, resolveShowOld, BLOCKED_REVIVE_TTL_MS } from "../store/inboxStore";
+import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
@@ -1663,19 +1663,17 @@ export const SessionCard = memo(function SessionCard({
   // the moment status goes active or the server echoes the message.
   const isPendingSend = useInboxStore((st) => convHasPendingSend(st.pendingMessages[session._id]));
   const isPendingWorking = isPendingSend && !isAgentActive(session);
-  // A blocked session the user has ALREADY acted on stops wearing the amber
-  // chip on the spot. Two local signals say they acted: a continue is sitting
-  // in this session's outbox, or a fleet revive was requested for it. The
-  // server's pending_api_error flag only clears when the agent's next real turn
-  // lands — several seconds of daemon work later — so reading it alone left
-  // every row still shouting "login" after the whole fleet had been told to
-  // continue. Same two facts the pill count and the banner already drop on
-  // (freshReviveRequestIds); if the revive never happens the stamp ages out
-  // (coarseNow keeps the TTL live) and the chip honestly returns.
+  // The amber blocked chip drops the instant the user acts on the session —
+  // see showsBlockedBadge. Scalar per-card selector, so only this card
+  // re-renders when its own revive stamp lands; coarseNow keeps the stamp's TTL
+  // live so an expired one brings the chip back on its own.
   const reviveRequestedAt = useInboxStore((st) => st.blockedReviveRequestedAt[session._id]);
-  const blockedActionPending =
-    isPendingSend || (!!reviveRequestedAt && coarseNow - reviveRequestedAt < BLOCKED_REVIVE_TTL_MS);
-  const showBlockedBadge = !!session.pending_api_error && !blockedActionPending;
+  const showBlockedBadge = showsBlockedBadge(
+    session.pending_api_error,
+    isPendingSend,
+    reviveRequestedAt,
+    coarseNow,
+  );
   // Kill+restart in flight for this session (written by useSessionRestart).
   // Scalar per-card selector, so only this card re-renders when its own restart
   // begins/ends.
