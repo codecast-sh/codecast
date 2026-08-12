@@ -476,6 +476,20 @@ async function mapForkDetails(ctx: { db: any }, forks: any[]) {
         status: fork.status,
         git_branch: fork.git_branch,
         fork_copied: fork.fork_copied,
+        // Triage/visibility state, free off the same row. The client preloads
+        // every returned branch into its sessions cache (preloadForkSessions);
+        // omitting these seeded a stashed/dismissed branch as an ACTIVE row,
+        // which rendered as a needs-input card on every boot until the live
+        // inbox payload delivered the real stamps (the "forks flash in the
+        // inbox on reload" bug). A seeded row must never claim more liveness
+        // than the server row it came from.
+        forked_from: fork.forked_from,
+        project_path: fork.project_path,
+        git_root: fork.git_root,
+        inbox_dismissed_at: fork.inbox_dismissed_at ?? null,
+        inbox_stashed_at: fork.inbox_stashed_at ?? null,
+        inbox_killed_at: fork.inbox_killed_at ?? null,
+        inbox_pinned_at: fork.inbox_pinned_at ?? null,
       };
     })
   );
@@ -1414,6 +1428,13 @@ export const getAllMessages = query({
           title: originalConv.title,
           share_token: originalConv.share_token,
           username: originalUser?.name || originalUser?.email?.split("@")[0] || "Unknown",
+          // Triage state for the client-side parent preload (same contract as
+          // mapForkDetails): a stashed/dismissed parent must seed as such, not
+          // as an active row that flashes into the inbox at boot.
+          inbox_dismissed_at: originalConv.inbox_dismissed_at ?? null,
+          inbox_stashed_at: originalConv.inbox_stashed_at ?? null,
+          inbox_killed_at: originalConv.inbox_killed_at ?? null,
+          inbox_pinned_at: originalConv.inbox_pinned_at ?? null,
         };
       }
     }
@@ -1866,6 +1887,13 @@ export const getConversationWithMeta = query({
           title: originalConv.title,
           share_token: originalConv.share_token,
           username: originalUser?.name || originalUser?.email?.split("@")[0] || "Unknown",
+          // Triage state for the client-side parent preload (same contract as
+          // mapForkDetails): a stashed/dismissed parent must seed as such, not
+          // as an active row that flashes into the inbox at boot.
+          inbox_dismissed_at: originalConv.inbox_dismissed_at ?? null,
+          inbox_stashed_at: originalConv.inbox_stashed_at ?? null,
+          inbox_killed_at: originalConv.inbox_killed_at ?? null,
+          inbox_pinned_at: originalConv.inbox_pinned_at ?? null,
         };
       }
     }
@@ -3082,7 +3110,14 @@ export async function performListRecentSessions(ctx: { db: QueryCtx["db"] }, use
         // from THIS projection. Omitting it left inbox_killed_at permanently
         // undefined on half the rows, so killed-awareness silently could not
         // work there. The conversation doc is already in hand — no extra read.
+        // Stash/dismiss/pin ride along for the same reason: a palette-opened
+        // session is injected into the client's sessions cache, and a row
+        // seeded without its triage state renders as an active needs-input
+        // card at boot (ct-42666).
         inbox_killed_at: c.inbox_killed_at,
+        inbox_dismissed_at: c.inbox_dismissed_at,
+        inbox_stashed_at: c.inbox_stashed_at,
+        inbox_pinned_at: c.inbox_pinned_at,
         isOwn,
         authorName: author?.name ?? null,
         authorAvatar: author?.avatar ?? null,
