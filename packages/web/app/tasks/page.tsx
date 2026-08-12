@@ -22,6 +22,8 @@ import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { filterToWorkspace } from "../../lib/workspaceScope";
+import { buildTaskTree, isActiveTask, isHumanOrigin, taskFamilyIndex, taskOrigin } from "@codecast/shared/tasks";
+import { closeTaskWithGuard } from "../../lib/taskActions";
 import { AgentTypeIcon, formatAgentType } from "../../components/AgentTypeIcon";
 import {
   Plus,
@@ -46,13 +48,35 @@ import {
   EyeOff,
   User,
   Bot,
+  Users,
   Lightbulb,
   Check,
   MessageSquare,
   FolderKanban,
   Layers,
   Activity,
+  ChevronDown,
+  ChevronRight,
+  CornerDownRight,
 } from "lucide-react";
+
+// Linear's progress circle, tiny: a ring that fills as direct subtasks close.
+function SubtaskRing({ done, total }: { done: number; total: number }) {
+  const r = 4;
+  const c = 2 * Math.PI * r;
+  const pct = total > 0 ? done / total : 0;
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" className="flex-shrink-0 -rotate-90">
+      <circle cx="6" cy="6" r={r} fill="none" strokeWidth="2" className="stroke-current opacity-25" />
+      <circle
+        cx="6" cy="6" r={r} fill="none" strokeWidth="2"
+        strokeDasharray={`${c * pct} ${c}`}
+        strokeLinecap="round"
+        className="stroke-current"
+      />
+    </svg>
+  );
+}
 
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type TaskPriority = "urgent" | "high" | "medium" | "low" | "none";
@@ -76,7 +100,24 @@ const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: string;
 
 const STATUS_ORDER: TaskStatus[] = ["in_progress", "in_review", "open", "backlog", "done", "dropped"];
 
-export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem; state: ItemRowState; triageMode?: boolean; onTriage?: (task: TaskItem, action: "active" | "dismissed") => void }) {
+export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenDescendantCount = 0, progress, collapsed = false, onToggleCollapse, parentChip }: {
+  task: TaskItem;
+  state: ItemRowState;
+  triageMode?: boolean;
+  onTriage?: (task: TaskItem, action: "active" | "dismissed") => void;
+  /** Nesting depth, already clamped to the emphasised top levels by buildTaskTree. */
+  indent?: number;
+  /** How many of this parent's subtasks the current view isn't rendering (agent-internal ones). */
+  hiddenDescendantCount?: number;
+  /** Direct-children progress (workspace truth), the ONE number story per parent row. */
+  progress?: { total: number; done: number; inProgress: number };
+  /** Collapse state for this parent's on-screen subtree. */
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+  /** Set on a floated subtask (parent filtered out of this view) for orientation. */
+  parentChip?: { id: string; short_id: string; title: string } | null;
+}) {
+  const router = useRouter();
   const activeSession = useInboxStore((s) => s.taskActiveSessions[task._id]) ?? null;
   const status = STATUS_CONFIG[task.status as TaskStatus] || STATUS_CONFIG.open;
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.medium;
@@ -101,6 +142,15 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
 
   return (
     <>
+      {indent > 0 && (
+        // Indent rail rather than left padding: the row is a flex line, so a
+        // fixed-width spacer keeps every column below it aligned across depths.
+        <span
+          aria-hidden
+          className="flex-shrink-0 self-stretch border-l border-sol-border/40"
+          style={{ marginLeft: `${(indent - 1) * 12}px`, width: "12px" }}
+        />
+      )}
       <button
         onClick={(e) => { e.stopPropagation(); state.onOpenPalette("status"); }}
         className="flex-shrink-0 hover:scale-125 transition-transform"
@@ -130,7 +180,58 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
       ) : (
         <span className="flex-1 text-sm text-sol-text truncate">{task.title}</span>
       )}
-      {task.source !== "human" && (
+      {/* Floated subtask: the parent was filtered out of this view, so the row
+          carries a small chip pointing back at it — never context-free. */}
+      {parentChip && (
+        <button
+          onClick={(e) => { e.stopPropagation(); router.push(`/tasks/${parentChip.id}`); }}
+          className="flex items-center gap-1 text-[10px] px-1.5 py-0 rounded border border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 flex-shrink-0 font-mono cq-hide-compact transition-colors max-w-[10rem]"
+          title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}
+        >
+          <CornerDownRight className="w-3 h-3 flex-shrink-0" />
+          <span className="truncate">{parentChip.short_id}</span>
+        </button>
+      )}
+      {/* ONE indicator per parent row (panel decision 4): a Linear-style
+          progress chip over direct children, with the hidden agent-internal
+          breakdown in the tooltip and glyph — never two competing numbers.
+          Clicking it collapses/expands the on-screen subtree. */}
+      {progress && progress.total > 0 && (() => {
+        const tip =
+          `${progress.total} subtask${progress.total > 1 ? "s" : ""}: ${progress.done} done, ${progress.inProgress} in progress` +
+          (hiddenDescendantCount > 0 ? ` — ${hiddenDescendantCount} agent-internal, not shown in this view` : "") +
+          (onToggleCollapse ? (collapsed ? " (click to expand)" : " (click to collapse)") : "");
+        const body = (
+          <>
+            {onToggleCollapse ? (collapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />) : null}
+            <SubtaskRing done={progress.done} total={progress.total} />
+            {progress.done}/{progress.total}
+            {hiddenDescendantCount > 0 && <Bot className="w-3 h-3" />}
+          </>
+        );
+        const cls = `flex items-center gap-1 text-[10px] px-1.5 py-0 rounded border flex-shrink-0 font-mono cq-hide-compact ${
+          hiddenDescendantCount > 0 ? "border-sol-cyan/30 text-sol-cyan/80" : "border-sol-border/40 text-sol-text-dim"
+        }`;
+        // A button only when it actually toggles something; otherwise a span so
+        // it doesn't look pressable-but-dead (the all-hidden case).
+        return onToggleCollapse ? (
+          <button onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }} className={`${cls} transition-colors ${hiddenDescendantCount > 0 ? "hover:bg-sol-cyan/10" : "hover:text-sol-text"}`} title={tip}>{body}</button>
+        ) : (
+          <span className={cls} title={tip}>{body}</span>
+        );
+      })()}
+      {/* Origin. A meeting task was written by an agent but decided by people,
+          so it gets its own marker — a bot icon here would file real
+          commitments in with agent bookkeeping, the confusion decision 4
+          exists to remove. */}
+      {taskOrigin(task) === "meeting" ? (
+        <span
+          className="flex items-center gap-1 text-[10px] px-1.5 py-0 rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 flex-shrink-0 cq-hide-compact"
+          title="Captured from a meeting"
+        >
+          <Users className="w-3 h-3" />meeting
+        </span>
+      ) : taskOrigin(task) === "agent" && (
         task.source_agent_type ? (
           <span className="flex-shrink-0 opacity-60 cq-hide-compact" title={`Created by ${formatAgentType(task.source_agent_type)}`}>
             <AgentTypeIcon agentType={task.source_agent_type} className="w-3.5 h-3.5" />
@@ -258,6 +359,7 @@ function KanbanCard({
   onContextMenu,
   onDragStart,
   onDragEnd,
+  parentChip,
 }: {
   task: TaskItem;
   isDragging?: boolean;
@@ -265,6 +367,8 @@ function KanbanCard({
   onContextMenu: (e: React.MouseEvent) => void;
   onDragStart?: (e: React.DragEvent) => void;
   onDragEnd?: () => void;
+  /** The board flattens trees; a subtask card names its parent instead. */
+  parentChip?: { short_id: string; title: string } | null;
 }) {
   const activeSession = useInboxStore((s) => s.taskActiveSessions[task._id]) ?? null;
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.none;
@@ -283,7 +387,15 @@ function KanbanCard({
       }`}
     >
       <div className="flex items-start justify-between gap-2 mb-2">
-        <span className="text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">{task.short_id}</span>
+        <span className="flex items-center gap-1.5 min-w-0 text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">
+          {task.short_id}
+          {parentChip && (
+            <span className="flex items-center gap-0.5 min-w-0 opacity-80" title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}>
+              <CornerDownRight className="w-2.5 h-2.5 flex-shrink-0" />
+              <span className="truncate max-w-[7rem]">{parentChip.short_id}</span>
+            </span>
+          )}
+        </span>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {activeSession ? (
             <ActiveSessionBadge session={activeSession} compact />
@@ -342,6 +454,7 @@ function KanbanView({
   onContextMenu,
   onAddTask,
   onStatusChange,
+  parentChipFor,
 }: {
   grouped: Record<string, TaskItem[]>;
   hiddenStatuses: Set<string>;
@@ -350,6 +463,7 @@ function KanbanView({
   onContextMenu: (e: React.MouseEvent, task: TaskItem) => void;
   onAddTask: (status: string) => void;
   onStatusChange: (task: TaskItem, newStatus: string) => void;
+  parentChipFor?: (task: TaskItem) => { short_id: string; title: string } | null;
 }) {
   const visibleStatuses = STATUS_ORDER.filter((s) => !hiddenStatuses.has(s) && (grouped[s]?.length || true));
   const hiddenWithTasks = STATUS_ORDER.filter((s) => hiddenStatuses.has(s));
@@ -440,6 +554,7 @@ function KanbanView({
                     onContextMenu={(e) => onContextMenu(e, task)}
                     onDragStart={(e) => onDragStart(e, task.short_id)}
                     onDragEnd={onDragEnd}
+                    parentChip={parentChipFor?.(task)}
                   />
                 ))}
                 {tasks.length === 0 && (
@@ -709,9 +824,17 @@ export function TaskListContent() {
   // machine-made unpromoted task (agent, plan_mode, todo_sync, import) sits
   // behind the Agent segment; "all" shows both. Insight suggestions stay
   // behind the separate triage link.
-  const isActive = (t: TaskItem) => t.triage_status !== "suggested" && t.triage_status !== "dismissed" && (t.source !== "insight" || !!t.promoted);
+  // The one activity predicate, shared with mobile/CLI counts so every surface
+  // agrees on which rows exist (see @codecast/shared/tasks).
+  const isActive = isActiveTask;
   const isTriage = (t: TaskItem) => t.source === "insight" ? t.triage_status !== "dismissed" : t.triage_status === "suggested";
-  const onHumanBoard = (t: TaskItem) => t.source === "human" || !!t.promoted;
+  // Meeting-derived tasks (Aivery turning huddles into work items) are for
+  // humans by definition, so they sit on the board without needing promotion —
+  // that rule lives in isHumanOrigin (@codecast/shared/tasks), shared with the
+  // CLI and mobile so the three can't drift on what counts as human work.
+  // `promoted` is the separate escape hatch an agent sets deliberately
+  // (`cast task create --human`) for its own task that a person must see.
+  const onHumanBoard = (t: TaskItem) => isHumanOrigin(t) || !!t.promoted;
   const sourceFilteredTasks = useMemo(() => {
     if (sourceFilter === "agent") {
       return tasksList.filter((t) => !onHumanBoard(t) && isActive(t));
@@ -791,11 +914,17 @@ export function TaskListContent() {
   // chosen sort field + direction applies everywhere. Ties fall back to a stable
   // status→priority→recency chain (direction-independent) so equal keys don't
   // shuffle when the user flips asc/desc.
+  // Sort, then nest: buildTaskTree reorders the sorted list so each subtask
+  // follows its parent, keeping the sort order within every level. Every group
+  // memo and the flat list funnel through here, so this one call is what makes
+  // nesting show up in all of them. The tree never adds or drops a row — a
+  // subtask whose parent was filtered out is promoted to the top level rather
+  // than disappearing (or resurfacing its hidden parent).
   const sortTasks = useCallback((tasks: TaskItem[]) => {
     const statusIdx = (s: string) => STATUS_ORDER.indexOf(s as TaskStatus);
     const prio = (t: TaskItem) => PRIORITY_ORDER[t.priority] ?? 3;
     const flip = dir === "desc" ? -1 : 1;
-    return [...tasks].sort((a, b) => {
+    const sorted = [...tasks].sort((a, b) => {
       let r = 0;
       if (sort === "priority") r = prio(a) - prio(b);
       else if (sort === "created") r = a.created_at - b.created_at;
@@ -808,6 +937,7 @@ export function TaskListContent() {
       if (pd !== 0) return pd;
       return b.created_at - a.created_at;
     });
+    return buildTaskTree(sorted).map((r) => r.task);
     // PRIORITY_ORDER / STATUS_ORDER are value-constant; omitted from deps to keep
     // this callback stable so the group memos don't re-sort every render.
   }, [sort, dir]);
@@ -1074,12 +1204,99 @@ export function TaskListContent() {
     return counts;
   }, [sourceFilteredTasks]);
 
+  // View-scope pass, ONE tree walk per rendered list: indent per row (nesting
+  // stays inside each group, so a parent under one header never adopts a child
+  // filed under another) and the on-screen descendant count from the same rows.
+  const viewNesting = useMemo(() => {
+    const byId = new Map<string, { indent: number; depth: number; visibleDescendants: number }>();
+    const collect = (items: TaskItem[]) => {
+      for (const row of buildTaskTree(items)) {
+        byId.set(row.task._id, { indent: row.indent, depth: row.depth, visibleDescendants: row.descendantCount });
+      }
+    };
+    if (listGroups) for (const g of listGroups) collect(g.items);
+    else collect(flatTasks);
+    return byId;
+  }, [listGroups, flatTasks]);
+
+  // Collapse state is a device-local viewing preference (localStorage, not the
+  // synced prefs bag — an unbounded per-task set doesn't belong in LWW sync).
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      return new Set(JSON.parse(window.localStorage.getItem("codecast.tasks.collapsed") || "[]"));
+    } catch { return new Set(); }
+  });
+  const toggleCollapsed = useCallback((id: string) => {
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      // Cap growth: keep the most recent ~300 toggles.
+      const arr = [...next].slice(-300);
+      try { window.localStorage.setItem("codecast.tasks.collapsed", JSON.stringify(arr)); } catch {}
+      return new Set(arr);
+    });
+  }, []);
+
+  // Drop the on-screen subtree of collapsed parents. Uses true depth (indent
+  // clamps at 2, so a depth-3 row shares its parent's indent).
+  const applyCollapse = useCallback((items: TaskItem[]) => {
+    if (collapsedIds.size === 0) return items;
+    const out: TaskItem[] = [];
+    let skipBelowDepth: number | null = null;
+    for (const t of items) {
+      const depth = viewNesting.get(t._id)?.depth ?? 0;
+      if (skipBelowDepth !== null && depth > skipBelowDepth) continue;
+      skipBelowDepth = null;
+      out.push(t);
+      if (collapsedIds.has(t._id)) skipBelowDepth = depth;
+    }
+    return out;
+  }, [collapsedIds, viewNesting]);
+
+  const displayGroups = useMemo(() => {
+    if (!listGroups) return null;
+    if (collapsedIds.size === 0) return listGroups;
+    return listGroups.map((g) => ({ ...g, items: applyCollapse(g.items) }));
+  }, [listGroups, applyCollapse, collapsedIds]);
+  const displayFlat = useMemo(() => applyCollapse(flatTasks), [applyCollapse, flatTasks]);
+
+  // Workspace-scope pass, computed once over the whole live set: TRUE deep
+  // subtask counts and direct-children progress. The clutter this page exists
+  // to fix is about ROWS, not awareness — agent execution subtasks stay off
+  // the human board, but their parent must still say that machinery is running
+  // under it, so these come from the unfiltered workspace, never the view.
+  const familyIndex = useMemo(() => taskFamilyIndex(tasksList), [tasksList]);
+
   const isBotView = sourceFilter === "triage";
-  const renderTaskRow = useCallback((task: TaskItem, state: ItemRowState) => (
-    <TaskRow task={task} state={state} triageMode={isBotView} onTriage={isBotView ? handleTriage : undefined} />
-  ), [isBotView, handleTriage]);
+  const renderTaskRow = useCallback((task: TaskItem, state: ItemRowState) => {
+    const nest = viewNesting.get(task._id);
+    const total = familyIndex.descendants.get(task._id) ?? 0;
+    // Floated subtask: parent_id set but the view's tree left this row at the
+    // top level — the parent is filtered out (or off this group), so the row
+    // carries an orientation chip back to it.
+    const parentRow = task.parent_id && (nest?.depth ?? 0) === 0
+      ? (tasks[String(task.parent_id)] as TaskItem | undefined)
+      : undefined;
+    return (
+      <TaskRow
+        task={task}
+        state={state}
+        triageMode={isBotView}
+        onTriage={isBotView ? handleTriage : undefined}
+        indent={nest?.indent ?? 0}
+        hiddenDescendantCount={Math.max(0, total - (nest?.visibleDescendants ?? 0))}
+        progress={familyIndex.progress.get(task._id)}
+        collapsed={collapsedIds.has(task._id)}
+        onToggleCollapse={(nest?.visibleDescendants ?? 0) > 0 || collapsedIds.has(task._id) ? () => toggleCollapsed(task._id) : undefined}
+        parentChip={parentRow ? { id: parentRow._id, short_id: parentRow.short_id, title: parentRow.title } : null}
+      />
+    );
+  }, [isBotView, handleTriage, viewNesting, familyIndex, tasks, collapsedIds, toggleCollapsed]);
 
   return (
+    <>
     <GenericListView<TaskItem>
           activeItemId={params?.id as string | undefined}
           paletteTargetType="task"
@@ -1181,8 +1398,8 @@ export function TaskListContent() {
             onSaveView: handleSaveView,
           }}
           shareUrl={buildShareUrl}
-          groups={listGroups}
-          flatItems={flatTasks}
+          groups={displayGroups}
+          flatItems={displayFlat}
           disableKeyboard={showCreate}
           renderRow={renderTaskRow}
           getItemId={(t) => t._id}
@@ -1230,13 +1447,26 @@ export function TaskListContent() {
               onContextMenu={(e, task) => { e.preventDefault(); openPaletteForItems([task]); }}
               onAddTask={() => openCreateModal('task')}
               onStatusChange={(task, newStatus) => {
-                updateTask(task.short_id, { status: newStatus });
+                // Terminal moves go through the single close gateway \u2014 a kanban
+                // drag must not bypass the open-subtasks guard. When it defers
+                // to the dialog, don't also toast success.
+                if (newStatus === "done" || newStatus === "dropped") {
+                  const res = closeTaskWithGuard(task.short_id, newStatus as "done" | "dropped");
+                  if (res.needsConfirm) return;
+                } else {
+                  updateTask(task.short_id, { status: newStatus });
+                }
                 toast.success(`${task.short_id} \u2192 ${newStatus.replace("_", " ")}`);
+              }}
+              parentChipFor={(t) => {
+                const p = t.parent_id ? (tasks[String(t.parent_id)] as TaskItem | undefined) : undefined;
+                return p ? { short_id: p.short_id, title: p.title } : null;
               }}
             />
           ) : undefined}
         >
         </GenericListView>
+      </>
     );
 }
 

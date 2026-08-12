@@ -2292,6 +2292,10 @@ export default defineSchema({
     project_id: v.optional(v.id("projects")),
     parent_id: v.optional(v.id("tasks")),
     plan_id: v.optional(v.id("plans")),
+    // Client-minted idempotency key for optimistic creates: webCreate returns
+    // the existing row for a repeat key, so a retried/replayed create (timeout
+    // after commit, lost ack) never inserts a second task.
+    client_key: v.optional(v.string()),
     short_id: v.string(),
 
     title: v.string(),
@@ -2427,6 +2431,7 @@ export default defineSchema({
     .index("by_project_status", ["project_id", "status"])
     .index("by_parent_id", ["parent_id"])
     .index("by_short_id", ["short_id"])
+    .index("by_client_key", ["user_id", "client_key"])
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])
     .index("by_team_updated", ["team_id", "updated_at"])
