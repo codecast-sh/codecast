@@ -105,6 +105,7 @@ import type * as redact from "../redact.js";
 import type * as reviews from "../reviews.js";
 import type * as searchCore from "../searchCore.js";
 import type * as searchMirror from "../searchMirror.js";
+import type * as sessionImages from "../sessionImages.js";
 import type * as sessionInitiator from "../sessionInitiator.js";
 import type * as sessionInsights from "../sessionInsights.js";
 import type * as sessionOwners from "../sessionOwners.js";
