@@ -7459,7 +7459,7 @@ function StoryTimelineView({ conversationId, userName, avatarUrl, onJump }: { co
   return (
     <div className="py-7">
       <div className="relative">
-        <div className="absolute left-[9px] top-2 bottom-6 w-px bg-gradient-to-b from-sol-border via-sol-border/60 to-transparent" />
+        <div className="absolute left-[9px] top-2 bottom-6 w-px bg-gradient-to-b from-sol-border via-[color-mix(in_srgb,var(--sol-border)_60%,transparent)] to-transparent" />
         {items.map((b) => (
           <BeatRow key={b.anchor_message_id} beat={b} userName={userName} avatarUrl={avatarUrl} showPrompt accent="blue" onJump={onJump} />
         ))}
@@ -7477,7 +7477,7 @@ function ThreadSummaryView({ conversationId, userName, avatarUrl, onJump }: { co
   return (
     <div className="py-7">
       <div className="relative">
-        <div className="absolute left-[9px] top-2 bottom-6 w-px bg-gradient-to-b from-sol-violet/50 via-sol-border/60 to-transparent" />
+        <div className="absolute left-[9px] top-2 bottom-6 w-px bg-gradient-to-b from-sol-violet/50 via-[color-mix(in_srgb,var(--sol-border)_60%,transparent)] to-transparent" />
         {items.map((b) => (
           <BeatRow key={b.anchor_message_id} beat={b} userName={userName} avatarUrl={avatarUrl} showPrompt accent="violet" onJump={onJump} />
         ))}
@@ -10577,7 +10577,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   return (
     <div data-sv-composer className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
-      {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />}
+      {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-[color-mix(in_srgb,var(--sol-bg)_80%,transparent)] to-transparent -mt-16 relative" />}
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
           {serverDeleted && !isRestarting && (
