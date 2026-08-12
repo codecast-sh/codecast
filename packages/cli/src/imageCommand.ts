@@ -107,7 +107,9 @@ function downscaleWithSips(bytes: Buffer, mediaType: string): Buffer | null {
   }
 }
 
-async function uploadOne(deps: PublishDeps, target: string, alt?: string): Promise<SharedImage> {
+/** Exported so `cast browser shot --share` reuses the whole pipeline — hash
+ *  dedupe, downscaling, upload, markdown — instead of growing a second one. */
+export async function uploadOne(deps: PublishDeps, target: string, alt?: string): Promise<SharedImage> {
   let bytes = await loadTargetBytes(target);
   let mediaType = detectImageMediaType(bytes);
   let downscaledFrom: number | undefined;

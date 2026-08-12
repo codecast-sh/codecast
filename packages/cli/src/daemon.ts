@@ -3706,6 +3706,12 @@ async function executeRemoteCommand(
         const sessionIds: Record<string, string> =
           parsed.session_ids && typeof parsed.session_ids === "object" ? parsed.session_ids : {};
         const sendContinue: boolean = parsed.continue_blocked !== false;
+        // The web paints its "continue" bubble the moment the user clicks and
+        // sends the client_id it painted with along the command. Enqueueing
+        // under that id makes the server echo REPLACE that bubble instead of
+        // adding a second one. Absent for server-initiated revives.
+        const continueClientIds: Record<string, string> =
+          parsed.client_ids && typeof parsed.client_ids === "object" ? parsed.client_ids : {};
 
         // save_as mode: snapshot the CURRENT login as a named profile (the web
         // Settings "save as profile" button). Pure save — no swap, no kills.
@@ -3773,7 +3779,11 @@ async function executeRemoteCommand(
             try {
               // client_id keyed by command id: re-running the command can't
               // double-queue, but a deliberate second switch still can.
-              await syncServiceRef.enqueueUserMessage(convId, "continue", `acct-switch-${commandId}-${convId}`);
+              await syncServiceRef.enqueueUserMessage(
+                convId,
+                "continue",
+                continueClientIds[convId] || `acct-switch-${commandId}-${convId}`,
+              );
               continued++;
             } catch (err) {
               log(`[ACCOUNTS] Continue enqueue failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
@@ -11934,10 +11944,21 @@ const startedSessionTmux = new PersistedStartedSessions();
 const restartingSessionIds = new Map<string, number>();
 const RESTART_GUARD_TTL_MS = 60_000;
 
+/** The largest window resumeReadinessPollMs can return. */
+export const MAX_RESUME_READINESS_POLL_MS = 120_000;
+
 // Prevent concurrent resume attempts on the same session
 const resumeInFlight = new Map<string, Promise<boolean>>();
 const resumeInFlightStarted = new Map<string, number>();
-const RESUME_IN_FLIGHT_TIMEOUT_MS = 120_000;
+// Must stay STRICTLY LARGER than the longest a single resume can legitimately
+// take, or the guard expires under a healthy resume and admits a second one into
+// the SAME tmux name — observed live on jx78ksdh85pw: the first resume ran 128s
+// (see resumeReadinessPollMs), the 120s guard called it stale, and the second
+// attempt died on `duplicate session: cc-resume-c731de13` after typing a second
+// `claude --resume` line into the pane the first was still booting. Derived from
+// the readiness ceiling plus setup (kill, new-session, JSONL relocate, model
+// scan) so raising a tier can never silently re-open that window.
+export const RESUME_IN_FLIGHT_TIMEOUT_MS = MAX_RESUME_READINESS_POLL_MS + 60_000;
 
 // How long to wait for a cold-resumed agent to render its prompt before giving up.
 // A `claude --resume` replays the whole transcript on boot, so the window scales
@@ -11945,9 +11966,14 @@ const RESUME_IN_FLIGHT_TIMEOUT_MS = 120_000;
 // (reconstituted) session — the boot would still be initializing when the poll
 // gave up, and the optimistic inject pasted into a half-booted/dead shell. 30s
 // floor gives a normal cold boot room to finish.
+//
+// The 500KB step exists because the old 1MB boundary put an 880KB transcript in
+// the 30s tier while Claude needed 38-71s to render its prompt for it — so every
+// restart of that session reported a timeout even when the boot was fine.
 export function resumeReadinessPollMs(jsonlSizeBytes: number): number {
-  if (jsonlSizeBytes > 10_000_000) return 90_000;
-  if (jsonlSizeBytes > 1_000_000) return 45_000;
+  if (jsonlSizeBytes > 10_000_000) return 120_000;
+  if (jsonlSizeBytes > 1_000_000) return 90_000;
+  if (jsonlSizeBytes > 500_000) return 60_000;
   return 30_000;
 }
 
@@ -14046,7 +14072,21 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   try {
     try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
 
-    await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd]);
+    try {
+      await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd]);
+    } catch (createErr) {
+      // The kill above just removed this name, so "duplicate session" can only mean
+      // a CONCURRENT resume recreated it between the two calls. Typing our command
+      // line into that pane would stack a second `claude --resume` on top of the one
+      // already booting there, and returning false sends the caller into
+      // reconstitution — rewriting the JSONL under a live boot. Yield to the other
+      // resume instead: it owns the pane and reports its own readiness.
+      const msg = createErr instanceof Error ? createErr.message : String(createErr);
+      if (!msg.includes("duplicate session")) throw createErr;
+      logDelivery(`Resume of ${shortId} yielding: tmux ${tmuxSession} was recreated by a concurrent resume`);
+      resumeSessionCache.set(sessionId, tmuxSession);
+      return true;
+    }
     await setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId);
     await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType);
 
@@ -14101,11 +14141,15 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     let jsonlSize = 0;
     try { jsonlSize = fs.statSync(jsonlPath).size; } catch {}
     const maxPollMs = resumeReadinessPollMs(jsonlSize);
-    const maxIterations = Math.ceil(maxPollMs / 250);
     const startTime = Date.now();
     let ready = false;
 
-    for (let i = 0; i < maxIterations; i++) {
+    // Deadline, not an iteration count. The old `maxPollMs / 250` loop assumed a
+    // capture-pane was free; each one actually costs 150-800ms depending on how
+    // many panes the tmux server holds, so a nominal 30s budget burned 128s of
+    // wall clock on a busy box (70+ panes here). That overrun is what pushed a
+    // single resume past the in-flight guard and let a second one collide with it.
+    while (Date.now() - startTime < maxPollMs) {
         await new Promise(resolve => setTimeout(resolve, 250));
         try {
           const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);

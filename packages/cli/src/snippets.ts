@@ -40,6 +40,153 @@ export function getSnippetTargets(): SnippetTarget[] {
   return targets;
 }
 
+/**
+ * How one codecast-owned section is recognized inside a CLAUDE.md / AGENTS.md.
+ *
+ * `headings[0]` is what we write today; the rest are headings older CLI versions
+ * wrote, matched so an update replaces the old section instead of stacking a
+ * second copy under it. `contentProbes` identifies bodies written before end
+ * markers existed — those files have a heading and no marker, and are the only
+ * reason a marker-less block may be removed at all.
+ */
+export interface SectionSpec {
+  headings: string[];
+  endMarker: string;
+  contentProbes?: string[];
+}
+
+/** A `## ` heading at the start of a line — the boundary between top-level
+ *  sections. Snippet bodies only ever go as deep as `### `, so this never
+ *  matches inside one of our own blocks. */
+const NEXT_SECTION = /\n## /;
+
+/**
+ * Every codecast-owned block matching `spec`, as [start, end) offsets.
+ *
+ * The rule that makes this correct: a block is OURS only when its end marker
+ * appears after its heading AND before the next `## ` heading. Detection and
+ * removal therefore share one window, which is precisely what the previous
+ * per-snippet copies got wrong — they tested `text.includes(endMarker)` across
+ * the whole file but cut with `indexOf(endMarker, start)`, so a marker sitting
+ * anywhere ABOVE the heading left the cut running to end of file and deleted
+ * every later section, user content included.
+ *
+ * A heading whose block carries no marker is left alone unless a content probe
+ * matches, so a user's own `## Tasks & Plans` survives while the real codecast
+ * block further down is the one replaced.
+ */
+export function findOwnedSections(text: string, spec: SectionSpec): Array<{ start: number; end: number }> {
+  const found: Array<{ start: number; end: number }> = [];
+
+  for (const heading of spec.headings) {
+    let from = 0;
+    for (;;) {
+      const start = text.indexOf(heading, from);
+      if (start === -1) break;
+      from = start + heading.length;
+
+      // Must be a real heading: at file start or immediately after a newline.
+      if (start !== 0 && text[start - 1] !== "\n") continue;
+
+      const bodyFrom = start + heading.length;
+      const rel = text.slice(bodyFrom).search(NEXT_SECTION);
+      // Keep the newline with the block we cut, so the next heading lands
+      // exactly where this block began.
+      const nextSection = rel === -1 ? text.length : bodyFrom + rel + 1;
+
+      const markerIdx = text.indexOf(spec.endMarker, bodyFrom);
+      const owned = markerIdx !== -1 && markerIdx < nextSection;
+
+      let end: number;
+      if (owned) {
+        end = markerIdx + spec.endMarker.length;
+        // Take the blank lines that separated this block from what follows.
+        // An update cuts the block here and re-appends it at the end, so
+        // leaving the separator behind would grow the file by one blank line
+        // on every refresh. The text before our heading already carries the
+        // separation the next section needs.
+        while (text[end] === "\n") end++;
+      } else if (spec.contentProbes?.some((p) => text.slice(start, nextSection).includes(p))) {
+        // Pre-marker-era block: bounded by the next heading, never by EOF.
+        end = nextSection;
+      } else {
+        continue; // Someone else's section that happens to share our heading.
+      }
+
+      found.push({ start, end });
+    }
+  }
+
+  // Outermost-first so callers can cut back to front without shifting offsets,
+  // and drop any block nested inside another.
+  found.sort((a, b) => a.start - b.start);
+  return found.filter((b, i) => i === 0 || b.start >= found[i - 1].end);
+}
+
+/** True when the file already carries a block we own. */
+export function hasOwnedSection(text: string, spec: SectionSpec): boolean {
+  return findOwnedSections(text, spec).length > 0;
+}
+
+/** Remove every block we own, leaving everything else byte-identical. */
+export function cutOwnedSections(text: string, spec: SectionSpec): string {
+  const blocks = findOwnedSections(text, spec);
+  let out = text;
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    out = out.slice(0, blocks[i].start) + out.slice(blocks[i].end);
+  }
+  return out;
+}
+
+/**
+ * The single install algorithm behind every snippet: skip when present and not
+ * updating, otherwise cut what we own and append the fresh section.
+ * Pure — the filesystem lives in the callers, so this is directly testable.
+ */
+export function applySnippet(
+  existing: string,
+  spec: SectionSpec,
+  snippet: string,
+  update: boolean,
+): { text: string; installed: boolean; updated: boolean } {
+  const has = hasOwnedSection(existing, spec);
+  if (has && !update) return { text: existing, installed: false, updated: false };
+  if (!has) return { text: existing + snippet, installed: true, updated: false };
+  const cut = cutOwnedSections(existing, spec);
+  return { text: cut.trimEnd() + "\n" + snippet, installed: true, updated: true };
+}
+
+/** Write `spec`'s section into one file, creating its directory if needed. */
+export function installSectionToFile(
+  filePath: string,
+  dirPath: string,
+  spec: SectionSpec,
+  snippet: string,
+  update: boolean,
+): { installed: boolean; updated: boolean } {
+  if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+  const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
+  const result = applySnippet(existing, spec, snippet, update);
+  if (result.installed) fs.writeFileSync(filePath, result.text, { mode: 0o600 });
+  return { installed: result.installed, updated: result.updated };
+}
+
+/** Write `spec`'s section into every agent instruction file on this machine. */
+export function installSectionToTargets(
+  spec: SectionSpec,
+  snippet: string,
+  update: boolean,
+): { installed: boolean; updated: boolean } {
+  let anyInstalled = false;
+  let anyUpdated = false;
+  for (const target of getSnippetTargets()) {
+    const r = installSectionToFile(target.filePath, target.dirPath, spec, snippet, update);
+    if (r.installed) anyInstalled = true;
+    if (r.updated) anyUpdated = true;
+  }
+  return { installed: anyInstalled, updated: anyUpdated };
+}
+
 export const MESSAGING_SNIPPET_END = "<!-- /codecast-messaging -->";
 export const MESSAGING_SNIPPET = `
 ## Messaging
@@ -113,41 +260,15 @@ For a single image — a screenshot, a chart render — use \`cast image <file-o
 ${PUBLISH_SNIPPET_END}
 `;
 
-/** Generic marked-snippet installer: header check + end-marker replace, else append.
- * `headers[0]` is the current section heading; the rest are legacy headings a
- * previous CLI version wrote — matched so an update replaces the old section
- * instead of appending a duplicate below it. */
+/** @deprecated Use `installSectionToTargets`. Kept as a thin adapter so callers
+ *  outside this module keep working while they migrate. */
 function installMarkedSnippetToTargets(
   headers: string[],
   endMarker: string,
   snippet: string,
   update: boolean,
 ): { installed: boolean; updated: boolean } {
-  let anyInstalled = false;
-  let anyUpdated = false;
-  for (const target of getSnippetTargets()) {
-    if (!fs.existsSync(target.dirPath)) {
-      fs.mkdirSync(target.dirPath, { recursive: true });
-    }
-    let existing = fs.existsSync(target.filePath) ? fs.readFileSync(target.filePath, "utf-8") : "";
-    const header = headers.find((h) => existing.includes(h));
-    const has = header !== undefined && existing.includes(endMarker);
-    if (has && !update) continue;
-    if (has) {
-      const start = existing.indexOf(header!);
-      const markerIdx = existing.indexOf(endMarker, start);
-      let end = markerIdx !== -1 ? markerIdx + endMarker.length : existing.length;
-      if (existing[end] === "\n") end++;
-      existing = existing.slice(0, start) + existing.slice(end);
-      fs.writeFileSync(target.filePath, existing.trimEnd() + "\n" + snippet, { mode: 0o600 });
-      anyInstalled = true;
-      anyUpdated = true;
-    } else {
-      fs.writeFileSync(target.filePath, existing + snippet, { mode: 0o600 });
-      anyInstalled = true;
-    }
-  }
-  return { installed: anyInstalled, updated: anyUpdated };
+  return installSectionToTargets({ headings: headers, endMarker }, snippet, update);
 }
 
 // One explanation of how agents name codecast objects in prose, shared by every
@@ -194,54 +315,13 @@ export function installPublishSnippet(update = false): { installed: boolean; upd
   );
 }
 
-function installMessagingSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-
-  let existing = "";
-  if (fs.existsSync(filePath)) {
-    existing = fs.readFileSync(filePath, "utf-8");
-  }
-
-  const hasMessaging = existing.includes("## Messaging") && existing.includes(MESSAGING_SNIPPET_END);
-  if (hasMessaging && !update) {
-    return { installed: false, updated: false };
-  }
-
-  if (hasMessaging && update) {
-    const msgStart = existing.indexOf("## Messaging");
-    let msgEnd = existing.length;
-
-    const endMarkerIdx = existing.indexOf(MESSAGING_SNIPPET_END, msgStart);
-    if (endMarkerIdx !== -1) {
-      msgEnd = endMarkerIdx + MESSAGING_SNIPPET_END.length;
-      if (existing[msgEnd] === "\n") msgEnd++;
-    }
-
-    const before = existing.slice(0, msgStart);
-    const after = existing.slice(msgEnd);
-    existing = before + after;
-    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + MESSAGING_SNIPPET, { mode: 0o600 });
-    return { installed: true, updated: true };
-  }
-
-  fs.writeFileSync(filePath, existing + MESSAGING_SNIPPET, { mode: 0o600 });
-  return { installed: true, updated: false };
-}
+export const MESSAGING_SECTION: SectionSpec = {
+  headings: ["## Messaging"],
+  endMarker: MESSAGING_SNIPPET_END,
+};
 
 export function installMessagingSnippet(update = false): { installed: boolean; updated: boolean } {
-  const targets = getSnippetTargets();
-  let anyInstalled = false;
-  let anyUpdated = false;
-
-  for (const target of targets) {
-    const result = installMessagingSnippetToFile(target.filePath, target.dirPath, update);
-    if (result.installed) anyInstalled = true;
-    if (result.updated) anyUpdated = true;
-  }
-
-  return { installed: anyInstalled, updated: anyUpdated };
+  return installSectionToTargets(MESSAGING_SECTION, MESSAGING_SNIPPET, update);
 }
 
 // Messaging is on by default for anyone who has memory. Backfill/refresh it for

@@ -9,6 +9,9 @@
 // Same deps pattern as publish.ts / imageCommand.ts: index.ts hands in config
 // access, this module stays importable by tests.
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./publish.js";
 import { expandStdinArgs } from "./sendBody.js";
@@ -18,6 +21,46 @@ import {
   threadStateFreshness,
   THREAD_STATE_MAX_CHARS,
 } from "@codecast/shared/contracts";
+
+// ── the local stamp the reminder hook reads ──────────────────────────────────
+//
+// The UserPromptSubmit hook (thread-state.sh) must decide whether to nudge
+// without a network call on every turn, so the decision is kept on disk: a
+// stamp file exists only while this session has a pinned state, and a counter
+// beside it holds the user turns since the last write. `cast state` resets the
+// counter on every write, which is what makes the reminder fire once per stale
+// stretch and re-arm when the agent actually updates its state.
+
+function threadStateDir(): string {
+  return path.join(os.homedir(), ".codecast", "thread-state");
+}
+
+export function threadStateStampPath(sessionId: string): string {
+  return path.join(threadStateDir(), `${sessionId}.json`);
+}
+
+export function threadStateCounterPath(sessionId: string): string {
+  return path.join(threadStateDir(), "counters", sessionId);
+}
+
+/** Stamp "this session has a pinned state" and reset the turn counter. */
+export function writeThreadStatePulse(sessionId: string): void {
+  try {
+    fs.mkdirSync(threadStateDir(), { recursive: true });
+    fs.writeFileSync(threadStateStampPath(sessionId), JSON.stringify({ at: Date.now() }));
+    const counter = threadStateCounterPath(sessionId);
+    if (fs.existsSync(counter)) fs.unlinkSync(counter);
+  } catch {}
+}
+
+/** Drop the stamp — a session with no pinned state is never nudged. */
+export function clearThreadStatePulse(sessionId: string): void {
+  try {
+    for (const file of [threadStateStampPath(sessionId), threadStateCounterPath(sessionId)]) {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    }
+  } catch {}
+}
 
 /** Words that mean "remove the pinned state" when they are the whole argument.
  * Deliberately excludes "done": an agent wrapping up is as likely to mean it as
@@ -86,6 +129,43 @@ export function describeProvenance(
   }
   if (freshness === "stale") bits.push("likely stale — rewrite or clear it");
   return bits.join(", ");
+}
+
+/** The reminder line, or null when the state is still fresh (or absent). */
+export function staleStateNotice(
+  row: { state?: string | null; at?: number | null; msg_count_at_write?: number | null; message_count?: number | null } | null,
+  now: number,
+): string | null {
+  if (!row?.state) return null;
+  const { freshness, messagesSince } = threadStateFreshness(
+    { thread_state: row.state, thread_state_at: row.at, thread_state_msg_count: row.msg_count_at_write },
+    row.message_count ?? 0,
+    now,
+  );
+  if (freshness === "fresh") return null;
+  const gap = messagesSince != null
+    ? `${messagesSince} messages old`
+    : `set ${formatAge(Math.max(0, now - (row.at ?? now)))}`;
+  return `pinned state is ${gap} — \`cast state\` to refresh it, or \`cast state clear\``;
+}
+
+/**
+ * Print the reminder after a command that marks a phase boundary (`cast task
+ * done`, `cast task start`, `cast plan comment`). Those are exactly the moments
+ * the pinned state went out of date, and the agent is already thinking about
+ * this session's status, so one dim line lands where it can be acted on.
+ *
+ * Silent on every failure: this rides along with another command's output and
+ * must never turn that command into an error.
+ */
+export async function warnIfThreadStateStale(deps: PublishDeps): Promise<void> {
+  try {
+    const session = deps.detectCurrentSessionId();
+    if (!session) return;
+    const row = await apiPost(deps, "/cli/sessions/state/get", { session }, { read: true, exitOnError: false });
+    const notice = staleStateNotice(row, Date.now());
+    if (notice) console.log(fmt.muted(`  ${notice}`));
+  } catch {}
 }
 
 function printState(text: string, provenance: string): void {
@@ -163,6 +243,14 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       }
 
       const result = await apiPost(deps, "/cli/sessions/state/set", { session, text });
+      // Keep the reminder hook's local stamp in step with the write — but only
+      // for THIS session. `--for` writes to somebody else's thread, and their
+      // agent's reminder is keyed to their own machine's stamp, not ours.
+      const own = !intent.session ? session : null;
+      if (own) {
+        if (result.cleared) clearThreadStatePulse(own);
+        else writeThreadStatePulse(own);
+      }
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
         return;
