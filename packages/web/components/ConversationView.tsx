@@ -64,7 +64,8 @@ import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
 import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
-import { monitorRowsFor, effectiveMonitorStatus, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
+import { CollapsibleBody, ExpandableLine } from "./CollapsibleBody";
+import { monitorRowsFor, effectiveMonitorStatus, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
   const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -6235,11 +6236,19 @@ function extractCompactionSummaryContent(content: string): string {
   return content.replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").trim();
 }
 
+// Alarm colour is reserved for outcomes the reader has to act on. A command
+// that FAILED is red; one somebody KILLED mid-flight is orange, because the
+// work it was doing stopped early. "stopped" is neither: it is the harness
+// tidying its books \u2014 background watches from a previous process that left no
+// completion record, marked closed on the way in. Nothing is wrong and nothing
+// is owed, so it wears the same quiet grey as the "monitor ended" line, and the
+// unknown-status fallback lands there too rather than crying wolf.
 const taskStatusConfig: Record<string, { icon: string; color: string; bg: string }> = {
   completed: { icon: '\u2713', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' },
   killed: { icon: '\u25A0', color: 'text-sol-orange', bg: 'bg-sol-orange/10 border-sol-orange/20' },
   failed: { icon: '\u2717', color: 'text-sol-red', bg: 'bg-sol-red/10 border-sol-red/20' },
   running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20' },
+  stopped: { icon: '\u25A0', color: 'text-sol-text-dim', bg: 'bg-sol-bg-alt/30 border-sol-border/40' },
 };
 
 function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { content: string; timestamp: number; agentNameToChildMap?: Record<string, string> }) {
@@ -6253,29 +6262,31 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   if (isMonitorEventNotification(parsed) && parsed.event) {
     const desc = monitorNotificationDescription(parsed);
     return (
-      <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs border rounded border-sol-blue/20 bg-sol-blue/5">
-        <Radar className="w-3.5 h-3.5 shrink-0 text-sol-blue/70" />
-        <span className="text-[10px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">monitor</span>
-        <span className="text-sol-text-muted min-w-0 truncate" title={desc ? `Monitor: ${desc}` : undefined}>
-          {decodeEntities(parsed.event)}
-        </span>
-        <span className="text-sol-text-dim shrink-0 whitespace-nowrap ml-auto" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      <div className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-blue/20 bg-sol-blue/5">
+        <Radar className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-blue/70" />
+        <span className="text-[10px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0 mt-px">monitor</span>
+        <ExpandableLine
+          text={decodeEntities(parsed.event)}
+          className="text-sol-text-muted"
+          title={desc ? `Monitor: ${desc}` : undefined}
+        />
+        <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
     );
   }
   if (isMonitorEndedNotification(parsed)) {
     const desc = monitorNotificationDescription(parsed);
     return (
-      <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs border rounded border-sol-border/40 bg-sol-bg-alt/30">
-        <Radar className="w-3.5 h-3.5 shrink-0 text-sol-text-dim" />
-        <span className="text-[10px] font-medium tracking-wide uppercase text-sol-text-dim shrink-0">monitor ended</span>
-        {desc && <span className="text-sol-text-dim min-w-0 truncate">{desc}</span>}
+      <div className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-border/40 bg-sol-bg-alt/30">
+        <Radar className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-text-dim" />
+        <span className="text-[10px] font-medium tracking-wide uppercase text-sol-text-dim shrink-0 mt-px">monitor ended</span>
+        {desc && <ExpandableLine text={desc} className="text-sol-text-dim" />}
         <span className="text-sol-text-dim shrink-0 whitespace-nowrap ml-auto" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
     );
   }
 
-  const cfg = taskStatusConfig[parsed.status] || taskStatusConfig.killed;
+  const cfg = taskStatusConfig[parsed.status] || taskStatusConfig.stopped;
 
   let childId: string | undefined;
   const nameMatch = parsed.summary.match(/['\u201c\u201d"](.*?)['\u201c\u201d"]/);
@@ -6286,17 +6297,21 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
 
   return (
     <div
-      className={`mb-2 px-3 py-2 flex items-center gap-2.5 text-xs border rounded ${cfg.bg}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
+      className={`mb-2 px-3 py-2 flex items-start gap-2.5 text-xs border rounded ${cfg.bg}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
       onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
     >
-      <span className={`font-mono text-sm leading-none shrink-0 ${cfg.color}`}>{cfg.icon}</span>
-      <span className="text-sol-text-muted min-w-0 truncate">{parsed.summary}</span>
+      <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
+      <ExpandableLine text={parsed.summary} className="text-sol-text-muted" />
       {childId && (
-        <svg className={`w-3 h-3 shrink-0 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
       )}
-      <span className="text-sol-text-dim font-mono text-[10px] ml-auto shrink-0">{parsed.taskId}</span>
+      {/* A batch notice names its tasks inside the summary itself, so pinning
+          one id on the row would read as if the rest weren't there. */}
+      {!isOrphanSummaryNotification(parsed) && (
+        <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
+      )}
       <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
     </div>
   );
@@ -6334,10 +6349,13 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
         <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
       {/* The prompt is authored markdown in both wire formats (spawn header
-          and <scheduled-task> inject) — render it as prose either way. */}
-      <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
-        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
-      </div>
+          and <scheduled-task> inject) — render it as prose either way. A trigger
+          briefing is often long, so it starts clipped behind an Expand. */}
+      <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
+        <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
+        </div>
+      </CollapsibleBody>
       {spawned?.contextSummary && (
         <div className="mx-3 mb-2 rounded border border-sol-border/30 bg-sol-bg/40 px-2 py-1.5 text-[11px] leading-relaxed text-sol-text-muted">
           <span className="font-medium text-sol-text-dim">Context from originating session: </span>
@@ -6495,11 +6513,15 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
           <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         )}
       </div>
-      <div className={`px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
-        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
-          components={MESSAGE_MD_COMPONENTS}
-        >{body}</ReactMarkdown>
-      </div>
+      {/* A message from another session is someone else's context, not this
+          thread's — it starts clipped so a long handoff doesn't bury the reply. */}
+      <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
+        <div className={`text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+            components={MESSAGE_MD_COMPONENTS}
+          >{body}</ReactMarkdown>
+        </div>
+      </CollapsibleBody>
     </div>
   );
 }
