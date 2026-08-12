@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
@@ -55,6 +55,18 @@ function parseColor(c: string): [number, number, number, number] {
     return [p[0] || 0, p[1] || 0, p[2] || 0, p[3] ?? 1];
   }
   return [0, 0, 0, 0];
+}
+
+// The solid colour a translucent tint actually shows once it is drawn over an
+// opaque background. A fade overlay has to be painted in the colour the user
+// sees, and these cards are an accent at ~5% over the page background, so the
+// tint and the page have to be composited before the gradient can target it.
+function blendOver(tint: string, base: string): string {
+  const [r1, g1, b1, a] = parseColor(tint);
+  const [r2, g2, b2] = parseColor(base);
+  const mix = (t: number, b: number) => Math.round(b + (t - b) * a);
+  const hex = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${hex(mix(r1, r2))}${hex(mix(g1, g2))}${hex(mix(b1, b2))}`;
 }
 
 const GRADIENT_STEPS = 14;
@@ -2057,6 +2069,47 @@ function TaskNotificationLine({ content, timestamp, childConversationMap }: { co
   );
 }
 
+// Mobile port of web's CollapsibleBody: a machine-delivered body (trigger prompt,
+// message from another session) is often a long briefing, so it starts clipped
+// behind a fade with an Expand toggle. Web masks the content; RN has no mask, so
+// the fade is an overlay and the caller passes the color it fades into.
+const COLLAPSED_BODY_HEIGHT = 160;
+
+function CollapsibleBody({ fadeColor, children }: { fadeColor: string; children: React.ReactNode }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  // The tallest height this content has ever reported. Unlike the web, Yoga
+  // pushes the clipping parent's maxHeight down into the child, so once clipped
+  // the child re-reports the CLIPPED height — which reads as "fits", removes the
+  // clip, restores the full height, and re-clips, forever. Latching the maximum
+  // breaks that loop: the first layout is always unclipped and therefore true,
+  // and later shrunken readings are ignored. Growth (streaming text) still wins.
+  const naturalHeight = useRef(0);
+  const onLayout = (e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    if (h <= naturalHeight.current) return;
+    naturalHeight.current = h;
+    setOverflows(h > COLLAPSED_BODY_HEIGHT + 8);
+  };
+  const clipped = overflows && !expanded;
+  return (
+    <RNView>
+      <RNView style={clipped ? { maxHeight: COLLAPSED_BODY_HEIGHT, overflow: 'hidden' } : undefined}>
+        <RNView onLayout={onLayout}>{children}</RNView>
+        {clipped && (
+          <LinearGradient colors={[fadeColor + '00', fadeColor]} style={styles.collapsibleFade} pointerEvents="none" />
+        )}
+      </RNView>
+      {overflows && (
+        <TouchableOpacity onPress={() => setExpanded((e) => !e)} style={styles.collapsibleToggle} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={11} color={Theme.textDim} />
+          <RNText style={styles.collapsibleToggleText}>{expanded ? 'Collapse' : 'Expand'}</RNText>
+        </TouchableOpacity>
+      )}
+    </RNView>
+  );
+}
+
 // Mobile port of web's SessionMessageBlock: a cross-session `cast send` message
 // is machine-delivered, not typed by the human, so it renders as a cyan-accented
 // card naming the sender instead of a user bubble full of raw XML.
@@ -2080,7 +2133,9 @@ function SessionMessageBlock({ from, name, body, timestamp }: { from: string; na
           <RNText style={styles.sessionMessageTime}>{formatRelativeTime(timestamp)}</RNText>
         )}
       </RNView>
-      <MarkdownContent text={body} baseStyle={styles.sessionMessageBody} isUser={false} />
+      <CollapsibleBody fadeColor={blendOver(Theme.cyan + '0d', Theme.bg)}>
+        <MarkdownContent text={body} baseStyle={styles.sessionMessageBody} isUser={false} />
+      </CollapsibleBody>
     </RNView>
   );
 }
@@ -2102,7 +2157,9 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
           <RNText style={styles.sessionMessageTime}>{formatRelativeTime(timestamp)}</RNText>
         )}
       </RNView>
-      <RNText style={styles.sessionMessageBody} selectable>{prompt}</RNText>
+      <CollapsibleBody fadeColor={blendOver(Theme.violet + '0d', Theme.bg)}>
+        <RNText style={styles.sessionMessageBody} selectable>{prompt}</RNText>
+      </CollapsibleBody>
     </RNView>
   );
 }
@@ -6781,6 +6838,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Theme.textSecondary,
     lineHeight: 19,
+  },
+  collapsibleFade: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 44,
+  },
+  collapsibleToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginTop: 4,
+  },
+  collapsibleToggleText: {
+    fontSize: 11,
+    color: Theme.textDim,
   },
   taskNotificationIcon: {
     fontSize: 14,
