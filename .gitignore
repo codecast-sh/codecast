@@ -95,7 +95,12 @@ TESTING_PERMISSIONS.md
 # Local demo/marketing video renders (large media, never committed)
 videos/
 
-# Scratch UI harnesses (throwaway, per-session)
+# Scratch UI harnesses (throwaway, per-session). A session builds a standalone
+# page to verify one component in Chrome, then abandons it — nothing under this
+# prefix is tracked, so ignore the whole convention rather than each new name.
+packages/web/_*.tsx
+packages/web/_*.html
+packages/web/public/_*.html
 packages/web/_chiptest.*
 dist-ssr/
 
