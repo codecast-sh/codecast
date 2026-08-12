@@ -23,8 +23,8 @@ import * as path from "node:path";
 import type { Command } from "commander";
 import { CdpConnection, listTargets, type CdpTarget } from "./cdp.js";
 import {
-  attachToTarget, clearState, freePort, isLive, launchManagedChrome, readState,
-  resolveTarget, setActiveTarget, settle, stopInstance, writeState,
+  attachToTarget, clearState, freePort, isLive, killStrayChrome, launchManagedChrome,
+  readState, resolveTarget, setActiveTarget, settle, stopInstance, writeState,
   type InstanceState, type PageSession,
 } from "./instance.js";
 import {
@@ -71,7 +71,14 @@ async function withPage<T>(
     const target = await resolveTarget(s.port, s, opts.tab);
     const page = await attachToTarget(conn, target.targetId);
     setActiveTarget(s, target.targetId);
+    // Re-arm every time: the previous process's registration died with its
+    // session, so without this any navigation this command triggers would land
+    // on a page with no console capture at all.
+    await armRecorder(page);
     return await fn(page, s, conn);
+  } catch (err) {
+    // A stack trace tells an agent nothing it can act on; the message does.
+    die((err as Error).message);
   } finally {
     conn.close();
   }
@@ -154,6 +161,13 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         } else {
           console.log(`  reusing existing clone ${fmt.muted(userDataDir)} ${fmt.muted("(--resync to refresh logins)")}`);
         }
+      }
+
+      // An abandoned Chrome still holding this profile would swallow the launch.
+      const strays = killStrayChrome(userDataDir);
+      if (strays) {
+        console.log(fmt.muted(`  cleared ${strays} stray Chrome process(es) holding the profile`));
+        await new Promise((r) => setTimeout(r, 1500));
       }
 
       const [w, h] = o.size.split("x").map((n) => parseInt(n, 10));
@@ -657,9 +671,13 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         }
         const rec = await readRecording(page);
         if (!rec.armed) {
-          console.log(`${WARN} no recorder in this page — it was open before the browser was driven.`);
-          console.log(fmt.muted("  `cast browser reload` arms it, then act again."));
+          console.log(`${WARN} could not read this page's console (the recorder did not install).`);
           return;
+        }
+        if (rec.late) {
+          console.log(
+            fmt.muted("  (capture started after this page had already run — earlier logs are missing; `cast browser reload` catches the whole load)"),
+          );
         }
         const wanted = o.errors ? rec.console.filter((c) => c.level === "error" || c.level === "warn") : rec.console;
         const n = parseInt(o.n, 10);
@@ -684,8 +702,13 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       await withPage(o, async (page) => {
         const rec = await readRecording(page);
         if (!rec.armed) {
-          console.log(`${WARN} no recorder in this page — \`cast browser reload\` arms it.`);
+          console.log(`${WARN} could not read this page's network (the recorder did not install).`);
           return;
+        }
+        if (rec.late) {
+          console.log(
+            fmt.muted("  (capture started after this page had already run — earlier requests are missing; `cast browser reload` catches the whole load)"),
+          );
         }
         let rows = rec.network;
         if (o.failed) rows = rows.filter((r) => r.error || (r.status !== null && (r.status === 0 || r.status >= 400)));

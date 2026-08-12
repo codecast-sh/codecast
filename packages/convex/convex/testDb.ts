@@ -16,13 +16,29 @@ export function makeFakeDb(tables: Record<string, any[]>) {
     _deleted: deleted,
     query(table: string) {
       const filters: Array<[string, any]> = [];
-      const apply = () => (tables[table] ?? []).filter((r) => filters.every(([f, v]) => r[f] === v));
+      // A search index is an eq-filter chain plus one substring term — enough to
+      // test the scoping and shaping around a text search, not the ranking.
+      let search: [string, string] | null = null;
+      const apply = () => (tables[table] ?? [])
+        .filter((r) => filters.every(([f, v]) => r[f] === v))
+        .filter((r) => !search
+          || String(r[search[0]] ?? "").toLowerCase().includes(search[1].toLowerCase()));
       const builder: any = {
         withIndex(_name: string, fn?: (q: any) => any) {
           if (fn) {
             const q: any = {
               eq(field: string, val: any) { filters.push([field, val]); return q; },
               gte() { return q; }, gt() { return q; }, lt() { return q; },
+            };
+            fn(q);
+          }
+          return builder;
+        },
+        withSearchIndex(_name: string, fn?: (q: any) => any) {
+          if (fn) {
+            const q: any = {
+              search(field: string, text: string) { search = [field, text]; return q; },
+              eq(field: string, val: any) { filters.push([field, val]); return q; },
             };
             fn(q);
           }

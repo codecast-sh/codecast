@@ -192,6 +192,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const createDoc = useInboxStore((s) => s.createDoc);
   const wsStamp = workspaceStamp(useWorkspaceArgs());
   const createModal = useInboxStore((s) => s.createModal);
+  const createModalDefaults = useInboxStore((s) => s.createModalDefaults);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
   const openCompose = useInboxStore((s) => s.openCompose);
@@ -695,7 +696,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         </a>
       )}
       {createModal === "task" && (
-        <CreateTaskModal onClose={() => closeCreateModal()} teamMembers={teamMembers} currentUser={currentUser} />
+        <CreateTaskModal onClose={() => closeCreateModal()} teamMembers={teamMembers} currentUser={currentUser} defaults={createModalDefaults} />
       )}
       {createModal === "plan" && (
         <CreateDocModal onClose={() => closeCreateModal()} initialType="plan" />

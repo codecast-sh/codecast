@@ -99,7 +99,10 @@ export function ChatAvatar({
   return (
     <span
       className={`ch-avatar ch-avatar-fallback ${className}`}
-      style={{ ...style, background: hueFor(name) }}
+      // The initials must scale with the box. Leaving the size in CSS makes a
+      // 16px face in a reply stack render 10px text, which collides into an
+      // unreadable smudge once the faces overlap.
+      style={{ ...style, background: hueFor(name), fontSize: Math.max(7, Math.round(size * 0.42)) }}
       title={name}
     >
       {initials(name)}

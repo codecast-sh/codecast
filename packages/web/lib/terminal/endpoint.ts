@@ -36,6 +36,19 @@ const CACHE_KEY = "cast_term_endpoint";
 // the panel at a standalone terminal server (packages/cli terminal dev server)
 // without a daemon round-trip.
 const OVERRIDE_KEY = "CAST_TERM_ENDPOINT";
+// Dev override: `localStorage.CAST_TERM_FORCE_RELAY = "1"` makes discovery
+// report every pane as living elsewhere, which is the only way to exercise the
+// relay transport on a single machine — the loopback probe would otherwise
+// always win. Twin of CAST_TERM_ENDPOINT above.
+const FORCE_RELAY_KEY = "CAST_TERM_FORCE_RELAY";
+
+function forceRelay(): boolean {
+  try {
+    return localStorage.getItem(FORCE_RELAY_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 const RESULT_POLL_MS = 400;
 const RESULT_POLL_TIMEOUT_MS = 10_000;
 const PROBE_TIMEOUT_MS = 1500;
@@ -171,6 +184,10 @@ export async function getTerminalEndpoint(
 ): Promise<TerminalEndpoint | null> {
   const override = readOverride();
   if (override) return override;
+  if (forceRelay()) {
+    lastFailure = "other-device";
+    return null;
+  }
 
   const want = opts?.deviceId;
   if (!opts?.force) {

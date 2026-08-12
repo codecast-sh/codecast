@@ -732,7 +732,12 @@ function useTaskUrlState() {
   return { status, view, group, sort, dir, priority, label, assignee, statuses, sourceFilter, session, setParam, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl };
 }
 
-export function TaskListContent() {
+/**
+ * The task list surface: tabs, filters, grouping, sort, board, palette, saved
+ * views. `/tasks` renders it whole; a project renders the same surface scoped to
+ * its own tasks, so working out of a project is the same list, not a second one.
+ */
+export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   const router = useRouter();
   const params = useParams();
   const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, setParam, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
@@ -746,6 +751,18 @@ export function TaskListContent() {
   const saveView = useInboxStore((s) => s.saveView);
   const taskView = useInboxStore((s) => s.clientState.ui?.task_view);
   const [hiddenStatuses, setHiddenStatuses] = useState<Set<string>>(new Set(["dropped"]));
+
+  // Grouping by project is meaningless inside one project — every row shares it.
+  const axisKeys = useMemo(
+    () => TASK_AXIS_KEYS.filter((k) => !(projectId && k === "project")),
+    [projectId]
+  );
+  // The view is shareable from wherever it is rendered; only the path differs,
+  // since the filters/sort/grouping travel in the query string either way.
+  const shareUrl = useCallback(() => {
+    const url = buildShareUrl();
+    return projectId ? url.replace("/tasks", `/projects/${projectId}`) : url;
+  }, [buildShareUrl, projectId]);
 
   const statusFilter = urlStatus;
   const setStatusFilter = useCallback((s: string) => {
@@ -793,7 +810,12 @@ export function TaskListContent() {
   // team's tasks — personal (teamless) tasks live in the personal view alone.
   const tasksList = useMemo(() => {
     const all = Object.values(tasks);
-    const scoped = filterToWorkspace(all, activeTeamId);
+    const inWorkspace = filterToWorkspace(all, activeTeamId);
+    // A project surface is the same pipeline narrowed at its source, so every
+    // count, filter and group below reports on the project alone.
+    const scoped = projectId
+      ? inWorkspace.filter((t) => String((t as any).project_id || "") === projectId)
+      : inWorkspace;
     // Derive the dormant session badge fields here — the single entry point of
     // the page's task pipeline — so every downstream filter/group/badge keeps
     // reading t.origin_session / t.source_agent_type unchanged. Server rows no
@@ -814,7 +836,7 @@ export function TaskListContent() {
         source_agent_type: sourceAgent,
       };
     });
-  }, [tasks, activeTeamId, taskOriginBadges]);
+  }, [tasks, activeTeamId, taskOriginBadges, projectId]);
 
   const allLabels = useMemo(() => {
     const set = new Set<string>(DEFAULT_LABELS);
@@ -880,7 +902,13 @@ export function TaskListContent() {
     }
 
     if (priorityFilter) list = list.filter((t) => t.priority === priorityFilter);
-    if (labelFilter) list = list.filter((t) => t.labels?.includes(labelFilter));
+    // Labels are multi-select, and a task carries several — so picking two
+    // labels widens the view (either one matches), the same way Linear treats
+    // repeated values of one field.
+    if (labelFilter) {
+      const wanted = labelFilter.split(",").filter(Boolean);
+      list = list.filter((t) => t.labels?.some((l) => wanted.includes(l)));
+    }
     if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
     else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
     return list;
@@ -1081,9 +1109,9 @@ export function TaskListContent() {
   return (
     <>
     <GenericListView<TaskItem>
-          activeItemId={params?.id as string | undefined}
+          activeItemId={projectId ? undefined : (params?.id as string | undefined)}
           paletteTargetType="task"
-          title="Tasks"
+          title={projectId ? "Project tasks" : "Tasks"}
           tabs={[
             { key: "all", label: "All", count: taskCounts.all, icon: Layers },
             { key: "", label: "Active", count: taskCounts.active, icon: Activity },
@@ -1099,13 +1127,13 @@ export function TaskListContent() {
           groupBy={primaryAxis}
           groupOptions={[
             { value: "none", label: "No grouping" },
-            ...TASK_AXIS_KEYS.map((k) => ({ value: k, label: TASK_AXES[k].label })),
+            ...axisKeys.map((k) => ({ value: k, label: TASK_AXES[k].label })),
           ]}
           onGroupChange={setPrimaryAxis}
           subGroupBy={secondaryAxis}
           subGroupOptions={[
             { value: "none", label: "Nothing" },
-            ...TASK_AXIS_KEYS.filter((k) => k !== primaryAxis).map((k) => ({ value: k, label: TASK_AXES[k].label })),
+            ...axisKeys.filter((k) => k !== primaryAxis).map((k) => ({ value: k, label: TASK_AXES[k].label })),
           ]}
           onSubGroupChange={setSecondaryAxis}
           sortBy={sort}
@@ -1141,7 +1169,7 @@ export function TaskListContent() {
                 onChange: (v: string) => setParam({ priority: v }),
               },
               {
-                key: "label", label: "Label", icon: <Tag className="w-3 h-3" />, value: labelFilter,
+                key: "label", label: "Label", icon: <Tag className="w-3 h-3" />, value: labelFilter, multi: true,
                 options: [{ key: "", label: "Any" }, ...allLabels.map((l) => ({ key: l, label: l }))],
                 onChange: (v: string) => setParam({ label: v }),
               },
@@ -1181,7 +1209,7 @@ export function TaskListContent() {
             onClear: () => setParam({ statuses: "", priority: "", label: "", assignee: "", source: "", session: "" }),
             onSaveView: handleSaveView,
           }}
-          shareUrl={buildShareUrl}
+          shareUrl={shareUrl}
           groups={displayGroups}
           flatItems={displayFlat}
           disableKeyboard={showCreate}
@@ -1191,7 +1219,7 @@ export function TaskListContent() {
           getSearchText={(t) => `${t.short_id} ${t.title}`}
           emptyIcon={<Circle className="w-8 h-8 opacity-30" />}
           emptyMessage="No tasks found"
-          onCreate={() => openCreateModal('task')}
+          onCreate={() => openCreateModal('task', projectId ? { project_id: projectId } : undefined)}
           hasMore={hasMore}
           onLoadMore={loadMore}
           paletteShortcuts={[
@@ -1229,7 +1257,7 @@ export function TaskListContent() {
               })}
               onCardClick={(t) => router.push(`/tasks/${t._id}`)}
               onContextMenu={(e, task) => { e.preventDefault(); openPaletteForItems([task]); }}
-              onAddTask={() => openCreateModal('task')}
+              onAddTask={() => openCreateModal('task', projectId ? { project_id: projectId } : undefined)}
               onStatusChange={(task, newStatus) => {
                 // Terminal moves go through the single close gateway \u2014 a kanban
                 // drag must not bypass the open-subtasks guard. When it defers
