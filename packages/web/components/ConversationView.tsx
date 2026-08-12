@@ -57,6 +57,7 @@ import { formatElapsedClock, shouldShowElapsed, deriveRunningTool } from "./work
 import { appendToDraft, formatPlanFeedback } from "../lib/quoteFormat";
 import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } from "../lib/imagePlaceholder";
 import { quoteToComposer, submitReview, attachReviewToMessage, takeReviewBatch } from "../lib/reviewActions";
+import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { MessageReview } from "./MessageReview";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
@@ -13379,10 +13380,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
   }, [conversation, isOwner, toggleFavoriteMutation]));
 
-  // Enter inline review on the assistant reply nearest the viewport center, so a
+  // `r` = quote. With text selected inside a reply it quotes THAT selection (the
+  // key behind the floating "Quote into reply" button); with nothing selected it
+  // enters inline review on the assistant reply nearest the viewport center, so a
   // keyboard-only user can start quoting/commenting without a mouse.
   useShortcutAction('conv.review', useCallback(() => {
     if (!conversation) return;
+    if (quoteSelectionIntoReply(conversation._id)) return;
     const regions = Array.from(document.querySelectorAll<HTMLElement>('.cc-msg-review'));
     const center = window.innerHeight / 2;
     let best: { id: string; dist: number } | null = null;

@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useInboxStore, isSessionWaitingForInput, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
 import { isInboxSessionView } from "../lib/inboxRouting";
+import { focusComposer } from "../lib/composerControl";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
 import { animatedHideSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
@@ -176,10 +177,7 @@ export function useGlobalShortcutActions() {
     router.push("/inbox");
   }, [router]));
 
-  useShortcutAction('compose.focus', useCallback(() => {
-    const el = document.querySelector<HTMLTextAreaElement>('[data-chat-input]');
-    if (el) { el.focus(); el.scrollIntoView({ block: 'nearest' }); }
-  }, []));
+  useShortcutAction('compose.focus', useCallback(() => { focusComposer(); }, []));
 
   useShortcutAction('sidebar.toggleLeft', useCallback(() => {
     const store = useInboxStore.getState();
