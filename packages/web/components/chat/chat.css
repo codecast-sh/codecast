@@ -1,0 +1,774 @@
+/* Team chat surface.
+ *
+ * Kept out of globals.css deliberately, mirroring components/editor/editor.css:
+ * the whole chat look reviews as one file, and it can't collide with unrelated
+ * edits to the global sheet.
+ *
+ * The visual language is the rest of codecast, not Slack: JetBrains Mono,
+ * solarized tokens, hairline rules, square-ish corners, high density. Every
+ * colour here is a --sol-* token so light and dark both work with no second
+ * palette. */
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+
+.ch-shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  background: var(--sol-bg);
+  color: var(--sol-text);
+}
+
+.ch-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ── Channel rail ────────────────────────────────────────────────────────── */
+
+.ch-rail {
+  width: 208px;
+  flex: 0 0 208px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid color-mix(in srgb, var(--sol-border) 32%, transparent);
+  background: color-mix(in srgb, var(--sol-bg-alt) 45%, var(--sol-bg));
+}
+
+.ch-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 10px 8px 12px;
+}
+
+.ch-rail-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--sol-text-muted0);
+}
+
+.ch-rail-add {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  color: var(--sol-text-muted0);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.ch-rail-add:hover {
+  background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+  color: var(--sol-text);
+}
+
+.ch-rail-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px 12px;
+}
+
+.ch-chan {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sol-text-dim);
+  text-align: left;
+  transition: background 110ms ease, color 110ms ease;
+}
+
+.ch-chan:hover {
+  background: color-mix(in srgb, var(--sol-border) 16%, transparent);
+  color: var(--sol-text-secondary);
+}
+
+.ch-chan-hash {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--sol-text-muted0);
+}
+
+.ch-chan-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Unread is carried by WEIGHT and full-strength text, never by colour alone —
+ * colour is already doing work for the active state. */
+.ch-chan-unread {
+  font-weight: 600;
+  color: var(--sol-text);
+}
+
+.ch-chan-unread .ch-chan-hash {
+  color: var(--sol-text-muted);
+}
+
+.ch-chan-active,
+.ch-chan-active:hover {
+  background: color-mix(in srgb, var(--sol-blue) 15%, transparent);
+  color: var(--sol-text);
+}
+
+.ch-chan-active .ch-chan-hash {
+  color: var(--sol-blue);
+}
+
+.ch-chan-muted {
+  opacity: 0.45;
+}
+
+/* A mention count is the one thing allowed to shout. */
+.ch-chan-badge {
+  flex: 0 0 auto;
+  min-width: 16px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--sol-red);
+  color: var(--sol-bg);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.ch-chan-dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sol-text-muted0);
+}
+
+/* ── Channel header ──────────────────────────────────────────────────────── */
+
+.ch-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+  background: color-mix(in srgb, var(--sol-bg-alt) 28%, var(--sol-bg));
+}
+
+.ch-head-name {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--sol-text);
+}
+
+.ch-head-hash {
+  color: var(--sol-text-muted0);
+  font-weight: 500;
+}
+
+.ch-head-topic {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--sol-text-muted);
+  border-left: 1px solid color-mix(in srgb, var(--sol-border) 34%, transparent);
+  padding-left: 10px;
+}
+
+/* ── Message list ────────────────────────────────────────────────────────── */
+
+.ch-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 0 8px;
+}
+
+/* The row is a two column grid: a fixed gutter that holds either the avatar or
+ * (when the message is grouped under the one above) a hover-revealed timestamp,
+ * and the body. Keeping the gutter identical in both states is what stops text
+ * shifting horizontally as messages group. */
+.ch-msg {
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  align-items: start;
+  padding: 2px 16px 2px 0;
+  position: relative;
+}
+
+.ch-msg:hover {
+  background: color-mix(in srgb, var(--sol-border) 9%, transparent);
+}
+
+.ch-msg-lead {
+  margin-top: 7px;
+}
+
+.ch-msg-gutter {
+  display: flex;
+  justify-content: flex-end;
+  padding-right: 8px;
+  padding-top: 2px;
+}
+
+.ch-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  object-fit: cover;
+  display: block;
+  background: var(--sol-bg-alt);
+}
+
+.ch-avatar-fallback {
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--sol-bg);
+  text-transform: uppercase;
+}
+
+/* Hover timestamp on grouped rows. Hidden rather than absent so it reserves no
+ * layout and cannot reflow the body on hover. */
+.ch-msg-hovertime {
+  font-size: 9.5px;
+  line-height: 18px;
+  color: var(--sol-text-muted0);
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+
+.ch-msg:hover .ch-msg-hovertime {
+  opacity: 1;
+}
+
+.ch-msg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 1px;
+}
+
+.ch-msg-author {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--sol-text);
+}
+
+.ch-msg-time {
+  font-size: 10px;
+  color: var(--sol-text-muted0);
+  font-variant-numeric: tabular-nums;
+}
+
+.ch-msg-time:hover {
+  color: var(--sol-text-muted);
+  text-decoration: underline;
+}
+
+.ch-msg-body {
+  font-size: 13px;
+  line-height: 1.58;
+  color: var(--sol-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.ch-msg-body p {
+  margin: 0 0 4px;
+}
+
+.ch-msg-body p:last-child {
+  margin-bottom: 0;
+}
+
+.ch-msg-edited {
+  margin-left: 5px;
+  font-size: 9.5px;
+  color: var(--sol-text-muted0);
+}
+
+.ch-msg-deleted {
+  font-size: 12.5px;
+  font-style: italic;
+  color: var(--sol-text-muted0);
+}
+
+/* Your own mention. Tinted, not boxed — a box on every mention turns a busy
+ * channel into confetti. */
+.ch-mention {
+  padding: 0 3px;
+  border-radius: 3px;
+  font-weight: 600;
+  color: var(--sol-blue);
+  background: color-mix(in srgb, var(--sol-blue) 13%, transparent);
+}
+
+.ch-mention-self {
+  color: var(--sol-orange);
+  background: color-mix(in srgb, var(--sol-orange) 17%, transparent);
+}
+
+/* The whole row when it mentions you, so it is findable while scrolling fast. */
+.ch-msg-mentions-me {
+  background: color-mix(in srgb, var(--sol-orange) 7%, transparent);
+  box-shadow: inset 2px 0 0 var(--sol-orange);
+}
+
+.ch-msg-mentions-me:hover {
+  background: color-mix(in srgb, var(--sol-orange) 11%, transparent);
+}
+
+/* ── Agent (anchor) messages ─────────────────────────────────────────────── */
+
+.ch-agent-chip {
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--sol-violet) 45%, transparent);
+  border-radius: 3px;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sol-violet);
+  line-height: 14px;
+}
+
+.ch-avatar-agent {
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--sol-violet) 18%, var(--sol-bg));
+  border: 1px solid color-mix(in srgb, var(--sol-violet) 40%, transparent);
+  color: var(--sol-violet);
+}
+
+/* Thinking state. Three dots breathing, plus the label — motion alone is not an
+ * accessible signal, so the words carry the meaning and the motion carries the
+ * liveness. */
+.ch-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--sol-text-muted);
+}
+
+.ch-thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.ch-thinking-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--sol-violet);
+  animation: ch-breathe 1.25s ease-in-out infinite;
+}
+
+.ch-thinking-dot:nth-child(2) { animation-delay: 0.16s; }
+.ch-thinking-dot:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes ch-breathe {
+  0%, 60%, 100% { opacity: 0.28; transform: translateY(0); }
+  30%           { opacity: 1;    transform: translateY(-2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ch-thinking-dot { animation: none; opacity: 0.7; }
+}
+
+.ch-agent-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--sol-red);
+}
+
+.ch-agent-retry {
+  font-size: 11px;
+  color: var(--sol-blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── Reactions ───────────────────────────────────────────────────────────── */
+
+.ch-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.ch-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 38%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sol-bg-alt) 50%, transparent);
+  font-size: 11px;
+  color: var(--sol-text-muted);
+  transition: border-color 110ms ease, background 110ms ease;
+}
+
+.ch-reaction:hover {
+  border-color: color-mix(in srgb, var(--sol-blue) 50%, transparent);
+}
+
+.ch-reaction-mine {
+  border-color: color-mix(in srgb, var(--sol-blue) 60%, transparent);
+  background: color-mix(in srgb, var(--sol-blue) 14%, transparent);
+  color: var(--sol-blue);
+}
+
+.ch-reaction-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* ── Thread affordance ───────────────────────────────────────────────────── */
+
+.ch-thread-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  padding: 2px 7px 2px 3px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: 11.5px;
+  color: var(--sol-blue);
+  transition: background 110ms ease, border-color 110ms ease;
+}
+
+.ch-thread-link:hover {
+  background: color-mix(in srgb, var(--sol-blue) 9%, transparent);
+  border-color: color-mix(in srgb, var(--sol-blue) 28%, transparent);
+}
+
+.ch-thread-faces {
+  display: inline-flex;
+}
+
+.ch-thread-face {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1.5px solid var(--sol-bg);
+  margin-right: -4px;
+  object-fit: cover;
+  background: var(--sol-bg-alt);
+}
+
+.ch-thread-count {
+  font-weight: 600;
+}
+
+.ch-thread-last {
+  color: var(--sol-text-muted0);
+}
+
+.ch-thread-link:hover .ch-thread-last {
+  color: var(--sol-text-muted);
+}
+
+/* ── Hover toolbar ───────────────────────────────────────────────────────── */
+
+.ch-tools {
+  position: absolute;
+  top: -10px;
+  right: 14px;
+  display: none;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
+  border-radius: 6px;
+  background: var(--sol-card);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--sol-text) 12%, transparent);
+  z-index: 3;
+}
+
+.ch-msg:hover .ch-tools,
+.ch-msg:focus-within .ch-tools {
+  display: flex;
+}
+
+.ch-tool {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--sol-text-muted);
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.ch-tool:hover {
+  background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+  color: var(--sol-text);
+}
+
+/* ── Dividers ────────────────────────────────────────────────────────────── */
+
+.ch-day {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 16px 10px;
+}
+
+.ch-day::before,
+.ch-day::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: color-mix(in srgb, var(--sol-border) 30%, transparent);
+}
+
+.ch-day-label {
+  flex: 0 0 auto;
+  padding: 1px 9px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 34%, transparent);
+  border-radius: 10px;
+  background: var(--sol-bg);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sol-text-muted);
+}
+
+/* Unread rule. Matches the transcript's existing NEW divider so the two surfaces
+ * teach the same thing. */
+.ch-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 16px 6px;
+}
+
+.ch-new::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    var(--sol-orange),
+    color-mix(in srgb, var(--sol-orange) 12%, transparent)
+  );
+}
+
+.ch-new-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sol-orange);
+}
+
+/* ── Composer ────────────────────────────────────────────────────────────── */
+
+.ch-composer {
+  margin: 0 16px 14px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 42%, transparent);
+  border-radius: 7px;
+  background: var(--sol-card);
+  transition: border-color 130ms ease, box-shadow 130ms ease;
+}
+
+.ch-composer:focus-within {
+  border-color: color-mix(in srgb, var(--sol-blue) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-blue) 11%, transparent);
+}
+
+.ch-composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px 5px;
+}
+
+.ch-composer-hint {
+  font-size: 10px;
+  color: var(--sol-text-muted0);
+}
+
+/* ── Thread panel ────────────────────────────────────────────────────────── */
+
+.ch-thread {
+  width: 384px;
+  flex: 0 0 384px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid color-mix(in srgb, var(--sol-border) 32%, transparent);
+  background: color-mix(in srgb, var(--sol-bg-alt) 22%, var(--sol-bg));
+}
+
+.ch-thread-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 10px 9px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+}
+
+.ch-thread-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--sol-text);
+}
+
+.ch-thread-sub {
+  font-size: 10.5px;
+  color: var(--sol-text-muted0);
+}
+
+.ch-thread-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 0 6px;
+}
+
+/* The root message of a thread reads as the subject of the panel, so it gets a
+ * rule under it and the replies hang below. */
+.ch-thread-root {
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 26%, transparent);
+  padding-bottom: 8px;
+  margin-bottom: 6px;
+}
+
+.ch-thread-replies-label {
+  padding: 0 16px 6px 46px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--sol-text-muted0);
+}
+
+/* ── Toast ───────────────────────────────────────────────────────────────── */
+
+.ch-toast {
+  display: flex;
+  gap: 9px;
+  width: 348px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 44%, transparent);
+  border-radius: 8px;
+  background: var(--sol-card);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--sol-text) 16%, transparent);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 130ms ease, transform 130ms ease;
+}
+
+.ch-toast:hover {
+  border-color: color-mix(in srgb, var(--sol-blue) 45%, transparent);
+}
+
+.ch-toast-mention {
+  box-shadow:
+    inset 3px 0 0 var(--sol-orange),
+    0 6px 20px color-mix(in srgb, var(--sol-text) 16%, transparent);
+  padding-left: 13px;
+}
+
+.ch-toast-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ch-toast-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.ch-toast-author {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sol-text);
+}
+
+.ch-toast-where {
+  font-size: 10.5px;
+  color: var(--sol-text-muted0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Two lines of preview, then clip. Enough to decide whether to switch context,
+ * not so much that the toast becomes the message. */
+.ch-toast-preview {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--sol-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ch-toast-count {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--sol-blue);
+}
+
+/* ── Empty + skeleton ────────────────────────────────────────────────────── */
+
+.ch-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  padding: 32px;
+  text-align: center;
+}
+
+.ch-empty-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sol-text-secondary);
+}
+
+.ch-empty-sub {
+  font-size: 11.5px;
+  color: var(--sol-text-muted0);
+  max-width: 320px;
+  line-height: 1.55;
+}
