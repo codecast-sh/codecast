@@ -22,6 +22,7 @@ import {
 import {
   useDevices,
   useForeignOwnerDevice,
+  foreignRunnerNote,
   deviceDisplayName,
   deviceKindLabel,
   relativeSeen,
@@ -31,9 +32,15 @@ import {
 } from "./DeviceBadge";
 import { useOwnersFromStore, OwnerAvatar, OwnerMenuItems } from "./OwnersBadge";
 
-/** Per-kind accent tint for the device lobe (text+bg only — the pill owns the border). */
-function deviceTint(d: { is_remote: boolean; platform: string } | undefined): string {
-  if (!d) return "bg-sol-bg-highlight/40 text-sol-text-dim";
+/** Per-kind accent tint for the device lobe (text+bg only — the pill owns the border).
+ *  A foreign machine (a teammate's or the agent box — not in the viewer's own
+ *  device list, so not re-routable from here) renders dim like the unassigned
+ *  state rather than borrowing the viewer's own-device accents. */
+function deviceTint(
+  d: { is_remote: boolean; platform: string } | undefined,
+  foreign = false,
+): string {
+  if (!d || foreign) return "bg-sol-bg-highlight/40 text-sol-text-dim";
   if (d.is_remote) return "bg-sol-violet/10 text-sol-violet";
   if (/linux/i.test(d.platform)) return "bg-sol-orange/10 text-sol-orange";
   return "bg-sol-blue/10 text-sol-blue";
@@ -74,7 +81,7 @@ export function AssignmentBadge({
     : null;
 
   const deviceTitle = d
-    ? `Runs on ${deviceDisplayName(d)} (${deviceKindLabel(d)})${own ? "" : " — a teammate's / shared machine"} — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`
+    ? `Runs on ${deviceDisplayName(d)} (${deviceKindLabel(d)})${own || !foreign ? "" : ` — ${foreignRunnerNote(foreign)}`} — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`
     : "No device assigned yet — the next message routes to your most-recently-active machine.";
 
   return (
@@ -86,7 +93,7 @@ export function AssignmentBadge({
           className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-[10px] font-medium outline-none transition-colors hover:border-sol-border/80"
         >
           {loaded && (
-            <span className={`inline-flex items-center gap-1 pl-2 pr-1.5 py-0.5 max-w-[150px] ${deviceTint(d)}`}>
+            <span className={`inline-flex items-center gap-1 pl-2 pr-1.5 py-0.5 max-w-[150px] ${deviceTint(d, !own && !!foreign)}`}>
               {d ? (
                 <>
                   <DeviceIcon d={d} />
