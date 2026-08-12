@@ -478,8 +478,24 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
           {/* What happens next with these quotes. Without it the rail states the
               batch but never says how to finish it — the two ways out are the
               composer (write something around the quotes) and a straight send. */}
-          {isReviewTarget && (
+          {footerOwner === messageId && (
             <div className="cc-rail-foot" style={{ top: railBottom }}>
+              {/* Read top to bottom: what you have, then the two ways to finish,
+                  then the navigation keys. The actions are the answer to "how do
+                  I send these?", so they lead — the key hints are sugar and sit
+                  last, dimmest. */}
+              <div className="cc-rail-foot-label">
+                {pendingTotal} quote{pendingTotal !== 1 ? "s" : ""} on your reply
+              </div>
+              <div className="cc-rail-foot-actions">
+                <button type="button" className="cc-rail-foot-send" onClick={sendComposer}>
+                  Send now
+                </button>
+                <button type="button" className="cc-rail-foot-write" onClick={focusComposer}>
+                  Write reply
+                  <MenuKeyCaps action="compose.focus" />
+                </button>
+              </div>
               <div className="cc-rail-foot-keys">
                 <span>
                   <KeyCap size="xs">↑</KeyCap>
@@ -494,18 +510,6 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
                   <KeyCap size="xs">⌫</KeyCap>
                   remove
                 </span>
-              </div>
-              <div className="cc-rail-foot-label">
-                {pendingTotal} quote{pendingTotal !== 1 ? "s" : ""} on your reply
-              </div>
-              <div className="cc-rail-foot-actions">
-                <button type="button" className="cc-comment-btn" onClick={focusComposer}>
-                  Write reply
-                  <MenuKeyCaps action="compose.focus" />
-                </button>
-                <button type="button" className="cc-comment-btn cc-comment-btn-primary" onClick={sendComposer}>
-                  Send now
-                </button>
               </div>
             </div>
           )}

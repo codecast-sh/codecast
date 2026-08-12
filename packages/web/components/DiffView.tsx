@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef, memo } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef, memo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import { genCommentId } from "../lib/reviewActions";
@@ -471,8 +471,21 @@ export const DiffView = memo(function DiffView({
   // frequently-rendering conversation tree.
   const handleRef = useRef<HTMLButtonElement | null>(null);
   const hoveredLine = useRef<FlatDiffLine | null>(null);
+  const hoverClear = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // The handle sits in the margin with a gap between it and the code, so the
+  // cursor leaves the block on its way over — hide on a delay and cancel that
+  // when it arrives, or the handle would vanish before it could be clicked.
+  // Same grace as the message-block handle in MessageReview.
+  const cancelClear = useCallback(() => {
+    if (hoverClear.current) {
+      clearTimeout(hoverClear.current);
+      hoverClear.current = null;
+    }
+  }, []);
 
   const trackRow = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    cancelClear();
     const btn = handleRef.current;
     if (!btn) return;
     const rowEl = (e.target as HTMLElement | null)?.closest?.("[data-diff-row]") as HTMLElement | null;
@@ -492,12 +505,17 @@ export const DiffView = memo(function DiffView({
     btn.dataset.moving = btn.dataset.on === "yes" ? "yes" : "no";
     btn.style.top = `${top}px`;
     btn.dataset.on = "yes";
-  }, [displayItems]);
+  }, [displayItems, cancelClear]);
 
   const untrackRow = useCallback(() => {
-    hoveredLine.current = null;
-    if (handleRef.current) handleRef.current.dataset.on = "no";
-  }, []);
+    cancelClear();
+    hoverClear.current = setTimeout(() => {
+      hoveredLine.current = null;
+      if (handleRef.current) handleRef.current.dataset.on = "no";
+    }, 140);
+  }, [cancelClear]);
+
+  useEffect(() => cancelClear, [cancelClear]);
 
   const commentOnHoveredRow = useCallback(() => {
     const line = hoveredLine.current;
@@ -520,6 +538,7 @@ export const DiffView = memo(function DiffView({
           className="cc-block-quote cc-diff-quote"
           title="Comment on this line"
           aria-label="Comment on this line"
+          onMouseEnter={cancelClear}
           onMouseDown={(e) => e.preventDefault()}
           onClick={commentOnHoveredRow}
         >

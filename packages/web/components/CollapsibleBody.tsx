@@ -90,6 +90,10 @@ export function ExpandableLine({
   );
 }
 
+// `children` may be a function of the open state. A clipped box shows a few
+// lines whatever its content, so a caller with an expensive body (markdown that
+// re-parses on mount) can render a cheap slice while collapsed and the whole
+// thing only once the reader asks for it.
 export function CollapsibleBody({
   collapsedHeight = 180,
   className = "",
@@ -99,7 +103,7 @@ export function CollapsibleBody({
   collapsedHeight?: number;
   className?: string;
   toggleClassName?: string;
-  children: React.ReactNode;
+  children: React.ReactNode | ((expanded: boolean) => React.ReactNode);
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
@@ -133,7 +137,7 @@ export function CollapsibleBody({
             : undefined
         }
       >
-        <div ref={innerRef}>{children}</div>
+        <div ref={innerRef}>{typeof children === "function" ? children(expanded) : children}</div>
       </div>
       {overflows && (
         <button
