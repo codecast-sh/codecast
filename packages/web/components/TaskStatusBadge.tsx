@@ -10,10 +10,13 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
+export type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type ExecutionStatus = "done" | "done_with_concerns" | "blocked" | "needs_context";
 
-const TASK_STATUS: Record<TaskStatus, { icon: LucideIcon; label: string; color: string; bg: string; border: string }> = {
+/** The one task-status vocabulary: icon, label and colour per status. Exported
+ *  because the task list, its groupers and this badge all render the same six
+ *  statuses — a second copy is how they drift apart. */
+export const TASK_STATUS: Record<TaskStatus, { icon: LucideIcon; label: string; color: string; bg: string; border: string }> = {
   backlog: { icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10", border: "border-sol-text-dim/30" },
   open: { icon: Circle, label: "Open", color: "text-sol-blue", bg: "bg-sol-blue/10", border: "border-sol-blue/30" },
   in_progress: { icon: CircleDot, label: "In Progress", color: "text-sol-yellow", bg: "bg-sol-yellow/10", border: "border-sol-yellow/30" },
@@ -21,6 +24,10 @@ const TASK_STATUS: Record<TaskStatus, { icon: LucideIcon; label: string; color: 
   done: { icon: CheckCircle2, label: "Done", color: "text-sol-green", bg: "bg-sol-green/10", border: "border-sol-green/30" },
   dropped: { icon: XCircle, label: "Dropped", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10", border: "border-sol-text-dim/30" },
 };
+
+/** Work-first ordering: what you are doing, then what you could pick up, then
+ *  what is finished. Drives status group order and the sort tie-breaker. */
+export const TASK_STATUS_ORDER: TaskStatus[] = ["in_progress", "in_review", "open", "backlog", "done", "dropped"];
 
 const EXEC_STATUS: Record<ExecutionStatus, { icon: LucideIcon; label: string; color: string; bg: string; border: string }> = {
   done: { icon: CheckCircle2, label: "Done", color: "text-sol-green", bg: "bg-sol-green/10", border: "border-sol-green/30" },
@@ -83,5 +90,6 @@ export function getExecStatusConfig(status: string) {
   return EXEC_STATUS[status as ExecutionStatus] ?? null;
 }
 
-export { TASK_STATUS, EXEC_STATUS };
-export type { TaskStatus, ExecutionStatus };
+export { EXEC_STATUS };
+// TaskStatus is exported at its declaration above.
+export type { ExecutionStatus };

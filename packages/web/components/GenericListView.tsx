@@ -148,6 +148,9 @@ function DisplayMenu({
   groupBy,
   groupOptions,
   onGroupChange,
+  subGroupBy,
+  subGroupOptions,
+  onSubGroupChange,
   sortBy,
   sortOptions,
   onSortChange,
@@ -159,6 +162,9 @@ function DisplayMenu({
   groupBy?: string;
   groupOptions?: ListSortOption[];
   onGroupChange?: (v: string) => void;
+  subGroupBy?: string;
+  subGroupOptions?: ListSortOption[];
+  onSubGroupChange?: (v: string) => void;
   sortBy: string;
   sortOptions: ListSortOption[];
   onSortChange: (v: string) => void;
@@ -209,6 +215,25 @@ function DisplayMenu({
                     label={o.label}
                     selected={o.value === groupBy}
                     onClick={() => onGroupChange!(o.value)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          {/* A second grouping axis, folded into the same header rather than
+              nested: "Ashot · Codecast" is one group. Only offered once a
+              primary grouping is chosen — there is nothing to sub-divide
+              otherwise. */}
+          {subGroupOptions && subGroupOptions.length > 0 && onSubGroupChange && groupBy && groupBy !== "none" && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">Then by</div>
+              <div className="space-y-0.5">
+                {subGroupOptions.map((o) => (
+                  <DisplayOptionRow
+                    key={o.value}
+                    label={o.label}
+                    selected={o.value === subGroupBy}
+                    onClick={() => onSubGroupChange(o.value)}
                   />
                 ))}
               </div>
@@ -401,6 +426,12 @@ export interface GenericListViewProps<T> {
   groupOptions?: ListSortOption[];
   onGroupChange?: (group: string) => void;
 
+  /** Optional second grouping axis. Buckets stay one level deep — the two axes
+   *  combine into a single header — so the row model never grows a depth. */
+  subGroupBy?: string;
+  subGroupOptions?: ListSortOption[];
+  onSubGroupChange?: (group: string) => void;
+
   sortBy: string;
   sortOptions: ListSortOption[];
   onSortChange: (sort: string) => void;
@@ -476,6 +507,9 @@ export function GenericListView<T>({
   groupBy,
   groupOptions,
   onGroupChange,
+  subGroupBy,
+  subGroupOptions,
+  onSubGroupChange,
   sortBy,
   sortOptions,
   onSortChange,
@@ -957,6 +991,9 @@ export function GenericListView<T>({
             groupBy={groupBy}
             groupOptions={groupOptions}
             onGroupChange={onGroupChange ? (v) => { onGroupChange(v); setFocusIndex(0); } : undefined}
+            subGroupBy={subGroupBy}
+            subGroupOptions={subGroupOptions}
+            onSubGroupChange={onSubGroupChange ? (v) => { onSubGroupChange(v); setFocusIndex(0); } : undefined}
             sortBy={sortBy}
             sortOptions={sortOptions}
             onSortChange={(v) => { onSortChange(v); setFocusIndex(0); }}
