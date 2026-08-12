@@ -6,6 +6,7 @@ import { registerRemoteCommand } from "./remote/cli.js";
 import { registerPublishCommand } from "./publish.js";
 import { registerImageCommand } from "./imageCommand.js";
 import { registerStateCommand, warnIfThreadStateStale } from "./stateCommand.js";
+import { registerBrowserCommand } from "./browser/cli.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -3102,6 +3103,7 @@ registerRemoteCommand(program);
 registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
 
 program
   .command("auth")
