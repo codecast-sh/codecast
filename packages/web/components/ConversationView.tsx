@@ -23,6 +23,8 @@ import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpa
 import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import {
+  describeSmallToolGroup,
+  describeToolGroup,
   extractCodexExecActions,
   formatToolName,
   isPlanWriteToolCall,
@@ -4595,7 +4597,7 @@ function InlineEntityTitle({ shortId, struck }: { shortId: string; struck?: bool
   const title = entity?.display_title || entity?.title;
   if (!title) return null;
   return (
-    <span className={`truncate max-w-[280px] ${struck ? "line-through decoration-sol-text-dim/70 text-sol-text-dim" : "text-sol-text-muted"}`}>
+    <span className={`truncate max-w-[280px] ${struck ? "line-through text-sol-text-dim" : "text-sol-text-muted"}`}>
       {title}
     </span>
   );
@@ -7534,86 +7536,6 @@ function ThreadSummaryView({ conversationId, userName, avatarUrl, onJump }: { co
   );
 }
 
-// How one family of tools describes itself. `one`/`many` are the counting forms
-// ("ran 2 commands"); `verb` is the past-tense word used when a small group can
-// name what it actually did ("ran npm test"). Families where verb + subject
-// wouldn't read as a phrase leave `verb` out and always count.
-type ToolPhrase = { verb?: string; one: string; many: (n: number) => string };
-
-function toolPhrase(rawName: string): ToolPhrase {
-  switch (rawName) {
-    case "Read":
-    case "read":
-    case "file_read": return { verb: "read", one: "read 1 file", many: (n) => `read ${n} files` };
-    case "Edit":
-    case "edit":
-    case "file_edit":
-    case "apply_patch":
-    case "fileChange":
-    case "NotebookEdit": return { verb: "edited", one: "1 edit", many: (n) => `${n} edits` };
-    case "Write":
-    case "write":
-    case "file_write": return { verb: "wrote", one: "wrote 1 file", many: (n) => `wrote ${n} files` };
-    case "Bash":
-    case "bash":
-    case "shell":
-    case "shell_command":
-    case "exec_command":
-    case "container.exec":
-    case "commandExecution": return { verb: "ran", one: "ran 1 command", many: (n) => `ran ${n} commands` };
-    case "Grep":
-    case "grep":
-    case "Glob":
-    case "glob":
-    case "code_search":
-    case "code_analysis": return { verb: "searched", one: "1 search", many: (n) => `${n} searches` };
-    case "WebFetch":
-    case "web_fetch":
-    case "WebSearch":
-    case "web_search":
-    case "web__run": return { verb: "looked up", one: "1 web lookup", many: (n) => `${n} web lookups` };
-    case "Task":
-    case "Agent": return { one: "ran 1 agent", many: (n) => `ran ${n} agents` };
-    case "TodoWrite": return { one: "updated todos", many: () => "updated todos" };
-    case "update_plan": return { one: "updated plan", many: () => "updated plan" };
-    case "view_image": return { verb: "viewed", one: "viewed 1 image", many: (n) => `viewed ${n} images` };
-    case "image_gen__imagegen": return { verb: "generated", one: "generated 1 image", many: (n) => `generated ${n} images` };
-    default: {
-      const label = formatToolName(rawName) || rawName;
-      return { verb: label, one: label, many: (n) => `${label} ×${n}` };
-    }
-  }
-}
-
-// Aggregate tool counts into a human phrase: "read 3 files · ran 2 commands".
-function describeToolGroup(rawName: string, count: number): string {
-  const phrase = toolPhrase(rawName);
-  return count === 1 ? phrase.one : phrase.many(count);
-}
-
-// One or two tools fit in the same space a count would take, so say WHAT they
-// did instead: "ran npm test", or "read lib/foo.ts · ran npm test". A pair of
-// the same kind states the verb once ("ran git status · npm test"), and a lone
-// tool spends the whole line on its subject. Returns "" when a subject is
-// missing (unparsed args, a tool with nothing to show), which leaves the caller
-// on the counting phrase.
-function describeSmallToolGroup(actions: readonly { name: string; input: string }[]): string {
-  if (actions.length === 0) return "";
-  const budget = actions.length === 1 ? 72 : 30;
-  const parts: string[] = [];
-  let previousVerb = "";
-  for (const action of actions) {
-    const { verb } = toolPhrase(action.name);
-    // Multi-line commands (heredocs, chained shell) collapse to one line first,
-    // so the clip spends its budget on words rather than indentation.
-    const subject = truncateStr(sharedToolSummary(action).replace(/\s+/g, " ").trim(), budget);
-    if (!verb || !subject) return "";
-    parts.push(verb === previousVerb ? subject : `${verb} ${subject}`);
-    previousVerb = verb;
-  }
-  return parts.join(" · ");
-}
-
 // A screenshot captured inside a collapsed tool group, surfaced on the receipt
 // chip as a small thumbnail. Clicking opens the shared lightbox (with arrow-key
 // browsing across every registered image) WITHOUT expanding the tool group.
@@ -7642,8 +7564,10 @@ function CondensedImageThumb({ image }: { image: ImageData }) {
 }
 
 // One distinct receipt row standing in for a whole turn's tool activity in the
-// condensed feed: a faint inset chip, clearly NOT prose, e.g.
-// "⚙ read 3 files · ran 2 commands · 1 search". Click to reveal the real tool
+// condensed feed: a faint inset chip, clearly NOT prose. A busy turn counts
+// ("⚙ read 3 files · ran 2 commands · 1 search"); one or two tools fit their
+// real subject in the same space, so they say it ("⚙ ran npm test"). Click to
+// reveal the real tool
 // blocks inline (the chip then reads as a hide toggle). Screenshots taken by
 // the collapsed tools ride along as clickable thumbnails, so images stay
 // reachable without expanding the group — which is why the root is a div, not
@@ -14340,9 +14264,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation?._id, conversation?.is_own, sessionImageEntries.length, backfillImagePreview]);
 
   // Sessions whose images predate conversation_images have nothing to read back,
-  // so ask the server to sweep the history once. The trigger is evidence, not a
-  // guess: the loaded window shows a storage/markdown image the server list does
-  // not have. Server-side it is idempotent and no-ops once the sweep completed.
+  // so ask the server to sweep the history once per opened conversation. The
+  // server owns the decision — it stamps images_backfilled_at and no-ops on
+  // every later call — so this only has to fire when the thread PLAUSIBLY has
+  // images the sweep hasn't seen.
+  //
+  // The evidence is the row's own image_preview_url, not the loaded window. A
+  // long thread keeps its images in the history, not the last 200 messages, so
+  // "the window shows an image the server list lacks" never fires on exactly
+  // the sessions that need the sweep most (verified: a 2354-message thread with
+  // images, zero of them in its window). image_preview_url is stamped whenever
+  // any image lands and is never cleared, so it means "this session has images".
+  // The window check stays as a second trigger for rows that predate it.
   const backfillConversationImages = useMutation(api.messages.backfillConversationImages);
   const imagesBackfilledRef = useRef<string | null>(null);
   useEffect(() => {
@@ -14351,10 +14284,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (imagesBackfilledRef.current === cid) return;
     const known = new Set(serverSessionImages.map((e) => e.key));
     // data: entries are never materialized — comparing them would re-trigger forever.
-    const missing = windowImageEntries.some(
+    const windowHasUnknown = windowImageEntries.some(
       (e) => !e.src?.startsWith("data:") && !known.has(e.key)
     );
-    if (!missing) return;
+    const rowHasImages = !!useInboxStore.getState().sessions[cid]?.image_preview_url;
+    if (!windowHasUnknown && !rowHasImages) return;
     imagesBackfilledRef.current = cid;
     backfillConversationImages({ conversation_id: cid as Id<"conversations"> }).catch(() => {});
   }, [conversation?._id, conversation?.is_own, serverSessionImages, windowImageEntries, backfillConversationImages]);

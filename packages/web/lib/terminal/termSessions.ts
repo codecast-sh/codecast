@@ -259,13 +259,15 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
     connectRemote(inst, opts.remote);
     return;
   }
-  if (!opts.endpoint) {
+  // Bound to a local, so the narrowing survives into the callbacks below.
+  const endpoint = opts.endpoint;
+  if (!endpoint) {
     inst.state.status = "error";
     inst.state.statusDetail = "no terminal transport";
     bump();
     return;
   }
-  const ws = new WebSocket(termWsUrl(opts.endpoint));
+  const ws = new WebSocket(termWsUrl(endpoint));
   ws.binaryType = "arraybuffer";
   inst.ws = ws;
   const encoder = new TextEncoder();
@@ -273,7 +275,7 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
   ws.onopen = () => {
     const hello = {
       type: "hello",
-      token: opts.endpoint.token,
+      token: endpoint.token,
       mode: opts.kind === "attach" ? "attach" : "create",
       name: opts.kind === "shell" ? inst.state.sessionName : undefined,
       cwd: opts.cwd,

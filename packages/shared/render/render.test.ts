@@ -15,6 +15,8 @@ import {
   structuredPayloadKeysFromRaw,
   extractCodexExecActions,
   summarizeCodexExecActions,
+  describeToolGroup,
+  describeSmallToolGroup,
 } from "./index";
 
 const tc = (name: string, input: unknown) => ({
@@ -310,5 +312,65 @@ describe("toolVisual / toolIcon", () => {
   it("toolIcon accepts both a name and a ToolCall-like", () => {
     expect(toolIcon("Bash")).toEqual({ icon: "terminal", color: "green" });
     expect(toolIcon(tc("Read", {}))).toEqual({ icon: "file-code-o", color: "blue" });
+  });
+});
+
+describe("describeToolGroup", () => {
+  it("counts a family, singular and plural", () => {
+    expect(describeToolGroup("Bash", 1)).toBe("ran 1 command");
+    expect(describeToolGroup("Bash", 4)).toBe("ran 4 commands");
+    expect(describeToolGroup("Read", 3)).toBe("read 3 files");
+    expect(describeToolGroup("Grep", 2)).toBe("2 searches");
+  });
+
+  it("falls back to the formatted tool name", () => {
+    expect(describeToolGroup("mcp__claude-in-chrome__navigate", 1)).toBe("Navigate");
+    expect(describeToolGroup("mcp__claude-in-chrome__navigate", 2)).toBe("Navigate ×2");
+  });
+});
+
+describe("describeSmallToolGroup", () => {
+  it("names a lone command instead of counting it", () => {
+    expect(describeSmallToolGroup([tc("Bash", { command: "npm test" })])).toBe("ran npm test");
+  });
+
+  it("spends a whole line on a lone subject, and splits it across a pair", () => {
+    const long = tc("Bash", { command: "cd packages/web && npx tsc --noEmit -p tsconfig.json --pretty false" });
+    expect(describeSmallToolGroup([long])).toBe(
+      "ran cd packages/web && npx tsc --noEmit -p tsconfig.json --pretty false",
+    );
+    expect(describeSmallToolGroup([long, long])).toBe(
+      "ran cd packages/web && npx tsc --n... · cd packages/web && npx tsc --n...",
+    );
+  });
+
+  it("states a repeated verb once", () => {
+    expect(describeSmallToolGroup([
+      tc("Bash", { command: "git status" }),
+      tc("Bash", { command: "npm test" }),
+    ])).toBe("ran git status · npm test");
+    expect(describeSmallToolGroup([
+      tc("Read", { file_path: "/Users/me/src/app/lib/foo.ts" }),
+      tc("Bash", { command: "npm test" }),
+    ])).toBe("read app/lib/foo.ts · ran npm test");
+  });
+
+  it("keeps a clipped path's filename, dropping leading directories", () => {
+    const deep = tc("Edit", { file_path: "/Users/me/src/codecast/packages/cli/src/stateCommand.ts" });
+    expect(describeSmallToolGroup([deep])).toBe("edited codecast/packages/cli/src/stateCommand.ts");
+    expect(describeSmallToolGroup([deep, deep])).toBe(
+      "edited cli/src/stateCommand.ts · cli/src/stateCommand.ts",
+    );
+  });
+
+  it("collapses a multi-line command onto one line", () => {
+    expect(describeSmallToolGroup([tc("Bash", { command: "cat <<'EOF'\n  hello\nEOF" })]))
+      .toBe("ran cat <<'EOF' hello EOF");
+  });
+
+  it("gives up when a subject is missing, leaving the caller to count", () => {
+    expect(describeSmallToolGroup([tc("Bash", { command: "" })])).toBe("");
+    expect(describeSmallToolGroup([tc("Task", { description: "audit the feed" })])).toBe("");
+    expect(describeSmallToolGroup([])).toBe("");
   });
 });

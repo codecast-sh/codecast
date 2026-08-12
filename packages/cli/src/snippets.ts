@@ -260,17 +260,6 @@ For a single image — a screenshot, a chart render — use \`cast image <file-o
 ${PUBLISH_SNIPPET_END}
 `;
 
-/** @deprecated Use `installSectionToTargets`. Kept as a thin adapter so callers
- *  outside this module keep working while they migrate. */
-function installMarkedSnippetToTargets(
-  headers: string[],
-  endMarker: string,
-  snippet: string,
-  update: boolean,
-): { installed: boolean; updated: boolean } {
-  return installSectionToTargets({ headings: headers, endMarker }, snippet, update);
-}
-
 // One explanation of how agents name codecast objects in prose, shared by every
 // feature that introduces one (sessions, tasks, plans, triggers, docs). Each of
 // those snippets used to teach its own object's id in its own words — or not at
@@ -297,22 +286,22 @@ Never paste an object's 32-character internal ID into prose. It renders as an un
 ${REFERENCES_SNIPPET_END}
 `;
 
+export const REFERENCES_SECTION: SectionSpec = {
+  headings: ["## Referencing objects"],
+  endMarker: REFERENCES_SNIPPET_END,
+};
+
 export function installReferencesSnippet(update = false): { installed: boolean; updated: boolean } {
-  return installMarkedSnippetToTargets(
-    ["## Referencing objects"],
-    REFERENCES_SNIPPET_END,
-    REFERENCES_SNIPPET,
-    update,
-  );
+  return installSectionToTargets(REFERENCES_SECTION, REFERENCES_SNIPPET, update);
 }
 
+export const PUBLISH_SECTION: SectionSpec = {
+  headings: ["## Publishing pages", "## Publishing artifacts", "## Publishing HTML artifacts"],
+  endMarker: PUBLISH_SNIPPET_END,
+};
+
 export function installPublishSnippet(update = false): { installed: boolean; updated: boolean } {
-  return installMarkedSnippetToTargets(
-    ["## Publishing pages", "## Publishing artifacts", "## Publishing HTML artifacts"],
-    PUBLISH_SNIPPET_END,
-    PUBLISH_SNIPPET,
-    update,
-  );
+  return installSectionToTargets(PUBLISH_SECTION, PUBLISH_SNIPPET, update);
 }
 
 export const MESSAGING_SECTION: SectionSpec = {

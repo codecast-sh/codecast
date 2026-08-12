@@ -3907,6 +3907,26 @@ export default function SessionDetailScreen() {
     );
   }, [allMessages, serverSessionImages]);
 
+  // Sweep a pre-feature history into conversation_images once, so a thread whose
+  // images all sit above the loaded window still fills the gallery. Same
+  // contract as web: the server stamps the conversation and no-ops afterwards,
+  // and image_preview_url on the row is the evidence that images exist at all.
+  const backfillConversationImages = useMutation(api.messages.backfillConversationImages);
+  const imagesBackfilledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isReal || !serverSessionImages || conversation?.is_own === false) return;
+    const cid = id as string;
+    if (imagesBackfilledRef.current === cid) return;
+    const known = new Set(serverSessionImages.map((e) => e.key));
+    const windowHasUnknown = extractSessionImages(allMessages, isTrustedImageSrc).some(
+      (e) => !e.src?.startsWith('data:') && !known.has(e.key)
+    );
+    const rowHasImages = !!useInboxStore.getState().sessions[cid]?.image_preview_url;
+    if (!windowHasUnknown && !rowHasImages) return;
+    imagesBackfilledRef.current = cid;
+    backfillConversationImages({ conversation_id: cid as Id<"conversations"> }).catch(() => {});
+  }, [isReal, id, conversation?.is_own, serverSessionImages, allMessages, backfillConversationImages]);
+
   const [galleryVisible, setGalleryVisible] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const openGallery = useCallback((image: ImageData) => {

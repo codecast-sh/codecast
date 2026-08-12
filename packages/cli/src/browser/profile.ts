@@ -113,11 +113,16 @@ const PROFILE_FILES = [
   "Trust Tokens",
 ];
 
+// IndexedDB is deliberately absent. It is where the bulk lives — 1.2G of the
+// 1.3G on the development machine, against 4.5M of cookies — and copying it
+// pushed Chrome's cold start past twenty seconds while adding no logins that
+// cookies and Local Storage had not already carried. Sites that keep a refresh
+// token only in IndexedDB will ask the agent to sign in again; that is the
+// right trade for a clone that copies in a second.
 const PROFILE_DIRS = [
   "Network", // cookies + transport security on newer builds
   "Local Storage", // where most SPAs park their session token
   "Session Storage",
-  "IndexedDB", // some auth flows persist refresh tokens here
 ];
 
 // SQLite may be mid-transaction while the real Chrome is running; the sidecars

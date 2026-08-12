@@ -150,14 +150,15 @@ import {
   isValidResumeSessionId,
   removeForkArtifactJsonl,
   resolveResumeAgentType,
-  resumeTmuxPrefix,
+  resumeShortId,
+  resumeTmuxName,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID } from "@codecast/shared/contracts";
-import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
+import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, MODEL_SET_ECHO_RE, countModelSetEchoes, isSwitchConfirmDialog, isStrandedModelCommand } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
@@ -3519,9 +3520,10 @@ async function executeRemoteCommand(
       }
       case "set_model": {
         // In-place model/effort switch for a running claude session: drive the
-        // /model picker and commit with `s` (session-only). Never the one-shot
-        // `/model <x>` / `/effort <x>` forms — those rewrite the user's GLOBAL
-        // default in ~/.claude/settings.json. See modelPicker.ts.
+        // /model picker and commit with `s` (session-only). The one-shot
+        // `/model <x>` / `/effort <x>` forms rewrite the user's GLOBAL default
+        // in ~/.claude/settings.json, so only options that opt in via
+        // oneShotSwitch (Fable) inject them. See modelPicker.ts.
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const conversationId = parsed.conversation_id;
         const modelKey: string | undefined = typeof parsed.model === "string" ? parsed.model : undefined;
@@ -3531,7 +3533,8 @@ async function executeRemoteCommand(
           break;
         }
         const modelOpt = modelKey ? findModelOption("claude", modelKey) : undefined;
-        if (modelKey && !modelOpt?.menuMatch) {
+        const oneShotAlias = modelOpt?.oneShotSwitch ? modelOpt.cliAlias : undefined;
+        if (modelKey && !modelOpt?.menuMatch && !oneShotAlias) {
           error = `Unknown model: ${modelKey}`;
           break;
         }
@@ -3592,7 +3595,17 @@ async function executeRemoteCommand(
           break;
         }
         try {
-          result = await driveModelPicker(tmuxTarget, { menuMatch: modelOpt?.menuMatch, effort: effortKey });
+          if (oneShotAlias) {
+            result = await injectOneShotModelSwitch(tmuxTarget, oneShotAlias);
+            // Effort has no one-shot that spares the global default beyond the
+            // model's own opt-in, so a combined switch still adjusts effort
+            // through the picker's session-only commit.
+            if (effortKey) {
+              result += `; ${await driveModelPicker(tmuxTarget, { effort: effortKey })}`;
+            }
+          } else {
+            result = await driveModelPicker(tmuxTarget, { menuMatch: modelOpt?.menuMatch, effort: effortKey });
+          }
           log(`[SET_MODEL] ${result} (session ${sessionId.slice(0, 8)})`);
         } catch (err) {
           error = err instanceof Error ? err.message : String(err);
@@ -10128,6 +10141,76 @@ async function capturePaneText(target: string, lines: number): Promise<string> {
   return stdout.replace(/[\s\n]+$/, "");
 }
 
+// Shared prelude for both switch drivers: a model switch must never interrupt
+// in-flight work, so require an idle prompt (unlike rewind, no double-Escape
+// interrupt — failing loudly is better than aborting the user's running turn),
+// then clear any composer draft (same dance as message injection: a lone C-u
+// is not reliable on CC 2.1.x).
+async function preparePaneForModelCommand(target: string): Promise<void> {
+  const start = Date.now();
+  let idle = false;
+  while (Date.now() - start < 8000) {
+    const tail = (await capturePaneText(target, 15)).split("\n").slice(-15).join("\n");
+    if (PICKER_PROMPT_RE.test(tail) && !PICKER_BUSY_RE.test(tail)) {
+      idle = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  if (!idle) throw new Error("Session is busy — try again when it's idle");
+
+  await tmuxExec(["send-keys", "-t", target, "Escape"]);
+  await new Promise((r) => setTimeout(r, 50));
+  for (let i = 0; i < 3; i++) {
+    await tmuxExec(["send-keys", "-t", target, "C-a"]);
+    await new Promise((r) => setTimeout(r, 20));
+    await tmuxExec(["send-keys", "-t", target, "C-k"]);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+// One-shot `/model <alias>` injection — for options that opt out of the picker
+// drive (ModelOption.oneShotSwitch, currently Fable). Unlike the picker's `s`
+// commit, the one-shot ALSO saves the model as the user's global default for
+// new sessions — the contract flag is the deliberate opt-in to that. Verified
+// live: the one-shot applies without the cache-confirm dialog the picker
+// commit pops on a conversation with history (handled anyway, belt and
+// braces), and its echo line is what the transcript rollup already parses.
+export async function injectOneShotModelSwitch(target: string, alias: string): Promise<string> {
+  await preparePaneForModelCommand(target);
+
+  const before = countModelSetEchoes(await capturePaneText(target, 200));
+  await pasteTextIntoPane(target, `/model ${alias}`);
+  await new Promise((r) => setTimeout(r, 150));
+  await tmuxExec(["send-keys", "-t", target, "Enter"]);
+
+  let nudgedStranded = false;
+  let confirmedDialog = false;
+  const start = Date.now();
+  while (Date.now() - start < 12000) {
+    await new Promise((r) => setTimeout(r, 400));
+    const text = await capturePaneText(target, 200);
+    if (countModelSetEchoes(text) > before) {
+      const echoes = text.match(new RegExp(`${MODEL_SET_ECHO_RE.source}[^\n]*`, "gi"));
+      return echoes ? echoes[echoes.length - 1].trim() : "model_set";
+    }
+    const tail = text.split("\n").slice(-12).join("\n");
+    if (!confirmedDialog && isSwitchConfirmDialog(tail)) {
+      confirmedDialog = true;
+      await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      continue;
+    }
+    // The slash-command popup can absorb the submit Enter, stranding the
+    // typed command in the composer — one discrete Enter recovers it.
+    if (!nudgedStranded && isStrandedModelCommand(tail, alias)) {
+      nudgedStranded = true;
+      await tmuxExec(["send-keys", "-t", target, "Enter"]);
+    }
+  }
+  await tmuxExec(["send-keys", "-t", target, "Escape"]).catch(() => {});
+  throw new Error("Model command not confirmed (no switch echo)");
+}
+
 export async function driveModelPicker(
   target: string,
   opts: { menuMatch?: string; effort?: string },
@@ -10142,25 +10225,7 @@ export async function driveModelPicker(
     return null;
   };
 
-  // A model switch must never interrupt in-flight work: require an idle prompt
-  // (unlike rewind, no double-Escape interrupt — failing loudly is better than
-  // aborting the user's running turn).
-  const idle = await waitFor(async () => {
-    const tail = (await capturePaneText(target, 15)).split("\n").slice(-15).join("\n");
-    return PICKER_PROMPT_RE.test(tail) && !PICKER_BUSY_RE.test(tail) ? true : null;
-  }, 8000);
-  if (!idle) throw new Error("Session is busy — try again when it's idle");
-
-  // Clear any composer draft (same dance as message injection: a lone C-u is
-  // not reliable on CC 2.1.x), then open the picker.
-  await tmuxExec(["send-keys", "-t", target, "Escape"]);
-  await new Promise((r) => setTimeout(r, 50));
-  for (let i = 0; i < 3; i++) {
-    await tmuxExec(["send-keys", "-t", target, "C-a"]);
-    await new Promise((r) => setTimeout(r, 20));
-    await tmuxExec(["send-keys", "-t", target, "C-k"]);
-    await new Promise((r) => setTimeout(r, 20));
-  }
+  await preparePaneForModelCommand(target);
   await pasteTextIntoPane(target, "/model");
   await new Promise((r) => setTimeout(r, 150));
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
@@ -13246,16 +13311,11 @@ async function discoverAndLinkSession(
   log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)}`);
 }
 
-// Short id used in resume tmux names (`cc-resume-<shortId>`) and log lines.
-// UUIDs keep the conventional 8-char prefix. Prefixed ids (agent-*, forked-*,
-// session-*) need more: their first 8 chars are almost all prefix, so distinct
-// sessions collapse onto one tmux name and each resume kills the other's pane
-// (two workflow agents both mapped to "agent-a9" on 2026-07-16). The reaper's
-// name fallback matches transcripts by startsWith, so a longer prefix stays
-// compatible.
-export function resumeShortId(sessionId: string): string {
-  return CLAUDE_UUID_RE.test(sessionId) ? sessionId.slice(0, 8) : sessionId.slice(0, 16);
-}
+// The resume tmux name is built in resumeCommand.ts (resumeTmuxName /
+// resumeShortId), where `cast restart --tmux` can match what this daemon
+// builds. Re-exported here for the callers and tests that already import it
+// from the daemon.
+export { resumeShortId };
 
 function remapConversationSession(
   oldSessionId: string,
@@ -14043,8 +14103,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     resumeCmd = `claude --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
   }
 
-  const prefix = resumeTmuxPrefix(agentType);
-  const tmuxSession = slug ? `${prefix}-resume-${slug}-${shortId}` : `${prefix}-resume-${shortId}`;
+  const tmuxSession = resumeTmuxName(agentType, sessionId, slug);
 
   // Check if this session already has a healthy agent running (avoid killing + recreating).
   // resolveLiveTmuxTarget probes the cached resume tmux, the original started session

@@ -14,8 +14,8 @@
 import { ReactNode } from "react";
 import Link from "next/link";
 import { User, MessageSquare, FolderKanban, Tag, ListChecks } from "lucide-react";
-import { TaskItem, ProjectItem } from "../store/inboxStore";
-import { ListGroup } from "../components/GenericListView";
+import type { TaskItem, ProjectItem } from "../store/inboxStore";
+import type { ListGroup } from "../components/GenericListView";
 import { getLabelColor } from "./labelColors";
 import { TASK_STATUS, TASK_STATUS_ORDER } from "../components/TaskStatusBadge";
 

@@ -31,7 +31,10 @@ const NOTIFICATION_TYPE = v.union(
   v.literal("doc_commented"),
   v.literal("plan_status_changed"),
   v.literal("plan_task_completed"),
-  v.literal("artifact_commented")
+  v.literal("artifact_commented"),
+  v.literal("chat_mention"),
+  v.literal("chat_reply"),
+  v.literal("chat_here")
 );
 
 const PREFERENCE_MAP: Record<string, string> = {
@@ -53,6 +56,12 @@ const PREFERENCE_MAP: Record<string, string> = {
   session_idle: "session_idle",
   session_error: "session_error",
   session_assigned: "session_assigned",
+  // A direct @you in chat is a mention like any other, so it rides the existing
+  // key rather than inventing a second switch for the same idea. Thread replies
+  // and @here are chat activity, which people mute separately.
+  chat_mention: "mention",
+  chat_reply: "chat_activity",
+  chat_here: "chat_activity",
 };
 
 function isNotificationEnabled(
@@ -118,6 +127,10 @@ export const emit = internalMutation({
     link: v.optional(v.string()),
     conversation_id: v.optional(v.id("conversations")),
     comment_id: v.optional(v.id("comments")),
+    // Chat deep link: entity_id already carries the channel, this names the exact
+    // message. Both ride into the push payload so a tap lands on the message
+    // rather than on the app.
+    chat_message_id: v.optional(v.id("chat_messages")),
     direct_recipient_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
@@ -178,6 +191,7 @@ export const emit = internalMutation({
         link: args.link,
         conversation_id: args.conversation_id,
         comment_id: args.comment_id,
+        chat_message_id: args.chat_message_id,
         message: args.message,
         read: false,
         created_at: now,
@@ -198,6 +212,10 @@ export const emit = internalMutation({
             conversationId: args.conversation_id,
             type: args.event_type,
             link: args.link,
+            // Chat taps route on these two ids (mobile reads data.channelId /
+            // data.messageId), including from a cold start.
+            channelId: args.entity_type === "chat_channel" ? args.entity_id : undefined,
+            messageId: args.chat_message_id,
           },
         });
       }

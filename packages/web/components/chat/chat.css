@@ -696,11 +696,43 @@
   border-color: color-mix(in srgb, var(--sol-blue) 45%, transparent);
 }
 
-.ch-toast-mention {
+/* Loud: someone is addressing you. The accent edge is the whole difference
+ * between "the room is talking" and "this one is about you". */
+.ch-toast-loud {
   box-shadow:
     inset 3px 0 0 var(--sol-orange),
     0 6px 20px color-mix(in srgb, var(--sol-text) 16%, transparent);
   padding-left: 13px;
+}
+
+/* Actions appear on hover only. A toast that always shows two buttons reads as a
+ * dialog and invites a click it does not need. */
+.ch-toast-actions {
+  display: flex;
+  align-self: flex-start;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity 110ms ease;
+}
+
+.ch-toast:hover .ch-toast-actions,
+.ch-toast:focus-within .ch-toast-actions {
+  opacity: 1;
+}
+
+.ch-toast-action {
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 4px;
+  color: var(--sol-text-muted0);
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.ch-toast-action:hover {
+  background: color-mix(in srgb, var(--sol-border) 24%, transparent);
+  color: var(--sol-text);
 }
 
 .ch-toast-main {

@@ -3447,6 +3447,38 @@ cliRoute("/cli/anchor/say", async (ctx, body) => {
   return await ctx.runAction(api.slack.postMessage, body);
 });
 
+// Team chat. Every one of these authorizes the caller inside the function — this
+// route only forwards the request body, so the mutation's own argument list is
+// what keeps identity and scope out of the caller's hands.
+cliRoute("/cli/chat/channels", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.listChannels, body);
+});
+cliRoute("/cli/chat/create-channel", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.createChannel, body);
+});
+cliRoute("/cli/chat/read", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.listMessages, body);
+});
+cliRoute("/cli/chat/thread", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.getThread, body);
+});
+cliRoute("/cli/chat/message", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.getMessage, body);
+});
+cliRoute("/cli/chat/search", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.searchMessages, body);
+});
+cliRoute("/cli/chat/send", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.sendMessage, body);
+});
+cliRoute("/cli/chat/mark-read", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.markRead, body);
+});
+// What the anchor runs to fill the placeholder already showing in the thread.
+cliRoute("/cli/chat/reply", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.replyAsAnchor, body);
+});
+
 // Tasks
 cliRoute("/cli/work/create", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.create, body);
@@ -3679,6 +3711,11 @@ cliRoute("/cli/sessions/dismiss", async (ctx, body) => ctx.runMutation(api.conve
 cliRoute("/cli/sessions/undismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "undismiss" }));
 cliRoute("/cli/sessions/kill", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "kill" }));
 
+// Restart (cast restart <session>): kill the agent and resume it through the
+// daemon's resume ladder — the web header's "Restart session", from a shell.
+// body: { api_token, session, repair? }.
+cliRoute("/cli/sessions/restart", async (ctx, body) => ctx.runMutation(api.conversations.cliRestartSession, body));
+
 // Rename (cast rename): set a session's title with the custom flag so the
 // auto-titler never overwrites it. body: { api_token, session, title }.
 cliRoute("/cli/sessions/rename", async (ctx, body) => ctx.runMutation(api.conversations.cliRenameSession, body));
@@ -3756,6 +3793,9 @@ cliRoute("/cli/vault/upload-url", async (ctx, body) => ctx.runMutation(api.image
 // reply carries that lease, so the capture loop learns when to stop from the
 // request it was already making.
 cliRoute("/cli/terminal/frame", async (ctx, body) => ctx.runMutation(api.terminalStream.cliPushFrame, body));
+// The viewer half, for callers with a token instead of a browser session.
+cliRoute("/cli/terminal/watch", async (ctx, body) => ctx.runMutation(api.terminalStream.watchPane, body));
+cliRoute("/cli/terminal/pane", async (ctx, body) => ctx.runQuery(api.terminalStream.getPane, body));
 
 // Image sharing (cast image): upload a screenshot/image to storage, then
 // resolve its stable public /api/storage/<uuid> URL for inline embedding in
