@@ -776,6 +776,7 @@ export const reportMetrics = mutation({
     memory: v.number(),
     pid_count: v.number(),
     agent_pid: v.optional(v.number()),
+    agent_started_at: v.optional(v.number()),
     awake_idle_ms: v.optional(v.number()),
     api_token: v.optional(v.string()),
   },
@@ -804,13 +805,27 @@ export const reportMetrics = mutation({
     const SNAPSHOT_THROTTLE_MS = 5 * 60 * 1000;
     const snapshotStale = !session.last_metrics_at || now - session.last_metrics_at > SNAPSHOT_THROTTLE_MS;
     const agentPidChanged = args.agent_pid !== undefined && args.agent_pid !== session.agent_pid;
-    if (snapshotStale || agentPidChanged) {
+    // The agent restarted. Unlike the metric copies this one cannot wait for
+    // the throttle: until it lands, the inbox renders the dead process's
+    // background watches as running. The tolerance absorbs the one-second
+    // resolution of the daemon's ps sampling — without it every tick would
+    // look like a restart and defeat the throttle entirely. A real restart
+    // moves the start by minutes.
+    const AGENT_START_JITTER_MS = 5_000;
+    const agentRestarted =
+      args.agent_started_at !== undefined &&
+      (session.agent_started_at === undefined ||
+        Math.abs(args.agent_started_at - session.agent_started_at) > AGENT_START_JITTER_MS);
+    if (snapshotStale || agentPidChanged || agentRestarted) {
       await ctx.db.patch(session._id, {
         current_cpu: args.cpu,
         current_memory: args.memory,
         current_pid_count: args.pid_count,
         last_metrics_at: now,
         ...(args.agent_pid !== undefined ? { agent_pid: args.agent_pid } : {}),
+        // Only on a real move: rewriting a within-tolerance sample would drift
+        // the stored start and re-push the liveness overlay for no reason.
+        ...(agentRestarted ? { agent_started_at: args.agent_started_at } : {}),
         ...(args.awake_idle_ms !== undefined ? { awake_idle_ms: args.awake_idle_ms } : {}),
       });
 

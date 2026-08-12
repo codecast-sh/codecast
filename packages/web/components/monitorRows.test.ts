@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { monitorRowsFor, effectiveMonitorStatus, watchingMonitors, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, monitorNotificationDescription } from "./monitorRows";
+import { monitorRowsFor, effectiveMonitorStatus, watchingMonitors, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription } from "./monitorRows";
 
 // The wire shapes below mirror a real transcript: a Monitor tool_use, its
 // "Monitor started (task <id> …)" result on the next message, then
@@ -136,6 +136,17 @@ const bgOrphanStoppedNotif = (taskId: string, toolUseId: string, ts: number) => 
   content: `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<status>stopped</status>\n<summary>No completion record was found for this background shell command from the previous session. It may have been stopped (via the UI, Monitor timeout, or agent teardown — these leave no transcript marker), or it may have been running when the previous Claude Code process exited.</summary>\n</task-notification>`,
 });
 
+// The orphan scan's aggregate, verbatim from a transcript: several task ids, a
+// synthetic marker id, no tool-use-id, and a summary that ends with a sentence
+// meant for the parser.
+const orphanBatchNotif = (taskIds: string[], ts: number) => ({
+  role: "user",
+  timestamp: ts,
+  content:
+    `<task-notification>\n${taskIds.map((id) => `<task-id>${id}</task-id>`).join("\n")}\n<task-id>__orphan_summary__:shell</task-id>\n<status>stopped</status>` +
+    `\n<summary>${taskIds.length} background shell command task(s) from the previous session have no completion record. They may have been stopped (via the UI, Monitor timeout, or agent teardown — these leave no transcript marker), or they may have been running when the previous Claude Code process exited. They have been marked stopped. Task ids: ${taskIds.join(", ")}. Task ids in this notification beginning with "__orphan_summary" are internal scan markers, not tasks.</summary>\n</task-notification>`,
+});
+
 describe("monitorRowsFor — background Bash lifecycle", () => {
   test("armed background command is watching, with task id and kind", () => {
     const rows = monitorRowsFor([bgBashCall("tu1", "Watch all four suite runs"), bgStartedResult("tu1", "bdcgma1cy")]);
@@ -197,6 +208,18 @@ describe("monitorRowsFor — background Bash lifecycle", () => {
     expect(rows[0].endedAt).toBe(9000);
   });
 
+  test("the orphan batch notice stops every row it names, not just the first", () => {
+    const rows = monitorRowsFor([
+      bgBashCall("tu1", "suite watch"),
+      bgStartedResult("tu1", "b1"),
+      bgBashCall("tu2", "log tail"),
+      bgStartedResult("tu2", "b2"),
+      orphanBatchNotif(["b1", "b2"], 9000),
+    ]);
+    expect(rows.map((r) => r.status)).toEqual(["stopped", "stopped"]);
+    expect(rows.map((r) => r.endedAt)).toEqual([9000, 9000]);
+  });
+
   test("TaskStop naming the background task id flips to stopped", () => {
     const rows = monitorRowsFor([
       bgBashCall("tu1", "suite watch"),
@@ -238,12 +261,73 @@ describe("isBackgroundBashToolCall", () => {
 });
 
 describe("effectiveMonitorStatus — defensive timeout expiry", () => {
+  test("persistent monitor never expires — its timeout_ms is ignored by the harness", () => {
+    // timeout_ms is a required Monitor param but documented as ignored when
+    // persistent: the watch runs until TaskStop or session end. The row must
+    // not carry it, or the expiry would hide a genuinely live watcher.
+    const [row] = monitorRowsFor([monitorCall("tuP", "reindex watch", { persistent: true, timeout_ms: 3600_000 }), startedResult("tuP", "tsk")]);
+    expect(row.timeoutMs).toBeUndefined();
+    expect(effectiveMonitorStatus(row, row.startedAt + 24 * 3600_000)).toBe("watching");
+    expect(watchingMonitors([row], row.startedAt + 24 * 3600_000).length).toBe(1);
+  });
+
   test("watching past its own timeout + slack reads timed out", () => {
     const [row] = monitorRowsFor([monitorCall("tuX", "w", { timeout_ms: 60_000 }), startedResult("tuX", "tsk")]);
     expect(effectiveMonitorStatus(row, row.startedAt + 30_000)).toBe("watching");
     expect(effectiveMonitorStatus(row, row.startedAt + 60_000 + 3 * 60_000)).toBe("timed_out");
     expect(watchingMonitors([row], row.startedAt + 30_000).length).toBe(1);
     expect(watchingMonitors([row], row.startedAt + 10 * 60_000).length).toBe(0);
+  });
+});
+
+// The real case this was built for: a session whose agent restarted while four
+// `until grep` shells were standing. The two armed before the restart died with
+// the old process and were never notified; the two armed after are alive. Only
+// the boot time separates them — both pairs are hours old and eventless.
+describe("effectiveMonitorStatus — agent restart cuts the watches it armed", () => {
+  const HOUR = 3600_000;
+  const armedAt = (ts: number) => {
+    const [row] = monitorRowsFor([
+      { ...bgBashCall("tu", "watch run"), timestamp: ts },
+      { ...bgStartedResult("tu", "tsk"), timestamp: ts + 1 },
+    ]);
+    return row;
+  };
+
+  test("a row armed before the current process booted reads stopped", () => {
+    const boot = 100 * HOUR;
+    const row = armedAt(boot - 2 * HOUR);
+    expect(effectiveMonitorStatus(row, boot + 19 * HOUR, boot)).toBe("stopped");
+    expect(watchingMonitors([row], boot + 19 * HOUR, boot).length).toBe(0);
+  });
+
+  test("a row armed after the boot stays watching, however old it gets", () => {
+    const boot = 100 * HOUR;
+    const row = armedAt(boot + HOUR);
+    expect(effectiveMonitorStatus(row, boot + 17 * HOUR, boot)).toBe("watching");
+    expect(watchingMonitors([row], boot + 17 * HOUR, boot).length).toBe(1);
+  });
+
+  test("clock skew around the boot instant does not cut a live row", () => {
+    const boot = 100 * HOUR;
+    // Armed 20s "before" the reported boot — skew, not a previous generation.
+    expect(effectiveMonitorStatus(armedAt(boot - 20_000), boot + HOUR, boot)).toBe("watching");
+  });
+
+  test("without a known boot time nothing is fenced", () => {
+    const boot = 100 * HOUR;
+    const row = armedAt(boot - 2 * HOUR);
+    expect(effectiveMonitorStatus(row, boot + 19 * HOUR)).toBe("watching");
+  });
+
+  test("a row that already ended keeps its own verdict, not the fence's", () => {
+    const boot = 100 * HOUR;
+    const [row] = monitorRowsFor([
+      { ...bgBashCall("tu", "watch run"), timestamp: boot - 2 * HOUR },
+      { ...bgStartedResult("tu", "tsk"), timestamp: boot - 2 * HOUR + 1 },
+      bgCompletedNotif("tsk", "tu", "watch run", 0, boot - HOUR),
+    ]);
+    expect(effectiveMonitorStatus(row, boot + HOUR, boot)).toBe("ended");
   });
 });
 
@@ -262,5 +346,21 @@ describe("notification parsing helpers", () => {
     expect(isMonitorEventNotification(n)).toBe(false);
     expect(n.toolUseId).toBe("tu9");
     expect(n.status).toBe("completed");
+  });
+
+  test("the orphan batch notice keeps every real id and drops the scan marker", () => {
+    const n = parseTaskNotificationBlock(orphanBatchNotif(["b1", "b2", "b3"], 0).content);
+    expect(n.taskIds).toEqual(["b1", "b2", "b3"]);
+    expect(n.taskId).toBe("b1");
+    expect(isOrphanSummaryNotification(n)).toBe(true);
+    // The sentence about "__orphan_summary" ids is addressed to the parser.
+    expect(n.summary).not.toContain("__orphan_summary");
+    expect(n.summary).toContain("have no completion record");
+  });
+
+  test("a single-task notice is not a batch", () => {
+    const n = parseTaskNotificationBlock(bgOrphanStoppedNotif("b6aw3d3t3", "tu1", 0).content);
+    expect(n.taskIds).toEqual(["b6aw3d3t3"]);
+    expect(isOrphanSummaryNotification(n)).toBe(false);
   });
 });

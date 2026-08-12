@@ -5099,7 +5099,13 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
     const sess = s.sessions[conversationId];
     return !!sess && (sess.agent_status === "stopped" || isLivenessStale(sess, now));
   });
-  const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now) : "watching";
+  // Start of the process currently behind this session. A watch armed before it
+  // died with the process that armed it — the session being alive says nothing
+  // about a shell owned by its predecessor. Narrow numeric subscription.
+  const agentStartedAt = useInboxStore((s) =>
+    (conversationId ? s.sessions[conversationId]?.agent_started_at : undefined) ?? undefined,
+  );
+  const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now, agentStartedAt) : "watching";
   const status: MonitorStatus = rawStatus === "watching" && sessionDead ? "stopped" : rawStatus;
   const failed = isBackground && status === "ended" && (row?.exitCode ?? 0) > 0;
   const badge = failed

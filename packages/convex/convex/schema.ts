@@ -1487,6 +1487,11 @@ export default defineSchema({
     // Real PID of the agent's process tree root (distinct from the daemon's PID
     // historically stored in `pid`). Set by the resource collector.
     agent_pid: v.optional(v.number()),
+    // When that agent process started (ps etime, resolved to wall clock by the
+    // resource collector). The session id survives a restart but this does not,
+    // so it names the process GENERATION: the web fences background watches
+    // armed by an earlier one, which died with it and are never notified.
+    agent_started_at: v.optional(v.number()),
     // Accumulated time the session has been idle while the machine was AWAKE
     // (sleep gaps excluded). Reset to 0 whenever the session shows activity.
     awake_idle_ms: v.optional(v.number()),
