@@ -5,9 +5,9 @@
 // usage credits). Shared by the header chip's popover and the Claude Accounts
 // settings page so both always tell the same story.
 
-import { worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { isWindowRolled, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 
-export { worstUsagePercent };
+export { worstUsagePercent, isWindowRolled };
 export type { CcUsage };
 
 // Status tone for a utilization percent: quiet while there's headroom, loud as
@@ -54,13 +54,21 @@ export function UsageMeterRow({
   now: number;
   title?: string;
 }) {
-  const tone = usageTone(percent);
-  const clamped = Math.min(100, Math.max(0, percent));
+  // A window whose reset has passed reads empty, whatever the snapshot says:
+  // the measurement described a window that no longer exists. The bar clears
+  // and the value cell says "reset" rather than claiming a fresh 0% reading.
+  const rolled = isWindowRolled({ resets_at: resetsAt }, now);
+  const live = rolled ? 0 : percent;
+  const tone = usageTone(live);
+  const clamped = Math.min(100, Math.max(0, live));
   const resetNote = resetsAt && resetsAt > now ? `resets in ${formatCountdown(resetsAt - now)}` : null;
+  const rolledNote = rolled
+    ? `${label}: window reset ${formatAgo(now - (resetsAt as number))} — the last reading (${Math.round(percent)}%) is from the window before it`
+    : null;
   return (
     <div
       className="flex items-center gap-2"
-      title={title ?? `${label}: ${Math.round(percent)}% used${resetNote ? ` — ${resetNote}` : ""}`}
+      title={rolledNote ?? title ?? `${label}: ${Math.round(percent)}% used${resetNote ? ` — ${resetNote}` : ""}`}
     >
       <span className="w-12 shrink-0 text-[10px] uppercase tracking-wider text-sol-text-dim">{label}</span>
       <div className="h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-sol-bg-inset">
@@ -70,16 +78,20 @@ export function UsageMeterRow({
             width: `${clamped}%`,
             background: tone,
             // A hairline sliver keeps a near-zero meter visibly "alive".
-            minWidth: percent > 0 ? 3 : 0,
+            minWidth: live > 0 ? 3 : 0,
           }}
         />
       </div>
-      <span
-        className="w-9 shrink-0 text-right font-mono text-[11px] tabular-nums"
-        style={{ color: percent >= 60 ? tone : "var(--sol-text-muted)" }}
-      >
-        {Math.round(percent)}%
-      </span>
+      {rolled ? (
+        <span className="w-9 shrink-0 text-right font-mono text-[10px] text-sol-text-dim">reset</span>
+      ) : (
+        <span
+          className="w-9 shrink-0 text-right font-mono text-[11px] tabular-nums"
+          style={{ color: live >= 60 ? tone : "var(--sol-text-muted)" }}
+        >
+          {Math.round(live)}%
+        </span>
+      )}
     </div>
   );
 }

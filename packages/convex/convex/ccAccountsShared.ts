@@ -110,14 +110,36 @@ export const ccLoginFlowValidator = v.object({
 // (allow a fresh start) treat it as no-flow.
 export const LOGIN_FLOW_STALE_MS = 6 * 60 * 1000;
 
-/** The worst (highest) utilization across an account's limit windows — what a
- * single summary meter should show. Null when no usage data exists. */
-export function worstUsagePercent(usage: CcUsage | undefined | null): number | null {
+/** A limit window whose reset time has already passed has ROLLED: the snapshot
+ * describes a window that no longer exists. `resets_at` is absolute, so this
+ * stays true however old the snapshot is — a 5h window read 17h ago rolled
+ * long ago, and its percent is history, not a reading. A window with no known
+ * reset time can never be proven rolled. */
+export function isWindowRolled(w: { resets_at?: number } | undefined | null, now: number): boolean {
+  return !!w && w.resets_at != null && w.resets_at <= now;
+}
+
+/** A window's utilization AS OF `now`: 0 once it has rolled, since a fresh
+ * window starts empty. The one place display and decision logic agree on what
+ * a stale snapshot still means. */
+export function livePercent(w: { percent: number; resets_at?: number }, now: number): number {
+  return isWindowRolled(w, now) ? 0 : w.percent;
+}
+
+function limitWindows(usage: CcUsage): { percent: number; resets_at?: number }[] {
+  return [usage.session, usage.weekly, usage.weekly_scoped, ...(usage.scoped ?? [])].filter(
+    (w): w is NonNullable<typeof w> => !!w,
+  );
+}
+
+/** The worst (highest) utilization across an account's limit windows AS OF
+ * `now` — what a single summary meter should show. Rolled windows count as 0,
+ * so a dormant account stops reading "100%" forever. Null when no usage data
+ * exists. */
+export function worstUsagePercent(usage: CcUsage | undefined | null, now: number): number | null {
   if (!usage) return null;
-  const pcts = [usage.session, usage.weekly, usage.weekly_scoped, ...(usage.scoped ?? [])]
-    .filter((w): w is NonNullable<typeof w> => !!w)
-    .map((w) => w.percent);
-  return pcts.length ? Math.max(...pcts) : null;
+  const windows = limitWindows(usage);
+  return windows.length ? Math.max(...windows.map((w) => livePercent(w, now))) : null;
 }
 
 /** An account with no headroom RIGHT NOW: some window is pegged and its reset
@@ -125,10 +147,7 @@ export function worstUsagePercent(usage: CcUsage | undefined | null): number | n
  * — the snapshot is just stale, the window has rolled. */
 export function isUsageExhausted(usage: CcUsage | undefined | null, now: number): boolean {
   if (!usage) return false;
-  for (const w of [usage.session, usage.weekly, usage.weekly_scoped, ...(usage.scoped ?? [])]) {
-    if (w && w.percent >= 100 && (w.resets_at ?? Number.POSITIVE_INFINITY) > now) return true;
-  }
-  return false;
+  return limitWindows(usage).some((w) => livePercent(w, now) >= 100);
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +238,7 @@ export function decideAutoSwitch(input: {
     return true;
   });
   const score = (p: AutoSwitchProfile): number =>
-    p.usage ? worstUsagePercent(p.usage) ?? 0 : 101;
+    p.usage ? worstUsagePercent(p.usage, now) ?? 0 : 101;
   candidates.sort((a, b) => score(a) - score(b));
   if (candidates[0]) return { action: "switch", profile: candidates[0].name };
 
