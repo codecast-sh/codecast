@@ -71,12 +71,29 @@ type ScanMessage = {
 // line read. One parser so the two surfaces can't disagree about a payload.
 export type ParsedTaskNotification = {
   taskId: string;
+  // Every task the notice names. Usually one; the orphan scan's summary notice
+  // marks a whole batch stopped in a single message and lists them all.
+  taskIds: string[];
   toolUseId?: string;
   status: string;
   summary: string;
   event?: string;
   outputFile?: string;
 };
+
+// The orphan scan pads its aggregate notice with a synthetic id and a sentence
+// telling the reader that id is not a task. Both are addressed to the agent
+// parsing the block, not to a person reading the transcript, so neither reaches
+// a surface.
+const ORPHAN_MARKER = "__orphan_summary__";
+const ORPHAN_MARKER_SENTENCE = /\s*Task ids in this notification beginning with [“"']?__orphan_summary[^.]*\.\s*/;
+
+// The aggregate carries no tool-use-id — it belongs to a batch, not to one
+// armed watch — so surfaces name the batch by its own list instead of pinning
+// the whole notice on whichever id happened to come first.
+export function isOrphanSummaryNotification(n: Pick<ParsedTaskNotification, "taskIds">): boolean {
+  return n.taskIds.length > 1;
+}
 
 const TAG = (name: string, inner: string) => inner.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))?.[1];
 
@@ -107,11 +124,15 @@ export function decodeEntities(s: string): string {
 }
 
 export function parseTaskNotificationBlock(block: string): ParsedTaskNotification {
+  const taskIds = [...block.matchAll(/<task-id>([\s\S]*?)<\/task-id>/g)]
+    .map((m) => m[1].trim())
+    .filter((id) => id && !id.startsWith(ORPHAN_MARKER));
   return {
-    taskId: TAG("task-id", block)?.trim() || "",
+    taskId: taskIds[0] || "",
+    taskIds,
     toolUseId: TAG("tool-use-id", block)?.trim(),
     status: TAG("status", block)?.trim() || "",
-    summary: TAG("summary", block)?.trim() || "",
+    summary: (TAG("summary", block)?.trim() || "").replace(ORPHAN_MARKER_SENTENCE, " ").trim(),
     event: TAG("event", block)?.trim(),
     outputFile: TAG("output-file", block)?.trim(),
   };
@@ -172,9 +193,11 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
           description: (input?.description && String(input.description)) || (kind === "monitor" ? "background watch" : "background command"),
           command: (input?.command && String(input.command)) || "",
           persistent: !!input?.persistent,
-          // Background tasks carry no timeout — they run until they exit or
-          // are stopped, so the defensive expiry below never applies to them.
-          timeoutMs: kind === "monitor" && typeof input?.timeout_ms === "number" ? input.timeout_ms : undefined,
+          // Background tasks carry no timeout, and a persistent monitor's
+          // timeout_ms is ignored by the harness (required input, but the
+          // watch runs until TaskStop or session end) — neither gets one
+          // here, so the defensive expiry below never applies to them.
+          timeoutMs: kind === "monitor" && !input?.persistent && typeof input?.timeout_ms === "number" ? input.timeout_ms : undefined,
           startedAt: msg.timestamp,
           status: "watching",
           eventCount: 0,
@@ -211,8 +234,8 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
       for (const block of msg.content.match(/<task-notification>[\s\S]*?<\/task-notification>/g) ?? []) {
         const n = parseTaskNotificationBlock(block);
         const row = (n.toolUseId && byToolUseId.get(n.toolUseId)) || (n.taskId && byTaskId.get(n.taskId)) || undefined;
-        if (!row) continue;
         if (n.event) {
+          if (!row) continue;
           if (n.event.startsWith(TIMED_OUT_MARKER)) {
             if (row.status === "watching") {
               row.status = "timed_out";
@@ -223,16 +246,22 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
             row.lastEvent = decodeEntities(n.event);
             row.lastEventAt = msg.timestamp;
           }
-        } else if (n.toolUseId && (TERMINAL_STATUSES.has(n.status) || isMonitorEndedNotification(n))) {
+        } else if (TERMINAL_STATUSES.has(n.status) || isMonitorEndedNotification(n)) {
           // "stopped" arrives on the orphan notice after a harness restart
           // ("No completion record was found …"); "killed" from an outside
           // teardown. Both mean the watch was cut, not that it finished.
-          if (row.status === "watching") {
-            row.status = n.status === "killed" || n.status === "stopped" ? "stopped" : "ended";
+          //
+          // The orphan scan's aggregate names a whole batch and carries no
+          // tool-use-id, so it ends every row it lists — not just the first.
+          const targets = n.toolUseId && row ? [row] : n.taskIds.map((id) => byTaskId.get(id)).filter((r): r is MonitorRow => !!r);
+          for (const target of targets) {
+            if (target.status === "watching") {
+              target.status = n.status === "killed" || n.status === "stopped" ? "stopped" : "ended";
+            }
+            target.endedAt ??= msg.timestamp;
+            const exit = n.summary.match(/exit code (\d+)/);
+            if (exit) target.exitCode = Number(exit[1]);
           }
-          row.endedAt ??= msg.timestamp;
-          const exit = n.summary.match(/exit code (\d+)/);
-          if (exit) row.exitCode = Number(exit[1]);
         }
       }
     }
@@ -247,13 +276,35 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
 // (tail not loaded/synced): past its own timeout plus slack it can't still be
 // running. Time-dependent, so it lives OUTSIDE the memoized scan.
 const TIMEOUT_SLACK_MS = 2 * 60_000;
-export function effectiveMonitorStatus(row: MonitorRow, now: number): MonitorStatus {
-  if (row.status === "watching" && row.timeoutMs !== undefined && now - row.startedAt > row.timeoutMs + TIMEOUT_SLACK_MS) {
+
+// A watch is a child of the agent process that armed it, so it cannot outlive
+// that process. When the agent restarts (`claude --resume` after a crash, a
+// kill, an account switch), every shell it was babysitting dies with it — but
+// the new process inherits only the transcript, so no completion notification
+// is ever written for them and the scan above leaves the rows "watching"
+// forever. Two dead `until grep` loops sat at a green "running for 19h" in the
+// inbox this way while their siblings, armed after the restart, were genuinely
+// alive: age can't tell them apart, but boot generation can.
+//
+// `agentStartedAt` is when the CURRENT agent process booted. A row armed
+// before it belongs to a process that is gone, so the watch was cut, not
+// finished — "stopped", the same verdict a kill notice produces. The slack
+// absorbs clock skew between the transcript's timestamps and the reported boot
+// (both come from the agent's own machine, so it only needs to be small); a
+// row armed after the boot is left entirely alone.
+const BOOT_SKEW_SLACK_MS = 60_000;
+
+export function effectiveMonitorStatus(row: MonitorRow, now: number, agentStartedAt?: number): MonitorStatus {
+  if (row.status !== "watching") return row.status;
+  if (agentStartedAt !== undefined && row.startedAt < agentStartedAt - BOOT_SKEW_SLACK_MS) {
+    return "stopped";
+  }
+  if (row.timeoutMs !== undefined && now - row.startedAt > row.timeoutMs + TIMEOUT_SLACK_MS) {
     return "timed_out";
   }
   return row.status;
 }
 
-export function watchingMonitors(rows: MonitorRow[], now: number): MonitorRow[] {
-  return rows.filter((r) => effectiveMonitorStatus(r, now) === "watching");
+export function watchingMonitors(rows: MonitorRow[], now: number, agentStartedAt?: number): MonitorRow[] {
+  return rows.filter((r) => effectiveMonitorStatus(r, now, agentStartedAt) === "watching");
 }

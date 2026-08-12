@@ -313,6 +313,10 @@ export type InboxSession = {
   agent_status?: AgentStatus;
   tmux_session?: string | null;
   permission_mode?: string | null;
+  // When the agent process behind this session started. Background watches and
+  // monitors armed before it belong to a process that has been replaced, so
+  // they are dead however alive the session is (see monitorRows).
+  agent_started_at?: number | null;
   is_deferred?: boolean;
   is_pinned?: boolean;
   // When the user pinned this session (Date.now() ms). Drives a stable order in
@@ -3347,7 +3351,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     // value here instead of clobbering it between overlay ticks.
     preserveFields: [
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
-      "is_connected", "tmux_session", "permission_mode",
+      "is_connected", "tmux_session", "permission_mode", "agent_started_at",
       "_postCreateBucketId",
     ],
     transform(draft, table, incoming) {

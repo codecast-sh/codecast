@@ -1276,7 +1276,10 @@ function MonitorBars({ session, isActive, onOpen }: {
   const rows = useMemo(() => monitorRowsFor(messages), [messages]);
   const [expanded, setExpanded] = useState(false);
   if (session.agent_status === "stopped" || isLivenessStale(session, now)) return null;
-  const watching = rows.filter((r) => effectiveMonitorStatus(r, now) === "watching");
+  // A live session can still be showing watches armed by a process it has since
+  // replaced (a restart takes its background shells with it but leaves the rows
+  // un-notified) — fence those out rather than stacking dead bars.
+  const watching = rows.filter((r) => effectiveMonitorStatus(r, now, session.agent_started_at ?? undefined) === "watching");
   if (watching.length === 0) return null;
   const shown = expanded ? watching : watching.slice(0, MAX_MONITOR_BARS);
   const hiddenCount = watching.length - shown.length;

@@ -1599,7 +1599,7 @@ export class SyncService {
     } catch {}
   }
 
-  async reportSessionMetrics(sessionId: string, cpu: number, memory: number, pidCount: number, agentPid?: number, awakeIdleMs?: number): Promise<void> {
+  async reportSessionMetrics(sessionId: string, cpu: number, memory: number, pidCount: number, agentPid?: number, awakeIdleMs?: number, agentStartedAt?: number): Promise<void> {
     try {
       await this.mutate("managedSessions:reportMetrics" as any, {
         session_id: sessionId,
@@ -1608,6 +1608,7 @@ export class SyncService {
         pid_count: pidCount,
         ...(agentPid !== undefined ? { agent_pid: agentPid } : {}),
         ...(awakeIdleMs !== undefined ? { awake_idle_ms: awakeIdleMs } : {}),
+        ...(agentStartedAt !== undefined ? { agent_started_at: agentStartedAt } : {}),
         api_token: this.apiToken,
       });
     } catch {}
