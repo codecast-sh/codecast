@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag } from "./castCommand";
+import { stripCdPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory } from "./castCommand";
 
 describe("stripCdPrefix", () => {
   test("strips a leading `cd <dir>;` prefix", () => {
@@ -278,5 +278,101 @@ describe("extractMessageFlag", () => {
 
   test("null for an expanded value", () => {
     expect(extractMessageFlag('ct-40882 -m "$SUMMARY"')).toBeNull();
+  });
+});
+
+describe("extractFlagValue", () => {
+  test("reads a flag value from argv", () => {
+    expect(extractFlagValue('pl-88 -g "ship the parser" -b "details"', ["-g", "--goal"])).toBe(
+      "ship the parser",
+    );
+  });
+
+  test("ignores a flag spelled inside a heredoc body", () => {
+    const args = "ct-1 - <<'EOF'\nrun it with -m to see the message\nEOF";
+    expect(extractFlagValue(args, ["-m", "--message"])).toBeNull();
+  });
+
+  test("ignores a flag spelled inside a quoted body", () => {
+    expect(extractFlagValue('ct-1 "pass -m to the runner" -t progress', ["-m", "--message"])).toBeNull();
+  });
+
+  test("null when the value is expanded", () => {
+    expect(extractFlagValue("ct-1 --goal $GOAL", ["-g", "--goal"])).toBeNull();
+  });
+});
+
+describe("normalizeCastCategory", () => {
+  test("resolves short and pre-rename spellings", () => {
+    expect(["t", "p", "d", "sched", "schedule", "task"].map(normalizeCastCategory)).toEqual([
+      "task", "plan", "doc", "trigger", "trigger", "task",
+    ]);
+  });
+});
+
+describe("extractCastBodyParts", () => {
+  test("comment body", () => {
+    expect(extractCastBodyParts("task", "comment", 'ct-40882 "wired the parser" -t progress')).toEqual([
+      { text: "wired the parser", label: undefined },
+    ]);
+  });
+
+  test("heredoc comment body keeps its line breaks", () => {
+    expect(extractCastBodyParts("t", "comment", "pl-88 - <<'EOF'\n# Report\n\n- one\n- two\nEOF")).toEqual([
+      { text: "# Report\n\n- one\n- two", label: undefined },
+    ]);
+  });
+
+  test("plan comment carries its rationale as a second part", () => {
+    expect(extractCastBodyParts("plan", "comment", 'pl-88 "use postgres" -d -r "convex has no joins"')).toEqual([
+      { text: "use postgres", label: undefined },
+      { text: "convex has no joins", label: "why" },
+    ]);
+  });
+
+  test("done note", () => {
+    expect(extractCastBodyParts("task", "done", 'ct-1 -m "verified in prod"')).toEqual([
+      { text: "verified in prod", label: undefined },
+    ]);
+  });
+
+  test("plan create carries goal then body", () => {
+    expect(extractCastBodyParts("plan", "create", '"Rewrite sync" -g "one path" -b "## Steps"')).toEqual([
+      { text: "one path", label: "goal" },
+      { text: "## Steps", label: undefined },
+    ]);
+  });
+
+  test("trigger add carries its prompt", () => {
+    expect(extractCastBodyParts("trigger", "add", '"Check if CI is green on main" --in 30m')).toEqual([
+      { text: "Check if CI is green on main", label: "prompt" },
+    ]);
+  });
+
+  test("trigger add reads a heredoc prompt", () => {
+    const args = "- --every 4h --title \"Growth audit\" <<'EOF'\nAudit budget allocation.\nEOF";
+    expect(extractCastBodyParts("sched", "add", args)).toEqual([
+      { text: "Audit budget allocation.", label: "prompt" },
+    ]);
+  });
+
+  test("cast state carries the pinned line", () => {
+    expect(extractCastBodyParts("state", "", '"Waiting on CI — nothing to decide"')).toEqual([
+      { text: "Waiting on CI — nothing to decide", label: undefined },
+    ]);
+  });
+
+  test("state readers carry nothing", () => {
+    expect(extractCastBodyParts("state", "clear", "")).toEqual([]);
+    expect(extractCastBodyParts("state", "show", "jx7c6zk")).toEqual([]);
+  });
+
+  test("queries carry nothing — a filter is not content", () => {
+    expect(extractCastBodyParts("feed", "", "-m samvit")).toEqual([]);
+    expect(extractCastBodyParts("task", "ls", '-q "auth"')).toEqual([]);
+  });
+
+  test("a shell-expanded body yields nothing to quote", () => {
+    expect(extractCastBodyParts("task", "comment", 'ct-1 "$(cat notes.md)"')).toEqual([]);
   });
 });

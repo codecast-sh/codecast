@@ -39,12 +39,16 @@ export interface SendBody {
  * a truncated message. Unsupported/expanded syntax is marked dynamic; callers
  * must never present that decoded recipe as the payload that actually arrived.
  */
-function scanShellWord(source: string): { body: string; dynamic: boolean } {
+function scanShellWord(source: string): { body: string; dynamic: boolean; quoted: boolean; end: number } {
   let body = "";
   let dynamic = false;
+  let quoted = false;
   let quote: "single" | "double" | null = null;
+  // Declared outside the loop so the scan can report where the word ended —
+  // tokenizeShellArgs walks a whole arg string one word at a time.
+  let i = 0;
 
-  for (let i = 0; i < source.length; i += 1) {
+  for (; i < source.length; i += 1) {
     const ch = source[i];
 
     if (quote === "single") {
@@ -86,10 +90,12 @@ function scanShellWord(source: string): { body: string; dynamic: boolean } {
     if (/\s/.test(ch)) break;
     if (ch === "'") {
       quote = "single";
+      quoted = true;
       continue;
     }
     if (ch === '"') {
       quote = "double";
+      quoted = true;
       continue;
     }
     if (ch === "\\") {
@@ -133,7 +139,54 @@ function scanShellWord(source: string): { body: string; dynamic: boolean } {
   }
 
   if (quote !== null) dynamic = true;
-  return { body, dynamic };
+  return { body, dynamic, quoted, end: i };
+}
+
+export interface ShellToken {
+  value: string;
+  dynamic: boolean;
+  quoted: boolean;
+}
+
+// Split an arg string into the shell words the command actually ran with,
+// stopping at a heredoc marker. Everything past `<<` is body text, never argv:
+// a report that mentions "-m" in prose is not a --message flag, and scanning it
+// as one would quote the wrong sentence back at the reader.
+export function tokenizeShellArgs(args: string): ShellToken[] {
+  const tokens: ShellToken[] = [];
+  let rest = args;
+  while (rest.length > 0) {
+    const ws = rest.match(/^\s+/);
+    if (ws) {
+      rest = rest.slice(ws[0].length);
+      continue;
+    }
+    if (rest.startsWith("<<")) break;
+    const { body, dynamic, quoted, end } = scanShellWord(rest);
+    // A word that consumed nothing is an operator (`;`, `|`, `>`): the rest of
+    // the line belongs to another command.
+    if (end === 0) break;
+    tokens.push({ value: body, dynamic, quoted });
+    rest = rest.slice(end);
+  }
+  return tokens;
+}
+
+// The value of a flag (`-m "…"`, `--goal '…'`) in a cast command's args. Reads
+// the tokenized argv rather than the raw string, so a flag spelled inside a
+// quoted body or a heredoc can't be mistaken for one. An expanded value ($VAR,
+// $(…)) is a recipe, not the delivered text, so it yields null.
+export function extractFlagValue(args: string, flags: string[]): string | null {
+  const tokens = tokenizeShellArgs(args);
+  for (let i = 0; i < tokens.length - 1; i += 1) {
+    if (tokens[i].dynamic || !flags.includes(tokens[i].value)) continue;
+    const value = tokens[i + 1];
+    // A bare `-x` after the flag is the NEXT flag, not this one's value: several
+    // cast flags are booleans (`cast plan comment pl-88 "…" -d -r "why"`).
+    if (!value.quoted && /^-{1,2}[A-Za-z]/.test(value.value)) return null;
+    return !value.dynamic && value.value ? value.value : null;
+  }
+  return null;
 }
 
 // Pull the message body out of a `cast send <id> …` arg string. The transcript
@@ -190,10 +243,7 @@ export function extractSendBody(args: string): SendBody {
 // Only literal quoted/bare values are returned — an expanded value ($VAR, $(…))
 // is a recipe, not the delivered text, so it yields null.
 export function extractMessageFlag(args: string): string | null {
-  const m = args.match(/(?:^|\s)(?:-m|--message)\s+([\s\S]+)/);
-  if (!m) return null;
-  const { body, dynamic } = scanShellWord(m[1]);
-  return !dynamic && body ? body : null;
+  return extractFlagValue(args, ["-m", "--message"]);
 }
 
 // The body argument of `cast task comment <id> "…"` / `cast plan comment <id> -`:
@@ -205,6 +255,78 @@ export function extractCommentBody(args: string): string | null {
   if (rest === args) return null;
   const { body, kind } = extractSendBody(rest);
   return kind === "dynamic" ? null : body || null;
+}
+
+// "t"/"p"/"d" are the short spellings, "sched"/"schedule" the pre-rename name of
+// `cast trigger` — old transcripts replay them forever, so every reader resolves
+// a category through here and sees one name per object kind.
+const CAST_CATEGORY_ALIASES: Record<string, string> = {
+  t: "task",
+  p: "plan",
+  d: "doc",
+  sched: "trigger",
+  schedule: "trigger",
+};
+
+export function normalizeCastCategory(category: string): string {
+  return CAST_CATEGORY_ALIASES[category] || category;
+}
+
+export interface CastBodyPart {
+  label?: string;
+  text: string;
+}
+
+// Flags whose value is prose the person wrote, not a switch. Order is the order
+// they read in: a plan's goal before its body.
+const CAST_BODY_FLAGS: Array<{ flags: string[]; label?: string }> = [
+  { flags: ["-g", "--goal"], label: "goal" },
+  { flags: ["-b", "--body"] },
+  { flags: ["-c", "--content"] },
+  { flags: ["-d", "--description"] },
+  { flags: ["-m", "--message"] },
+  { flags: ["--summary"] },
+  { flags: ["-r", "--reason"], label: "why" },
+];
+
+// Only mutations carry prose. Reading flags off queries would quote a filter
+// back as content (`cast feed -m samvit` names a teammate, not a message).
+const CAST_BODY_SUBCOMMANDS = new Set([
+  "comment", "create", "add", "done", "drop", "complete",
+  "edit", "update", "decide", "discover", "note",
+]);
+
+// The prose a cast mutation carried: a comment body, a done note, a plan's goal,
+// a trigger's prompt, a pinned thread state. This is the content of the action —
+// the conversation renders it as a message body, so one function decides what
+// that content is for every cast command instead of each card guessing.
+export function extractCastBodyParts(
+  category: string,
+  subcommand: string,
+  args: string,
+): CastBodyPart[] {
+  const cat = normalizeCastCategory(category);
+  const parts: CastBodyPart[] = [];
+  const push = (text: string | null, label?: string) => {
+    const trimmed = text?.trim();
+    if (trimmed && !parts.some((p) => p.text === trimmed)) parts.push({ text: trimmed, label });
+  };
+
+  // Commands whose prose is the first positional argument.
+  const positional = () => {
+    const { body, kind } = extractSendBody(args);
+    return kind === "dynamic" ? null : body || null;
+  };
+
+  if (subcommand === "comment") push(extractCommentBody(args));
+  else if (cat === "trigger" && subcommand === "add") push(positional(), "prompt");
+  else if (cat === "state" && !["clear", "show"].includes(subcommand)) push(positional());
+
+  if (CAST_BODY_SUBCOMMANDS.has(subcommand)) {
+    for (const { flags, label } of CAST_BODY_FLAGS) push(extractFlagValue(args, flags), label);
+  }
+
+  return parts;
 }
 
 // Parse a raw shell command into its cast (category, subcommand, args), tolerating
