@@ -5,7 +5,7 @@ import { registerWorkspaceCommand } from "./workspace/cli.js";
 import { registerRemoteCommand } from "./remote/cli.js";
 import { registerPublishCommand } from "./publish.js";
 import { registerImageCommand } from "./imageCommand.js";
-import { registerStateCommand } from "./stateCommand.js";
+import { registerStateCommand, warnIfThreadStateStale } from "./stateCommand.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -15,6 +15,7 @@ import { buildWslAutostartTaskRun, daemonSupportedOnPlatform, isWSL, WINDOWS_DAE
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
+import { matchProject, looksLikeConvexId } from "./projectRef.js";
 import {
   parseEntityUrl,
   buildEntityUrl,
@@ -42,7 +43,7 @@ import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
-import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet } from "./snippets.js";
+import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -862,45 +863,41 @@ echo "{\\"pid\\":$CLAUDE_PID,\\"tty\\":\\"$TTY\\",\\"ts\\":$(date +%s),\\"term\\
 exit 0
 `;
 
-function installStatusHook(): void {
+// One installer for every codecast agent hook: write the script, then register
+// it under each event in ~/.claude/settings.json without disturbing hooks the
+// user (or another tool) put there. Idempotent — a hook already registered for
+// an event is left alone, so re-running an install never duplicates it.
+// Errors are swallowed: hooks are an enhancement, never a reason to fail setup.
+function installHookScript(fileName: string, script: string, events: readonly string[]): void {
   const home = process.env.HOME || "";
   const hooksDir = path.join(home, ".claude", "hooks");
-  const hookFile = path.join(hooksDir, "codecast-status.sh");
+  const hookFile = path.join(hooksDir, fileName);
   const settingsFile = path.join(home, ".claude", "settings.json");
 
   try {
     fs.mkdirSync(hooksDir, { recursive: true });
-    fs.writeFileSync(hookFile, CODECAST_STATUS_HOOK, { mode: 0o755 });
+    fs.writeFileSync(hookFile, script, { mode: 0o755 });
 
     let settings: any = {};
     if (fs.existsSync(settingsFile)) {
       settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
     }
-
     if (!settings.hooks) settings.hooks = {};
 
-    const hookEntry = {
-      type: "command",
-      command: hookFile,
-      timeout: 5,
-    };
+    const hookEntry = { type: "command", command: hookFile, timeout: 5 };
 
-    for (const event of ["UserPromptSubmit", "PreToolUse", "PreCompact", "Stop", "PermissionRequest", "Notification", "SessionStart"] as const) {
+    for (const event of events) {
       if (!settings.hooks[event]) settings.hooks[event] = [];
-
       const hookArray = settings.hooks[event] as any[];
-      const alreadyPresent = hookArray.some((matcher: any) => {
-        const hooks = matcher.hooks || [];
-        return hooks.some((h: any) => h.command?.includes("codecast-status.sh"));
-      });
-
-      if (!alreadyPresent) {
-        if (hookArray.length > 0 && hookArray[0].matcher === "") {
-          hookArray[0].hooks = hookArray[0].hooks || [];
-          hookArray[0].hooks.push(hookEntry);
-        } else {
-          hookArray.unshift({ matcher: "", hooks: [hookEntry] });
-        }
+      const alreadyPresent = hookArray.some((matcher: any) =>
+        (matcher.hooks || []).some((h: any) => h.command?.includes(fileName))
+      );
+      if (alreadyPresent) continue;
+      if (hookArray.length > 0 && hookArray[0].matcher === "") {
+        hookArray[0].hooks = hookArray[0].hooks || [];
+        hookArray[0].hooks.push(hookEntry);
+      } else {
+        hookArray.unshift({ matcher: "", hooks: [hookEntry] });
       }
     }
 
@@ -908,100 +905,52 @@ function installStatusHook(): void {
   } catch {
     // Ignore errors - hook is optional enhancement
   }
+}
+
+function installStatusHook(): void {
+  installHookScript("codecast-status.sh", CODECAST_STATUS_HOOK, [
+    "UserPromptSubmit", "PreToolUse", "PreCompact", "Stop", "PermissionRequest", "Notification", "SessionStart",
+  ]);
 }
 
 function installSessionRegisterHook(): void {
-  const home = process.env.HOME || "";
-  const hooksDir = path.join(home, ".claude", "hooks");
-  const hookFile = path.join(hooksDir, "session-register.sh");
-  const settingsFile = path.join(home, ".claude", "settings.json");
+  installHookScript("session-register.sh", SESSION_REGISTER_HOOK, ["SessionStart", "UserPromptSubmit"]);
+}
 
-  try {
-    fs.mkdirSync(hooksDir, { recursive: true });
-    fs.writeFileSync(hookFile, SESSION_REGISTER_HOOK, { mode: 0o755 });
+const THREAD_STATE_HOOK = `#!/bin/bash
+# Pinned thread-state reminder — ONE short nudge when a state has gone quiet.
+set -uo pipefail
 
-    let settings: any = {};
-    if (fs.existsSync(settingsFile)) {
-      settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
-    }
+INPUT=$(cat)
+SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
+[ -z "$SESSION_ID" ] && exit 0
 
-    if (!settings.hooks) settings.hooks = {};
+DIR="$HOME/.codecast/thread-state"
+# No stamp = no pinned state. A session that never ran \`cast state\` is never
+# nudged about it — the reminder maintains what exists, it doesn't recruit.
+[ -f "$DIR/$SESSION_ID.json" ] || exit 0
 
-    const hookEntry = {
-      type: "command",
-      command: hookFile,
-      timeout: 5,
-    };
+mkdir -p "$DIR/counters"
+COUNTER="$DIR/counters/$SESSION_ID"
+COUNT=0
+[ -f "$COUNTER" ] && COUNT=$(cat "$COUNTER" 2>/dev/null || echo 0)
+COUNT=$((COUNT + 1))
+echo "$COUNT" > "$COUNTER"
 
-    for (const event of ["SessionStart", "UserPromptSubmit"] as const) {
-      if (!settings.hooks[event]) settings.hooks[event] = [];
+# Fires on the crossing only, never after. \`cast state\` deletes the counter on
+# every write, so an agent that keeps its state current is reminded again later,
+# and one that ignores this is not nagged a second time.
+[ "$COUNT" -eq 10 ] || exit 0
 
-      const hookArray = settings.hooks[event] as any[];
-      const alreadyPresent = hookArray.some((matcher: any) => {
-        const hooks = matcher.hooks || [];
-        return hooks.some((h: any) => h.command?.includes("session-register.sh"));
-      });
+echo "<thread-state>Your pinned state is 10 turns old. Update it with cast state if it no longer says where this stands, or clear it.</thread-state>"
+`;
 
-      if (!alreadyPresent) {
-        if (hookArray.length > 0 && hookArray[0].matcher === "") {
-          hookArray[0].hooks = hookArray[0].hooks || [];
-          hookArray[0].hooks.push(hookEntry);
-        } else {
-          hookArray.unshift({ matcher: "", hooks: [hookEntry] });
-        }
-      }
-    }
-
-    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
-  } catch {
-    // Ignore errors - hook is optional enhancement
-  }
+function installThreadStateHook(): void {
+  installHookScript("thread-state.sh", THREAD_STATE_HOOK, ["UserPromptSubmit"]);
 }
 
 function installTaskPulseHook(): void {
-  const home = process.env.HOME || "";
-  const hooksDir = path.join(home, ".claude", "hooks");
-  const hookFile = path.join(hooksDir, "task-pulse.sh");
-  const settingsFile = path.join(home, ".claude", "settings.json");
-
-  try {
-    fs.mkdirSync(hooksDir, { recursive: true });
-    fs.writeFileSync(hookFile, TASK_PULSE_HOOK, { mode: 0o755 });
-
-    let settings: any = {};
-    if (fs.existsSync(settingsFile)) {
-      settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
-    }
-
-    if (!settings.hooks) settings.hooks = {};
-
-    const hookEntry = {
-      type: "command",
-      command: hookFile,
-      timeout: 5,
-    };
-
-    for (const event of ["UserPromptSubmit"] as const) {
-      if (!settings.hooks[event]) settings.hooks[event] = [];
-
-      const hookArray = settings.hooks[event] as any[];
-      const alreadyPresent = hookArray.some((matcher: any) => {
-        const hooks = matcher.hooks || [];
-        return hooks.some((h: any) => h.command?.includes("task-pulse.sh"));
-      });
-
-      if (!alreadyPresent) {
-        if (hookArray.length > 0 && hookArray[0].matcher === "") {
-          hookArray[0].hooks = hookArray[0].hooks || [];
-          hookArray[0].hooks.push(hookEntry);
-        } else {
-          hookArray.unshift({ matcher: "", hooks: [hookEntry] });
-        }
-      }
-    }
-
-    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
-  } catch {}
+  installHookScript("task-pulse.sh", TASK_PULSE_HOOK, ["UserPromptSubmit"]);
 }
 
 function showWelcome(): void {
@@ -1661,6 +1610,7 @@ async function runOnboarding(config: Config): Promise<void> {
   installSessionRegisterHook();
   installStatusHook();
   installTaskPulseHook();
+  installThreadStateHook();
 
   showWelcome();
 
@@ -2272,6 +2222,8 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **Check existing work first.** Your context includes an overview of active tasks and plans. Before creating new ones, check if your work already has a task or fits under an existing plan. When the user names a topic, search by it directly — \`cast task ls -q "<topic>"\` and \`cast plan ls -q "<topic>"\` filter by title/description so you don't have to scan a wall of IDs. Use \`cast task ready\` (optionally \`-q\`) for unclaimed work. Claim existing tasks with \`cast task start <id>\` rather than creating duplicates.
 
+**File work under a project when one fits.** A project groups tasks, plans, and docs that belong to the same effort — it is how the human triages a board that spans many sessions. Run \`cast project ls\` to see what exists, then pass \`--project "<name>"\` on create, or \`cast task update <id> --project "<name>"\` for a task already filed. Name it in plain words: every \`--project\` flag takes an ID, a short ID, or a title substring, so \`--project "Agent Quality"\` is the normal form and you never need to look up an ID. Don't invent a project for one task — file under an existing one, or leave it unfiled.
+
 ### Working on tasks
 
 Once you have a task:
@@ -2302,6 +2254,11 @@ cast task ready                             # Find available work
 cast task ready -q "<topic>"                # Filter ready tasks by title/description
 cast task ls -q "<topic>"                   # Search all active tasks by title/description
 cast plan ls -q "<topic>"                   # Search active plans by title/goal
+cast project ls                             # Projects in your workspace (the triage unit)
+cast project show <id>                      # A project and every task under it
+cast task ls -p "<project>"                 # Tasks in one project (ID, short ID, or title text)
+cast task create "Title" --project "<name>" # File a new task under a project
+cast task update <id> --project "<name>"    # File an existing task (--project '' unfiles it)
 cast task start/done/comment <id>           # Task lifecycle
 cast task create "Title" -t task -p high    # Create task (internal to agent work by default)
 cast task create "Title" --plan <plan_id>   # Create task bound to plan
@@ -2465,7 +2422,7 @@ cast state show <session_id>         # read another session's state
 
 Write it for someone who has been away: what is happening now, what it is waiting on, what happens next, and whether anything is theirs to decide. Lead with the situation — the transcript already holds the history. Keep it to a few lines. \`Goal:\`, \`Status:\`, \`Next:\`, \`Blocked:\` render as labels when you use them.
 
-You own it, so it is only true while you keep it true. Rewrite it whenever the answer changes — a new phase, a new blocker, a decision the human owes you — and clear it when the work is done or the line no longer holds. The dashboard counts the messages that have landed since you wrote it and fades the panel as that number grows, so a state you stopped maintaining reads as abandoned instead of current. Never leave a state saying you are waiting on something that already arrived.
+Update it at the moments that change the answer: you finish a phase, you get blocked, you hand work to another session, you are about to go quiet. Clear it when the work is done. A state claiming you are waiting on something that already arrived is worse than none — the dashboard shows how far the thread has run since you wrote it, so a line you stopped maintaining reads as abandoned rather than current.
 
 Pin one on any thread that will run long, park on something outside your control, or share work with other sessions. Skip it for a question you answer in a single turn.
 ${STATE_SNIPPET_END}
@@ -2485,341 +2442,94 @@ function expandStdinPromptArgs(args: string[]): string[] {
 // Generic marked-snippet installer: idempotent header check + end-marker replace,
 // otherwise append. Used for snippets that don't need the bespoke per-section
 // fallback heuristics the older installers carry.
-function installMarkedSnippet(
-  header: string,
-  endMarker: string,
-  snippet: string,
+// Every codecast-owned section in an agent instruction file is described here
+// and installed by ONE algorithm (`installSectionToTargets`, ./snippets.ts).
+//
+// This table replaced five near-identical `install*ToFile` copies that had
+// drifted into three different answers for "where does this block end when the
+// end marker is missing" — and one of those answers deleted the rest of the
+// user's CLAUDE.md. See snippets.sections.test.ts for the regressions.
+//
+// `headings[0]` is what we write today; the rest are headings older CLI versions
+// wrote, so an update replaces the old section instead of stacking a copy under
+// it. `contentProbes` is how a snippet opts into removing its own bodies from
+// before end markers existed — without one, a block we cannot prove we own is
+// left untouched.
+const SNIPPET_SECTIONS = {
+  memory: {
+    spec: {
+      headings: ["## Memory"],
+      endMarker: MEMORY_SNIPPET_END,
+      contentProbes: ["codecast search", "cast search"],
+    },
+    body: () => MEMORY_SNIPPET,
+    references: true,
+  },
+  triggers: {
+    spec: {
+      headings: [TRIGGER_SNIPPET_HEADING, LEGACY_TASK_SNIPPET_HEADING],
+      endMarker: TASK_SNIPPET_END,
+      contentProbes: ["cast trigger", "cast schedule", "codecast task", "cast task"],
+    },
+    body: () => TASK_SNIPPET,
+    references: true,
+  },
+  work: {
+    spec: {
+      headings: [
+        "## Tasks & Plans",
+        "## Tasks, Plans & Workflows",
+        "## Issue Tracking with codecast task",
+        "## Issue Tracking with cast task",
+      ],
+      endMarker: WORK_SNIPPET_END,
+    },
+    body: () => WORK_SNIPPET,
+    references: true,
+  },
+  workflow: {
+    spec: { headings: ["## Workflows"], endMarker: WORKFLOW_SNIPPET_END },
+    body: () => WORKFLOW_SNIPPET,
+    references: true,
+  },
+  visual: {
+    spec: { headings: ["## Visual Canvas"], endMarker: VISUAL_SNIPPET_END },
+    body: () => VISUAL_SNIPPET,
+    references: false,
+  },
+  forks: {
+    spec: { headings: ["## Forks & Sessions"], endMarker: FORKS_SNIPPET_END },
+    body: () => FORKS_SNIPPET,
+    references: true,
+  },
+  state: {
+    spec: { headings: ["## Thread state"], endMarker: STATE_SNIPPET_END },
+    body: () => STATE_SNIPPET,
+    references: true,
+  },
+} satisfies Record<string, { spec: SectionSpec; body: () => string; references: boolean }>;
+
+// Every feature that introduces an object the agent names in prose (a session, a
+// task, a plan, a trigger, a doc) also ensures the one shared "Referencing
+// objects" section exists. Written once per file and refreshed in place, so
+// enabling several features still yields exactly one copy.
+function installSnippetSection(
+  key: keyof typeof SNIPPET_SECTIONS,
   update: boolean,
 ): { installed: boolean; updated: boolean } {
-  const targets = getSnippetTargets();
-  let anyInstalled = false;
-  let anyUpdated = false;
-
-  for (const target of targets) {
-    if (!fs.existsSync(target.dirPath)) {
-      fs.mkdirSync(target.dirPath, { recursive: true });
-    }
-    let existing = fs.existsSync(target.filePath) ? fs.readFileSync(target.filePath, "utf-8") : "";
-
-    const has = existing.includes(header) && existing.includes(endMarker);
-    if (has && !update) continue;
-
-    if (has) {
-      const start = existing.indexOf(header);
-      const markerIdx = existing.indexOf(endMarker, start);
-      let end = markerIdx !== -1 ? markerIdx + endMarker.length : existing.length;
-      if (existing[end] === "\n") end++;
-      existing = existing.slice(0, start) + existing.slice(end);
-      fs.writeFileSync(target.filePath, existing.trimEnd() + "\n" + snippet, { mode: 0o600 });
-      anyInstalled = true;
-      anyUpdated = true;
-    } else {
-      fs.writeFileSync(target.filePath, existing + snippet, { mode: 0o600 });
-      anyInstalled = true;
-    }
-  }
-
-  return { installed: anyInstalled, updated: anyUpdated };
-}
-
-// Every feature below introduces an object the agent will want to name in prose
-// (a session, a task, a plan, a trigger, a doc), so each one also ensures the
-// single shared "Referencing objects" section exists. It is written once per
-// file and refreshed in place, so enabling several features never duplicates it.
-function withReferences(
-  result: { installed: boolean; updated: boolean },
-  update: boolean,
-): { installed: boolean; updated: boolean } {
-  installReferencesSnippet(update);
+  const entry = SNIPPET_SECTIONS[key];
+  const result = installSectionToTargets(entry.spec, entry.body(), update);
+  if (entry.references) installReferencesSnippet(update);
   return result;
 }
 
-function installForksSnippet(update = false): { installed: boolean; updated: boolean } {
-  return withReferences(
-    installMarkedSnippet("## Forks & Sessions", FORKS_SNIPPET_END, FORKS_SNIPPET, update),
-    update,
-  );
-}
-
-function installStateSnippet(update = false): { installed: boolean; updated: boolean } {
-  return withReferences(
-    installMarkedSnippet("## Thread state", STATE_SNIPPET_END, STATE_SNIPPET, update),
-    update,
-  );
-}
-
-// MESSAGING_SNIPPET + MESSAGING_SNIPPET_END live in ./snippets.ts (shared with the daemon).
-
-// SnippetTarget + getSnippetTargets live in ./snippets.ts (shared with the daemon).
-
-function installSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-
-  let existing = "";
-  if (fs.existsSync(filePath)) {
-    existing = fs.readFileSync(filePath, "utf-8");
-  }
-
-  const hasMemory = existing.includes("## Memory") && (existing.includes("codecast search") || existing.includes("cast search"));
-  if (hasMemory && !update) {
-    return { installed: false, updated: false };
-  }
-
-  if (hasMemory && update) {
-    const memoryStart = existing.indexOf("## Memory");
-    let memoryEnd = existing.length;
-
-    const endMarkerIdx = existing.indexOf(MEMORY_SNIPPET_END, memoryStart);
-    if (endMarkerIdx !== -1) {
-      memoryEnd = endMarkerIdx + MEMORY_SNIPPET_END.length;
-      if (existing[memoryEnd] === "\n") memoryEnd++;
-    } else {
-      const nextSection = existing.slice(memoryStart + 10).match(/\n## [A-Z]/);
-      if (nextSection && nextSection.index !== undefined) {
-        memoryEnd = memoryStart + 10 + nextSection.index;
-      }
-    }
-
-    const before = existing.slice(0, memoryStart);
-    const after = existing.slice(memoryEnd);
-    existing = before + after;
-    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + MEMORY_SNIPPET, { mode: 0o600 });
-    return { installed: true, updated: true };
-  }
-
-  fs.writeFileSync(filePath, existing + MEMORY_SNIPPET, { mode: 0o600 });
-  return { installed: true, updated: false };
-}
-
-function installMemorySnippet(update = false): { installed: boolean; updated: boolean } {
-  const targets = getSnippetTargets();
-  let anyInstalled = false;
-  let anyUpdated = false;
-
-  for (const target of targets) {
-    const result = installSnippetToFile(target.filePath, target.dirPath, update);
-    if (result.installed) anyInstalled = true;
-    if (result.updated) anyUpdated = true;
-  }
-
-  return withReferences({ installed: anyInstalled, updated: anyUpdated }, update);
-}
-
-function installTaskSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-
-  let existing = "";
-  if (fs.existsSync(filePath)) {
-    existing = fs.readFileSync(filePath, "utf-8");
-  }
-
-  const headings = [TRIGGER_SNIPPET_HEADING, LEGACY_TASK_SNIPPET_HEADING].filter((h) => existing.includes(h));
-  const hasTask = headings.length > 0 &&
-    ["cast trigger", "cast schedule", "codecast task", "cast task"].some((s) => existing.includes(s));
-  if (hasTask && !update) {
-    return { installed: false, updated: false };
-  }
-
-  if (hasTask && update) {
-    // Remove every recognized block (current or pre-rename heading), then
-    // append the fresh snippet once.
-    for (const heading of headings) {
-      const taskStart = existing.indexOf(heading);
-      if (taskStart === -1) continue;
-      let taskEnd = existing.length;
-
-      const endMarkerIdx = existing.indexOf(TASK_SNIPPET_END, taskStart);
-      if (endMarkerIdx !== -1) {
-        taskEnd = endMarkerIdx + TASK_SNIPPET_END.length;
-        if (existing[taskEnd] === "\n") taskEnd++;
-      } else {
-        const nextSection = existing.slice(taskStart + heading.length).match(/\n## [A-Z]/);
-        if (nextSection && nextSection.index !== undefined) {
-          taskEnd = taskStart + heading.length + nextSection.index;
-        }
-      }
-
-      existing = existing.slice(0, taskStart) + existing.slice(taskEnd);
-    }
-    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + TASK_SNIPPET, { mode: 0o600 });
-    return { installed: true, updated: true };
-  }
-
-  fs.writeFileSync(filePath, existing + TASK_SNIPPET, { mode: 0o600 });
-  return { installed: true, updated: false };
-}
-
-function installTaskSnippet(update = false): { installed: boolean; updated: boolean } {
-  const targets = getSnippetTargets();
-  let anyInstalled = false;
-  let anyUpdated = false;
-
-  for (const target of targets) {
-    const result = installTaskSnippetToFile(target.filePath, target.dirPath, update);
-    if (result.installed) anyInstalled = true;
-    if (result.updated) anyUpdated = true;
-  }
-
-  return withReferences({ installed: anyInstalled, updated: anyUpdated }, update);
-}
-
-function installWorkSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-
-  let existing = "";
-  if (fs.existsSync(filePath)) {
-    existing = fs.readFileSync(filePath, "utf-8");
-  }
-
-  const hasWork = (existing.includes("## Issue Tracking with codecast task") || existing.includes("## Issue Tracking with cast task") || existing.includes("## Tasks, Plans & Workflows") || existing.includes("## Tasks & Plans")) && existing.includes(WORK_SNIPPET_END);
-  if (hasWork && !update) {
-    return { installed: false, updated: false };
-  }
-
-  if (hasWork && update) {
-    let workStart = existing.indexOf("## Tasks & Plans");
-    if (workStart === -1) workStart = existing.indexOf("## Tasks, Plans & Workflows");
-    if (workStart === -1) workStart = existing.indexOf("## Issue Tracking with codecast task");
-    if (workStart === -1) workStart = existing.indexOf("## Issue Tracking with cast task");
-    let workEnd = existing.length;
-
-    const endMarkerIdx = existing.indexOf(WORK_SNIPPET_END, workStart);
-    if (endMarkerIdx !== -1) {
-      workEnd = endMarkerIdx + WORK_SNIPPET_END.length;
-      if (existing[workEnd] === "\n") workEnd++;
-    }
-
-    const before = existing.slice(0, workStart);
-    const after = existing.slice(workEnd);
-    existing = before + after;
-    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + WORK_SNIPPET, { mode: 0o600 });
-    return { installed: true, updated: true };
-  }
-
-  fs.writeFileSync(filePath, existing + WORK_SNIPPET, { mode: 0o600 });
-  return { installed: true, updated: false };
-}
-
-function installWorkSnippet(update = false): { installed: boolean; updated: boolean } {
-  const targets = getSnippetTargets();
-  let anyInstalled = false;
-  let anyUpdated = false;
-
-  for (const target of targets) {
-    const result = installWorkSnippetToFile(target.filePath, target.dirPath, update);
-    if (result.installed) anyInstalled = true;
-    if (result.updated) anyUpdated = true;
-  }
-
-  return withReferences({ installed: anyInstalled, updated: anyUpdated }, update);
-}
-
-
-function installWorkflowSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-
-  let existing = "";
-  if (fs.existsSync(filePath)) {
-    existing = fs.readFileSync(filePath, "utf-8");
-  }
-
-  const hasWorkflow = existing.includes("## Workflows") && existing.includes(WORKFLOW_SNIPPET_END);
-  if (hasWorkflow && !update) {
-    return { installed: false, updated: false };
-  }
-
-  if (hasWorkflow && update) {
-    const wfStart = existing.indexOf("## Workflows");
-    let wfEnd = existing.length;
-
-    const endMarkerIdx = existing.indexOf(WORKFLOW_SNIPPET_END, wfStart);
-    if (endMarkerIdx !== -1) {
-      wfEnd = endMarkerIdx + WORKFLOW_SNIPPET_END.length;
-      if (existing[wfEnd] === "\n") wfEnd++;
-    }
-
-    const before = existing.slice(0, wfStart);
-    const after = existing.slice(wfEnd);
-    existing = before + after;
-    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + WORKFLOW_SNIPPET, { mode: 0o600 });
-    return { installed: true, updated: true };
-  }
-
-  fs.writeFileSync(filePath, existing + WORKFLOW_SNIPPET, { mode: 0o600 });
-  return { installed: true, updated: false };
-}
-
-function installWorkflowSnippet(update = false): { installed: boolean; updated: boolean } {
-  const targets = getSnippetTargets();
-  let anyInstalled = false;
-  let anyUpdated = false;
-
-  for (const target of targets) {
-    const result = installWorkflowSnippetToFile(target.filePath, target.dirPath, update);
-    if (result.installed) anyInstalled = true;
-    if (result.updated) anyUpdated = true;
-  }
-
-  return { installed: anyInstalled, updated: anyUpdated };
-}
-
-function installVisualSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-
-  let existing = "";
-  if (fs.existsSync(filePath)) {
-    existing = fs.readFileSync(filePath, "utf-8");
-  }
-
-  const hasVisual = existing.includes("## Visual Canvas") && existing.includes(VISUAL_SNIPPET_END);
-  if (hasVisual && !update) {
-    return { installed: false, updated: false };
-  }
-
-  if (hasVisual && update) {
-    const visualStart = existing.indexOf("## Visual Canvas");
-    let visualEnd = existing.length;
-
-    const endMarkerIdx = existing.indexOf(VISUAL_SNIPPET_END, visualStart);
-    if (endMarkerIdx !== -1) {
-      visualEnd = endMarkerIdx + VISUAL_SNIPPET_END.length;
-      if (existing[visualEnd] === "\n") visualEnd++;
-    }
-
-    const before = existing.slice(0, visualStart);
-    const after = existing.slice(visualEnd);
-    existing = before + after;
-    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + VISUAL_SNIPPET, { mode: 0o600 });
-    return { installed: true, updated: true };
-  }
-
-  fs.writeFileSync(filePath, existing + VISUAL_SNIPPET, { mode: 0o600 });
-  return { installed: true, updated: false };
-}
-
-function installVisualSnippet(update = false): { installed: boolean; updated: boolean } {
-  const targets = getSnippetTargets();
-  let anyInstalled = false;
-  let anyUpdated = false;
-
-  for (const target of targets) {
-    const result = installVisualSnippetToFile(target.filePath, target.dirPath, update);
-    if (result.installed) anyInstalled = true;
-    if (result.updated) anyUpdated = true;
-  }
-
-  return { installed: anyInstalled, updated: anyUpdated };
-}
+function installMemorySnippet(update = false) { return installSnippetSection("memory", update); }
+function installTaskSnippet(update = false) { return installSnippetSection("triggers", update); }
+function installWorkSnippet(update = false) { return installSnippetSection("work", update); }
+function installWorkflowSnippet(update = false) { return installSnippetSection("workflow", update); }
+function installVisualSnippet(update = false) { return installSnippetSection("visual", update); }
+function installForksSnippet(update = false) { return installSnippetSection("forks", update); }
+function installStateSnippet(update = false) { return installSnippetSection("state", update); }
 
 // installMessagingSnippet lives in ./snippets.ts (shared with the daemon).
 
@@ -2930,6 +2640,7 @@ function refreshEnabledSnippets(config: Record<string, any>): void {
   installSessionRegisterHook();
   installStatusHook();
   installTaskPulseHook();
+  installThreadStateHook();
 }
 
 function uninstallOrchestration(): void {
@@ -3356,6 +3067,20 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
   }
 }
 
+// A mistyped or invented subcommand must FAIL, loudly, on stderr. The root
+// command carries an action handler (bare `cast` prints help), and commander
+// hands unrecognized operands to that handler instead of firing command:* — so
+// without this guard `cast <anything>` exits 0 with the whole help text on
+// STDOUT. Agents scrape that: `cast own $(cast codecast | grep -oE 'jx[a-z0-9]+'
+// | head -1)` picked up jx7c6zk, the placeholder short id in cast own's own
+// examples, and tried to own a session that never existed. Help goes to stderr
+// here for the same reason: nothing usable may reach stdout on a failure.
+function failUnknownCommand(operands: string[]): never {
+  console.error(`error: unknown command '${operands[0]}'`);
+  console.error(`Run 'cast --help' for the list of commands.`);
+  process.exit(1);
+}
+
 program
   .name("cast")
   .description(
@@ -3367,6 +3092,8 @@ program
   )
   .version(getVersion())
   .action(() => {
+    const operands = program.args.filter((a) => !a.startsWith("-"));
+    if (operands.length > 0) failUnknownCommand(operands);
     program.outputHelp();
   });
 
@@ -4548,6 +4275,39 @@ const formatOwners = (owners: Array<{ name?: string | null; email?: string | nul
     ? owners.map((o) => o.name || o.email || "?").join(", ")
     : "nobody";
 
+// `cast own <member>` — one argument that is unmistakably a PERSON means "put
+// the current session on them", the shape every sibling command already has
+// (cast rename, cast label set, cast state). Callers reached for it and got
+// "No session found for \"ashot@almostcandid.com\"", because the lone argument
+// filled the session slot.
+//
+// The test is positive-for-member, never negative-for-session: an email or a
+// name with a space cannot be a session reference, while anything id-shaped
+// stays a session reference exactly as before. Guessing the other way round
+// would silently retarget a real session, which is far worse than an error.
+const looksLikeMember = (arg: string) => arg.includes("@") || /\s/.test(arg.trim());
+
+// Split `own`/`disown` positionals into their two slots, defaulting the session
+// to the current one when the caller named only a member.
+function resolveOwnerTarget(
+  first: string,
+  second: string | undefined,
+  cmd: string,
+): { sessionId: string; member: string | undefined } {
+  if (second !== undefined || !looksLikeMember(first)) {
+    return { sessionId: first, member: second };
+  }
+  const current = detectCurrentSessionId();
+  if (!current) {
+    console.error(
+      `No session detected, so "${first}" has no session to apply to — ` +
+      `pass one explicitly: cast ${cmd} jx7c6zk ${first}`
+    );
+    process.exit(1);
+  }
+  return { sessionId: current, member: first };
+}
+
 program
   .command("own")
   .description(
@@ -4564,14 +4324,16 @@ program
     "with a team you're in). Scripts should pass an exact email.\n\n" +
     "Examples:\n" +
     "  cast own jx7c6zk jason@example.com   # hand off to a teammate (notifies them)\n" +
+    "  cast own jason@example.com           # …hand off the CURRENT session\n" +
     "  cast own jx7c6zk                     # claim it yourself\n" +
     "  cast owners jx7c6zk                  # who owns it\n" +
     "  cast disown jx7c6zk                  # step off it yourself\n" +
     "  cast disown jx7c6zk --all            # clear every owner"
   )
-  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .argument("<session_or_member>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or a member email/name, to use the CURRENT session")
   .argument("[member]", "Team member email (exact) or name; defaults to you")
-  .action(async (sessionId: string, member: string | undefined) => {
+  .action(async (first: string, second: string | undefined) => {
+    const { sessionId, member } = resolveOwnerTarget(first, second, "own");
     const result = await cliPost("/cli/sessions/own", {
       session_id: sessionId,
       owner: member?.trim() || "me",
@@ -4587,10 +4349,11 @@ program
 program
   .command("disown")
   .description("Remove an owner from a session — defaults to you (see: cast own)")
-  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .argument("<session_or_member>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or a member email/name, to use the CURRENT session")
   .argument("[member]", "Team member email (exact) or name; defaults to you")
   .option("--all", "Clear EVERY owner, not just one")
-  .action(async (sessionId: string, member: string | undefined, opts: { all?: boolean }) => {
+  .action(async (first: string, second: string | undefined, opts: { all?: boolean }) => {
+    const { sessionId, member } = resolveOwnerTarget(first, second, "disown");
     const result = opts.all
       ? await cliPost("/cli/sessions/owners/set", { session_id: sessionId, owners: [] })
       : await cliPost("/cli/sessions/disown", {
@@ -12776,7 +12539,7 @@ work
   .option("-d, --description <text>", "Description")
   .option("-t, --type <type>", "Type: task, feature, bug, chore", "task")
   .option("-p, --priority <level>", "Priority: urgent, high, medium, low", "medium")
-  .option("--project <id>", "Project ID")
+  .option("--project <ref>", "Project ID, short ID, or title substring")
   .option("--blocked-by <ids>", "Comma-separated short_ids this is blocked by")
   .option("--labels <labels>", "Comma-separated labels")
   .option("--assignee <name>", "Assignee")
@@ -12798,6 +12561,9 @@ work
     }
 
     const sessionId = detectCurrentSessionId();
+    // Resolved once, not per title: a bulk decomposition writes one project to
+    // every subtask, and resolving inside the loop would be N identical lookups.
+    const projectId = options.project ? await resolveProjectId(options.project) : undefined;
     for (const t of titles) {
       const body: Record<string, any> = {
         title: t,
@@ -12807,7 +12573,7 @@ work
       };
       if (options.description && titles.length === 1) body.description = options.description;
       if (options.human) body.promoted = true;
-      if (options.project) body.project_id = options.project;
+      if (projectId) body.project_id = projectId;
       if (options.assignee) body.assignee = options.assignee;
       if (options.blockedBy) body.blocked_by = options.blockedBy.split(",").map((s: string) => s.trim());
       if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
@@ -12836,7 +12602,7 @@ work
   .command("ls")
   .alias("list")
   .description("List work items (default: active only)")
-  .option("-p, --project <ref>", "Filter by project ID or title substring")
+  .option("-p, --project <ref>", "Filter by project ID, short ID, or title substring")
   .option("-s, --status <status>", "Filter by status")
   .option("-r, --ready", "Show only ready items (open, no blockers)")
   .option("-a, --all", "Include done/dropped tasks")
@@ -12964,6 +12730,7 @@ work
         console.log(`${c.dim}Session bound to plan ${result.plan_id}${c.reset}`);
       } catch {}
     }
+    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
   });
 
 work
@@ -12995,6 +12762,7 @@ work
     }
     console.log(`${c.green}ok${c.reset} Completed ${c.cyan}${shortId}${c.reset}`);
     if (sessionId) clearTaskPulseIfBound(sessionId, shortId);
+    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
   });
 
 work
@@ -13030,7 +12798,7 @@ work
   .option("-d, --description <text>", "New description")
   .option("--assignee <name>", "New assignee")
   .option("--labels <labels>", "Comma-separated labels")
-  .option("--project <id>", "Project ID")
+  .option("--project <ref>", "Project ID, short ID, or title substring")
   .option("--project-path <path>", "Project directory path")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
   .option("--parent <task_id>", "Nest under a parent task; pass '' to move it back to the top level")
@@ -13052,7 +12820,7 @@ work
     if (options.description !== undefined) body.description = options.description;
     if (options.assignee !== undefined) body.assignee = options.assignee;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
-    if (options.project !== undefined) body.project_id = options.project;
+    if (options.project !== undefined) body.project_id = await resolveProjectId(options.project);
     if (options.projectPath !== undefined) body.project_path = options.projectPath;
     if (options.plan) body.plan_id = options.plan;
     await cliPost("/cli/work/update", body);
@@ -13078,6 +12846,7 @@ work
     }
     await cliPost("/cli/work/comment", body);
     console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${shortId}${c.reset}`);
+    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
   });
 
 work
@@ -13177,13 +12946,13 @@ work
 work
   .command("ready")
   .description("Show tasks ready to work on (open, no blockers)")
-  .option("-p, --project <id>", "Filter by project")
+  .option("-p, --project <ref>", "Filter by project ID, short ID, or title substring")
   .option("--plan <plan_id>", "Filter by plan")
   .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
   .option("--subtasks", "Include open subtasks of in-progress parents (rescue an abandoned tree)")
   .action(async (options: any) => {
     const body: Record<string, any> = { ready: true };
-    if (options.project) body.project_id = options.project;
+    if (options.project) body.project_id = await resolveProjectId(options.project);
     if (options.plan) body.plan_id = options.plan;
     if (options.query) body.query = options.query;
     if (options.subtasks) body.include_subtasks = true;
@@ -13268,26 +13037,25 @@ const PROJECT_STATUS_ICONS: Record<string, string> = {
   done: "●",
 };
 
-function looksLikeConvexId(ref: string): boolean {
-  return /^[a-z0-9]{28,36}$/.test(ref);
-}
-
 // Resolve a project reference — a convex id, or a title substring / short_id of
-// a project visible to the caller (own or team workspace).
+// a project visible to the caller (own or team workspace). Every --project flag
+// goes through here, readers and writers alike: agents write project names from
+// prompts, never 32-character ids, so a flag that only speaks ids is a flag that
+// always fails for them. The matching rules live in projectRef.ts, where they
+// are tested; this only adds the fetch and the error exits.
 async function resolveProjectId(ref: string): Promise<string> {
-  if (looksLikeConvexId(ref)) return ref;
+  if (!ref || looksLikeConvexId(ref)) return ref;
   const projects = await cliPost("/cli/projects/list", {});
-  const needle = ref.toLowerCase();
-  const matches = (Array.isArray(projects) ? projects : []).filter(
-    (p: any) => p.short_id === ref || p.title?.toLowerCase().includes(needle)
-  );
-  if (matches.length === 1) return matches[0]._id;
-  if (matches.length === 0) {
+  const result = matchProject(Array.isArray(projects) ? projects : [], ref);
+  if (result.kind === "one" || result.kind === "id") return result.id;
+  if (result.kind === "empty") return ref;
+  if (result.kind === "none") {
     console.error(`No project matching "${ref}" in your workspace`);
+    console.error(`Run 'cast project ls' to see your projects.`);
     process.exit(1);
   }
   console.error(`Ambiguous project "${ref}" — matches:`);
-  for (const p of matches) console.error(`  ${p._id}  ${p.title}`);
+  for (const p of result.matches) console.error(`  ${p._id}  ${p.title}`);
   process.exit(1);
 }
 
@@ -13425,7 +13193,7 @@ doc
   .option("--content-file <path>", "Read content from file ('-' for stdin)")
   .option("-t, --type <type>", "Document type (note, plan, insight, decision, runbook)", "note")
   .option("-l, --labels <labels>", "Comma-separated labels")
-  .option("--project <id>", "Project ID")
+  .option("--project <ref>", "Project ID, short ID, or title substring")
   .action(async (title: string, options: any) => {
     const body: Record<string, any> = { title };
     if (options.contentFile) {
@@ -13442,7 +13210,7 @@ doc
     body.doc_type = options.type;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
     body.project_path = getRealCwd();
-    if (options.project) body.project_id = options.project;
+    if (options.project) body.project_id = await resolveProjectId(options.project);
 
     const sessionId = detectCurrentSessionId();
     if (sessionId) {
@@ -13464,12 +13232,12 @@ doc
   .command("ls")
   .description("List documents")
   .option("-t, --type <type>", "Filter by type (note, plan, insight, decision, runbook)")
-  .option("--project <id>", "Filter by project")
+  .option("--project <ref>", "Filter by project ID, short ID, or title substring")
   .option("-n, --limit <n>", "Max results", "20")
   .action(async (options: any) => {
     const body: Record<string, any> = { limit: parseInt(options.limit) };
     if (options.type) body.doc_type = options.type;
-    if (options.project) body.project_id = options.project;
+    if (options.project) body.project_id = await resolveProjectId(options.project);
     const docs = await cliPost("/cli/docs/list", body);
     if (!docs?.length) { console.log("No documents found."); return; }
     for (const d of docs) {
@@ -13739,7 +13507,7 @@ plan
   .option("--body-file <path>", "Plan body from file (for longer content; '-' for stdin)")
   .option("-a, --acceptance <criteria>", "Acceptance criterion (repeatable)", (val: string, prev: string[]) => prev.concat([val]), [] as string[])
   .option("--from-session", "Promote from current session")
-  .option("--project <id>", "Project ID")
+  .option("--project <ref>", "Project ID, short ID, or title substring")
   .option("-t, --template <name>", "Use a workflow template (plan-implement-verify, implement-review-fix, full-lifecycle)")
   .option("--model-stylesheet <stylesheet>", "CSS-like model routing rules")
   .action(async (title: string, options: any) => {
@@ -13751,7 +13519,7 @@ plan
       body.body = expandStdinPromptArgs([options.body])[0];
     }
     if (options.acceptance?.length) body.acceptance_criteria = options.acceptance;
-    if (options.project) body.project_id = options.project;
+    if (options.project) body.project_id = await resolveProjectId(options.project);
     if (options.modelStylesheet) body.model_stylesheet = options.modelStylesheet;
 
     const sessionId = detectCurrentSessionId();
@@ -13828,7 +13596,7 @@ plan
   .option("--draft", "Show draft plans")
   .option("--done", "Show done plans")
   .option("--all", "Show all statuses")
-  .option("--project <id>", "Filter by project")
+  .option("--project <ref>", "Filter by project ID, short ID, or title substring")
   .option("-q, --query <text>", "Filter by title/goal/description (case-insensitive)")
   .action(async (options: any) => {
     const body: Record<string, any> = {};
@@ -13836,7 +13604,7 @@ plan
     else if (options.draft) body.status = "draft";
     else if (options.done) body.status = "done";
     else if (options.active) body.status = "active";
-    if (options.project) body.project_id = options.project;
+    if (options.project) body.project_id = await resolveProjectId(options.project);
     if (options.query) body.query = options.query;
     body.project_path = getRealCwd();
 
@@ -14093,6 +13861,7 @@ plan
     if (options.author) body.author = options.author;
     await cliPost("/cli/plans/comment", body);
     console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${planId}${c.reset}`);
+    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
   });
 
 plan
@@ -15846,7 +15615,7 @@ plan
   .command("import")
   .description("Import a plan from a YAML file")
   .argument("<file>", "YAML file path")
-  .option("--project <id>", "Project ID")
+  .option("--project <ref>", "Project ID, short ID, or title substring")
   .action(async (file: string, options: any) => {
     const filePath = path.resolve(getRealCwd(), file);
     if (!fs.existsSync(filePath)) {
@@ -15898,7 +15667,7 @@ plan
 
     const planBody: Record<string, any> = { title, source: "imported", project_path: getRealCwd() };
     if (goal) planBody.goal = goal;
-    if (options.project) planBody.project_id = options.project;
+    if (options.project) planBody.project_id = await resolveProjectId(options.project);
 
     const planResult = await cliPost("/cli/plans/create", planBody);
     console.log(`${c.green}ok${c.reset} Created plan ${c.cyan}${planResult.short_id}${c.reset}: ${title}`);
@@ -16600,7 +16369,8 @@ if (!isStableContextFastPath) checkForUpdates().then(async (available) => {
     if (config?.orch_enabled) installOrchestration(true);
     installSessionRegisterHook();
     installStatusHook();
-  installTaskPulseHook();
+    installTaskPulseHook();
+    installThreadStateHook();
 
     if (daemonWasRunning) {
       startDaemon();
