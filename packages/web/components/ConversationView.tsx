@@ -649,6 +649,11 @@ export type ConversationData = {
     title?: string;
     share_token?: string;
     username: string;
+    // Triage stamps for the parent-preload seed (see inboxVisibilityFields).
+    inbox_dismissed_at?: number | null;
+    inbox_stashed_at?: number | null;
+    inbox_killed_at?: number | null;
+    inbox_pinned_at?: number | null;
   } | null;
   is_favorite?: boolean;
   profile_pinned_at?: number;
