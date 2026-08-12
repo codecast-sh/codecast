@@ -420,6 +420,11 @@ export default defineSchema({
     // thumbnail. Denormalized at message-write time (latestImagePreviewUrl);
     // never cleared, so presence also means "this session has images".
     image_preview_url: v.optional(v.string()),
+    // When the conversation's whole history was swept into conversation_images
+    // (backfillConversationImages). Live ingest materializes every new image, so
+    // this only marks that the pre-feature history was caught up. Set = never
+    // sweep this conversation again.
+    images_backfilled_at: v.optional(v.number()),
     has_pending_messages: v.optional(v.boolean()),
     // True while the conversation's newest message is a transient Claude Code
     // API/auth-error banner (see isApiErrorBanner). Cleared when a real turn
@@ -1586,6 +1591,28 @@ export default defineSchema({
     .index("by_type_timestamp", ["change_type", "timestamp"])
     // cast blame: attribute uncommitted lines to the newest edit of the file.
     .index("by_file_path", ["file_path"]),
+
+  // Every image in a conversation, materialized at message ingest
+  // (materializeConversationImages in messages.ts). The header gallery reads
+  // this instead of scanning the loaded message window, so its list covers the
+  // whole thread no matter how few pages are loaded. image_key = the storage id
+  // or the markdown src — the same identity extractSessionImages dedupes on —
+  // so a re-synced message upserts instead of duplicating a row.
+  // Inline base64 (data:) images are deliberately NOT materialized: the payload
+  // is the identity, and an index table is no place for it. The client window
+  // extraction still surfaces those, and the merge folds them in.
+  conversation_images: defineTable({
+    conversation_id: v.id("conversations"),
+    image_key: v.string(),
+    storage_id: v.optional(v.id("_storage")),
+    src: v.optional(v.string()),
+    message_id: v.id("messages"),
+    // Position within the message, so two images in one turn keep their order.
+    seq: v.number(),
+    timestamp: v.number(),
+  })
+    .index("by_conversation_id", ["conversation_id"])
+    .index("by_conversation_image_key", ["conversation_id", "image_key"]),
 
   pull_requests: defineTable({
     team_id: v.id("teams"),

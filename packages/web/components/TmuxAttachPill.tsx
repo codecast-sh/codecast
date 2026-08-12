@@ -22,14 +22,18 @@
  *
  * The last case is the point: `tmux attach` for a pane on another host is not a
  * command that can ever work, and handing it over as if it could is what made
- * this pill actively misleading. The terminal split still works for foreign
- * panes — it routes through the owning daemon, not the viewer's shell.
+ * this pill actively misleading.
+ *
+ * What the SPLIT can show follows the same three cases, because a pane can only
+ * be relayed by the daemon that owns it. Your own machines work either way — a
+ * local pane over the loopback PTY, a pane on your Mac mini as relayed screens
+ * (read-only). A teammate's pane is theirs alone.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { Copy } from "lucide-react";
 import { copyToClipboard } from "../lib/utils";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
@@ -54,10 +58,14 @@ export function TmuxAttachPill({
   const prev = useRef<string | null | undefined>(undefined);
   const [anim, setAnim] = useState<"tmux-pill-in" | "tmux-pill-change" | null>(null);
 
-  const machine = useQuery(
+  // useQueryNoThrow, not useQuery: this lookup only ENRICHES the pill (it names
+  // the machine and shapes the copy command). Without it the pill still renders
+  // something honest. A plain useQuery re-throws during render, and this exact
+  // query taking the whole conversation header down is why the rule exists.
+  const machine = useQueryNoThrow(
     api.devices.getConversationMachine,
     tmuxSession && conversationKey ? { conversation_id: conversationKey as any } : "skip",
-  ) as SessionMachine | null | undefined;
+  ).data as SessionMachine | null | undefined;
 
   useEffect(() => {
     const p = prev.current;
@@ -74,10 +82,10 @@ export function TmuxAttachPill({
   const foreign = !!machine && !machine.is_mine;
 
   // The pane is on a machine that isn't yours: name it, don't pretend it's
-  // reachable. The terminal split still works — it routes through the owning
-  // daemon rather than through the viewer's shell.
+  // reachable — not by ssh, and not by the split either, since relaying a pane
+  // means asking its owner's daemon.
   const copyLabel = foreign
-    ? `Runs on ${machineName} — not your machine, so there's no attach command to copy. Watch it via the terminal split.`
+    ? `Runs on ${machineName} — someone else's machine, so there's nothing here to copy or watch.`
     : attach && machine?.ssh_host
       ? `Copy ${attach}`
       : attach && machine
@@ -96,7 +104,9 @@ export function TmuxAttachPill({
   // name, offer the split — the daemon verifies has-session on connect and
   // the split shows a clean reconnect state if the pane is truly gone. The
   // dot keeps showing the liveness hint.
-  const canSplit = !!conversationKey && !!tmuxSession;
+  // A teammate's pane has no transport at all, so don't offer the split for it
+  // — clicking through to an explanation is worse than the tooltip saying it.
+  const canSplit = !!conversationKey && !!tmuxSession && !foreign;
   const splitOpen = !!conversationKey && isConversationTerminalOpen(conversationKey);
 
   const pillColors = isLive
@@ -111,7 +121,7 @@ export function TmuxAttachPill({
           canSplit
             ? splitOpen
               ? "Hide this agent's terminal"
-              : "Watch this agent's terminal (read-only, opens above the conversation)"
+              : "Watch this agent's terminal (opens above the conversation)"
             : copyLabel
         }
         side="bottom"
