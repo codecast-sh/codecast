@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { awaitTrackedSessionCreateResult, categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { awaitTrackedSessionCreateResult, categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 import { DispatchNotWiredError } from "../mutativeMiddleware";
 import { declareViewNav } from "../viewNav";
@@ -4164,6 +4164,56 @@ describe("liveInboxIds persistence + synced show-old", () => {
       ui: { inbox_show_old: false, "inbox_show_old:ts": Date.now() - 60_000 },
     });
     expect(resolveShowOld(useInboxStore.getState().clientState.ui)).toBe(true);
+  });
+
+  describe("teamInboxIds persistence (team-keyed twin)", () => {
+    beforeEach(() => {
+      useInboxStore.setState({
+        teamInboxIds: new Set<string>(),
+        teamInboxIdSnapshot: null,
+        clientState: {},
+      } as any);
+    });
+
+    it("setTeamInboxIds keeps the Set and the team-keyed snapshot in lockstep", () => {
+      useInboxStore.getState().setTeamInboxIds(["a", "b"], "team1");
+      const st = useInboxStore.getState();
+      expect([...st.teamInboxIds].sort()).toEqual(["a", "b"]);
+      expect(st.teamInboxIdSnapshot).toEqual({ team_id: "team1", ids: ["a", "b"] });
+    });
+
+    // Raw setState for the ui prefs: syncTable's stamped-bag LWW is orthogonal
+    // to what's under test here (the seed guards read the resolved ui values).
+    const setUi = (ui: Record<string, any>) =>
+      useInboxStore.setState({ clientState: { ui } } as any);
+
+    it("cold-boot seed lands only in team scope with the matching active team", () => {
+      const snap = { team_id: "team1", ids: ["x", "y"] };
+      // mine scope: no seed
+      setUi({ inbox_scope: "mine", active_team_id: "team1" });
+      seedTeamInboxIdsFromCache(snap);
+      expect(useInboxStore.getState().teamInboxIds.size).toBe(0);
+      // team scope, different team: no seed
+      setUi({ inbox_scope: "team", active_team_id: "team2" });
+      seedTeamInboxIdsFromCache(snap);
+      expect(useInboxStore.getState().teamInboxIds.size).toBe(0);
+      // team scope, matching team: seed
+      setUi({ inbox_scope: "team", active_team_id: "team1" });
+      seedTeamInboxIdsFromCache(snap);
+      expect([...useInboxStore.getState().teamInboxIds].sort()).toEqual(["x", "y"]);
+    });
+
+    it("cold-boot seed never clobbers a team payload that raced hydration", () => {
+      setUi({ inbox_scope: "team", active_team_id: "team1" });
+      useInboxStore.getState().setTeamInboxIds(["fresh"], "team1");
+      seedTeamInboxIdsFromCache({ team_id: "team1", ids: ["stale"] });
+      expect([...useInboxStore.getState().teamInboxIds]).toEqual(["fresh"]);
+    });
+
+    it("snapshot is persisted; the raw Set is not", () => {
+      expect(isPersistedStoreKey("teamInboxIdSnapshot")).toBe(true);
+      expect(isPersistedStoreKey("teamInboxIds")).toBe(false);
+    });
   });
 
   it("the legacy show_old_sessions key is never read — a stale server `true` cannot resurrect cruft mode", () => {

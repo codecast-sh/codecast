@@ -9,12 +9,15 @@ import { useRecoveryPoll } from "./useRecoveryPoll";
 // Record the team-mode active id set, change-guarded so an identical payload
 // doesn't allocate a new Set and re-render every subscriber. The panel gates the
 // visible list on this while inbox_scope is "team" (see filterInboxScope). Mirror
-// of applyLiveInboxIds for the team board.
-export function applyTeamInboxIds(sessions: any[]) {
-  const next = new Set<string>(sessions.map((x: any) => x._id.toString()));
+// of applyLiveInboxIds for the team board — including the persistence rule: the
+// write goes through the sync() action (never raw setState) so the team-keyed
+// IDB snapshot stays current and the next boot's first frame can seed from it.
+export function applyTeamInboxIds(sessions: any[], teamId: string | null) {
+  const ids = sessions.map((x: any) => x._id.toString());
+  const next = new Set<string>(ids);
   const prev = useInboxStore.getState().teamInboxIds;
-  if (prev.size === next.size && [...next].every((id) => prev.has(id))) return;
-  useInboxStore.setState({ teamInboxIds: next });
+  if (prev.size === next.size && ids.every((id) => prev.has(id))) return;
+  useInboxStore.getState().setTeamInboxIds(ids, teamId);
 }
 
 /**
@@ -56,9 +59,9 @@ export function useSyncTeamInboxSessions() {
     const sessions = data?.sessions ?? [];
     if (!Array.isArray(sessions)) return;
     syncTable("sessions", sessions as unknown as InboxSession[]);
-    applyTeamInboxIds(sessions);
+    applyTeamInboxIds(sessions, (activeTeamId as string | undefined) ?? null);
     lastSyncRef.current = Date.now();
-  }, [syncTable]), { coalesceMs: 300 });
+  }, [syncTable, activeTeamId]), { coalesceMs: 300 });
 
   useConvexSync(teamLiveness, useCallback((data: any) => {
     const liveness = data?.liveness ?? data;
@@ -92,7 +95,7 @@ export function useSyncTeamInboxSessions() {
     const sessions = fresh?.sessions ?? [];
     if (!Array.isArray(sessions)) return;
     syncTable("sessions", sessions as unknown as InboxSession[]);
-    applyTeamInboxIds(sessions);
+    applyTeamInboxIds(sessions, (activeTeamId as string | undefined) ?? null);
     lastSyncRef.current = Date.now();
   }, [convex, active, activeTeamId, syncTable]), 15_000);
 

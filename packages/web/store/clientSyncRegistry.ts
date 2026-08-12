@@ -146,6 +146,13 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "meta", key: "liveInboxIdList" },
     hydration: "manual",
   },
+  // Team-mode twin of liveInboxIdList, keyed by team id (see inboxStore's
+  // teamInboxIdSnapshot doc). Manual for the same reason: the boot block seeds
+  // the in-memory teamInboxIds Set from it, guarded by scope + active team.
+  teamInboxIdSnapshot: {
+    persistence: { kind: "meta", key: "teamInboxIdSnapshot" },
+    hydration: "manual",
+  },
   _lastViewedAt: {
     persistence: { kind: "meta", key: "_lastViewedAt" },
   },
