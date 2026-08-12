@@ -1,6 +1,6 @@
 "use client";
 
-import React, { memo, useState } from "react";
+import React, { memo } from "react";
 import { Pin, ChevronDown, X } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
@@ -43,7 +43,6 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
   // a coarse ticker the panel would keep claiming "just now" for hours.
   const now = useCoarseNow(30_000);
   const collapsed = useInboxStore((s) => s.clientState?.ui?.thread_state_collapsed === true);
-  const [hovering, setHovering] = useState(false);
 
   const view = threadStateView(
     { thread_state: threadState, thread_state_at: threadStateAt, thread_state_msg_count: threadStateMsgCount },
@@ -58,7 +57,14 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
     useInboxStore.getState().updateClientUI({ thread_state_collapsed: !collapsed });
 
   const clear = () => {
-    const previous = { thread_state: threadState, thread_state_at: threadStateAt, thread_state_msg_count: threadStateMsgCount };
+    // Nulls, not undefined: the patch rail reads null as an explicit clear and
+    // ignores undefined, so an Undo on a legacy row (written before the counts
+    // existed) still restores exactly what was there.
+    const previous = {
+      thread_state: threadState ?? null,
+      thread_state_at: threadStateAt ?? null,
+      thread_state_msg_count: threadStateMsgCount ?? null,
+    };
     useInboxStore.getState().patchConversation(conversationId, {
       thread_state: null,
       thread_state_at: null,
@@ -81,8 +87,6 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
     <div className="relative z-20 bg-sol-bg pt-1.5">
       <div className="mx-auto conv-col px-2 sm:px-4 pb-1.5">
         <div
-          onMouseEnter={() => setHovering(true)}
-          onMouseLeave={() => setHovering(false)}
           className={`group rounded-xl border border-sol-border/40 border-l-2 ${tone.bar} bg-sol-bg-alt/60 overflow-hidden animate-in fade-in slide-in-from-bottom-1 duration-200`}
         >
           <div className="flex items-center gap-2 pl-2.5 pr-1.5 py-1.5">
@@ -112,7 +116,7 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
                   onClick={clear}
                   title="Clear the pinned state"
                   aria-label="Clear the pinned state"
-                  className={`p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-all ${hovering ? "opacity-100" : "opacity-0"}`}
+                  className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-all"
                 >
                   <X className="w-3 h-3" strokeWidth={2.5} />
                 </button>
