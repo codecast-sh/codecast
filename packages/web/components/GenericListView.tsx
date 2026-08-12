@@ -514,10 +514,12 @@ export function GenericListView<T>({
   const router = useRouter();
   const currentPath = usePathname();
 
-  // Open/close a row's detail by driving the URL. Click and space both call this:
-  // navigating to the row's route opens it (instant when the route shares this
-  // page's component — e.g. /tasks), and navigating back to the list route closes
-  // it, so the detail toggles in place with no re-mount.
+  // Open/close a row's detail by driving the URL: navigating to the row's route
+  // opens it (instant when the route shares this page's component — e.g.
+  // /tasks), and navigating back to the list route closes it, in place with no
+  // re-mount. Click always opens — re-clicking the open row is a no-op, closing
+  // belongs to Esc/✕ — while space keeps the keyboard toggle.
+  const openDetail = (item: T) => router.push(getItemRoute(item));
   const toggleDetail = (item: T) => {
     const route = getItemRoute(item);
     const base = route.replace(/\/[^/]+$/, "");
@@ -796,8 +798,8 @@ export function GenericListView<T>({
       isFocused,
       isSelected,
       isEditing,
-      // Click toggles the detail in place (same as space) by driving the URL.
-      onClick: () => { setFocusIndex(globalIdx); toggleDetail(item); },
+      // Click opens the detail in place (space toggles) by driving the URL.
+      onClick: () => { setFocusIndex(globalIdx); openDetail(item); },
       onSelect: () => toggleSelect(id),
       onContextMenu: (e: React.MouseEvent) => {
         e.preventDefault();
