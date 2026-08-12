@@ -16,12 +16,12 @@ import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, filterInboxScope, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { sessionsWakeSig, resolveShowOld } from "../store/inboxStore";
+import { sessionsWakeSig, resolveShowOld, BLOCKED_REVIVE_TTL_MS } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { isBlockedConversation, isSubagentConversation, nestParentIdOf, LOGIN_FLOW_STALE_MS } from "@codecast/convex/convex/ccAccountsShared";
-import { isLivenessStale } from "@codecast/shared/contracts";
+import { isLivenessStale, blockedContinueClientId } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -603,9 +603,9 @@ function BlockedSessionsBanner({
     const targets = acted.filter(
       (sess) => sess.pending_api_error_kind === "limit" || sess.pending_api_error_kind === "connection",
     );
-    const bucket = Math.floor(Date.now() / 60_000);
+    const at = Date.now();
     for (const sess of targets) {
-      const clientId = `continue-blocked-${sess._id}-${bucket}`;
+      const clientId = blockedContinueClientId(sess._id, at);
       store.addOptimisticMessage(sess._id, "continue", undefined, clientId);
       store.sendMessage(sess._id, "continue", undefined, clientId);
     }
@@ -621,11 +621,23 @@ function BlockedSessionsBanner({
   // the dead token in memory) + continue, so a re-login on the same account
   // doesn't force a switch to a different one.
   // The daemon work (keychain swap, kill, restart, re-queue) is inherently
-  // remote, but the user's gesture renders instantly: stamp the acted sessions
-  // as revive-in-flight (classification moves them to WORKING, the pill count
-  // drops) and close the banner before awaiting anything. The await only
-  // powers the outcome toast. If the mutation itself fails, revert the stamps
-  // and un-snooze so the banner resurfaces for a retry; if a daemon is merely
+  // remote, but the user's gesture renders instantly, in every acted session at
+  // once: the "continue" each one is about to receive is painted into its local
+  // message cache NOW, and the sessions are stamped as revive-in-flight
+  // (classification moves them to WORKING, the pill count and the blocked chips
+  // drop). Both land before anything is awaited; the await only powers the
+  // outcome toast.
+  //
+  // The daemon still OWNS delivery here — it has to kill the process holding
+  // the dead token before the continue lands, an ordering the web can't
+  // reproduce from a plain send. So we hand it the client ids we painted with
+  // (continue_client_ids -> the command's client_ids), and its enqueue carries
+  // them: the server echo replaces each painted bubble instead of doubling it.
+  // The nonce makes the ids unique to THIS gesture, so a revive seconds after a
+  // continue-all can't dedupe itself away against that earlier send's row.
+  //
+  // If the mutation itself fails, take the whole gesture back — bubbles, stamps
+  // and the snooze — so the banner resurfaces for a retry. If a daemon is merely
   // unreachable, the stamps age out (BLOCKED_REVIVE_TTL_MS) and those sessions
   // honestly return to blocked.
   const runRevive = async (
@@ -636,15 +648,26 @@ function BlockedSessionsBanner({
   ) => {
     const ids = acted.map((sess) => sess._id);
     const store = useInboxStore.getState();
+    const nonce = Math.random().toString(36).slice(2, 10);
+    const clientIds: Record<string, string> = {};
+    for (const id of ids) {
+      clientIds[id] = `acct-revive-${nonce}-${id}`;
+      store.addOptimisticMessage(id, "continue", undefined, clientIds[id]);
+    }
     store.markBlockedReviveRequested(ids);
     closeBanner();
     setBusy(busyKey);
     try {
-      const res = await requestSwitch({ profile, include_subagents: effectiveInclude });
+      const res = await requestSwitch({
+        profile,
+        include_subagents: effectiveInclude,
+        continue_client_ids: clientIds,
+      });
       toast.success(
         successToast(res) + (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : ""),
       );
     } catch (err) {
+      for (const id of ids) store.removeOptimisticMessage(id, clientIds[id]);
       store.clearBlockedReviveRequested(ids);
       updateDismissed("blocked_sessions_banner", 0);
       toast.error(err instanceof Error ? err.message : failToast);
@@ -1640,6 +1663,19 @@ export const SessionCard = memo(function SessionCard({
   // the moment status goes active or the server echoes the message.
   const isPendingSend = useInboxStore((st) => convHasPendingSend(st.pendingMessages[session._id]));
   const isPendingWorking = isPendingSend && !isAgentActive(session);
+  // A blocked session the user has ALREADY acted on stops wearing the amber
+  // chip on the spot. Two local signals say they acted: a continue is sitting
+  // in this session's outbox, or a fleet revive was requested for it. The
+  // server's pending_api_error flag only clears when the agent's next real turn
+  // lands — several seconds of daemon work later — so reading it alone left
+  // every row still shouting "login" after the whole fleet had been told to
+  // continue. Same two facts the pill count and the banner already drop on
+  // (freshReviveRequestIds); if the revive never happens the stamp ages out
+  // (coarseNow keeps the TTL live) and the chip honestly returns.
+  const reviveRequestedAt = useInboxStore((st) => st.blockedReviveRequestedAt[session._id]);
+  const blockedActionPending =
+    isPendingSend || (!!reviveRequestedAt && coarseNow - reviveRequestedAt < BLOCKED_REVIVE_TTL_MS);
+  const showBlockedBadge = !!session.pending_api_error && !blockedActionPending;
   // Kill+restart in flight for this session (written by useSessionRestart).
   // Scalar per-card selector, so only this card re-renders when its own restart
   // begins/ends.
@@ -1883,7 +1919,7 @@ export const SessionCard = memo(function SessionCard({
               {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
             </span>
             <div className="flex items-center gap-1 flex-shrink-0">
-              {session.pending_api_error && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
+              {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
               {session.session_error && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
               )}
@@ -1895,13 +1931,13 @@ export const SessionCard = memo(function SessionCard({
               )}
               {/* Reuse the staleness-aware isLive so an aged-out subagent row
                   stops pulsing green, matching the main card and the bucket. */}
-              {isLive && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && (
+              {isLive && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && (
                 <span className="relative flex h-1.5 w-1.5" title="Live">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
                   <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-sol-green" />
                 </span>
               )}
-              {!isLive && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
+              {!isLive && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
                 <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session idle" />
               )}
               {session.message_count > 0 && (
@@ -2189,7 +2225,7 @@ export const SessionCard = memo(function SessionCard({
                 Gate
               </span>
             )}
-            {session.pending_api_error && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
+            {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
             {session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}
@@ -2202,7 +2238,7 @@ export const SessionCard = memo(function SessionCard({
             {/* Settled with content gets the gray idle dot. Keyed on !isLive (now
                 staleness-aware) rather than the raw is_idle flag, so a frozen
                 is_idle:false row that's really finished shows idle, not nothing. */}
-            {!isWorking && !isLive && variant !== "dismissed" && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && !isRowRestarting && session.message_count > 0 && (
+            {!isWorking && !isLive && variant !== "dismissed" && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && !isRowRestarting && session.message_count > 0 && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session idle" />
             )}
             {/* A kill+restart owns the row's signal while it runs: the re-pended
@@ -2221,7 +2257,7 @@ export const SessionCard = memo(function SessionCard({
                 pending
               </span>
             )}
-            {(isWorking || isLive) && !isPendingWorking && !isRowRestarting && !session.pending_api_error && (
+            {(isWorking || isLive) && !isPendingWorking && !isRowRestarting && !showBlockedBadge && (
               <span className="relative flex h-2 w-2" title="Working">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
