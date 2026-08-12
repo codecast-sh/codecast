@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DELIVERED_ECHO_ADOPTION_WINDOW_MS, findEchoedPendingMessage, resolveEchoImages } from "./messages";
+import { DELIVERED_ECHO_ADOPTION_WINDOW_MS, findEchoedPendingMessage, injectedImageRefs, resolveEchoImages } from "./messages";
 
 // The command-id coverage proof rides on echo→pending matching: the matched
 // row's client_id is stamped onto the transcript row, and v2 overlays reconcile
@@ -189,17 +189,42 @@ describe("resolveEchoImages", () => {
     ).toEqual([{ media_type: "image/webp", storage_id: SID }]);
   });
 
-  test("with no pending row at all the echoed path still yields a renderable image", () => {
+  // With no pending row the only ids left are the ones in the message text,
+  // which anyone can type. null says "verify these against storage first" —
+  // inserting an id that names no object fails schema validation and loses the
+  // whole message, so the caller must not trust them blind.
+  test("with no pending row the echoed ids are handed back for verification", () => {
     expect(
       resolveEchoImages(undefined, undefined, `text [Image /tmp/codecast/images/${SID}.jpeg]`),
-    ).toEqual([{ media_type: "image/jpeg", storage_id: SID }]);
+    ).toBeNull();
+    expect(
+      resolveEchoImages(undefined, { image_storage_ids: [] }, `[Image /tmp/codecast/images/${SID}.jpeg]`),
+    ).toBeNull();
   });
 
-  test("a repeated path yields one image, and plain text yields none", () => {
-    const echo = `[Image /tmp/codecast/images/${SID}.gif] and again /tmp/codecast/images/${SID}.gif`;
-    expect(resolveEchoImages(undefined, undefined, echo)).toEqual([
-      { media_type: "image/gif", storage_id: SID },
-    ]);
+  test("plain text asks for nothing", () => {
     expect(resolveEchoImages(undefined, undefined, "no images here")).toBeUndefined();
+  });
+});
+
+describe("injectedImageRefs", () => {
+  const SID = "kg2d8yf566mpk8b702ce2w4nwx8cb5zt";
+
+  test("media type comes from the extension the daemon wrote", () => {
+    for (const [ext, type] of [["png", "image/png"], ["webp", "image/webp"], ["jpg", "image/jpeg"], ["jpeg", "image/jpeg"], ["gif", "image/gif"]]) {
+      expect(injectedImageRefs(`[Image /tmp/codecast/images/${SID}.${ext}]`)).toEqual([
+        { media_type: type, storage_id: SID },
+      ]);
+    }
+  });
+
+  test("a path repeated in one turn yields one image", () => {
+    const echo = `[Image /tmp/codecast/images/${SID}.gif] and again /tmp/codecast/images/${SID}.gif`;
+    expect(injectedImageRefs(echo)).toEqual([{ media_type: "image/gif", storage_id: SID }]);
+  });
+
+  test("prose that merely mentions an image path yields nothing", () => {
+    expect(injectedImageRefs("no images here")).toEqual([]);
+    expect(injectedImageRefs("/tmp/codecast/images/report.txt")).toEqual([]);
   });
 });

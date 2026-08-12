@@ -809,25 +809,49 @@ export function pendingImageStorageIds(
 }
 
 // Images to store on an echoed user turn. Anything the sync already carried
-// wins. Otherwise take the paired pending row's storage ids, and failing that
-// the ids the echo itself names — a delivered image then still renders even
-// when no pending row could be paired, which is the whole point: the file
-// exists in storage, so the bubble should never come out blank.
+// wins; otherwise the paired pending row's storage ids, whose media type comes
+// from the extension the daemon wrote (hardcoding image/png mislabelled every
+// webp and jpeg). Returns null when only the echo text is left to go on — the
+// caller then has to verify those ids against storage before trusting them.
 export function resolveEchoImages(
   existing: Array<{ media_type: string; storage_id?: string }> | undefined,
   pm: { image_storage_ids?: string[]; image_storage_id?: string } | undefined,
   echoContent: string,
-): Array<{ media_type: string; storage_id?: string }> | undefined {
+): Array<{ media_type: string; storage_id?: string }> | undefined | null {
   if (existing && existing.length > 0) return existing;
-  const refs = injectedImageRefs(echoContent);
   const pendingIds = pm ? pendingImageStorageIds(pm) : [];
-  if (pendingIds.length > 0) {
-    return pendingIds.map((id) => ({
-      media_type: refs.find((r) => r.storage_id === id)?.media_type || "image/png",
-      storage_id: id,
-    }));
+  if (pendingIds.length === 0) return injectedImageRefs(echoContent).length > 0 ? null : existing;
+  const refs = injectedImageRefs(echoContent);
+  return pendingIds.map((id) => ({
+    media_type: refs.find((r) => r.storage_id === id)?.media_type || "image/png",
+    storage_id: id,
+  }));
+}
+
+// Last resort when no pending row could be paired: the storage ids the echo
+// itself names. A delivered image then still renders — the file is in storage,
+// so the bubble should never come out blank just because the terminal mangled
+// the prose the matcher compares.
+//
+// These ids are untrusted: the path is ordinary message text, so anyone can
+// type one. An id that names no storage object fails schema validation on
+// insert and takes the WHOLE message down with it, which is far worse than a
+// missing thumbnail — so each candidate is resolved against storage first and
+// silently dropped if it doesn't exist.
+async function verifiedEchoImages(
+  ctx: { storage: { getUrl: (id: Id<"_storage">) => Promise<string | null> } },
+  echoContent: string,
+): Promise<Array<{ media_type: string; storage_id: Id<"_storage"> }>> {
+  const kept: Array<{ media_type: string; storage_id: Id<"_storage"> }> = [];
+  for (const ref of injectedImageRefs(echoContent)) {
+    const id = ref.storage_id as Id<"_storage">;
+    try {
+      if (await ctx.storage.getUrl(id)) kept.push({ media_type: ref.media_type, storage_id: id });
+    } catch {
+      // Malformed id — not ours, ignore.
+    }
   }
-  return refs.length > 0 ? refs : existing;
+  return kept;
 }
 
 // Does this echoed user turn ack the given pending image row? Both contents are
@@ -1093,7 +1117,11 @@ export const addMessage = mutation({
         // Agent echoed the message → durable proof of delivery; promote to terminal "delivered".
         await markPendingDelivered(ctx, matchingPending);
       }
-      images = resolveEchoImages(images, matchingPending, safeContent || "") as typeof images;
+      const resolved = resolveEchoImages(images, matchingPending, safeContent || "");
+      images = (resolved === null
+        ? await verifiedEchoImages(ctx, safeContent || "")
+        : resolved) as typeof images;
+      if (images && images.length === 0) images = undefined;
     }
 
     const messageId = await ctx.db.insert("messages", {
@@ -1545,7 +1573,11 @@ export const addMessages = mutation({
           await markPendingDelivered(ctx, matchingPending);
       }
       if (msg.role === "user") {
-        images = resolveEchoImages(images, matchingPending, safeContent || "") as typeof images;
+        const resolved = resolveEchoImages(images, matchingPending, safeContent || "");
+        images = (resolved === null
+          ? await verifiedEchoImages(ctx, safeContent || "")
+          : resolved) as typeof images;
+        if (images && images.length === 0) images = undefined;
       }
 
       const messageId = await ctx.db.insert("messages", {
