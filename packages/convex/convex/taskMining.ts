@@ -6,6 +6,7 @@ import { Id, Doc } from "./_generated/dataModel";
 import { teamVisibleConvTeam } from "./privacy";
 import { nextShortId } from "./counters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
+import { inboxVisibilityFields } from "./inboxProjection";
 
 // Called after generateSessionInsight saves a new insight — mines tasks + docs for that conversation
 export const mineConversationAfterInsight = internalAction({
@@ -1132,6 +1133,10 @@ export const webGetDocDetail = query({
             outcome_type: (conv as any).outcome_type,
             git_branch: (conv as any).git_branch,
             short_id: conv.short_id,
+            // Triage/visibility stamps: the client seeds these snapshots into its
+            // sessions cache (useOpenLinkedSession), so a stashed/dismissed session
+            // must not seed as an active row (ct-42666).
+            ...inboxVisibilityFields(conv),
           };
           const insight = await ctx.db
             .query("session_insights")
@@ -1234,6 +1239,10 @@ export const webGetTaskDetail = query({
             agent_type: conv.agent_type,
             outcome_type: (conv as any).outcome_type,
             git_branch: (conv as any).git_branch,
+            // Triage/visibility stamps: the client seeds these snapshots into its
+            // sessions cache (useOpenLinkedSession), so a stashed/dismissed session
+            // must not seed as an active row (ct-42666).
+            ...inboxVisibilityFields(conv),
           };
           if (isActive) {
             const recentMsgs = await ctx.db
@@ -1275,6 +1284,10 @@ export const webGetTaskDetail = query({
         agent_type: conv.agent_type,
         outcome_type: (conv as any).outcome_type,
         git_branch: (conv as any).git_branch,
+        // Triage/visibility stamps: the client seeds these snapshots into its
+        // sessions cache (useOpenLinkedSession), so a stashed/dismissed session
+        // must not seed as an active row (ct-42666).
+        ...inboxVisibilityFields(conv),
       };
       if (isActive) {
         const recentMsgs = await ctx.db

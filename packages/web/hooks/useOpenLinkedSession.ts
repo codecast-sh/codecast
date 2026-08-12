@@ -77,6 +77,15 @@ export function useOpenLinkedSession() {
         // Carried by workflow-agent sessions; keeps the seeded stub classified as a
         // subagent by inbox filters instead of surfacing as a top-level row.
         parent_conversation_id: conv.parent_conversation_id,
+        // Triage/visibility stamps (projected server-side via
+        // inboxVisibilityFields): the stub persists in the sessions cache, and
+        // one seeded without them renders a stashed/dismissed session as an
+        // active needs-input card at boot (ct-42666).
+        inbox_dismissed_at: conv.inbox_dismissed_at,
+        inbox_stashed_at: conv.inbox_stashed_at,
+        inbox_killed_at: conv.inbox_killed_at,
+        inbox_pinned_at: conv.inbox_pinned_at,
+        is_pinned: !!conv.inbox_pinned_at,
       });
     }
     const narrow = typeof window !== "undefined" && window.innerWidth < MOBILE_MAX_WIDTH;
