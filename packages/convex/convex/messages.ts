@@ -772,12 +772,62 @@ export async function latestImagePreviewUrl(
 // file by its Convex storage id), so the agent's echoed user turn carries the
 // pending row's storage id verbatim.
 export function injectedImageStorageIds(content: string): string[] {
-  const ids: string[] = [];
+  return injectedImageRefs(content).map((r) => r.storage_id);
+}
+
+const IMAGE_EXT_MEDIA_TYPE: Record<string, string> = {
+  png: "image/png",
+  webp: "image/webp",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+};
+
+// Same paths as injectedImageStorageIds, as message `images` entries. The
+// extension is how downloadImage recorded the object's content type, so it is
+// the media type — hardcoding image/png mislabelled every webp and jpeg.
+export function injectedImageRefs(
+  content: string,
+): Array<{ media_type: string; storage_id: string }> {
+  const refs: Array<{ media_type: string; storage_id: string }> = [];
+  const seen = new Set<string>();
   // Every extension downloadImage can write (named by the object's content type).
-  const re = /\/codecast\/images\/([^/\s.\]]+)\.(?:png|webp|jpe?g|gif)/g;
+  const re = /\/codecast\/images\/([^/\s.\]]+)\.(png|webp|jpe?g|gif)/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) ids.push(m[1]);
-  return ids;
+  while ((m = re.exec(content)) !== null) {
+    if (seen.has(m[1])) continue;
+    seen.add(m[1]);
+    refs.push({ media_type: IMAGE_EXT_MEDIA_TYPE[m[2].toLowerCase()] || "image/png", storage_id: m[1] });
+  }
+  return refs;
+}
+
+export function pendingImageStorageIds(
+  pm: { image_storage_ids?: string[]; image_storage_id?: string },
+): string[] {
+  return pm.image_storage_ids ?? (pm.image_storage_id ? [pm.image_storage_id] : []);
+}
+
+// Images to store on an echoed user turn. Anything the sync already carried
+// wins. Otherwise take the paired pending row's storage ids, and failing that
+// the ids the echo itself names — a delivered image then still renders even
+// when no pending row could be paired, which is the whole point: the file
+// exists in storage, so the bubble should never come out blank.
+export function resolveEchoImages(
+  existing: Array<{ media_type: string; storage_id?: string }> | undefined,
+  pm: { image_storage_ids?: string[]; image_storage_id?: string } | undefined,
+  echoContent: string,
+): Array<{ media_type: string; storage_id?: string }> | undefined {
+  if (existing && existing.length > 0) return existing;
+  const refs = injectedImageRefs(echoContent);
+  const pendingIds = pm ? pendingImageStorageIds(pm) : [];
+  if (pendingIds.length > 0) {
+    return pendingIds.map((id) => ({
+      media_type: refs.find((r) => r.storage_id === id)?.media_type || "image/png",
+      storage_id: id,
+    }));
+  }
+  return refs.length > 0 ? refs : existing;
 }
 
 // Does this echoed user turn ack the given pending image row? Both contents are
@@ -792,8 +842,7 @@ export function imageEchoMatchesPending(
 ): boolean {
   const echoed = injectedImageStorageIds(echoContent);
   if (echoed.length > 0) {
-    const pendingIds = pm.image_storage_ids ?? (pm.image_storage_id ? [pm.image_storage_id] : []);
-    return pendingIds.some((id) => echoed.includes(id));
+    return pendingImageStorageIds(pm).some((id) => echoed.includes(id));
   }
   return Math.abs(msgTimestamp - (pm.created_at || 0)) < 120_000;
 }
@@ -817,6 +866,13 @@ export function imageEchoMatchesPending(
 // can never be cross-stamped by an old delivered twin.
 export const DELIVERED_ECHO_ADOPTION_WINDOW_MS = 30 * 60 * 1000;
 
+// Control bytes the terminal leaks into an echoed turn. The daemon clears the
+// client's composer with Ctrl+A / Ctrl+K before typing; when the input is not
+// ready to consume them they land as literal SOH (\x01) and VT (\x0b) inside
+// the text the agent echoes. They render as nothing, so the message looks fine
+// while exact-text echo matching fails on it.
+const ECHO_CONTROL_CHARS_RE = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+
 export function findEchoedPendingMessage<
   T extends {
     _id: unknown;
@@ -825,6 +881,8 @@ export function findEchoedPendingMessage<
     status: string;
     delivered_at?: number;
     echo_message_id?: unknown;
+    image_storage_ids?: string[];
+    image_storage_id?: string;
   },
 >(
   pendingMsgs: readonly T[],
@@ -832,7 +890,10 @@ export function findEchoedPendingMessage<
   msgTimestamp: number,
   consumed?: ReadonlySet<unknown>,
 ): T | undefined {
-  const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
+  const c = (safeContent || "")
+    .replace(/\[Image[:\s][^\]]*\]/gi, "")
+    .replace(ECHO_CONTROL_CHARS_RE, "")
+    .trim();
   const cFlat = c.replace(/\s+/g, " ").trim();
   const contentMatches = (pm: T) => {
     // Strip image tokens from BOTH sides: the composer stamps "[Image N]" into
@@ -842,6 +903,7 @@ export function findEchoedPendingMessage<
     const pc = redactSecrets(pm.content)
       .replace(/\[Image[:\s][^\]]*\]/gi, "")
       .replace(/\[image\]/gi, "")
+      .replace(ECHO_CONTROL_CHARS_RE, "")
       .trim();
     const pcFlat = pc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
     const contentMatch = cFlat === pcFlat || c === pc;
@@ -854,6 +916,29 @@ export function findEchoedPendingMessage<
   const inDeliveryOrder = [...pendingMsgs].sort(
     (a, b) => (a.created_at || 0) - (b.created_at || 0),
   );
+  // Strongest tier, tried first: the echo names the storage id of the file the
+  // daemon wrote, and the daemon only knows that path because it read this
+  // pending row. That join survives whatever the terminal did to the prose —
+  // text equality does not (a stray keystroke or a leaked Ctrl+K byte is enough
+  // to break it, and the row then loses its images, sender and clean content).
+  // Still ordered oldest-first and gated on never-adopted, so re-sending a draft
+  // that reuses one storage id pairs each echo with a different row.
+  const echoedImageIds = injectedImageStorageIds(safeContent || "");
+  const imageIdMatch = () =>
+    echoedImageIds.length === 0
+      ? undefined
+      : inDeliveryOrder.find(
+          (pm) =>
+            !pm.echo_message_id &&
+            !consumed?.has(pm._id) &&
+            // A row killed before injection never had its file written, so it
+            // can't be the source of this path — only a resend reusing the same
+            // draft storage id could put it here, and that belongs to the row
+            // that actually shipped.
+            pm.status !== "cancelled" &&
+            pm.status !== "undeliverable" &&
+            pendingImageStorageIds(pm).some((id) => echoedImageIds.includes(id)),
+        );
   const firstMatch = (statuses: readonly string[]) => inDeliveryOrder.find(
     (pm) => statuses.includes(pm.status) && !consumed?.has(pm._id) && contentMatches(pm),
   );
@@ -869,7 +954,10 @@ export function findEchoedPendingMessage<
       !consumed?.has(pm._id) &&
       contentMatches(pm),
   );
-  return firstMatch(["pending", "injected"]) ?? firstMatch(["failed"]) ?? recentlyDeliveredMatch();
+  return imageIdMatch()
+    ?? firstMatch(["pending", "injected"])
+    ?? firstMatch(["failed"])
+    ?? recentlyDeliveredMatch();
 }
 
 export const addMessage = mutation({
@@ -1002,15 +1090,10 @@ export const addMessage = mutation({
         // transcript echo itself carries no sender identity, so this is the
         // only point where "who typed it" is known.
         fromUserIdToStore = matchingPending.from_user_id;
-        if (!images || images.length === 0) {
-          const ids = matchingPending.image_storage_ids ?? (matchingPending.image_storage_id ? [matchingPending.image_storage_id] : []);
-          if (ids.length > 0) {
-            images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
-          }
-        }
         // Agent echoed the message → durable proof of delivery; promote to terminal "delivered".
         await markPendingDelivered(ctx, matchingPending);
       }
+      images = resolveEchoImages(images, matchingPending, safeContent || "") as typeof images;
     }
 
     const messageId = await ctx.db.insert("messages", {
@@ -1455,17 +1538,14 @@ export const addMessages = mutation({
           consumedPendingIds.add(matchingPending._id);
           contentToStore = redactSecrets(matchingPending.content);
           clientIdToStore = matchingPending.client_id;
-          if (!images || images.length === 0) {
-            const ids = matchingPending.image_storage_ids ?? (matchingPending.image_storage_id ? [matchingPending.image_storage_id] : []);
-            if (ids.length > 0) {
-              images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
-            }
-          }
           // The agent echoed this user message to its JSONL — durable proof it was received.
           // Promote the pending row to "delivered" here (atomic with the insert, content-matched)
           // so the ack can't be missed by a fire-and-forget side-channel or a non-acking sync
           // path. delivered is terminal, so the 120s stuck-message reset stops re-injecting it.
           await markPendingDelivered(ctx, matchingPending);
+      }
+      if (msg.role === "user") {
+        images = resolveEchoImages(images, matchingPending, safeContent || "") as typeof images;
       }
 
       const messageId = await ctx.db.insert("messages", {

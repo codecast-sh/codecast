@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DELIVERED_ECHO_ADOPTION_WINDOW_MS, findEchoedPendingMessage } from "./messages";
+import { DELIVERED_ECHO_ADOPTION_WINDOW_MS, findEchoedPendingMessage, resolveEchoImages } from "./messages";
 
 // The command-id coverage proof rides on echo→pending matching: the matched
 // row's client_id is stamped onto the transcript row, and v2 overlays reconcile
@@ -130,5 +130,76 @@ describe("findEchoedPendingMessage", () => {
     };
     const echo = "[Image /tmp/codecast/images/kg2b6ks3phj21khqs7bj94x6kn8c9c6s.png]";
     expect(findEchoedPendingMessage([pending], echo, 2_000)?._id).toBe("cmd-a");
+  });
+
+  // Terminal injection is lossy: the daemon clears the client's composer with
+  // Ctrl+A / Ctrl+K, and when the input isn't ready those keys land as literal
+  // \x01 / \x0b inside the echoed turn — sometimes on top of a stray character
+  // already sitting in the prompt. Both happened in prod on 2026-08-12 and both
+  // broke exact-text matching, so the bubble lost its thumbnail. The echoed
+  // storage id is the join key that survives any of it.
+  const SID = "kg25ynm6vjbf4610s3rx1wpmdh8cahwy";
+
+  test("echoed storage id matches through leaked control bytes and a stray prefix", () => {
+    const pending = {
+      ...row("cmd-a", "[Image 1] sometimes diff panel header gets into this state", 1_000, "injected"),
+      image_storage_ids: [SID],
+    };
+    const echo =
+      `q[Image 1] sometimes diff panel header gets into this state [Image /tmp/codecast/images/${SID}.png]`;
+    expect(findEchoedPendingMessage([pending], echo, 2_000)?._id).toBe("cmd-a");
+  });
+
+  test("leaked control bytes alone don't break a text-only match", () => {
+    const a = row("cmd-a", "ship it", 1_000, "injected");
+    expect(findEchoedPendingMessage([a], "ship it", 2_000)?._id).toBe("cmd-a");
+  });
+
+  test("the storage-id tier still respects delivery order across a reused draft id", () => {
+    const a = { ...row("cmd-a", "[Image 1] look", 1_000, "delivered", "cmd-a", { echo_message_id: "msg-1" }), image_storage_ids: [SID] };
+    const b = { ...row("cmd-b", "[Image 1] look", 2_000, "injected"), image_storage_ids: [SID] };
+    const echo = `[Image 1] look [Image /tmp/codecast/images/${SID}.png]`;
+    expect(findEchoedPendingMessage([a, b], echo, 3_000)?._id).toBe("cmd-b");
+  });
+
+  test("a cancelled row never absorbs an echo by storage id", () => {
+    const a = { ...row("cmd-a", "[Image 1] look", 1_000, "cancelled"), image_storage_ids: [SID] };
+    const echo = `[Image 1] look [Image /tmp/codecast/images/${SID}.png]`;
+    expect(findEchoedPendingMessage([a], echo, 2_000)).toBeUndefined();
+  });
+
+  test("an echoed id belonging to no pending row matches nothing", () => {
+    const a = { ...row("cmd-a", "[Image 1] look", 1_000, "injected"), image_storage_ids: ["other"] };
+    const echo = `totally different text [Image /tmp/codecast/images/${SID}.png]`;
+    expect(findEchoedPendingMessage([a], echo, 2_000)).toBeUndefined();
+  });
+});
+
+describe("resolveEchoImages", () => {
+  const SID = "kg2d8yf566mpk8b702ce2w4nwx8cb5zt";
+
+  test("images already carried by the sync win", () => {
+    const existing = [{ media_type: "image/png", storage_id: "from-sync" }];
+    expect(resolveEchoImages(existing, { image_storage_ids: [SID] }, "")).toBe(existing);
+  });
+
+  test("the paired pending row's ids take the media type from the echoed filename", () => {
+    expect(
+      resolveEchoImages(undefined, { image_storage_ids: [SID] }, `[Image /tmp/codecast/images/${SID}.webp]`),
+    ).toEqual([{ media_type: "image/webp", storage_id: SID }]);
+  });
+
+  test("with no pending row at all the echoed path still yields a renderable image", () => {
+    expect(
+      resolveEchoImages(undefined, undefined, `text [Image /tmp/codecast/images/${SID}.jpeg]`),
+    ).toEqual([{ media_type: "image/jpeg", storage_id: SID }]);
+  });
+
+  test("a repeated path yields one image, and plain text yields none", () => {
+    const echo = `[Image /tmp/codecast/images/${SID}.gif] and again /tmp/codecast/images/${SID}.gif`;
+    expect(resolveEchoImages(undefined, undefined, echo)).toEqual([
+      { media_type: "image/gif", storage_id: SID },
+    ]);
+    expect(resolveEchoImages(undefined, undefined, "no images here")).toBeUndefined();
   });
 });
