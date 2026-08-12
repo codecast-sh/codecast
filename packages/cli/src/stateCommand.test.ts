@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { parseStateArgs, formatAge, describeProvenance } from "./stateCommand.js";
+import { parseStateArgs, formatAge, describeProvenance, staleStateNotice } from "./stateCommand.js";
 
 describe("parseStateArgs", () => {
   test("no args reads the current state", () => {
@@ -102,5 +102,44 @@ describe("describeProvenance", () => {
   test("a row with no stored count omits the gap rather than claiming zero", () => {
     const line = describeProvenance({ at: now - 60_000, message_count: 500 }, now);
     expect(line).toBe("set 1 min ago");
+  });
+});
+
+// The reminder that rides along with `cast task done` / `start` / `plan
+// comment`. It must stay silent unless there is a state AND the thread has run
+// past it — a nudge on a fresh state trains the agent to ignore the channel.
+describe("staleStateNotice", () => {
+  const now = 1_700_000_000_000;
+
+  test("no pinned state means no reminder", () => {
+    expect(staleStateNotice(null, now)).toBeNull();
+    expect(staleStateNotice({ state: null, message_count: 900 }, now)).toBeNull();
+  });
+
+  test("a fresh state is not worth a reminder", () => {
+    expect(
+      staleStateNotice(
+        { state: "Waiting on CI", at: now - 60_000, msg_count_at_write: 100, message_count: 105 },
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  test("a thread that ran past the state earns one line with the real gap", () => {
+    const notice = staleStateNotice(
+      { state: "Waiting on CI", at: now - 60_000, msg_count_at_write: 100, message_count: 400 },
+      now,
+    );
+    expect(notice).toContain("300 messages old");
+    expect(notice).toContain("cast state");
+  });
+
+  test("a row with no write-time count falls back to age, never a made-up gap", () => {
+    const notice = staleStateNotice(
+      { state: "Waiting on CI", at: now - 72 * 3_600_000, message_count: 400 },
+      now,
+    );
+    expect(notice).toContain("set 3 days ago");
+    expect(notice).not.toContain("messages old");
   });
 });
