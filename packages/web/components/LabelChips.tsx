@@ -1,44 +1,42 @@
 import { getLabelColor } from "../lib/labelColors";
 
+/** How many labels may spell out their name, most rows carrying 3-4 of them. */
+const MAX_NAMED = 2;
+
 /**
  * Labels in a dense list row. A label is a color dot by default and spells out
- * its name only inside a wide list container (see .cq-label-chip in globals.css)
- * — every chip in the row is flex-shrink-0, so the width a name takes comes out
- * of the row's title, and the name is only worth that trade where the title
- * still has room. It stays ONE element at both widths, so the dot never moves:
- * the name grows out of it and folds back in.
+ * its name only where the list is wide enough to pay for it: the first name at
+ * one container width, the second at a wider one, the rest stay dots at every
+ * size (see .cq-label-t1 / .cq-label-t2 in globals.css). Every chip in the row is
+ * flex-shrink-0, so the width a name takes comes out of the row's title — which
+ * is why the widths, not the row's own content, decide.
  *
- * A row carrying more than `max` labels keeps dots at every width — a fistful of
- * names crowds the title whatever the container is doing.
+ * A chip is ONE element at both sizes, so the dot never moves: the name grows
+ * out of it and folds back in.
  */
 export function LabelChips({
   labels,
-  max = 2,
   dotClass = "w-2 h-2",
   className = "",
 }: {
   labels: string[];
-  /** Above this many labels the row stays dots-only. */
-  max?: number;
   dotClass?: string;
   className?: string;
 }) {
   if (!labels || labels.length === 0) return null;
-  const expandable = labels.length <= max;
   return (
     <div className={`flex items-center gap-1 flex-shrink-0 ${className}`}>
-      {labels.map((l) => {
+      {labels.map((l, i) => {
         const lc = getLabelColor(l);
+        const tier = i < MAX_NAMED ? `cq-label-t${i + 1} ${lc.bg} ${lc.border} ${lc.text}` : "";
         return (
           <span
             key={l}
             title={l}
-            className={`inline-flex items-center gap-1 flex-shrink-0 rounded-full py-0 text-[10px] leading-4 whitespace-nowrap ${
-              expandable ? `cq-label-chip ${lc.bg} ${lc.border} ${lc.text}` : ""
-            }`}
+            className={`inline-flex items-center gap-1 flex-shrink-0 rounded-full py-0 text-[10px] leading-4 whitespace-nowrap ${tier}`}
           >
             <span className={`${dotClass} rounded-full flex-shrink-0 ${lc.dot}`} />
-            {expandable && <span className="cq-label-text">{l}</span>}
+            {i < MAX_NAMED && <span className="cq-label-name max-w-[10rem] truncate">{l}</span>}
           </span>
         );
       })}

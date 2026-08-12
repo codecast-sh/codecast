@@ -18,7 +18,8 @@ import { LivenessDot, ActiveSessionBadge, taskLivenessState } from "../../compon
 const api = _api as any;
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { TaskStatusBadge } from "../../components/TaskStatusBadge";
+import { TaskStatusBadge, TASK_STATUS, TASK_STATUS_ORDER, type TaskStatus } from "../../components/TaskStatusBadge";
+import { buildTaskGroups, isValidTaskGroup, parseTaskGroup, TASK_AXES, TASK_AXIS_KEYS } from "../../lib/taskGrouping";
 import { LabelChips } from "../../components/LabelChips";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
@@ -79,17 +80,10 @@ function SubtaskRing({ done, total }: { done: number; total: number }) {
   );
 }
 
-type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type TaskPriority = "urgent" | "high" | "medium" | "low" | "none";
 
-const STATUS_CONFIG: Record<TaskStatus, { icon: typeof Circle; label: string; color: string }> = {
-  backlog: { icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
-  open: { icon: Circle, label: "Open", color: "text-sol-blue" },
-  in_progress: { icon: CircleDot, label: "In Progress", color: "text-sol-yellow" },
-  in_review: { icon: CircleDot, label: "In Review", color: "text-sol-violet" },
-  done: { icon: CheckCircle2, label: "Done", color: "text-sol-green" },
-  dropped: { icon: XCircle, label: "Dropped", color: "text-sol-text-dim" },
-};
+// One task-status vocabulary, shared with TaskStatusBadge and the groupers.
+const STATUS_CONFIG = TASK_STATUS;
 
 const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: string; color: string }> = {
   urgent: { icon: AlertTriangle, label: "Urgent", color: "text-sol-red" },
@@ -99,7 +93,7 @@ const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: string;
   none: { icon: Minus, label: "None", color: "text-sol-text-dim" },
 };
 
-const STATUS_ORDER: TaskStatus[] = ["in_progress", "in_review", "open", "backlog", "done", "dropped"];
+const STATUS_ORDER = TASK_STATUS_ORDER;
 
 export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenDescendantCount = 0, progress, collapsed = false, onToggleCollapse, parentChip }: {
   task: TaskItem;
@@ -588,7 +582,8 @@ function KanbanView({
 // Grouping vs sorting are independent axes (see useTaskUrlState). These name the
 // legal values for each, so we can both validate input and migrate the legacy
 // single `sort` param that overloaded the two.
-const TASK_GROUP_VALUES = new Set(["none", "status", "project", "plan", "assignee", "label", "session"]);
+// Legal group values are "none" or one or more axis names joined by "+"
+// ("assignee", "assignee+project") — lib/taskGrouping owns that vocabulary.
 const TASK_SORT_VALUES = new Set(["priority", "created", "updated", "title"]);
 // Natural direction per sort field — picking a field resets to this so "Created"
 // lands newest-first and "Priority"/"Title" land most-urgent / A→Z without a
@@ -604,10 +599,10 @@ function taskDefaultDir(sort: string): "asc" | "desc" {
  *  became `group=that, sort=priority`; a flat-sort word ("updated", …) became
  *  `group=none`; anything else falls to the default `group=status`. */
 function normalizeTaskSort(rawGroup: string, rawSort: string, rawDir: string) {
-  let group = TASK_GROUP_VALUES.has(rawGroup) ? rawGroup : "";
+  let group = isValidTaskGroup(rawGroup) ? rawGroup : "";
   let sort = TASK_SORT_VALUES.has(rawSort) ? rawSort : "";
   if (!group) {
-    if (TASK_GROUP_VALUES.has(rawSort)) { group = rawSort; sort = sort || "priority"; }
+    if (isValidTaskGroup(rawSort)) { group = rawSort; sort = sort || "priority"; }
     else if (TASK_SORT_VALUES.has(rawSort)) { group = "none"; }
     else group = "status";
   }
@@ -714,16 +709,33 @@ function useTaskUrlState() {
   // Grouping and sorting are separate controls. Picking a sort *field* resets the
   // direction to that field's natural default; the toggle flips it explicitly.
   const setGroup = useCallback((g: string) => setParam({ group: g }), [setParam]);
+
+  // A group value names one or two axes ("assignee", "assignee+project"), but
+  // the Display popover drives them as two controls, so translate both ways.
+  const [primaryAxis, secondaryAxis] = useMemo(() => {
+    const axes = parseTaskGroup(group);
+    return [axes[0] ?? "none", axes[1] ?? "none"];
+  }, [group]);
+  // Changing the primary keeps the secondary where it still makes sense; "no
+  // grouping" clears both, since there is nothing left to sub-divide.
+  const setPrimaryAxis = useCallback((a: string) => {
+    if (a === "none") { setGroup("none"); return; }
+    setGroup(secondaryAxis !== "none" && secondaryAxis !== a ? `${a}+${secondaryAxis}` : a);
+  }, [setGroup, secondaryAxis]);
+  const setSecondaryAxis = useCallback((b: string) => {
+    if (primaryAxis === "none") return;
+    setGroup(b === "none" || b === primaryAxis ? primaryAxis : `${primaryAxis}+${b}`);
+  }, [setGroup, primaryAxis]);
   const setSort = useCallback((s: string) => setParam({ sort: s, dir: taskDefaultDir(s) }), [setParam]);
   const toggleSortDir = useCallback(() => setParam({ dir: dir === "asc" ? "desc" : "asc" }), [setParam, dir]);
 
-  return { status, view, group, sort, dir, priority, label, assignee, statuses, sourceFilter, session, setParam, setGroup, setSort, toggleSortDir, buildShareUrl };
+  return { status, view, group, sort, dir, priority, label, assignee, statuses, sourceFilter, session, setParam, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl };
 }
 
 export function TaskListContent() {
   const router = useRouter();
   const params = useParams();
-  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, setParam, setGroup, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
+  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, setParam, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   const tasks = useInboxStore((s) => s.tasks);
   const projects = useInboxStore((s) => s.projects);
@@ -936,154 +948,25 @@ export function TaskListContent() {
     // this callback stable so the group memos don't re-sort every render.
   }, [sort, dir]);
 
-  const planGroups = useMemo(() => {
-    if (group !== "plan") return null;
-    const byPlan: Record<string, { plan: TaskItem["plan"]; tasks: TaskItem[] }> = {};
-    const unplanned: TaskItem[] = [];
-    for (const t of filteredTasks) {
-      if (t.plan) {
-        const key = t.plan._id;
-        if (!byPlan[key]) byPlan[key] = { plan: t.plan, tasks: [] };
-        byPlan[key].tasks.push(t);
-      } else {
-        unplanned.push(t);
-      }
-    }
-    const ordered = Object.values(byPlan)
-      .sort((a, b) => (a.plan!.title || "").localeCompare(b.plan!.title || ""));
-    if (unplanned.length > 0) {
-      ordered.push({ plan: undefined, tasks: unplanned });
-    }
-    for (const g of ordered) {
-      g.tasks = sortTasks(g.tasks);
-    }
-    return ordered;
-  }, [filteredTasks, group, sortTasks]);
+  // Every grouping the list offers — including combined ones like
+  // "Assignee · Project" — comes out of one keyed grouper (lib/taskGrouping),
+  // so an added axis or pairing costs a descriptor rather than a memo.
+  const groupCtx = useMemo(
+    () => ({ projects, onFilterLabel: (label: string) => setParam({ label }) }),
+    [projects, setParam]
+  );
 
-  const assigneeGroups = useMemo(() => {
-    if (group !== "assignee") return null;
-    const byAssignee: Record<string, { info: TaskItem["assignee_info"]; tasks: TaskItem[] }> = {};
-    const unassigned: TaskItem[] = [];
-    for (const t of filteredTasks) {
-      if (t.assignee && t.assignee_info) {
-        const ownerKey = t.assignee;
-        const ownerInfo = t.assignee_info;
-        if (!byAssignee[ownerKey]) byAssignee[ownerKey] = { info: ownerInfo, tasks: [] };
-        byAssignee[ownerKey].tasks.push(t);
-      } else {
-        unassigned.push(t);
-      }
-    }
-    const ordered = Object.values(byAssignee)
-      .sort((a, b) => (a.info?.name || "").localeCompare(b.info?.name || ""));
-    if (unassigned.length > 0) {
-      ordered.push({ info: undefined, tasks: unassigned });
-    }
-    for (const g of ordered) {
-      g.tasks = sortTasks(g.tasks);
-    }
-    return ordered;
-  }, [filteredTasks, group, sortTasks]);
+  const listGroups = useMemo(
+    () => buildTaskGroups({ group, tasks: filteredTasks, sortTasks, statusFilter, ctx: groupCtx }),
+    [group, filteredTasks, sortTasks, statusFilter, groupCtx]
+  );
 
-  const sessionGroups = useMemo(() => {
-    if (group !== "session") return null;
-    const bySession: Record<string, { session: NonNullable<TaskItem["origin_session"]>; tasks: TaskItem[] }> = {};
-    const noSession: TaskItem[] = [];
-    for (const t of filteredTasks) {
-      if (t.origin_session) {
-        const key = t.origin_session.session_id;
-        if (!bySession[key]) bySession[key] = { session: t.origin_session, tasks: [] };
-        bySession[key].tasks.push(t);
-      } else {
-        noSession.push(t);
-      }
-    }
-    // Sort groups by most recent task first
-    const ordered = Object.values(bySession)
-      .sort((a, b) => Math.max(...b.tasks.map(t => t.created_at)) - Math.max(...a.tasks.map(t => t.created_at)));
-    if (noSession.length > 0) {
-      ordered.push({ session: { conversation_id: "", session_id: "", title: undefined }, tasks: noSession });
-    }
-    for (const g of ordered) {
-      g.tasks = sortTasks(g.tasks);
-    }
-    return ordered;
-  }, [filteredTasks, group, sortTasks]);
-
-  const projectGroups = useMemo(() => {
-    if (group !== "project") return null;
-    const byProject: Record<string, { project: ProjectItem | undefined; tasks: TaskItem[] }> = {};
-    const noProject: TaskItem[] = [];
-    for (const t of filteredTasks) {
-      const pid = (t as any).project_id;
-      if (pid) {
-        if (!byProject[pid]) byProject[pid] = { project: projects[pid], tasks: [] };
-        byProject[pid].tasks.push(t);
-      } else {
-        noProject.push(t);
-      }
-    }
-    const ordered = Object.values(byProject)
-      .sort((a, b) => (a.project?.title || "").localeCompare(b.project?.title || ""));
-    if (noProject.length > 0) {
-      ordered.push({ project: undefined, tasks: noProject });
-    }
-    for (const g of ordered) {
-      g.tasks = sortTasks(g.tasks);
-    }
-    return ordered;
-  }, [filteredTasks, group, sortTasks, projects]);
-
-  // Group by the task's primary label (labels[0]) — the same representative
-  // label the kanban card shows. A task lands in exactly one bucket so its
-  // _id stays a unique virtualizer key (GenericListView keys rows by id);
-  // tasks with no labels collect in a trailing "No label" group.
-  const labelGroups = useMemo(() => {
-    if (group !== "label") return null;
-    const byLabel: Record<string, { label: string; tasks: TaskItem[] }> = {};
-    const noLabel: TaskItem[] = [];
-    for (const t of filteredTasks) {
-      const primary = t.labels?.[0];
-      if (primary) {
-        if (!byLabel[primary]) byLabel[primary] = { label: primary, tasks: [] };
-        byLabel[primary].tasks.push(t);
-      } else {
-        noLabel.push(t);
-      }
-    }
-    const ordered = Object.values(byLabel)
-      .sort((a, b) => a.label.localeCompare(b.label));
-    if (noLabel.length > 0) {
-      ordered.push({ label: "", tasks: noLabel });
-    }
-    for (const g of ordered) {
-      g.tasks = sortTasks(g.tasks);
-    }
-    return ordered;
-  }, [filteredTasks, group, sortTasks]);
-
-  // Status grouping is suppressed when a single-status tab is active (every row
-  // would share that status), collapsing to a flat sorted list instead. Each
-  // status bucket is ordered by the active sort field + direction, same as every
-  // other grouping.
-  const statusGroups = useMemo(() => {
-    if (group !== "status") return null;
-    if (statusFilter && statusFilter !== "all") return null;
-    const byStatus: Record<string, TaskItem[]> = {};
-    for (const t of filteredTasks) (byStatus[t.status as string] ??= []).push(t);
-    return STATUS_ORDER
-      .filter((s) => byStatus[s]?.length)
-      .map((s) => ({ status: s, tasks: sortTasks(byStatus[s]) }));
-  }, [group, statusFilter, filteredTasks, sortTasks]);
-
-  // Exactly one *Groups memo is non-null at a time (each gates on `group`), so
-  // the flat list is just that grouping flattened — or, when ungrouped, the whole
-  // filtered set run through the comparator.
-  const flatTasks = useMemo(() => {
-    const active = planGroups || assigneeGroups || sessionGroups || projectGroups || labelGroups || statusGroups;
-    if (active) return active.flatMap((g: any) => g.tasks);
-    return sortTasks(filteredTasks);
-  }, [filteredTasks, sortTasks, planGroups, assigneeGroups, sessionGroups, projectGroups, labelGroups, statusGroups]);
+  // The flat list is that grouping flattened, so keyboard order matches what the
+  // headers show; ungrouped, it is the whole filtered set through the comparator.
+  const flatTasks = useMemo(
+    () => (listGroups ? listGroups.flatMap((g) => g.items) : sortTasks(filteredTasks)),
+    [listGroups, sortTasks, filteredTasks]
+  );
 
   const kanbanGrouped = useMemo(() => {
     return filteredTasks.reduce((acc: Record<string, TaskItem[]>, t) => {
@@ -1093,100 +976,6 @@ export function TaskListContent() {
       return acc;
     }, {});
   }, [filteredTasks]);
-
-  const listGroups = useMemo((): ListGroup<TaskItem>[] | null => {
-    if (group === "plan" && planGroups) {
-      return planGroups.map((g) => ({
-        key: g.plan?._id || "__unplanned",
-        label: g.plan?.title || "Unplanned",
-        badge: g.plan ? (
-          <span className={`text-[10px] px-1.5 py-0 rounded border ${
-            g.plan.status === "active" ? "border-sol-green/30 text-sol-green" : "border-sol-border/30 text-sol-text-dim"
-          }`}>{g.plan.status}</span>
-        ) : undefined,
-        extra: g.plan ? (
-          <Link href={`/plans/${g.plan._id}`} onClick={(e) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
-            View plan
-          </Link>
-        ) : undefined,
-        items: g.tasks,
-      }));
-    }
-    if (group === "assignee" && assigneeGroups) {
-      return assigneeGroups.map((g) => ({
-        key: g.info ? g.tasks[0]?.assignee || "__unknown" : "__unassigned",
-        label: g.info?.name || "Unassigned",
-        icon: g.info?.image ? (
-          <img src={g.info.image} alt={g.info.name} className="w-4 h-4 rounded-full" />
-        ) : (
-          <User className="w-3.5 h-3.5 text-sol-text-dim" />
-        ),
-        extra: g.info && (g.info as any).github_username ? (
-          <Link href={`/team/${(g.info as any).github_username}`} onClick={(e) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
-            Profile
-          </Link>
-        ) : undefined,
-        items: g.tasks,
-      }));
-    }
-    if (group === "session" && sessionGroups) {
-      return sessionGroups.map((g) => ({
-        key: g.session.session_id || "__no_session",
-        label: g.session.session_id
-          ? (g.session.title || g.session.session_id.slice(0, 8))
-          : "No session",
-        icon: <MessageSquare className={`w-3.5 h-3.5 ${g.session.session_id ? "text-sol-cyan" : "text-sol-text-dim"}`} />,
-        extra: g.session.conversation_id ? (
-          <Link href={`/sessions/${g.session.conversation_id}`} onClick={(e) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
-            View session
-          </Link>
-        ) : undefined,
-        items: g.tasks,
-      }));
-    }
-    if (group === "project" && projectGroups) {
-      return projectGroups.map((g) => ({
-        key: g.project?._id || "__no_project",
-        label: g.project?.title || "No project",
-        icon: <FolderKanban className={`w-3.5 h-3.5 ${g.project ? "text-sol-cyan" : "text-sol-text-dim"}`} />,
-        extra: g.project ? (
-          <Link href={`/projects/${g.project._id}`} onClick={(e) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
-            View project
-          </Link>
-        ) : undefined,
-        items: g.tasks,
-      }));
-    }
-    if (group === "label" && labelGroups) {
-      return labelGroups.map((g) => {
-        const lc = g.label ? getLabelColor(g.label) : null;
-        return {
-          key: g.label || "__no_label",
-          label: g.label || "No label",
-          icon: lc ? (
-            <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${lc.dot}`} />
-          ) : (
-            <Tag className="w-3.5 h-3.5 text-sol-text-dim" />
-          ),
-          extra: g.label ? (
-            <button
-              onClick={(e) => { e.stopPropagation(); setParam({ label: g.label }); }}
-              className="text-[10px] text-sol-cyan hover:underline flex-shrink-0"
-            >
-              Filter
-            </button>
-          ) : undefined,
-          items: g.tasks,
-        };
-      });
-    }
-    if (!statusGroups) return null;
-    return statusGroups.map(({ status: s, tasks }) => {
-      const cfg = STATUS_CONFIG[s];
-      const Icon = cfg.icon;
-      return { key: s, label: cfg.label, icon: <Icon className={`w-3.5 h-3.5 ${cfg.color}`} />, items: tasks };
-    });
-  }, [group, planGroups, assigneeGroups, sessionGroups, projectGroups, labelGroups, statusGroups, setParam]);
 
   const taskCounts = useMemo(() => {
     const counts: Record<string, number> = { active: 0, all: 0 };
@@ -1307,17 +1096,18 @@ export function TaskListContent() {
           ]}
           activeTab={statusFilter}
           onTabChange={setStatusFilter}
-          groupBy={group}
+          groupBy={primaryAxis}
           groupOptions={[
             { value: "none", label: "No grouping" },
-            { value: "status", label: "Status" },
-            { value: "project", label: "Project" },
-            { value: "plan", label: "Plan" },
-            { value: "assignee", label: "Assignee" },
-            { value: "label", label: "Label" },
-            { value: "session", label: "Session" },
+            ...TASK_AXIS_KEYS.map((k) => ({ value: k, label: TASK_AXES[k].label })),
           ]}
-          onGroupChange={setGroup}
+          onGroupChange={setPrimaryAxis}
+          subGroupBy={secondaryAxis}
+          subGroupOptions={[
+            { value: "none", label: "Nothing" },
+            ...TASK_AXIS_KEYS.filter((k) => k !== primaryAxis).map((k) => ({ value: k, label: TASK_AXES[k].label })),
+          ]}
+          onSubGroupChange={setSecondaryAxis}
           sortBy={sort}
           sortOptions={[
             { value: "priority", label: "Priority" },
