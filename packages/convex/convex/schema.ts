@@ -350,6 +350,19 @@ export default defineSchema({
     title_gen_scheduled_at: v.optional(v.number()),
     title_is_custom: v.optional(v.boolean()),
     idle_summary: v.optional(v.string()),
+    // The pinned thread state: a short standing answer to "where does this
+    // thread stand right now?", written and kept current by the agent itself
+    // (`cast state "…"`, cleared with `cast state clear`). Unlike idle_summary —
+    // an AI-generated blurb about what the session was about — this is a live
+    // status the agent owns and revises as the work moves, so the human can open
+    // a noisy thread and know the situation without reading the backscroll.
+    // Rendered pinned above the composer and truncated on the inbox card.
+    thread_state: v.optional(v.string()),
+    thread_state_at: v.optional(v.number()),
+    // message_count when the state was written. The gap against the live count
+    // is the honest staleness signal the UI shows ("12 messages since"), and the
+    // only defence against a stale state reading as current.
+    thread_state_msg_count: v.optional(v.number()),
     // Dedupe for the needs-input push: "<message_count>:<kind>" of the last
     // waiting episode already notified (see notifications.checkNeedsInput).
     // Mirrors the web idle-sound's notified-keys map so one episode pushes

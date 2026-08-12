@@ -113,11 +113,12 @@ import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
 import { FormattedSummary } from "./FormattedSummary";
+import { ThreadStatePanel } from "./ThreadStatePanel";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractMessageFlag, extractCommentBody, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -15516,6 +15517,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       </div>
+
+      {/* The pinned thread state sits between the feed and the composer, outside
+          data-sv-feed so it can't perturb the virtualizer, and outside the
+          composer's own condition so it stays readable while a permission
+          prompt owns the input. It renders nothing when the agent has not
+          pinned a state. */}
+      {conversation && (
+        <ThreadStatePanel
+          conversationId={conversation._id.toString()}
+          threadState={conversation.thread_state}
+          threadStateAt={conversation.thread_state_at}
+          threadStateMsgCount={conversation.thread_state_msg_count}
+          messageCount={conversation.message_count}
+          canClear={effectiveIsOwner}
+        />
+      )}
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">
