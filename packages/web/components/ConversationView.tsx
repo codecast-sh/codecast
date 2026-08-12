@@ -4783,6 +4783,15 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
 // italic line: these are often written reports, and the sentence that survived a
 // 90-character cut was rarely the one worth reading. Long bodies start clipped
 // with an Expand toggle, so a row still costs a few lines in the transcript.
+// A collapsed body shows about four lines whatever its length, and a cast
+// comment can be a 20KB report — parsing all of it to paint four lines is the
+// kind of per-row cost that adds up to a frozen transcript. Slice to a few
+// screens' worth while clipped; the full text renders when the reader expands.
+const CAST_BODY_CLIP = 2000;
+function clipBody(text: string): string {
+  return text.length > CAST_BODY_CLIP ? text.slice(0, CAST_BODY_CLIP) : text;
+}
+
 function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: string }) {
   return (
     <div className={`mt-1 ml-1 border-l-2 pl-2.5 space-y-1.5 ${accent}`}>
@@ -4792,9 +4801,14 @@ function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: st
             <div className="text-[10px] uppercase tracking-wide text-sol-text-dim mb-0.5">{part.label}</div>
           )}
           <CollapsibleBody collapsedHeight={132} toggleClassName="mt-1">
-            <div className="text-[13px] text-sol-text prose prose-invert prose-sm max-w-none">
-              <MessageMarkdown content={part.text} userText />
-            </div>
+            {(expanded) => (
+              <div className="text-[13px] text-sol-text prose prose-invert prose-sm max-w-none
+                prose-code:text-sol-cyan prose-code:bg-sol-bg-highlight prose-code:px-1 prose-code:rounded prose-code:text-xs
+                prose-code:before:content-none prose-code:after:content-none
+                [&_pre]:overflow-x-auto [&_pre]:max-w-full">
+                <MessageMarkdown content={expanded ? part.text : clipBody(part.text)} userText />
+              </div>
+            )}
           </CollapsibleBody>
         </div>
       ))}
@@ -4802,7 +4816,7 @@ function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: st
   );
 }
 
-export function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
   const [expanded, setExpanded] = useState(false);
   const cast = parseCastCommand(tool)!;
   const { category, subcommand, args } = cast;
@@ -7520,51 +7534,84 @@ function ThreadSummaryView({ conversationId, userName, avatarUrl, onJump }: { co
   );
 }
 
-// Aggregate tool counts into a human phrase: "read 3 files · ran 2 commands".
-function describeToolGroup(rawName: string, count: number): string {
-  const n = count;
+// How one family of tools describes itself. `one`/`many` are the counting forms
+// ("ran 2 commands"); `verb` is the past-tense word used when a small group can
+// name what it actually did ("ran npm test"). Families where verb + subject
+// wouldn't read as a phrase leave `verb` out and always count.
+type ToolPhrase = { verb?: string; one: string; many: (n: number) => string };
+
+function toolPhrase(rawName: string): ToolPhrase {
   switch (rawName) {
     case "Read":
     case "read":
-    case "file_read": return n === 1 ? "read 1 file" : `read ${n} files`;
+    case "file_read": return { verb: "read", one: "read 1 file", many: (n) => `read ${n} files` };
     case "Edit":
     case "edit":
     case "file_edit":
     case "apply_patch":
     case "fileChange":
-    case "NotebookEdit": return n === 1 ? "1 edit" : `${n} edits`;
+    case "NotebookEdit": return { verb: "edited", one: "1 edit", many: (n) => `${n} edits` };
     case "Write":
     case "write":
-    case "file_write": return n === 1 ? "wrote 1 file" : `wrote ${n} files`;
+    case "file_write": return { verb: "wrote", one: "wrote 1 file", many: (n) => `wrote ${n} files` };
     case "Bash":
     case "bash":
     case "shell":
     case "shell_command":
     case "exec_command":
     case "container.exec":
-    case "commandExecution": return n === 1 ? "ran 1 command" : `ran ${n} commands`;
+    case "commandExecution": return { verb: "ran", one: "ran 1 command", many: (n) => `ran ${n} commands` };
     case "Grep":
     case "grep":
     case "Glob":
     case "glob":
     case "code_search":
-    case "code_analysis": return n === 1 ? "1 search" : `${n} searches`;
+    case "code_analysis": return { verb: "searched", one: "1 search", many: (n) => `${n} searches` };
     case "WebFetch":
     case "web_fetch":
     case "WebSearch":
     case "web_search":
-    case "web__run": return n === 1 ? "1 web lookup" : `${n} web lookups`;
+    case "web__run": return { verb: "looked up", one: "1 web lookup", many: (n) => `${n} web lookups` };
     case "Task":
-    case "Agent": return n === 1 ? "ran 1 agent" : `ran ${n} agents`;
-    case "TodoWrite": return "updated todos";
-    case "update_plan": return "updated plan";
-    case "view_image": return n === 1 ? "viewed 1 image" : `viewed ${n} images`;
-    case "image_gen__imagegen": return n === 1 ? "generated 1 image" : `generated ${n} images`;
+    case "Agent": return { one: "ran 1 agent", many: (n) => `ran ${n} agents` };
+    case "TodoWrite": return { one: "updated todos", many: () => "updated todos" };
+    case "update_plan": return { one: "updated plan", many: () => "updated plan" };
+    case "view_image": return { verb: "viewed", one: "viewed 1 image", many: (n) => `viewed ${n} images` };
+    case "image_gen__imagegen": return { verb: "generated", one: "generated 1 image", many: (n) => `generated ${n} images` };
     default: {
       const label = formatToolName(rawName) || rawName;
-      return n === 1 ? label : `${label} ×${n}`;
+      return { verb: label, one: label, many: (n) => `${label} ×${n}` };
     }
   }
+}
+
+// Aggregate tool counts into a human phrase: "read 3 files · ran 2 commands".
+function describeToolGroup(rawName: string, count: number): string {
+  const phrase = toolPhrase(rawName);
+  return count === 1 ? phrase.one : phrase.many(count);
+}
+
+// One or two tools fit in the same space a count would take, so say WHAT they
+// did instead: "ran npm test", or "read lib/foo.ts · ran npm test". A pair of
+// the same kind states the verb once ("ran git status · npm test"), and a lone
+// tool spends the whole line on its subject. Returns "" when a subject is
+// missing (unparsed args, a tool with nothing to show), which leaves the caller
+// on the counting phrase.
+function describeSmallToolGroup(actions: readonly { name: string; input: string }[]): string {
+  if (actions.length === 0) return "";
+  const budget = actions.length === 1 ? 72 : 30;
+  const parts: string[] = [];
+  let previousVerb = "";
+  for (const action of actions) {
+    const { verb } = toolPhrase(action.name);
+    // Multi-line commands (heredocs, chained shell) collapse to one line first,
+    // so the clip spends its budget on words rather than indentation.
+    const subject = truncateStr(sharedToolSummary(action).replace(/\s+/g, " ").trim(), budget);
+    if (!verb || !subject) return "";
+    parts.push(verb === previousVerb ? subject : `${verb} ${subject}`);
+    previousVerb = verb;
+  }
+  return parts.join(" · ");
 }
 
 // A screenshot captured inside a collapsed tool group, surfaced on the receipt
@@ -7604,18 +7651,21 @@ function CondensedImageThumb({ image }: { image: ImageData }) {
 const CondensedToolsLine = memo(function CondensedToolsLine({ tools, expanded, onToggle, images, globalImageMap }: { tools: ToolCall[]; expanded: boolean; onToggle: () => void; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
   const { summary, screenshots } = useMemo(() => {
     const counts = new Map<string, number>();
+    const actions: { name: string; input: string }[] = [];
     const shots: { id: string; image: ImageData }[] = [];
     for (const tc of tools) {
       const nested = extractCodexExecActions(tc);
       const represented = nested.length > 0 ? nested : [tc];
       for (const action of represented) {
         counts.set(action.name, (counts.get(action.name) ?? 0) + 1);
+        actions.push(action);
       }
       const toolImage = images?.find(img => img.tool_use_id === tc.id) || globalImageMap?.[tc.id];
       if (toolImage) shots.push({ id: tc.id, image: toolImage });
     }
+    const counted = [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
     return {
-      summary: [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · "),
+      summary: (actions.length <= 2 && describeSmallToolGroup(actions)) || counted,
       screenshots: shots,
     };
   }, [tools, images, globalImageMap]);

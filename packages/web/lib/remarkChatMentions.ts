@@ -15,7 +15,14 @@ import { findAndReplace } from "mdast-util-find-and-replace";
 //
 // Pairs with .ch-mention / .ch-mention-self in components/chat/chat.css.
 
-const MENTION_RE = /(^|[\s(<[{,:;"'])@([A-Za-z0-9][A-Za-z0-9_.-]*)/g;
+// Just the handle. The character before it is checked against the match's own
+// input rather than captured, because a leading capture group would have to
+// re-emit that character as a sibling text node, and splicing text back around
+// a replacement is exactly where findAndReplace's tree walk goes wrong.
+const MENTION_RE = /@([A-Za-z0-9][A-Za-z0-9_.-]*)/g;
+
+// "@" glued to the end of a word is an email address or a path, not a mention.
+const BOUNDARY_RE = /[\s(<[{,:;"'*_~-]/;
 
 export type ChatMentionOptions = {
   /** Handles that resolve to a real member. Anything else stays plain text, so
@@ -36,24 +43,27 @@ export function remarkChatMentions(options: ChatMentionOptions = {}) {
       [
         [
           MENTION_RE,
-          (_match: string, lead: string, handle: string) => {
-            // Unknown handle: hand back the original text so the sentence is
-            // unchanged. Returning false tells findAndReplace to skip it.
+          (match: string, handle: string, meta: { index: number; input: string }) => {
+            const before = meta && meta.index > 0 ? meta.input[meta.index - 1] : "";
+            // Returning false leaves the original text exactly as written, which
+            // is what an unknown handle or a mid-word "@" must do.
+            if (before && !BOUNDARY_RE.test(before)) return false;
             if (known && !has(known, handle)) return false;
-            const className = has(self, handle)
-              ? "ch-mention ch-mention-self"
-              : "ch-mention";
-            const mention = {
-              type: "chatMention",
-              // data.hName/hProperties is how mdast hands a custom node to
-              // rehype — the same trick remarkEntityIds uses for entity pills.
-              data: { hName: "span", hProperties: { className } },
-              children: [{ type: "text", value: `@${handle}` }],
+            return {
+              type: "emphasis",
+              // data.hName/hProperties is how mdast hands a node to rehype under
+              // a tag of our choosing — the same trick remarkEntityIds uses for
+              // entity pills. emphasis is used as the carrier because it is a
+              // real inline node type the tree walk already understands.
+              data: {
+                hName: "span",
+                hProperties: {
+                  className: has(self, handle) ? "ch-mention ch-mention-self" : "ch-mention",
+                  "data-mention": handle,
+                },
+              },
+              children: [{ type: "text", value: match }],
             };
-            // The leading character is part of the match so "@" glued to the end
-            // of a word (an email address, a file path) cannot match. Give it
-            // back untouched alongside the mention.
-            return lead ? [{ type: "text", value: lead }, mention] : [mention];
           },
         ],
       ],

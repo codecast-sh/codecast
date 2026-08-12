@@ -2855,6 +2855,7 @@ interface InboxStoreState {
   addOptimisticMessage: (convId: string, content: string, images?: Array<OptimisticImage>, clientId?: string) => string;
   markOptimisticAsQueued: (convId: string, content: string) => void;
   markOptimisticAsFailed: (convId: string, clientId: string) => void;
+  removeOptimisticMessage: (convId: string, clientId: string) => void;
   // Swap an optimistic message's still-uploading images for their resolved
   // server records (drops the spinner) once a backgrounded upload completes.
   resolvePendingUploads: (convId: string, clientId: string, images: Array<OptimisticImage>) => void;
@@ -6348,6 +6349,20 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (pending) {
       this.pendingMessages[convId] = pending.map(mark);
     }
+  }),
+
+  // The revert half of addOptimisticMessage: drop a bubble whose delivery was
+  // refused before it ever reached the rail (the blocked-revive paint, whose
+  // mutation threw). Marking it failed would keep it forever — the prune
+  // deliberately protects failed sends for a retry — so a gesture that will
+  // never be delivered has to take its optimistic copy back with it.
+  removeOptimisticMessage: sync(function (this: Draft, convId: string, clientId: string) {
+    const pending = this.pendingMessages[convId];
+    if (!pending) return;
+    const kept = pending.filter((m) => m._clientId !== clientId && m._id !== clientId);
+    if (kept.length === pending.length) return;
+    if (kept.length === 0) delete this.pendingMessages[convId];
+    else this.pendingMessages[convId] = kept;
   }),
 
   resolvePendingUploads: sync(function (this: Draft, convId: string, clientId: string, images: Array<OptimisticImage>) {
