@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, PlanItem, DocItem } from "../../../store/inboxStore";
 import { useSyncTasks } from "../../../hooks/useSyncTasks";
+import { TaskListContent } from "../../tasks/page";
 import { useSyncPlans } from "../../../hooks/useSyncPlans";
 import { useSyncDocs } from "../../../hooks/useSyncDocs";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
@@ -197,6 +198,17 @@ function ProjectDetailContent() {
 
   useSyncProjects();
   useSyncTasks();
+
+  // Which face of the project you're on. Tasks is the default: a project is
+  // somewhere to work, and the overview is the summary you step back to.
+  const searchParams = useSearchParams();
+  const tab = searchParams.get("tab") === "overview" ? "overview" : "tasks";
+  const setTab = useCallback((next: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === "tasks") params.delete("tab"); else params.set("tab", next);
+    const qs = params.toString();
+    router.replace(qs ? `/projects/${projectId}?${qs}` : `/projects/${projectId}`);
+  }, [searchParams, router, projectId]);
   useSyncPlans();
   useSyncDocs();
 
@@ -382,7 +394,7 @@ function ProjectDetailContent() {
           )}
 
           {/* Summary counts */}
-          <div className="flex items-center gap-3 text-[11px] text-sol-text-dim ml-auto">
+          <div className="flex items-center gap-3 text-[11px] text-sol-text-dim ml-auto cq-hide-compact">
             {projectPlans.length > 0 && (
               <span className="flex items-center gap-1">
                 <Target className="w-3 h-3" /> {projectPlans.length}
@@ -398,9 +410,46 @@ function ProjectDetailContent() {
             )}
           </div>
         </div>
+
+        {/* Tasks is the working surface; Overview is the summary of everything
+            filed here — plans, their tasks, and docs. */}
+        <div className="flex items-center gap-1 ml-7 mt-3 -mb-1">
+          {/* The Tasks tab carries no count of its own: the list below reports
+              what it is actually showing (the board hides agent-internal tasks
+              by default), and the project's raw totals sit in the header row.
+              Two numbers that disagree are worse than one. */}
+          {([
+            { key: "tasks", label: "Tasks", icon: ListChecks, count: 0 },
+            { key: "overview", label: "Overview", icon: Target, count: projectPlans.length + projectDocs.length },
+          ] as const).map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs transition-colors ${
+                  active
+                    ? "bg-sol-bg-alt text-sol-text border border-sol-border/40"
+                    : "text-sol-text-dim hover:text-sol-text border border-transparent"
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+                <span>{t.label}</span>
+                {t.count > 0 && <span className="text-[10px] tabular-nums text-sol-text-dim">{t.count}</span>}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Content: unified hierarchy */}
+      {/* The project's tasks, through the same list surface /tasks uses —
+          same filters, grouping, board, palette and saved views. */}
+      {tab === "tasks" ? (
+        <div className="flex-1 min-h-0">
+          <TaskListContent projectId={projectId} />
+        </div>
+      ) : (
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto py-3 px-2">
           {!hasContent && (
@@ -446,6 +495,7 @@ function ProjectDetailContent() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

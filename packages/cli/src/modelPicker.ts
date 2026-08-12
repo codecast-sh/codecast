@@ -109,8 +109,10 @@ export function planModelNavigation(state: PickerState, menuMatch: string): numb
  */
 export const STRANDED_MODEL_COMMAND_RE = /^\s*[❯›]\s*\/model\s*$/m;
 
-export function isStrandedModelCommand(paneTail: string): boolean {
-  return STRANDED_MODEL_COMMAND_RE.test(paneTail);
+export function isStrandedModelCommand(paneTail: string, args?: string): boolean {
+  if (!args) return STRANDED_MODEL_COMMAND_RE.test(paneTail);
+  const esc = args.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^\\s*[❯›]\\s*\\/model\\s+${esc}\\s*$`, "m").test(paneTail);
 }
 
 /** The session-only commit echo, tolerant of ANSI bold wrapping. */
@@ -127,6 +129,19 @@ export const SESSION_ONLY_COMMIT_RE =
  */
 export function countSessionOnlyCommits(paneText: string): number {
   return (paneText.match(new RegExp(SESSION_ONLY_COMMIT_RE.source, "gi")) ?? []).length;
+}
+
+/**
+ * Any /model switch echo — the picker's session-only commit AND the one-shot
+ * form ("Set model to Fable 5 and saved as your default for new sessions").
+ * Same staleness trap as countSessionOnlyCommits: echoes of earlier switches
+ * linger in scrollback, so callers count before acting and wait for the count
+ * to increase.
+ */
+export const MODEL_SET_ECHO_RE = /Set model to \S+/i;
+
+export function countModelSetEchoes(paneText: string): number {
+  return (paneText.match(new RegExp(MODEL_SET_ECHO_RE.source, "gi")) ?? []).length;
 }
 
 // Committing a model switch on a conversation WITH HISTORY pops a cache

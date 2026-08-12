@@ -9289,6 +9289,74 @@ export const cliSetSessionVisibility = mutation({
   },
 });
 
+// Agent-facing restart (cast restart <session> via /cli/sessions/restart) — the
+// pair to `cast kill <session>`, and the same backend as the web header's
+// "Restart session": kill the agent, then resume it through the daemon's resume
+// ladder (resume the local transcript → repair from the server copy →
+// reconstitute → start fresh). `repair: true` is the web's escalation rung, which
+// forces the rebuild from the server copy even when a plain resume would appear
+// to succeed — for a stale or corrupt local transcript.
+//
+// A restart resurfaces the card first. Reviving an agent whose session is filed
+// under Killed would otherwise leave it running where nobody can see it, and the
+// restart's own pane would be reaped as a hidden pane.
+//
+// The daemon commands are addressed to the RUNNER (conv.user_id), not the caller,
+// so a second-party owner's restart reaches the machine actually running the
+// session — same routing as restartSession/dispatch.resumeSession.
+//
+// Returns what the caller needs to follow the restart to its pane: the agent's
+// session_id (which stamps the pane as @codecast_session_id) and the device that
+// will host it, so `cast restart --tmux` can tell "coming up here" apart from
+// "coming up on another machine, don't wait for it".
+export const cliRestartSession = mutation({
+  args: {
+    session: v.string(),
+    repair: v.optional(v.boolean()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      c.user_id?.toString() === userId.toString() ||
+      c.owner_user_id?.toString() === userId.toString()
+    );
+    if (!conv) {
+      throw new Error(
+        `No session found for "${args.session}" (you can only restart sessions you run or own)`
+      );
+    }
+    const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
+    if (!conv.session_id) {
+      throw new Error(`Session ${shortId} has no agent transcript yet — nothing to restart`);
+    }
+
+    const { wasHidden, rearmed } = await resurfaceHiddenSession(ctx, conv, userId);
+    const { deduplicated } = await enqueueKillAndResume(ctx, conv.user_id, conv, {
+      forceReconstitute: !!args.repair,
+    });
+
+    return {
+      ok: true as const,
+      short_id: shortId,
+      title: conv.title ?? null,
+      session_id: conv.session_id,
+      conversation_id: conv._id,
+      agent_type: fromConvexAgentType(conv.agent_type),
+      project_path: conv.project_path ?? conv.git_root ?? null,
+      device_id: (conv as any).owner_device_id ?? null,
+      repaired: !!args.repair,
+      deduplicated: !!deduplicated,
+      was_hidden: wasHidden,
+      rearmed_schedules: rearmed,
+    };
+  },
+});
+
 // Agent-facing rename (cast rename via /cli/sessions/rename). Stamps the same
 // title_is_custom flag as the web Rename control, so the auto-titlers
 // (titleGeneration, idleSummary, cleanup) never overwrite it. Access: the

@@ -30,6 +30,24 @@ export async function isTeamMember(
   return !!m;
 }
 
+// The admin half of the same question, next to it so the two can never drift.
+// Membership decides what you may READ; admin decides what you may reshape for
+// everybody else (delete a teammate's message, rename a channel, set the default
+// one). Chat and anchors both gate on this.
+export async function isTeamAdmin(
+  ctx: DbCtx,
+  userId: Id<"users">,
+  teamId: Id<"teams">
+): Promise<boolean> {
+  const m = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_team", (q: any) =>
+      q.eq("user_id", userId).eq("team_id", teamId)
+    )
+    .first();
+  return m?.role === "admin";
+}
+
 async function getOwnerTeamVisibility(
   ctx: DbCtx,
   ownerId: Id<"users">,

@@ -14,6 +14,10 @@ export type TimelineMessage = {
   /** An agent placeholder still waiting on its answer. Never grouped, because it
    *  is about to change height and grouping it makes the list jump. */
   pendingAgent?: boolean;
+  /** A tombstone. Never grouped: "This message was deleted" folded under the
+   *  header above reads as a continuation of that person's sentence rather than
+   *  as its own event. */
+  deleted?: boolean;
 };
 
 export type TimelineRow<M extends TimelineMessage> =
@@ -117,6 +121,8 @@ export function buildChatTimeline<M extends TimelineMessage>(
       prev.authorId === m.authorId &&
       !prev.pendingAgent &&
       !m.pendingAgent &&
+      !prev.deleted &&
+      !m.deleted &&
       m.createdAt - prev.createdAt <= GROUP_WINDOW_MS;
 
     rows.push({ kind: "message", key: m.id, message: m, grouped });
@@ -153,14 +159,23 @@ export function tallyUnread(
 }
 
 /**
- * Whether an arriving message should raise an in-app toast.
+ * How loudly an arriving message may interrupt.
  *
- * The product rule, in one place so web and mobile cannot drift: toasts are
- * deliberately more eager than notifications, because a toast costs the reader
- * nothing once it has been glanced at. What it must never do is tell you about
- * something already on your screen, or about your own typing.
+ * Not a boolean, deliberately. A single yes/no forces one presentation on every
+ * message, so the only way to stop a busy channel from strobing is to silence it
+ * completely — which throws away the mention along with the chatter. A tier lets
+ * the things that are actually about you stay loud while ordinary talk degrades
+ * to a quiet card, and then to a badge.
+ *
+ *   "loud"   accent edge, sound, longer dwell. Someone is addressing you.
+ *   "quiet"  plain card, no sound, short dwell. The room is talking.
+ *   "silent" no toast at all. The unread badge is the whole signal.
+ *
+ * One implementation so web and mobile cannot drift apart.
  */
-export function shouldToastChatMessage(input: {
+export type ChatToastTier = "loud" | "quiet" | "silent";
+
+export type ToastDecisionInput = {
   authorId: string;
   viewerId: string;
   mentionsViewer?: boolean;
@@ -171,14 +186,29 @@ export function shouldToastChatMessage(input: {
   activeThreadRootId?: string;
   /** The thread this message belongs to, if any. */
   threadRootId?: string;
+  /** The viewer has posted in this thread, so replies to it are addressed to
+   *  them in every sense that matters. */
+  viewerInThread?: boolean;
+  /** An agent's answer to a question the viewer asked. Always loud: they are
+   *  waiting for it. */
+  answersViewer?: boolean;
   windowFocused: boolean;
   channelMuted?: boolean;
-  /** "all" toasts every message, "mentions" only those naming you, "none" is
-   *  silent. Mirrors chat_reads.notify_level. */
+  /** Mirrors chat_reads.notify_level. */
   notifyLevel?: "all" | "mentions" | "none";
-  /** A global do-not-disturb, which outranks everything except nothing. */
+  /** Global do-not-disturb or an active snooze, which outranks everything. */
   doNotDisturb?: boolean;
-}): boolean {
+  /** How many toasts this channel has already raised inside the recency window.
+   *  The gate that stops three people typing from producing a toast every few
+   *  seconds — after the cap the channel collapses to a badge until it settles. */
+  recentToastsFromChannel?: number;
+};
+
+/** Quiet toasts allowed from one channel before it stops interrupting. Loud
+ *  toasts are never rate limited: being named is not chatter. */
+export const QUIET_TOAST_BURST_CAP = 3;
+
+export function chatToastTier(input: ToastDecisionInput): ChatToastTier {
   const {
     authorId,
     viewerId,
@@ -187,25 +217,41 @@ export function shouldToastChatMessage(input: {
     activeChannelId,
     activeThreadRootId,
     threadRootId,
+    viewerInThread,
+    answersViewer,
     windowFocused,
     channelMuted,
     notifyLevel = "all",
     doNotDisturb,
+    recentToastsFromChannel = 0,
   } = input;
 
   // You have read what you just sent.
-  if (authorId === viewerId) return false;
-  if (doNotDisturb) return false;
-  if (notifyLevel === "none") return false;
-  // A muted channel still surfaces a direct mention — muting a room is not the
-  // same as asking not to be spoken to.
-  if ((channelMuted || notifyLevel === "mentions") && !mentionsViewer) return false;
+  if (authorId === viewerId) return "silent";
+  if (doNotDisturb) return "silent";
+  if (notifyLevel === "none") return "silent";
 
-  // Already on screen: same channel, same thread context, window focused.
+  // Already on screen: same channel, same thread context, window focused. This
+  // outranks even a mention — telling someone about a line they are looking at
+  // is the fastest way to teach them to ignore toasts.
   if (windowFocused && channelId === activeChannelId) {
     const sameContext = (threadRootId ?? undefined) === (activeThreadRootId ?? undefined);
-    if (sameContext) return false;
+    if (sameContext) return "silent";
   }
 
-  return true;
+  // Addressed to you: named, answered, or a reply on a thread you are part of.
+  const addressed = !!mentionsViewer || !!answersViewer || (!!threadRootId && !!viewerInThread);
+  // A muted channel still surfaces these — muting a room is not the same as
+  // asking not to be spoken to.
+  if (addressed) return "loud";
+
+  if (channelMuted || notifyLevel === "mentions") return "silent";
+  // The room is busy. Let it be a badge until it settles.
+  if (recentToastsFromChannel >= QUIET_TOAST_BURST_CAP) return "silent";
+  return "quiet";
+}
+
+/** Convenience for callers that only need to know whether to render anything. */
+export function shouldToastChatMessage(input: ToastDecisionInput): boolean {
+  return chatToastTier(input) !== "silent";
 }

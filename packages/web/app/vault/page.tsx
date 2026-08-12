@@ -52,7 +52,7 @@ import { useDocForFile, useVaultTeamResolver } from "../../components/vault/useV
 import { vaultPresence } from "../../lib/vault/scopeModel";
 import { vaultLandingPath } from "../../lib/vault/projectVault";
 import { filesHref } from "../../lib/vault/vaultHref";
-import { useVaultStore } from "../../store/vaultStore";
+import { useVaultStore, type VaultUnreachableReason } from "../../store/vaultStore";
 import {
   toggleVaultEditMode,
   toggleVaultSourceMode,
@@ -99,7 +99,7 @@ function NoDaemonTeaching({
   onRetry,
   onOpenRemote,
 }: {
-  reason: "none" | "no-devices" | "probe-failed" | "old-daemon" | "refused" | "error";
+  reason: VaultUnreachableReason;
   detail: string | null;
   remoteVaults: { id: string; name: string; note_count?: number }[];
   onRetry: () => void;
@@ -156,6 +156,15 @@ function NoDaemonTeaching({
         <>
           The daemon is running and answered the first check, but the file call
           failed before reaching it. Retry — the detail below says why.
+        </>
+      ),
+    },
+    "other-device": {
+      title: "Those files are on another machine",
+      body: (
+        <>
+          A vault is read straight off the disk it lives on, so only that machine can
+          serve it. Open this page there, or read a mirrored copy below if one exists.
         </>
       ),
     },

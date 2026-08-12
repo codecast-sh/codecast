@@ -141,6 +141,9 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   task_completed: ["task completed", "tasks completed"],
   task_failed: ["task failed", "tasks failed"],
   team_session_start: ["teammate session", "teammate sessions"],
+  chat_mention: ["chat mention", "chat mentions"],
+  chat_reply: ["thread reply", "thread replies"],
+  chat_here: ["channel announcement", "channel announcements"],
 };
 
 export function summarizePushBatch(

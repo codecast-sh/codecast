@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createTeamFeedFilter } from "./privacy";
+import { purgeChatMembership } from "./chat";
 import { readLocalViewRevision } from "./localFirstCommands";
 import {
   TEAM_MEMBERS_VIEW_CONTRACT_ID,
@@ -441,6 +442,10 @@ export const removeMember = mutation({
       }
     }
     await ctx.db.delete(memberMembership._id);
+    // Chat is gated on team membership alone, so its per-member rows have to go
+    // with the membership: read state, channel subscriptions, and any push still
+    // queued that would deliver the team's message text after access ended.
+    await purgeChatMembership(ctx, args.member_user_id, teamId);
     const memberUser = await ctx.db.get(args.member_user_id);
     const team = await ctx.db.get(teamId);
     const memberName = memberUser?.name || memberUser?.email || "A member";

@@ -2676,7 +2676,10 @@ interface InboxStoreState {
 
   // -- Create modal --
   createModal: 'task' | 'plan' | 'doc' | null;
-  openCreateModal: (type: 'task' | 'plan' | 'doc') => void;
+  /** Fields the create modal should open pre-filled with — how a scoped
+   *  surface (a project's task list) makes "new task" mean "new task here". */
+  createModalDefaults: { project_id?: string; plan_id?: string } | null;
+  openCreateModal: (type: 'task' | 'plan' | 'doc', defaults?: { project_id?: string; plan_id?: string }) => void;
   closeCreateModal: () => void;
 
   // -- Close-guard: one shared dialog for "close a parent with open subtasks".
@@ -4669,8 +4672,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   createModal: null,
-  openCreateModal: (type: 'task' | 'plan' | 'doc') => set({ createModal: type }),
-  closeCreateModal: () => set({ createModal: null }),
+  createModalDefaults: null,
+  openCreateModal: (type: 'task' | 'plan' | 'doc', defaults?: { project_id?: string; plan_id?: string }) =>
+    set({ createModal: type, createModalDefaults: defaults ?? null }),
+  closeCreateModal: () => set({ createModal: null, createModalDefaults: null }),
 
   taskCloseGuard: null,
   setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[] } | null) => set({ taskCloseGuard: g }),

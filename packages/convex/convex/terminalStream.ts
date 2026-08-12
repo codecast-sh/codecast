@@ -34,7 +34,7 @@
 
 import { v } from "convex/values";
 import { query, mutation, internalMutation } from "./functions";
-import { requireUser, requireUserOrToken } from "./lib/auth";
+import { requireUserOrToken } from "./lib/auth";
 import {
   PANE_COMMAND_DEBOUNCE_MS,
   PANE_LEASE_MS,
@@ -61,9 +61,12 @@ async function findRow(ctx: any, userId: any, device_id: string, target: string)
  * actually cold.
  */
 export const watchPane = mutation({
-  args: { device_id: v.string(), target: v.string() },
+  // Session auth OR an api token, the same pair every other function here
+  // resolves. The browser is the normal caller; a token lets the CLI hold a
+  // lease too (`cast watch`, and the relay's end-to-end test).
+  args: { device_id: v.string(), target: v.string(), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const userId = await requireUser(ctx);
+    const userId = await requireUserOrToken(ctx, args.api_token);
     if (!isValidPaneTarget(args.target)) throw new Error("Invalid pane target");
 
     // Own-device only. This is also what makes the command insert safe: it
@@ -118,9 +121,9 @@ export const watchPane = mutation({
 
 /** The current screen, as the viewer subscribes to it. */
 export const getPane = query({
-  args: { device_id: v.string(), target: v.string() },
+  args: { device_id: v.string(), target: v.string(), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const userId = await requireUser(ctx);
+    const userId = await requireUserOrToken(ctx, args.api_token);
     const row = await findRow(ctx, userId, args.device_id, args.target);
     if (!row) return null;
     return {

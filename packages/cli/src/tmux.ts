@@ -43,6 +43,90 @@ export function tmuxRun(args: string[], opts?: { timeout?: number; env?: Record<
   };
 }
 
+// ── Finding the pane an agent lives in ────────────────────────────────────────
+// The daemon stamps every pane it starts or resumes with `@codecast_session_id`
+// (setTmuxSessionOption), and that pane is the one the web session attaches to —
+// the header tmux pill, the read-only split, and message injection all address
+// it. So the stamp is how anything else finds "the pane for this session".
+//
+// Stamp + creation time + name in ONE tmux call: identifying a pane costs one
+// exec, not one show-options per pane.
+//
+// The separator must be PRINTABLE. tmux sanitizes control characters in all
+// format output — a tab comes back as `_`, which silently welds the three
+// fields into one unparseable string (and then nothing ever matches). The name
+// goes LAST because it is the only field a human names, so anything unexpected
+// in it can be re-joined instead of shifting the fields.
+const PANE_FIELD_SEP = "|";
+const PANE_LIST_FORMAT = `#{@codecast_session_id}${PANE_FIELD_SEP}#{session_created}${PANE_FIELD_SEP}#{session_name}`;
+
+export type CodecastPane = {
+  tmux: string;
+  /** From @codecast_session_id, when the pane carries it. */
+  sessionId: string | null;
+  /** tmux #{session_created}, unix seconds. 0 when tmux didn't report one. */
+  createdSec: number;
+};
+
+/** Parse `tmux list-sessions -F PANE_LIST_FORMAT` output. Unset user options
+ *  expand to the empty string, and an ancient tmux that doesn't expand `#{@opt}`
+ *  at all just yields no stamp — so a pane goes unmatched rather than
+ *  misidentified. */
+export function parseCodecastPaneRows(stdout: string): CodecastPane[] {
+  const panes: CodecastPane[] = [];
+  for (const row of stdout.split("\n")) {
+    if (!row.trim()) continue;
+    const [sessionId, created, ...rest] = row.split(PANE_FIELD_SEP);
+    // Re-join: a separator inside the name is the name's, not a new field.
+    const tmux = rest.join(PANE_FIELD_SEP).trim();
+    if (!tmux) continue;
+    // A tmux too old to expand `#{@opt}` hands the placeholder back verbatim.
+    // That is "no stamp", not a session id — read it as one, and a pane could be
+    // mistaken for another session's.
+    const stamp = (sessionId ?? "").trim();
+    panes.push({
+      tmux,
+      sessionId: stamp && !stamp.includes("#{") ? stamp : null,
+      createdSec: Number.parseInt((created ?? "").trim(), 10) || 0,
+    });
+  }
+  return panes;
+}
+
+/**
+ * The pane running `sessionId`, or null.
+ *
+ * The stamp wins. The name is only a fallback for a pane that predates the
+ * stamp (or a tmux too old to expand it), and then only for an UNSTAMPED pane —
+ * one stamped for another session is another session's, whatever it is called.
+ *
+ * `newerThanSec` is how a restart avoids attaching to the pane it just asked the
+ * daemon to kill: the resume builds a NEW pane under the same name, so "same
+ * name, created before I asked" means the old one is still standing there.
+ */
+export function pickPaneForSession(
+  panes: CodecastPane[],
+  sessionId: string,
+  nameSuffix: string,
+  newerThanSec?: number,
+): string | null {
+  const fresh = (p: CodecastPane) =>
+    newerThanSec === undefined || (p.createdSec > 0 && p.createdSec >= newerThanSec);
+  const stamped = panes.filter((p) => p.sessionId === sessionId);
+  const named = panes.filter(
+    (p) => !p.sessionId && p.tmux.includes("-resume-") && p.tmux.endsWith(nameSuffix),
+  );
+  return (stamped.find(fresh) ?? named.find(fresh) ?? null)?.tmux ?? null;
+}
+
+/** One tmux call: every pane this machine has, name + codecast stamps. */
+export function listCodecastPanes(): CodecastPane[] {
+  const r = tmuxRun(["list-sessions", "-F", PANE_LIST_FORMAT]);
+  // status !== 0 covers "no server running", which is simply no panes.
+  if (r.status !== 0) return [];
+  return parseCodecastPaneRows(r.stdout);
+}
+
 export function hasTmux(): boolean {
   if (_hasTmux === null) {
     try {

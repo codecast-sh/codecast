@@ -22,6 +22,17 @@ export interface CdpEvent {
 
 type EventHandler = (ev: CdpEvent) => void;
 
+/** A call that never came back. Distinct from CdpError, which is a real reply. */
+export class CdpTimeout extends Error {
+  constructor(
+    public readonly method: string,
+    ms: number,
+  ) {
+    super(`${method} did not answer within ${ms}ms`);
+    this.name = "CdpTimeout";
+  }
+}
+
 export class CdpError extends Error {
   constructor(
     message: string,
@@ -123,14 +134,36 @@ export class CdpConnection {
     }
   }
 
-  /** Issue a CDP call. `sessionId` targets a page session; omit for browser scope. */
-  send<T = any>(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<T> {
+  /**
+   * Issue a CDP call. `sessionId` targets a page session; omit for browser scope.
+   *
+   * Every call is bounded. Some CDP methods do not merely fail slowly, they
+   * never answer at all: a `Runtime.evaluate` issued while the page is between
+   * documents waits for an execution context that the navigation already threw
+   * away, and the reply never comes. There is nothing to catch, so a CLI
+   * without this timeout hangs forever — which for an agent is worse than any
+   * error, because it burns the whole turn learning nothing.
+   */
+  send<T = any>(
+    method: string,
+    params: Record<string, unknown> = {},
+    sessionId?: string,
+    timeoutMs = 30_000,
+  ): Promise<T> {
     if (this.closed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error(`CDP connection is not open (${method})`));
     }
     return new Promise<T>((resolve, reject) => {
       const id = this.nextId++;
-      this.pending.set(id, { resolve, reject, method });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new CdpTimeout(method, timeoutMs));
+      }, timeoutMs);
+      const settle = <R>(fn: (v: R) => void) => (v: R) => {
+        clearTimeout(timer);
+        fn(v);
+      };
+      this.pending.set(id, { resolve: settle(resolve), reject: settle(reject), method });
       this.ws!.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }

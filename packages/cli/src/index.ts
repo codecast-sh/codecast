@@ -42,9 +42,9 @@ import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
-import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
+import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
-import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet } from "./snippets.js";
+import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -97,6 +97,7 @@ import {
   combineClaudeResumeFlags,
   isReconstitutionTarget,
   removeForkArtifactJsonl,
+  resumeShortId,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import Anthropic from "@anthropic-ai/sdk";
@@ -123,6 +124,7 @@ import {
   writeNote,
 } from "./vault/vaultCli.js";
 import { buildMatcher, contextWindow, matchingLines, resolveLineRange } from "./textView.js";
+import { resolveOwnTarget } from "./ownTarget.js";
 
 const program = new Command();
 const isStableContextFastPath =
@@ -2530,7 +2532,14 @@ function installWorkSnippet(update = false) { return installSnippetSection("work
 function installWorkflowSnippet(update = false) { return installSnippetSection("workflow", update); }
 function installVisualSnippet(update = false) { return installSnippetSection("visual", update); }
 function installForksSnippet(update = false) { return installSnippetSection("forks", update); }
-function installStateSnippet(update = false) { return installSnippetSection("state", update); }
+// The only snippet that ships a hook alongside its markdown. The section tells
+// the agent to keep its pinned state current; the hook is the one thing that
+// raises the question again once the work is underway, so enabling either half
+// on its own gives you half a feature.
+function installStateSnippet(update = false) {
+  installThreadStateHook();
+  return installSnippetSection("state", update);
+}
 
 // installMessagingSnippet lives in ./snippets.ts (shared with the daemon).
 
@@ -2633,6 +2642,7 @@ function refreshEnabledSnippets(config: Record<string, any>): void {
   if (config.workflow_enabled) installWorkflowSnippet(true);
   if (config.visual_enabled) installVisualSnippet(true);
   if (config.publish_enabled) installPublishSnippet(true);
+  if (config.browser_enabled) installBrowserSnippet(true);
   // Messaging is on by default for memory installs — backfill/refresh + persist.
   const msgPatch = ensureMessagingForMemory(config);
   if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
@@ -3103,7 +3113,13 @@ registerRemoteCommand(program);
 registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId }, () => {
+  // First successful launch teaches the agents on this machine that the
+  // command exists, and marks it for refresh on future upgrades.
+  const cfg = readConfig();
+  if (cfg && !cfg.browser_enabled) { cfg.browser_enabled = true; writeConfig(cfg); }
+  installBrowserSnippet(true);
+});
 
 program
   .command("auth")
@@ -4277,37 +4293,23 @@ const formatOwners = (owners: Array<{ name?: string | null; email?: string | nul
     ? owners.map((o) => o.name || o.email || "?").join(", ")
     : "nobody";
 
-// `cast own <member>` — one argument that is unmistakably a PERSON means "put
-// the current session on them", the shape every sibling command already has
-// (cast rename, cast label set, cast state). Callers reached for it and got
-// "No session found for \"ashot@almostcandid.com\"", because the lone argument
-// filled the session slot.
-//
-// The test is positive-for-member, never negative-for-session: an email or a
-// name with a space cannot be a session reference, while anything id-shaped
-// stays a session reference exactly as before. Guessing the other way round
-// would silently retarget a real session, which is far worse than an error.
-const looksLikeMember = (arg: string) => arg.includes("@") || /\s/.test(arg.trim());
-
-// Split `own`/`disown` positionals into their two slots, defaulting the session
-// to the current one when the caller named only a member.
+// Split `own`/`disown` positionals into their two slots (see ownTarget.ts): a
+// lone argument that is unmistakably a person targets the CURRENT session,
+// rather than being read as a session id that cannot resolve.
 function resolveOwnerTarget(
   first: string,
   second: string | undefined,
   cmd: string,
 ): { sessionId: string; member: string | undefined } {
-  if (second !== undefined || !looksLikeMember(first)) {
-    return { sessionId: first, member: second };
-  }
-  const current = detectCurrentSessionId();
-  if (!current) {
+  const r = resolveOwnTarget(first, second, detectCurrentSessionId);
+  if (!r.ok) {
     console.error(
-      `No session detected, so "${first}" has no session to apply to — ` +
-      `pass one explicitly: cast ${cmd} jx7c6zk ${first}`
+      `No session detected, so "${r.member}" has no session to apply to — ` +
+      `pass one explicitly: cast ${cmd} jx7c6zk ${r.member}`
     );
     process.exit(1);
   }
-  return { sessionId: current, member: first };
+  return { sessionId: r.sessionId, member: r.member };
 }
 
 program
@@ -4598,12 +4600,143 @@ program
     stopDaemon();
   });
 
+/** How often --tmux looks for the pane the restart is bringing up. */
+const PANE_POLL_INTERVAL_MS = 400;
+
+/**
+ * Attach this terminal to a tmux session — switching the client when we are
+ * already inside tmux, because `attach-session` from within tmux refuses to
+ * nest. Returns false when tmux would not take us there.
+ */
+function attachOrSwitchTmux(target: string): boolean {
+  const inTmux = !!process.env.TMUX;
+  const r = spawnSync("tmux", [inTmux ? "switch-client" : "attach-session", "-t", target], {
+    stdio: inTmux ? "ignore" : "inherit",
+  });
+  return r.status === 0;
+}
+
+/**
+ * `cast restart <session>` — restart a session's AGENT (the daemon form takes no
+ * argument). Same backend as the web header's "Restart session".
+ *
+ * With --tmux we then follow the restart to its pane and attach. The pane is the
+ * daemon's, not ours: it is stamped with the agent's session id, the web
+ * session's tmux pill points at it, and the browser's read-only split renders
+ * it — so attaching here puts your keyboard on the terminal the web session is
+ * already watching.
+ *
+ * We only accept a pane created after we asked. The resume rebuilds the pane
+ * under the same name, so an older one of that name is the pre-restart pane the
+ * daemon is about to kill — attaching to it would drop us the moment it does.
+ * The one exception is a deduplicated restart, where no new pane is coming and
+ * the standing one is the honest answer.
+ */
+async function restartSessionAgent(
+  session: string,
+  options: { tmux?: boolean; repair?: boolean; timeout?: string },
+): Promise<void> {
+  // Before the call: a pane created while the request is in flight is ours.
+  const requestedAtSec = Math.floor(Date.now() / 1000);
+  const result = await cliPost("/cli/sessions/restart", { session, repair: !!options.repair });
+
+  const title = result.title ? ` ${c.dim}${result.title}${c.reset}` : "";
+  if (result.deduplicated) {
+    console.log(`${c.dim}Restart already in flight for ${c.reset}${c.cyan}${result.short_id}${c.reset}${title}`);
+  } else {
+    const how = result.repaired ? "rebuilding from the server transcript" : "resuming the transcript";
+    const back = result.was_hidden ? ", back in the inbox" : "";
+    const rearmed = result.rearmed_schedules
+      ? `, rearmed ${result.rearmed_schedules} trigger${result.rearmed_schedules === 1 ? "" : "s"}`
+      : "";
+    console.log(
+      `${c.green}ok${c.reset} restarting ${c.cyan}${result.short_id}${c.reset}${title} ${c.dim}— ${how}${back}${rearmed}${c.reset}`,
+    );
+  }
+  if (!options.tmux) {
+    console.log(`${c.dim}Watch it:${c.reset} cast read ${result.short_id}`);
+    return;
+  }
+
+  if (!hasTmux()) {
+    console.log(`${c.dim}tmux is not installed here, so there is no pane to attach to.${c.reset}`);
+    return;
+  }
+  // A pane exists on exactly ONE machine — the daemon that runs the session.
+  // When that is not this one, waiting for a local pane would just time out.
+  const here = deviceId();
+  if (result.device_id && result.device_id !== here) {
+    console.log(`${c.dim}This session runs on another machine, so its pane comes up there, not here.${c.reset}`);
+    console.log(`${c.dim}Open it from the web session's tmux pill instead.${c.reset}`);
+    return;
+  }
+
+  const sessionId: string = result.session_id;
+  const nameSuffix = `-${resumeShortId(sessionId)}`;
+  const timeoutMs = (Number.parseInt(options.timeout ?? "", 10) || 45) * 1000;
+  const deadline = Date.now() + timeoutMs;
+  // The waiting line is transient — it exists to be erased. Piped output keeps
+  // no cursor, so print it only to a terminal rather than leaving raw escapes
+  // in a log.
+  const transient = !!process.stdout.isTTY;
+  if (transient) process.stdout.write(`${c.dim}Waiting for the pane...${c.reset}`);
+
+  let target: string | null = null;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, PANE_POLL_INTERVAL_MS));
+    target = pickPaneForSession(listCodecastPanes(), sessionId, nameSuffix, requestedAtSec);
+    if (target) break;
+  }
+  // Nothing new came up. A deduplicated restart never promised a new pane, so
+  // take the standing one; otherwise say plainly that the resume didn't land.
+  if (!target && result.deduplicated) {
+    target = pickPaneForSession(listCodecastPanes(), sessionId, nameSuffix);
+  }
+  if (transient) process.stdout.write("\r\x1b[2K");
+
+  if (!target) {
+    console.log(`${c.yellow}!${c.reset} No pane came up within ${Math.round(timeoutMs / 1000)}s.`);
+    console.log(`  ${c.dim}Check the daemon:${c.reset} cast status`);
+    console.log(`  ${c.dim}Then retry:${c.reset} cast restart ${result.short_id} --tmux`);
+    process.exit(1);
+  }
+
+  console.log(`${c.dim}Attaching to${c.reset} ${target}`);
+  if (!attachOrSwitchTmux(target)) {
+    console.log(`${c.yellow}!${c.reset} Couldn't attach. Run it yourself: tmux attach -t '${target}'`);
+    process.exit(1);
+  }
+}
+
 program
   .command("restart")
-  .description("Restart the background daemon (update if available, then start)")
+  .description(
+    "Restart the background daemon, or a session's agent\n\n" +
+    "With no argument, restarts the daemon (updating it first if an update is\n" +
+    "available). With a session ID, restarts that session's AGENT the same way\n" +
+    "the web header's \"Restart session\" does: the daemon stops it, then resumes\n" +
+    "the transcript in a fresh pane. The pair to `cast kill <session>`.\n\n" +
+    "--tmux attaches you to that pane. It is the same pane the web session is\n" +
+    "attached to, so what you type and what the browser shows are one terminal.\n\n" +
+    "Examples:\n" +
+    "  cast restart                  # restart the daemon\n" +
+    "  cast restart jx7c6zk          # restart that session's agent\n" +
+    "  cast restart jx7c6zk --tmux   # ...and attach to the pane it comes up in"
+  )
+  .argument("[session]", "Session short ID (e.g. jx7c6zk) — omit to restart the daemon")
+  .option("--tmux", "Attach to the tmux pane the session comes back up in (session form only)")
+  .option("--repair", "Rebuild the transcript from the server copy instead of resuming the local one")
   .option("--wait", "Block until the daemon is running and connected to Convex (exit 1 if not)")
-  .option("--timeout <seconds>", "How long --wait polls before giving up", "45")
-  .action(async (options: any) => {
+  .option("--timeout <seconds>", "How long --wait (or --tmux) polls before giving up", "45")
+  .action(async (session: string | undefined, options: any) => {
+    if (session) {
+      await restartSessionAgent(session, options);
+      return;
+    }
+    if (options.tmux || options.repair) {
+      console.error("--tmux and --repair restart a session: pass the session ID (cast restart jx7c6zk --tmux)");
+      process.exit(1);
+    }
     const startedAt = Date.now();
     stopDaemon();
     const available = await checkForUpdates(true);
@@ -8641,85 +8774,21 @@ program
         continue;
       }
 
-      let content = fs.readFileSync(filePath, "utf-8");
-      let changed = false;
-
-      // Remove memory snippet
-      const memStart = content.indexOf("## Memory");
-      if (memStart !== -1 && (content.includes("codecast search") || content.includes("cast search"))) {
-        const memEndMarker = content.indexOf(MEMORY_SNIPPET_END, memStart);
-        let memEnd = memEndMarker !== -1 ? memEndMarker + MEMORY_SNIPPET_END.length : content.length;
-        if (content[memEnd] === "\n") memEnd++;
-        content = content.slice(0, memStart) + content.slice(memEnd);
-        changed = true;
+      // Every section we own, removed by the same algorithm that installs them
+      // (`cutOwnedSections`, ./snippets.ts). This used to be seven hand-rolled
+      // copies that fell back to end-of-file when a block's end marker was
+      // missing, so an uninstall could take the rest of the user's CLAUDE.md
+      // with it — at the one moment they have stopped watching.
+      const original = fs.readFileSync(filePath, "utf-8");
+      let content = original;
+      for (const key of Object.keys(SNIPPET_SECTIONS) as Array<keyof typeof SNIPPET_SECTIONS>) {
+        content = cutOwnedSections(content, SNIPPET_SECTIONS[key].spec);
+      }
+      for (const spec of [MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION]) {
+        content = cutOwnedSections(content, spec);
       }
 
-      // Remove trigger snippet (current or pre-rename heading)
-      const taskStart = [TRIGGER_SNIPPET_HEADING, LEGACY_TASK_SNIPPET_HEADING]
-        .map((h) => content.indexOf(h))
-        .find((i) => i !== -1) ?? -1;
-      if (taskStart !== -1 && (content.includes("cast trigger") || content.includes("codecast task") || content.includes("codecast schedule") || content.includes("cast task") || content.includes("cast schedule"))) {
-        const taskEndMarker = content.indexOf(TASK_SNIPPET_END, taskStart);
-        let taskEnd = taskEndMarker !== -1 ? taskEndMarker + TASK_SNIPPET_END.length : content.length;
-        if (content[taskEnd] === "\n") taskEnd++;
-        content = content.slice(0, taskStart) + content.slice(taskEnd);
-        changed = true;
-      }
-
-      // Remove work snippet
-      let workStart = content.indexOf("## Tasks & Plans");
-      if (workStart === -1) workStart = content.indexOf("## Tasks, Plans & Workflows");
-      if (workStart === -1) workStart = content.indexOf("## Issue Tracking with cast task");
-      if (workStart === -1) workStart = content.indexOf("## Issue Tracking with codecast task");
-      if (workStart !== -1 && content.includes(WORK_SNIPPET_END)) {
-        const workEndMarker = content.indexOf(WORK_SNIPPET_END, workStart);
-        let workEnd = workEndMarker !== -1 ? workEndMarker + WORK_SNIPPET_END.length : content.length;
-        if (content[workEnd] === "\n") workEnd++;
-        content = content.slice(0, workStart) + content.slice(workEnd);
-        changed = true;
-      }
-
-      // Remove plan snippet
-      const planStart = content.indexOf("## Plans");
-      if (planStart !== -1 && content.includes(PLAN_SNIPPET_END)) {
-        const planEndMarker = content.indexOf(PLAN_SNIPPET_END, planStart);
-        let planEnd = planEndMarker !== -1 ? planEndMarker + PLAN_SNIPPET_END.length : content.length;
-        if (content[planEnd] === "\n") planEnd++;
-        content = content.slice(0, planStart) + content.slice(planEnd);
-        changed = true;
-      }
-
-      // Remove workflow snippet
-      const wfStart = content.indexOf("## Workflows");
-      if (wfStart !== -1 && content.includes(WORKFLOW_SNIPPET_END)) {
-        const wfEndMarker = content.indexOf(WORKFLOW_SNIPPET_END, wfStart);
-        let wfEnd = wfEndMarker !== -1 ? wfEndMarker + WORKFLOW_SNIPPET_END.length : content.length;
-        if (content[wfEnd] === "\n") wfEnd++;
-        content = content.slice(0, wfStart) + content.slice(wfEnd);
-        changed = true;
-      }
-
-      // Remove the shared object-reference snippet
-      const refStart = content.indexOf("## Referencing objects");
-      if (refStart !== -1 && content.includes(REFERENCES_SNIPPET_END)) {
-        const refEndMarker = content.indexOf(REFERENCES_SNIPPET_END, refStart);
-        let refEnd = refEndMarker !== -1 ? refEndMarker + REFERENCES_SNIPPET_END.length : content.length;
-        if (content[refEnd] === "\n") refEnd++;
-        content = content.slice(0, refStart) + content.slice(refEnd);
-        changed = true;
-      }
-
-      // Remove messaging snippet
-      const msgStart = content.indexOf("## Messaging");
-      if (msgStart !== -1 && content.includes(MESSAGING_SNIPPET_END)) {
-        const msgEndMarker = content.indexOf(MESSAGING_SNIPPET_END, msgStart);
-        let msgEnd = msgEndMarker !== -1 ? msgEndMarker + MESSAGING_SNIPPET_END.length : content.length;
-        if (content[msgEnd] === "\n") msgEnd++;
-        content = content.slice(0, msgStart) + content.slice(msgEnd);
-        changed = true;
-      }
-
-      if (changed) {
+      if (content !== original) {
         fs.writeFileSync(filePath, content.trimEnd() + "\n");
         console.log(`Removed codecast snippets from ${filePath.replace(home, "~")}`);
       }

@@ -24,11 +24,16 @@ export interface ModelOption {
    * arg allowlist and shell globbing reject; `--model sonnet-1m` silently
    * launches a bogus "custom model".) */
   midSessionOnly?: boolean;
+  /** Mid-session switch by injecting the one-shot `/model <cliAlias>` command
+   * instead of driving the picker. The one-shot also saves the model as the
+   * user's GLOBAL default for new sessions (verified live 2026-08-12) — only
+   * set this where that side effect is the intent, as it is for Fable. */
+  oneShotSwitch?: boolean;
 }
 
 export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your saved default model", menuMatch: "^Default\\b" },
-  { key: "fable", label: "Fable", hint: "Most capable, ~2× limit burn", menuMatch: "^Fable\\b", cliAlias: "fable" },
+  { key: "fable", label: "Fable", hint: "Most capable, ~2× limit burn", menuMatch: "^Fable\\b", cliAlias: "fable", oneShotSwitch: true },
   { key: "opus", label: "Opus", hint: "Best for everyday, complex tasks", menuMatch: "^Opus\\b", cliAlias: "opus" },
   { key: "sonnet", label: "Sonnet", hint: "Efficient for routine tasks", menuMatch: "^Sonnet(?!\\s*\\(1M)", cliAlias: "sonnet" },
   { key: "sonnet-1m", label: "Sonnet 1M", hint: "Sonnet with 1M context", menuMatch: "^Sonnet\\s*\\(1M", midSessionOnly: true },

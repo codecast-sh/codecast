@@ -3168,10 +3168,11 @@ export default defineSchema({
       v.literal("conversation"),
       v.literal("artifact"),
       // Chat notifications never fan out over this table — the sender computes the
-      // recipient list and re-checks channel access for each one, because `emit`'s
-      // subscription fan-out does not re-check access and a chat preview carries
-      // real message text. This member exists only so the notification and
-      // subscription entity unions stay one shape.
+      // recipient list and re-checks channel access for each one, because a chat
+      // preview carries real message text. This member exists only so the
+      // notification and subscription entity unions stay one shape. Should a row
+      // ever appear, `emit` re-checks team membership for a chat_channel entity
+      // and `teams.removeMember` deletes the rows of a departing member.
       v.literal("chat_channel")
     ),
     entity_id: v.string(),
@@ -3324,6 +3325,12 @@ export default defineSchema({
     // caller to be authorized for that anchor — otherwise any api_token holder
     // could overwrite any message and author content under the bot's face.
     agent_anchor_id: v.optional(v.id("anchors")),
+    // Thread-level switch for the anchor, set on the thread ROOT only. Absent
+    // means the default: the anchor answers a plain reply in a thread it is
+    // already part of, so asking a follow-up does not mean re-typing its name.
+    // `false` is a member saying stop — nothing but an explicit @mention wakes it
+    // in that thread again (and that mention flips this back to true).
+    anchor_follow: v.optional(v.boolean()),
     fork_conversation_id: v.optional(v.id("conversations")),
   })
     .index("by_channel_created", ["channel_id", "created_at"])
