@@ -10,6 +10,8 @@
 import { test, expect } from "bun:test";
 import {
   resumeReadinessPollMs,
+  MAX_RESUME_READINESS_POLL_MS,
+  RESUME_IN_FLIGHT_TIMEOUT_MS,
   classifyTmuxLiveState,
   extractTmuxLiveRegion,
 } from "./daemon.js";
@@ -17,15 +19,38 @@ import {
 // ---- 2a: readiness window tiers ----
 test("readiness floor is 30s for small/reconstituted sessions (was 15s)", () => {
   expect(resumeReadinessPollMs(0)).toBe(30_000);
-  expect(resumeReadinessPollMs(500_000)).toBe(30_000);
-  expect(resumeReadinessPollMs(1_000_000)).toBe(30_000); // boundary: not > 1MB
+  expect(resumeReadinessPollMs(500_000)).toBe(30_000); // boundary: not > 500KB
 });
 
 test("readiness window scales up for larger transcripts", () => {
-  expect(resumeReadinessPollMs(1_000_001)).toBe(45_000);
-  expect(resumeReadinessPollMs(5_000_000)).toBe(45_000);
-  expect(resumeReadinessPollMs(10_000_001)).toBe(90_000);
-  expect(resumeReadinessPollMs(50_000_000)).toBe(90_000);
+  expect(resumeReadinessPollMs(500_001)).toBe(60_000);
+  expect(resumeReadinessPollMs(1_000_001)).toBe(90_000);
+  expect(resumeReadinessPollMs(10_000_001)).toBe(120_000);
+  expect(resumeReadinessPollMs(50_000_000)).toBe(120_000);
+});
+
+// jx78ksdh85pw: an 880KB transcript took Claude 38-71s to render its prompt, but
+// the old 1MB boundary gave it the 30s tier — so every restart of that session
+// reported a timeout on a boot that was actually fine, and the web sat on
+// "resuming" while the user clicked Restart again and killed the healthy pane.
+test("a ~900KB transcript gets a window Claude can actually boot in", () => {
+  expect(resumeReadinessPollMs(901_411)).toBeGreaterThanOrEqual(60_000);
+});
+
+test("no tier exceeds the declared ceiling", () => {
+  for (const size of [0, 500_001, 1_000_001, 10_000_001, 500_000_000]) {
+    expect(resumeReadinessPollMs(size)).toBeLessThanOrEqual(MAX_RESUME_READINESS_POLL_MS);
+  }
+});
+
+// ---- 2c: the guard must outlive the thing it guards ----
+// The in-flight map is what serializes resumes on one session. When it expires
+// mid-resume it does not merely retry — it lets a SECOND resume run against the
+// same tmux name, which is how `duplicate session: cc-resume-c731de13` appeared
+// with two `claude --resume` lines typed into one pane. Any future tier bump that
+// crosses the guard re-opens that window, so pin the ordering here.
+test("the in-flight guard outlives the longest readiness window", () => {
+  expect(RESUME_IN_FLIGHT_TIMEOUT_MS).toBeGreaterThan(MAX_RESUME_READINESS_POLL_MS);
 });
 
 // ---- 2b: bare-shell detection ----
