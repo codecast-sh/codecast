@@ -11720,7 +11720,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     const ffd = conversation?.forked_from_details;
     if (ffd?.conversation_id) {
-      preloadForkSessions([{ _id: ffd.conversation_id.toString(), title: ffd.title || "Parent session" }]);
+      // Pass the triage fields through: a stashed/dismissed parent must seed
+      // as such, or it flashes into the inbox as an active card at boot.
+      preloadForkSessions([{
+        _id: ffd.conversation_id.toString(),
+        title: ffd.title || "Parent session",
+        inbox_dismissed_at: ffd.inbox_dismissed_at,
+        inbox_stashed_at: ffd.inbox_stashed_at,
+        inbox_killed_at: ffd.inbox_killed_at,
+        inbox_pinned_at: ffd.inbox_pinned_at,
+      }]);
     }
   }, [conversation?.fork_children, conversation?.fork_siblings, conversation?.forked_from_details, conversation?._id, conversation?.forked_from, preloadForkSessions]);
 
@@ -13230,7 +13239,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (!useInboxStore.getState().sessions[targetId]) {
       if (convId === null) {
         const ffd = conversation?.forked_from_details;
-        if (ffd?.conversation_id) preloadForkSessions([{ _id: ffd.conversation_id.toString(), title: ffd.title || "Parent session" }]);
+        if (ffd?.conversation_id) preloadForkSessions([{
+          _id: ffd.conversation_id.toString(),
+          title: ffd.title || "Parent session",
+          inbox_dismissed_at: ffd.inbox_dismissed_at,
+          inbox_stashed_at: ffd.inbox_stashed_at,
+          inbox_killed_at: ffd.inbox_killed_at,
+          inbox_pinned_at: ffd.inbox_pinned_at,
+        }]);
       } else {
         const child = (conversation?.fork_children || []).find(f => f._id === targetId);
         const sibling = child ? undefined : (conversation?.fork_siblings || []).find(f => f._id === targetId);

@@ -538,6 +538,16 @@ export type ForkChild = {
   // First user prompt past the fork point — the divergent message that
   // distinguishes this branch from its siblings (see mapForkDetails).
   first_divergent_preview?: string;
+  // Triage/visibility state off the same conversation row. preloadForkSessions
+  // copies these onto the seeded row so a stashed/dismissed/killed branch never
+  // masquerades as an active needs-input card at boot.
+  forked_from?: string | null;
+  project_path?: string;
+  git_root?: string;
+  inbox_dismissed_at?: number | null;
+  inbox_stashed_at?: number | null;
+  inbox_killed_at?: number | null;
+  inbox_pinned_at?: number | null;
 };
 
 
@@ -5871,8 +5881,23 @@ export const useInboxStore = create<InboxStoreState>(
     // Dismiss/stash are absolute — never altered by viewing. If the injected
     // session arrived hidden, surface it through viewingDismissedId so the user
     // can read it without resurrecting it into the active inbox.
-    this.sessions[session._id] = { ...session };
-    if (isSessionHidden(session)) {
+    //
+    // Never DOWNGRADE a cached row: callers build inject payloads from narrow
+    // projections (deep link, palette), so an existing row is the richer
+    // record — keep its values and let the payload only fill gaps. Writing the
+    // thin payload over a synced row is how a stashed/pinned session loses its
+    // triage stamps and flashes into the inbox as an active card at boot
+    // (ct-42666). All callers currently guard on !sessions[id]; this makes the
+    // invariant hold regardless of caller discipline.
+    const existing = this.sessions[session._id];
+    const merged: InboxSession = { ...session };
+    if (existing) {
+      for (const k of Object.keys(existing) as (keyof InboxSession)[]) {
+        if (existing[k] !== undefined) (merged as any)[k] = existing[k];
+      }
+    }
+    this.sessions[session._id] = merged;
+    if (isSessionHidden(merged)) {
       this.viewingDismissedId = session._id;
     } else {
       declareViewNav("gesture");
@@ -5890,11 +5915,40 @@ export const useInboxStore = create<InboxStoreState>(
   // because this is incoming-data seeding, not a user edit — it persists to IDB
   // (branches stay preloaded across reloads) but dispatches nothing to the server.
   preloadForkSessions: sync(function (this: Draft, forks: ForkChild[], forkedFrom?: string) {
+    // Per-user triage/visibility state off the server row. A seeded row MUST
+    // carry these: without them a stashed/dismissed branch reads as an active
+    // idle session, and since it persists to IDB it renders as a needs-input
+    // card on every boot until the live payload re-delivers the stamps (the
+    // "forks flash in the inbox on reload" bug).
+    const triageFields = (f: ForkChild) => ({
+      inbox_dismissed_at: f.inbox_dismissed_at ?? null,
+      inbox_stashed_at: f.inbox_stashed_at ?? null,
+      inbox_killed_at: f.inbox_killed_at ?? null,
+      inbox_pinned_at: f.inbox_pinned_at ?? null,
+      // The buckets read the enriched twin, so derive it the way the server does.
+      is_pinned: !!f.inbox_pinned_at,
+    });
+    // A payload that carries neither stash nor dismiss was built without triage
+    // state (a synthesized {_id,title} parent stub, or a pre-upgrade server) —
+    // never fabricate "not stashed" nulls from it.
+    const hasTriage = (f: ForkChild) =>
+      f.inbox_stashed_at !== undefined || f.inbox_dismissed_at !== undefined;
     for (const f of forks) {
       const id = f?._id;
       if (!id || !isConvexId(id)) continue;               // skip optimistic/stub ids
-      if (this.sessions[id]) continue;                    // don't clobber live data
       if (this.pending[`sessions:${id}`]?.type === "exclude") continue; // killed locally
+      const existing = this.sessions[id];
+      if (existing) {
+        // Don't clobber live data — but DO heal a row seeded before the payload
+        // carried triage state (undefined = the field was never delivered; an
+        // explicit null is a real "not stashed/dismissed" and stays). This is
+        // what retires the stampless stubs already persisted in caches.
+        if (!hasTriage(f)) continue;
+        for (const [k, v] of Object.entries(triageFields(f))) {
+          if ((existing as any)[k] === undefined) (existing as any)[k] = v;
+        }
+        continue;
+      }
       if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
       this.sessions[id] = {
         _id: id,
@@ -5906,8 +5960,11 @@ export const useInboxStore = create<InboxStoreState>(
         message_count: f.message_count ?? 0,
         is_idle: true,
         has_pending: false,
-        forked_from: forkedFrom ?? null,
+        forked_from: f.forked_from ?? forkedFrom ?? null,
         parent_message_uuid: f.parent_message_uuid ?? null,
+        project_path: f.project_path,
+        git_root: f.git_root,
+        ...(hasTriage(f) ? triageFields(f) : null),
       } as InboxSession;
     }
   }),
