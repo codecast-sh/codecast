@@ -12,6 +12,7 @@ import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages, cancelQueuedMessagesOnKill } from "./pendingMessages";
 import { latestImagePreviewUrl } from "./messages";
+import { inboxVisibilityFields } from "./inboxProjection";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
@@ -486,10 +487,7 @@ async function mapForkDetails(ctx: { db: any }, forks: any[]) {
         forked_from: fork.forked_from,
         project_path: fork.project_path,
         git_root: fork.git_root,
-        inbox_dismissed_at: fork.inbox_dismissed_at ?? null,
-        inbox_stashed_at: fork.inbox_stashed_at ?? null,
-        inbox_killed_at: fork.inbox_killed_at ?? null,
-        inbox_pinned_at: fork.inbox_pinned_at ?? null,
+        ...inboxVisibilityFields(fork),
       };
     })
   );
@@ -1431,10 +1429,7 @@ export const getAllMessages = query({
           // Triage state for the client-side parent preload (same contract as
           // mapForkDetails): a stashed/dismissed parent must seed as such, not
           // as an active row that flashes into the inbox at boot.
-          inbox_dismissed_at: originalConv.inbox_dismissed_at ?? null,
-          inbox_stashed_at: originalConv.inbox_stashed_at ?? null,
-          inbox_killed_at: originalConv.inbox_killed_at ?? null,
-          inbox_pinned_at: originalConv.inbox_pinned_at ?? null,
+          ...inboxVisibilityFields(originalConv),
         };
       }
     }
@@ -1890,10 +1885,7 @@ export const getConversationWithMeta = query({
           // Triage state for the client-side parent preload (same contract as
           // mapForkDetails): a stashed/dismissed parent must seed as such, not
           // as an active row that flashes into the inbox at boot.
-          inbox_dismissed_at: originalConv.inbox_dismissed_at ?? null,
-          inbox_stashed_at: originalConv.inbox_stashed_at ?? null,
-          inbox_killed_at: originalConv.inbox_killed_at ?? null,
-          inbox_pinned_at: originalConv.inbox_pinned_at ?? null,
+          ...inboxVisibilityFields(originalConv),
         };
       }
     }
@@ -3114,10 +3106,7 @@ export async function performListRecentSessions(ctx: { db: QueryCtx["db"] }, use
         // session is injected into the client's sessions cache, and a row
         // seeded without its triage state renders as an active needs-input
         // card at boot (ct-42666).
-        inbox_killed_at: c.inbox_killed_at,
-        inbox_dismissed_at: c.inbox_dismissed_at,
-        inbox_stashed_at: c.inbox_stashed_at,
-        inbox_pinned_at: c.inbox_pinned_at,
+        ...inboxVisibilityFields(c),
         isOwn,
         authorName: author?.name ?? null,
         authorAvatar: author?.avatar ?? null,
