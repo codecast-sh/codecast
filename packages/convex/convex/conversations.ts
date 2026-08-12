@@ -9180,6 +9180,47 @@ export const dismissFromInbox = mutation({
   },
 });
 
+/**
+ * Bring a hidden card back to the inbox and rearm what its kill canceled.
+ * Shared by `cast undismiss` (whose whole job this is) and `cast restart`
+ * (which would otherwise revive an agent nobody can see).
+ *
+ * inbox_killed_at clears too, or the restore can't do what it advertises: a
+ * killed row is hidden by shouldShowInInbox on that flag alone, so clearing
+ * only the hide stamps left it invisible and `cast kill`'s own "cast undismiss
+ * <id> to resurface" hint was a false promise. (It used to work by accident —
+ * the web's pin gesture wiped the flag through the patch rail, which is exactly
+ * the hole the dispatch guard sealed.)
+ *
+ * `status` deliberately stays: this resurfaces the CARD, it does not restart
+ * the agent — that's what enqueueKillAndResume is for.
+ */
+async function resurfaceHiddenSession(
+  ctx: MutationCtx,
+  conv: Doc<"conversations">,
+  userId: Id<"users">,
+): Promise<{ wasHidden: boolean; rearmed: number }> {
+  const wasHidden = !!(conv.inbox_dismissed_at || conv.inbox_stashed_at || conv.inbox_killed_at);
+  if (!wasHidden) return { wasHidden: false, rearmed: 0 };
+
+  await ctx.db.patch(conv._id, {
+    inbox_dismissed_at: undefined,
+    inbox_stashed_at: undefined,
+    inbox_killed_at: undefined,
+  });
+  // The un-kill mirror (same as the web restore path in dispatch): bring back
+  // the schedules the kill canceled, stamped tasks only. Scan the runner's,
+  // plus the caller's when a second-party owner is restoring.
+  let rearmed = 0;
+  if (conv.inbox_dismissed_at) {
+    rearmed = await reactivateTasksCanceledOnKill(ctx, conv.user_id, conv._id);
+    if (conv.user_id.toString() !== userId.toString()) {
+      rearmed += await reactivateTasksCanceledOnKill(ctx, userId, conv._id);
+    }
+  }
+  return { wasHidden, rearmed };
+}
+
 // Agent-facing inbox visibility (cast dismiss / undismiss / kill via
 // /cli/sessions/*). Field semantics are IDENTICAL to the web inbox gestures and
 // run the same hide-transition side effects (applyHideTransition):
@@ -9216,30 +9257,7 @@ export const cliSetSessionVisibility = mutation({
     const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
 
     if (args.action === "undismiss") {
-      const wasHidden = !!(conv.inbox_dismissed_at || conv.inbox_stashed_at || conv.inbox_killed_at);
-      // inbox_killed_at clears too, or undismiss can't do what it advertises: a
-      // killed row is hidden by shouldShowInInbox on that flag alone, so
-      // clearing only the hide stamps left it invisible and `cast kill`'s own
-      // "cast undismiss <id> to resurface" hint was a false promise. (It used to
-      // work by accident — the web's pin gesture wiped the flag through the
-      // patch rail, which is exactly the hole the dispatch guard just sealed.)
-      // `status` deliberately stays: undismiss resurfaces the CARD, it does not
-      // restart the agent — that's Restart's job.
-      await ctx.db.patch(conv._id, {
-        inbox_dismissed_at: undefined,
-        inbox_stashed_at: undefined,
-        inbox_killed_at: undefined,
-      });
-      // The un-kill mirror (same as the web restore path in dispatch): bring
-      // back the schedules the kill canceled, stamped tasks only. Scan the
-      // runner's, plus the caller's when a second-party owner is restoring.
-      let rearmed = 0;
-      if (conv.inbox_dismissed_at) {
-        rearmed = await reactivateTasksCanceledOnKill(ctx, conv.user_id, conv._id);
-        if (conv.user_id.toString() !== userId.toString()) {
-          rearmed += await reactivateTasksCanceledOnKill(ctx, userId, conv._id);
-        }
-      }
+      const { wasHidden, rearmed } = await resurfaceHiddenSession(ctx, conv, userId);
       return { ok: true as const, short_id: shortId, action: args.action, was_hidden: wasHidden, rearmed_schedules: rearmed };
     }
 

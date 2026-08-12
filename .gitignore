@@ -117,3 +117,6 @@ docs/social-posting.md
 packages/cli/*
 # Editor/atomic-write temp files (name.tsx.tmp.<pid>.<hash>)
 *.tmp.[0-9]*.[0-9a-f]*
+
+# Scratch convex probes (one-off prod queries, never shipped)
+packages/convex/_*.mjs

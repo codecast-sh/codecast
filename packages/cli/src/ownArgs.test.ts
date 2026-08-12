@@ -55,11 +55,12 @@ afterAll(() => {
 // Async on purpose: Bun.spawnSync blocks this process's event loop, so the
 // in-process capture server above could never answer the CLI's request and
 // every networked case would deadlock until the test timed out.
-async function run(args: string[], env: Record<string, string> = {}) {
+async function run(args: string[], opts: { env?: Record<string, string>; cwd?: string } = {}) {
   captured = [];
   const proc = Bun.spawn({
     cmd: [process.execPath, ENTRY, ...args],
-    env: { ...process.env, HOME: home, CLAUDE_CODE_SESSION_ID: "CURRENT-SESSION", ...env },
+    env: { ...process.env, HOME: home, CLAUDE_CODE_SESSION_ID: "CURRENT-SESSION", ...opts.env },
+    cwd: opts.cwd,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -132,9 +133,14 @@ describe("cast own / disown resolve a lone member against the current session", 
   }, SPAWN_TIMEOUT);
 
   test("a lone member with no detectable session errors instead of guessing", async () => {
-    // Empty CLAUDE_CODE_SESSION_ID plus an isolated HOME (no ~/.claude
-    // transcripts) leaves detection with nothing to resolve.
-    const r = await run(["own", "ashot@almostcandid.com"], { CLAUDE_CODE_SESSION_ID: "" });
+    // Detection has three inputs, so all three have to come up empty: no
+    // CLAUDE_CODE_SESSION_ID, a cwd outside any tracked project (process
+    // ancestry matches on the project root), and an isolated HOME with no
+    // ~/.claude transcripts to fall back on.
+    const r = await run(["own", "ashot@almostcandid.com"], {
+      env: { CLAUDE_CODE_SESSION_ID: "" },
+      cwd: os.tmpdir(),
+    });
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr).toContain("ashot@almostcandid.com");
     // It must not have silently posted anything.

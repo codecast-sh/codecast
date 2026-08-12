@@ -1747,6 +1747,26 @@ describe("pending user messages must never be lost on reload", () => {
     expect(pending[0]._isFailed).toBe(true);
   });
 
+  // The revive buttons paint a "continue" into every acted session before the
+  // switch mutation is awaited. When that mutation throws, nothing will ever
+  // deliver those messages, so the gesture has to take its bubbles back —
+  // marking them failed would keep them forever (the prune protects failed
+  // sends for a retry that can't happen here).
+  it("removeOptimisticMessage takes back a bubble whose send was refused", () => {
+    const store = useInboxStore.getState();
+    const kept = store.addOptimisticMessage("c1", "stays");
+    const dropped = store.addOptimisticMessage("c1", "never sent");
+
+    store.removeOptimisticMessage("c1", dropped);
+    const pending = useInboxStore.getState().pendingMessages.c1;
+    expect(pending).toHaveLength(1);
+    expect(pending[0]._clientId).toBe(kept);
+
+    // Last one out clears the conversation's entry entirely.
+    store.removeOptimisticMessage("c1", kept);
+    expect(useInboxStore.getState().pendingMessages.c1).toBeUndefined();
+  });
+
   it("prunes a pending message only once the server confirms it by client_id", () => {
     const store = useInboxStore.getState();
     const clientId = store.addOptimisticMessage("c1", "delivered");
