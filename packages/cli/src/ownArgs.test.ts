@@ -51,28 +51,32 @@ afterAll(() => {
 
 // Run the real CLI with a deterministic "current session" and an isolated HOME
 // (CONFIG_DIR is derived from process.env.HOME, so this redirects all config).
-function run(args: string[], env: Record<string, string> = {}) {
+//
+// Async on purpose: Bun.spawnSync blocks this process's event loop, so the
+// in-process capture server above could never answer the CLI's request and
+// every networked case would deadlock until the test timed out.
+async function run(args: string[], env: Record<string, string> = {}) {
   captured = [];
-  const r = Bun.spawnSync({
+  const proc = Bun.spawn({
     cmd: [process.execPath, ENTRY, ...args],
     env: { ...process.env, HOME: home, CLAUDE_CODE_SESSION_ID: "CURRENT-SESSION", ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
   // The CLI also fires a telemetry POST to /cli/log; only the command's own
   // request is interesting here.
   const calls = captured.filter((c) => !c.path.startsWith("/cli/log"));
-  return {
-    exitCode: r.exitCode,
-    stdout: r.stdout.toString(),
-    stderr: r.stderr.toString(),
-    call: calls[0],
-  };
+  return { exitCode, stdout, stderr, call: calls[0] };
 }
 
 describe("unknown commands fail instead of printing help to stdout", () => {
-  test("an invented subcommand exits nonzero with nothing scrapable on stdout", () => {
-    const r = run(["codecast"]);
+  test("an invented subcommand exits nonzero with nothing scrapable on stdout", async () => {
+    const r = await run(["codecast"]);
     expect(r.exitCode).not.toBe(0);
     // The whole bug: a scrape of stdout must come back empty, so the
     // placeholder id in the help examples is unreachable.
@@ -81,56 +85,56 @@ describe("unknown commands fail instead of printing help to stdout", () => {
     expect(r.stderr).toContain("unknown command 'codecast'");
   }, SPAWN_TIMEOUT);
 
-  test("bare `cast` still prints help and exits 0", () => {
-    const r = run([]);
+  test("bare `cast` still prints help and exits 0", async () => {
+    const r = await run([]);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("Usage: cast");
   }, SPAWN_TIMEOUT);
 });
 
 describe("cast own / disown resolve a lone member against the current session", () => {
-  test("an email argument fills the MEMBER slot, not the session slot", () => {
-    const r = run(["own", "ashot@almostcandid.com"]);
+  test("an email argument fills the MEMBER slot, not the session slot", async () => {
+    const r = await run(["own", "ashot@almostcandid.com"]);
     expect(r.call?.path).toBe("/cli/sessions/own");
     expect(r.call?.body.owner).toBe("ashot@almostcandid.com");
     expect(r.call?.body.session_id).toBe("CURRENT-SESSION");
   }, SPAWN_TIMEOUT);
 
-  test("a name with a space fills the MEMBER slot too", () => {
-    const r = run(["own", "Jason Benn"]);
+  test("a name with a space fills the MEMBER slot too", async () => {
+    const r = await run(["own", "Jason Benn"]);
     expect(r.call?.body.owner).toBe("Jason Benn");
     expect(r.call?.body.session_id).toBe("CURRENT-SESSION");
   }, SPAWN_TIMEOUT);
 
-  test("an id-shaped argument still means the SESSION, claimed by you", () => {
-    const r = run(["own", "jx7c6zk"]);
+  test("an id-shaped argument still means the SESSION, claimed by you", async () => {
+    const r = await run(["own", "jx7c6zk"]);
     expect(r.call?.body.session_id).toBe("jx7c6zk");
     expect(r.call?.body.owner).toBe("me");
   }, SPAWN_TIMEOUT);
 
-  test("two arguments keep their original meaning", () => {
-    const r = run(["own", "jx7c6zk", "ashot@almostcandid.com"]);
+  test("two arguments keep their original meaning", async () => {
+    const r = await run(["own", "jx7c6zk", "ashot@almostcandid.com"]);
     expect(r.call?.body.session_id).toBe("jx7c6zk");
     expect(r.call?.body.owner).toBe("ashot@almostcandid.com");
   }, SPAWN_TIMEOUT);
 
-  test("disown shares the resolution", () => {
-    const r = run(["disown", "ashot@almostcandid.com"]);
+  test("disown shares the resolution", async () => {
+    const r = await run(["disown", "ashot@almostcandid.com"]);
     expect(r.call?.path).toBe("/cli/sessions/disown");
     expect(r.call?.body.owner).toBe("ashot@almostcandid.com");
     expect(r.call?.body.session_id).toBe("CURRENT-SESSION");
   }, SPAWN_TIMEOUT);
 
-  test("disown with an id-shaped argument is unchanged", () => {
-    const r = run(["disown", "jx7c6zk"]);
+  test("disown with an id-shaped argument is unchanged", async () => {
+    const r = await run(["disown", "jx7c6zk"]);
     expect(r.call?.body.session_id).toBe("jx7c6zk");
     expect(r.call?.body.owner).toBe("me");
   }, SPAWN_TIMEOUT);
 
-  test("a lone member with no detectable session errors instead of guessing", () => {
+  test("a lone member with no detectable session errors instead of guessing", async () => {
     // Empty CLAUDE_CODE_SESSION_ID plus an isolated HOME (no ~/.claude
     // transcripts) leaves detection with nothing to resolve.
-    const r = run(["own", "ashot@almostcandid.com"], { CLAUDE_CODE_SESSION_ID: "" });
+    const r = await run(["own", "ashot@almostcandid.com"], { CLAUDE_CODE_SESSION_ID: "" });
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr).toContain("ashot@almostcandid.com");
     // It must not have silently posted anything.
