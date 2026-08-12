@@ -1,6 +1,5 @@
-import { useState, useMemo, useCallback, memo } from "react";
+import { useState, useMemo, useCallback, useRef, memo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { MessageSquarePlus } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { genCommentId } from "../lib/reviewActions";
 import { KeyCap } from "./KeyboardShortcutsHelp";
@@ -460,8 +459,75 @@ export const DiffView = memo(function DiffView({
     [commentContext],
   );
 
+  // One comment handle for the whole block instead of one per row, sitting in the
+  // left margin OUTSIDE the code — the same `.cc-block-quote` handle a message
+  // block gets (MessageReview), at the same gutter offset. It glides to whatever
+  // row the cursor is on, so only a single mark is ever on screen and sweeping
+  // the diff no longer flashes a chip down every line.
+  //
+  // Moving it is imperative (a delegated mouseover writes `top` and a data
+  // attribute) rather than React state: hover state would re-render every row of
+  // the diff on each row the cursor crosses, and this sits inside the
+  // frequently-rendering conversation tree.
+  const handleRef = useRef<HTMLButtonElement | null>(null);
+  const hoveredLine = useRef<FlatDiffLine | null>(null);
+
+  const trackRow = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const btn = handleRef.current;
+    if (!btn) return;
+    const rowEl = (e.target as HTMLElement | null)?.closest?.("[data-diff-row]") as HTMLElement | null;
+    // Separators, comment threads and the handle itself report no row: keep the
+    // handle where it is rather than snapping it away mid-gesture.
+    if (!rowEl) return;
+    const line = displayItems[Number(rowEl.dataset.diffRow)];
+    if (!line || line.type === "separator") return;
+    hoveredLine.current = line;
+    // The handle lives outside the horizontal scroller, so it can't use the
+    // row's offsetTop (that's measured inside it). Measure against the block.
+    const host = btn.offsetParent as HTMLElement | null;
+    const top = host ? rowEl.getBoundingClientRect().top - host.getBoundingClientRect().top : 0;
+    // Appearing and moving are different gestures. Sliding into place from the
+    // row you last left looks like a glitch, so only animate `top` while the
+    // handle is already visible.
+    btn.dataset.moving = btn.dataset.on === "yes" ? "yes" : "no";
+    btn.style.top = `${top}px`;
+    btn.dataset.on = "yes";
+  }, [displayItems]);
+
+  const untrackRow = useCallback(() => {
+    hoveredLine.current = null;
+    if (handleRef.current) handleRef.current.dataset.on = "no";
+  }, []);
+
+  const commentOnHoveredRow = useCallback(() => {
+    const line = hoveredLine.current;
+    if (line) addLineComment(line.lineKey ?? 0, line.newNum ?? line.oldNum, line.content);
+  }, [addLineComment]);
+
   return (
-    <div className="code-block-resizable group font-mono text-[13px] leading-[22px]">
+    <div
+      className={`code-block-resizable group font-mono text-[13px] leading-[22px] ${commentContext ? "relative" : ""}`}
+      onMouseOver={commentContext ? trackRow : undefined}
+      onMouseLeave={commentContext ? untrackRow : undefined}
+    >
+      {commentContext && (
+        <button
+          ref={handleRef}
+          type="button"
+          data-cc-gutter
+          data-on="no"
+          tabIndex={-1}
+          className="cc-block-quote cc-diff-quote"
+          title="Comment on this line"
+          aria-label="Comment on this line"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={commentOnHoveredRow}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M9.6 6C7 7.5 5.2 9.9 5.2 13.1c0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L9.6 6zm8 0c-2.6 1.5-4.4 3.9-4.4 7.1 0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L17.6 6z" />
+          </svg>
+        </button>
+      )}
       <div className="cb-hscroll">
         <div className="min-w-fit">
         {displayItems.map((item, i) => {
@@ -501,21 +567,9 @@ export const DiffView = memo(function DiffView({
 
           const lk = line.lineKey ?? i;
           const lineComments = commentContext ? commentsByLine[lk] : undefined;
-          const lineNum = line.newNum ?? line.oldNum;
 
           const row = (
-            <div className={`${rowBg} whitespace-pre ${commentContext ? "relative group/line pl-5" : ""}`}>
-              {commentContext && (
-                <button
-                  type="button"
-                  onClick={() => addLineComment(lk, lineNum, line.content)}
-                  className="absolute left-0 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-4 h-4 rounded-sm text-sol-blue/80 bg-sol-bg-highlight/90 opacity-0 group-hover/line:opacity-100 hover:text-sol-cyan transition-opacity"
-                  title="Comment on this line"
-                  aria-label="Comment on this line"
-                >
-                  <MessageSquarePlus size={11} />
-                </button>
-              )}
+            <div data-diff-row={commentContext ? i : undefined} className={`${rowBg} whitespace-pre`}>
               {showLineNumbers && (
                 <span
                   className="select-none inline-block text-right font-medium text-sol-text-dim opacity-55 pl-1 pr-3 mr-3 border-r border-sol-border/30"
@@ -579,7 +633,7 @@ function DiffLineThread({
 }) {
   const editingId = useInboxStore((s) => s.reviewEditingId);
   return (
-    <div className="ml-5 my-1 border-l-2 border-sol-blue/40 pl-2.5 space-y-1 font-sans text-sol-text">
+    <div className="ml-2 my-1 border-l-2 border-sol-blue/40 pl-2.5 space-y-1 font-sans text-sol-text">
       {comments.map((c) =>
         c.id === editingId ? (
           <LineCommentEditor key={c.id} conversationId={conversationId} comment={c} onDone={onCloseEditor} />

@@ -1474,6 +1474,28 @@ pre[class*="language-"] {
   transform: scale(1.06);
 }
 
+/* Per-LINE variant inside a diff (DiffView). Same handle, same gutter — but one
+   per code block instead of one per row: it glides to the row under the cursor
+   and fades rather than remounting, so sweeping a long diff shows a single calm
+   mark instead of a chip flashing on every line. `top` is written imperatively;
+   it animates only while the handle is already up (data-moving), because sliding
+   in from the previously hovered row reads as a glitch. */
+.cc-diff-quote {
+  top: 0;
+  opacity: 0;
+  pointer-events: none;
+  animation: none;
+  transition: opacity 120ms ease, color 120ms, border-color 120ms, background 120ms, transform 120ms;
+}
+.cc-diff-quote[data-on="yes"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+.cc-diff-quote[data-moving="yes"] {
+  transition: top 90ms ease-out, opacity 120ms ease, color 120ms, border-color 120ms,
+    background 120ms, transform 120ms;
+}
+
 /* Mirror of .cc-block-quote on the RIGHT gutter: anchor a teammate comment thread
    to this message. Carries a count badge when the message already has comments. */
 .cc-block-comment {
