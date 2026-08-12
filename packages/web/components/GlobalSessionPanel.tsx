@@ -11,6 +11,7 @@ import { AppLoader } from "./AppLoader";
 import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
+import { threadStateView, THREAD_STATE_PIN_CLASS } from "../lib/threadState";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
@@ -40,7 +41,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, Pin } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -1610,7 +1611,7 @@ export const SessionCard = memo(function SessionCard({
   // structural signature), subscribe to a shared 30s clock so those stay fresh on
   // their own cadence instead of riding data churn. One timer total for all cards
   // (see useCoarseNow); 30s granularity is plenty for a minutes-scale idle counter.
-  useCoarseNow(30_000);
+  const coarseNow = useCoarseNow(30_000);
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
   const isStashed = variant === "stashed";
@@ -1673,6 +1674,12 @@ export const SessionCard = memo(function SessionCard({
     session._hasDraft ? (st.drafts[session._id]?.draft_message as string | undefined) ?? "" : ""
   ));
   const cardSummary = sessionCardSummary(session);
+  // The agent's pinned thread state, when it wrote one. It REPLACES the
+  // generated summary on the card rather than stacking with it: one is what the
+  // agent says is true right now, the other is a description of the session, and
+  // two summary lines on a card is one too many. Ages on the coarse clock, so a
+  // state the thread has run past reads dim instead of confident.
+  const stateView = threadStateView(session, session.message_count, coarseNow);
   // "Working" = the agent is actively running right now (mirrors
   // sessionLivenessState's "active"). The green pulse keys off this ACTUAL state
   // rather than the section the card lives in, so pinned and flat-view cards —
@@ -1896,6 +1903,17 @@ export const SessionCard = memo(function SessionCard({
               </span>
             </div>
           </div>
+          {stateView && (
+            <div className="mt-0.5 flex items-start gap-1" title={stateView.text}>
+              <Pin
+                className={`w-2 h-2 mt-[3px] shrink-0 ${THREAD_STATE_PIN_CLASS[stateView.freshness]}`}
+                strokeWidth={2.4}
+              />
+              <span className="text-[10px] text-sol-text-secondary truncate leading-snug">
+                {stateView.headline}
+              </span>
+            </div>
+          )}
           {cleanedUserMsg && (
             <div className="text-[10px] text-gray-500 mt-0.5 truncate leading-snug">
               <span className="text-gray-600 mr-0.5">&gt;</span>
@@ -2026,7 +2044,18 @@ export const SessionCard = memo(function SessionCard({
             </div>
           </div>
         )}
-        {cardSummary && !session.implementation_session && (
+        {stateView && !session.implementation_session && (
+          <div className="mt-0.5 flex items-start gap-1" title={stateView.text}>
+            <Pin
+              className={`w-2.5 h-2.5 mt-[3px] shrink-0 ${THREAD_STATE_PIN_CLASS[stateView.freshness]}`}
+              strokeWidth={2.4}
+            />
+            <span className={`text-[11px] truncate leading-snug ${stateView.freshness === "stale" ? "text-sol-text-dim" : "text-sol-text-secondary"}`}>
+              {stateView.headline}
+            </span>
+          </div>
+        )}
+        {cardSummary && !stateView && !session.implementation_session && (
           <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
             <FormattedSummary text={cardSummary} />
           </div>

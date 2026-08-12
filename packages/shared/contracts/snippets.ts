@@ -155,6 +155,22 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     versionKey: "publish_version",
   },
   {
+    slug: "state",
+    aliases: ["threadstate", "pinned", "pin"],
+    name: "Thread State",
+    desc: "A pinned, agent-maintained status per thread (cast state)",
+    detail:
+      "Adds `cast state \"…\"` so an agent keeps one short pinned line on its session saying " +
+      "where the work stands — what it is waiting on, what comes next, what you have to decide. " +
+      "It shows above the composer and on the inbox card, so you can re-enter a long or noisy " +
+      "thread without reading it back. The agent rewrites the line as the work moves and clears " +
+      "it when it stops being true; the dashboard shows how far the thread has run since it was " +
+      "last written, so a neglected one reads as stale rather than current.",
+    writesTo: "CLAUDE.md — a ## Thread state section with the command",
+    enabledKey: "state_enabled",
+    versionKey: "state_version",
+  },
+  {
     slug: "orchestration",
     aliases: ["orchestrate", "orch"],
     name: "Orchestration",

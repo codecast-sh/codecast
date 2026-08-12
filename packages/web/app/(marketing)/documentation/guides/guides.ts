@@ -61,6 +61,13 @@ export const GUIDES: Guide[] = [
     installSlug: "stable",
   },
   {
+    slug: "thread-state",
+    title: "Pinned thread state",
+    dek: "cast state keeps one agent-written line saying where a thread stands, pinned above the composer and on the inbox card, with its staleness on show.",
+    category: "Collaboration",
+    installSlug: "state",
+  },
+  {
     slug: "forks-and-spawn",
     title: "Forks and spawned sessions",
     dek: "cast fork branches a conversation N ways; cast spawn starts fresh sessions. Both land in the inbox as work the human owns.",

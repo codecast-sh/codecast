@@ -5,6 +5,7 @@ import { registerWorkspaceCommand } from "./workspace/cli.js";
 import { registerRemoteCommand } from "./remote/cli.js";
 import { registerPublishCommand } from "./publish.js";
 import { registerImageCommand } from "./imageCommand.js";
+import { registerStateCommand } from "./stateCommand.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -40,7 +41,7 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
 import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
@@ -2429,6 +2430,32 @@ Labels carry across a fork by default: a branch inherits whatever label you'd fi
 ${FORKS_SNIPPET_END}
 `;
 
+const STATE_SNIPPET_END = "<!-- /codecast-state -->";
+const STATE_SNIPPET = `
+## Thread state
+
+Keep one short pinned line on this session saying where the work stands. The human sees it above the composer and on the inbox card the moment they open the thread, so they learn the situation without reading back through it. That matters most in the threads that are hardest to re-enter: long ones, parked ones, and ones where several sessions are talking past each other.
+
+\`\`\`bash
+cast state "Waiting on CI for the auth fix — nothing to decide yet"
+cast state - <<'EOF'                 # multi-line, exact newlines preserved
+Status: sync layer rewritten, tests green
+Blocked: needs a prod key before the last check
+Next: deploy once the key lands
+EOF
+cast state                           # print the current state
+cast state clear                     # remove it
+cast state show <session_id>         # read another session's state
+\`\`\`
+
+Write it for someone who has been away: what is happening now, what it is waiting on, what happens next, and whether anything is theirs to decide. Lead with the situation — the transcript already holds the history. Keep it to a few lines. \`Goal:\`, \`Status:\`, \`Next:\`, \`Blocked:\` render as labels when you use them.
+
+You own it, so it is only true while you keep it true. Rewrite it whenever the answer changes — a new phase, a new blocker, a decision the human owes you — and clear it when the work is done or the line no longer holds. The dashboard counts the messages that have landed since you wrote it and fades the panel as that number grows, so a state you stopped maintaining reads as abandoned instead of current. Never leave a state saying you are waiting on something that already arrived.
+
+Pin one on any thread that will run long, park on something outside your control, or share work with other sessions. Skip it for a question you answer in a single turn.
+${STATE_SNIPPET_END}
+`;
+
 // CLI shim over the shared '-'-to-stdin convention (sendBody.ts): expand '-'
 // arguments to the stdin body, exiting with the usage error instead of throwing.
 function expandStdinPromptArgs(args: string[]): string[] {
@@ -2495,6 +2522,13 @@ function withReferences(
 function installForksSnippet(update = false): { installed: boolean; updated: boolean } {
   return withReferences(
     installMarkedSnippet("## Forks & Sessions", FORKS_SNIPPET_END, FORKS_SNIPPET, update),
+    update,
+  );
+}
+
+function installStateSnippet(update = false): { installed: boolean; updated: boolean } {
+  return withReferences(
+    installMarkedSnippet("## Thread state", STATE_SNIPPET_END, STATE_SNIPPET, update),
     update,
   );
 }
@@ -2991,6 +3025,16 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     }
   }
 
+  if (config.state_enabled && config.state_version !== getStateVersion()) {
+    const result = installStateSnippet(true);
+    config.state_version = getStateVersion();
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Thread state snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  }
+
   if (config.memory_enabled !== undefined && config.memory_version === getMemoryVersion()) {
     if (config.memory_enabled) {
       installMemorySnippet(false);
@@ -3315,6 +3359,7 @@ registerWorkspaceCommand(program);
 registerRemoteCommand(program);
 registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
 
 program
   .command("auth")
@@ -9463,6 +9508,7 @@ program
       workflows: { getVersion: getWorkflowVersion, install: installWorkflowSnippet, reEnable: "cast workflow install" },
       visual: { getVersion: getVisualVersion, install: installVisualSnippet, reEnable: "cast install" },
       publish: { getVersion: getPublishVersion, install: installPublishSnippet, reEnable: "cast install" },
+      state: { getVersion: getStateVersion, install: installStateSnippet, reEnable: "cast install" },
       orchestration: { getVersion: getWorkVersion, install: installOrchestration, reEnable: "cast install" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));

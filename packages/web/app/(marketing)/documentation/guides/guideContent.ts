@@ -16,6 +16,7 @@ import workflows from "./content/workflows.md?raw";
 import orchestration from "./content/orchestration.md?raw";
 import visualCanvas from "./content/visual-canvas.md?raw";
 import publish from "./content/publish.md?raw";
+import threadState from "./content/thread-state.md?raw";
 
 const CONTENT: Record<string, string> = {
   "agent-snippets": agentSnippets,
@@ -29,6 +30,7 @@ const CONTENT: Record<string, string> = {
   "orchestration": orchestration,
   "visual-canvas": visualCanvas,
   "publish": publish,
+  "thread-state": threadState,
 };
 
 export function getGuideContent(slug: string): string | undefined {

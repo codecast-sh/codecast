@@ -3683,6 +3683,12 @@ cliRoute("/cli/sessions/kill", async (ctx, body) => ctx.runMutation(api.conversa
 // auto-titler never overwrites it. body: { api_token, session, title }.
 cliRoute("/cli/sessions/rename", async (ctx, body) => ctx.runMutation(api.conversations.cliRenameSession, body));
 
+// Pinned thread state (cast state): the agent's standing "where this stands"
+// line, shown pinned above the composer and on the inbox card. Empty text
+// clears it. body: { api_token, session, text? }.
+cliRoute("/cli/sessions/state/set", async (ctx, body) => ctx.runMutation(api.conversations.setThreadState, body));
+cliRoute("/cli/sessions/state/get", async (ctx, body) => ctx.runQuery(api.conversations.getThreadState, body));
+
 cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
 cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));
 cliRoute("/cli/sessions/owners/set", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwners, body));

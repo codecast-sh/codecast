@@ -302,6 +302,13 @@ export type InboxSession = {
   stable_exclude?: string[];
   message_count: number;
   idle_summary?: string;
+  // The agent's pinned "where this thread stands" line (`cast state`), with the
+  // clock and message_count from when it was written. The card renders its
+  // headline in place of idle_summary and dims it as the gap grows — see
+  // shared/contracts/threadState.
+  thread_state?: string | null;
+  thread_state_at?: number | null;
+  thread_state_msg_count?: number | null;
   is_idle: boolean;
   // True when an AskUserQuestion poll is open and unanswered. The agent is
   // blocked on the user, so this always means "needs input" regardless of the
@@ -776,6 +783,11 @@ export type ClientUI = {
   // header toggle when a conversation has none yet). Off by default — you still
   // SEE and can reply to comments others leave regardless of this.
   comments_enabled?: boolean;
+  // Fold the pinned thread-state panel above the composer down to its headline
+  // row. Expanded by default — the panel exists to be read on arrival — and
+  // left unstamped, so it stays a per-device reading preference like the other
+  // layout toggles.
+  thread_state_collapsed?: boolean;
   // Inbox session panel view mode. When true, the panel drops the
   // Pinned/New/Needs-Input/Working grouping and shows every session as one flat
   // list sorted newest-first by creation time (started_at). Toggled by Ctrl+,.
@@ -1470,6 +1482,11 @@ export function sessionStructuralSig(s: InboxSession): string {
     // lands in the session — never on heartbeats — so folding it in is cheap
     // and keeps the thumb from waiting on the coarse ticker.
     s.image_preview_url || "",
+    // The agent's pinned thread state replaces the card's summary line. The
+    // TIMESTAMP stands in for the text: every write stamps a new one, so the
+    // signature stays short while still waking the card on a rewrite. Set by
+    // `cast state` only — a few times per session, never on heartbeats.
+    s.thread_state_at || 0,
   ].join("\x1f");
 }
 
