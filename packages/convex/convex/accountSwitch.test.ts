@@ -8,6 +8,7 @@ import {
   shouldSweepStaleFlag,
   decideAutoSwitch,
   isUsageExhausted,
+  isWindowRolled,
   worstUsagePercent,
   AUTO_SWITCH_ATTEMPT_EVIDENCE_MS,
   AUTO_SWITCH_CONTINUE_KEY,
@@ -124,10 +125,32 @@ describe("usage predicates", () => {
   });
 
   test("worstUsagePercent takes the max across windows, null without data", () => {
-    expect(worstUsagePercent(usage(28, 27, 42))).toBe(42);
-    expect(worstUsagePercent(usage(90, 10))).toBe(90);
-    expect(worstUsagePercent(undefined)).toBeNull();
-    expect(worstUsagePercent({ fetched_at: 1 })).toBeNull();
+    expect(worstUsagePercent(usage(28, 27, 42), now)).toBe(42);
+    expect(worstUsagePercent(usage(90, 10), now)).toBe(90);
+    expect(worstUsagePercent(undefined, now)).toBeNull();
+    expect(worstUsagePercent({ fetched_at: 1 }, now)).toBeNull();
+  });
+
+  test("worstUsagePercent reads a rolled window as 0, not as its old percent", () => {
+    // A 17h-old snapshot of a 5h session window: the window it measured ended
+    // long ago, so the meter must clear instead of staying pegged.
+    const stale: CcUsage = {
+      fetched_at: now - 17 * 3600_000,
+      session: { percent: 100, resets_at: now - 12 * 3600_000 },
+      weekly: { percent: 21, resets_at: now + 86_400_000 },
+    };
+    expect(worstUsagePercent(stale, now)).toBe(21);
+    // Every window rolled — the account reads empty, not "no data".
+    expect(worstUsagePercent({ fetched_at: 1, session: { percent: 100, resets_at: now - 1 } }, now)).toBe(0);
+    // A window with no known reset time can't be proven rolled.
+    expect(worstUsagePercent({ fetched_at: 1, session: { percent: 100 } }, now)).toBe(100);
+  });
+
+  test("isWindowRolled needs a reset time that has actually passed", () => {
+    expect(isWindowRolled({ resets_at: now - 1 }, now)).toBe(true);
+    expect(isWindowRolled({ resets_at: now + 1 }, now)).toBe(false);
+    expect(isWindowRolled({}, now)).toBe(false);
+    expect(isWindowRolled(undefined, now)).toBe(false);
   });
 
   test("isUsageExhausted requires a pegged window whose reset is still ahead", () => {

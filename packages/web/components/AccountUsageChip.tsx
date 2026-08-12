@@ -142,8 +142,10 @@ export function AccountUsageChip() {
     codexProfiles[0];
   if (!device || (!active && !activeCodex)) return null;
 
-  const worst = active ? worstUsagePercent(active.usage) : null;
-  const codexWorst = activeCodex ? worstUsagePercent(activeCodex.usage) : null;
+  // Time-aware: a window whose reset has passed contributes 0, so a dormant
+  // account's old 100% never keeps the chip pegged red.
+  const worst = active ? worstUsagePercent(active.usage, now) : null;
+  const codexWorst = activeCodex ? worstUsagePercent(activeCodex.usage, now) : null;
   const claudeTone = worst != null ? usageTone(worst) : "var(--sol-text-dim)";
   const codexTone = codexWorst != null ? usageTone(codexWorst) : "var(--sol-text-dim)";
   // The segment reads as: account name + worst LIMIT window. (The label used
