@@ -15,7 +15,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { getAuthenticatedUserId, enqueuePendingMessage } from "./pendingMessages";
-import { classifyApiErrorBanner } from "./inboxFilters";
+import { classifyApiErrorBanner, blockedContinueClientId } from "./inboxFilters";
 import {
   ccAccountsValidator,
   decideAutoSwitch,
@@ -129,13 +129,14 @@ export const continueAllBlocked = mutation({
       };
     }
 
-    // client_id is minute-bucketed: a double-click can't double-queue, but a
-    // deliberate retry a minute later still can.
-    const bucket = Math.floor(Date.now() / 60_000);
+    // Same shared client_id the web paints its optimistic bubble with, so a
+    // racing CLI run, a double-click, and the browser's own copy all collapse
+    // into one send.
+    const at = Date.now();
     for (const conv of blocked) {
       await enqueuePendingMessage(ctx, conv, userId, {
         content: "continue",
-        client_id: `continue-blocked-${conv._id}-${bucket}`,
+        client_id: blockedContinueClientId(conv._id, at),
       });
     }
     return { continued: blocked.length, subagents: subagentCount, total_blocked: totalBlocked };
@@ -164,6 +165,11 @@ export const requestAccountSwitch = mutation({
     // Report the selection without inserting any daemon command — the CLI
     // shows this and asks before a mass revive.
     dry_run: v.optional(v.boolean()),
+    // conversation id -> client_id, from a caller that already painted the
+    // "continue" locally (the web's revive buttons paint every acted session
+    // on the click). Forwarded to the daemon so its enqueue carries the same
+    // id and the echo replaces the painted bubble.
+    continue_client_ids: v.optional(v.record(v.string(), v.string())),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -205,6 +211,7 @@ export const requestAccountSwitch = mutation({
       primary,
       continueBlocked: args.continue_blocked !== false,
       now,
+      continueClientIds: args.continue_client_ids,
     });
 
     return {
@@ -233,6 +240,12 @@ async function insertSwitchCommands(
     primary: Doc<"devices"> | undefined;
     continueBlocked: boolean;
     now: number;
+    // conversation id -> the client_id the CALLER already painted its optimistic
+    // "continue" bubble with (the web's revive buttons). Handed to the daemon so
+    // its post-kill enqueue carries the same id and the server echo replaces that
+    // bubble instead of doubling it. Absent for server-initiated revives (the
+    // login-flow confirm, the auto-switch loop) — the daemon mints its own.
+    continueClientIds?: Record<string, string>;
   },
 ): Promise<{ devices: number; routed: number; commandIds: Id<"daemon_commands">[] }> {
   const onlineById = new Map(opts.online.map((d) => [d.device_id, d]));
@@ -268,6 +281,15 @@ async function insertSwitchCommands(
           conversation_ids: convs.map((c) => c._id),
           session_ids: Object.fromEntries(convs.map((c) => [c._id, c.session_id])),
           continue_blocked: opts.continueBlocked,
+          ...(opts.continueClientIds
+            ? {
+                client_ids: Object.fromEntries(
+                  convs
+                    .map((c) => [c._id, opts.continueClientIds![c._id]] as const)
+                    .filter(([, clientId]) => !!clientId),
+                ),
+              }
+            : {}),
         }),
         created_at: opts.now,
         target_device_id: deviceId,

@@ -89,3 +89,14 @@ export function classifyApiErrorBanner(
 export function isApiErrorBanner(content: string | null | undefined): boolean {
   return classifyApiErrorBanner(content) !== null;
 }
+
+// The client_id every "continue" sent to un-park a blocked session carries,
+// whoever sends it: the web's fleet buttons, the server's continueAllBlocked
+// (the CLI path), and the daemon's post-switch revive. One shared key is what
+// lets the web paint the bubble the instant the user clicks and still have the
+// server echo REPLACE it rather than double it — the optimistic prune matches
+// on client_id alone. Minute-bucketed: a double-click can't double-queue, a
+// deliberate retry a minute later still can.
+export function blockedContinueClientId(conversationId: string, at: number): string {
+  return `continue-blocked-${conversationId}-${Math.floor(at / 60_000)}`;
+}
