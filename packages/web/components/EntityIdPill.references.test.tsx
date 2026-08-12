@@ -1,0 +1,207 @@
+import { test, expect, describe, mock } from "bun:test";
+
+// End-to-end check of the label rule for inline object references: a reference
+// reads as the object's NAME, never its id. Here the whole path runs for real —
+// markdown → remark plugin → EntityIdPill — with only the Convex transport
+// faked, so what these assertions see is the same HTML a reader gets.
+//
+// The symptom that started this: an agent wrote a trigger's id into its summary
+// and the conversation rendered a raw 32-char blob in monospace. Tasks and
+// plans had the same problem in a milder form — "ct-38940" mid-sentence tells
+// the reader nothing about what is being discussed.
+
+const TRIGGER_CONVEX_ID = "rx72qtvpbmmrmwcjqmhzawejsx8bq9gm";
+const FAKE_TRIGGER = {
+  _id: TRIGGER_CONVEX_ID,
+  short_id: "tr-42",
+  title: "Audit budget allocation across markets",
+  display_title: "Growth audit",
+  display_summary: "Checks funded markets and reports anything off.",
+  prompt: "Audit budget allocation across markets.",
+  schedule_type: "recurring" as const,
+  interval_ms: 4 * 60 * 60 * 1000,
+  status: "scheduled",
+  run_at: Date.now() + 90 * 60 * 1000,
+  run_count: 7,
+  last_run_at: Date.now() - 19 * 60 * 1000,
+};
+
+const TASK_CONVEX_ID = "kx72qtvpbmmrmwcjqmhzawejsx8bq9gm";
+const FAKE_TASK = {
+  _id: TASK_CONVEX_ID,
+  short_id: "ct-38940",
+  title: "Retry queue for failed webhooks",
+  status: "in_progress",
+  priority: "high",
+};
+
+const PLAN_CONVEX_ID = "mx72qtvpbmmrmwcjqmhzawejsx8bq9gm";
+const FAKE_PLAN = {
+  _id: PLAN_CONVEX_ID,
+  short_id: "pl-88",
+  title: "Billing migration",
+  status: "active",
+  goal: "Move every customer onto the new Stripe webhook API.",
+  tasks: [],
+};
+
+// A title long enough to prove the pill truncates rather than swallowing the
+// sentence around it.
+const LONG_TITLE_TASK = {
+  _id: "nx72qtvpbmmrmwcjqmhzawejsx8bq9gm",
+  short_id: "ct-77",
+  title: "Rewrite the delivery pipeline so queued sends survive a daemon restart",
+  status: "open",
+};
+
+// Every `webGet` is asked by `{ short_id }` or `{ id }`, so the fake transport
+// dispatches on the function's NAME. (`api` is a proxy — each property access
+// hands back a fresh object, so `===` on it never matches.)
+const { getFunctionName } = await import("convex/server");
+
+const ROWS: Record<string, any[]> = {
+  "agentTasks:webGet": [FAKE_TRIGGER],
+  "tasks:webGet": [FAKE_TASK, LONG_TITLE_TASK],
+  "plans:webGet": [FAKE_PLAN],
+};
+
+const TYPE_OF_CONVEX_ID: Record<string, string> = {
+  [TRIGGER_CONVEX_ID]: "trigger",
+  [TASK_CONVEX_ID]: "task",
+  [PLAN_CONVEX_ID]: "plan",
+};
+
+function fakeQuery(fn: unknown, args: any) {
+  if (args === "skip") return undefined;
+  const name = getFunctionName(fn as any);
+  if (name === "entities:resolveIdType") return TYPE_OF_CONVEX_ID[args?.id] ?? null;
+  const rows = ROWS[name];
+  if (!rows) return undefined;
+  return rows.find((r) => r.short_id === args?.short_id || r._id === args?.id) ?? null;
+}
+
+// Keep every other export real — the component graph imports names statically,
+// and a missing one is a link-time error rather than a call-time one.
+const convexReact = await import("convex/react");
+mock.module("convex/react", () => ({
+  ...convexReact,
+  useQuery: fakeQuery,
+  useQueries: () => ({}),
+}));
+
+const noThrow = await import("../hooks/useQueryNoThrow");
+mock.module("../hooks/useQueryNoThrow", () => ({
+  ...noThrow,
+  useQueryNoThrow: (fn: unknown, args: any) => ({ data: fakeQuery(fn, args) }),
+}));
+
+mock.module("next/link", () => ({
+  default: ({ href, children, ...props }: any) => (
+    <a href={href} {...props}>{children}</a>
+  ),
+}));
+
+const { renderToStaticMarkup } = await import("react-dom/server");
+const { default: ReactMarkdown } = await import("react-markdown");
+const { entityRemarkPlugins } = await import("../lib/remarkEntityIds");
+const { EntityAwareLink, EntityAwareCode } = await import("./EntityIdPill");
+
+const MD_COMPONENTS = { a: EntityAwareLink, code: EntityAwareCode } as const;
+
+function render(markdown: string): string {
+  return renderToStaticMarkup(
+    <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS as any}>
+      {markdown}
+    </ReactMarkdown>,
+  );
+}
+
+// The pill's visible text, with the surrounding markup stripped — what a reader
+// actually sees where the id was written.
+function pillText(html: string): string {
+  const m = html.match(/<a [^>]*class="not-prose[^"]*"[^>]*>.*?<span>([^<]*)<\/span><\/a>/);
+  return m ? m[1] : "";
+}
+
+describe("inline trigger references", () => {
+  test("a bare short id renders the trigger's name, not its id", () => {
+    const html = render("Trigger tr-42 marked complete.");
+    expect(html).toContain("Growth audit");
+    expect(html).toContain('href="/triggers?task=' + TRIGGER_CONVEX_ID + '"');
+    // Reads as a sentence, with the reference standing in for the id.
+    expect(html).toContain("Trigger ");
+    expect(html).toContain("marked complete.");
+  });
+
+  test("the same id inside backticks becomes a reference too", () => {
+    // This is the exact shape from the report: the agent wrapped the id in
+    // inline code, so the fix has to cover the `code` renderer as well.
+    const html = render("Trigger `tr-42` marked complete.");
+    expect(html).toContain("Growth audit");
+    expect(html).not.toContain("<code>tr-42</code>");
+  });
+
+  test("an @[Title id] mention resolves to the same reference", () => {
+    const html = render("see @[Growth audit tr-42] for the cadence");
+    expect(html).toContain("Growth audit");
+    expect(html).not.toContain("@Growth audit");
+  });
+
+  test("a raw 32-char trigger id still resolves, for prose already written", () => {
+    // Old summaries carry the blob. resolveIdType now knows the agent_tasks
+    // table, so those become references retroactively instead of staying blobs.
+    const html = render(`Trigger \`${TRIGGER_CONVEX_ID}\` marked complete.`);
+    expect(html).not.toContain(`<code>${TRIGGER_CONVEX_ID}</code>`);
+    expect(html).toContain("Growth audit");
+  });
+
+  test("an unresolvable id degrades to plain text rather than crashing", () => {
+    const html = render("Trigger `tr-99999` is gone.");
+    expect(html).toContain("tr-99999");
+  });
+});
+
+describe("inline task and plan references", () => {
+  // The reported symptom: "…ticks (ct-38940)." told the reader nothing. A task
+  // reference is a name now, exactly like a session or trigger reference.
+  test("a task short id renders the task's title, not the id", () => {
+    const html = render("Ticks up on ct-38940 now.");
+    expect(pillText(html)).toBe("Retry queue for failed webhooks");
+    expect(html).not.toContain(">ct-38940<");
+    expect(html).toContain('href="/tasks/' + TASK_CONVEX_ID + '"');
+  });
+
+  test("a plan short id renders the plan's title", () => {
+    const html = render("Rolled into pl-88 this week.");
+    expect(pillText(html)).toBe("Billing migration");
+    expect(html).not.toContain(">pl-88<");
+  });
+
+  test("a task id in backticks becomes a titled reference too", () => {
+    const html = render("Filed `ct-38940` for the retry queue.");
+    expect(pillText(html)).toBe("Retry queue for failed webhooks");
+    expect(html).not.toContain("<code>ct-38940</code>");
+  });
+
+  test("an @[Title id] task mention resolves to the live title", () => {
+    // The written title is stale on purpose: the pill shows what the task is
+    // called NOW, not what it was called when the agent typed the mention.
+    const html = render("see @[Old name ct-38940] for the retry work");
+    expect(pillText(html)).toBe("Retry queue for failed webhooks");
+    expect(html).not.toContain("Old name");
+  });
+
+  test("a long title is clipped on a word boundary, not mid-word", () => {
+    const html = render("Blocked on ct-77 until the restart lands.");
+    const label = pillText(html);
+    expect(label).toBe("Rewrite the delivery pipeline so queued…");
+    expect(html).toContain("until the restart lands.");
+  });
+
+  test("a task nobody can read keeps its short id", () => {
+    // webGet returns null for a task outside the reader's workspace. The pill
+    // must not go blank or claim a title it never got — it falls back to the id.
+    const html = render("Ask them about ct-99999.");
+    expect(html).toContain("ct-99999");
+  });
+});
