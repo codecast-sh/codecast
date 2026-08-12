@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cleanPromptSliceTitle, isTriggerFailing, latestLoadedTriggerMessage, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
+import { cleanPromptSliceTitle, groupSessionsByTrigger, isTriggerFailing, latestLoadedTriggerMessage, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
 import { isSessionHardBlocked, visualOrderSessions, type InboxSession } from "../store/inboxStore";
 
 describe("taskDisplayTitle / cleanPromptSliceTitle", () => {
@@ -323,9 +323,9 @@ describe("visualOrderSessions absorbed projection", () => {
   });
 });
 
-// Pseudo rows: harness loops (ScheduleWakeup) and live subagents projected
-// into the same trigger set. See loopTaskRow/subagentTaskRow in triggerTasks.
-describe("loop and subagent pseudo rows", () => {
+// Pseudo rows: harness loops (ScheduleWakeup) projected into the trigger set.
+// See loopTaskRow in triggerTasks.
+describe("loop pseudo rows", () => {
   const NOW = Date.now();
   const loop = (extra: Record<string, unknown> = {}) => ({
     status: "armed" as const,
@@ -428,7 +428,11 @@ describe("loop and subagent pseudo rows", () => {
     expect(p.absorbedIds.has("home")).toBe(false);
   });
 
-  it("a live subagent rows in as running; an idle one does not", () => {
+  // Regression: subagents are transient labor, not standing triggers — a
+  // running worker must never appear in the roster (a five-agent review
+  // fan-out was stacking five "running" rows above every real trigger). It
+  // already renders nested under its parent session's card.
+  it("a live subagent never gets a trigger row", () => {
     const p = partitionTriggerInbox(
       undefined,
       {
@@ -437,13 +441,10 @@ describe("loop and subagent pseudo rows", () => {
       },
       { now: NOW },
     );
-    expect(p.rows).toHaveLength(1);
-    expect(p.rows[0].kind).toBe("subagent");
-    expect(p.rows[0].task.status).toBe("running");
-    expect(p.rows[0].openId).toBe("live");
+    expect(p.rows).toHaveLength(0);
   });
 
-  it("a subagent sleeping on its own loop is represented once, as the loop", () => {
+  it("a subagent sleeping on its own loop still rows in as the loop", () => {
     const p = partitionTriggerInbox(
       undefined,
       {
@@ -461,16 +462,86 @@ describe("loop and subagent pseudo rows", () => {
     expect(p.rows[0].kind).toBe("loop");
   });
 
-  it("pseudo rows compose with real trigger rows and sort by tier", () => {
+  it("loop rows compose with real trigger rows and sort by soonest fire", () => {
     const p = partitionTriggerInbox(
       [task("t1", { run_at: NOW + 3_600_000 })],
-      {
-        home: session("home", { loop_state: loop() }),
-        worker: session("worker", { is_subagent: true, is_idle: false, agent_status: "working", updated_at: NOW }),
-      },
+      { home: session("home", { loop_state: loop() }) },
       { now: NOW },
     );
-    // running subagent first, then soonest fire (the loop at +20m), then t1.
-    expect(p.rows.map((r) => r.kind ?? "trigger")).toEqual(["subagent", "loop", "trigger"]);
+    // Soonest fire first (the loop at +20m), then t1 at +1h.
+    expect(p.rows.map((r) => r.kind ?? "trigger")).toEqual(["loop", "trigger"]);
+  });
+});
+
+// The "By trigger" lens: roster rows become group headers, each claiming the
+// sessions it drives; unclaimed sessions return as `rest` for the project tier.
+describe("groupSessionsByTrigger", () => {
+  const row = (t: TaskRow, kind?: "loop") => ({ task: t, unread: false, kind });
+
+  it("an inject trigger claims its home conversation", () => {
+    const home = session("home");
+    const other = session("other");
+    const { triggerGroups, rest } = groupSessionsByTrigger(
+      [row(task("t1", { originating_conversation_id: "home" }))],
+      [home, other],
+    );
+    expect(triggerGroups).toHaveLength(1);
+    expect(triggerGroups[0].items.map((s) => s._id)).toEqual(["home"]);
+    expect(rest.map((s) => s._id)).toEqual(["other"]);
+  });
+
+  it("a spawn trigger claims its runs, newest activity first", () => {
+    const run1 = session("run1", { agent_task_id: "t1", updated_at: 100 });
+    const run2 = session("run2", { agent_task_id: "t1", updated_at: 200 });
+    const { triggerGroups, rest } = groupSessionsByTrigger([row(task("t1"))], [run1, run2]);
+    expect(triggerGroups[0].items.map((s) => s._id)).toEqual(["run2", "run1"]);
+    expect(rest).toEqual([]);
+  });
+
+  it("first roster row wins a contested session; groups keep roster order", () => {
+    const home = session("home");
+    const { triggerGroups } = groupSessionsByTrigger(
+      [
+        row(task("t1", { originating_conversation_id: "home" })),
+        row(task("t2", { originating_conversation_id: "home" })),
+      ],
+      [home],
+    );
+    expect(triggerGroups.map((g) => g.key)).toEqual(["t1", "t2"]);
+    expect(triggerGroups[0].items.map((s) => s._id)).toEqual(["home"]);
+    expect(triggerGroups[1].items).toEqual([]);
+  });
+
+  it("a trigger with no visible sessions keeps its (empty) group", () => {
+    const { triggerGroups, rest } = groupSessionsByTrigger(
+      [row(task("t1", { originating_conversation_id: "gone" }))],
+      [session("loose")],
+    );
+    expect(triggerGroups).toHaveLength(1);
+    expect(triggerGroups[0].items).toEqual([]);
+    expect(rest.map((s) => s._id)).toEqual(["loose"]);
+  });
+
+  it("claims a stashed home from the hidden pool without leaking hidden sessions into rest", () => {
+    const stashedHome = session("home", { inbox_stashed_at: 1 });
+    const stashedLoose = session("loose", { inbox_stashed_at: 1 });
+    const { triggerGroups, rest } = groupSessionsByTrigger(
+      [row(task("t1", { originating_conversation_id: "home" }))],
+      [session("active")],
+      { hidden: [stashedHome, stashedLoose] },
+    );
+    expect(triggerGroups[0].items.map((s) => s._id)).toEqual(["home"]);
+    // Unclaimed hidden stays in its bucket; unclaimed active falls to rest.
+    expect(rest.map((s) => s._id)).toEqual(["active"]);
+  });
+
+  it("loop pseudo rows claim their own session like inject homes", () => {
+    const home = session("home");
+    const { triggerGroups, rest } = groupSessionsByTrigger(
+      [row(task("loop:home", { originating_conversation_id: "home" }), "loop")],
+      [home],
+    );
+    expect(triggerGroups[0].items.map((s) => s._id)).toEqual(["home"]);
+    expect(rest).toEqual([]);
   });
 });

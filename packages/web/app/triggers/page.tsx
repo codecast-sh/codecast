@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -328,24 +328,28 @@ function RowIndicator({ task }: { task: any }) {
 }
 
 function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boolean }) {
-  // ?task=<id> deep-links here from an inbox schedule row's gear verb and from
-  // an inline trigger pill: that row arrives expanded and scrolled into view.
-  // Either handle addresses the row — the pill links by short id ("tr-42")
-  // whenever its own lookup hasn't resolved to a Convex id yet.
-  const isDeepLinked = () => {
-    if (typeof window === "undefined") return false;
-    const ref = new URLSearchParams(window.location.search).get("task");
-    return !!ref && (ref === task._id || ref.toLowerCase() === task.short_id);
-  };
-  // Read once at mount — after that the page behaves normally.
+  // ?task=<id> deep-links here from an inbox trigger row, a schedule row's
+  // gear verb, and an inline trigger pill: that row arrives expanded and
+  // scrolled into view. Either handle addresses the row — the pill links by
+  // short id ("tr-42") whenever its own lookup hasn't resolved to a Convex id
+  // yet. Read REACTIVELY (tab-context searchParams): the tab shell keeps this
+  // page mounted, so a later click on another trigger changes only the query —
+  // a mount-time read would leave that click landing on the page with nothing
+  // expanded.
+  const deepLinkRef = useSearchParams().get("task");
+  const isDeepLinked =
+    !!deepLinkRef && (deepLinkRef === task._id || deepLinkRef.toLowerCase() === task.short_id);
   const [expanded, setExpanded] = useState(isDeepLinked);
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (rowRef.current && isDeepLinked()) {
-      rowRef.current.scrollIntoView({ block: "center" });
+    if (isDeepLinked) {
+      setExpanded(true);
+      rowRef.current?.scrollIntoView({ block: "center" });
     }
+    // Keyed on the param VALUE so each new ?task= target re-fires; a row that
+    // stops being the target keeps whatever state the user left it in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [deepLinkRef]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [formMode, setFormMode] = useState<null | "edit" | "duplicate">(null);
   // Verbs flip the row in the local webList cache synchronously (local-first);
