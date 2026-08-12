@@ -24,6 +24,26 @@
   .cq-hide-minimal { display: none !important; }
 }
 
+/* Row labels (components/LabelChips.tsx) spell out their name only where the
+   list is definitely wide enough to pay for it. A list row is a flex line whose
+   title is the sole flexible item, so every pixel a name takes is a pixel the
+   title loses — at 1000px the row still leaves the title several hundred pixels
+   after the short id, the right-hand chips and two spelled-out labels, and below
+   that the labels fold back to dots. The chip is one element at both widths: it
+   carries the label's tint and border color always, and only picks up the border
+   width and side padding that make it read as a pill once the name is showing.
+   Split the detail panel open (the list panel is the query container) and the
+   names fold away on their own. */
+.cq-label-text { display: none; }
+@container (min-width: 1000px) {
+  .cq-label-chip {
+    border-width: 1px !important;
+    padding-left: 0.375rem !important;
+    padding-right: 0.375rem !important;
+  }
+  .cq-label-text { display: inline !important; }
+}
+
 /* List header (GenericListView) progressive disclosure. The header is its own
    container query container, so this fires off the header's width and works on
    the full-width list page too — not just inside the squeezed detail panel. As
