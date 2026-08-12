@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   categorizeSessions,
   freshReviveRequestIds,
+  showsBlockedBadge,
   BLOCKED_REVIVE_TTL_MS,
 } from "./inboxStore";
 
@@ -90,5 +91,32 @@ describe("freshReviveRequestIds", () => {
 
   it("handles a missing map", () => {
     expect(freshReviveRequestIds(undefined, NOW).size).toBe(0);
+  });
+});
+
+// Regression: the amber chip on the session row read ONLY the server's
+// pending_api_error, so pressing "Continue N on current account" moved the
+// count and the banner but left every row still wearing "login" until the
+// daemon had killed, restarted and resynced each session.
+describe("showsBlockedBadge", () => {
+  it("shows the chip on a blocked session nobody has acted on", () => {
+    expect(showsBlockedBadge(true, false, undefined, NOW)).toBe(true);
+  });
+
+  it("never shows it on a session that isn't blocked", () => {
+    expect(showsBlockedBadge(false, false, undefined, NOW)).toBe(false);
+    expect(showsBlockedBadge(undefined, false, undefined, NOW)).toBe(false);
+  });
+
+  it("drops it while a message of the user's is still in the outbox", () => {
+    expect(showsBlockedBadge(true, true, undefined, NOW)).toBe(false);
+  });
+
+  it("drops it on a fresh revive stamp", () => {
+    expect(showsBlockedBadge(true, false, NOW - 5_000, NOW)).toBe(false);
+  });
+
+  it("brings it back once the stamp expires", () => {
+    expect(showsBlockedBadge(true, false, NOW - (BLOCKED_REVIVE_TTL_MS + 1_000), NOW)).toBe(true);
   });
 });
