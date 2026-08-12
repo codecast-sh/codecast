@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { ChevronDown, Check, X } from "lucide-react";
 
@@ -13,13 +13,26 @@ export function FilterOptionList({
   multi,
   onChange,
   onPicked,
+  searchable,
 }: {
   options: FilterOption[];
   value: string;
   multi?: boolean;
   onChange: (v: string) => void;
   onPicked?: () => void;
+  /** Force the search box on or off. Left unset, it appears once the list is
+   *  long enough to scroll — task labels are a vocabulary of phrases, not a
+   *  handful of statuses, so scanning them by eye stops working. */
+  searchable?: boolean;
 }) {
+  const [query, setQuery] = useState("");
+  const showSearch = searchable ?? options.length > 10;
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!showSearch || !q) return options;
+    // The empty option is the "clear" action, so it always stays reachable.
+    return options.filter((o) => o.key === "" || o.label.toLowerCase().includes(q));
+  }, [options, query, showSearch]);
   const selected = multi ? new Set(value ? value.split(",") : []) : null;
   const hasValue = multi ? selected!.size > 0 : !!value;
   const isSelected = (key: string) =>
@@ -35,23 +48,47 @@ export function FilterOptionList({
 
   return (
     <>
-      {options.map((opt) => {
+      {showSearch && (
+        <div className="px-2 pt-1 pb-1.5 sticky top-0 bg-sol-bg z-10">
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter picks the only remaining match — the fast path when you
+              // know the label and just typed enough of it.
+              if (e.key === "Enter") {
+                const hits = shown.filter((o) => o.key !== "");
+                if (hits.length === 1) handleClick(hits[0].key);
+              }
+              e.stopPropagation();
+            }}
+            placeholder="Search"
+            className="w-full h-6 px-1.5 text-xs bg-sol-bg-alt border border-sol-border/40 rounded text-sol-text placeholder:text-sol-text-dim outline-none focus:border-sol-cyan/50"
+          />
+        </div>
+      )}
+      {shown.map((opt) => {
         const OptIcon = opt.icon;
         const sel = isSelected(opt.key);
         return (
           <button
             key={opt.key}
             onClick={() => handleClick(opt.key)}
+            title={opt.label}
             className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
               sel ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
             }`}
           >
-            {OptIcon && <OptIcon className={`w-3.5 h-3.5 ${opt.color || ""}`} />}
-            <span className="flex-1 text-left">{opt.label}</span>
-            {sel && <Check className="w-3 h-3 text-sol-cyan" />}
+            {OptIcon && <OptIcon className={`w-3.5 h-3.5 flex-shrink-0 ${opt.color || ""}`} />}
+            <span className="flex-1 text-left truncate">{opt.label}</span>
+            {sel && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
           </button>
         );
       })}
+      {shown.length === 0 && (
+        <div className="px-3 py-2 text-xs text-sol-text-dim">No match</div>
+      )}
     </>
   );
 }
@@ -98,7 +135,7 @@ export function FilterDropdown({
     : active && value ? active.label : label;
 
   const optionsPopover = open && (
-    <div className="absolute top-full left-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-64 overflow-y-auto">
+    <div className="absolute top-full left-0 mt-1 w-max min-w-[11rem] max-w-[20rem] bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-64 overflow-y-auto">
       <FilterOptionList options={options} value={value} multi={multi} onChange={onChange} onPicked={() => setOpen(false)} />
     </div>
   );

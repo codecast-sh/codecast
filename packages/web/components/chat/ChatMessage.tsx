@@ -141,8 +141,14 @@ export const ChatMessage = memo(function ChatMessage({
 }: ChatMessageProps) {
   const { author, agentStatus } = message;
 
+  // Registered as a [plugin, options] tuple, not as remarkChatMentions(opts):
+  // unified calls each array entry to OBTAIN the transformer, so handing it an
+  // already-built transformer makes it run with the options slot as the tree.
   const remarkPlugins = useMemo(
-    () => [...entityRemarkPlugins, remarkChatMentions({ known: knownHandles, self: selfHandles })],
+    () => [
+      ...entityRemarkPlugins,
+      [remarkChatMentions, { known: knownHandles, self: selfHandles }] as const,
+    ],
     [knownHandles, selfHandles],
   );
 

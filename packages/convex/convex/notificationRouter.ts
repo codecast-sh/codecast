@@ -8,7 +8,8 @@ const ENTITY_TYPE = v.union(
   v.literal("doc"),
   v.literal("plan"),
   v.literal("conversation"),
-  v.literal("artifact")
+  v.literal("artifact"),
+  v.literal("chat_channel")
 );
 
 const NOTIFICATION_TYPE = v.union(

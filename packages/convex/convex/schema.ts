@@ -74,6 +74,11 @@ export default defineSchema({
       doc_activity: v.optional(v.boolean()),
       plan_activity: v.optional(v.boolean()),
       artifact_activity: v.optional(v.boolean()),
+      // Team chat that is not a direct mention: a thread reply, an @here. A
+      // direct @you rides the existing `mention` key. Absent reads as ON, so the
+      // key must exist here or the settings toggle has nowhere to persist and the
+      // mute silently does nothing.
+      chat_activity: v.optional(v.boolean()),
     })),
     pr_auto_comment_enabled: v.optional(v.boolean()),
     // Dedupe/cooldown state for the aggregated "sessions blocked" notification
@@ -649,8 +654,13 @@ export default defineSchema({
   // Slack adapter can resolve channel → anchor with a single indexed lookup.
   anchor_channels: defineTable({
     anchor_id: v.id("anchors"),
-    surface: v.union(v.literal("slack")),
-    // Slack: the channel id (e.g. "C0123"). Unique per surface.
+    // "codecast" binds an anchor to a chat channel INSIDE codecast. These rows are
+    // an override, not the wiring: a chat channel with no row resolves to its
+    // team's anchor through `anchors.by_team`, so mentioning the anchor works with
+    // no setup step and no row written per channel that could drift.
+    surface: v.union(v.literal("slack"), v.literal("codecast")),
+    // Slack: the channel id (e.g. "C0123"). codecast: the chat_channels _id.
+    // Unique per surface.
     channel_key: v.string(),
     // Slack workspace/team id, for multi-workspace installs.
     workspace_key: v.optional(v.string()),
@@ -1826,7 +1836,13 @@ export default defineSchema({
       v.literal("doc_commented"),
       v.literal("plan_status_changed"),
       v.literal("plan_task_completed"),
-      v.literal("artifact_commented")
+      v.literal("artifact_commented"),
+      // Team chat. There is deliberately no type for a plain channel message:
+      // ordinary chatter produces unread state only, never a notification row and
+      // never a push.
+      v.literal("chat_mention"),
+      v.literal("chat_reply"),
+      v.literal("chat_here")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -1840,9 +1856,16 @@ export default defineSchema({
       v.literal("doc"),
       v.literal("plan"),
       v.literal("conversation"),
-      v.literal("artifact")
+      v.literal("artifact"),
+      v.literal("chat_channel")
     )),
     entity_id: v.optional(v.string()),
+    // The exact chat message a chat notification points at. entity_id names the
+    // channel; this names the row inside it, so the bell, the toast and the phone
+    // all deep-link to the same message instead of "the channel, somewhere".
+    // Routing goes through entity_type + these ids, never through `link` — `link`
+    // is for pages outside the app and web opens it in a new tab.
+    chat_message_id: v.optional(v.id("chat_messages")),
     // Deep link the notification opens (e.g. codecast.sh/a/<slug>?c=<comment>
     // — the artifact page opens that comment thread). Takes precedence over
     // the entity_type route when present.
@@ -3143,7 +3166,13 @@ export default defineSchema({
       v.literal("doc"),
       v.literal("plan"),
       v.literal("conversation"),
-      v.literal("artifact")
+      v.literal("artifact"),
+      // Chat notifications never fan out over this table — the sender computes the
+      // recipient list and re-checks channel access for each one, because `emit`'s
+      // subscription fan-out does not re-check access and a chat preview carries
+      // real message text. This member exists only so the notification and
+      // subscription entity unions stay one shape.
+      v.literal("chat_channel")
     ),
     entity_id: v.string(),
     reason: v.union(
@@ -3194,6 +3223,173 @@ export default defineSchema({
     .index("by_entity", ["entity_id"])
     .index("by_owner_seq", ["owner_user_id", "seq"])
     .index("by_team_seq", ["team_id", "seq"]),
+
+  // ── Team chat ───────────────────────────────────────────────────────────────
+  // A Slack-shaped chat inside codecast: channels, flat threads, mentions,
+  // reactions, read state. Four tables, all scoped to ONE team.
+  //
+  // v1 scope, and why it is this small:
+  //  - Every channel is visible to every member of its team. There is no private
+  //    channel and no direct message, so `canAccessChannel` (chat.ts) is exactly
+  //    "is the caller a member of channel.team_id" — one check, one shape, no
+  //    second membership model to disagree with the first. Private channels and
+  //    DMs are a later phase; adding the fields later costs nothing because every
+  //    new field is optional and this schema does not re-validate on push.
+  //  - Nothing here denormalizes a counter onto a shared row. `last_message_at`
+  //    and `message_count` on the channel would make EVERY member a writer of the
+  //    same document on every send — the hot-document pattern that has cost this
+  //    database three incidents, and that terminal_frames is explicitly allowed to
+  //    skip only because it "has exactly one writer". The channel rail instead
+  //    reads one row per channel off `by_channel_created` descending, which gives
+  //    the sort key and the preview text together.
+  //  - Thread rollups ("3 replies", participant faces) are derived the same way,
+  //    from `by_thread_created`, so a reply never re-versions the fattest row in
+  //    the table and a tombstoned reply cannot leave a stale count behind.
+  //
+  // EVERY table here carries `updated_at` and EVERY patch must bump it. The web
+  // store's sync layer keeps the previous object identity when no *scalar* field
+  // changed (syncProtocol.scalarFieldsEqual deliberately skips arrays and
+  // objects), so a patch that only touches `mentions` or `attachments` would be
+  // silently dropped on the way to the UI. chat.ts funnels all writes through
+  // `patchChat` so this cannot be forgotten.
+
+  chat_channels: defineTable({
+    team_id: v.id("teams"),
+    // Slug, lowercase, unique per team on a best-effort basis only. Routing is by
+    // _id — two concurrent creates can both pass the uniqueness read, so a name
+    // must never be the thing that resolves to a channel row.
+    name: v.string(),
+    topic: v.optional(v.string()),
+    // The channel a new team member lands in. Team admins only.
+    is_default: v.optional(v.boolean()),
+    created_by: v.id("users"),
+    created_at: v.number(),
+    updated_at: v.number(),
+    archived_at: v.optional(v.number()),
+    // Optimistic-create altKey: the store writes a `chatstub-…` row carrying this
+    // and the server row supersedes it when it syncs back.
+    client_id: v.optional(v.string()),
+  })
+    // Prefix-matches serve "every channel in this team", so no separate by_team.
+    .index("by_team_name", ["team_id", "name"])
+    .index("by_client_id", ["client_id"]),
+
+  chat_messages: defineTable({
+    // Denormalized from the channel so scope checks and the search index don't
+    // need a second read. Derived on insert, never a mutation argument.
+    team_id: v.id("teams"),
+    channel_id: v.id("chat_channels"),
+    // Threads are FLAT, like Slack's: a reply points at the ROOT message and a
+    // root leaves this absent. Never set it to the row's own id — the thread view
+    // reads the root by id and the replies by index, and a self-reference would
+    // put the root in both halves.
+    thread_root_id: v.optional(v.id("chat_messages")),
+    // The author. For an anchor's reply this is the anchor's `bot_user_id`.
+    user_id: v.id("users"),
+    author_kind: v.optional(v.union(v.literal("user"), v.literal("agent"))),
+    content: v.string(),
+    // Resolved SERVER-side by parsing `content` against the team roster. Never a
+    // caller argument: a client-supplied id array is a notification cannon.
+    mentions: v.optional(v.array(v.id("users"))),
+    // "here" notifies the members who are actually present (user_presence).
+    // `@channel` is deliberately absent in v1 — on a team small enough to share
+    // one codecast workspace it is the same blast radius with worse manners.
+    mention_scope: v.optional(v.literal("here")),
+    attachments: v.optional(v.array(v.object({
+      storage_id: v.id("_storage"),
+      name: v.optional(v.string()),
+      mime: v.optional(v.string()),
+      width: v.optional(v.number()),
+      height: v.optional(v.number()),
+    }))),
+    // Optimistic altKey AND the server's send-dedupe key: a retried send with the
+    // same client_id returns the existing row instead of inserting a twin (and,
+    // critically, does not wake the anchor a second time).
+    client_id: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+    edited_at: v.optional(v.number()),
+    // Tombstone rather than a delete, so replies keep their root and a thread
+    // count stays honest.
+    deleted_at: v.optional(v.number()),
+    // Anchor reply lifecycle — the same states the comment thread already uses.
+    agent_status: v.optional(v.union(
+      v.literal("thinking"),
+      v.literal("streaming"),
+      v.literal("done"),
+      v.literal("error"),
+    )),
+    // Which anchor owns this placeholder. `chat.replyAsAnchor` requires the row to
+    // name an anchor, the row's author to BE that anchor's bot identity, and the
+    // caller to be authorized for that anchor — otherwise any api_token holder
+    // could overwrite any message and author content under the bot's face.
+    agent_anchor_id: v.optional(v.id("anchors")),
+    fork_conversation_id: v.optional(v.id("conversations")),
+  })
+    .index("by_channel_created", ["channel_id", "created_at"])
+    .index("by_thread_created", ["thread_root_id", "created_at"])
+    .index("by_channel_client_id", ["channel_id", "client_id"])
+    // Team-scoped full-text search backs `chat.searchMessages`. A chat nobody can
+    // search is a write-only log. The team filter keeps one team's results out of
+    // another's; the caller's membership is still checked before the query runs.
+    .searchIndex("search_content", {
+      searchField: "content",
+      filterFields: ["team_id", "channel_id"],
+    }),
+
+  // Reactions are their own rows, NOT an array on the message.
+  //
+  // An inline array cannot survive the optimistic store: a pending field override
+  // clears only when the echoed value is `===` the pending one, and Convex resends
+  // arrays as fresh references, so the local value would mask the server's
+  // forever. Worse, the patch collector reads the field name from the path and the
+  // value from the patch, so a nested toggle would record the INNER array under
+  // the outer field name and corrupt the row's shape locally.
+  //
+  // One row per (message, user, emoji) makes a toggle an insert or a delete, which
+  // the pending machinery reconciles on presence, not on identity. It also takes
+  // reactions off the message document entirely, so a popular message is not a
+  // contended row.
+  chat_reactions: defineTable({
+    message_id: v.id("chat_messages"),
+    // Denormalized so a reaction can be scoped/pruned with the channel without
+    // re-reading its message.
+    channel_id: v.id("chat_channels"),
+    user_id: v.id("users"),
+    emoji: v.string(),
+    created_at: v.number(),
+  })
+    .index("by_message", ["message_id"])
+    // The toggle's own lookup: exactly one row may exist per (message, user,
+    // emoji), and the server splices the CALLER's id in or out — a client can
+    // never write another user's reaction.
+    .index("by_message_user_emoji", ["message_id", "user_id", "emoji"])
+    .index("by_channel", ["channel_id"]),
+
+  // Per (user, channel): where they have read to, and how loudly the channel may
+  // interrupt them. One writer per row — the owner — so no contention, and every
+  // mutation derives the user from the authenticated caller rather than an
+  // argument (a `user_id` argument would let anyone clear someone else's badge or
+  // silently mute them).
+  //
+  // A missing row is meaningful: it means the member has never opened the channel,
+  // which reads as notify level "mentions". The row appears the first time they
+  // read or post, and that is also the signal the toast layer uses for "a channel
+  // I am actually in".
+  chat_reads: defineTable({
+    user_id: v.id("users"),
+    channel_id: v.id("chat_channels"),
+    team_id: v.id("teams"),
+    last_read_at: v.number(),
+    last_read_message_id: v.optional(v.id("chat_messages")),
+    notify_level: v.union(v.literal("all"), v.literal("mentions"), v.literal("none")),
+    joined_at: v.optional(v.number()),
+    updated_at: v.number(),
+  })
+    // Prefix-matches serve "all of my read state", so no separate by_user. There
+    // is deliberately no by_channel index: a query over everyone's read state in a
+    // channel is a read-receipt surface nobody asked for.
+    .index("by_user_channel", ["user_id", "channel_id"]),
 
 }, {
   // The `messages` table is in the millions of rows, and the default
