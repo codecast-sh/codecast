@@ -19,6 +19,7 @@ const api = _api as any;
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { TaskStatusBadge } from "../../components/TaskStatusBadge";
+import { LabelChips } from "../../components/LabelChips";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { filterToWorkspace } from "../../lib/workspaceScope";
@@ -285,14 +286,7 @@ export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenD
         <Link2 className="w-3.5 h-3.5 text-sol-red flex-shrink-0 cq-hide-compact" />
       )}
       {task.labels && task.labels.length > 0 && (
-        <div className="flex items-center gap-1 flex-shrink-0 cq-hide-compact">
-          {task.labels.map((l: string) => {
-            const lc = getLabelColor(l);
-            return (
-              <span key={l} className={`w-2 h-2 rounded-full flex-shrink-0 ${lc.dot}`} title={l} />
-            );
-          })}
-        </div>
+        <LabelChips labels={task.labels} className="cq-hide-compact" />
       )}
       {task.assignee_info && (() => {
         const avatar = task.assignee_info.image ? (
