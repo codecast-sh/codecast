@@ -3,51 +3,24 @@
 // into reply" — which adds the selection to your reply as a rail card with an
 // optional note (same single verb as the per-block hover handle). Positioned at
 // the selection rect via a portal.
+//
+// The same action has a key: `r` (conv.review). The button carries its keycap, so
+// the shortcut is learned from the place you already use. Resolving the selection
+// lives in lib/quoteSelection so the button and the key quote the same thing.
 
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { createReviewComment } from "../lib/reviewActions";
-import { quoteUnitAt } from "../lib/quoteUnits";
-
-type Anchor = { x: number; y: number; messageId: string; blockIndex: number; quote: string };
-
-function resolveSelection(): Anchor | null {
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
-  const text = sel.toString().trim();
-  if (!text) return null;
-
-  const range = sel.getRangeAt(0);
-  const anchorEl = (range.startContainer.nodeType === 1
-    ? (range.startContainer as Element)
-    : range.startContainer.parentElement) as HTMLElement | null;
-  const region = anchorEl?.closest(".cc-msg-review") as HTMLElement | null;
-  if (!region) return null; // selection isn't in a reviewable assistant body
-
-  const msgEl = region.closest('[id^="msg-"]') as HTMLElement | null;
-  const messageId = msgEl?.id?.slice(4);
-  if (!messageId) return null;
-
-  // Which quote unit does the selection start in? Units are the top-level blocks
-  // of the .cc-content column, with lists expanded per <li> — see lib/quoteUnits.
-  // The hover handle resolves the same way, so selection and hover indices agree.
-  const contentEl = region.querySelector(":scope > .cc-content") as HTMLElement | null;
-  if (!contentEl) return null;
-  const blockIndex = quoteUnitAt(contentEl, anchorEl)?.index ?? 0;
-
-  const rect = range.getBoundingClientRect();
-  if (!rect || (rect.width === 0 && rect.height === 0)) return null;
-  return { x: rect.left + rect.width / 2, y: rect.top, messageId, blockIndex, quote: text };
-}
+import { resolveQuoteSelection, quoteSelectionIntoReply, type QuoteSelection } from "../lib/quoteSelection";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 
 export function SelectionQuoteToolbar({ conversationId }: { conversationId: string }) {
-  const [anchor, setAnchor] = useState<Anchor | null>(null);
+  const [anchor, setAnchor] = useState<QuoteSelection | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const schedule = () => {
       if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setAnchor(resolveSelection()), 120);
+      timer.current = setTimeout(() => setAnchor(resolveQuoteSelection()), 120);
     };
     const onSelChange = () => {
       const sel = window.getSelection();
@@ -79,15 +52,11 @@ export function SelectionQuoteToolbar({ conversationId }: { conversationId: stri
 
   if (!anchor) return null;
 
-  const clear = () => {
-    window.getSelection()?.removeAllRanges();
-    setAnchor(null);
-  };
-  // Same single verb as the per-block handle: quote the selection into your
-  // reply (a rail card) and open an optional note.
+  // Same single verb as the per-block handle and the `r` key: quote the selection
+  // into your reply as a rail card, with an optional note.
   const doQuote = () => {
-    createReviewComment(conversationId, anchor.messageId, anchor.blockIndex, anchor.quote);
-    clear();
+    quoteSelectionIntoReply(conversationId);
+    setAnchor(null);
   };
 
   // Place above the selection; flip below if too close to the top.
@@ -104,6 +73,7 @@ export function SelectionQuoteToolbar({ conversationId }: { conversationId: stri
     >
       <button type="button" className="cc-sel-btn" onClick={doQuote}>
         ❝ Quote into reply
+        <KeyCap size="xs">R</KeyCap>
       </button>
     </div>,
     document.body,

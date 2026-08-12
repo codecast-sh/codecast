@@ -242,7 +242,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   // the visible tab, and the dispatcher then falls through to favorite.
   { key: 'ctrl+shift+f', mac: 'meta+shift+f', action: 'vault.search', skipInputCheck: true, description: 'Search files' },
   { key: 'ctrl+shift+f', mac: 'meta+shift+f', action: 'conv.favorite', when: 'conversation', skipInputCheck: true, description: 'Toggle favorite' },
-  { key: 'r', action: 'conv.review', when: 'conversation', description: 'Review / comment on a reply' },
+  { key: 'r', action: 'conv.review', when: 'conversation', description: 'Quote selected text into your reply' },
   { key: 'meta+shift+l', action: 'conv.copyLink', when: 'conversation', skipInputCheck: true, description: 'Copy conversation link' },
   { key: 'ctrl+shift+c', mac: 'meta+shift+c', action: 'conv.cycleDensity', when: 'conversation', skipInputCheck: true, description: 'Cycle message density' },
 
