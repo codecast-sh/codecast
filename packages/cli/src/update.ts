@@ -15,7 +15,7 @@ const VISUAL_VERSION = "6"; // bumped: image captions from alt text + side-by-si
 const FORKS_VERSION = "4"; // bumped: fan-out is a handoff — one cast fork call, no orchestration; default anchor excludes the fork request so branches never know they are forks
 const PUBLISH_VERSION = "4"; // bumped: cast image cross-reference for single-image sharing; never link local paths
 const BROWSER_VERSION = "3"; // bumped: screenshots render inline in the thread; per-session tab ownership
-const STATE_VERSION = "2"; // bumped: update at event boundaries, not on an abstract condition
+const STATE_VERSION = "3"; // bumped: first line = what you're working on; --status working|blocked|done
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_RETRY_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours

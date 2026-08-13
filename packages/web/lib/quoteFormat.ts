@@ -10,6 +10,10 @@ export type PendingComment = {
   quote: string;
   body: string;
   createdAt: number;
+  // Set on diff line comments: the file and line the comment sits on, so the
+  // editor can offer posting it as a durable team comment at that anchor.
+  filePath?: string;
+  fileLine?: number;
 };
 
 // Prefix every line with "> " so multi-line and structured text (lists, code)

@@ -283,6 +283,8 @@ export type ProjectItem = {
   title: string;
   description?: string;
   status: string;
+  /** Workspace truth (server row field): set = team project, absent = personal. */
+  team_id?: string | null;
   color?: string;
   icon?: string;
   target_date?: number;
@@ -346,6 +348,9 @@ export type InboxSession = {
   thread_state?: string | null;
   thread_state_at?: number | null;
   thread_state_msg_count?: number | null;
+  // Declared tri-state of that line: "working" | "blocked" | "done". Changes
+  // only on a state write, so thread_state_at in the wake signature covers it.
+  thread_state_status?: string | null;
   is_idle: boolean;
   // True when an AskUserQuestion poll is open and unanswered. The agent is
   // blocked on the user, so this always means "needs input" regardless of the
@@ -413,6 +418,7 @@ export type InboxSession = {
   workflow_run_id?: string | null;
   is_workflow_primary?: boolean;
   workflow_run_status?: string | null;
+  workflow_run_name?: string | null;
   // The schedule (agent_tasks row) that spawned this conversation as a run.
   // Lets the sidebar badge/strip attribute any historical run to its schedule.
   agent_task_id?: string | null;
@@ -803,6 +809,31 @@ export type SavedView = {
   created_at: number;
 };
 
+/**
+ * A saved view as it now lives on the server (convex/savedViews.ts). The legacy
+ * SavedView above is the client_state shape these were kept in before they could
+ * be shared; useSyncSavedViews migrates those across once and then they are gone.
+ */
+export type SavedViewRow = {
+  _id: string;
+  client_key?: string;
+  user_id?: string;
+  team_id?: string;
+  name: string;
+  page: "tasks" | "docs" | "plans";
+  prefs: TaskViewPrefs | DocViewPrefs | PlanViewPrefs;
+  /** Visible to the whole team's rail, not just its author's. */
+  shared?: boolean;
+  icon?: string;
+  color?: string;
+  /** Enrichment from webList — who authored a view you did not. */
+  owner_name?: string;
+  owner_image?: string;
+  is_mine?: boolean;
+  created_at: number;
+  updated_at: number;
+};
+
 // The inbox panel's session-ordering modes. "grouped" = status sections;
 // "recent" = flat, newest-first by last activity (updated_at) — reshuffles as
 // sessions work; "time" = flat, newest-first by creation (started_at) — a
@@ -931,14 +962,16 @@ export type ClientTips = {
   _inlineSuppressed?: boolean;
 };
 
+// Tabs carry CONTENT identity only (path, session). The panel arrangement —
+// which rails are open, their widths, the dock — is global chrome shared by
+// every tab: switching tabs must reveal another page under the exact same
+// frame, never reshape the frame. (Tabs used to snapshot/restore a per-tab
+// workspace; that made the right rail open/close and resize on every switch.)
 export type AppTab = {
   id: string;
   title: string;
   path: string;
   sessionId?: string;
-  sidePanelSessionId?: string;
-  /** The tab's own arrangement — one snapshot instead of a flag per region. */
-  workspace?: PersistedWorkspace;
   createdAt: number;
 };
 
@@ -2986,8 +3019,9 @@ interface InboxStoreState extends ChatSliceState {
   updateClientTips: (partial: Partial<ClientTips>) => void;
 
   // -- Saved views --
-  saveView: (view: Omit<SavedView, "id" | "created_at" | "team_id">) => void;
-  deleteView: (id: string) => void;
+  createSavedView: (opts: { name: string; page: "tasks" | "docs" | "plans"; prefs: any; shared?: boolean; icon?: string; client_key?: string }) => any;
+  updateSavedView: (id: string, fields: Record<string, any>) => void;
+  deleteSavedView: (id: string) => void;
 
   // -- Tabs --
   tabs: AppTab[];
@@ -3046,10 +3080,10 @@ interface InboxStoreState extends ChatSliceState {
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
   // Teammate comment actions (optimistic → dispatch side-effect → live-query reconcile).
-  addComment: (conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string }) => Promise<unknown>;
+  addComment: (conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string; filePath?: string; lineNumber?: number }) => Promise<unknown>;
   editComment: (commentId: string, content: string) => Promise<unknown>;
   deleteComment: (commentId: string) => Promise<unknown>;
-  askAgentInThread: (conversationId: string, opts?: { messageId?: string }) => Promise<unknown>;
+  askAgentInThread: (conversationId: string, opts?: { messageId?: string; filePath?: string; lineNumber?: number }) => Promise<unknown>;
 
   // -- Sidebar nav expanded sections --
   sidebarNavExpanded: Record<string, boolean>;
@@ -3085,6 +3119,7 @@ interface InboxStoreState extends ChatSliceState {
   docs: Record<string, DocItem>;
   plans: Record<string, PlanItem>;
   projects: Record<string, ProjectItem>;
+  savedViews: Record<string, SavedViewRow>;
   notifications: Record<string, any>;
   docProjectPaths: string[];
   docDetails: Record<string, DocDetail>;
@@ -3582,6 +3617,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // opts, so without this projects synced as an authoritative snapshot — the one
   // remaining collection that still pruned the cache by absence.
   projects: { isDelta: true },
+  savedViews: { isDelta: true, altKey: "client_key" },
   // altKey supersede for optimistic create-stubs: the incoming server row with
   // the same name rekeys the stub away (names are per-user and practically
   // unique; a rare duplicate-name create just retires the stub onto the older
@@ -5636,26 +5672,44 @@ const inboxStoreConfig = (set: any, get: any) => ({
     return stamped;
   }),
 
-  saveView: action(function (this: Draft, view: Omit<SavedView, "id" | "created_at" | "team_id">) {
-    const current = this.clientState.ui?.saved_views ?? [];
-    const newView: SavedView = {
-      ...view,
-      id: `sv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      team_id: this.clientState.ui?.active_team_id,
+  // Saved views are a server collection now, so they can be shared. All three
+  // writes are local-first: the row renders from the draft immediately and the
+  // server echo reconciles, superseding the stub via the client_key altKey.
+  createSavedView: action(function (this: Draft, opts: {
+    name: string;
+    page: "tasks" | "docs" | "plans";
+    prefs: any;
+    shared?: boolean;
+    icon?: string;
+    client_key?: string;
+  }) {
+    const key = opts.client_key ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const teamId = this.clientState.ui?.active_team_id;
+    const stubId = `temp_view_${key}`;
+    this.savedViews[stubId] = {
+      _id: stubId,
+      client_key: key,
+      team_id: teamId,
+      name: opts.name,
+      page: opts.page,
+      prefs: opts.prefs ?? {},
+      // Sharing needs a team to share with; without one the row stays personal.
+      shared: !!opts.shared && !!teamId,
+      icon: opts.icon,
+      is_mine: true,
       created_at: Date.now(),
-    };
-    const newViews = [...current, newView];
-    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
-    this.clientState.ui.saved_views = newViews;
-    return newViews;
+      updated_at: Date.now(),
+    } as SavedViewRow;
+    return { ...opts, client_key: key, team_id: teamId, shared: !!opts.shared && !!teamId };
   }),
 
-  deleteView: action(function (this: Draft, id: string) {
-    const current = this.clientState.ui?.saved_views ?? [];
-    const newViews = current.filter((v: SavedView) => v.id !== id);
-    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
-    this.clientState.ui.saved_views = newViews;
-    return newViews;
+  updateSavedView: action(function (this: Draft, id: string, fields: Record<string, any>) {
+    const row = (this.savedViews as any)[id];
+    if (row) Object.assign(row, fields, { updated_at: Date.now() });
+  }),
+
+  deleteSavedView: action(function (this: Draft, id: string) {
+    delete (this.savedViews as any)[id];
   }),
 
   updateClientLayout: action(function (this: Draft, key: string, value: any) {
@@ -6933,6 +6987,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   docs: {},
   plans: {},
   projects: {},
+  savedViews: {},
   notifications: {},
   docDetails: {},
   taskFilter: { status: "" },
@@ -7195,7 +7250,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // the comments altKey config, and the server dedups on client_id so an outbox
   // retry can't double-insert. The same-named dispatch side effect does the
   // durable write (notifications, mentions, github sync) via comments.addComment.
-  addComment: receiptAsyncAction(function (this: Draft, conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string }) {
+  addComment: receiptAsyncAction(function (this: Draft, conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string; filePath?: string; lineNumber?: number }) {
     const body = content.trim();
     if (!body) return;
     const clientId = `commentstub-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
@@ -7206,6 +7261,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
       conversation_id: conversationId,
       message_id: opts?.messageId,
       parent_comment_id: opts?.parentCommentId,
+      file_path: opts?.filePath,
+      line_number: opts?.lineNumber,
       content: body,
       user_id: me?._id ?? "",
       created_at: Date.now(),
@@ -7217,6 +7274,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
       content: body,
       messageId: opts?.messageId,
       parentCommentId: opts?.parentCommentId,
+      filePath: opts?.filePath,
+      lineNumber: opts?.lineNumber,
       clientId,
       commandId: `legacy-comments-create:${clientId}`,
     };
@@ -7267,7 +7326,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // Opt-in agent reply: drop an optimistic "thinking" agent comment so the UI
   // reacts instantly; the side effect spawns/reuses the thread's fork.
-  askAgentInThread: receiptAsyncAction(function (this: Draft, conversationId: string, opts?: { messageId?: string }) {
+  askAgentInThread: receiptAsyncAction(function (this: Draft, conversationId: string, opts?: { messageId?: string; filePath?: string; lineNumber?: number }) {
     const clientId = `commentstub-agent-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
     const me = (this as any).currentUser;
     this.comments[clientId] = {
@@ -7275,6 +7334,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
       client_id: clientId,
       conversation_id: conversationId,
       message_id: opts?.messageId,
+      file_path: opts?.filePath,
+      line_number: opts?.lineNumber,
       content: "",
       user_id: me?._id ?? "",
       created_at: Date.now(),
@@ -7284,6 +7345,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     return {
       conversationId,
       messageId: opts?.messageId,
+      filePath: opts?.filePath,
+      lineNumber: opts?.lineNumber,
       clientId,
       commandId: `legacy-comments-ask:${clientId}`,
     };
@@ -7685,8 +7748,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
       title: opts.title,
       path: opts.path,
       sessionId: opts.sessionId,
-      sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-      workspace: serializeWorkspace(this.workspace as WorkspaceState),
       createdAt: Date.now(),
     };
     this.tabs = [...this.tabs, tab];
@@ -7718,22 +7779,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.tabs = newTabs;
   }),
 
+  // Switching tabs changes ONLY what the stage shows. The workspace (rails,
+  // sizes, dock) is global chrome — it never rides along, so the frame is
+  // pixel-identical across tabs.
   switchTab: action(function (this: Draft, id: string) {
     if (this.activeTabId === id) return;
     if (this.activeTabId) {
       this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
         ...t,
-        sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-        workspace: serializeWorkspace(this.workspace as WorkspaceState),
         path: stampedTabPath(t),
       } : t);
     }
-    const target = this.tabs.find((t: AppTab) => t.id === id);
     this.activeTabId = id;
-    if (target) {
-      this.sidePanelSessionId = target.sidePanelSessionId ?? null;
-      if (target.workspace) this.workspace = hydrateWorkspace(target.workspace);
-    }
   }),
 
   updateTab: action(function (this: Draft, id: string, patch: Partial<AppTab>) {
@@ -7751,8 +7808,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!this.activeTabId) return;
     this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
       ...t,
-      sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-      workspace: serializeWorkspace(this.workspace as WorkspaceState),
       path: stampedTabPath(t),
       ...patch,
     } : t);

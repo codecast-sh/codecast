@@ -14,6 +14,23 @@ second copy under it.
 
 A user's own section sitting BETWEEN two codecast blocks. Nothing may move it.
 
+## Referencing objects
+
+Every codecast object has a short ID. Write one into your prose and it renders as a live reference: the object's title, its current state, and a link that opens it. This works anywhere you write — messages, summaries, task comments, doc bodies, trigger prompts.
+
+| Object  | Short ID  | Where to find it |
+|---------|-----------|------------------|
+| Session | `jx7c6zk` | `cast feed`, `cast search`, `cast context` |
+| Task    | `ct-4102` | `cast task ls`, `cast task ready` |
+| Plan    | `pl-88`   | `cast plan ls` |
+| Trigger | `tr-42`   | `cast trigger ls` |
+| Doc     | `doc:<id>` | `cast doc ls`, `cast doc search` |
+
+There are two forms. Write the bare ID by default — `Filed under ct-4102.` — it reads as a normal sentence and still renders the full reference. Write `@[Title id]` — `@[Fix the auth race ct-4102]` — when the reader needs the name in the sentence itself.
+
+Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
+<!-- /codecast-references -->
+
 ## Deploy notes
 
 The last user section. It follows the codecast blocks, so anything that cuts a
@@ -51,20 +68,3 @@ Both start working immediately and appear in the inbox. A branch or session only
 
 Labels carry across a fork by default: a branch inherits whatever label you'd filed the parent session under (labels are your personal filing, so this follows your own filing even when you fork a teammate's session), keeping a fork grouped with its source without any flag. Pass `--label <name>` to file the new sessions under a label you choose instead — an override for forks, and the only way to file a `spawn` (which starts fresh, with nothing to inherit). The label is created if it doesn't exist: `cast spawn --label rollout "<task>" "<task>"`, then `cast sessions --label rollout` to see the whole fan-out as a group.
 <!-- /codecast-forks -->
-
-## Referencing objects
-
-Every codecast object has a short ID. Write one into your prose and it renders as a live reference: the object's title, its current state, and a link that opens it. This works anywhere you write — messages, summaries, task comments, doc bodies, trigger prompts.
-
-| Object  | Short ID  | Where to find it |
-|---------|-----------|------------------|
-| Session | `jx7c6zk` | `cast feed`, `cast search`, `cast context` |
-| Task    | `ct-4102` | `cast task ls`, `cast task ready` |
-| Plan    | `pl-88`   | `cast plan ls` |
-| Trigger | `tr-42`   | `cast trigger ls` |
-| Doc     | `doc:<id>` | `cast doc ls`, `cast doc search` |
-
-There are two forms. Write the bare ID by default — `Filed under ct-4102.` — it reads as a normal sentence and still renders the full reference. Write `@[Title id]` — `@[Fix the auth race ct-4102]` — when the reader needs the name in the sentence itself.
-
-Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
-<!-- /codecast-references -->

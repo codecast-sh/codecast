@@ -1,5 +1,4 @@
 import { useState, useCallback, useEffect, useRef, memo, useMemo, useDeferredValue } from "react";
-import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
@@ -16,7 +15,7 @@ import { ConversationDiffLayout } from "../../components/ConversationDiffLayout"
 import { ConversationData } from "../../components/ConversationView";
 import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated, selectSessionRailOpen, selectSessionRailUserClosed } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated } from "../../store/inboxStore";
 import { SharePopover } from "../../components/SharePopover";
 import { SessionErrorBanner } from "../../components/SessionErrorBanner";
 import { ActivityFeed } from "../../components/ActivityFeed";
@@ -238,14 +237,9 @@ export function QueuePageClient() {
   const tabCtx = useTabContext();
   const isActiveTab = tabCtx ? tabCtx.isActive : true;
 
-  // Auto-open session panel when entering inbox (DashboardLayout renders it)
-  useMountEffect(() => {
-    const store = useInboxStore.getState();
-    if (!selectSessionRailOpen(store) && !selectSessionRailUserClosed(store)) {
-      store.toggleSidePanel();
-    }
-  });
-
+  // The session rail's route defaults (auto-open on entering the inbox) live
+  // in DashboardLayout's navigation effects, gated so a tab switch — which
+  // mounts this pane lazily on first activation — never reshapes the frame.
 
   // Wake on STRUCTURAL session change (membership/bucket/order), never on the
   // ~1s liveness heartbeat: the raw s.sessions ref flips on every tick, and this

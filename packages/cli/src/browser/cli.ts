@@ -784,7 +784,31 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           console.log(`${fmt.muted(`+${(e.t / 1000).toFixed(1)}s`)} ${fmt.error("UNCAUGHT")} ${e.text}`);
           if (e.stack) console.log(fmt.muted(e.stack.split("\n").slice(1, 4).map((l) => `    ${l.trim()}`).join("\n")));
         }
-        if (!wanted.length && !rec.errors.length) console.log(fmt.muted("(nothing logged)"));
+        for (const d of rec.dialogs ?? []) {
+          console.log(`${fmt.muted(`+${(d.t / 1000).toFixed(1)}s`)} ${fmt.warning("DIALOG")} ${d.kind}: ${d.message}`);
+        }
+        if (!wanted.length && !rec.errors.length && !(rec.dialogs ?? []).length) {
+          console.log(fmt.muted("(nothing logged)"));
+        }
+      });
+    });
+
+  br.command("dialogs")
+    .description("Modal dialogs the page tried to open (answered without blocking)")
+    .option("--tab <id>", "Act on a specific tab")
+    .action(async (o: { tab?: string }) => {
+      await act(o, async (page) => {
+        const rec = await readRecording(page);
+        if (!rec.dialogs?.length) return console.log(fmt.muted("(the page opened no dialogs)"));
+        for (const d of rec.dialogs) {
+          console.log(`${fmt.muted(`+${(d.t / 1000).toFixed(1)}s`)} ${d.kind.padEnd(12)} ${d.message}`);
+        }
+        console.log(
+          fmt.muted(
+            "\n  These were answered automatically (confirm→OK, prompt→default) so they could not\n" +
+              "  freeze the tab. Drive the real flow with clicks if the answer matters.",
+          ),
+        );
       });
     });
 

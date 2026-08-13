@@ -16,7 +16,7 @@ import { inboxVisibilityFields } from "./inboxProjection";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, findModelOption, fromConvexAgentType, toConvexAgentType, normalizeThreadState } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, findModelOption, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, ACTIVE_AGENT_STATUSES, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
@@ -7692,9 +7692,13 @@ async function enrichInboxSessionRow(
   }
 
   let workflow_run_status: string | null = null;
+  let workflow_run_name: string | null = null;
   if (conv.workflow_run_id) {
     const run = await ctx.db.get(conv.workflow_run_id);
-    if (run) workflow_run_status = run.status;
+    if (run) {
+      workflow_run_status = run.status;
+      workflow_run_name = run.workflow_name ?? null;
+    }
   }
 
   // Anchor identity: a personal anchor's bot isn't in the team roster, so the
@@ -7724,6 +7728,7 @@ async function enrichInboxSessionRow(
     thread_state: conv.thread_state ?? null,
     thread_state_at: conv.thread_state_at ?? null,
     thread_state_msg_count: conv.thread_state_msg_count ?? null,
+    thread_state_status: conv.thread_state_status ?? null,
     is_idle: isIdle,
     awaiting_input: awaitingInput,
     is_unresponsive: isUnresponsive,
@@ -7763,6 +7768,7 @@ async function enrichInboxSessionRow(
     workflow_run_id: conv.workflow_run_id || null,
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
+    workflow_run_name,
     // Schedule that spawned this conversation as a run (see schema) — lets the
     // sidebar badge and the schedule strip attribute ANY run, not just the
     // latest one webList can resolve from last_run_session_uuid.
@@ -7842,6 +7848,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     thread_state: child.thread_state ?? null,
     thread_state_at: child.thread_state_at ?? null,
     thread_state_msg_count: child.thread_state_msg_count ?? null,
+    thread_state_status: child.thread_state_status ?? null,
     is_idle: childIsIdle,
     awaiting_input: false,
     is_unresponsive: false,
@@ -7874,6 +7881,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     workflow_run_id: null,
     is_workflow_primary: false,
     workflow_run_status: null,
+    workflow_run_name: null,
     icon: child.icon,
     icon_color: child.icon_color,
     team_id: child.team_id ?? null,
@@ -8574,6 +8582,7 @@ export function tallyInboxRows(
     awaiting_input: boolean;
     idle_summary: string | null;
     thread_state: string | null;
+    thread_state_status: string | null;
     last_user_message: string | null;
     label: string | null;
     active_plan: { short_id: string; title: string } | null;
@@ -8649,6 +8658,7 @@ export function tallyInboxRows(
       // The agent's own pinned state beats the generated blurb when both exist:
       // one is what the agent says is true now, the other is a description.
       thread_state: s.thread_state || null,
+      thread_state_status: s.thread_state_status || null,
       last_user_message: s.last_user_message || null,
       label: rowLabel,
       active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
@@ -9477,6 +9487,10 @@ export const setThreadState = mutation({
   args: {
     session: v.string(),
     text: v.optional(v.string()),
+    // "working" | "blocked" | "done" (loose spellings accepted). Absent on
+    // writes from older CLIs — those default to "working", the overwhelmingly
+    // common truth for a state written mid-session.
+    status: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -9504,17 +9518,20 @@ export const setThreadState = mutation({
         thread_state: undefined,
         thread_state_at: undefined,
         thread_state_msg_count: undefined,
+        thread_state_status: undefined,
       });
       return { ok: true as const, short_id: shortId, cleared: true as const, state: null, previous_state: previous };
     }
 
     const at = Date.now();
+    const status = parseThreadStateStatus(args.status) ?? "working";
     await ctx.db.patch(conv._id, {
       thread_state: text,
       thread_state_at: at,
       thread_state_msg_count: conv.message_count ?? 0,
+      thread_state_status: status,
     });
-    return { ok: true as const, short_id: shortId, cleared: false as const, state: text, previous_state: previous, at };
+    return { ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at };
   },
 });
 
@@ -9545,6 +9562,7 @@ export const getThreadState = query({
       short_id: conv.short_id ?? conv._id.toString().slice(0, 7),
       title: conv.title ?? null,
       state: conv.thread_state ?? null,
+      status: conv.thread_state_status ?? null,
       at: conv.thread_state_at ?? null,
       msg_count_at_write: conv.thread_state_msg_count ?? null,
       message_count: conv.message_count ?? 0,

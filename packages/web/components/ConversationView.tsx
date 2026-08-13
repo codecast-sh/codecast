@@ -5181,9 +5181,8 @@ const BACKGROUND_BADGE_LABEL: Record<MonitorStatus, string> = {
 };
 
 function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId?: string }) {
-  const isWorkflow = tool.name === "Workflow";
-  const isBackground = !isWorkflow && tool.name !== "Monitor";
-  let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean; name?: string } = {};
+  const isBackground = tool.name !== "Monitor";
+  let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean } = {};
   try { input = JSON.parse(tool.input); } catch {}
   const [showCommand, setShowCommand] = useState(false);
   const messages = useInboxStore((s) => (conversationId ? s.messages[conversationId] : undefined));
@@ -5206,31 +5205,25 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
   );
   const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now, agentStartedAt) : "watching";
   const status: MonitorStatus = rawStatus === "watching" && sessionDead ? "stopped" : rawStatus;
-  const failed = status === "ended" && (isBackground ? (row?.exitCode ?? 0) > 0 : isWorkflow && !!row?.failed);
+  const failed = isBackground && status === "ended" && (row?.exitCode ?? 0) > 0;
   const badge = failed
-    ? { label: isWorkflow ? "failed" : `exit ${row!.exitCode}`, cls: "bg-sol-red/10 text-sol-red border-sol-red/30" }
-    : { cls: MONITOR_BADGE[status].cls, label: isBackground || isWorkflow ? BACKGROUND_BADGE_LABEL[status] : MONITOR_BADGE[status].label };
+    ? { label: `exit ${row!.exitCode}`, cls: "bg-sol-red/10 text-sol-red border-sol-red/30" }
+    : { cls: MONITOR_BADGE[status].cls, label: isBackground ? BACKGROUND_BADGE_LABEL[status] : MONITOR_BADGE[status].label };
   const watching = status === "watching";
   const commandFirstLine = (input.command || "").split("\n").find((l) => l.trim()) || "";
-  const Icon = isWorkflow ? Workflow : isBackground ? Terminal : Radar;
-  // A workflow's identity lives on the row (Summary + script name from the
-  // launch result), not in the tool input (a script blob). The input's `name`
-  // covers the window before the result lands / saved-workflow calls.
-  const description = isWorkflow
-    ? row?.description || input.name || "workflow run"
-    : input.description || (isBackground ? "background command" : "background watch");
+  const Icon = isBackground ? Terminal : Radar;
 
   return (
     <div className={`my-1 rounded border-l-2 ${watching ? "border-sol-blue/60 bg-sol-blue/5" : "border-sol-border/60 bg-sol-bg-alt/30"}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 min-w-0">
         <Icon className={`w-3.5 h-3.5 shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`} />
-        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isWorkflow ? "Workflow" : isBackground ? "Background" : "Monitor"}</span>
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isBackground ? "Background" : "Monitor"}</span>
         {input.persistent && (
           <ShortcutTooltip label="Runs until TaskStop or session end — not a one-shot watch">
             <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-blue/40 text-sol-blue/90 bg-sol-blue/10">persistent</span>
           </ShortcutTooltip>
         )}
-        <span className="text-xs text-sol-text truncate min-w-0">{description}</span>
+        <span className="text-xs text-sol-text truncate min-w-0">{input.description || (isBackground ? "background command" : "background watch")}</span>
         {(row?.eventCount ?? 0) > 0 && (
           <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">
             {row!.eventCount} event{row!.eventCount === 1 ? "" : "s"}
@@ -5256,11 +5249,6 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
             <span className="block truncate">{commandFirstLine}</span>
           )}
         </button>
-      )}
-      {/* A workflow has no command to expand — its script name (parsed from
-          the launch result) is the one-line identity under the summary. */}
-      {isWorkflow && row?.command && (
-        <div className="px-3 pb-1.5 font-mono text-[11px] text-sol-text-dim truncate">{row.command}</div>
       )}
       {row?.lastEvent && (
         <div className="mx-3 mb-2 flex items-baseline gap-1.5 min-w-0 text-[11px] leading-snug">
@@ -7970,7 +7958,7 @@ function AssistantBlockImpl({
             <WorkflowToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : tc.name === "Skill" ? (
             <SkillBlock key={tc.id} tool={tc} />
-          ) : tc.name === "Monitor" || tc.name === "Workflow" || isBackgroundBashToolCall(tc) ? (
+          ) : tc.name === "Monitor" || isBackgroundBashToolCall(tc) ? (
             <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
           ) : tc.name === "ScheduleWakeup" ? (
             <ScheduleWakeupBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} timestamp={timestamp} />
@@ -14811,6 +14799,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <TaskBadge task={(conversation as any).active_task} />
               </span>
             )}
+            {/* A workflow run in flight inside this session. The launch card
+                sits wherever the run was armed — often far above the tail —
+                so the header carries the standing signal, linking to the run's
+                live view. Server truth via the conversation's stamped run. */}
+            {(conversation as any)?.is_workflow_primary && (conversation as any)?.workflow_run_id &&
+              ["pending", "running", "paused"].includes((conversation as any)?.workflow_run_status) && (
+              <span data-simple-hide className="cq-header-collapse contents">
+                <Link
+                  href={`/workflows/runs/${(conversation as any).workflow_run_id}`}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px]"
+                  title={`Workflow ${(conversation as any).workflow_run_status}${(conversation as any).workflow_run_name ? `: ${(conversation as any).workflow_run_name}` : ""} — open the live run`}
+                >
+                  <span className="w-1 h-1 rounded-full bg-sol-cyan animate-pulse motion-reduce:animate-none" />
+                  <Workflow className="w-2.5 h-2.5 flex-shrink-0" />
+                  <span className="truncate">{(conversation as any).workflow_run_name || "workflow"}</span>
+                </Link>
+              </span>
+            )}
 
             {conversation && (
               <TooltipProvider delayDuration={300}>
@@ -15706,6 +15712,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           threadState={conversation.thread_state}
           threadStateAt={conversation.thread_state_at}
           threadStateMsgCount={conversation.thread_state_msg_count}
+          threadStateStatus={conversation.thread_state_status}
           messageCount={conversation.message_count}
           canClear={effectiveIsOwner}
         />

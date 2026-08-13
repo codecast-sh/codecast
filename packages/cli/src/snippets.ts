@@ -124,18 +124,19 @@ export function findOwnedSections(text: string, spec: SectionSpec): Array<{ star
   return found.filter((b, i) => i === 0 || b.start >= found[i - 1].end);
 }
 
-/** True when the file already carries a block we own. */
-export function hasOwnedSection(text: string, spec: SectionSpec): boolean {
-  return findOwnedSections(text, spec).length > 0;
-}
-
 /**
  * What one install run did.
  *
- * `installed` — the section is present for this spec (it was written, or it was
- * already there and we were not updating). `updated` — an existing block was
- * refreshed rather than a new one appended. `unchanged` — nothing was written,
- * so no mtime moved.
+ * `installed` — this call put the section on disk. False when the section was
+ * already there and we were not updating, which is why `cast install` then
+ * prints "up to date" (index.ts:9601) rather than "installed".
+ *
+ * `updated` — an existing block was refreshed in place rather than a new one
+ * appended.
+ *
+ * `unchanged` — nothing moved. From `applySnippet` that means the text it
+ * returns is byte-identical to the text it was given; from the file writers it
+ * means they skipped the write, so the mtime did not move.
  */
 export interface SnippetInstallResult {
   installed: boolean;
@@ -165,7 +166,15 @@ function replaceOwnedBlocks(
     // The block's end swallowed whatever blank lines separated it from the next
     // section, so re-emit exactly one — and none at end of file.
     const insert = body !== null && i === 0 ? (after === "" ? body : body + "\n") : "";
-    out = out.slice(0, blocks[i].start) + insert + after;
+    let head = out.slice(0, blocks[i].start);
+    // A block's window covers the blank lines BELOW it, never the one above.
+    // Remove a block that ended the file and that blank line is orphaned: the
+    // file ends "last line\n\n", and re-enabling the snippet then appends onto
+    // two newlines instead of one, so a disable/enable cycle grows the file by a
+    // line every time. Nothing follows it to separate, so end the file after its
+    // last real line.
+    if (insert === "" && after === "") head = head.replace(/\n+$/, "\n");
+    out = head + insert + after;
   }
   return out;
 }
@@ -337,12 +346,6 @@ For a single image — a screenshot, a chart render — use \`cast image <file-o
 ${PUBLISH_SNIPPET_END}
 `;
 
-// One explanation of how agents name codecast objects in prose, shared by every
-// feature that introduces one (sessions, tasks, plans, triggers, docs). Each of
-// those snippets used to teach its own object's id in its own words — or not at
-// all, which is why agents pasted raw 32-char ids for triggers. Installed once
-// per file and refreshed in place, so having several features enabled still
-// yields exactly one copy.
 export const BROWSER_SNIPPET_END = "<!-- /codecast-browser -->";
 export const BROWSER_SNIPPET = `
 ## Browser
@@ -390,6 +393,12 @@ export function installBrowserSnippet(update = false): SnippetInstallResult {
   return installSectionToTargets(BROWSER_SECTION, BROWSER_SNIPPET, update);
 }
 
+// One explanation of how agents name codecast objects in prose, shared by every
+// feature that introduces one (sessions, tasks, plans, triggers, docs). Each of
+// those snippets used to teach its own object's id in its own words — or not at
+// all, which is why agents pasted raw 32-char ids for triggers. Installed once
+// per file and refreshed in place, so having several features enabled still
+// yields exactly one copy.
 export const REFERENCES_SNIPPET_END = "<!-- /codecast-references -->";
 export const REFERENCES_SNIPPET = `
 ## Referencing objects

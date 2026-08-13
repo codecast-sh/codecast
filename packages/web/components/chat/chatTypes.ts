@@ -58,4 +58,6 @@ export type ChatChannelView = {
   mentionCount?: number;
   muted?: boolean;
   isPrivate?: boolean;
+  /** The channel's team — the mention scope for its composer. */
+  teamId?: string;
 };

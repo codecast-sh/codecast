@@ -1,0 +1,36 @@
+Usage: cast install [options] [snippet]
+
+Install or manage agent capability snippets in your CLAUDE.md / ~/.claude config.
+
+Run with no argument for the interactive wizard, or name one snippet to install
+just that one (non-interactive). Add --disable to turn a snippet off.
+
+Snippets:
+  memory        Cross-session recall (cast search / context / feed)
+  messaging     Session-to-session messages (cast send)
+  forks         Branch or spawn sessions into the inbox
+  tasks         Work tracking for agents (cast task / plan)
+  triggers      Delayed, recurring, and event-driven agent runs (cast trigger)
+  workflows     Execution graphs with approval gates (cast workflow)
+  visual        Inline HTML visuals from agents (cast-canvas)
+  publish       Shareable published pages (cast publish)
+  state         A pinned, agent-maintained status per thread (cast state)
+  browser       Drive a real Chrome (cast browser)
+  orchestration Multi-agent plan execution (/orchestrate)
+  stable        Inject recent session history into every new conversation
+
+Examples:
+  cast install                      Interactive wizard (all snippets)
+  cast install --all                Install everything, no prompts
+  cast install workflows            Install just the Workflows snippet
+  cast install workflows --disable  Turn the Workflows snippet off
+  cast install --disable            Turn all snippets off
+
+Arguments:
+  snippet     install just one snippet by name (e.g. workflows); omit for the
+              interactive wizard
+
+Options:
+  --all       Enable all snippets without prompting
+  --disable   Disable the named snippet (or all snippets when none is named)
+  -h, --help  display help for command

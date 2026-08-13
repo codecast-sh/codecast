@@ -32,21 +32,23 @@ export function useConversationCommentsSync(conversationId: string | undefined):
 }
 
 export type CommentActions = {
-  addComment: (input: { content: string; messageId?: string; parentCommentId?: string }) => Promise<void>;
+  addComment: (input: { content: string; messageId?: string; parentCommentId?: string; filePath?: string; lineNumber?: number }) => Promise<void>;
   editComment: (commentId: string, content: string) => void;
   deleteComment: (commentId: string) => Promise<void>;
-  askAgent: (messageId?: string) => Promise<void>;
+  askAgent: (messageId?: string, fileAnchor?: { filePath: string; lineNumber?: number }) => Promise<void>;
 };
 
 export function useCommentActions(conversationId: string | undefined): CommentActions {
   const canQuery = !!conversationId && isConvexId(conversationId);
   const addComment = useCallback(
-    async (input: { content: string; messageId?: string; parentCommentId?: string }) => {
+    async (input: { content: string; messageId?: string; parentCommentId?: string; filePath?: string; lineNumber?: number }) => {
       if (!input.content.trim() || !canQuery) return;
       try {
         await useInboxStore.getState().addComment(conversationId!, input.content, {
           messageId: input.messageId,
           parentCommentId: input.parentCommentId,
+          filePath: input.filePath,
+          lineNumber: input.lineNumber,
         });
       } catch (error) {
         if (!isParkedDispatchError(error)) throw error;
@@ -71,10 +73,14 @@ export function useCommentActions(conversationId: string | undefined): CommentAc
       if (!isParkedDispatchError(error)) throw error;
     }
   }, []);
-  const askAgent = useCallback(async (messageId?: string) => {
+  const askAgent = useCallback(async (messageId?: string, fileAnchor?: { filePath: string; lineNumber?: number }) => {
     if (!canQuery) return;
     try {
-      await useInboxStore.getState().askAgentInThread(conversationId!, { messageId });
+      await useInboxStore.getState().askAgentInThread(conversationId!, {
+        messageId,
+        filePath: fileAnchor?.filePath,
+        lineNumber: fileAnchor?.lineNumber,
+      });
     } catch (error) {
       if (!isParkedDispatchError(error)) throw error;
     }
@@ -85,6 +91,7 @@ export function useCommentActions(conversationId: string | undefined): CommentAc
 export type ConversationComments = CommentActions & {
   global: CommentThread;
   anchored: CommentThread[];
+  files: CommentThread[];
   countByMessageId: Map<string, number>;
   totalCount: number;
 };
@@ -103,7 +110,35 @@ export function useConversationComments(conversationId: string | undefined): Con
     return m;
   }, [grouped]);
   const actions = useCommentActions(conversationId);
-  return { ...actions, global: grouped.global, anchored: grouped.anchored, countByMessageId, totalCount: mine.length };
+  return { ...actions, global: grouped.global, anchored: grouped.anchored, files: grouped.files, countByMessageId, totalCount: mine.length };
+}
+
+const EMPTY_FILE_COMMENTS: Comment[] = [];
+
+// Read one FILE's durable line comments (used by DiffView to render code-anchored
+// threads inline under their diff lines). Only subscribes when a filePath is
+// given, so inert diffs pay nothing.
+export function useFileComments(conversationId: string | undefined, filePath: string | undefined) {
+  const mine = useInboxStore(
+    useShallow((s) =>
+      conversationId && filePath
+        ? (Object.values(s.comments) as Comment[]).filter(
+            (c) => c.conversation_id === conversationId && !c.message_id && c.file_path === filePath,
+          )
+        : EMPTY_FILE_COMMENTS,
+    ),
+  );
+  return useMemo(() => {
+    const byLine = new Map<number, Comment[]>();
+    for (const c of mine) {
+      const line = c.line_number ?? 0;
+      const arr = byLine.get(line);
+      if (arr) arr.push(c);
+      else byLine.set(line, [c]);
+    }
+    for (const arr of byLine.values()) arr.sort((a, b) => a.created_at - b.created_at);
+    return byLine;
+  }, [mine]);
 }
 
 // Read just ONE message's anchored thread (used by the inline per-message thread).

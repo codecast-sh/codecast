@@ -4,6 +4,7 @@ import { useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore, ProjectItem } from "../../store/inboxStore";
 import { useSyncProjects } from "../../hooks/useSyncProjects";
+import { filterToWorkspace } from "../../lib/workspaceScope";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { toast } from "sonner";
@@ -218,14 +219,19 @@ function ProjectListContent() {
   useSyncProjects();
 
   const projects = useInboxStore((s) => s.projects);
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const [showCreate, setShowCreate] = useState(false);
   const [showDone, setShowDone] = useState(false);
 
+  // Strict workspace boundary at read time: `store.projects` caches rows from
+  // every workspace (the sync overlay never prunes on team switch, IDB persists
+  // them across reloads), so the view must re-assert the active workspace — a
+  // team view shows only that team's projects, personal shows only teamless.
   const allProjects = useMemo(() => {
-    const list = Object.values(projects);
+    const list = filterToWorkspace(Object.values(projects), activeTeamId);
     list.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
     return list;
-  }, [projects]);
+  }, [projects, activeTeamId]);
 
   const grouped = useMemo(() => {
     const result: Record<string, ProjectItem[]> = {};

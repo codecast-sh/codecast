@@ -1289,3 +1289,121 @@
 .ch-edit-cancel {
   color: var(--sol-text-muted);
 }
+
+/* ── Channel management menu (ChannelMenu.tsx) ──────────────────────────── */
+
+.ch-channel-menu {
+  position: fixed;
+  z-index: 60;
+  width: 252px;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  border-radius: 8px;
+  background: var(--sol-card);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--sol-text) 20%, transparent);
+  font-size: 12px;
+}
+
+.ch-channel-menu-head {
+  padding: 5px 8px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sol-text);
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ch-channel-menu-label {
+  padding: 4px 8px 2px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sol-text-muted);
+}
+
+.ch-channel-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 5px;
+  text-align: left;
+  color: var(--sol-text-secondary);
+  transition: background 100ms ease;
+}
+
+.ch-channel-menu-item:hover {
+  background: color-mix(in srgb, var(--sol-border) 20%, transparent);
+}
+
+.ch-channel-menu-check {
+  flex: 0 0 auto;
+  width: 14px;
+  display: grid;
+  place-items: center;
+  margin-top: 1px;
+  color: var(--sol-blue);
+}
+
+.ch-channel-menu-item-label {
+  display: block;
+  font-size: 12px;
+  color: var(--sol-text);
+}
+
+.ch-channel-menu-hint {
+  display: block;
+  font-size: 10.5px;
+  color: var(--sol-text-muted);
+}
+
+.ch-channel-menu-danger .ch-channel-menu-item-label {
+  color: var(--sol-red);
+}
+
+.ch-channel-menu-danger .ch-channel-menu-check {
+  color: var(--sol-red);
+}
+
+.ch-channel-menu-rule {
+  height: 1px;
+  margin: 4px 2px;
+  background: color-mix(in srgb, var(--sol-border) 30%, transparent);
+}
+
+.ch-channel-menu-edit {
+  display: flex;
+  gap: 5px;
+  padding: 5px 6px;
+}
+
+.ch-channel-menu-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+  border-radius: 5px;
+  background: var(--sol-bg);
+  color: var(--sol-text);
+  font-size: 12px;
+}
+
+.ch-channel-menu-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--sol-blue) 60%, transparent);
+}
+
+.ch-channel-menu-save {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: 5px;
+  background: var(--sol-blue);
+  color: var(--sol-bg);
+  font-size: 11px;
+  font-weight: 600;
+}

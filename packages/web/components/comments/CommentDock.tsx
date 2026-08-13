@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { MessageSquare, CornerUpRight, Quote } from "lucide-react";
+import { MessageSquare, CornerUpRight, Quote, FileCode2 } from "lucide-react";
 import { SlotActions } from "../workspace/Slot";
 import { useInboxStore, selectCommentRailOpen } from "../../store/inboxStore";
+import { useDiffViewerStore } from "../../store/diffViewerStore";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { isConvexId } from "../../lib/entityLinks";
 import { cleanContent } from "../../lib/conversationProcessor";
@@ -125,6 +126,28 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
             it shares this edge with. */}
         <SlotActions slot="context" onClose={() => setOpen(false)} />
       </header>
+
+      {comments.files.length > 0 && (
+        <div className="cc-railx-anchored">
+          <div className="cc-railx-anchored-label">On code</div>
+          {comments.files.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              className="cc-railx-anchored-row"
+              title="Open the diff panel — the thread renders under its line"
+              onClick={() => useDiffViewerStore.getState().setDiffPanelOpen(true)}
+            >
+              <FileCode2 className="w-3 h-3 shrink-0 text-sol-cyan/70" />
+              <span className="cc-railx-anchored-snip font-mono">
+                {t.filePath}{t.lineNumber ? `:${t.lineNumber}` : ""}
+              </span>
+              <span className="cc-railx-anchored-count">{t.comments.length}</span>
+              <CornerUpRight className="w-3 h-3 shrink-0 opacity-50" />
+            </button>
+          ))}
+        </div>
+      )}
 
       {comments.anchored.length > 0 && (
         <div className="cc-railx-anchored">

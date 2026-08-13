@@ -489,11 +489,29 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     setIsMobile(window.innerWidth < 768);
   });
 
+  // The route-default effects below adjust the rail when you NAVIGATE between
+  // surfaces. A tab switch also changes `pathname` (it reports the active
+  // tab's path), but revealing an already-open tab is not navigation — the
+  // frame must stay pixel-identical — so each effect stands down when the
+  // pathname change arrived with a tab switch. The ref is updated in a
+  // separate effect declared AFTER the consumers: effects run in declaration
+  // order, so during a switch they still compare against the pre-switch tab.
+  const prevActiveTabRef = useRef(s.activeTabId);
+
   useWatchEffect(() => {
     const wasInbox = prevWasInboxRef.current;
     prevWasInboxRef.current = isOnInboxPage;
+    if (prevActiveTabRef.current !== s.activeTabId) return;
+    const store = useInboxStore.getState();
+    // Entering the inbox opens the session list beside it (unless you closed
+    // it by hand). Runs on first mount too — a boot landing on /inbox seeds
+    // the rail for a fresh workspace.
+    if (!wasInbox && isOnInboxPage) {
+      if (!selectSessionRailOpen(store) && !selectSessionRailUserClosed(store)) {
+        store.toggleSidePanel();
+      }
+    }
     if (wasInbox && !isOnInboxPage) {
-      const store = useInboxStore.getState();
       // The Favorites view is a mode of the inbox's session list; leaving the
       // inbox drops back to the active desk so the rail isn't stuck on the shelf.
       if (store.showFavorites) store.setShowFavorites(false);
@@ -511,6 +529,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     const prev = prevPathnameRef.current;
     prevPathnameRef.current = pathname;
     if (!prev || prev === pathname) return;
+    if (prevActiveTabRef.current !== s.activeTabId) return;
     const store = useInboxStore.getState();
     if (selectSessionRailUserClosed(store)) return;
     const wasConvPage = prev.includes("/conversation/");
@@ -529,6 +548,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       }
     }
   }, [pathname, isOnInboxPage]);
+
+  // Keep LAST of the trio: the consumers above must see the pre-switch tab id.
+  useWatchEffect(() => {
+    prevActiveTabRef.current = s.activeTabId;
+  }, [s.activeTabId]);
 
   const resolveNewSessionContext = useCallback(() => {
     const store = useInboxStore.getState();
