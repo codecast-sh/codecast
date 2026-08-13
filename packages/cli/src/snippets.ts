@@ -373,7 +373,7 @@ cast browser text                  # visible text, for reading rather than actin
 
 **Debugging a web app**: \`cast browser console\` and \`cast browser network --failed\` report what the page logged and requested, including errors thrown before you looked. Capture is armed automatically; when it starts after the page has already run it says so, and \`cast browser reload\` catches the whole load.
 
-**Showing the human what you saw**: \`cast browser shot --share\` uploads the screenshot and prints markdown that renders inline in the thread. Never link a local path — their browser cannot read files on this machine.
+**Showing the human what you saw**: \`cast browser shot\` puts the picture straight into the conversation, under the command that took it — no flag needed. Add \`--share\` when you also want a link you can paste elsewhere, with \`--alt\` to caption it. Never link a local path — their browser cannot read files on this machine.
 
 **One browser, many agents.** Every agent on this machine drives the SAME Chrome, so tabs are owned per session: commands act on YOUR tab, and \`cast browser tabs\` marks it \`*\` and other agents' tabs \`~\`. Open your own with \`cast browser open --new-tab <url>\` and pass \`--tab <id>\` when you want to be certain. If a page suddenly looks wrong, run \`cast browser tabs\` before you debug the app — a tab someone else navigated looks exactly like a broken feature.
 
