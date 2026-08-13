@@ -70,6 +70,10 @@ export default defineSchema({
       permission_request: v.boolean(),
       session_idle: v.optional(v.boolean()),
       session_error: v.optional(v.boolean()),
+      // Routed by notificationRouter's PREFERENCE_MAP, so it has to be storable
+      // here — a preference key the row cannot hold is a mute that silently
+      // never applies.
+      session_assigned: v.optional(v.boolean()),
       task_activity: v.optional(v.boolean()),
       doc_activity: v.optional(v.boolean()),
       plan_activity: v.optional(v.boolean()),
@@ -3168,10 +3172,12 @@ export default defineSchema({
       v.literal("conversation"),
       v.literal("artifact"),
       // Chat notifications never fan out over this table — the sender computes the
-      // recipient list and re-checks channel access for each one, because `emit`'s
-      // subscription fan-out does not re-check access and a chat preview carries
-      // real message text. This member exists only so the notification and
-      // subscription entity unions stay one shape.
+      // recipient list and re-checks channel access for each one, because a chat
+      // preview carries real message text. This member exists only so the
+      // notification and subscription entity unions stay one shape. Should a row
+      // ever appear, `emit` re-checks team membership for a chat_channel entity
+      // and both membership-removal paths (`teams.removeMember` and
+      // `teams.removeFromTeam`) delete the rows of a departing member.
       v.literal("chat_channel")
     ),
     entity_id: v.string(),
@@ -3246,12 +3252,15 @@ export default defineSchema({
   //    from `by_thread_created`, so a reply never re-versions the fattest row in
   //    the table and a tombstoned reply cannot leave a stale count behind.
   //
-  // EVERY table here carries `updated_at` and EVERY patch must bump it. The web
-  // store's sync layer keeps the previous object identity when no *scalar* field
-  // changed (syncProtocol.scalarFieldsEqual deliberately skips arrays and
-  // objects), so a patch that only touches `mentions` or `attachments` would be
-  // silently dropped on the way to the UI. chat.ts funnels all writes through
-  // `patchChat` so this cannot be forgotten.
+  // The three PATCHED tables — channels, messages, reads — carry `updated_at`
+  // and EVERY patch must bump it. The web store's sync layer keeps the previous
+  // object identity when no *scalar* field changed
+  // (syncProtocol.scalarFieldsEqual deliberately skips arrays and objects), so a
+  // patch that only touches `mentions` or `attachments` would be silently
+  // dropped on the way to the UI. chat.ts funnels all writes through `patchChat`
+  // so this cannot be forgotten, and its signature admits exactly those three
+  // table ids. `chat_reactions` is insert-or-delete only and carries no
+  // `updated_at`: there is no patch to bump.
 
   chat_channels: defineTable({
     team_id: v.id("teams"),
@@ -3306,6 +3315,14 @@ export default defineSchema({
     // same client_id returns the existing row instead of inserting a twin (and,
     // critically, does not wake the anchor a second time).
     client_id: v.optional(v.string()),
+    // "agent" = this line was typed by a codecast session running as its human
+    // host, not by the human. The author is still that human (`user_id`), so it
+    // is not `author_kind` — that word is reserved for the anchor's own replies.
+    // It exists so the anchor wake path can refuse to run a billed turn on
+    // somebody's laptop because a machine asked for one. Self-declared by the
+    // CLI, so it is an honest downgrade rather than a boundary: a caller who
+    // omits it is treated exactly as a human, which is what it already was.
+    origin: v.optional(v.literal("agent")),
     created_at: v.number(),
     updated_at: v.number(),
     edited_at: v.optional(v.number()),
@@ -3324,6 +3341,15 @@ export default defineSchema({
     // caller to be authorized for that anchor — otherwise any api_token holder
     // could overwrite any message and author content under the bot's face.
     agent_anchor_id: v.optional(v.id("anchors")),
+    // When the wake's deadline will declare the answer missing. Lets the client
+    // show an honest countdown on the thinking row instead of a bare shimmer.
+    agent_deadline_at: v.optional(v.number()),
+    // Thread-level switch for the anchor, set on the thread ROOT only. Absent
+    // means the default: the anchor answers a plain reply in a thread it is
+    // already part of, so asking a follow-up does not mean re-typing its name.
+    // `false` is a member saying stop — nothing but an explicit @mention wakes it
+    // in that thread again (and that mention flips this back to true).
+    anchor_follow: v.optional(v.boolean()),
     fork_conversation_id: v.optional(v.id("conversations")),
   })
     .index("by_channel_created", ["channel_id", "created_at"])

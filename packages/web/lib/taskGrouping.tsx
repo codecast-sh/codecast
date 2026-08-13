@@ -14,8 +14,8 @@
 import { ReactNode } from "react";
 import Link from "next/link";
 import { User, MessageSquare, FolderKanban, Tag, ListChecks } from "lucide-react";
-import { TaskItem, ProjectItem } from "../store/inboxStore";
-import { ListGroup } from "../components/GenericListView";
+import type { TaskItem, ProjectItem } from "../store/inboxStore";
+import type { ListGroup } from "../components/GenericListView";
 import { getLabelColor } from "./labelColors";
 import { TASK_STATUS, TASK_STATUS_ORDER } from "../components/TaskStatusBadge";
 
@@ -214,7 +214,10 @@ export const TASK_AXIS_KEYS = ["status", "project", "plan", "assignee", "label",
  *  unrecognised value) yields an empty list, meaning a flat list. */
 export function parseTaskGroup(group: string): string[] {
   if (!group || group === "none") return [];
-  const axes = group.split("+").filter((a) => a in TASK_AXES);
+  // A space is accepted alongside "+": a shared link carries the separator
+  // percent-encoded, but a hand-edited one keeps a literal "+", which a query
+  // parser hands back as " ". Both should mean the same grouping.
+  const axes = group.split(/[+ ]/).filter((a) => a in TASK_AXES);
   // Repeats would produce a header like "Open · Open"; keep the first.
   return [...new Set(axes)];
 }
@@ -223,7 +226,7 @@ export function parseTaskGroup(group: string): string[] {
 export function isValidTaskGroup(group: string): boolean {
   if (group === "none") return true;
   if (!group) return false;
-  const parts = group.split("+");
+  const parts = group.split(/[+ ]/);
   return parts.length > 0 && parts.every((p) => p in TASK_AXES);
 }
 

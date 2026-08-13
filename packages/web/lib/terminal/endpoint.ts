@@ -36,6 +36,19 @@ const CACHE_KEY = "cast_term_endpoint";
 // the panel at a standalone terminal server (packages/cli terminal dev server)
 // without a daemon round-trip.
 const OVERRIDE_KEY = "CAST_TERM_ENDPOINT";
+// Dev override: `localStorage.CAST_TERM_FORCE_RELAY = "1"` makes discovery
+// report every pane as living elsewhere, which is the only way to exercise the
+// relay transport on a single machine — the loopback probe would otherwise
+// always win. Twin of CAST_TERM_ENDPOINT above.
+const FORCE_RELAY_KEY = "CAST_TERM_FORCE_RELAY";
+
+function forceRelay(): boolean {
+  try {
+    return localStorage.getItem(FORCE_RELAY_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 const RESULT_POLL_MS = 400;
 const RESULT_POLL_TIMEOUT_MS = 10_000;
 const PROBE_TIMEOUT_MS = 1500;
@@ -171,16 +184,28 @@ export async function getTerminalEndpoint(
 ): Promise<TerminalEndpoint | null> {
   const override = readOverride();
   if (override) return override;
+  if (forceRelay()) {
+    lastFailure = "other-device";
+    return null;
+  }
 
   const want = opts?.deviceId;
   if (!opts?.force) {
     const cached = readCache();
-    // A cached endpoint for the WRONG machine is not a hit: the pane we were
-    // asked about isn't there, and probing it successfully would be the most
-    // misleading possible outcome.
-    if (cached && (!want || cached.deviceId === want) && (await probeEndpoint(cached)) !== null) {
-      lastFailure = "none";
-      return cached;
+    // A cached endpoint that still answers on loopback tells us which machine
+    // this browser is on. That settles a targeted lookup either way:
+    //   same device → it's local, hand back the endpoint
+    //   other device → it CANNOT be local, so say so now instead of spending
+    //                  the discovery budget proving a machine isn't itself
+    // Probing the wrong machine's cached endpoint and returning it would be
+    // the most misleading possible outcome, so the id check comes first.
+    if (cached && (await probeEndpoint(cached)) !== null) {
+      if (!want || cached.deviceId === want) {
+        lastFailure = "none";
+        return cached;
+      }
+      lastFailure = "other-device";
+      return null;
     }
   }
 

@@ -10,7 +10,7 @@ import {
   CheckCircle, Terminal,
 } from "lucide-react";
 
-type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity";
+type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity" | "chat_activity";
 
 const NOTIF_SECTIONS = [
   {
@@ -29,6 +29,7 @@ const NOTIF_SECTIONS = [
     items: [
       { key: "mention" as NotifType, label: "Mentions", desc: "When someone @mentions you" },
       { key: "artifact_activity" as NotifType, label: "Published Pages", desc: "When someone comments on a page you published" },
+      { key: "chat_activity" as NotifType, label: "Team Chat", desc: "Thread replies and @here in a channel (a direct @you rides Mentions)" },
     ],
   },
   {
@@ -52,6 +53,7 @@ const DEFAULT_PREFS = {
   doc_activity: true,
   plan_activity: true,
   artifact_activity: true,
+  chat_activity: true,
 };
 
 export default function NotificationsSettingsPage() {

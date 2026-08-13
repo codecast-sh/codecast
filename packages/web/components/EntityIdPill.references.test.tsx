@@ -101,6 +101,30 @@ mock.module("next/link", () => ({
   ),
 }));
 
+// A task the CLIENT knows about but this fake server never answers for — the
+// local-first seed. `ct-50001` is absent from ROWS above on purpose.
+const SEEDED_TASK = {
+  _id: "px72qtvpbmmrmwcjqmhzawejsx8bq9gm",
+  short_id: "ct-50001",
+  title: "Seeded from the local store",
+  status: "open",
+};
+const realStore = await import("../store/inboxStore");
+mock.module("../store/inboxStore", () => ({
+  ...realStore,
+  useInboxStore: {
+    getState: () => ({
+      tasks: { [SEEDED_TASK._id]: SEEDED_TASK },
+      plans: {},
+      docs: {},
+      projects: {},
+      conversations: {},
+      sessions: {},
+      mentionIndex: { tasks: {}, plans: {}, docs: {} },
+    }),
+  },
+}));
+
 const { renderToStaticMarkup } = await import("react-dom/server");
 const { default: ReactMarkdown } = await import("react-markdown");
 const { entityRemarkPlugins } = await import("../lib/remarkEntityIds");
@@ -201,6 +225,29 @@ describe("inline task and plan references", () => {
   test("a task nobody can read keeps its short id", () => {
     // webGet returns null for a task outside the reader's workspace. The pill
     // must not go blank or claim a title it never got — it falls back to the id.
+    const html = render("Ask them about ct-99999.");
+    expect(html).toContain("ct-99999");
+  });
+});
+
+describe("local-first seeding", () => {
+  // Without this, every task mention in a conversation renders "ct-…" first and
+  // swaps to the title a round-trip later — a visible flip and reflow on every
+  // mount, on a client that already had the answer in memory.
+  test("a reference paints its title on the first render, before any server answer", () => {
+    const html = render("Picked up ct-50001 this morning.");
+    expect(pillText(html)).toBe("Seeded from the local store");
+    expect(html).not.toContain(">ct-50001<");
+  });
+
+  test("the server row still wins once it lands", () => {
+    // ct-38940 is served AND could be seeded; the served row is the fresher of
+    // the two, so it is the one that shows.
+    const html = render("Ticks up on ct-38940 now.");
+    expect(pillText(html)).toBe("Retry queue for failed webhooks");
+  });
+
+  test("an id in neither the store nor the server still degrades to the id", () => {
     const html = render("Ask them about ct-99999.");
     expect(html).toContain("ct-99999");
   });

@@ -3,6 +3,8 @@ import { StyleSheet } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { useQuery } from 'convex/react';
 import { api as _api } from '@codecast/convex/convex/_generated/api';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { findEntityInStore } from '@codecast/web/lib/liveEntities';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme } from '@/constants/Theme';
@@ -84,7 +86,18 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   const trigger = useQuery(api.agentTasks.webGet, type === 'trigger' && queryArgs ? queryArgs : 'skip');
   const doc = useQuery(api.docs.webGet, type === 'doc' && looksConvex ? { id: rawId } : 'skip');
 
-  const entity: any = type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : undefined;
+  const served: any = type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : undefined;
+
+  // Local-first, same rule as web: the client usually already holds this row, so
+  // paint the title on the FIRST frame instead of flashing the raw id until the
+  // query answers. Read once and non-reactively (getState, not a subscription) —
+  // a pill must not re-render on the churn of a collection with thousands of
+  // rows; the live query above is what keeps the label fresh.
+  const seed = React.useMemo(
+    () => (type ? findEntityInStore(useInboxStore.getState(), type, rawId) : undefined),
+    [type, rawId],
+  );
+  const entity: any = served ?? seed;
 
   // Unknown id shape, a Convex id resolving to no entity table, or the
   // transient state while resolveIdType is in flight.

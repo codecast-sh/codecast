@@ -37,6 +37,7 @@ const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
+const Chat = lazy(() => import("@/app/chat/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Explore = lazy(() => import("@/app/explore/page"));
 const Timeline = lazy(() => import("@/app/timeline/page"));
@@ -158,6 +159,11 @@ export function App() {
               <Route path="inbox" element={<E name="Inbox"><Inbox /></E>} />
               <Route path="feed" element={<E name="Feed"><Feed /></E>} />
               <Route path="crosstalk" element={<E name="Crosstalk"><Crosstalk /></E>} />
+              {/* Team chat. The bare route picks the busiest channel; the
+                  parameterized one is the permalink the server mints
+                  (convex/chatText.ts chatPermalink → /chat/<id>?m=<msg>). */}
+              <Route path="chat" element={<E name="Chat"><Chat /></E>} />
+              <Route path="chat/:channelId" element={<E name="Chat"><Chat /></E>} />
               <Route path="search" element={<E name="Search"><Search /></E>} />
               <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
               <Route path="conversation/:id" element={<E name="Conversation"><Conversation /></E>} />

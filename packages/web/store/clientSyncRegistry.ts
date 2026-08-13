@@ -120,6 +120,44 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     localFirst: true,
   },
+  // Team chat. Persisted so a channel opens with its last page already on screen
+  // and an unsent message survives a reload, and deferred because a chat page is
+  // never the first paint.
+  //
+  // Deliberately NOT localFirst. Auto-pending protects a field until the server
+  // echoes the identical value, and chat's interesting fields are server clock
+  // stamps (created_at / edited_at / deleted_at) the client cannot predict — a
+  // pending entry over one of those can never retire, so it would mask the real
+  // row forever. Chat reconciles by delta overlay + a client_id supersede
+  // instead, and plants its two real deletion tombstones by hand
+  // (store/chatSlice.ts explains both).
+  chatChannels: {
+    persistence: { kind: "collection", key: "chatChannels" },
+    hydration: { phase: "deferred" },
+  },
+  chatMessages: {
+    persistence: { kind: "collection", key: "chatMessages" },
+    hydration: { phase: "deferred" },
+    // A row must know which channel it belongs to; anything else is a foreign
+    // document that would render as a message with no home.
+    validRow: (row: any) => typeof row?.channel_id === "string" && typeof row?.content === "string",
+  },
+  chatReactions: {
+    persistence: { kind: "collection", key: "chatReactions" },
+    hydration: { phase: "deferred" },
+  },
+  chatReads: {
+    persistence: { kind: "collection", key: "chatReads" },
+    hydration: { phase: "deferred" },
+  },
+  // The server's own per-channel unread numbers (chat.listChannels' rail). A
+  // small array, so a meta blob: it is the only honest count for a channel whose
+  // messages this client has never loaded, and having it at boot means the rail
+  // paints its badges before any query answers.
+  chatRail: {
+    persistence: { kind: "meta", key: "chatRail" },
+    hydration: { phase: "deferred" },
+  },
   notifications: {
     localFirst: true,
   },

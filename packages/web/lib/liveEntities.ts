@@ -27,6 +27,20 @@ type Member = { _id: string; name?: string; email?: string; image?: string; gith
 type AssigneeInfo = { name: string; image?: string; github_username?: string } | null;
 
 /**
+ * What we call a person. ONE rule, so a teammate with a GitHub handle and no
+ * display name is not "sarah" in chat and "sarah@example.com" on every task and
+ * doc chip. Chat's lib/chatViews calls this too.
+ */
+export function memberDisplayName(m: Member | null | undefined, fallback = "Unknown"): string {
+  return m?.name || m?.github_username || m?.email || fallback;
+}
+
+/** Their face: an uploaded image, else whatever GitHub has. */
+export function memberAvatarUrl(m: Member | null | undefined): string | undefined {
+  return m?.image || m?.github_avatar_url;
+}
+
+/**
  * Resolve a task/doc assignee's display info from the live team roster, keyed by
  * the (optimistically-updated) assignee id. The server-enriched `fallback` is
  * used only for ids not in the local roster, so a just-reassigned task shows the
@@ -40,9 +54,9 @@ export function resolveAssigneeInfo(
 ): AssigneeInfo {
   if (!assignee) return null;
   const m = teamMembers?.find((x) => x && x._id === assignee);
-  if (m) return { name: m.name || m.email || "Unknown", image: m.image || m.github_avatar_url, github_username: m.github_username };
+  if (m) return { name: memberDisplayName(m), image: memberAvatarUrl(m), github_username: m.github_username };
   if (currentUser && (assignee === currentUser._id || assignee === "me")) {
-    return { name: currentUser.name || currentUser.email || "Unknown", image: currentUser.image || currentUser.github_avatar_url, github_username: currentUser.github_username };
+    return { name: memberDisplayName(currentUser), image: memberAvatarUrl(currentUser), github_username: currentUser.github_username };
   }
   return fallback ?? { name: String(assignee) };
 }
@@ -224,4 +238,90 @@ export function docSearchText(
 ): string {
   if (!doc) return "";
   return [doc.display_title, doc.title, doc.source_file].filter(Boolean).join(" ");
+}
+
+// ---------------------------------------------------------------------------
+// Resolving a reference from what the client already knows
+//
+// An inline object reference (an EntityIdPill) shows the object's TITLE. The
+// title comes from a live Convex query, which takes a round-trip — and until it
+// lands the pill can only show the id, so every task/plan mention in a
+// conversation visibly flips from "ct-38940" to its name on mount.
+//
+// The client usually knows the answer already: the mention index holds a
+// lightweight snapshot of every task/plan/doc the user can reference (across
+// ALL their teams — that is what it is for), and the active-team collections
+// hold the full rows. Seeding the pill from those makes it correct on the first
+// frame, which is what local-first means here. The query still runs and still
+// wins once it answers.
+// ---------------------------------------------------------------------------
+
+export type StoreEntitySeed = {
+  _id?: string;
+  title?: string;
+  display_title?: string;
+  name?: string;
+  short_id?: string;
+  status?: string;
+};
+
+// short_id → row, memoized on the COLLECTION's identity. The store is a
+// mutative draft, so a collection keeps its reference until one of its rows
+// changes; the index is therefore built once per version and shared by every
+// pill on screen, instead of each one scanning thousands of rows.
+const shortIdIndexes = new WeakMap<object, Map<string, any>>();
+
+function byShortId(collection: Record<string, any> | undefined | null): Map<string, any> | null {
+  if (!collection) return null;
+  const cached = shortIdIndexes.get(collection);
+  if (cached) return cached;
+  const index = new Map<string, any>();
+  for (const row of Object.values(collection)) {
+    const sid = (row as any)?.short_id;
+    if (typeof sid === "string") index.set(sid.toLowerCase(), row);
+  }
+  shortIdIndexes.set(collection, index);
+  return index;
+}
+
+/** Look an id up in a collection by Convex id first, then by short id. */
+function lookup(collection: Record<string, any> | undefined | null, rawId: string): any {
+  if (!collection) return undefined;
+  return collection[rawId] ?? byShortId(collection)?.get(rawId.toLowerCase());
+}
+
+/**
+ * The object a reference names, as the local store already knows it — or
+ * undefined when the client has never seen it. Sessions resolve by their 7-char
+ * short id as well as their Convex id; triggers are not a store collection, so
+ * they always wait for the server.
+ */
+export function findEntityInStore(
+  state: any,
+  type: string,
+  rawId: string,
+): StoreEntitySeed | undefined {
+  if (!state || !rawId) return undefined;
+  const mention = state.mentionIndex;
+  switch (type) {
+    case "task":
+      return lookup(state.tasks, rawId) ?? lookup(mention?.tasks, rawId);
+    case "plan":
+      return lookup(state.plans, rawId) ?? lookup(mention?.plans, rawId);
+    case "doc":
+      return lookup(state.docs, rawId) ?? lookup(mention?.docs, rawId);
+    case "project":
+      return lookup(state.projects, rawId);
+    case "session": {
+      const short = rawId.slice(0, 7).toLowerCase();
+      return (
+        state.conversations?.[rawId]
+        ?? state.sessions?.[rawId]
+        ?? lookup(state.conversations, short)
+        ?? lookup(state.sessions, short)
+      );
+    }
+    default:
+      return undefined;
+  }
 }

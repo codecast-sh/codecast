@@ -16,7 +16,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
-import { CdpConnection, isCdpAlive, listTargets, type CdpTarget } from "./cdp.js";
+import { CdpConnection, CdpTimeout, isCdpAlive, listTargets, type CdpTarget } from "./cdp.js";
 import { browserHome, clonePath, chromeUserDataRoot, type ChromeChannel } from "./profile.js";
 import { findChromeBinary, chromeBinaryProbes, isPidAlive, ChromeNotFoundError } from "../workspace/chrome.js";
 
@@ -116,7 +116,11 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
   child.unref();
   if (!child.pid) throw new Error("Chrome spawn returned no pid");
 
-  const deadline = Date.now() + 20_000;
+  // Generous, because a cold start on a large cloned profile is slow and the
+  // failure mode of giving up early is nasty: Chrome keeps running and holds
+  // the profile's singleton lock, so every later launch silently hands off to
+  // the instance we already abandoned and appears to do nothing at all.
+  const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
     if (spawnError) throw new Error(`failed to spawn Chrome at '${bin}': ${(spawnError as Error).message}`);
     if (!isPidAlive(child.pid)) {
@@ -150,6 +154,40 @@ export async function freePort(): Promise<number> {
   });
 }
 
+/**
+ * Kill any Chrome still holding this user-data-dir.
+ *
+ * Chrome guards a profile directory with a singleton lock. A second launch
+ * against a locked directory does not fail — it forwards its command line to
+ * the running instance and exits, so the new `--remote-debugging-port` is
+ * quietly dropped and the CLI waits out its deadline against a browser that was
+ * never going to listen. Any orphan therefore has to go before we launch, or
+ * the profile is wedged until the user finds it in Activity Monitor.
+ */
+export function killStrayChrome(userDataDir: string, exceptPid?: number): number {
+  let killed = 0;
+  try {
+    const { execSync } = require("node:child_process") as typeof import("node:child_process");
+    const out = execSync(`pgrep -f ${JSON.stringify(`--user-data-dir=${userDataDir}`)}`, {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    for (const line of out.split("\n")) {
+      const pid = parseInt(line.trim(), 10);
+      if (!pid || pid === exceptPid || pid === process.pid) continue;
+      try {
+        process.kill(pid, "SIGTERM");
+        killed++;
+      } catch {
+        /* already gone */
+      }
+    }
+  } catch {
+    // pgrep exits non-zero when nothing matches — that is the common case.
+  }
+  return killed;
+}
+
 export async function stopInstance(state: InstanceState): Promise<void> {
   if (!isPidAlive(state.pid)) return;
   try {
@@ -179,17 +217,39 @@ export interface PageSession {
   targetId: string;
 }
 
-/** Attach to a target and turn on the domains every command needs. */
+/** Raised when a tab's renderer stops answering, with the way out. */
+export class TabUnresponsive extends Error {
+  constructor(targetId: string, detail: string) {
+    super(
+      `tab ${targetId.slice(0, 8)} is not responding (${detail}).\n` +
+        `  Its renderer is wedged — usually a modal JavaScript dialog waiting on a click, or a script in a tight loop.\n` +
+        `  Recover with: cast browser close --tab ${targetId.slice(0, 8)}   (or \`cast browser open --new-tab <url>\`)`,
+    );
+    this.name = "TabUnresponsive";
+  }
+}
+
+/**
+ * Attach to a target and turn on the domains every command needs.
+ *
+ * The enables are bounded well below the default. Each one needs the renderer
+ * to answer, so a wedged tab hangs here rather than anywhere interesting, and
+ * ten seconds is long enough for any healthy page. A blocked tab must fail fast
+ * and say how to recover, because the agent cannot see the window.
+ */
 export async function attachToTarget(conn: CdpConnection, targetId: string): Promise<PageSession> {
   const { sessionId } = await conn.send<{ sessionId: string }>("Target.attachToTarget", {
     targetId,
     flatten: true,
   });
-  await conn.send("Page.enable", {}, sessionId);
-  await conn.send("DOM.enable", {}, sessionId);
-  await conn.send("Runtime.enable", {}, sessionId);
-  await conn.send("Accessibility.enable", {}, sessionId);
-  await conn.send("Network.enable", {}, sessionId);
+  try {
+    for (const domain of ["Page", "DOM", "Runtime", "Accessibility", "Network"]) {
+      await conn.send(`${domain}.enable`, {}, sessionId, 10_000);
+    }
+  } catch (err) {
+    if (err instanceof CdpTimeout) throw new TabUnresponsive(targetId, err.message);
+    throw err;
+  }
   return { conn, sessionId, targetId };
 }
 
@@ -235,13 +295,26 @@ export function setActiveTarget(state: InstanceState, targetId: string): void {
  * long-poll subscriptions) would otherwise pin us open forever, so a request is
  * forgiven once it has been outstanding longer than `staleRequestMs`.
  */
+// Counts DOM changes in the page so `settle` can read one number instead of
+// diffing the tree. Re-installed after every navigation, since a new document
+// gets a new execution context and the old observer goes with the old one.
+const OBSERVER_SOURCE = `(() => {
+  if (window.__castMut) { window.__castMut.n = 0; return; }
+  const s = { n: 0 };
+  new MutationObserver(() => { s.n++; }).observe(document, {
+    childList: true, subtree: true, attributes: true, characterData: true,
+  });
+  window.__castMut = s;
+})()`;
+
 export async function settle(
   page: PageSession,
-  opts: { timeoutMs?: number; quietMs?: number; staleRequestMs?: number } = {},
+  opts: { timeoutMs?: number; quietMs?: number; staleRequestMs?: number; domOnlyQuietMs?: number } = {},
 ): Promise<{ settled: boolean; reason: string }> {
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const quietMs = opts.quietMs ?? 500;
   const staleRequestMs = opts.staleRequestMs ?? 5_000;
+  const domOnlyQuietMs = opts.domOnlyQuietMs ?? 1_500;
 
   const inflight = new Map<string, number>();
   let lastActivity = Date.now();
@@ -266,27 +339,15 @@ export async function settle(
   // A MutationObserver in the page is the cheapest DOM-quiet signal there is:
   // no polling of the tree, just a counter we read.
   await page.conn
-    .send(
-      "Runtime.evaluate",
-      {
-        expression: `(() => {
-          if (window.__castMut) { window.__castMut.n = 0; return; }
-          const s = { n: 0 };
-          new MutationObserver(() => { s.n++; }).observe(document, {
-            childList: true, subtree: true, attributes: true, characterData: true,
-          });
-          window.__castMut = s;
-        })()`,
-      },
-      page.sessionId,
-    )
+    .send("Runtime.evaluate", { expression: OBSERVER_SOURCE }, page.sessionId, 2_000)
     .catch(() => {
-      /* a page mid-navigation will reject; the next poll re-arms it */
+      /* mid-navigation this never answers; the poll below re-arms it */
     });
 
   const deadline = Date.now() + timeoutMs;
   let lastMutations = -1;
   let quietSince = 0;
+  let domQuietSince = 0;
 
   while (Date.now() < deadline) {
     await sleep(120);
@@ -307,17 +368,31 @@ export async function settle(
           returnByValue: true,
         },
         page.sessionId,
+        2_000,
       );
       [ready, mutations] = JSON.parse(r.result.value);
     } catch {
-      // Navigating out from under us — reset and keep waiting.
+      // Navigating out from under us. The old execution context is gone along
+      // with its observer, so re-arm and keep waiting rather than counting the
+      // new document's first paint as quiet.
       quietSince = 0;
+      domQuietSince = 0;
+      lastMutations = -1;
+      await page.conn
+        .send("Runtime.evaluate", { expression: OBSERVER_SOURCE }, page.sessionId, 2_000)
+        .catch(() => {});
       continue;
     }
 
     const domQuiet = mutations === lastMutations;
     lastMutations = mutations;
     const netQuiet = inflight.size === 0 && Date.now() - lastActivity > 150;
+
+    if (ready === "complete" && domQuiet) {
+      if (!domQuietSince) domQuietSince = Date.now();
+    } else {
+      domQuietSince = 0;
+    }
 
     if (ready === "complete" && netQuiet && domQuiet) {
       if (!quietSince) quietSince = Date.now();
@@ -327,6 +402,17 @@ export async function settle(
       }
     } else {
       quietSince = 0;
+    }
+
+    // A page can be finished while its network never is. Anything that polls —
+    // GitHub, Gmail, any app with live updates — keeps requests in flight for
+    // as long as it is open, so waiting for network silence there means always
+    // waiting the full timeout and then reporting failure on a page that
+    // rendered seconds ago. A DOM that has not changed for a good while is the
+    // honest signal that rendering is done.
+    if (domQuietSince && Date.now() - domQuietSince >= domOnlyQuietMs) {
+      off();
+      return { settled: true, reason: "render quiet (network still active)" };
     }
   }
 

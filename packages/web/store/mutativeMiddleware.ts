@@ -352,6 +352,13 @@ const RETRY_DELAYS = [1000, 2000, 4000];
 //    transient overload, carry neither marker, and stay retryable.
 export function isPermanentDispatchError(error: unknown): boolean {
   if (error instanceof CommandReceiptRejectedError) return true;
+  // A backend that says "retryable" outranks the text match below. A thrown
+  // ConvexError reaches the client as "Uncaught ConvexError: …" with its data
+  // attached, so a rate limit — the one refusal that WILL accept the identical
+  // payload a moment later — would otherwise be read as terminal and dropped
+  // from the outbox. Only an explicit `true` counts; everything else keeps the
+  // old, stricter reading.
+  if ((error as { data?: { retryable?: unknown } })?.data?.retryable === true) return false;
   const msg = String((error as { message?: unknown })?.message ?? error ?? "");
   return /\bUncaught\b|ArgumentValidationError|Could not find public function/.test(msg);
 }
@@ -376,6 +383,10 @@ export const MUST_DELIVER_ACTIONS = new Set([
   "editComment",
   "deleteComment",
   "askAgentInThread",
+  // A chat line is user-authored content on the same terms. chat.sendMessage
+  // dedupes on client_id (and refuses to wake an anchor twice for it), so
+  // re-driving it forever is safe.
+  "dispatchChatSend",
 ]);
 
 // Replay staleness ceiling. "Never drop user content" holds while delivery is

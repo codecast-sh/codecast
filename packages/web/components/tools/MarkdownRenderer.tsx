@@ -246,11 +246,14 @@ export const ImageRowParagraph: Components['p'] = ({ node, children, ...props })
 // single largest hot path during a session switch (measured: ~4.2s of self time,
 // 775 renders). None of these component overrides close over props, so they're
 // genuinely static.
-const MD_REHYPE_PLUGINS = [rehypeHighlight];
+export const MD_REHYPE_PLUGINS = [rehypeHighlight];
 // Runs after entity-id/mention rewriting so it cleans every prose text node,
 // including those inside generated pills. Module scope keeps the identity
 // stable, matching the perf note above.
-const MD_REMARK_PLUGINS = [...entityRemarkPlugins, remarkSanitizeInvisibleUnicode];
+// Exported so a surface that adds a plugin of its own (chat's mentions) BUILDS
+// FROM this list instead of from entityRemarkPlugins — the sanitizer is a
+// security control, and a surface that assembles its own list silently drops it.
+export const MD_REMARK_PLUGINS = [...entityRemarkPlugins, remarkSanitizeInvisibleUnicode];
 // Exported for surfaces that reuse this component set with a few overrides
 // (the vault reading view swaps `a`/`img` for wiki-link-aware variants).
 export const MD_COMPONENTS: Components = {

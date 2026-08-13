@@ -201,7 +201,7 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
   );
 }
 
-export function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose: () => void; teamMembers?: any[] | null; currentUser?: any }) {
+export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }: { onClose: () => void; teamMembers?: any[] | null; currentUser?: any; defaults?: { project_id?: string; plan_id?: string } | null }) {
   const createTask = useInboxStore((s) => s.createTask);
   const workspaceArgs = useWorkspaceArgs();
 
@@ -252,6 +252,10 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose
       assignee: assignee || undefined,
       labels: labels.length > 0 ? labels : undefined,
       ...wsArgs,
+      // Where the modal was opened from — a project's own list files the task
+      // into that project rather than into the unfiled pile.
+      ...(defaults?.project_id ? { project_id: defaults.project_id } : {}),
+      ...(defaults?.plan_id ? { plan_id: defaults.plan_id } : {}),
     };
     // Through the shared helper: mints a client_key so the stub altKey-supersedes
     // to the real row (no lingering duplicate), and toasts on a server refusal.
@@ -265,7 +269,7 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose
     } else {
       onClose();
     }
-  }, [title, priority, status, assignee, labels, createMore, createTask, onClose, workspaceArgs]);
+  }, [title, priority, status, assignee, labels, createMore, createTask, onClose, workspaceArgs, defaults]);
 
   return (
     <div

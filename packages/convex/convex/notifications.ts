@@ -5,6 +5,7 @@ import { enqueuePush } from "./pushRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { isConversationTeamVisible } from "./privacy";
+import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./notificationRouter";
 import { isAgentSpawnedConversation } from "./ccAccountsShared";
 import { listSessionOwnerIds } from "./sessionOwners";
 import {
@@ -164,38 +165,17 @@ export const notifyTeamSessionStart = internalMutation({
 // an arbitrary-text notification to any user (spam/phishing). Real notifications
 // are created by the internal mutations and server-side inserts in this file and
 // in agentTasks/notificationRouter.
+// The unions come from notificationRouter, which is where they are declared for
+// `emit`. Two hand-maintained copies of the same list is how this one fell three
+// types behind and would have rejected a caller writing a legitimate row.
 export const create = internalMutation({
   args: {
     recipient_user_id: v.id("users"),
-    type: v.union(
-      v.literal("mention"),
-      v.literal("comment_reply"),
-      v.literal("conversation_comment"),
-      v.literal("team_invite"),
-      v.literal("session_idle"),
-      v.literal("permission_request"),
-      v.literal("session_error"),
-      v.literal("session_assigned"),
-      v.literal("team_session_start"),
-      v.literal("task_completed"),
-      v.literal("task_failed"),
-      v.literal("task_assigned"),
-      v.literal("task_status_changed"),
-      v.literal("task_commented"),
-      v.literal("doc_updated"),
-      v.literal("doc_commented"),
-      v.literal("plan_status_changed"),
-      v.literal("plan_task_completed")
-    ),
+    type: NOTIFICATION_TYPE,
     actor_user_id: v.optional(v.id("users")),
     comment_id: v.optional(v.id("comments")),
     conversation_id: v.optional(v.id("conversations")),
-    entity_type: v.optional(v.union(
-      v.literal("task"),
-      v.literal("doc"),
-      v.literal("plan"),
-      v.literal("conversation")
-    )),
+    entity_type: v.optional(ENTITY_TYPE),
     entity_id: v.optional(v.string()),
     message: v.string(),
   },

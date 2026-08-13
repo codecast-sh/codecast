@@ -1,5 +1,6 @@
-import { Hash } from "lucide-react";
-import { ChatAvatar } from "./ChatMessage";
+import { Hash, BellOff, Clock } from "lucide-react";
+import { CommentAvatar } from "../comments/CommentAvatar";
+import type { ChatToastTier } from "../../lib/chatTimeline";
 import "./chat.css";
 
 // The in-app toast for an arriving chat message.
@@ -21,18 +22,34 @@ export type ChatToastData = {
   authorAvatarUrl?: string;
   authorIsAgent?: boolean;
   preview: string;
-  mentionsMe?: boolean;
+  /** Loud carries the accent edge and a sound; quiet is a plain card. Silent
+   *  never reaches this component. */
+  tier?: ChatToastTier;
   /** Set when several messages collapsed into this one card. */
   collapsedCount?: number;
   /** Present when the message is a reply, so the card can say so. */
   inThread?: boolean;
 };
 
-export function ChatToast({ data, onOpen }: { data: ChatToastData; onOpen: (d: ChatToastData) => void }) {
+export function ChatToast({
+  data,
+  onOpen,
+  onMuteChannel,
+  onSnooze,
+}: {
+  data: ChatToastData;
+  onOpen: (d: ChatToastData) => void;
+  /** The escape hatches live on the toast itself. If the off switch is not one
+   *  gesture from the annoyance, people mute everything after one bad afternoon
+   *  and never come back. */
+  onMuteChannel?: (channelId: string) => void;
+  onSnooze?: (minutes: number) => void;
+}) {
   const where = data.inThread ? `thread in #${data.channelName}` : `#${data.channelName}`;
+  const loud = data.tier === "loud";
   return (
     <div
-      className={`ch-toast ${data.mentionsMe ? "ch-toast-mention" : ""}`}
+      className={`ch-toast ${loud ? "ch-toast-loud" : ""}`}
       role="button"
       tabIndex={0}
       onClick={() => onOpen(data)}
@@ -43,11 +60,12 @@ export function ChatToast({ data, onOpen }: { data: ChatToastData; onOpen: (d: C
         }
       }}
     >
-      <ChatAvatar
+      <CommentAvatar
         name={data.authorName}
-        avatarUrl={data.authorAvatarUrl}
+        image={data.authorAvatarUrl}
         isAgent={data.authorIsAgent}
         size={26}
+        letters={2}
       />
       <div className="ch-toast-main">
         <div className="ch-toast-head">
@@ -64,6 +82,37 @@ export function ChatToast({ data, onOpen }: { data: ChatToastData; onOpen: (d: C
           </div>
         )}
       </div>
+
+      {(onMuteChannel || onSnooze) && (
+        <div className="ch-toast-actions">
+          {onMuteChannel && (
+            <button
+              type="button"
+              className="ch-toast-action"
+              title={`Mute #${data.channelName}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onMuteChannel(data.channelId);
+              }}
+            >
+              <BellOff className="w-3 h-3" />
+            </button>
+          )}
+          {onSnooze && (
+            <button
+              type="button"
+              className="ch-toast-action"
+              title="Snooze notifications for an hour"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSnooze(60);
+              }}
+            >
+              <Clock className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

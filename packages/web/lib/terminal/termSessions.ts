@@ -59,6 +59,11 @@ interface TermInstance {
   remoteDispose?: () => void;
 }
 
+// How long a relayed pane may show nothing before we call it unreachable.
+// Generous: it has to cover the daemon poll picking the command up, one
+// capture, and the push landing — several seconds on a healthy machine.
+const REMOTE_FIRST_FRAME_TIMEOUT_MS = 20_000;
+
 const instances = new Map<string, TermInstance>();
 let order: string[] = [];
 let activeId: string | null = null;
@@ -259,13 +264,15 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
     connectRemote(inst, opts.remote);
     return;
   }
-  if (!opts.endpoint) {
+  // Bound to a local, so the narrowing survives into the callbacks below.
+  const endpoint = opts.endpoint;
+  if (!endpoint) {
     inst.state.status = "error";
     inst.state.statusDetail = "no terminal transport";
     bump();
     return;
   }
-  const ws = new WebSocket(termWsUrl(opts.endpoint));
+  const ws = new WebSocket(termWsUrl(endpoint));
   ws.binaryType = "arraybuffer";
   inst.ws = ws;
   const encoder = new TextEncoder();
@@ -273,7 +280,7 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
   ws.onopen = () => {
     const hello = {
       type: "hello",
-      token: opts.endpoint.token,
+      token: endpoint.token,
       mode: opts.kind === "attach" ? "attach" : "create",
       name: opts.kind === "shell" ? inst.state.sessionName : undefined,
       cwd: opts.cwd,
@@ -399,8 +406,21 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
  */
 function connectRemote(inst: TermInstance, src: RemotePaneSource): void {
   let lastSeq = -1;
-  inst.remoteDispose = connectRemotePane(src, {
+  // Nothing on the relay says "that daemon can't do this". A machine that is
+  // asleep, offline, or running a build that predates stream_pane all present
+  // the same way: the lease is taken and no frame ever comes. Without a
+  // deadline the split spins on "connecting" forever, so give silence a voice.
+  const firstFrame = setTimeout(() => {
+    if (inst.state.status !== "connecting") return;
+    inst.state.status = "error";
+    inst.state.statusDetail =
+      "that machine isn't answering — its daemon may be offline, asleep, or too old to stream a pane";
+    bump();
+  }, REMOTE_FIRST_FRAME_TIMEOUT_MS);
+
+  const dropLease = connectRemotePane(src, {
     onFrame: (f) => {
+      clearTimeout(firstFrame);
       inst.state.lastFrameAt = f.streamer_seen_at ?? f.updated_at;
       if (f.seq === lastSeq || f.frame === null) {
         // Heartbeat with no new screen: still proof of life, so keep the
@@ -429,12 +449,18 @@ function connectRemote(inst: TermInstance, src: RemotePaneSource): void {
       if (inst.state.status === "open") {
         inst.state.statusDetail = message;
       } else {
+        clearTimeout(firstFrame);
         inst.state.status = "error";
         inst.state.statusDetail = message;
       }
       bump();
     },
   });
+
+  inst.remoteDispose = () => {
+    clearTimeout(firstFrame);
+    dropLease();
+  };
 }
 
 function shortTitle(sessionName: string | undefined, cwd: string | undefined): string {

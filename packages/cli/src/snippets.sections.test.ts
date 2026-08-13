@@ -196,3 +196,119 @@ describe("regression: repeated updates do not grow the file", () => {
     expect(out).not.toMatch(/\n{3,}/);
   });
 });
+
+// `cast uninstall` removes every section we own from one file. It used to be
+// seven hand-rolled copies, each falling back to end-of-file when a marker was
+// missing — so uninstalling could take the rest of the user's CLAUDE.md with
+// it, at the one moment they have stopped watching.
+describe("uninstall: removing every owned section at once", () => {
+  const MEM = "<!-- /codecast-memory -->";
+  const MSG = "<!-- /codecast-messaging -->";
+  const MEMORY: SectionSpec = { headings: ["## Memory"], endMarker: MEM, contentProbes: ["cast search"] };
+  const MESSAGING: SectionSpec = { headings: ["## Messaging"], endMarker: MSG };
+
+  const file = [
+    "# My CLAUDE.md",
+    "",
+    "## My Personal Notes",
+    "DO NOT LOSE THIS",
+    "",
+    "## Memory",
+    "cast search stuff",
+    MEM,
+    "",
+    "## Architecture",
+    "The billing service owns invoices.",
+    "",
+    "## Messaging",
+    "cast send things",
+    MSG,
+    "",
+    "## My Deploy Runbook",
+    "step 1: ssh bastion",
+    "",
+  ].join("\n");
+
+  const cutAll = (text: string) =>
+    [MEMORY, MESSAGING].reduce((acc, spec) => cutOwnedSections(acc, spec), text);
+
+  test("removes our sections and keeps everything between them", () => {
+    const out = cutAll(file);
+    expect(out).not.toContain("cast search stuff");
+    expect(out).not.toContain("cast send things");
+    expect(out).toContain("## My Personal Notes");
+    expect(out).toContain("DO NOT LOSE THIS");
+    expect(out).toContain("The billing service owns invoices.");
+    expect(out).toContain("## My Deploy Runbook");
+    expect(out).toContain("ssh bastion");
+  });
+
+  test("an end marker stranded above its heading does not eat the rest of the file", () => {
+    const stranded = [
+      "# My CLAUDE.md",
+      "",
+      "## Notes",
+      "I pasted a fragment here once:",
+      MSG,
+      "",
+      "## Messaging",
+      "cast send things",
+      "",
+      "## My Deploy Runbook",
+      "step 1: ssh bastion — IRREPLACEABLE",
+      "",
+    ].join("\n");
+    const out = cutAll(stranded);
+    expect(out).toContain("ssh bastion — IRREPLACEABLE");
+    expect(out).toContain("## My Deploy Runbook");
+    // Ownership is genuinely ambiguous here — the marker is not inside the
+    // block — so the section stays. A leftover heading is recoverable; a
+    // deleted runbook is not.
+    expect(out).toContain("## Messaging");
+  });
+
+  test("removing from a file with none of our sections changes nothing", () => {
+    const theirs = "# Mine\n\n## Notes\njust me\n";
+    expect(cutAll(theirs)).toBe(theirs);
+  });
+});
+
+// `cast install <slug> --disable` used to write `<key>_enabled: false` and
+// print "disabled" while leaving the section in CLAUDE.md — so the agent kept
+// reading a capability the user believed they had switched off. Removal is the
+// other half of that promise.
+describe("disable removes the section from disk", () => {
+  const MSG = "<!-- /codecast-messaging -->";
+  const MESSAGING: SectionSpec = { headings: ["## Messaging"], endMarker: MSG };
+  const MSG_BODY = `\n## Messaging\ncast send things\n${MSG}\n`;
+
+  test("removes only the disabled section", () => {
+    const withBoth = applySnippet(
+      applySnippet("# Mine\n\n## My Notes\nKEEP THIS\n", MESSAGING, MSG_BODY, false).text,
+      WORK,
+      FRESH,
+      false,
+    ).text;
+    const after = cutOwnedSections(withBoth, MESSAGING);
+    expect(after).not.toContain("## Messaging");
+    expect(after).toContain("## Tasks & Plans"); // the other snippet survives
+    expect(after).toContain("KEEP THIS"); // and so does the user
+  });
+
+  test("disabling twice is harmless", () => {
+    const once = cutOwnedSections(applySnippet("# Mine\n", MESSAGING, MSG_BODY, false).text, MESSAGING);
+    expect(cutOwnedSections(once, MESSAGING)).toBe(once);
+  });
+
+  test("re-enabling after a disable restores exactly one copy", () => {
+    const installed = applySnippet("# Mine\n", MESSAGING, MSG_BODY, false).text;
+    const disabled = cutOwnedSections(installed, MESSAGING);
+    const again = applySnippet(disabled, MESSAGING, MSG_BODY, false).text;
+    expect(again.match(/## Messaging/g)).toHaveLength(1);
+  });
+
+  test("disabling something that was never installed changes nothing", () => {
+    const theirs = "# Mine\n\n## My Notes\nKEEP THIS\n";
+    expect(cutOwnedSections(theirs, MESSAGING)).toBe(theirs);
+  });
+});

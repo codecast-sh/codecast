@@ -15,6 +15,13 @@
   display: flex;
   height: 100%;
   min-height: 0;
+  /* The thread panel becomes an overlay on a narrow surface, and an overlay
+   * needs something to be positioned against. */
+  position: relative;
+  /* …and the columns collapse by the width of THIS BOX, not of the window. The
+   * page ships inside a shell whose sidebar takes ~240px, so a viewport media
+   * query answers a question nobody asked. */
+  container: ch-shell / inline-size;
   background: var(--sol-bg);
   color: var(--sol-text);
 }
@@ -52,7 +59,7 @@
   font-weight: 600;
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
 }
 
 .ch-rail-add {
@@ -61,7 +68,7 @@
   width: 18px;
   height: 18px;
   border-radius: 3px;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
   transition: background 120ms ease, color 120ms ease;
 }
 
@@ -86,7 +93,7 @@
   border-radius: 4px;
   font-size: 12.5px;
   line-height: 1.5;
-  color: var(--sol-text-dim);
+  color: var(--sol-text-muted);
   text-align: left;
   transition: background 110ms ease, color 110ms ease;
 }
@@ -99,7 +106,7 @@
 .ch-chan-hash {
   flex: 0 0 auto;
   font-size: 12px;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
 }
 
 .ch-chan-name {
@@ -132,7 +139,11 @@
 }
 
 .ch-chan-muted {
-  opacity: 0.45;
+  color: var(--sol-text-dim);
+}
+
+.ch-chan-muted .ch-chan-hash {
+  color: var(--sol-text-dim);
 }
 
 /* A mention count is the one thing allowed to shout. */
@@ -156,7 +167,7 @@
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--sol-text-muted0);
+  background: var(--sol-text-muted);
 }
 
 /* ── Channel header ──────────────────────────────────────────────────────── */
@@ -180,7 +191,7 @@
 }
 
 .ch-head-hash {
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
   font-weight: 500;
 }
 
@@ -198,11 +209,120 @@
 
 /* ── Message list ────────────────────────────────────────────────────────── */
 
+/* The wrapper exists so the jump pill can be positioned against the viewport of
+ * the list rather than against its scrolling content. */
+.ch-list-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .ch-list {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   padding: 12px 0 8px;
+  /* The virtualizer measures rows; anchoring fights it for control of scrollTop
+   * and the two together produce a list that creeps while new rows arrive. */
+  overflow-anchor: none;
+  display: flex;
+  flex-direction: column;
+}
+
+/* A channel with only a few messages sits at the BOTTOM, against the composer —
+ * a young channel that starts at the ceiling with a void underneath reads as
+ * broken. `margin-top: auto` rather than `justify-content: flex-end` on the
+ * scroller: flex-end makes the overflowing top of a long list unreachable in
+ * every browser, and a long channel is the case that matters most. */
+.ch-list-sizer {
+  margin-top: auto;
+  width: 100%;
+  position: relative;
+  flex: 0 0 auto;
+}
+
+/* …but NOT in a thread. There the replies answer the root message pinned above
+ * them, so they hang from it. Floating them to the bottom of the panel would
+ * leave the answer detached from its question. */
+.ch-thread .ch-list-sizer {
+  margin-top: 0;
+}
+
+.ch-loading-older {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 0;
+  font-size: 11px;
+  color: var(--sol-text-muted);
+}
+
+/* Sits above the composer, centred. Appears only when the reader has scrolled
+ * away on purpose. */
+.ch-jump {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border: 1px solid color-mix(in srgb, var(--sol-blue) 45%, transparent);
+  border-radius: 12px;
+  background: var(--sol-card);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--sol-text) 18%, transparent);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--sol-blue);
+  z-index: 4;
+  animation: ch-jump-in 140ms ease-out;
+}
+
+.ch-jump:hover {
+  background: color-mix(in srgb, var(--sol-blue) 12%, var(--sol-card));
+}
+
+@keyframes ch-jump-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ch-jump { animation: none; }
+}
+
+/* ── Send states ─────────────────────────────────────────────────────────── */
+
+.ch-msg-pending {
+  opacity: 0.58;
+}
+
+/* Failed reads as loudly as a mention, because it is the one state the reader
+ * must not scroll past. */
+.ch-msg-failed {
+  background: color-mix(in srgb, var(--sol-red) 7%, transparent);
+  box-shadow: inset 2px 0 0 var(--sol-red);
+}
+
+.ch-send-failed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--sol-red);
+}
+
+.ch-send-retry {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--sol-blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* The row is a two column grid: a fixed gutter that holds either the avatar or
@@ -225,6 +345,22 @@
   margin-top: 7px;
 }
 
+/* A permalink landing. The flash fades out on its own rather than leaving a
+ * persistent highlight: it answers "which one" and then gets out of the way, so
+ * the message reads like every other message a second later. */
+.ch-msg-flash {
+  animation: ch-flash 1.6s ease-out 1;
+}
+
+@keyframes ch-flash {
+  0% { background: color-mix(in srgb, var(--sol-yellow) 26%, transparent); }
+  100% { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ch-msg-flash { animation: none; background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); }
+}
+
 .ch-msg-gutter {
   display: flex;
   justify-content: flex-end;
@@ -232,30 +368,16 @@
   padding-top: 2px;
 }
 
-.ch-avatar {
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  object-fit: cover;
-  display: block;
-  background: var(--sol-bg-alt);
-}
-
-.ch-avatar-fallback {
-  display: grid;
-  place-items: center;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--sol-bg);
-  text-transform: uppercase;
-}
+/* Faces come from components/comments/CommentAvatar — the same round avatar the
+ * rest of the app draws, so a teammate is not a circle in a comment and a square
+ * in chat on the same screen. Only the thread stack's overlap is chat's own. */
 
 /* Hover timestamp on grouped rows. Hidden rather than absent so it reserves no
  * layout and cannot reflow the body on hover. */
 .ch-msg-hovertime {
   font-size: 9.5px;
   line-height: 18px;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
   font-variant-numeric: tabular-nums;
   opacity: 0;
   transition: opacity 90ms ease;
@@ -280,12 +402,12 @@
 
 .ch-msg-time {
   font-size: 10px;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
   font-variant-numeric: tabular-nums;
 }
 
 .ch-msg-time:hover {
-  color: var(--sol-text-muted);
+  color: var(--sol-text);
   text-decoration: underline;
 }
 
@@ -294,6 +416,16 @@
   line-height: 1.58;
   color: var(--sol-text-secondary);
   overflow-wrap: anywhere;
+  /* Prose gets a measure. Unbounded, a message ran 150 characters a line at
+   * 1600px and past 200 on a 27" display, where the eye loses the line return.
+   * Code, tables and images stay free to use the whole column. */
+  max-width: 78ch;
+}
+
+.ch-msg-body pre,
+.ch-msg-body table,
+.ch-msg-body img {
+  max-width: none;
 }
 
 .ch-msg-body p {
@@ -307,13 +439,13 @@
 .ch-msg-edited {
   margin-left: 5px;
   font-size: 9.5px;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
 }
 
 .ch-msg-deleted {
   font-size: 12.5px;
   font-style: italic;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
 }
 
 /* Your own mention. Tinted, not boxed — a box on every mention turns a busy
@@ -353,14 +485,6 @@
   text-transform: uppercase;
   color: var(--sol-violet);
   line-height: 14px;
-}
-
-.ch-avatar-agent {
-  display: grid;
-  place-items: center;
-  background: color-mix(in srgb, var(--sol-violet) 18%, var(--sol-bg));
-  border: 1px solid color-mix(in srgb, var(--sol-violet) 40%, transparent);
-  color: var(--sol-violet);
 }
 
 /* Thinking state. Three dots breathing, plus the label — motion alone is not an
@@ -477,9 +601,6 @@
 }
 
 .ch-thread-face {
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
   border: 1.5px solid var(--sol-bg);
   margin-right: -4px;
   object-fit: cover;
@@ -491,7 +612,7 @@
 }
 
 .ch-thread-last {
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
 }
 
 .ch-thread-link:hover .ch-thread-last {
@@ -596,6 +717,7 @@
 /* ── Composer ────────────────────────────────────────────────────────────── */
 
 .ch-composer {
+  container: ch-composer / inline-size;
   margin: 0 16px 14px;
   border: 1px solid color-mix(in srgb, var(--sol-border) 42%, transparent);
   border-radius: 7px;
@@ -618,7 +740,35 @@
 
 .ch-composer-hint {
   font-size: 10px;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
+}
+
+/* The optional half of the hint. Shed by available WIDTH — the thread panel is
+ * the obvious narrow case, but the main composer gets just as narrow with a rail
+ * and a thread beside it. A container query asks the real question. */
+@container ch-composer (max-width: 420px) {
+  .ch-composer-hint-wide { display: none; }
+}
+
+/* The composer is the app's own MessageInput (see ChatComposer). It is built to
+ * FLOAT over a conversation, so it brings two things that are wrong for a
+ * composer sitting in a block below the list:
+ *
+ *   - a 64px gradient scrim pulled up over the content behind it. In a chat it
+ *     lands squarely on the newest message and greys out the one line the reader
+ *     most wants — which is exactly how it read before this rule.
+ *   - its own page background and bottom padding, which paint over the card the
+ *     composer is framed in.
+ *
+ * Both are cancelled here rather than in MessageInput: every other surface still
+ * wants the floating behaviour. */
+.ch-composer [data-sv-composer] > .bg-gradient-to-t {
+  display: none;
+}
+
+.ch-composer [data-sv-composer] > .pointer-events-auto {
+  padding-bottom: 0;
+  background: transparent;
 }
 
 /* ── Thread panel ────────────────────────────────────────────────────────── */
@@ -626,6 +776,11 @@
 .ch-thread {
   width: 384px;
   flex: 0 0 384px;
+  /* Never more than a third of the surface: three fixed columns inside a shell
+   * that already spends 240px on the app sidebar left the transcript 265px at
+   * 1100px — four words a line, with clipped code and 600px of dead space in the
+   * panel beside it. */
+  max-width: 34%;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -649,7 +804,7 @@
 
 .ch-thread-sub {
   font-size: 10.5px;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
 }
 
 .ch-thread-body {
@@ -668,12 +823,12 @@
 }
 
 .ch-thread-replies-label {
-  padding: 0 16px 6px 46px;
+  padding: 0 16px 4px 46px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
 }
 
 /* ── Toast ───────────────────────────────────────────────────────────────── */
@@ -696,11 +851,43 @@
   border-color: color-mix(in srgb, var(--sol-blue) 45%, transparent);
 }
 
-.ch-toast-mention {
+/* Loud: someone is addressing you. The accent edge is the whole difference
+ * between "the room is talking" and "this one is about you". */
+.ch-toast-loud {
   box-shadow:
     inset 3px 0 0 var(--sol-orange),
     0 6px 20px color-mix(in srgb, var(--sol-text) 16%, transparent);
   padding-left: 13px;
+}
+
+/* Actions appear on hover only. A toast that always shows two buttons reads as a
+ * dialog and invites a click it does not need. */
+.ch-toast-actions {
+  display: flex;
+  align-self: flex-start;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity 110ms ease;
+}
+
+.ch-toast:hover .ch-toast-actions,
+.ch-toast:focus-within .ch-toast-actions {
+  opacity: 1;
+}
+
+.ch-toast-action {
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 4px;
+  color: var(--sol-text-muted);
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.ch-toast-action:hover {
+  background: color-mix(in srgb, var(--sol-border) 24%, transparent);
+  color: var(--sol-text);
 }
 
 .ch-toast-main {
@@ -723,7 +910,7 @@
 
 .ch-toast-where {
   font-size: 10.5px;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -768,7 +955,344 @@
 
 .ch-empty-sub {
   font-size: 11.5px;
-  color: var(--sol-text-muted0);
+  color: var(--sol-text-muted);
   max-width: 320px;
   line-height: 1.55;
+}
+
+
+/* ── Narrow windows ──────────────────────────────────────────────────────────
+ *
+ * Three fixed columns is a 1500px design. A 13" laptop, or any split window, is
+ * the common case — so once the surface itself is under 940px the rail collapses
+ * to an icon strip (the channels are still one click away, and unread still
+ * shows), and under 860px the thread panel stops being a column and becomes an
+ * overlay over the transcript, which is the only one of the three that must stay
+ * readable. Container queries, so the app sidebar's 240px is already subtracted:
+ * a 1180px window with the sidebar open is a 940px surface. */
+
+@container ch-shell (max-width: 940px) {
+  .ch-rail {
+    width: 44px;
+    flex: 0 0 44px;
+  }
+
+  .ch-rail-head {
+    justify-content: center;
+    padding: 10px 0 8px;
+  }
+
+  .ch-rail-title,
+  .ch-chan-name {
+    display: none;
+  }
+
+  .ch-rail-list {
+    padding: 0 4px 12px;
+  }
+
+  .ch-chan {
+    justify-content: center;
+    gap: 0;
+    padding: 5px 0;
+    position: relative;
+  }
+
+  /* The count would not fit beside a 12px glyph, so it rides the corner. */
+  .ch-chan-badge {
+    position: absolute;
+    top: 0;
+    right: 1px;
+    min-width: 13px;
+    height: 13px;
+    font-size: 8.5px;
+    line-height: 13px;
+  }
+
+  .ch-chan-muted svg[aria-label="Muted"] {
+    display: none;
+  }
+}
+
+@container ch-shell (max-width: 860px) {
+  .ch-thread {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 6;
+    width: min(384px, 82%);
+    flex: none;
+    max-width: none;
+    background: var(--sol-bg);
+    box-shadow: -8px 0 24px color-mix(in srgb, var(--sol-text) 16%, transparent);
+  }
+}
+
+/* ── Skeleton ────────────────────────────────────────────────────────────────
+ *
+ * A first load has a shape. Without one, a slow channel and a channel whose
+ * query failed both render as the same blank rectangle — and the empty state,
+ * which only belongs to a channel that really is empty, never appears. */
+
+.ch-skeleton {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: 16px 16px 12px 0;
+}
+
+.ch-skel-row {
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  align-items: start;
+}
+
+.ch-skel-avatar {
+  justify-self: end;
+  margin-right: 8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sol-border) 34%, transparent);
+  animation: ch-pulse 1.6s ease-in-out infinite;
+}
+
+.ch-skel-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ch-skel-line {
+  height: 9px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--sol-border) 28%, transparent);
+  animation: ch-pulse 1.6s ease-in-out infinite;
+}
+
+.ch-skel-head {
+  width: 118px;
+  height: 8px;
+  background: color-mix(in srgb, var(--sol-border) 40%, transparent);
+}
+
+@keyframes ch-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ch-skel-avatar, .ch-skel-line { animation: none; }
+}
+
+/* ── Empty state extras ──────────────────────────────────────────────────── */
+
+.ch-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 2px;
+  border-radius: 50%;
+}
+
+.ch-empty-bad {
+  background: color-mix(in srgb, var(--sol-red) 14%, transparent);
+  color: var(--sol-red);
+}
+
+.ch-empty-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--sol-blue) 45%, transparent);
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--sol-blue);
+  transition: background 110ms ease;
+}
+
+.ch-empty-action:hover {
+  background: color-mix(in srgb, var(--sol-blue) 12%, transparent);
+}
+
+/* ── Popovers: reaction picker, message menu, notification level ─────────── */
+
+/* The toolbar disappears on mouse-out, so it has to stay up while one of its
+ * own popovers is open. */
+.ch-msg:hover .ch-tools,
+.ch-msg:focus-within .ch-tools,
+.ch-tools-open {
+  display: flex;
+}
+
+.ch-picker,
+.ch-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 8;
+  padding: 3px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  border-radius: 7px;
+  background: var(--sol-card);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--sol-text) 20%, transparent);
+}
+
+.ch-picker {
+  display: flex;
+  gap: 1px;
+}
+
+.ch-picker-item {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 24px;
+  border-radius: 5px;
+  font-size: 14px;
+  line-height: 1;
+  transition: background 100ms ease, transform 100ms ease;
+}
+
+.ch-picker-item:hover {
+  background: color-mix(in srgb, var(--sol-blue) 16%, transparent);
+  transform: translateY(-1px);
+}
+
+.ch-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+}
+
+.ch-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  color: var(--sol-text-secondary);
+  text-align: left;
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.ch-menu-item:hover {
+  background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+  color: var(--sol-text);
+}
+
+.ch-menu-danger {
+  color: var(--sol-red);
+}
+
+.ch-menu-danger:hover {
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
+  color: var(--sol-red);
+}
+
+.ch-notify {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+/* A click anywhere else closes the menu without the menu itself having to know
+ * about the document. */
+.ch-notify-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 7;
+}
+
+.ch-notify-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 3px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  border-radius: 7px;
+  background: var(--sol-card);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--sol-text) 20%, transparent);
+}
+
+.ch-notify-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  text-align: left;
+  transition: background 100ms ease;
+}
+
+.ch-notify-item:hover {
+  background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+}
+
+.ch-notify-label {
+  font-size: 11.5px;
+  color: var(--sol-text-secondary);
+}
+
+.ch-notify-hint {
+  font-size: 10px;
+  color: var(--sol-text-muted);
+}
+
+.ch-notify-on .ch-notify-label {
+  font-weight: 600;
+  color: var(--sol-blue);
+}
+
+/* ── Editing in place ────────────────────────────────────────────────────── */
+
+.ch-edit {
+  margin: 2px 0 4px;
+}
+
+.ch-edit-box {
+  width: 100%;
+  max-width: 78ch;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--sol-blue) 45%, transparent);
+  border-radius: 6px;
+  background: var(--sol-card);
+  color: var(--sol-text);
+  font-size: 13px;
+  line-height: 1.55;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.ch-edit-box:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-blue) 11%, transparent);
+}
+
+.ch-edit-foot {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.ch-edit-save {
+  font-weight: 600;
+  color: var(--sol-blue);
+}
+
+.ch-edit-cancel {
+  color: var(--sol-text-muted);
 }

@@ -104,6 +104,27 @@ describe("client sync registry", () => {
     });
   });
 
+  // Chat opts OUT of local-first field protection on purpose, and that choice is
+  // load-bearing enough to lock down: auto-pending clears only on an exact echo,
+  // and chat's fields are server clock stamps the client cannot predict, so a
+  // pending entry over one could never retire and would mask the real row.
+  it("chat collections persist and hydrate late, and are deliberately not field-protected", () => {
+    for (const key of ["chatChannels", "chatMessages", "chatReactions", "chatReads"]) {
+      expect(COLLECTION_STORE_KEYS).toContain(key);
+      expect(HYDRATION_DEFERRED_KEYS).toContain(key);
+      expect(isProtectedSyncCollection(key)).toBe(false);
+      expect(DISPATCH_TABLE_MAP[key]).toBeUndefined();
+    }
+    expect(META_STORE_KEYS).toContain("chatRail");
+
+    // A message row must know its channel; anything else is a foreign document
+    // that would hydrate as a message with no home.
+    const validMessage = collectionRowValidator("chatMessages")!;
+    expect(validMessage({ _id: "m1", channel_id: "c1", content: "hi" })).toBe(true);
+    expect(validMessage({ _id: "m1", content: "hi" })).toBe(false);
+    expect(validMessage({})).toBe(false);
+  });
+
   it("every registered collection has a Dexie table (schema version bumped)", () => {
     // A missing table used to reject loadCache's whole Promise.all — one
     // forgotten migration silently disabled the entire cache.

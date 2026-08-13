@@ -72,6 +72,43 @@ import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/setting
 import type { PendingComment } from "../lib/quoteFormat";
 import type { Comment as CommentRow } from "../lib/commentThread";
 import { pushInboxViewHistory, isApplyingViewHistory, type InboxViewSnapshot } from "../lib/inboxViewHistory";
+// Team chat lives in its own slice: four delta-synced collections plus the
+// optimistic writers over them. Spread into the config below, and its state
+// shape is folded into InboxStoreState so the draft type covers it.
+import {
+  createChatSlice,
+  CHAT_SYNC_REGISTRY,
+  selectChannelReadMarker,
+  type ChatSliceState,
+} from "./chatSlice";
+// Re-exported so chat surfaces import their selectors from the store, like every
+// other view does, instead of reaching into the slice file.
+export {
+  selectChatRail,
+  selectChannelMessages,
+  selectChannelReadMarker,
+  selectThreadReplies,
+  selectChatReactions,
+  chatReactionSyncOpts,
+  chatSendState,
+  chatReactionStubId,
+  newChatMessageClientId,
+  newChatChannelClientId,
+  CHAT_CHANNEL_STUB_PREFIX,
+  CHAT_MESSAGE_STUB_PREFIX,
+  CHAT_READ_STUB_PREFIX,
+  CHAT_REACTION_STUB_PREFIX,
+} from "./chatSlice";
+export type {
+  ChatChannelRow,
+  ChatMessageRow,
+  ChatReadRow,
+  ChatReactionRow,
+  ChatRailRow,
+  ChatRailChannel,
+  ChatNotifyLevel,
+  ChatSendOptions,
+} from "./chatSlice";
 
 // Critical UI prefs mirrored to localStorage so they're available
 // synchronously at module load — avoids a layout flash between first paint
@@ -786,6 +823,10 @@ export type ClientUI = {
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
   sounds_enabled?: boolean;
+  // Chat toasts stay quiet until this instant. Set from the snooze button on a
+  // toast — the off switch has to be one gesture from the annoyance, or people
+  // mute everything after one bad afternoon.
+  chat_snooze_until?: number;
   task_view?: TaskViewPrefs;
   doc_view?: DocViewPrefs;
   plan_view?: PlanViewPrefs;
@@ -2478,7 +2519,7 @@ export function findReusableBlankSession(
 
 // -- Store interface --
 
-interface InboxStoreState {
+interface InboxStoreState extends ChatSliceState {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -2675,8 +2716,11 @@ interface InboxStoreState {
   closeCompose: () => void;
 
   // -- Create modal --
-  createModal: 'task' | 'plan' | 'doc' | null;
-  openCreateModal: (type: 'task' | 'plan' | 'doc') => void;
+  createModal: 'task' | 'plan' | 'doc' | 'chat' | null;
+  /** Fields the create modal should open pre-filled with — how a scoped
+   *  surface (a project's task list) makes "new task" mean "new task here". */
+  createModalDefaults: { project_id?: string; plan_id?: string } | null;
+  openCreateModal: (type: 'task' | 'plan' | 'doc' | 'chat', defaults?: { project_id?: string; plan_id?: string }) => void;
   closeCreateModal: () => void;
 
   // -- Close-guard: one shared dialog for "close a parent with open subtasks".
@@ -3551,6 +3595,10 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // thread never prunes another's; altKey "client_id" rekeys an optimistic stub
   // onto its real server row (the stub carries client_id === its own stub id).
   comments: { isDelta: true, altKey: "client_id" },
+  // Team chat. Same delta rule as everything above — syncing one channel's page
+  // never prunes another's, and a thread's replies survive a channel sync. See
+  // store/chatSlice.ts for why these collections carry no pending protection.
+  ...CHAT_SYNC_REGISTRY,
   clientState: {
     kind: "singleton",
     merge: {
@@ -3841,6 +3889,35 @@ async function awaitResolvedSessionPreparation(convexId: string): Promise<void> 
   await resolvedSessionPreparations.get(convexId);
 }
 
+/**
+ * A channel create has just been superseded by its server row. Anything typed
+ * into the channel while the create was in flight was dispatched with the STUB
+ * channel id, and the dispatch handler refuses a stub — a refusal the outbox
+ * reads as success, so it retired the entry and nothing will ever re-drive it.
+ * The message would sit on screen as "pending" forever.
+ *
+ * Same hook, same shape and the same reason as scheduleResolvedSessionContinuations:
+ * a timer, so the continuation observes the rekeyed store and dispatch stays out
+ * of the incoming-data transaction. retryChatSend re-dispatches under the SAME
+ * client id, which chat.sendMessage dedupes on, so a message that did somehow
+ * land cannot double-post.
+ */
+function scheduleResolvedChatChannelSends(channelId: string): void {
+  setTimeout(() => {
+    const state = useInboxStore.getState();
+    const messages = state.chatMessages || {};
+    for (const id in messages) {
+      const row = messages[id];
+      if (!row || row.channel_id !== channelId || isConvexId(row._id)) continue;
+      state.retryChatSend(row._id);
+    }
+    // The read row was written under the stub too, so the server has never been
+    // told this viewer joined and read the channel they just created.
+    const marker = selectChannelReadMarker(state as any, channelId);
+    state.markChannelRead(channelId, marker?._id);
+  }, 0);
+}
+
 function rekeyId(draft: any, oldId: string, newId: string) {
   if (oldId === newId) return;
   if (draft.sessions[oldId]) {
@@ -3905,6 +3982,14 @@ function rekeyId(draft: any, oldId: string, newId: string) {
     if (t.sessionId === oldId) t.sessionId = newId;
     if (t.path === `/inbox?s=${oldId}`) t.path = `/inbox?s=${newId}`;
     else if (t.path === `/conversation/${oldId}`) t.path = `/conversation/${newId}`;
+    // A newly created channel is navigated to by its stub id, because the rail
+    // can select it before the server has answered. The tab path is the app's
+    // real router (TabContent), and TabPane re-stamps window.location from it,
+    // so rewriting it here is what stops the reader sitting on a dead
+    // /chat/chatstub-… while their channel lives beside it under its real id.
+    else if (t.path === `/chat/${oldId}` || t.path.startsWith(`/chat/${oldId}?`)) {
+      t.path = `/chat/${newId}${t.path.slice(`/chat/${oldId}`.length)}`;
+    }
   }
   // The parent's branch-map chip for an optimistic fork follows the rekey too.
   // This matters on the altKey-supersede path (a parked fork create that lands
@@ -3914,6 +3999,29 @@ function rekeyId(draft: any, oldId: string, newId: string) {
   if (Array.isArray(draft.optimisticForkChildren)) {
     for (const f of draft.optimisticForkChildren) {
       if (f._id === oldId) f._id = newId;
+    }
+  }
+  // Chat rows point at each other by id: messages and reactions name their
+  // channel, replies name their thread root. When a channel stub or a message
+  // stub is superseded by its server row, everything pointing at the dead stub id
+  // has to follow, or the messages typed while the create was in flight orphan
+  // under an id no query will ever return. Same rule as the bucket assignment
+  // above, applied to the three chat collections that carry a reference.
+  if (draft.chatMessages) {
+    for (const id in draft.chatMessages) {
+      const row = draft.chatMessages[id];
+      if (row.channel_id === oldId) row.channel_id = newId;
+      if (row.thread_root_id === oldId) row.thread_root_id = newId;
+    }
+  }
+  if (draft.chatReactions) {
+    for (const id in draft.chatReactions) {
+      if (draft.chatReactions[id].channel_id === oldId) draft.chatReactions[id].channel_id = newId;
+    }
+  }
+  if (draft.chatReads) {
+    for (const id in draft.chatReads) {
+      if (draft.chatReads[id].channel_id === oldId) draft.chatReads[id].channel_id = newId;
     }
   }
 }
@@ -4669,8 +4777,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   createModal: null,
-  openCreateModal: (type: 'task' | 'plan' | 'doc') => set({ createModal: type }),
-  closeCreateModal: () => set({ createModal: null }),
+  createModalDefaults: null,
+  openCreateModal: (type: 'task' | 'plan' | 'doc' | 'chat', defaults?: { project_id?: string; plan_id?: string }) =>
+    set({ createModal: type, createModalDefaults: defaults ?? null }),
+  closeCreateModal: () => set({ createModal: null, createModalDefaults: null }),
 
   taskCloseGuard: null,
   setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[] } | null) => set({ taskCloseGuard: g }),
@@ -5765,6 +5875,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
             // continuation observe the rekeyed store and keeps dispatch out of
             // the incoming-data transaction itself.
             scheduleResolvedSessionContinuations(match._id, launchReconfigure);
+          }
+          if (field === "chatChannels" && isConvexId(match._id)) {
+            scheduleResolvedChatChannelSends(match._id);
           }
         } else if (!table[oldId]) {
           table[oldId] = old as any;
@@ -7664,6 +7777,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
   getSession: (id: string) => {
     return get().sessions[id];
   },
+
+  // =====================
+  // TEAM CHAT
+  // =====================
+  // Collections, optimistic writers and their durable dispatch actions. Kept in
+  // store/chatSlice.ts so the whole surface reads as one thing; spread here so
+  // the middleware wraps every action exactly as if it were written inline.
+  ...createChatSlice(set, get),
 
 });
 

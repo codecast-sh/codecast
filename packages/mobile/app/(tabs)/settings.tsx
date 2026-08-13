@@ -171,7 +171,7 @@ export default function SettingsScreen() {
 
   const teamMembers = useQuery(api.teams.getTeamMembers, activeTeamId ? { team_id: activeTeamId } : "skip");
 
-  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity') => {
+  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity' | 'chat_activity') => {
     const currentPrefs = currentUser?.notification_preferences || {
       team_session_start: true,
       mention: true,
@@ -193,6 +193,7 @@ export default function SettingsScreen() {
           task_activity: currentPrefs.task_activity ?? true,
           doc_activity: currentPrefs.doc_activity ?? true,
           plan_activity: currentPrefs.plan_activity ?? true,
+          chat_activity: (currentPrefs as any).chat_activity ?? true,
           [type]: !currentVal,
         },
       });

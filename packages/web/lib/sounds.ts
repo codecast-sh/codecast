@@ -127,6 +127,17 @@ export function soundKill() {
   } catch {}
 }
 
+// A chat message addressed to you. Two rising notes, quieter and shorter than
+// soundNewSession — it marks someone speaking to you, not a machine finishing
+// work, and it may fire while you are mid-sentence somewhere else.
+export function soundChatMention() {
+  if (!isEnabled()) return;
+  play([
+    { freq: 587.33, start: 0, dur: 0.14, gain: 0.45, type: "sine" },
+    { freq: 880, start: 0.09, dur: 0.18, gain: 0.3, type: "sine" },
+  ], 0.045);
+}
+
 export function soundSend() {
   if (!isEnabled() || !isSupported()) return;
   try {

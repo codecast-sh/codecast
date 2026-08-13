@@ -39,6 +39,20 @@ export function usePushNotifications() {
       const data = response.notification.request.content.data;
       if (data.conversationId) {
         router.push(`/session/${data.conversationId}`);
+      } else if (data.channelId) {
+        // A team chat push lands in the channel it came from — and when it was
+        // a thread reply, in that thread, which is where the words actually
+        // are. threadRootId rides along in the push payload for exactly this.
+        // Object form + cast: expo's typed-route union only regenerates when
+        // Metro runs, so a freshly added route is unknown to tsc until then.
+        if (data.threadRootId) {
+          router.push({
+            pathname: '/chat/thread/[id]',
+            params: { id: String(data.threadRootId), channel: String(data.channelId) },
+          } as never);
+        } else {
+          router.push({ pathname: '/chat/[id]', params: { id: String(data.channelId) } } as never);
+        }
       } else if (data.type === 'aggregate') {
         // A batched push ("12 notifications") has no single session to open —
         // land on the list that itemizes them.

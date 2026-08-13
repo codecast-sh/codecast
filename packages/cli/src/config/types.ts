@@ -114,6 +114,8 @@ export interface Config {
   publish_version?: string;
   state_enabled?: boolean;
   state_version?: string;
+  browser_enabled?: boolean;
+  browser_version?: string;
 
   // --- Cross-machine project-path resolution (daemon.ts) ---
   // Explicit project-path overrides for resuming sessions/forks recorded on another

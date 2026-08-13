@@ -1,9 +1,11 @@
 import { internalMutation } from "./functions";
 import { v } from "convex/values";
 import { enqueuePush } from "./pushRouter";
+import { isTeamMember } from "./privacy";
 
-
-const ENTITY_TYPE = v.union(
+// The two unions live HERE and are imported wherever else a notification is
+// written, so a new type cannot be added to one list and missed by the others.
+export const ENTITY_TYPE = v.union(
   v.literal("task"),
   v.literal("doc"),
   v.literal("plan"),
@@ -12,7 +14,7 @@ const ENTITY_TYPE = v.union(
   v.literal("chat_channel")
 );
 
-const NOTIFICATION_TYPE = v.union(
+export const NOTIFICATION_TYPE = v.union(
   v.literal("mention"),
   v.literal("comment_reply"),
   v.literal("conversation_comment"),
@@ -31,10 +33,13 @@ const NOTIFICATION_TYPE = v.union(
   v.literal("doc_commented"),
   v.literal("plan_status_changed"),
   v.literal("plan_task_completed"),
-  v.literal("artifact_commented")
+  v.literal("artifact_commented"),
+  v.literal("chat_mention"),
+  v.literal("chat_reply"),
+  v.literal("chat_here")
 );
 
-const PREFERENCE_MAP: Record<string, string> = {
+export const PREFERENCE_MAP: Record<string, string> = {
   task_assigned: "task_activity",
   task_status_changed: "task_activity",
   task_commented: "task_activity",
@@ -53,6 +58,12 @@ const PREFERENCE_MAP: Record<string, string> = {
   session_idle: "session_idle",
   session_error: "session_error",
   session_assigned: "session_assigned",
+  // A direct @you in chat is a mention like any other, so it rides the existing
+  // key rather than inventing a second switch for the same idea. Thread replies
+  // and @here are chat activity, which people mute separately.
+  chat_mention: "mention",
+  chat_reply: "chat_activity",
+  chat_here: "chat_activity",
 };
 
 function isNotificationEnabled(
@@ -118,6 +129,11 @@ export const emit = internalMutation({
     link: v.optional(v.string()),
     conversation_id: v.optional(v.id("conversations")),
     comment_id: v.optional(v.id("comments")),
+    // Chat deep link: entity_id already carries the channel, this names the exact
+    // message. Both ride into the push payload so a tap lands on the message
+    // rather than on the app.
+    chat_message_id: v.optional(v.id("chat_messages")),
+    chat_thread_root_id: v.optional(v.id("chat_messages")),
     direct_recipient_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
@@ -155,9 +171,33 @@ export const emit = internalMutation({
       }
     }
 
+    // A chat notification carries the message's own text in the bell and in the
+    // phone banner, so who receives it is a privacy decision, not a routing one.
+    // chat.ts already computes the recipient list and re-checks membership, but
+    // this is the fan-out every future caller reaches for — and it does not
+    // otherwise re-check anything — so the channel's own gate is applied here
+    // too. A member removed from the team stops receiving the text immediately,
+    // even if a stale subscription row outlives them.
+    let allowed = recipients;
+    if (args.entity_type === "chat_channel") {
+      const channelId = ctx.db.normalizeId("chat_channels", args.entity_id);
+      const channel = channelId ? await ctx.db.get(channelId) : null;
+      if (!channel) return { notified: 0 };
+      const members: typeof recipients = [];
+      for (const recipient of recipients) {
+        // The one membership check, from privacy.ts. A local copy of this query
+        // is how a future rule (a hidden membership, a pending invite) gets
+        // applied everywhere except the fan-out that ships message text.
+        if (await isTeamMember(ctx, recipient._id, channel.team_id)) {
+          members.push(recipient);
+        }
+      }
+      allowed = members;
+    }
+
     let created = 0;
 
-    for (const recipient of recipients) {
+    for (const recipient of allowed) {
       if (
         !isNotificationEnabled(
           recipient.notification_preferences as any,
@@ -178,6 +218,7 @@ export const emit = internalMutation({
         link: args.link,
         conversation_id: args.conversation_id,
         comment_id: args.comment_id,
+        chat_message_id: args.chat_message_id,
         message: args.message,
         read: false,
         created_at: now,
@@ -198,6 +239,12 @@ export const emit = internalMutation({
             conversationId: args.conversation_id,
             type: args.event_type,
             link: args.link,
+            // Chat taps route on these ids: mobile opens /chat/<channelId>,
+            // or the thread screen when threadRootId is present — a reply's
+            // words live in the thread, so that is where the tap must land.
+            channelId: args.entity_type === "chat_channel" ? args.entity_id : undefined,
+            messageId: args.chat_message_id,
+            threadRootId: args.chat_thread_root_id,
           },
         });
       }
