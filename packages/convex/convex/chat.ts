@@ -1158,7 +1158,12 @@ export const markRead = mutation({
       if (!marker || marker.channel_id.toString() !== channel._id.toString()) {
         chatFail("INVALID", "That message is not in this channel");
       }
-      readAt = Math.min(marker.created_at, now);
+      // The marker's own stamp, unclamped. Stamps are server-written and
+      // strictly monotonic per channel, which puts a same-millisecond send up
+      // to a few ms in the FUTURE of Date.now() — clamping to now would leave
+      // that row eternally unread. A client cannot forge the stamp: it can only
+      // name a row, and only one in this channel.
+      readAt = marker.created_at;
     }
     await upsertRead(
       ctx, userId, channel.team_id, channel._id, readAt, args.last_read_message_id, undefined,
@@ -1275,7 +1280,17 @@ export const sendMessage = mutation({
 
     await chatRateLimit(ctx, userId, "chat.send", SEND_LIMIT);
 
-    const now = Date.now();
+    // Strictly monotonic per channel. created_at is load-bearing three ways —
+    // pagination order, the unread scan's `gt(lastReadAt)`, and the read mark
+    // itself — and two rows in the same millisecond break all three at once:
+    // a message landing in the read mark's millisecond is unread yet invisible
+    // to the badge forever. One indexed read per send buys the invariant.
+    const newestRow = await ctx.db
+      .query("chat_messages")
+      .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channel._id))
+      .order("desc")
+      .first();
+    const now = Math.max(Date.now(), (newestRow?.created_at ?? 0) + 1);
     const mentions = await resolveMentions(ctx, channel.team_id, content, userId);
     const here = mentionsHere(content);
     if (here) await chatRateLimit(ctx, userId, "chat.here", HERE_LIMIT);
@@ -1712,9 +1727,6 @@ async function maybeWakeAnchor(
 ): Promise<{ placeholder_id: Id<"chat_messages"> | null; skipped: string | null }> {
   const no = (skipped: string | null) => ({ placeholder_id: null, skipped });
 
-  // (1) A line a session typed never reaches a person's machine.
-  if (opts.message.origin === "agent") return no("agent_authored");
-
   const anchor = await resolveChannelAnchor(ctx, opts.channel);
   if (!anchor) return no(null);
   const addressed = opts.mentions.some(
@@ -1725,6 +1737,12 @@ async function maybeWakeAnchor(
   const followUp = !addressed && !!opts.root
     && await anchorHoldsThread(ctx, anchor, opts.root, opts.message._id);
   if (!addressed && !followUp) return no(null);
+
+  // (1) A line a session typed never reaches a person's machine. Checked AFTER
+  // the addressed test so a skip reason only surfaces when the anchor was
+  // actually asked for — an agent's plain message must not report anchor state
+  // it never touched.
+  if (opts.message.origin === "agent") return no("agent_authored");
 
   // (4) Anchor access is its own relation — and the HOST's is the one that
   // matters most here. The wake enqueues the thread excerpt onto the host's
@@ -1772,7 +1790,10 @@ async function maybeWakeAnchor(
     await patchChat(ctx, opts.root._id, { anchor_follow: true });
   }
 
-  const now = Date.now();
+  // The same monotonic rule as the send that triggered this: the placeholder
+  // must sort AFTER its question, and Date.now() alone can tie with — or trail —
+  // a bumped message stamp from the same millisecond.
+  const now = Math.max(Date.now(), opts.message.created_at + 1);
   const placeholderId = await ctx.db.insert("chat_messages", {
     team_id: opts.channel.team_id,
     channel_id: opts.channel._id,
