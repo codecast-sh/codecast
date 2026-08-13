@@ -21,7 +21,7 @@ import type { PendingComment } from "../lib/quoteFormat";
 import { getQuoteUnits, quoteUnitAt, unitTop } from "../lib/quoteUnits";
 import { createReviewComment, exitReviewMode } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
-import { focusComposer, sendComposer } from "../lib/composerControl";
+import { focusComposer } from "../lib/composerControl";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { RightCommentRail } from "./comments/RightCommentRail";
@@ -61,9 +61,6 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   const myComments = useInboxStore(
     useShallow((s) => (s.reviewComments[conversationId] ?? []).filter((c) => c.messageId === messageId)),
   );
-  // Whole-conversation count: the rail footer talks about the reply you're about
-  // to send, which carries every quote in the batch, not just this message's.
-  const pendingTotal = useInboxStore((s) => (s.reviewComments[conversationId] ?? []).length);
   // The footer belongs to the BATCH, not to keyboard mode. Escape drops the review
   // target but KEEPS the quotes (exitReviewMode), and that is exactly the moment a
   // user steps back and asks "now what?" — so the footer has to outlive the target.
@@ -459,7 +456,6 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
                   author={author}
                   onDone={focusRegion}
                   onStep={sortedComments.length > 1 ? (delta) => stepEditor(i, delta) : undefined}
-                  position={sortedComments.length > 1 ? { index: i, total: sortedComments.length } : undefined}
                 />
               ) : (
                 <CommentChip
@@ -475,49 +471,21 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
             </div>
           ))}
 
-          {/* What happens next with these quotes. Without it the rail states the
-              batch but never says how to finish it — the two ways out are the
-              composer (write something around the quotes) and a straight send. */}
+          {/* One quiet line: the quotes ride along on the next send, so the only
+              thing worth saying is how to get to the input. Clicking it does the
+              same as the key. Everything else the rail used to spell out — the
+              count, a send button, the per-card keys — was noise beside cards
+              that already show all of it. */}
           {footerOwner === messageId && (
-            <div className="cc-rail-foot" style={{ top: railBottom }}>
-              {/* Read top to bottom: what you have, then the two ways to finish,
-                  then the navigation keys. The actions are the answer to "how do
-                  I send these?", so they lead — the key hints are sugar and sit
-                  last, dimmest. */}
-              <div className="cc-rail-foot-label">
-                {pendingTotal} quote{pendingTotal !== 1 ? "s" : ""} on your reply
-              </div>
-              <div className="cc-rail-foot-actions">
-                <button type="button" className="cc-rail-foot-send" onClick={sendComposer}>
-                  Send now
-                </button>
-                <button type="button" className="cc-rail-foot-write" onClick={focusComposer}>
-                  Write reply
-                  <MenuKeyCaps action="compose.focus" />
-                </button>
-              </div>
-              {/* These keys only reach the region while it holds focus, so the
-                  hints appear only then — after Escape the footer keeps saying
-                  what the batch is and how to send it, without advertising keys
-                  that would do nothing. */}
-              {isReviewTarget && (
-                <div className="cc-rail-foot-keys">
-                  <span>
-                    <KeyCap size="xs">↑</KeyCap>
-                    <KeyCap size="xs">↓</KeyCap>
-                    move
-                  </span>
-                  <span>
-                    <KeyCap size="xs">N</KeyCap>
-                    note
-                  </span>
-                  <span>
-                    <KeyCap size="xs">⌫</KeyCap>
-                    remove
-                  </span>
-                </div>
-              )}
-            </div>
+            <button
+              type="button"
+              className="cc-rail-foot"
+              style={{ top: railBottom }}
+              onClick={focusComposer}
+            >
+              <MenuKeyCaps action="compose.focus" />
+              to reply
+            </button>
           )}
         </div>
       )}
@@ -602,7 +570,6 @@ function CommentEditor({
   author,
   onDone,
   onStep,
-  position,
 }: {
   conversationId: string;
   comment: PendingComment;
@@ -610,7 +577,6 @@ function CommentEditor({
   onDone: () => void;
   // Move to the previous/next quote's note. Absent when this is the only quote.
   onStep?: (delta: number) => void;
-  position?: { index: number; total: number };
 }) {
   const [value, setValue] = useState(comment.body);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -646,8 +612,7 @@ function CommentEditor({
 
   const cancel = close;
 
-  // Plain ↑/↓ belong to the caret inside the note, so stepping between notes
-  // takes the modifier: save what's typed, then open the neighbour's editor.
+  // Save what's typed, then open the neighbour's editor.
   const step = useCallback(
     (delta: number) => {
       useInboxStore.getState().commitReviewComment(conversationId, comment.id, value.trim());
@@ -655,6 +620,17 @@ function CommentEditor({
     },
     [value, conversationId, comment.id, onStep],
   );
+
+  // Plain ↑/↓ move between notes, but only once the caret has nowhere left to go
+  // inside this one: on the first line ↑ steps back, on the last line ↓ steps
+  // forward, and in between the arrows edit text as usual. That is how a list of
+  // fields behaves everywhere else, and it is what "I can't go up and down while
+  // typing a note" was asking for. A selection always belongs to the textarea.
+  const arrowLeavesNote = useCallback((el: HTMLTextAreaElement, up: boolean) => {
+    if (el.selectionStart !== el.selectionEnd) return false;
+    const at = el.selectionStart;
+    return up ? el.value.lastIndexOf("\n", at - 1) === -1 : el.value.indexOf("\n", at) === -1;
+  }, []);
 
   return (
     <div className="cc-comment-editor">
@@ -675,9 +651,14 @@ function CommentEditor({
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               save();
-            } else if (onStep && (e.metaKey || e.ctrlKey) && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-              e.preventDefault();
-              step(e.key === "ArrowDown" ? 1 : -1);
+            } else if (onStep && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+              const up = e.key === "ArrowUp";
+              // ⌘ jumps out of the note from anywhere; a bare arrow only once the
+              // caret is against that edge, so it still edits multi-line notes.
+              if (e.metaKey || e.ctrlKey || arrowLeavesNote(e.currentTarget, up)) {
+                e.preventDefault();
+                step(up ? -1 : 1);
+              }
             } else if (e.key === "Escape") {
               e.preventDefault();
               cancel();
@@ -685,35 +666,6 @@ function CommentEditor({
           }}
           onBlur={save}
         />
-        {/* Which note of how many, and the keys that walk between them — while
-            you're typing, plain ↑/↓ move the caret, so the jump needs ⌘. */}
-        {position && (
-          <div className="cc-comment-editor-nav">
-            <button
-              type="button"
-              className="cc-comment-btn"
-              disabled={position.index === 0}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => step(-1)}
-            >
-              <KeyCap size="xs">⌘</KeyCap>
-              <KeyCap size="xs">↑</KeyCap>
-            </button>
-            <span className="cc-comment-editor-count">
-              note {position.index + 1} of {position.total}
-            </span>
-            <button
-              type="button"
-              className="cc-comment-btn"
-              disabled={position.index === position.total - 1}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => step(1)}
-            >
-              <KeyCap size="xs">⌘</KeyCap>
-              <KeyCap size="xs">↓</KeyCap>
-            </button>
-          </div>
-        )}
         <div className="cc-comment-editor-footer">
           <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>
             Cancel
