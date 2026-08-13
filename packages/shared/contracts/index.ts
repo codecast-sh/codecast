@@ -18,3 +18,13 @@ export * from "./stableContext";
 export * from "./vaultProtocol";
 export * from "./vaultMirror";
 export * from "./terminalStream";
+// Without these two lines every consumer reinvents the capability vocabulary:
+// convex copied the constants, the web store reached in by relative path, and
+// the web UI and the CLI each declared their own scope and kind unions. Four
+// workarounds for one missing export.
+export * from "./capabilities";
+export * from "./capabilityResolver";
+// The fleet comparison — one row per capability, one cell per machine. Here for
+// the same reason: the CLI, the browser and Convex all render this grid, and
+// while it lived in the CLI the other two could only reimplement it.
+export * from "./fleetDiff";

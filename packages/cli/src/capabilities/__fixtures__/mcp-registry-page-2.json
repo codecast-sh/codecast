@@ -1,0 +1,95 @@
+{
+  "servers": [
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "agency.goji/goji",
+        "description": "Answers on AEO, SEO, web and brand from GOJI's published material. Melbourne, Australia.",
+        "repository": {
+          "url": "https://github.com/goji-agency/goji-mcp",
+          "source": "github"
+        },
+        "version": "1.0.1",
+        "websiteUrl": "https://goji.agency",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://mcp.goji.agency/mcp"
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "statusChangedAt": "2026-08-13T13:12:26.047978Z",
+          "publishedAt": "2026-08-13T13:12:26.047978Z",
+          "updatedAt": "2026-08-13T13:12:26.047978Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "agency.kesey/pretrip",
+        "description": "Screen regulated-health marketing copy against source-cited rulesets, all 50 states.",
+        "title": "Pre-Trip compliance scanner",
+        "version": "1.0.1",
+        "websiteUrl": "https://scan.kesey.agency/developers/",
+        "packages": [
+          {
+            "registryType": "npm",
+            "identifier": "pretrip-mcp",
+            "version": "1.0.1",
+            "transport": {
+              "type": "stdio"
+            }
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "statusChangedAt": "2026-07-26T18:03:21.463557Z",
+          "publishedAt": "2026-07-26T18:03:21.463557Z",
+          "updatedAt": "2026-07-26T18:03:21.463557Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "agency.lona/trading",
+        "description": "AI-powered trading strategy development: backtesting, market data, and portfolio analysis",
+        "repository": {
+          "url": "https://github.com/mindsightventures/lona",
+          "source": "github",
+          "id": "891584339",
+          "subfolder": "packages/lona-mcp-server"
+        },
+        "version": "2.0.0",
+        "websiteUrl": "https://lona.agency",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://mcp.lona.agency/mcp"
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "statusChangedAt": "2026-02-24T00:07:27.525636Z",
+          "publishedAt": "2026-02-24T00:07:27.525636Z",
+          "updatedAt": "2026-02-24T00:07:27.525636Z",
+          "isLatest": true
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "nextCursor": "agency.lona/trading:2.0.0",
+    "count": 3
+  }
+}
