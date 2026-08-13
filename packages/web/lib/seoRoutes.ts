@@ -1,5 +1,6 @@
 import { GUIDES, guideHref } from "../app/(marketing)/documentation/guides/guides";
 import { POSTS } from "../app/(marketing)/blog/posts";
+import { COMPARISONS, compareHref } from "../app/(marketing)/compare/comparisons";
 
 /**
  * seoRoutes — the single source of truth for every publicly indexable route.
@@ -104,6 +105,17 @@ const STATIC_ENTRIES: SeoEntry[] = [
 
 export const SEO_ROUTES: SeoEntry[] = [
   ...STATIC_ENTRIES,
+  {
+    path: "/compare",
+    title: "Codecast vs the alternatives",
+    description:
+      "Honest side-by-side comparisons of Codecast with other coding agent tools — Conductor, Vibe Kanban, Happy, Claudia — and when each is the better choice.",
+  },
+  ...COMPARISONS.map((c) => ({
+    path: compareHref(c.slug),
+    title: `${c.title} — which coding agent tool fits?`,
+    description: c.dek,
+  })),
   ...GUIDES.map((g) => ({
     path: guideHref(g.slug),
     title: `${g.title} — Codecast docs`,

@@ -122,6 +122,7 @@ export function BlogFooter() {
               <li><Link href="/features" className="hover:text-[#073642]">CLI</Link></li>
               <li><Link href="/changelog" className="hover:text-[#073642]">Changelog</Link></li>
               <li><Link href="/pricing" className="hover:text-[#073642]">Pricing</Link></li>
+              <li><Link href="/compare" className="hover:text-[#073642]">Compare</Link></li>
               <li><Link href="/security" className="hover:text-[#073642]">Security</Link></li>
             </ul>
           </div>

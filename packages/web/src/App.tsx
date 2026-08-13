@@ -25,6 +25,8 @@ const Download = lazy(() => import("@/app/(marketing)/download/page"));
 const BlogIndex = lazy(() => import("@/app/(marketing)/blog/page"));
 const BlogGitBlame = lazy(() => import("@/app/(marketing)/blog/git-blame-for-ai-agents/page"));
 const BlogAgentInbox = lazy(() => import("@/app/(marketing)/blog/an-inbox-for-your-agents/page"));
+const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
+const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
 const Login = lazy(() => import("@/app/login/page"));
 const Signup = lazy(() => import("@/app/signup/page"));
@@ -139,6 +141,8 @@ export function App() {
               <Route path="blog" element={<E name="BlogIndex"><BlogIndex /></E>} />
               <Route path="blog/git-blame-for-ai-agents" element={<E name="BlogGitBlame"><BlogGitBlame /></E>} />
               <Route path="blog/an-inbox-for-your-agents" element={<E name="BlogAgentInbox"><BlogAgentInbox /></E>} />
+              <Route path="compare" element={<E name="CompareIndex"><CompareIndex /></E>} />
+              <Route path="compare/:slug" element={<E name="Compare"><Compare /></E>} />
             </Route>
 
             {/* Auth */}
@@ -184,6 +188,9 @@ export function App() {
               <Route path="tasks/:id" element={<E name="TaskDetail"><TaskDetail /></E>} />
               <Route path="projects" element={<E name="Projects"><Projects /></E>} />
               <Route path="projects/:id" element={<E name="ProjectDetail"><ProjectDetail /></E>} />
+              {/* A task opened inside a project — same component as the project
+                  itself, so the project never unmounts around it. */}
+              <Route path="projects/:id/:taskId" element={<E name="ProjectDetail"><ProjectDetail /></E>} />
               <Route path="workflows" element={<E name="Workflows"><Workflows /></E>} />
               <Route path="routines" element={<E name="Routines"><Routines /></E>} />
               <Route path="triggers" element={<E name="Triggers"><Triggers /></E>} />

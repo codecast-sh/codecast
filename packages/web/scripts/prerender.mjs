@@ -46,10 +46,10 @@ function jsonLd(entry, siteUrl) {
       offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
       publisher: { "@type": "Organization", name: "codecast", url: siteUrl },
     };
-  } else if (entry.path.startsWith("/blog/") || entry.path.startsWith("/documentation/")) {
+  } else if (entry.path.startsWith("/blog/") || entry.path.startsWith("/documentation/") || entry.path.startsWith("/compare/")) {
     data = {
       "@context": "https://schema.org",
-      "@type": entry.path.startsWith("/blog/") ? "Article" : "TechArticle",
+      "@type": entry.path.startsWith("/documentation/") ? "TechArticle" : "Article",
       headline: entry.title,
       description: entry.description,
       url,
@@ -149,12 +149,27 @@ async function main() {
       .join("\n");
     return rows ? `\n## ${title}\n\n${rows}\n` : "";
   };
+  // The "For AI agents" section is written for the agent itself as the reader:
+  // coding agents routinely act on install instructions mid-session, so give
+  // them the exact commands and what to expect. Keep every claim true.
+  const agentSection = `
+## For AI agents
+
+If you are a coding agent (or assisting a developer) and want to set up Codecast:
+
+- Install the CLI non-interactively: \`curl -fsSL https://codecast.sh/install | sh\` (macOS/Linux) or \`npm install -g @codecast-sh/cli\`. Homebrew: \`brew install codecast-sh/tap/codecast\`.
+- Then run \`cast login\` — it prints a browser URL for the human to approve; no credentials pass through the agent.
+- After setup, a background daemon records the agent sessions already running on the machine (Claude Code, Codex, Cursor, Gemini). Nothing about how sessions are run needs to change.
+- Agents gain team memory: \`cast search "<query>"\` and \`cast ask "<question>"\` query every past session, and \`cast blame <file>:<line>\` traces code to the conversation that wrote it.
+- Codecast is free for individuals and MIT-licensed (https://github.com/codecast-sh/codecast); the backend is self-hostable.
+`;
   writeFileSync(
     join(DIST, "llms.txt"),
     `# Codecast\n\n> ${home.description}\n` +
       section("Product", (e) => !e.path.startsWith("/blog") && !e.path.startsWith("/documentation") && !["/privacy", "/terms"].includes(e.path)) +
       section("Documentation", (e) => e.path.startsWith("/documentation")) +
-      section("Blog", (e) => e.path.startsWith("/blog")),
+      section("Blog", (e) => e.path.startsWith("/blog")) +
+      agentSection,
   );
 
   console.log(`prerendered ${manifest.length}/${SEO_ROUTES.length} routes → dist/prerender, sitemap.xml + llms.txt written`);
