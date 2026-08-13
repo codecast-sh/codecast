@@ -26,8 +26,9 @@
  *
  * What the SPLIT can show follows the same three cases, because a pane can only
  * be relayed by the daemon that owns it. Your own machines work either way — a
- * local pane over the loopback PTY, a pane on your Mac mini as relayed screens
- * (read-only). A teammate's pane is theirs alone.
+ * local pane over the loopback PTY, a pane on your Mac mini as relayed screens.
+ * Both accept typing; the relayed one just answers more slowly. A teammate's
+ * pane is theirs alone.
  */
 
 import { useEffect, useRef, useState } from "react";

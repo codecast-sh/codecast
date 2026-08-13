@@ -29,9 +29,16 @@ export interface TermTabState {
   title: string;
   status: TermStatus;
   statusDetail?: string;
+  /** No input path at all — a watcher, not a participant. */
   readOnly: boolean;
-  /** Relayed from another machine (screens, not a PTY): read-only, and it can
-   *  go stale without the connection ever "closing". */
+  /** The far pane dictates geometry, so the xterm is sized to it and never
+   *  resizes it back. Distinct from `readOnly`: a relayed pane accepts typing
+   *  but must not be reshaped, because its real size belongs to whatever is
+   *  attached on the other machine. */
+  paneSized: boolean;
+  /** Relayed from another machine (screens, not a PTY): typing works but goes
+   *  at relay speed, and it can go stale without the connection ever
+   *  "closing". */
   remote?: boolean;
   /** remote only: when the last screen arrived, so the UI can say "paused"
    *  instead of pretending a frozen picture is live. */
@@ -235,9 +242,11 @@ export function openTerminal(opts: OpenTerminalOptions): string {
       sessionName: opts.name,
       title: opts.title ?? (opts.kind === "attach" ? (opts.target ?? "attach") : "shell"),
       status: "connecting",
-      // A relayed pane is screens, not a PTY — there is nowhere to send a
-      // keystroke, so it is read-only whatever the caller asked for.
-      readOnly: !!opts.remote || (opts.kind === "attach" && !opts.interactive),
+      readOnly: opts.kind === "attach" && !opts.interactive && !opts.remote,
+      // A relayed pane's size belongs to the machine it lives on: we are
+      // reading a screen tmux already laid out, and resizing it from here would
+      // reflow it under whoever is attached there.
+      paneSized: !!opts.remote || (opts.kind === "attach" && !opts.interactive),
       remote: !!opts.remote,
       cwd: opts.cwd,
     },
@@ -301,6 +310,7 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
           inst.state.status = "open";
           inst.state.sessionName = msg.sessionName;
           inst.state.readOnly = !!msg.readOnly;
+          if (msg.readOnly) inst.state.paneSized = true;
           // Kill requested while we were still connecting: now that the
           // session exists server-side, follow through instead of leaking it.
           if (inst.killRequested) {
@@ -311,10 +321,9 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
           if (inst.state.kind === "shell" && !opts.title) {
             inst.state.title = shortTitle(msg.sessionName, inst.state.cwd);
           }
-          // Only read-only viewers adopt the pane's size (they may not
-          // reshape it); interactive attaches size the pane to the panel,
-          // like any real terminal client.
-          if (inst.state.readOnly && msg.cols && msg.rows) {
+          // Panes we don't own the size of adopt theirs; interactive attaches
+          // size the pane to the panel, like any real terminal client.
+          if (inst.state.paneSized && msg.cols && msg.rows) {
             inst.term.resize(msg.cols, msg.rows);
           } else if (inst.pendingResize) {
             const { cols, rows } = inst.pendingResize;
@@ -385,7 +394,7 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
     }
   });
   inst.term.onResize(({ cols, rows }) => {
-    if (inst.state.readOnly) return; // watchers never resize the pane
+    if (inst.state.paneSized) return; // the pane's own size wins
     if (ws.readyState === WebSocket.OPEN && inst.state.status === "open") {
       ws.send(JSON.stringify({ type: "resize", cols, rows }));
     } else {
@@ -396,13 +405,18 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
 
 /**
  * Relay transport: repaint the pane from whole screens instead of a byte
- * stream. Nothing here writes back — a relayed pane has no input path at all.
+ * stream, and send keystrokes back through the same row.
  *
  * Frames only arrive when the far screen CHANGES, so "no frame for a while"
  * means either a quiet agent or a machine that went away. The daemon's
  * heartbeat is what tells those apart, and it lands as a `seq`-less update:
  * hence tracking lastFrameAt off the row's own timestamp rather than off our
  * own paint.
+ *
+ * Input is deliberately NOT echoed locally. A relayed pane shows exactly what
+ * tmux has, so the character appears when the far end has actually accepted it
+ * — slower, but it never shows a keystroke that didn't land, which is the one
+ * thing a terminal must not lie about.
  */
 function connectRemote(inst: TermInstance, src: RemotePaneSource): void {
   let lastSeq = -1;
@@ -418,7 +432,7 @@ function connectRemote(inst: TermInstance, src: RemotePaneSource): void {
     bump();
   }, REMOTE_FIRST_FRAME_TIMEOUT_MS);
 
-  const dropLease = connectRemotePane(src, {
+  const conn = connectRemotePane(src, {
     onFrame: (f) => {
       clearTimeout(firstFrame);
       inst.state.lastFrameAt = f.streamer_seen_at ?? f.updated_at;
@@ -457,9 +471,25 @@ function connectRemote(inst: TermInstance, src: RemotePaneSource): void {
     },
   });
 
+  // Keystrokes out. Guarded on `open` so the characters someone types at a
+  // spinner aren't queued up to land all at once when the pane finally appears.
+  inst.term.onData((data) => {
+    if (inst.state.status === "open" && !inst.state.readOnly) conn.write(data);
+  });
+  // Focus is what buys the fast poll on the far side, so report it honestly:
+  // claiming it while the tab is in the background would keep a machine
+  // capturing at typing speed for a pane nobody is looking at.
+  const onFocus = () => conn.setInteractive(true);
+  const onBlur = () => conn.setInteractive(false);
+  inst.term.textarea?.addEventListener("focus", onFocus);
+  inst.term.textarea?.addEventListener("blur", onBlur);
+  if (document.activeElement === inst.term.textarea) conn.setInteractive(true);
+
   inst.remoteDispose = () => {
     clearTimeout(firstFrame);
-    dropLease();
+    inst.term.textarea?.removeEventListener("focus", onFocus);
+    inst.term.textarea?.removeEventListener("blur", onBlur);
+    conn.close();
   };
 }
 
@@ -473,7 +503,7 @@ function shortTitle(sessionName: string | undefined, cwd: string | undefined): s
 
 function fitInstance(inst: TermInstance): void {
   if (!inst.container || inst.container.clientWidth < 20 || inst.container.clientHeight < 20) return;
-  if (inst.state.readOnly) return; // fixed to pane size; CSS handles overflow
+  if (inst.state.paneSized) return; // fixed to pane size; CSS handles overflow
   try {
     inst.fit.fit();
   } catch {}

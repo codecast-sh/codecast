@@ -9,7 +9,8 @@
 //
 //   this machine   → the loopback PTY WebSocket. Interactive, byte-exact.
 //   your other box → screens relayed through Convex (lib/terminal/remotePane).
-//                    Read-only, a few frames a second.
+//                    A few frames a second, and typing works at that same
+//                    speed: fine for answering an agent, wrong for vim.
 //   someone else's → nothing. Relaying it would mean writing commands into
 //                    another account's daemon queue; we name the machine and
 //                    stop there.
@@ -24,7 +25,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
-import { X, RotateCw, Eye } from "lucide-react";
+import { X, RotateCw, Radio } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -265,9 +266,9 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
         {isRemote && (
           <span
             className="inline-flex items-center gap-1 px-1 rounded text-[9px] font-mono text-sol-cyan bg-sol-cyan/10 flex-shrink-0"
-            title={`Relayed from ${machineName ?? "another machine"} — you can watch this pane but not type into it.`}
+            title={`Relayed from ${machineName ?? "another machine"}. Typing works, but every keystroke makes a round trip — expect a moment before it shows up.`}
           >
-            <Eye className="w-2.5 h-2.5" />
+            <Radio className="w-2.5 h-2.5" />
             {machineName ?? "remote"}
           </span>
         )}
