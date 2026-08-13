@@ -29,7 +29,19 @@ export interface InstanceState {
   sourceProfile: string | null;
   channel: ChromeChannel;
   startedAt: number;
-  /** The tab subsequent commands act on, unless --tab overrides it. */
+  /**
+   * The tab each SESSION is working in, keyed by session id.
+   *
+   * One browser serves every agent on the machine, so a single global "active
+   * tab" made concurrent sessions fight: session A opens a page, session B
+   * navigates the same tab to its own, and A's next command acts on B's page —
+   * which looks exactly like the app under test misbehaving. Observed in
+   * practice on 2026-08-13, where a hijacked tab made a working autocomplete
+   * appear broken. Ownership by session keeps them out of each other's way
+   * without needing a browser per agent.
+   */
+  tabsBySession?: Record<string, string>;
+  /** Fallback for callers with no session (a human at a terminal). */
   activeTargetId: string | null;
 }
 
@@ -217,13 +229,14 @@ export interface PageSession {
   targetId: string;
 }
 
-/** Raised when a tab's renderer stops answering, with the way out. */
+/** Raised when a tab's renderer will not answer, with the way out. */
 export class TabUnresponsive extends Error {
   constructor(targetId: string, detail: string) {
     super(
-      `tab ${targetId.slice(0, 8)} is not responding (${detail}).\n` +
-        `  Its renderer is wedged — usually a modal JavaScript dialog waiting on a click, or a script in a tight loop.\n` +
-        `  Recover with: cast browser close --tab ${targetId.slice(0, 8)}   (or \`cast browser open --new-tab <url>\`)`,
+      `tab ${targetId.slice(0, 8)} did not respond (${detail}).\n` +
+        `  Usually its renderer is blocked — a modal JavaScript dialog waiting on a click, or a script in a tight loop.\n` +
+        `  It can also just be busy: this browser is shared with every other agent on the machine.\n` +
+        `  Try the command again first. If it keeps failing: cast browser close --tab ${targetId.slice(0, 8)}`,
     );
     this.name = "TabUnresponsive";
   }
@@ -242,13 +255,27 @@ export async function attachToTarget(conn: CdpConnection, targetId: string): Pro
     targetId,
     flatten: true,
   });
-  try {
+  // Retried once, because a single slow answer is not proof of a wedge. One
+  // Chrome serves every agent on the machine, so a burst of parallel work makes
+  // a perfectly healthy tab miss a ten-second deadline — and condemning it then
+  // tells the agent to close a page that was only busy. A truly blocked
+  // renderer stays blocked, so a second attempt separates the two cheaply.
+  const enableAll = async (timeoutMs: number) => {
     for (const domain of ["Page", "DOM", "Runtime", "Accessibility", "Network"]) {
-      await conn.send(`${domain}.enable`, {}, sessionId, 10_000);
+      await conn.send(`${domain}.enable`, {}, sessionId, timeoutMs);
     }
+  };
+  try {
+    await enableAll(10_000);
   } catch (err) {
-    if (err instanceof CdpTimeout) throw new TabUnresponsive(targetId, err.message);
-    throw err;
+    if (!(err instanceof CdpTimeout)) throw err;
+    await sleep(500);
+    try {
+      await enableAll(15_000);
+    } catch (retryErr) {
+      if (retryErr instanceof CdpTimeout) throw new TabUnresponsive(targetId, retryErr.message);
+      throw retryErr;
+    }
   }
   return { conn, sessionId, targetId };
 }
@@ -257,27 +284,79 @@ export async function attachToTarget(conn: CdpConnection, targetId: string): Pro
  * Resolve which tab to act on: the explicit target, else the recorded active
  * tab if it still exists, else the most recently opened page.
  */
-export async function resolveTarget(port: number, state: InstanceState, explicit?: string): Promise<CdpTarget> {
+export async function resolveTarget(
+  port: number,
+  state: InstanceState,
+  explicit?: string,
+  sessionId?: string | null,
+): Promise<CdpTarget> {
   const targets = await listTargets(port);
   if (!targets.length) throw new Error("the browser has no open tabs — run `cast browser open <url>`");
   if (explicit) {
     const match =
       targets.find((t) => t.targetId === explicit) ||
-      targets.find((t) => t.targetId.startsWith(explicit)) ||
+      targets.find((t) => t.targetId.toLowerCase().startsWith(explicit.toLowerCase())) ||
       targets.find((t) => t.url.includes(explicit));
     if (!match) throw new Error(`no tab matching '${explicit}'`);
     return match;
   }
-  if (state.activeTargetId) {
+  // This session's own tab first — never whichever tab another agent touched
+  // most recently.
+  const owned = sessionId ? state.tabsBySession?.[sessionId] : undefined;
+  if (owned) {
+    const match = targets.find((t) => t.targetId === owned);
+    if (match) return match;
+  }
+
+  // No tab of our own. Falling back to "the most recent tab" is what caused
+  // agents to steal each other's pages: the most recent tab is very often the
+  // one somebody else just opened. So consider only tabs nobody has claimed,
+  // and if there are none, say so rather than trespassing — an agent with no
+  // tab should open one, which costs nothing.
+  const claimedByOthers = new Set(
+    Object.entries(state.tabsBySession ?? {})
+      .filter(([sid]) => sid !== sessionId)
+      .map(([, id]) => id),
+  );
+  const free = targets.filter((t) => !claimedByOthers.has(t.targetId));
+
+  if (sessionId && free.length === 0) {
+    throw new Error(
+      "every open tab belongs to another agent — run `cast browser open --new-tab <url>` to get your own.\n" +
+        "  This browser is shared by every agent on the machine; acting on someone else's tab breaks their work.",
+    );
+  }
+  if (!sessionId && state.activeTargetId) {
     const match = targets.find((t) => t.targetId === state.activeTargetId);
     if (match) return match;
   }
-  return targets[targets.length - 1];
+  return (free.length ? free : targets)[Math.max(0, (free.length ? free : targets).length - 1)];
 }
 
-export function setActiveTarget(state: InstanceState, targetId: string): void {
-  if (state.activeTargetId === targetId) return;
-  writeState({ ...state, activeTargetId: targetId });
+/**
+ * Record which tab this session is working in.
+ *
+ * Read-modify-write against the file rather than the caller's copy: several
+ * agents write this concurrently, and merging into a stale in-memory snapshot
+ * would drop whichever claim landed in between.
+ */
+export function setActiveTarget(state: InstanceState, targetId: string, sessionId?: string | null): void {
+  const current = readState() ?? state;
+  const tabs = { ...(current.tabsBySession ?? {}) };
+  if (sessionId) tabs[sessionId] = targetId;
+  if (current.activeTargetId === targetId && (!sessionId || tabs[sessionId] === current.tabsBySession?.[sessionId])) {
+    return;
+  }
+  writeState({ ...current, activeTargetId: targetId, tabsBySession: tabs });
+}
+
+/** Drop tabs that no longer exist, so the map cannot grow without bound. */
+export function pruneTabOwnership(state: InstanceState, liveTargetIds: Set<string>): void {
+  const tabs = state.tabsBySession ?? {};
+  const kept = Object.fromEntries(Object.entries(tabs).filter(([, id]) => liveTargetIds.has(id)));
+  if (Object.keys(kept).length !== Object.keys(tabs).length) {
+    writeState({ ...state, tabsBySession: kept });
+  }
 }
 
 /**

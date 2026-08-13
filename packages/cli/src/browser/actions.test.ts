@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { ElementGone, click, locate, pressKey, type } from "./actions.js";
+import { ElementGone, click, locate, pressKey, scroll, type } from "./actions.js";
 import type { PageSession } from "./instance.js";
 
 interface Call {
@@ -181,5 +181,57 @@ describe("type", () => {
     const order = calls.map((c) => c.method);
     expect(order.indexOf("Input.insertText")).toBeLessThan(order.lastIndexOf("Input.dispatchKeyEvent"));
     expect(calls.at(-1)!.params.windowsVirtualKeyCode).toBe(13);
+  });
+});
+
+describe("scroll", () => {
+  /** A page that moves by `step` on each wheel event, up to `limit`. */
+  function scrollable(step: number, limit: number) {
+    let y = 0;
+    const page = {
+      sessionId: "s1",
+      targetId: "t1",
+      conn: {
+        send: async (method: string, params: any = {}) => {
+          if (method === "Runtime.evaluate") {
+            return { result: { value: JSON.stringify([y, limit, 400, 300]) } };
+          }
+          if (method === "Input.dispatchMouseEvent" && params.type === "mouseWheel") {
+            y = Math.max(0, Math.min(limit, y + Math.sign(params.deltaY) * step));
+          }
+          return {};
+        },
+      },
+    } as unknown as PageSession;
+    return page;
+  }
+
+  test("reports the position AFTER the scroll, not before", async () => {
+    // Reading scrollY straight after dispatching returns the old offset — a
+    // wheel event is handled asynchronously — which made the first scroll of
+    // every page report "at 0".
+    const r = await scroll(scrollable(300, 2000), 900);
+    expect(r.y).toBe(300);
+    expect(r.moved).toBe(true);
+  });
+
+  test("reports the furthest the page can go", async () => {
+    const r = await scroll(scrollable(300, 2000), 900);
+    expect(r.max).toBe(2000);
+  });
+
+  test("says when the page did not move", async () => {
+    // Distinguishes "already at the bottom" from a successful scroll, so an
+    // agent paging through content knows to stop.
+    const r = await scroll(scrollable(300, 0), 900);
+    expect(r.moved).toBe(false);
+    expect(r.y).toBe(0);
+  });
+
+  test("a negative amount scrolls up", async () => {
+    const page = scrollable(300, 2000);
+    await scroll(page, 900);
+    const r = await scroll(page, -900);
+    expect(r.y).toBe(0);
   });
 });
