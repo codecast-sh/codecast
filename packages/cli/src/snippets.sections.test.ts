@@ -1,9 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import {
   applySnippet,
   cutOwnedSections,
   findOwnedSections,
   hasOwnedSection,
+  installSectionToFile,
   type SectionSpec,
 } from "./snippets.js";
 
@@ -175,10 +179,11 @@ describe("applySnippet", () => {
   });
 });
 
-// A refresh cuts each block out and re-appends it at the end. If the cut left
-// the blank line that separated it from the next section, every `cast update`
-// would grow the file — the shipped CLI added one blank line per snippet per
-// run. Two consecutive updates must be byte-identical.
+// A refresh replaces each block where it stands. The block's end deliberately
+// swallows the blank line that separated it from the next section, and the
+// refresh writes exactly one back — so the separator neither vanishes nor
+// doubles. The shipped CLI added one blank line per snippet per run.
+// Two consecutive updates must be byte-identical.
 describe("regression: repeated updates do not grow the file", () => {
   test("a second update is byte-identical to the first", () => {
     const start = `# Mine\n\n## Tasks & Plans\nold\n${END}\n\n## Later\nkeep\n`;
@@ -189,11 +194,116 @@ describe("regression: repeated updates do not grow the file", () => {
     expect(thrice).toBe(once);
   });
 
-  test("blank-line structure around neighbours is preserved", () => {
+  // This test used to assert `# Mine\n\n## Later\nkeep\n` — the signature of the
+  // old writer, which cut our block out of the middle and re-appended it at the
+  // bottom, leaving the user's `## Later` pulled up under their title. The file
+  // did not grow, which is all this describe block claims, but the user's
+  // section order silently changed on every update. The claim about blank lines
+  // is unweakened; what changed is where the refreshed block belongs.
+  test("blank lines are preserved and the block does not move", () => {
     const start = `# Mine\n\n## Tasks & Plans\nold\n${END}\n\n## Later\nkeep\n`;
     const out = applySnippet(start, WORK, FRESH, true).text;
-    expect(out).toContain("# Mine\n\n## Later\nkeep\n");
+    expect(out).toBe(`# Mine\n\n## Tasks & Plans\n\nfresh body\n${END}\n\n## Later\nkeep\n`);
     expect(out).not.toMatch(/\n{3,}/);
+  });
+});
+
+// The block is refreshed where it stands. Re-appending it at the end walked
+// codecast's sections downward past the user's own content on every update.
+describe("regression: an update does not reorder the user's file", () => {
+  const start = [
+    "# My CLAUDE.md",
+    "",
+    "## Above",
+    "written before codecast existed",
+    "",
+    "## Tasks & Plans",
+    "old body",
+    END,
+    "",
+    "## Below",
+    "still mine",
+    "",
+  ].join("\n");
+
+  test("the section keeps its place between the sections around it", () => {
+    const out = applySnippet(start, WORK, FRESH, true).text;
+    expect(out).toBe(
+      [
+        "# My CLAUDE.md",
+        "",
+        "## Above",
+        "written before codecast existed",
+        "",
+        "## Tasks & Plans",
+        "",
+        "fresh body",
+        END,
+        "",
+        "## Below",
+        "still mine",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  test("its neighbours keep their order across ten updates", () => {
+    let out = start;
+    for (let i = 0; i < 10; i++) out = applySnippet(out, WORK, FRESH, true).text;
+    expect(out.indexOf("## Above")).toBeLessThan(out.indexOf("## Tasks & Plans"));
+    expect(out.indexOf("## Tasks & Plans")).toBeLessThan(out.indexOf("## Below"));
+    expect(out).toBe(applySnippet(out, WORK, FRESH, true).text);
+  });
+
+  test("duplicates collapse into the FIRST block's position, not the end", () => {
+    const dup = [
+      "# Top",
+      "",
+      "## Tasks & Plans",
+      "first",
+      END,
+      "",
+      "## Mine",
+      "keep me here",
+      "",
+      "## Tasks & Plans",
+      "second",
+      END,
+      "",
+    ].join("\n");
+    const out = applySnippet(dup, WORK, FRESH, true).text;
+    expect(out.match(/## Tasks & Plans/g)).toHaveLength(1);
+    expect(out.indexOf("## Tasks & Plans")).toBeLessThan(out.indexOf("## Mine"));
+    expect(out).toContain("keep me here");
+  });
+});
+
+// The daemon refreshes these snippets on a reconcile loop. A write with the
+// same bytes still moves the file's mtime, which wakes every watcher on the
+// machine for nothing.
+describe("a run that changes nothing reports unchanged", () => {
+  test("re-applying the current section is a no-op", () => {
+    const once = applySnippet("# Mine\n", WORK, FRESH, true);
+    expect(once.unchanged).toBe(false);
+    const twice = applySnippet(once.text, WORK, FRESH, true);
+    expect(twice).toMatchObject({ installed: true, updated: true, unchanged: true });
+    expect(twice.text).toBe(once.text);
+  });
+
+  test("a changed body is not unchanged", () => {
+    const once = applySnippet("# Mine\n", WORK, FRESH, true).text;
+    const next = applySnippet(once, WORK, `\n## Tasks & Plans\n\nNEW body\n${END}\n`, true);
+    expect(next.unchanged).toBe(false);
+    expect(next.text).toContain("NEW body");
+  });
+
+  test("present and not updating is unchanged", () => {
+    const text = `## Tasks & Plans\nbody\n${END}\n`;
+    expect(applySnippet(text, WORK, FRESH, false)).toMatchObject({
+      installed: false,
+      updated: false,
+      unchanged: true,
+    });
   });
 });
 
@@ -310,5 +420,71 @@ describe("disable removes the section from disk", () => {
   test("disabling something that was never installed changes nothing", () => {
     const theirs = "# Mine\n\n## My Notes\nKEEP THIS\n";
     expect(cutOwnedSections(theirs, MESSAGING)).toBe(theirs);
+  });
+});
+
+// The claim above, proved against a real file: the write itself is skipped, so
+// the mtime does not move. mtime is the observable that matters — it is what
+// every file watcher on the machine wakes on.
+describe("installSectionToFile: no write when nothing changed", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cast-snippets-"));
+  afterAll(() => fs.rmSync(tmpRoot, { recursive: true, force: true }));
+
+  let n = 0;
+  /** A fresh dir per test, with the section already installed and its mtime
+   *  parked in the past so a rewrite is unmistakable. */
+  const seeded = () => {
+    const dir = path.join(tmpRoot, `case-${n++}`);
+    const file = path.join(dir, "CLAUDE.md");
+    installSectionToFile(file, dir, WORK, FRESH, true);
+    const past = new Date(Date.now() - 60_000);
+    fs.utimesSync(file, past, past);
+    return { dir, file, mtime: fs.statSync(file).mtimeMs };
+  };
+
+  test("creating the file writes it", () => {
+    const dir = path.join(tmpRoot, "create");
+    const file = path.join(dir, "CLAUDE.md");
+    const r = installSectionToFile(file, dir, WORK, FRESH, true);
+    expect(r).toMatchObject({ installed: true, unchanged: false });
+    expect(fs.readFileSync(file, "utf-8")).toContain("fresh body");
+  });
+
+  test("re-installing the same section leaves the mtime alone", () => {
+    const { dir, file, mtime } = seeded();
+    const r = installSectionToFile(file, dir, WORK, FRESH, true);
+    expect(r).toMatchObject({ installed: true, updated: true, unchanged: true });
+    expect(fs.statSync(file).mtimeMs).toBe(mtime);
+  });
+
+  test("ten reconcile passes still leave the mtime alone", () => {
+    const { dir, file, mtime } = seeded();
+    for (let i = 0; i < 10; i++) installSectionToFile(file, dir, WORK, FRESH, true);
+    expect(fs.statSync(file).mtimeMs).toBe(mtime);
+  });
+
+  test("a genuinely new body does write", () => {
+    const { dir, file, mtime } = seeded();
+    const r = installSectionToFile(file, dir, WORK, `\n## Tasks & Plans\n\nNEW body\n${END}\n`, true);
+    expect(r.unchanged).toBe(false);
+    expect(fs.statSync(file).mtimeMs).toBeGreaterThan(mtime);
+    expect(fs.readFileSync(file, "utf-8")).toContain("NEW body");
+  });
+
+  test("present and not updating never touches the file", () => {
+    const { dir, file, mtime } = seeded();
+    const r = installSectionToFile(file, dir, WORK, FRESH, false);
+    expect(r).toMatchObject({ installed: false, unchanged: true });
+    expect(fs.statSync(file).mtimeMs).toBe(mtime);
+  });
+
+  test("the user's surrounding content survives a real write", () => {
+    const dir = path.join(tmpRoot, "surround");
+    const file = path.join(dir, "CLAUDE.md");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, `# Mine\n\n## Above\nkeep\n\n## Tasks & Plans\nold\n${END}\n\n## Below\nkeep too\n`);
+    installSectionToFile(file, dir, WORK, FRESH, true);
+    const out = fs.readFileSync(file, "utf-8");
+    expect(out).toBe(`# Mine\n\n## Above\nkeep\n\n## Tasks & Plans\n\nfresh body\n${END}\n\n## Below\nkeep too\n`);
   });
 });
