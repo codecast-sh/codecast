@@ -2090,7 +2090,8 @@ cast feed --state needs-input     # filter feed by work state
 cast feed --label api             # sessions I filed under a label (search/sessions take --label too)
 cast read <id> 15:25              # read messages 15-25
 cast read '<share-url>#msg-<id>'  # read a window around a linked message (-c N for context size)
-cast link <id> [line]             # mint a deep link to any object (session+line→message, ct-/pl- task/plan, --type doc)
+cast link [id] [line]             # mint a deep link to any object (session+line→message, ct-/pl- task/plan, --type doc)
+cast link                         # …the link to THIS session, to hand a human something clickable
 
 # Explore sessions — 3 axes: QUERY (which) × CONTENT (state | --messages) × LIVENESS (snapshot | -w)
 cast sessions                     # state snapshot, grouped most-actionable-first
@@ -8196,6 +8197,27 @@ program
     }
   });
 
+// Map a local agent session id to its codecast conversation id via the endpoint
+// `cast links` already uses. Returns null when the session has no conversation
+// (never synced, or not this user's).
+async function resolveSessionConversationId(
+  config: { auth_token?: string; convex_url?: string },
+  sessionId: string,
+): Promise<string | null> {
+  const siteUrl = (config.convex_url ?? "").replace(".cloud", ".site");
+  try {
+    const response = await cliFetchRead(`${siteUrl}/cli/session-links`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, api_token: config.auth_token }),
+    });
+    const result = await response.json();
+    return result?.conversation_id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 program
   .command("link")
   .description(
@@ -8204,7 +8226,10 @@ program
     "id, or a pasted URL; for a session you can add a line number (as shown by\n" +
     "`cast read`) to anchor the exact message. Type is inferred from the id prefix\n" +
     "(ct-… task, pl-… plan, jx… session); pass --type for full ids or docs.\n\n" +
+    "With no argument it links to the CURRENT session — the answer to \"what is\n" +
+    "the link to this conversation?\" (`cast links` also prints it, with a title).\n\n" +
     "Examples:\n" +
+    "  cast link                           # link to THIS session\n" +
     "  cast link jx70ntf 99                # link to message 99 in that session\n" +
     "  cast link jx70ntf                   # link to the session (no anchor)\n" +
     "  cast link ct-37187                  # link to a task\n" +
@@ -8214,7 +8239,7 @@ program
     "                                      # expand a short/partial link to canonical form\n" +
     "  cast link jx70ntf 99 --json         # { url, type, id, message_id, line }"
   )
-  .argument("<ref>", "Object id (short or full), or a pasted codecast URL (a #msg-<id> anchor is preserved)")
+  .argument("[ref]", "Object id (short or full), or a pasted codecast URL (a #msg-<id> anchor is preserved); defaults to the current session")
   .argument("[line]", "1-based message line to anchor (sessions only, as shown by `cast read`)")
   .option("--type <type>", "Entity type: session | task | plan | doc | project (overrides inference)")
   .option("--json", "Output as JSON")
@@ -8223,6 +8248,30 @@ program
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
       process.exit(1);
+    }
+
+    // "Link to this conversation" is the most common thing to want and was the
+    // one thing you could not ask for: `cast link` alone failed on a missing
+    // required argument, which is why an agent reached for an invented
+    // `cast codecast` and scraped a placeholder id out of the help text.
+    //
+    // detectCurrentSessionId returns the LOCAL agent session id, which the read
+    // path below cannot resolve (its resolver deliberately takes only short and
+    // full conversation ids). /cli/session-links is the existing mapping from
+    // one to the other — the same endpoint `cast links` uses, so an unsynced
+    // session gets synced here exactly as it does there.
+    if (ref === undefined) {
+      const current = detectCurrentSessionId();
+      if (!current) {
+        console.error("No session detected — pass one explicitly: cast link jx7c6zk");
+        process.exit(1);
+      }
+      const resolved = await resolveSessionConversationId(config, current);
+      if (!resolved) {
+        console.error("Could not resolve the current session — pass one explicitly: cast link jx7c6zk");
+        process.exit(1);
+      }
+      ref = resolved;
     }
 
     const lineNum = line !== undefined ? parseInt(line, 10) : undefined;
