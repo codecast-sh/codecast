@@ -1,13 +1,18 @@
 // What does one machine have that the others do not?
 //
-// `inventory.ts` answers "what is installed here" for a single machine. This
-// module takes N of those answers — one per device the user owns — and lays
-// them side by side: a row per capability, a cell per machine, and a verdict
-// per row. It is the whole of the fleet mirror's reading surface, and it is
-// pure: no filesystem, no network, no clock, no randomness. The daemon, the
-// browser and the server can all run it and must all get the same answer, for
-// the same reason the snippet catalog is shared code — a diff that disagrees
-// with itself per machine is worse than no diff.
+// `packages/cli/src/capabilities/inventory.ts` answers "what is installed here"
+// for a single machine. This module takes N of those answers — one per device
+// the user owns, arriving as JSON over the wire — and lays them side by side: a
+// row per capability, a cell per machine, and a verdict per row. It is the whole
+// of the fleet mirror's reading surface, and it is pure: no filesystem, no
+// network, no clock, no randomness.
+//
+// It lives in the shared contracts because THREE runtimes render this grid — the
+// daemon for `cast cap status`, the browser for `/capabilities`, and Convex for
+// the stored summary — and a diff that disagrees with itself per machine is
+// worse than no diff. While it lived in the CLI package the other two could only
+// reimplement it, and they did, with different vocabularies and different
+// answers. Same rule as the snippet catalog: one copy, or the copies drift.
 //
 // Four rules shape everything below.
 //
@@ -245,7 +250,7 @@ export interface FleetDiff {
 
 // --------------------------------------------------------------- orderings
 
-/** Narrowest scope first, as `toInvocableList` orders them (inventory.ts:398).
+/** Narrowest scope first, as `toInvocableList` orders them (packages/cli/src/capabilities/inventory.ts:398).
  *  This is a ranking, so it is spelled out rather than borrowed from a
  *  declaration list that happens to read the same way today. */
 const SCOPE_ORDER = ["local", "project", "user"] as const satisfies readonly ObservedScope[];
@@ -351,7 +356,7 @@ function pinOf(kind: FleetRowKind, meta?: Record<string, string>): Pin | undefin
   switch (kind) {
     case "plugin": {
       // Claude Code records `gitCommitSha` per install, so pinning is read, not
-      // invented (inventory.ts:248-251). A reporter that only knows the version
+      // invented (packages/cli/src/capabilities/inventory.ts:248-251). A reporter that only knows the version
       // — `claude plugin list --json` never sees a sha — says so with its kind
       // rather than passing a version off as a sha.
       const sha = text(meta?.sha);
@@ -470,7 +475,7 @@ interface Fold {
  * Does this declaration decide the machine's pin?
  *
  * A pin is not a union, it is a resolution: the narrowest scope wins, the same
- * rule `toInvocableList` uses for a name collision (inventory.ts:397-408). Two
+ * rule `toInvocableList` uses for a name collision (packages/cli/src/capabilities/inventory.ts:397-408). Two
  * declarations at one scope come from two clients describing one machine, so
  * the more precise answer wins — and if even that ties, the smaller string
  * does, which is arbitrary but keeps the answer independent of the order the
@@ -620,7 +625,7 @@ export function buildFleetDiff(reports: DeviceReport[]): FleetDiff {
         fold = { enabled: false, pinRank: SCOPE_ORDER.length, scopes: new Set() };
         row.byDevice.set(deviceId, fold);
       }
-      // Scopes stack rather than override (inventory.ts:19-22), so one scope
+      // Scopes stack rather than override (packages/cli/src/capabilities/inventory.ts:19-22), so one scope
       // switching a plugin on is enough for it to be on here — the same union
       // `claude plugin list --json` reports. The same goes for the bytes on
       // disk: one declaration finding them is enough.
