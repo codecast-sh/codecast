@@ -76,6 +76,13 @@ export default function ChatChannelScreen() {
     return out;
   }, [teamMembers]);
 
+  // The gate for rendered mentions: exactly the handles the strip offers and
+  // the server resolves. One vocabulary end to end.
+  const knownHandles = useMemo(
+    () => new Set(mentionCandidates.map((c) => c.handle.toLowerCase())),
+    [mentionCandidates],
+  );
+
   // Head page stays live via the subscription; older pages accumulate below it.
   const head = useQuery(api.chat.listMessages, { channel_id: channelId, limit: 60 });
 // Names for authors the roster no longer carries (departed members): the
@@ -323,6 +330,7 @@ export default function ChatChannelScreen() {
         message={view}
         grouped={item.grouped}
         now={now}
+        knownMentionHandles={knownHandles}
         onOpenThread={pushThread}
         onLongPress={onLongPress}
         onToggleReaction={(id, emoji) => void toggleReaction({ message_id: id as any, emoji })}

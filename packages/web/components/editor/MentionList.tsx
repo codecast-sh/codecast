@@ -24,6 +24,10 @@ export type MentionItem = {
   type: string;
   label: string;
   sublabel?: string;
+  /** The @handle this person answers to in team chat — the server's mention
+   *  vocabulary (github username, email local part, or a bot's name slug). */
+  handle?: string;
+  isBot?: boolean;
   image?: string;
   shortId?: string;
   status?: string;

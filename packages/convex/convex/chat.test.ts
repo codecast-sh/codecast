@@ -6,6 +6,7 @@ import {
   editMessage,
   expireAnchorReply,
   stopAnchorReply,
+  archiveChannel,
   getThread,
   listChannels,
   listMessages,
@@ -986,10 +987,15 @@ describe("the anchor in a thread", () => {
     const ctx = context(ALICE, seed);
     const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@anchor hi" });
     // The message LANDED. It used to take the whole transaction down with it.
-    expect(messagesIn(ctx).length).toBe(1);
-    expect(messagesIn(ctx)[0].content).toBe("@anchor hi");
-    expect(sent.anchor_thinking_message_id).toBe(null);
+    expect(messagesIn(ctx).some((m: any) => m.content === "@anchor hi")).toBe(true);
     expect(sent.anchor_wake_skipped).toBe("anchor_has_no_session");
+    // And the asker can SEE why nothing is coming: an error row in the thread,
+    // not a silent skip that reads as the anchor ignoring them.
+    expect(sent.anchor_thinking_message_id).toBeTruthy();
+    expect(placeholders(ctx)[0].agent_status).toBe("error");
+    expect(placeholders(ctx)[0].content).toContain("not running");
+    // No wake was queued for it.
+    expect(ctx.db._tables.pending_messages.length).toBe(0);
   });
 
   test("an anchor whose session row is gone says so instead of spinning", async () => {
@@ -1016,10 +1022,11 @@ describe("the anchor in a thread", () => {
       window_start: Date.now(), request_count: 30,
     });
     const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@anchor check?" });
-    expect(messagesIn(ctx).length).toBe(1);
     expect(sent.created).toBe(true);
-    expect(sent.anchor_thinking_message_id).toBe(null);
     expect(sent.anchor_wake_skipped).toBe("rate_limited");
+    expect(placeholders(ctx)[0].agent_status).toBe("error");
+    expect(placeholders(ctx)[0].content).toContain("too many requests");
+    expect(ctx.db._tables.pending_messages.length).toBe(0);
   });
 
   test("an anchor whose host has left the team is not woken", async () => {
@@ -1034,6 +1041,8 @@ describe("the anchor in a thread", () => {
     const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@anchor hi" });
     expect(sent.anchor_wake_skipped).toBe("host_not_in_team");
     expect(ctx.db._tables.pending_messages.length).toBe(0);
+    expect(placeholders(ctx)[0].agent_status).toBe("error");
+    expect(placeholders(ctx)[0].content).toContain("no longer on this team");
   });
 
   test("a paused anchor is not woken", async () => {
@@ -1590,5 +1599,18 @@ describe("channel unread semantics", () => {
     );
     expect(rail.unread).toBe(0);
     expect(rail.unread_mentions).toBe(0);
+  });
+});
+
+describe("archive round-trip syncs", () => {
+  test("restore writes null — a clear a delta sync can SEE, not a removed field", async () => {
+    const ctx = context(ALICE);
+    await call(archiveChannel, as(ctx, BOB), { channel_id: CHANNEL, archived: true });
+    expect(ctx.db._tables.chat_channels[0].archived_at).toBeGreaterThan(0);
+    await call(archiveChannel, as(ctx, BOB), { channel_id: CHANNEL, archived: false });
+    // Field-removal here left every client archived forever: an overlay treats
+    // an absent field as "no information", never as a clear.
+    expect(ctx.db._tables.chat_channels[0].archived_at).toBe(null);
+    expect("archived_at" in ctx.db._tables.chat_channels[0]).toBe(true);
   });
 });

@@ -448,17 +448,10 @@
   color: var(--sol-text-muted);
 }
 
-/* Your own mention. Tinted, not boxed — a box on every mention turns a busy
- * channel into confetti. */
-.ch-mention {
-  padding: 0 3px;
-  border-radius: 3px;
-  font-weight: 600;
-  color: var(--sol-blue);
-  background: color-mix(in srgb, var(--sol-blue) 13%, transparent);
-}
-
-.ch-mention-self {
+/* Mentions wear the doc editor's own chip (editor.css: .editor-mention
+ * .mention-person) — one stylesheet, not a chat imitation. Chat adds only the
+ * self accent: your own name runs hotter than everyone else's. */
+.editor-mention.ch-mention-self {
   color: var(--sol-orange);
   background: color-mix(in srgb, var(--sol-orange) 17%, transparent);
 }

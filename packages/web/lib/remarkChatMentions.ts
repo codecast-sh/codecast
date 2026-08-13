@@ -34,10 +34,14 @@ export type ChatMentionOptions = {
   known?: Set<string>;
   /** The viewer's own handles, which get the louder treatment. */
   self?: Set<string>;
+  /** handle → display name. When present, the chip renders "@Samvit
+   *  Ramadurgam" over the stored "@samvit" — the same face a person mention
+   *  wears in the doc editor, whose classes this plugin emits. */
+  names?: Map<string, string>;
 };
 
 export function remarkChatMentions(options: ChatMentionOptions = {}) {
-  const { known, self } = options;
+  const { known, self, names } = options;
   const has = (set: Set<string> | undefined, handle: string) =>
     !!set && (set.has(handle) || set.has(handle.toLowerCase()));
 
@@ -53,6 +57,7 @@ export function remarkChatMentions(options: ChatMentionOptions = {}) {
             // is what an unknown handle or a mid-word "@" must do.
             if (before && !BOUNDARY_RE.test(before)) return false;
             if (known && !has(known, handle)) return false;
+            const display = names?.get(handle) ?? names?.get(handle.toLowerCase());
             return {
               type: "emphasis",
               // data.hName/hProperties is how mdast hands a node to rehype under
@@ -62,11 +67,17 @@ export function remarkChatMentions(options: ChatMentionOptions = {}) {
               data: {
                 hName: "span",
                 hProperties: {
-                  className: has(self, handle) ? "ch-mention ch-mention-self" : "ch-mention",
+                  // The doc editor's own chip classes (editor.css), so a person
+                  // renders identically here and in a doc — one stylesheet, not
+                  // a chat-flavored imitation. Self keeps its louder accent.
+                  className: has(self, handle)
+                    ? "editor-mention mention-person ch-mention-self"
+                    : "editor-mention mention-person",
                   "data-mention": handle,
+                  title: display ? `@${handle}` : undefined,
                 },
               },
-              children: [{ type: "text", value: match }],
+              children: [{ type: "text", value: display ? `@${display}` : match }],
             };
           },
         ],

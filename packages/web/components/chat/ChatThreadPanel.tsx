@@ -34,6 +34,8 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
   viewerId,
   knownHandles,
   selfHandles,
+  handleNames,
+  teamId,
   now,
   targetMessageId,
   onClose,
@@ -52,6 +54,9 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
   viewerId: string;
   knownHandles?: Set<string>;
   selfHandles?: Set<string>;
+  handleNames?: Map<string, string>;
+  /** The channel's team — scopes the composer's @ popup to the room's team. */
+  teamId?: string;
   now: number;
   /** A permalink to a REPLY: the panel is the only place that message exists, so
    *  the link lands nowhere unless the panel scrolls to it. */
@@ -111,6 +116,7 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
         permalinkChannelId={channelId}
         knownHandles={knownHandles}
         selfHandles={selfHandles}
+        handleNames={handleNames}
         now={now}
         inThread
         targetMessageId={targetMessageId}
@@ -124,6 +130,7 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
       <ChatComposer
         channelId={channelId}
         threadRootId={rootId}
+        teamId={teamId}
         placeholder="Reply…"
         onSend={onSend}
         compact

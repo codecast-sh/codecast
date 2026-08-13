@@ -73,3 +73,34 @@ describe("ChatMessage", () => {
     expect(html).toContain("🚀");
   });
 });
+
+describe("mention chips share the doc editor's face", () => {
+  test("a known handle renders the editor-mention chip with the display name", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={view({ content: "ping @samvit please" })}
+        now={Date.parse("2026-08-13T15:00:00Z")}
+        knownHandles={new Set(["samvit"])}
+        handleNames={new Map([["samvit", "Samvit Ramadurgam"]])}
+      />,
+    );
+    // The doc editor's classes, so both surfaces read one stylesheet.
+    expect(html).toContain("editor-mention");
+    expect(html).toContain("mention-person");
+    // Stored text is the handle; the chip wears the person's name, and the
+    // handle survives as the title for hover/copy orientation.
+    expect(html).toContain("@Samvit Ramadurgam");
+    expect(html).toContain('title="@samvit"');
+  });
+
+  test("an unknown @word stays plain text", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={view({ content: "email a@b.com and @nobody" })}
+        now={Date.parse("2026-08-13T15:00:00Z")}
+        knownHandles={new Set(["samvit"])}
+      />,
+    );
+    expect(html).not.toContain("editor-mention");
+  });
+});

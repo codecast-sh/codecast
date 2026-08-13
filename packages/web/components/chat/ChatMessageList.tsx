@@ -59,6 +59,7 @@ export type ChatMessageListProps = {
   permalinkChannelId?: string;
   knownHandles?: Set<string>;
   selfHandles?: Set<string>;
+  handleNames?: Map<string, string>;
   now: number;
   hasMoreAbove?: boolean;
   isLoadingOlder?: boolean;
@@ -93,6 +94,7 @@ export const ChatMessageList = memo(function ChatMessageList({
   permalinkChannelId,
   knownHandles,
   selfHandles,
+  handleNames,
   now,
   hasMoreAbove,
   isLoadingOlder,
@@ -264,6 +266,7 @@ export const ChatMessageList = memo(function ChatMessageList({
                     channelId={permalinkChannelId}
                     knownHandles={knownHandles}
                     selfHandles={selfHandles}
+                    handleNames={handleNames}
                     now={now}
                     mine={row.message.view.author.id === viewerId}
                     inThread={inThread}

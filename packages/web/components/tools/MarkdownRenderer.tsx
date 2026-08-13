@@ -53,7 +53,7 @@ function sanitizeInvisibleUnicode(value: string): string {
 // type that never reaches this walk), so verbatim code stays byte-exact —
 // rewriting bytes inside a code block could corrupt legitimate source, and
 // flagging there is deliberately out of scope.
-function remarkSanitizeInvisibleUnicode() {
+export function remarkSanitizeInvisibleUnicode() {
   return (tree: any) => {
     const walk = (node: any) => {
       if (!node) return;

@@ -75,7 +75,7 @@ export function HighlightedCodeText({ content, style }: { content: string; style
 // that never existed).
 const MENTION_ENTITY_RE = new RegExp(`^(.*?)\\s*\\b(${MENTION_ID_SOURCE})$`, 'i');
 
-export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false): React.ReactNode[] {
+export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false, knownMentionHandles?: Set<string>): React.ReactNode[] {
   const result: React.ReactNode[] = [];
   const pattern = new RegExp(
     '(`[^`]+`|\\*\\*(.+?)\\*\\*|\\*(.+?)\\*|~~(.+?)~~|\\[([^\\]]+)\\]\\(([^)]+)\\)'
@@ -177,10 +177,19 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
         );
       }
     } else if (match[9]) {
-      // @word mention
-      result.push(
-        <RNText key={`${keyPrefix}m${key++}`} style={mdStyles.mentionPill}>@{match[9]}</RNText>
-      );
+      // @word mention. When the caller supplies the resolvable-handle set
+      // (chat does — the same vocabulary the server notifies on), an unknown
+      // @word stays plain text: a chip that lights up but notifies nobody is
+      // worse than no chip. Callers that pass nothing keep the liberal
+      // highlight (session transcripts, where @words are prose).
+      const word = match[9];
+      if (knownMentionHandles && !knownMentionHandles.has(word.toLowerCase())) {
+        result.push(<RNText key={`${keyPrefix}m${key++}`}>@{word}</RNText>);
+      } else {
+        result.push(
+          <RNText key={`${keyPrefix}m${key++}`} style={mdStyles.mentionPill}>@{word}</RNText>
+        );
+      }
     } else if (match[10]) {
       // Entity ID (jx… session, ct-/pl- task/plan, doc reference)
       const id = match[10];
@@ -342,7 +351,7 @@ function MarkdownImage({ src, alt, tiled }: { src: string; alt: string; tiled?: 
   );
 }
 
-export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean }) {
+export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, knownMentionHandles }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean; knownMentionHandles?: Set<string> }) {
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;
@@ -360,7 +369,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
       const fontSize = [18, 16, 15, 14, 13, 13][level - 1];
       elements.push(
         <RNText key={`${blockKey}h${elKey++}`} style={[baseStyle, { fontSize, fontWeight: '700', marginTop: 8, marginBottom: 4 }]}>
-          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser)}
+          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser, knownMentionHandles)}
         </RNText>
       );
       i++;
@@ -423,7 +432,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
                 {item.checked !== undefined ? (item.checked ? '\u2611' : '\u2610') : item.ordered ? `${item.num}.` : item.depth > 0 ? '\u25e6' : '\u2022'}
               </RNText>
               <RNText style={[baseStyle, { flex: 1 }, item.checked === true && { textDecorationLine: 'line-through', color: Theme.textMuted0 }]}>
-                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser)}
+                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser, knownMentionHandles)}
               </RNText>
             </RNView>
           ))}
@@ -453,7 +462,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
       elements.push(
         <RNView key={`${blockKey}q${elKey++}`} style={isUser ? mdStyles.blockquoteUser : mdStyles.blockquote}>
           <RNText style={[baseStyle, mdStyles.blockquoteText]}>
-            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser)}
+            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser, knownMentionHandles)}
           </RNText>
         </RNView>
       );
@@ -488,7 +497,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
                 {row.map((cell, ci) => (
                   <RNView key={ci} style={mdStyles.tableCell}>
                     <RNText style={[baseStyle, mdStyles.tableCellText]}>
-                      {renderInlineMarkdown(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser)}
+                      {renderInlineMarkdown(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser, knownMentionHandles)}
                     </RNText>
                   </RNView>
                 ))}
@@ -510,7 +519,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
     if (paraLines.length > 0) {
       elements.push(
         <RNText key={`${blockKey}p${elKey++}`} style={[baseStyle, { marginBottom: 6 }]} selectable>
-          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser)}
+          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser, knownMentionHandles)}
         </RNText>
       );
     }
@@ -522,7 +531,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
 // The fence-splitting run of blocks — code fences to CodeBlockWithCopy /
 // CastCanvas, everything else to MarkdownTextBlock. Internal: MarkdownContent
 // wraps this with insight-block extraction; InsightCard bodies reuse it.
-function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix }: { text: string; baseStyle: any; isUser: boolean; keyPrefix: string }) {
+function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, knownMentionHandles }: { text: string; baseStyle: any; isUser: boolean; keyPrefix: string; knownMentionHandles?: Set<string> }) {
   // Language may be hyphenated (cast-canvas, objective-c).
   const codeBlockRegex = /```([\w-]+)?\n([\s\S]*?)```/g;
   const blocks: Array<{ type: 'text' | 'code'; content: string; language?: string }> = [];
@@ -561,7 +570,7 @@ function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix }: { text: string; 
           );
         }
 
-        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`${keyPrefix}b${idx}`} isUser={isUser} />;
+        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`${keyPrefix}b${idx}`} isUser={isUser} knownMentionHandles={knownMentionHandles} />;
       })}
     </>
   );
@@ -569,7 +578,7 @@ function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix }: { text: string; 
 
 // "★ Insight ─────" callout — mirrors web's InsightCard (ConversationView):
 // violet-tinted card, star + uppercase label header, markdown body.
-function InsightCard({ label, content, baseStyle }: { label: string; content: string; baseStyle: any }) {
+function InsightCard({ label, content, baseStyle, knownMentionHandles }: { label: string; content: string; baseStyle: any; knownMentionHandles?: Set<string> }) {
   return (
     <RNView style={mdStyles.insightCard}>
       <RNView style={mdStyles.insightHeader}>
@@ -577,13 +586,13 @@ function InsightCard({ label, content, baseStyle }: { label: string; content: st
         <RNText style={mdStyles.insightLabel}>{label}</RNText>
       </RNView>
       <RNView style={mdStyles.insightBody}>
-        <MarkdownBlocks text={content} baseStyle={baseStyle} isUser={false} keyPrefix="ins" />
+        <MarkdownBlocks text={content} baseStyle={baseStyle} isUser={false} keyPrefix="ins" knownMentionHandles={knownMentionHandles} />
       </RNView>
     </RNView>
   );
 }
 
-export function MarkdownContent({ text, baseStyle, isUser = false }: { text: string; baseStyle: any; isUser?: boolean }) {
+export function MarkdownContent({ text, baseStyle, isUser = false, knownMentionHandles }: { text: string; baseStyle: any; isUser?: boolean; knownMentionHandles?: Set<string> }) {
   // Insight extraction runs on every assistant text (same placement as web's
   // assistant-message flat run) so cards show up on ALL surfaces that render
   // markdown — message bubbles, tool results, plan/teammate cards.
@@ -596,9 +605,9 @@ export function MarkdownContent({ text, baseStyle, isUser = false }: { text: str
     <RNView>
       {parts.map((part, pIdx) =>
         part.type === 'insight' ? (
-          <InsightCard key={pIdx} label={part.label} content={part.content} baseStyle={baseStyle} />
+          <InsightCard key={pIdx} label={part.label} content={part.content} baseStyle={baseStyle} knownMentionHandles={knownMentionHandles} />
         ) : (
-          <MarkdownBlocks key={pIdx} text={part.content} baseStyle={baseStyle} isUser={isUser} keyPrefix={`p${pIdx}`} />
+          <MarkdownBlocks key={pIdx} text={part.content} baseStyle={baseStyle} isUser={isUser} keyPrefix={`p${pIdx}`} knownMentionHandles={knownMentionHandles} />
         )
       )}
     </RNView>
