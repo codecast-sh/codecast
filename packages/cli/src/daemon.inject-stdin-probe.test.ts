@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { proveTmuxStdinConsumption } from "./daemon.js";
+import { drainTmuxComposer, proveTmuxStdinConsumption } from "./daemon.js";
 
 // ct-40212: a painted composer does not prove stdin is being read. On a cold
 // boot under load the ❯ box is visible for seconds while every key still lands
@@ -57,10 +57,11 @@ function scriptedExec(opts: { consumingAfterPolls: number }) {
 }
 
 describe("proveTmuxStdinConsumption", () => {
-  test("returns quickly when the composer consumes the first probe", async () => {
+  test("returns the pre-probe baseline when the composer consumes the first probe", async () => {
     const { exec, sends } = scriptedExec({ consumingAfterPolls: 0 });
-    await proveTmuxStdinConsumption("t:0.0", 20_000, exec as any);
+    const baseline = await proveTmuxStdinConsumption("t:0.0", 20_000, exec as any);
     expect(sends.length).toBe(1); // one probe, seen immediately
+    expect(baseline).toBe(0); // empty composer before the probe
   });
 
   test("throws AGENT_STDIN_NOT_READY when the composer never consumes", async () => {
@@ -84,8 +85,20 @@ describe("proveTmuxStdinConsumption", () => {
       if (args[0] === "send-keys") throw new Error("must not type into a glyphless pane");
       return { stdout: "opencode ready\nno prompt glyph here\n" };
     };
-    // Returns without sending any key or throwing.
-    await proveTmuxStdinConsumption("t:0.0", 20_000, exec as any);
+    // Returns null (no probe typed, nothing for the drain to verify).
+    expect(await proveTmuxStdinConsumption("t:0.0", 20_000, exec as any)).toBeNull();
+  });
+
+  test("returns the stale-draft probe count as the baseline", async () => {
+    // A draft like "quick fix" sits in the composer before the probe. The
+    // baseline must include its 'q' so the drain verifies against it, not 0.
+    let composer = "quick fix";
+    const exec = async (args: Args): Promise<{ stdout: string }> => {
+      if (args[0] === "capture-pane") return { stdout: BOX(composer) };
+      if (args[0] === "send-keys" && args.includes("-l")) composer += args[args.indexOf("-l") + 1];
+      return { stdout: "" };
+    };
+    expect(await proveTmuxStdinConsumption("t:0.0", 20_000, exec as any)).toBe(1);
   });
 
   test("does not count a probe glyph that only appears ABOVE the composer", async () => {
@@ -106,5 +119,79 @@ describe("proveTmuxStdinConsumption", () => {
       /AGENT_STDIN_NOT_READY/,
     );
     expect(sends.length).toBeGreaterThan(0);
+  });
+});
+
+// ct-43082: the probe proves keys reach the input handler, NOT that control
+// bytes are interpreted yet. On a marginal cold boot the probe renders while
+// C-a/C-k are still mishandled, the accumulated probes survive the blind
+// drain, and the paste + Enter submits "qqq<message>". drainTmuxComposer
+// closes the loop: after the drain cycles it verifies the composer's probe
+// count fell back to the pre-probe baseline, re-draining until it does, and
+// throws (retryable) instead of pasting into a dirty composer.
+//
+// Harness: a fake pane whose composer holds probe residue; C-k empties the
+// composer only when the scripted TUI "handles" control keys — immediately,
+// never, or only after N capture polls.
+function drainScriptedExec(opts: {
+  composer: string;
+  controls: "handled" | "ignored" | { afterPolls: number };
+}) {
+  let composer = opts.composer;
+  let polls = 0;
+  const sends: string[] = [];
+  const exec = async (args: Args): Promise<{ stdout: string }> => {
+    if (args[0] === "capture-pane") {
+      polls++;
+      return { stdout: BOX(composer) };
+    }
+    if (args[0] === "send-keys") {
+      const key = args[args.length - 1];
+      sends.push(key);
+      const handled =
+        opts.controls === "handled" || (typeof opts.controls === "object" && polls >= opts.controls.afterPolls);
+      if (key === "C-k" && handled) composer = "";
+    }
+    return { stdout: "" };
+  };
+  return { exec, sends, getComposer: () => composer, getPolls: () => polls };
+}
+
+describe("drainTmuxComposer", () => {
+  test("clears probe residue and returns when the TUI handles control keys", async () => {
+    const { exec, getComposer } = drainScriptedExec({ composer: "qqq", controls: "handled" });
+    await drainTmuxComposer("t:0.0", 0, 5_000, exec as any);
+    expect(getComposer()).toBe("");
+  });
+
+  test("throws AGENT_STDIN_NOT_READY when probes survive a mishandled drain (the qqq leak)", async () => {
+    // Before the fix there was no verification: the paste proceeded and Enter
+    // submitted "qqq<message>" as the user's message.
+    const { exec } = drainScriptedExec({ composer: "qqq", controls: "ignored" });
+    await expect(drainTmuxComposer("t:0.0", 0, 800, exec as any)).rejects.toThrow(
+      /AGENT_STDIN_NOT_READY/,
+    );
+  });
+
+  test("re-drains until a slow input handler catches up", async () => {
+    // Control keys start working only after 3 capture polls — the closed loop
+    // must keep cycling instead of giving up on the first dirty check.
+    const { exec, getComposer } = drainScriptedExec({ composer: "qq", controls: { afterPolls: 3 } });
+    await drainTmuxComposer("t:0.0", 0, 5_000, exec as any);
+    expect(getComposer()).toBe("");
+  });
+
+  test("null baseline (busy pane / glyphless client) keeps the blind drain: no verification, no throw", async () => {
+    const { exec, sends, getPolls } = drainScriptedExec({ composer: "fresh draft", controls: "ignored" });
+    await drainTmuxComposer("t:0.0", null, 800, exec as any);
+    expect(sends.filter((k) => k === "C-k").length).toBe(3); // the three blind cycles only
+    expect(getPolls()).toBe(0); // no verification captures
+  });
+
+  test("probe chars at or below the baseline count as clean", async () => {
+    // baseline 1 = a 'q' predating the probe (e.g. footer text on some client);
+    // the drain must not demand a count it can never reach.
+    const { exec } = drainScriptedExec({ composer: "q", controls: "ignored" });
+    await drainTmuxComposer("t:0.0", 1, 800, exec as any);
   });
 });
