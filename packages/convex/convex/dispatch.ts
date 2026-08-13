@@ -5,7 +5,7 @@ import { enqueueStartSession } from "./devices";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { resolveTeamForPath, buildShareUpdate } from "./privacy";
-import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
+import { hasRecentPendingDaemonCommand, enqueueResumeSession } from "./daemonCommandUtils";
 import { resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType } from "@codecast/shared/contracts";
@@ -838,33 +838,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const conv = await ctx.db.get(convId as Id<"conversations">);
     const isSecondPartyOwner = conv?.owner_user_id?.toString() === userId.toString();
     if (!conv || (conv.user_id.toString() !== userId.toString() && !isSecondPartyOwner)) throw new Error("Unauthorized");
-    const agentType = fromConvexAgentType(conv.agent_type);
-    // Daemon commands are polled by the RUNNER's daemon — for a second-party
-    // owner resuming a session run by another account, address the command to
-    // the runner, not the caller.
-    const daemonUserId = conv.user_id;
-    const pendingCommands = await ctx.db
-      .query("daemon_commands")
-      .withIndex("by_user_pending", (q: any) => q.eq("user_id", daemonUserId).eq("executed_at", undefined))
-      .collect();
-    if (hasRecentPendingDaemonCommand(pendingCommands as any, {
-      conversationId: convId,
-      command: "resume_session",
-    })) {
-      return { deduplicated: true };
-    }
-    const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: daemonUserId,
-      command: "resume_session" as const,
-      args: JSON.stringify({
-        session_id: conv.session_id,
-        agent_type: agentType,
-        conversation_id: convId,
-        project_path: conv.project_path || conv.git_root,
-      }),
-      created_at: Date.now(),
-    });
-    return { command_id: commandId };
+    // Runner-addressed and deduplicated by the shared writer.
+    const { deduplicated, command_id } = await enqueueResumeSession(ctx, conv);
+    return deduplicated ? { deduplicated: true } : { command_id };
   },
 
   // Web-triggered "move to remote": enqueue a move_to_device command targeted
