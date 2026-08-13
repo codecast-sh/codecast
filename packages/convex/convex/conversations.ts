@@ -7692,9 +7692,13 @@ async function enrichInboxSessionRow(
   }
 
   let workflow_run_status: string | null = null;
+  let workflow_run_name: string | null = null;
   if (conv.workflow_run_id) {
     const run = await ctx.db.get(conv.workflow_run_id);
-    if (run) workflow_run_status = run.status;
+    if (run) {
+      workflow_run_status = run.status;
+      workflow_run_name = run.workflow_name ?? null;
+    }
   }
 
   // Anchor identity: a personal anchor's bot isn't in the team roster, so the
@@ -7763,6 +7767,7 @@ async function enrichInboxSessionRow(
     workflow_run_id: conv.workflow_run_id || null,
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
+    workflow_run_name,
     // Schedule that spawned this conversation as a run (see schema) — lets the
     // sidebar badge and the schedule strip attribute ANY run, not just the
     // latest one webList can resolve from last_run_session_uuid.
@@ -7874,6 +7879,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     workflow_run_id: null,
     is_workflow_primary: false,
     workflow_run_status: null,
+    workflow_run_name: null,
     icon: child.icon,
     icon_color: child.icon_color,
     team_id: child.team_id ?? null,

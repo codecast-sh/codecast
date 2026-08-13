@@ -17,6 +17,7 @@
 export {
   buildFleetDiff,
   capabilityIdentity,
+  fleetRowKey,
   type CellStatus,
   type DeviceReport,
   type FleetDevice,

@@ -1316,11 +1316,8 @@ function MonitorBars({ session, isActive, onOpen }: {
     <>
       {shown.map((row) => {
         const isBackground = row.kind === "background";
-        const isWorkflow = row.kind === "workflow";
-        const family = isWorkflow ? "Workflow" : isBackground ? "Background" : "Monitor";
-        const ariaLabel = isWorkflow
-          ? "Multi-agent workflow — running inside this session"
-          : isBackground
+        const family = isBackground ? "Background" : "Monitor";
+        const ariaLabel = isBackground
           ? "Background command — running inside this session"
           : "Monitor — watching inside this session";
         return (
@@ -1367,10 +1364,10 @@ function MonitorBars({ session, isActive, onOpen }: {
                       space-starved (esp. with the panel narrow), so event/time
                       meta lives on the subrow and the persistent chip rides
                       the badge tooltip; the conversation block keeps the chip. */}
-                  <ShortcutTooltip label={isWorkflow ? "Multi-agent workflow — runs in the background until it completes, then wakes the agent" : isBackground ? "Background command — runs until it exits or is stopped, then wakes the agent" : row.persistent ? "Persistent watch — runs until TaskStop or session end" : `One-shot watch${row.timeoutMs !== undefined ? ` — times out after ${fmtDuration(row.timeoutMs)}` : ""}`}>
+                  <ShortcutTooltip label={isBackground ? "Background command — runs until it exits or is stopped, then wakes the agent" : row.persistent ? "Persistent watch — runs until TaskStop or session end" : `One-shot watch${row.timeoutMs !== undefined ? ` — times out after ${fmtDuration(row.timeoutMs)}` : ""}`}>
                     <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
                       <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
-                      {isBackground || isWorkflow ? "running" : "watching"}
+                      {isBackground ? "running" : "watching"}
                     </span>
                   </ShortcutTooltip>
                 </div>
@@ -1385,7 +1382,7 @@ function MonitorBars({ session, isActive, onOpen }: {
                     </span>
                   ) : (
                     <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-mono text-sol-text-dim">
-                      {row.command.split("\n").find((l) => l.trim()) || (isWorkflow ? "multi-agent workflow" : "background watch")}
+                      {row.command.split("\n").find((l) => l.trim()) || "background watch"}
                     </span>
                   )}
                   <span className="shrink-0 text-[10px] tabular-nums text-sol-text-dim">
@@ -2224,6 +2221,20 @@ export const SessionCard = memo(function SessionCard({
               <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/30">
                 <span className="w-1 h-1 rounded-full bg-sol-magenta animate-pulse" />
                 Gate
+              </span>
+            )}
+            {/* A workflow run in flight inside this session — the standing
+                signal that a settled-looking turn is actually fanned out
+                across agents. Server truth via the conversation's stamped
+                run (works even when the message window hasn't synced the
+                launch), same family color as the workflow cards. */}
+            {session.is_workflow_primary && (session.workflow_run_status === "running" || session.workflow_run_status === "pending") && (
+              <span
+                className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 max-w-[140px]"
+                title={session.workflow_run_name ? `Workflow running: ${session.workflow_run_name}` : "Workflow running"}
+              >
+                <span className="w-1 h-1 rounded-full bg-sol-cyan animate-pulse" />
+                <span className="truncate">{session.workflow_run_name || "workflow"}</span>
               </span>
             )}
             {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}

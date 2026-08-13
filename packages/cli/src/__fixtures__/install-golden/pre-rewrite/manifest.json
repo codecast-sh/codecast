@@ -83,15 +83,6 @@
       ".claude/settings.json": "e6bbe8b54259b3bf"
     }
   },
-  "browser": {
-    "config": {
-      "browser_enabled": true,
-      "browser_version": "3"
-    },
-    "stdout": "* Browser — installed in ~/.claude/CLAUDE.md\n",
-    "wroteClaudeMd": true,
-    "otherFiles": {}
-  },
   "orchestration": {
     "config": {
       "orch_enabled": true,
