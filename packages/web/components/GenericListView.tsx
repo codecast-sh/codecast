@@ -3,7 +3,7 @@ import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "re
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter, usePathname } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { formatShortcutLabel } from "../shortcuts";
+import { formatShortcutLabel, useShortcutAction } from "../shortcuts";
 import { FilterDropdown, FilterOptionList } from "./FilterDropdown";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
@@ -470,6 +470,11 @@ export interface GenericListViewProps<T> {
   onLoadMore?: () => void;
 
   paletteTargetType?: 'task' | 'doc';
+  /** Short-ID ref for an item (e.g. a task's `ct-…`). When provided, Ctrl+N with
+   *  rows multi-selected opens the new-session composer pre-filled with the
+   *  selection's refs, so the first message can just say what to do with them
+   *  ("merge these two"). */
+  getComposeRef?: (item: T) => string | null | undefined;
   paletteShortcuts?: { key: string; mode: string; label: string }[];
   paletteProps?: { teamMembers?: any[]; currentUser?: any };
 
@@ -529,6 +534,7 @@ export function GenericListView<T>({
   isLoadingMore,
   onLoadMore,
   paletteTargetType,
+  getComposeRef,
   paletteShortcuts,
   paletteProps,
   renderPreview,
@@ -564,6 +570,7 @@ export function GenericListView<T>({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const storeOpenPalette = useInboxStore((s) => s.openPalette);
+  const storeOpenCompose = useInboxStore((s) => s.openCompose);
   const paletteIsOpen = useInboxStore((s) => s.palette.open);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -707,6 +714,21 @@ export function GenericListView<T>({
   const openPaletteForItems = useCallback((items: T[], mode = "root") => {
     storeOpenPalette({ targets: items as any[], targetType: paletteTargetType, mode });
   }, [storeOpenPalette, paletteTargetType]);
+
+  // Ctrl+N with rows multi-selected: seed the new-session composer with the
+  // selection's refs (bare short IDs render as live reference cards), so the
+  // first message can just say what to do with them. With nothing selected,
+  // decline — DashboardLayout's default handler opens the blank composer.
+  useShortcutAction('session.compose', () => {
+    if (!getComposeRef || selectedIds.size === 0) return false;
+    const refs = visibleItems
+      .filter((item) => selectedIds.has(getItemId(item)))
+      .map(getComposeRef)
+      .filter((r): r is string => !!r);
+    if (refs.length === 0) return false;
+    storeOpenCompose(refs.join(" ") + " ");
+    return true;
+  });
 
   const toggleGroup = useCallback((key: string) => {
     setCollapsedGroups((prev) => {
