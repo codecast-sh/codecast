@@ -7,9 +7,16 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, PlanItem, DocItem } from "../../../store/inboxStore";
 import { useSyncTasks } from "../../../hooks/useSyncTasks";
 import { TaskListContent } from "../../tasks/page";
+import { TaskDetailContent } from "../../tasks/[id]/page";
+import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
+import { ErrorBoundary } from "../../../components/ErrorBoundary";
+import { projectDotClass } from "../../../lib/projectColors";
+import { buildProgressSeries } from "../../../lib/projectProgress";
+import { ProgressChart } from "../../../components/ProgressChart";
 import { useSyncPlans } from "../../../hooks/useSyncPlans";
 import { useSyncDocs } from "../../../hooks/useSyncDocs";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { toast } from "sonner";
@@ -35,6 +42,7 @@ import {
   X,
   ChevronRight,
   ChevronDown,
+  Activity,
 } from "lucide-react";
 
 const api = _api as any;
@@ -212,7 +220,13 @@ function ProjectDetailContent() {
   useSyncPlans();
   useSyncDocs();
 
-  const project = useQuery(api.projects.webGet, projectId ? { id: projectId } : "skip");
+  // Local-first: the store already holds every project the rail lists, so a
+  // project you click renders NOW and the server row enriches it when it lands.
+  // Gating the whole surface on the query meant a spinner on every open — and,
+  // offline, a spinner forever beside a sidebar happily naming the same project.
+  const { data: serverProject } = useQueryNoThrow(api.projects.webGet, projectId ? { id: projectId } : "skip");
+  const storeProjects = useInboxStore((s) => s.projects);
+  const project = serverProject ?? (projectId ? (storeProjects as any)[projectId] : undefined);
 
   const tasks = useInboxStore((s) => s.tasks);
   const plans = useInboxStore((s) => s.plans);
@@ -260,15 +274,11 @@ function ProjectDetailContent() {
     return map;
   }, [projectTasks]);
 
-  // Standalone tasks (in project but not under any plan)
-  const standaloneTasks = useMemo(() =>
-    projectTasks
-      .filter((t: any) => !t.plan_id)
-      .sort((a, b) => {
-        const order: Record<string, number> = { in_progress: 0, in_review: 1, open: 2, backlog: 3, done: 4, dropped: 5 };
-        const sd = (order[a.status] ?? 3) - (order[b.status] ?? 3);
-        return sd !== 0 ? sd : b.updated_at - a.updated_at;
-      }),
+  // Completion over time, from the timestamps tasks already carry. Uses the
+  // project's WHOLE task set, not the board's filtered view: this is the shape
+  // of the project, not of whatever you are currently looking at.
+  const progressSeries = useMemo(
+    () => buildProgressSeries(projectTasks as any[], Date.now()),
     [projectTasks]
   );
 
@@ -302,7 +312,7 @@ function ProjectDetailContent() {
   if (!project) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="text-sm text-sol-text-dim">Loading project...</div>
+        <div className="text-sm text-sol-text-dim">Loading project…</div>
       </div>
     );
   }
@@ -316,20 +326,14 @@ function ProjectDetailContent() {
   const status = statusCfg[project.status] || statusCfg.active;
   const StatusIcon = status.icon;
 
-  const hasContent = projectPlans.length > 0 || standaloneTasks.length > 0 || projectDocs.length > 0;
+  const hasContent = projectPlans.length > 0 || projectTasks.length > 0 || projectDocs.length > 0;
 
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
       <div className="px-6 py-4 border-b border-sol-border/20">
-        <div className="flex items-center gap-3 mb-3">
-          <button
-            onClick={() => router.push("/projects")}
-            className="text-sol-text-dim hover:text-sol-text transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-
+        <div className="flex items-center gap-3 mb-3 min-w-0">
+          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${projectDotClass(project)}`} />
           {editingTitle ? (
             <div className="flex items-center gap-2 flex-1">
               <input
@@ -357,7 +361,7 @@ function ProjectDetailContent() {
           )}
         </div>
 
-        <div className="flex items-center gap-4 ml-7">
+        <div className="flex items-center gap-4 ml-5">
           {/* Status dropdown */}
           <div className="relative group/status">
             <button className={`flex items-center gap-1.5 text-xs ${status.color}`}>
@@ -413,7 +417,7 @@ function ProjectDetailContent() {
 
         {/* Tasks is the working surface; Overview is the summary of everything
             filed here — plans, their tasks, and docs. */}
-        <div className="flex items-center gap-1 ml-7 mt-3 -mb-1">
+        <div className="flex items-center gap-1 ml-5 mt-3 -mb-1">
           {/* The Tasks tab carries no count of its own: the list below reports
               what it is actually showing (the board hides agent-internal tasks
               by default), and the project's raw totals sit in the header row.
@@ -451,16 +455,18 @@ function ProjectDetailContent() {
         </div>
       ) : (
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto py-3 px-2">
-          {!hasContent && (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <Target className="w-8 h-8 text-sol-text-dim/20 mb-2" />
-              <p className="text-xs text-sol-text-dim">This project is empty</p>
-              <p className="text-[11px] text-sol-text-dim/60 mt-1">Create plans, tasks, or docs and assign them to this project</p>
-            </div>
-          )}
+        {/* Overview answers "what is this and how is it going" — it deliberately
+            does NOT list tasks. It used to, and that list was a worse copy of
+            the Tasks tab beside it: no filters, no grouping, no board, no
+            keyboard. One list, one place. What lives here is what the task list
+            cannot say: the shape of progress over time, and the plans and docs
+            around the work. */}
+        <div className="max-w-3xl mx-auto py-4 px-2 space-y-1">
+          <SectionHeader icon={Activity} label="Progress" count={0} />
+          <div className="px-1 pb-2">
+            <ProgressChart series={progressSeries} />
+          </div>
 
-          {/* Plans with nested tasks */}
           {projectPlans.length > 0 && (
             <>
               <SectionHeader icon={Target} label="Plans" count={projectPlans.length} />
@@ -474,17 +480,6 @@ function ProjectDetailContent() {
             </>
           )}
 
-          {/* Standalone tasks */}
-          {standaloneTasks.length > 0 && (
-            <>
-              <SectionHeader icon={ListChecks} label="Tasks" count={standaloneTasks.length} />
-              {standaloneTasks.map((task) => (
-                <TaskRow key={task._id} task={task} />
-              ))}
-            </>
-          )}
-
-          {/* Docs */}
           {projectDocs.length > 0 && (
             <>
               <SectionHeader icon={FileText} label="Docs" count={projectDocs.length} />
@@ -492,6 +487,14 @@ function ProjectDetailContent() {
                 <DocRow key={doc._id} doc={doc} />
               ))}
             </>
+          )}
+
+          {!hasContent && (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Target className="w-8 h-8 text-sol-text-dim/20 mb-2" />
+              <p className="text-xs text-sol-text-dim">Nothing filed here yet</p>
+              <p className="text-[11px] text-sol-text-dim/60 mt-1">Assign tasks, plans or docs to this project and they show up here</p>
+            </div>
           )}
         </div>
       </div>
@@ -501,10 +504,27 @@ function ProjectDetailContent() {
 }
 
 export default function ProjectDetailPage() {
+  // Selection stays in the URL and inside the project: /projects/<id> is the
+  // project, /projects/<id>/<taskId> is a task within it. Both render this same
+  // component (see TabContent), so opening a task reconciles in place — the
+  // project's list never unmounts and you never leave the project.
+  const params = useParams();
+  const projectId = params?.id as string | undefined;
+  const taskId = params?.taskId as string | undefined;
   return (
     <AuthGuard>
       <DashboardLayout>
-        <ProjectDetailContent />
+        <DetailSplitLayout
+          list={<ProjectDetailContent />}
+          surface="projects"
+          closeHref={`/projects/${projectId}`}
+        >
+          {taskId ? (
+            <ErrorBoundary name="ProjectTaskDetail" level="panel">
+              <TaskDetailContent taskId={taskId} variant="page" />
+            </ErrorBoundary>
+          ) : null}
+        </DetailSplitLayout>
       </DashboardLayout>
     </AuthGuard>
   );
