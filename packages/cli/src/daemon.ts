@@ -9502,7 +9502,7 @@ export function classifyTranscriptTail(tailContent: string): TranscriptTurnState
 
 // Open background work in a Claude JSONL transcript: tasks the harness started
 // (run_in_background Bash, a command moved to the background on timeout, a
-// Monitor) that have not yet reached a terminal state. While any is open, the
+// Monitor, a Workflow run) that have not yet reached a terminal state. While any is open, the
 // harness re-invokes the agent when it finishes — so a turn that ended with an
 // open task is "waiting" (an active substate), not idle/needs-input.
 //
@@ -9524,6 +9524,7 @@ export function scanOpenBackgroundTasks(content: string, currentSessionId?: stri
     /running in background with ID: ([A-Za-z0-9_-]+)/g,
     /moved to the background \(ID: ([A-Za-z0-9_-]+)\)/g,
     /Monitor started \(task ([A-Za-z0-9_-]+)/g,
+    /Workflow launched in background\. Task ID: ([A-Za-z0-9_-]+)/g,
   ];
   for (const rawLine of content.split("\n")) {
     const line = rawLine.trim();
