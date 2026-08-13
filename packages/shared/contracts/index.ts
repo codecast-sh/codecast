@@ -28,3 +28,8 @@ export * from "./capabilityResolver";
 // the same reason: the CLI, the browser and Convex all render this grid, and
 // while it lived in the CLI the other two could only reimplement it.
 export * from "./fleetDiff";
+export * from "./capabilityScopes";
+// The connectable-apps catalog (the /capabilities Apps tab): Convex answers
+// connection state in this vocabulary and the web renders it, so both need the
+// one definition. Deep paths do not resolve past the exports map — barrel only.
+export * from "./appDescriptors";

@@ -24,6 +24,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { readLocalCredential } from "./remote/session-move.js";
+import { atomicWriteFile } from "./atomicWrite.js";
 
 const ACTIVE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const PROFILE_KEYCHAIN_PREFIX = "codecast-cc-account-";
@@ -78,12 +79,7 @@ function indexPath(): string {
   return path.join(codecastDir(), "cc-accounts.json");
 }
 
-function atomicWriteFile(filePath: string, content: string, mode = 0o600): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.tmp`);
-  fs.writeFileSync(tmp, content, { mode });
-  fs.renameSync(tmp, filePath);
-}
+
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested)
@@ -254,7 +250,7 @@ export function patchOauthAccount(oauthAccount: Record<string, any>): void {
     cfg = JSON.parse(fs.readFileSync(p, "utf-8"));
   } catch {}
   cfg.oauthAccount = oauthAccount;
-  atomicWriteFile(p, JSON.stringify(cfg, null, 2), 0o644);
+  atomicWriteFile(p, JSON.stringify(cfg, null, 2), { mode: 0o644 });
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +324,7 @@ export function readProfileIndex(): ProfileIndex {
 }
 
 function writeProfileIndex(index: ProfileIndex): void {
-  atomicWriteFile(indexPath(), JSON.stringify(index, null, 2), 0o644);
+  atomicWriteFile(indexPath(), JSON.stringify(index, null, 2), { mode: 0o644 });
 }
 
 // ---------------------------------------------------------------------------
@@ -799,7 +795,7 @@ export async function refreshUsageSnapshots(
     for (const key of Object.keys(cache.accounts)) {
       if (!knownKeys.has(key)) delete cache.accounts[key];
     }
-    atomicWriteFile(usageCachePath(), JSON.stringify(cache, null, 2), 0o644);
+    atomicWriteFile(usageCachePath(), JSON.stringify(cache, null, 2), { mode: 0o644 });
   }
   return summary;
 }

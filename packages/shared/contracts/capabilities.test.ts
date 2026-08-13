@@ -29,7 +29,10 @@ import {
   slugMatchesSource,
   type CapabilityKind,
   type ScopeKind,
-} from "./capabilities";
+  manifestHash,
+  deriveExecutionSurfaces,
+  requiresExplicitConsent,
+} from "./capabilities.js";
 
 describe("capability enums", () => {
   it("has no duplicate members in any enum", () => {
@@ -74,7 +77,9 @@ describe("capability enums", () => {
     const prefixes = CAPABILITY_SOURCES.map((s) => CAPABILITY_SOURCE_PREFIX[s]);
     expect(new Set(prefixes).size).toBe(prefixes.length);
     for (const source of CAPABILITY_SOURCES) {
-      const slug = formatCapabilitySlug({ source, segments: ["x"] });
+      const slug = formatCapabilitySlug(
+        source === "git" ? { source, segments: ["x"], pin: "abc123" } : { source, segments: ["x"] },
+      );
       expect(capabilitySlugSource(slug)).toBe(source);
     }
   });
@@ -258,5 +263,99 @@ describe("kinds a driver may write", () => {
     for (const k of MATERIALIZABLE_KINDS) {
       expect((CAPABILITY_KINDS as readonly CapabilityKind[]).includes(k)).toBe(true);
     }
+  });
+});
+
+// ------------------------------------------------- the manifest and its hash
+
+// Consent is granted against the manifest, so these properties are the ones the
+// consent gate rests on: two scanners must agree on the same capability, any
+// change to what will run must change the hash, and a publisher must never be
+// able to talk their way to a quieter badge.
+describe("manifestHash", () => {
+  it("is stable under key reordering at every depth", () => {
+    const a = manifestHash({
+      bin: ["run"],
+      mcp: [{ name: "s", command: "node s.js" }],
+      hooks: ["PreToolUse"],
+    });
+    const b = manifestHash({
+      hooks: ["PreToolUse"],
+      mcp: [{ command: "node s.js", name: "s" }],
+      bin: ["run"],
+    });
+    expect(a).toBe(b);
+  });
+
+  it("changes when anything that will run changes", () => {
+    const base = { mcp: [{ command: "node server.js" }] };
+    const hash = manifestHash(base);
+    expect(manifestHash({ mcp: [{ command: "node other.js" }] })).not.toBe(hash);
+    expect(manifestHash({ ...base, hooks: ["PreToolUse"] })).not.toBe(hash);
+    expect(manifestHash({ ...base, envKeys: ["API_KEY"] })).not.toBe(hash);
+    expect(manifestHash({ ...base, allowedTools: ["Bash"] })).not.toBe(hash);
+  });
+
+  it("array order is meaningful — arguments are not a set", () => {
+    expect(manifestHash({ bin: ["a", "b"] })).not.toBe(manifestHash({ bin: ["b", "a"] }));
+  });
+
+  it("an absent manifest hashes like an empty one, and never throws", () => {
+    expect(manifestHash(undefined)).toBe(manifestHash({}));
+  });
+
+  it("an explicit undefined field does not change the hash", () => {
+    // Otherwise a scanner that sets `scripts: undefined` and one that omits it
+    // would disagree about an identical capability.
+    expect(manifestHash({ bin: ["x"], scripts: undefined })).toBe(manifestHash({ bin: ["x"] }));
+  });
+});
+
+describe("deriveExecutionSurfaces", () => {
+  it("reads each surface off the structure that implies it", () => {
+    expect(deriveExecutionSurfaces({ bin: ["run"] })).toContain("ships_bin");
+    expect(deriveExecutionSurfaces({ scripts: ["s.sh"] })).toContain("ships_scripts");
+    expect(deriveExecutionSurfaces({ hooks: ["PreToolUse"] })).toContain("declares_hooks");
+    expect(deriveExecutionSurfaces({ allowedTools: ["Bash"] })).toContain("declares_allowed_tools");
+    expect(deriveExecutionSurfaces({ mcp: [{ command: "node s.js" }] })).toContain("mcp_stdio_command");
+    expect(deriveExecutionSurfaces({ mcp: [{ url: "https://x/mcp" }] })).toContain("mcp_remote_url");
+  });
+
+  it("an empty list is empty — and that reads as dangerous, not benign", () => {
+    expect(deriveExecutionSurfaces({})).toEqual([]);
+    expect(deriveExecutionSurfaces(undefined)).toEqual([]);
+    // The contract's deliberate rule: nothing observed means nothing looked.
+    expect(requiresExplicitConsent(deriveExecutionSurfaces({}))).toBe(true);
+  });
+
+  it("a declared list RAISES risk", () => {
+    const surfaces = deriveExecutionSurfaces({}, ["ships_bin"]);
+    expect(surfaces).toContain("ships_bin");
+    expect(requiresExplicitConsent(surfaces)).toBe(true);
+  });
+
+  it("a declared list can NEVER lower risk", () => {
+    // The whole asymmetry: a publisher claiming "prose" over a capability that
+    // ships a binary must not get the quieter badge.
+    const surfaces = deriveExecutionSurfaces({ bin: ["run"] }, ["prose"]);
+    expect(surfaces).toContain("ships_bin");
+    expect(requiresExplicitConsent(surfaces)).toBe(true);
+  });
+
+  it("a bogus declared value is ignored rather than trusted", () => {
+    const surfaces = deriveExecutionSurfaces({ bin: ["run"] }, ["totally-made-up" as never]);
+    expect(surfaces).toEqual(["ships_bin"]);
+  });
+
+  it("output order is canonical, so equal sets compare equal", () => {
+    const a = deriveExecutionSurfaces({ mcp: [{ command: "c" }], bin: ["b"] });
+    const b = deriveExecutionSurfaces({ bin: ["b"], mcp: [{ command: "c" }] });
+    expect(a).toEqual(b);
+    expect(a).toEqual(["ships_bin", "mcp_stdio_command"]);
+  });
+
+  it("one server declaring both a command and a url reports both", () => {
+    expect(deriveExecutionSurfaces({ mcp: [{ command: "node s.js", url: "https://x/mcp" }] }))
+      .toEqual(["mcp_stdio_command", "mcp_remote_url"]);
   });
 });

@@ -29,6 +29,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useMutation } from "convex/react";
+import { api as _chatApi } from "@codecast/convex/convex/_generated/api";
+const api = _chatApi as any;
 import { Lock, BellOff, Bell, Plus, AlertTriangle, RotateCw } from "lucide-react";
 import { useInboxStore, selectChannelReadMarker, type ChatNotifyLevel } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -48,18 +51,13 @@ import { ChatChannelRail } from "../../components/chat/ChatChannelRail";
 import { ChatMessageList } from "../../components/chat/ChatMessageList";
 import { ChatThreadPanel } from "../../components/chat/ChatThreadPanel";
 import { ChatComposer } from "../../components/chat/ChatComposer";
+import { ChannelContextMenu, useChannelMenu } from "../../components/chat/ChannelMenu";
 import { setChatFocus, clearChatFocus } from "../../lib/chatFocus";
 import "../../components/chat/chat.css";
 
 /** The clock the whole surface shares. Relative times ("3m ago") must stay
  *  honest without a re-render per row per second — see hooks/useCoarseNow. */
 const CLOCK_MS = 30_000;
-
-const NOTIFY_LEVELS: { value: ChatNotifyLevel; label: string; hint: string }[] = [
-  { value: "all", label: "All messages", hint: "Toast for every message" },
-  { value: "mentions", label: "Mentions only", hint: "Only when you are named" },
-  { value: "none", label: "Nothing", hint: "Muted — badge only" },
-];
 
 /** Is the window focused and the document visible, right now, reactively?
  *  document.hasFocus() is not state React can see, so it is subscribed to. */
@@ -107,12 +105,26 @@ export default function ChatPage() {
     if (supersededTo) router.replace(`/chat/${supersededTo}`);
   }, [supersededTo, router]);
 
+  const activeWorkspaceTeam = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
+  // Mirrors TeamSwitcher: the ui bag is the client truth, the user doc follows.
+  const saveActiveTeam = useMutation(api.teams.setActiveTeam);
+  // The URL names a channel the workspace filter excludes, and the cache KNOWS
+  // it (carries a different team): rendering it would show the wrong team's
+  // roster in the composer and popup. Surface a switch instead.
+  const outOfScopeChannel = useInboxStore((s) => {
+    if (!urlChannelId) return null;
+    const row = s.chatChannels[urlChannelId];
+    if (!row?.team_id) return null;
+    if (activeWorkspaceTeam && String(row.team_id) === String(activeWorkspaceTeam)) return null;
+    return { id: urlChannelId, name: row.name, teamId: String(row.team_id) };
+  });
   const activeChannelId = useMemo(() => {
     if (supersededTo) return supersededTo;
+    if (outOfScopeChannel) return undefined; // handled by the interstitial
     if (urlChannelId && rail.some((c) => c.id === urlChannelId)) return urlChannelId;
     if (urlChannelId) return urlChannelId; // not loaded yet — trust the URL
     return rail[0]?.id;
-  }, [urlChannelId, supersededTo, rail]);
+  }, [urlChannelId, supersededTo, rail, outOfScopeChannel]);
   const activeChannel = rail.find((c) => c.id === activeChannelId);
 
   // ── Data ──────────────────────────────────────────────────────────────────
@@ -231,15 +243,9 @@ export default function ChatPage() {
     useInboxStore.getState().openCreateModal("chat");
   }, []);
 
-  const [notifyOpen, setNotifyOpen] = useState(false);
-  const setNotifyLevel = useCallback(
-    (level: ChatNotifyLevel) => {
-      setNotifyOpen(false);
-      if (!activeChannelId) return;
-      useInboxStore.getState().setChannelNotifyLevel(activeChannelId, level);
-    },
-    [activeChannelId],
-  );
+  // The app's one context-menu system; the header bell and the rail's rows
+  // (click and right-click) all open the same instance.
+  const channelMenu = useChannelMenu();
 
   // ── Render ────────────────────────────────────────────────────────────────
   const showEmpty = messages.length === 0 && !feed.loading && !feed.error;
@@ -251,6 +257,13 @@ export default function ChatPage() {
       <ChatChannelRail
         channels={rail}
         activeChannelId={activeChannelId}
+        onChannelContextMenu={(e, c) =>
+          channelMenu.open(e, {
+            channelId: c.id,
+            notifyLevel: (c as any).notifyLevel ?? "mentions",
+            onArchived: c.id === activeChannelId ? () => router.replace("/chat") : undefined,
+          })
+        }
         onSelect={selectChannel}
         onCreate={createChannel}
       />
@@ -267,42 +280,25 @@ export default function ChatPage() {
               </span>
               {activeChannel?.topic && <span className="ch-head-topic">{activeChannel.topic}</span>}
               {!activeChannel?.topic && <span className="ch-head-topic" />}
-              {/* Three levels, so a round trip through "mute" cannot silently
-                  promote a channel from mentions-only to everything. */}
-              <div className="ch-notify">
-                <button
-                  type="button"
-                  className="ch-tool"
-                  title="Notifications for this channel"
-                  aria-haspopup="menu"
-                  aria-expanded={notifyOpen}
-                  onClick={() => setNotifyOpen((v) => !v)}
-                >
-                  {activeChannel?.muted ? <BellOff className="w-3.5 h-3.5" /> : <Bell className="w-3.5 h-3.5" />}
-                </button>
-                {notifyOpen && (
-                  <>
-                    <div className="ch-notify-scrim" onClick={() => setNotifyOpen(false)} />
-                    <div className="ch-notify-menu" role="menu">
-                      {NOTIFY_LEVELS.map((l) => (
-                        <button
-                          key={l.value}
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={(activeChannel?.notifyLevel ?? "mentions") === l.value}
-                          className={`ch-notify-item ${
-                            (activeChannel?.notifyLevel ?? "mentions") === l.value ? "ch-notify-on" : ""
-                          }`}
-                          onClick={() => setNotifyLevel(l.value)}
-                        >
-                          <span className="ch-notify-label">{l.label}</span>
-                          <span className="ch-notify-hint">{l.hint}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
+              {/* One management surface for everything channel-shaped —
+                  notifications, rename, topic, archive — shared verbatim with
+                  the sidebar's channel rows (ChannelMenu). */}
+              <button
+                type="button"
+                className="ch-tool"
+                title="Channel settings"
+                aria-haspopup="menu"
+                onClick={(e) => {
+                  if (!activeChannelId) return;
+                  channelMenu.open(e, {
+                    channelId: activeChannelId,
+                    notifyLevel: activeChannel?.notifyLevel ?? "mentions",
+                    onArchived: () => router.replace("/chat"),
+                  });
+                }}
+              >
+                {activeChannel?.muted ? <BellOff className="w-3.5 h-3.5" /> : <Bell className="w-3.5 h-3.5" />}
+              </button>
             </header>
 
             {showSkeleton ? (
@@ -367,12 +363,36 @@ export default function ChatPage() {
 
             <ChatComposer
               channelId={activeChannelId}
-              teamId={activeChannel?.team_id}
+              teamId={activeChannel?.teamId}
               placeholder={`Message #${activeChannel?.name ?? "channel"}`}
               onSend={send}
               autoFocus
             />
           </>
+        ) : outOfScopeChannel ? (
+          <div className="ch-empty">
+            <div className="ch-empty-title">#{outOfScopeChannel.name} belongs to another team</div>
+            <div className="ch-empty-sub">
+              Channels live inside their team's workspace. Switch to that team to read it.
+            </div>
+            <button
+              type="button"
+              className="ch-empty-action"
+              onClick={() => {
+                useInboxStore.getState().updateClientUI({ active_team_id: outOfScopeChannel.teamId });
+                void saveActiveTeam({ team_id: outOfScopeChannel.teamId as any }).catch(() => {});
+              }}
+            >
+              Switch team and open
+            </button>
+          </div>
+        ) : !activeWorkspaceTeam ? (
+          <div className="ch-empty">
+            <div className="ch-empty-title">Chat lives in team workspaces</div>
+            <div className="ch-empty-sub">
+              The personal workspace has no channels. Switch to a team to see its rooms.
+            </div>
+          </div>
         ) : (
           <div className="ch-empty">
             <div className="ch-empty-title">No channels yet</div>
@@ -387,6 +407,7 @@ export default function ChatPage() {
         )}
       </div>
 
+      <ChannelContextMenu state={channelMenu} />
       {threadRootId && activeChannelId && (
         <ChatThreadPanel
           channelId={activeChannelId}
@@ -398,7 +419,7 @@ export default function ChatPage() {
           knownHandles={handles.known}
           selfHandles={handles.self}
           handleNames={handles.names}
-          teamId={activeChannel?.team_id}
+          teamId={activeChannel?.teamId}
           now={now}
           // The link named a reply, and a reply only exists in this panel.
           targetMessageId={targetRow?.thread_root_id ? targetId : undefined}

@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chooseClaudeTailMessagesForTokenBudget, fetchExport, generateClaudeCodeJsonl, generateCodexJsonl, isHumanInstruction, type ExportResult } from "./jsonlGenerator.js";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { chooseClaudeTailMessagesForTokenBudget, fetchExport, generateClaudeCodeJsonl, generateCodexJsonl, isHumanInstruction, writeCodexSession, type ExportResult } from "./jsonlGenerator.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -645,6 +648,18 @@ describe("generateClaudeCodeJsonl", () => {
 });
 
 describe("generateCodexJsonl", () => {
+  test("returns the rollout path it writes", () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-codex-home-"));
+    try {
+      const written = writeCodexSession("{\"type\":\"session_meta\"}\n", "synthetic-thread", "codecast-fork", codexHome);
+      expect(written.sessionId).toBe("synthetic-thread");
+      expect(written.filePath).toStartWith(path.join(codexHome, "sessions"));
+      expect(fs.readFileSync(written.filePath, "utf8")).toBe("{\"type\":\"session_meta\"}\n");
+    } finally {
+      fs.rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
   test("uses provided session id in session_meta payload", () => {
     const forcedSessionId = "019c95d9-ef8b-7d43-b08f-647d85b2e5a6";
     const data: ExportResult = {

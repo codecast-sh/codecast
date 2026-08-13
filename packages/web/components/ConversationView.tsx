@@ -21,7 +21,7 @@ import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import {
   describeSmallToolGroup,
@@ -64,6 +64,7 @@ import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { MessageReview } from "./MessageReview";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
+import { SuggestionPills } from "./SuggestionPills";
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
@@ -165,7 +166,8 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2 } from "lucide-react";
+import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
 import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
@@ -4908,6 +4910,11 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
         accent: "border-sol-orange/25",
         icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
       };
+      case "browser": return {
+        color: "text-sol-cyan/80",
+        accent: "border-sol-cyan/25",
+        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="9" /><path strokeLinecap="round" strokeLinejoin="round" d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 010 18M12 3a15 15 0 000 18" /></svg>
+      };
       case "diff": case "summary": case "handoff": case "context": case "ask": return {
         color: "text-sol-magenta/80",
         accent: "border-sol-magenta/25",
@@ -4930,6 +4937,22 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
     // renders below the row.
     return m && m[1] !== "-" ? m[1] : "";
   }, [args]);
+
+  // `cast browser …` drives a page in the cloned Chrome. The CLI prints the
+  // page URL on its own line (pageLine / "→ navigated to"), so the freshest
+  // standalone URL in the output is the page the command left the browser on.
+  // Falls back to the argument of `open <url>` when there is no output yet.
+  const browserUrl = useMemo(() => {
+    if (cat !== "browser") return null;
+    const lines = [...stripAnsi(output).matchAll(/^\s*(https?:\/\/\S+)\s*$/gm)];
+    if (lines.length > 0) return lines[lines.length - 1][1];
+    if (subcommand === "open" && firstArg && firstArg !== "back" && firstArg !== "forward") {
+      if (/^https?:\/\//i.test(firstArg)) return firstArg;
+      if (/^[\w-]+(\.[\w-]+)+(\/|$)/.test(firstArg)) return `https://${firstArg}`;
+    }
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cat, subcommand, output, firstArg]);
 
   const renderSummary = () => {
     const isShow = subcommand === "show" || subcommand === "status" || subcommand === "context";
@@ -5038,6 +5061,21 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
           <span className="group-hover:underline">{cat}{subLabel ? ` ${subLabel}` : ""}</span>
         </span>
         {renderSummary()}
+        {browserUrl && (
+          <a
+            href={browserUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sol-cyan/70 hover:text-sol-cyan transition-colors flex-shrink-0 font-mono flex items-center gap-0.5"
+            onClick={(e) => e.stopPropagation()}
+            title={browserUrl}
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+            <span>open tab</span>
+          </a>
+        )}
       </div>
 
       {bodyParts.length > 0 && <CastMutationBody parts={bodyParts} accent={config.accent} />}
@@ -5181,9 +5219,8 @@ const BACKGROUND_BADGE_LABEL: Record<MonitorStatus, string> = {
 };
 
 function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId?: string }) {
-  const isWorkflow = tool.name === "Workflow";
-  const isBackground = !isWorkflow && tool.name !== "Monitor";
-  let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean; name?: string } = {};
+  const isBackground = tool.name !== "Monitor";
+  let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean } = {};
   try { input = JSON.parse(tool.input); } catch {}
   const [showCommand, setShowCommand] = useState(false);
   const messages = useInboxStore((s) => (conversationId ? s.messages[conversationId] : undefined));
@@ -5206,31 +5243,25 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
   );
   const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now, agentStartedAt) : "watching";
   const status: MonitorStatus = rawStatus === "watching" && sessionDead ? "stopped" : rawStatus;
-  const failed = status === "ended" && (isBackground ? (row?.exitCode ?? 0) > 0 : isWorkflow && !!row?.failed);
+  const failed = isBackground && status === "ended" && (row?.exitCode ?? 0) > 0;
   const badge = failed
-    ? { label: isWorkflow ? "failed" : `exit ${row!.exitCode}`, cls: "bg-sol-red/10 text-sol-red border-sol-red/30" }
-    : { cls: MONITOR_BADGE[status].cls, label: isBackground || isWorkflow ? BACKGROUND_BADGE_LABEL[status] : MONITOR_BADGE[status].label };
+    ? { label: `exit ${row!.exitCode}`, cls: "bg-sol-red/10 text-sol-red border-sol-red/30" }
+    : { cls: MONITOR_BADGE[status].cls, label: isBackground ? BACKGROUND_BADGE_LABEL[status] : MONITOR_BADGE[status].label };
   const watching = status === "watching";
   const commandFirstLine = (input.command || "").split("\n").find((l) => l.trim()) || "";
-  const Icon = isWorkflow ? Workflow : isBackground ? Terminal : Radar;
-  // A workflow's identity lives on the row (Summary + script name from the
-  // launch result), not in the tool input (a script blob). The input's `name`
-  // covers the window before the result lands / saved-workflow calls.
-  const description = isWorkflow
-    ? row?.description || input.name || "workflow run"
-    : input.description || (isBackground ? "background command" : "background watch");
+  const Icon = isBackground ? Terminal : Radar;
 
   return (
     <div className={`my-1 rounded border-l-2 ${watching ? "border-sol-blue/60 bg-sol-blue/5" : "border-sol-border/60 bg-sol-bg-alt/30"}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 min-w-0">
         <Icon className={`w-3.5 h-3.5 shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`} />
-        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isWorkflow ? "Workflow" : isBackground ? "Background" : "Monitor"}</span>
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isBackground ? "Background" : "Monitor"}</span>
         {input.persistent && (
           <ShortcutTooltip label="Runs until TaskStop or session end — not a one-shot watch">
             <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-blue/40 text-sol-blue/90 bg-sol-blue/10">persistent</span>
           </ShortcutTooltip>
         )}
-        <span className="text-xs text-sol-text truncate min-w-0">{description}</span>
+        <span className="text-xs text-sol-text truncate min-w-0">{input.description || (isBackground ? "background command" : "background watch")}</span>
         {(row?.eventCount ?? 0) > 0 && (
           <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">
             {row!.eventCount} event{row!.eventCount === 1 ? "" : "s"}
@@ -5256,11 +5287,6 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
             <span className="block truncate">{commandFirstLine}</span>
           )}
         </button>
-      )}
-      {/* A workflow has no command to expand — its script name (parsed from
-          the launch result) is the one-line identity under the summary. */}
-      {isWorkflow && row?.command && (
-        <div className="px-3 pb-1.5 font-mono text-[11px] text-sol-text-dim truncate">{row.command}</div>
       )}
       {row?.lastEvent && (
         <div className="mx-3 mb-2 flex items-baseline gap-1.5 min-w-0 text-[11px] leading-snug">
@@ -7139,8 +7165,32 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     setIsExpanded(!isExpanded);
   };
 
+  // Right-click mirrors the corner toolbar (meta actions only); the hook's
+  // guards keep native menus on links and text selections.
+  const ctxMenu = useContextMenu<void>();
+
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 -mx-4 px-4 py-4 rounded-lg ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/15 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : "bg-sol-blue/10 border border-sol-blue/30"} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 -mx-4 px-4 py-4 rounded-lg ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/15 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : "bg-sol-blue/10 border border-sol-blue/30"} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)}>
+      <ContextMenu state={ctxMenu}>
+        {() => (
+          <>
+            <CtxItem icon={CopyIcon} onSelect={handleCopy}>Copy message</CtxItem>
+            <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>
+            <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
+              {isBookmarked ? "Remove bookmark" : "Bookmark message"}
+            </CtxItem>
+            {(onForkFromMessage && messageUuid) || onStartShareSelection ? <CtxSeparator /> : null}
+            {onForkFromMessage && messageUuid && (
+              <CtxItem icon={Split} onSelect={() => onForkFromMessage(messageUuid)}>Fork from here</CtxItem>
+            )}
+            {onStartShareSelection && (
+              <CtxItem icon={Share2} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
+            )}
+            <CtxSeparator />
+            <CtxItem icon={Maximize2} onSelect={() => setFullscreen(true)}>Fullscreen</CtxItem>
+          </>
+        )}
+      </ContextMenu>
       <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
         {onStartShareSelection && (
           <button
@@ -7842,6 +7892,10 @@ function AssistantBlockImpl({
   const onlyToolCalls = hasToolCalls && !hasContent && !visibleThinking;
   const hasVisibleContent = hasContent || visibleThinking || hasToolCalls || hasImages;
 
+  // Right-click mirrors the corner toolbar (meta actions only). Declared
+  // before the visibility early-return — hooks can't be conditional.
+  const ctxMenu = useContextMenu<void>();
+
   // When nothing visible, hide completely
   if (!hasVisibleContent) {
     return null;
@@ -7850,7 +7904,30 @@ function AssistantBlockImpl({
   const hasPlanWrite = hasToolCalls && toolCalls?.some(isPlanWriteToolCall);
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-1.5" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-1.5" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
+      <ContextMenu state={ctxMenu}>
+        {() => (
+          <>
+            <CtxItem icon={CopyIcon} onSelect={handleCopy}>Copy message</CtxItem>
+            <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>
+            <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
+              {isBookmarked ? "Remove bookmark" : "Bookmark message"}
+            </CtxItem>
+            {((onForkFromMessage && messageUuid && !onlyToolCalls) || onStartShareSelection) && <CtxSeparator />}
+            {onForkFromMessage && messageUuid && !onlyToolCalls && (
+              <CtxItem icon={Split} onSelect={() => onForkFromMessage(messageUuid)}>Fork from here</CtxItem>
+            )}
+            {onStartShareSelection && (
+              <CtxItem icon={Share2} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
+            )}
+            {onCollapseTurn && (
+              <CtxItem icon={ChevronUp} onSelect={onCollapseTurn}>Collapse turn</CtxItem>
+            )}
+            <CtxSeparator />
+            <CtxItem icon={Maximize2} onSelect={() => setFullscreen(true)}>Fullscreen</CtxItem>
+          </>
+        )}
+      </ContextMenu>
       {onCollapseTurn && (
         <button
           onClick={onCollapseTurn}
@@ -7970,7 +8047,7 @@ function AssistantBlockImpl({
             <WorkflowToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : tc.name === "Skill" ? (
             <SkillBlock key={tc.id} tool={tc} />
-          ) : tc.name === "Monitor" || tc.name === "Workflow" || isBackgroundBashToolCall(tc) ? (
+          ) : tc.name === "Monitor" || isBackgroundBashToolCall(tc) ? (
             <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
           ) : tc.name === "ScheduleWakeup" ? (
             <ScheduleWakeupBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} timestamp={timestamp} />
@@ -8996,6 +9073,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // never changes on a heartbeat. Subscribing to the whole row re-rendered the input
   // (and its draft textarea) ~1×/s for a live session.
   const composeTeamId = useInboxStore((s) => s.sessions[conversationId]?.team_id);
+  // Suggestion pills pref — off by default; the strip mounts only when on.
+  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
   // The mention picker is team-scoped, so it surfaces sessions from sibling repos.
   // We show a row's project only when it differs from this one — same-repo rows
   // would just repeat it. This is the current conversation's project basename.
@@ -10965,6 +11044,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             // positioning context the caret-anchored popup hangs from.
             return <div ref={acAnchorRef} className="relative h-0">{dropdown}</div>;
           })()}
+          {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (
+            <div className={`mx-auto px-2 sm:px-4 ${isExpanded ? "conv-col" : "max-w-md"}`}>
+              <SuggestionPills
+                conversationId={conversationId}
+                idle={!isWaitingForResponse && !isThinking && !(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
+                hidden={!!message || pastedImages.length > 0 || composeMode}
+                onPick={(t) => { setMessage(t); textareaRef.current?.focus(); }}
+              />
+            </div>
+          )}
           <form onSubmit={handleFormSubmit} className={bareComposer ? "w-full" : `mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-md"}`}>
             <div className={`flex flex-col ${bareComposer ? "" : "border"} transition-colors duration-150 ${bareComposer ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${isExpanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[40vh]" : ""} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bareComposer ? "" : "border-sol-border"}`}>
               {isSelectionActive && (
@@ -14811,6 +14900,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <TaskBadge task={(conversation as any).active_task} />
               </span>
             )}
+            {/* A workflow run in flight inside this session. The launch card
+                sits wherever the run was armed — often far above the tail —
+                so the header carries the standing signal, linking to the run's
+                live view. Server truth via the conversation's stamped run. */}
+            {(conversation as any)?.is_workflow_primary && (conversation as any)?.workflow_run_id &&
+              ["pending", "running", "paused"].includes((conversation as any)?.workflow_run_status) && (
+              <span data-simple-hide className="cq-header-collapse contents">
+                <Link
+                  href={`/workflows/runs/${(conversation as any).workflow_run_id}`}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px]"
+                  title={`Workflow ${(conversation as any).workflow_run_status}${(conversation as any).workflow_run_name ? `: ${(conversation as any).workflow_run_name}` : ""} — open the live run`}
+                >
+                  <span className="w-1 h-1 rounded-full bg-sol-cyan animate-pulse motion-reduce:animate-none" />
+                  <Workflow className="w-2.5 h-2.5 flex-shrink-0" />
+                  <span className="truncate">{(conversation as any).workflow_run_name || "workflow"}</span>
+                </Link>
+              </span>
+            )}
 
             {conversation && (
               <TooltipProvider delayDuration={300}>
@@ -15706,6 +15813,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           threadState={conversation.thread_state}
           threadStateAt={conversation.thread_state_at}
           threadStateMsgCount={conversation.thread_state_msg_count}
+          threadStateStatus={conversation.thread_state_status}
           messageCount={conversation.message_count}
           canClear={effectiveIsOwner}
         />

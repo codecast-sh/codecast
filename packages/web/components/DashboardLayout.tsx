@@ -43,7 +43,7 @@ import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
-import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
+import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
 import { StageCompanion } from "./StageCompanion";
 import { companionId, autoAllowed as wsAutoAllowed, surfaceForPath, slotPolicyFor } from "../store/workspace";
@@ -60,7 +60,7 @@ import { useSyncMentionTasks } from "../hooks/useSyncTasks";
 import { isInboxSessionView, resolveSessionSelectKind } from "../lib/inboxRouting";
 import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
-import { TabBar } from "./TabBar";
+import { TabBar, AttachTabButton } from "./TabBar";
 import { pathLabel } from "../lib/pathLabel";
 import { TabContent } from "./TabContent";
 import { BreadcrumbBar } from "./BreadcrumbBar";
@@ -337,6 +337,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isOnSchedulesPage = pathname === "/schedules" || (pathname?.startsWith("/schedules/") ?? false);
   const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
+  const isOnCapabilitiesPage = pathname === "/capabilities";
   const isOnFilesPage = pathname === "/files" || (pathname?.startsWith("/files/") ?? false);
   // /vault = pre-rename alias for /files. Kept as its own flag rather than
   // folded into the one above because the routes.manifest parity test reads the
@@ -359,7 +360,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const surface = isOnSettingsPage ? "settings" : surfaceForPath(pathname ?? "");
   const slotPolicy = slotPolicyFor(surface);
   const isOnWorkingPage = slotPolicy.secondary;
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
@@ -489,11 +490,29 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     setIsMobile(window.innerWidth < 768);
   });
 
+  // The route-default effects below adjust the rail when you NAVIGATE between
+  // surfaces. A tab switch also changes `pathname` (it reports the active
+  // tab's path), but revealing an already-open tab is not navigation — the
+  // frame must stay pixel-identical — so each effect stands down when the
+  // pathname change arrived with a tab switch. The ref is updated in a
+  // separate effect declared AFTER the consumers: effects run in declaration
+  // order, so during a switch they still compare against the pre-switch tab.
+  const prevActiveTabRef = useRef(s.activeTabId);
+
   useWatchEffect(() => {
     const wasInbox = prevWasInboxRef.current;
     prevWasInboxRef.current = isOnInboxPage;
+    if (prevActiveTabRef.current !== s.activeTabId) return;
+    const store = useInboxStore.getState();
+    // Entering the inbox opens the session list beside it (unless you closed
+    // it by hand). Runs on first mount too — a boot landing on /inbox seeds
+    // the rail for a fresh workspace.
+    if (!wasInbox && isOnInboxPage) {
+      if (!selectSessionRailOpen(store) && !selectSessionRailUserClosed(store)) {
+        store.toggleSidePanel();
+      }
+    }
     if (wasInbox && !isOnInboxPage) {
-      const store = useInboxStore.getState();
       // The Favorites view is a mode of the inbox's session list; leaving the
       // inbox drops back to the active desk so the rail isn't stuck on the shelf.
       if (store.showFavorites) store.setShowFavorites(false);
@@ -511,6 +530,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     const prev = prevPathnameRef.current;
     prevPathnameRef.current = pathname;
     if (!prev || prev === pathname) return;
+    if (prevActiveTabRef.current !== s.activeTabId) return;
     const store = useInboxStore.getState();
     if (selectSessionRailUserClosed(store)) return;
     const wasConvPage = prev.includes("/conversation/");
@@ -529,6 +549,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       }
     }
   }, [pathname, isOnInboxPage]);
+
+  // Keep LAST of the trio: the consumers above must see the pre-switch tab id.
+  useWatchEffect(() => {
+    prevActiveTabRef.current = s.activeTabId;
+  }, [s.activeTabId]);
 
   const resolveNewSessionContext = useCallback(() => {
     const store = useInboxStore.getState();
@@ -666,6 +691,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       }
       if (popped.inboxId) return;
       if (isNonTabRoute(window.location.pathname)) return;
+      // A detached tab window navigates via React Router only — the shared
+      // tabs its store hydrates belong to the main window, so mirroring this
+      // window's URL into the "active tab" would rewrite someone else's tab.
+      if (isDetachedTabWindow()) return;
       const store = useInboxStore.getState();
       const id = store.activeTabId;
       if (!id) return;
@@ -800,7 +829,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     );
   }
 
-  const hasTabs = s.tabs.length > 0 && !isNonTabRoute(routerLocation.pathname);
+  // A detached tab window shows exactly its URL via React Router — no tab
+  // shell, even though the shared tabs hydrate into its store too.
+  const hasTabs = s.tabs.length > 0 && !isNonTabRoute(routerLocation.pathname) && !isDetachedTabWindow();
   const content = hasTabs ? <TabContent /> : children;
 
   // The trail sits above whatever surface is open — one bar for every page, so
@@ -1006,6 +1037,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 </button>
               </ShortcutTooltip>
             )}
+            {/* Detached tab window only: merge this surface back into the
+                main window as a tab (renders null everywhere else). */}
+            <AttachTabButton />
             <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
               <button
                 onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}

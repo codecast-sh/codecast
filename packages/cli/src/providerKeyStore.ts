@@ -11,6 +11,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { ProviderKeyStore } from "@codecast/shared/contracts";
+import { atomicWriteFile } from "./atomicWrite.js";
 
 export const PROVIDER_KEY_STORE_FILE = "provider-keys.json";
 
@@ -49,11 +50,7 @@ export function writeProviderKeyStore(configDir: string, store: ProviderKeyStore
   const obj: ProviderKeyStore = {};
   for (const [k] of entries.sort(([a], [b]) => a.localeCompare(b))) obj[k] = store[k];
   const content = JSON.stringify(obj, null, 2) + "\n";
-  fs.mkdirSync(configDir, { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, content, { mode: 0o600 });
-  fs.chmodSync(tmp, 0o600);
-  fs.renameSync(tmp, file);
+  atomicWriteFile(file, content, { mode: 0o600 });
   return content;
 }
 

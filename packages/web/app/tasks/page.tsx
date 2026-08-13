@@ -12,6 +12,7 @@ import { DetailSplitLayout } from "../../components/DetailSplitLayout";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
+import { TaskMenuItems } from "../../components/menus/ObjectContextMenus";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { LivenessDot, ActiveSessionBadge, taskLivenessState } from "../../components/LivenessDot";
 
@@ -19,13 +20,15 @@ const api = _api as any;
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { TaskStatusBadge, TASK_STATUS, TASK_STATUS_ORDER, type TaskStatus } from "../../components/TaskStatusBadge";
-import { buildTaskGroups, isValidTaskGroup, parseTaskGroup, TASK_AXES, TASK_AXIS_KEYS } from "../../lib/taskGrouping";
+import { buildTaskGroups, isValidTaskGroup, parseTaskGroup, taskGroupDropUpdates, TASK_AXES, TASK_AXIS_KEYS } from "../../lib/taskGrouping";
+import { statusByKey, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../lib/taskStatuses";
+import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { LabelChips } from "../../components/LabelChips";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { filterToWorkspace } from "../../lib/workspaceScope";
 import { buildTaskTree, isActiveTask, isHumanOrigin, taskFamilyIndex, taskOrigin } from "@codecast/shared/tasks";
-import { closeTaskWithGuard } from "../../lib/taskActions";
+import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
 import { AgentTypeIcon, formatAgentType } from "../../components/AgentTypeIcon";
 import {
   Plus,
@@ -60,6 +63,7 @@ import {
   ChevronDown,
   ChevronRight,
   CornerDownRight,
+  Copy,
 } from "lucide-react";
 
 // Linear's progress circle, tiny: a ring that fills as direct subtasks close.
@@ -114,7 +118,10 @@ export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenD
 }) {
   const router = useRouter();
   const activeSession = useInboxStore((s) => s.taskActiveSessions[task._id]) ?? null;
-  const status = STATUS_CONFIG[task.status as TaskStatus] || STATUS_CONFIG.open;
+  // Resolve through the task's own team so a row shows that team's vocabulary
+  // ("Working on") even if it ever renders outside its workspace view.
+  const teamStatuses = useTeamTaskStatusList((task as any).team_id);
+  const status = statusVisual(taskStatusOf(task as any, teamStatuses));
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.medium;
   const StatusIcon = status.icon;
   const PriorityIcon = priority.icon;
@@ -186,6 +193,17 @@ export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenD
           <CornerDownRight className="w-3 h-3 flex-shrink-0" />
           <span className="truncate">{parentChip.short_id}</span>
         </button>
+      )}
+      {/* A duplicate is dropped but keeps pointing at the task that superseded
+          it, so the row explains itself when it surfaces in Done/All views. */}
+      {task.duplicate_of && (
+        <span
+          className="flex items-center gap-1 text-[10px] px-1.5 py-0 rounded border border-sol-border/40 text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact"
+          title={`Duplicate of ${task.duplicate_of}`}
+        >
+          <Copy className="w-3 h-3" />
+          {task.duplicate_of}
+        </span>
       )}
       {/* ONE indicator per parent row (panel decision 4): a Linear-style
           progress chip over direct children, with the hidden agent-internal
@@ -340,6 +358,108 @@ function fmtDate(ms: number): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+/** Compact one-line rendering of a task inside the combine dialog, so the
+ *  reader sees exactly which two rows the drop involved. */
+function TaskMiniCard({ task }: { task: TaskItem }) {
+  const teamStatuses = useTeamTaskStatusList((task as any).team_id);
+  const status = statusVisual(taskStatusOf(task as any, teamStatuses));
+  const StatusIcon = status.icon;
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-sol-border/40 bg-sol-bg-alt/40 px-2.5 py-1.5 min-w-0">
+      <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} />
+      <span className="text-xs font-mono text-sol-text-dim flex-shrink-0">{task.short_id}</span>
+      <span className="text-xs text-sol-text truncate">{task.title}</span>
+    </div>
+  );
+}
+
+/**
+ * Dropping one task onto another asks what the gesture meant: file it as a
+ * subtask (shared guards: cycle, depth, workspace) or mark it a duplicate
+ * (links duplicate_of, then drops through the single close gateway). Same
+ * overlay pattern and key-trapping as GlobalCloseGuardDialog.
+ */
+function TaskCombineDialog({ source, target, onClose }: {
+  source: TaskItem;
+  target: TaskItem;
+  onClose: () => void;
+}) {
+  const updateTask = useInboxStore((s) => s.updateTask);
+
+  useWatchEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Trap keys so list shortcuts (s, p, j/k…) can't fire behind the overlay.
+      e.stopPropagation();
+      if (e.key === "Escape") { e.preventDefault(); onClose(); }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  const asSubtask = () => {
+    const res = setTaskParent(source.short_id, target.short_id);
+    if (!res.ok) toast.error(res.reason);
+    else toast.success(`${source.short_id} is now a subtask of ${target.short_id}`);
+    onClose();
+  };
+  const asDuplicate = () => {
+    updateTask(source.short_id, { duplicate_of: target.short_id });
+    closeTaskWithGuard(source.short_id, "dropped");
+    toast.success(`${source.short_id} marked as duplicate of ${target.short_id}`);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="w-[28rem] max-w-[90vw] rounded-lg border border-sol-border bg-sol-bg shadow-xl p-4" onClick={(e) => e.stopPropagation()}>
+        <div className="text-sm font-medium text-sol-text mb-3">Combine tasks</div>
+        <div className="space-y-1.5 mb-4">
+          <TaskMiniCard task={source} />
+          <div className="flex items-center gap-1.5 pl-2 text-[10px] text-sol-text-dim uppercase tracking-wide">
+            <CornerDownRight className="w-3 h-3" /> dropped onto
+          </div>
+          <TaskMiniCard task={target} />
+        </div>
+        <div className="space-y-1.5">
+          <button
+            autoFocus
+            onClick={asSubtask}
+            className="w-full flex items-start gap-2.5 rounded-md border border-sol-cyan/40 bg-sol-cyan/10 hover:bg-sol-cyan/20 px-3 py-2 text-left transition-colors"
+          >
+            <CornerDownRight className="w-3.5 h-3.5 text-sol-cyan mt-0.5 flex-shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium text-sol-text">Add as subtask</span>
+              <span className="block text-[11px] text-sol-text-muted">
+                {source.short_id} files under {target.short_id}; both stay open.
+              </span>
+            </span>
+          </button>
+          <button
+            onClick={asDuplicate}
+            className="w-full flex items-start gap-2.5 rounded-md border border-sol-border/40 hover:border-sol-border hover:bg-sol-bg-alt px-3 py-2 text-left transition-colors"
+          >
+            <Copy className="w-3.5 h-3.5 text-sol-text-muted mt-0.5 flex-shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium text-sol-text">Mark as duplicate</span>
+              <span className="block text-[11px] text-sol-text-muted">
+                {source.short_id} is dropped and linked to {target.short_id} as the original.
+              </span>
+            </span>
+          </button>
+        </div>
+        <div className="flex justify-end mt-3">
+          <button
+            onClick={onClose}
+            className="h-7 px-2.5 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function KanbanCard({
   task,
   isDragging,
@@ -435,7 +555,9 @@ function KanbanCard({
 }
 
 function KanbanView({
+  statuses,
   grouped,
+  keyFor,
   hiddenStatuses,
   onToggleHidden,
   onCardClick,
@@ -444,17 +566,21 @@ function KanbanView({
   onStatusChange,
   parentChipFor,
 }: {
+  /** The workspace's status vocabulary — one column per status, board-ordered. */
+  statuses: TeamTaskStatus[];
   grouped: Record<string, TaskItem[]>;
+  /** A task's current column key (resolved status id). */
+  keyFor: (t: TaskItem) => string;
   hiddenStatuses: Set<string>;
   onToggleHidden: (status: string) => void;
   onCardClick: (task: TaskItem) => void;
   onContextMenu: (e: React.MouseEvent, task: TaskItem) => void;
   onAddTask: (status: string) => void;
-  onStatusChange: (task: TaskItem, newStatus: string) => void;
+  onStatusChange: (task: TaskItem, newStatusKey: string) => void;
   parentChipFor?: (task: TaskItem) => { short_id: string; title: string } | null;
 }) {
-  const visibleStatuses = STATUS_ORDER.filter((s) => !hiddenStatuses.has(s) && (grouped[s]?.length || true));
-  const hiddenWithTasks = STATUS_ORDER.filter((s) => hiddenStatuses.has(s));
+  const visibleStatuses = statuses.filter((s) => !hiddenStatuses.has(s.id));
+  const hiddenWithTasks = statuses.filter((s) => hiddenStatuses.has(s.id));
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
 
@@ -476,13 +602,13 @@ function KanbanView({
     if (!shortId) return;
     const allTasks = Object.values(grouped).flat();
     const task = allTasks.find(t => t.short_id === shortId);
-    if (!task || task.status === targetStatus) {
+    if (!task || keyFor(task) === targetStatus) {
       setDragging(null);
       return;
     }
     onStatusChange(task, targetStatus);
     setDragging(null);
-  }, [grouped, onStatusChange]);
+  }, [grouped, keyFor, onStatusChange]);
 
   const handleDragOver = useCallback((e: React.DragEvent, status: string) => {
     e.preventDefault();
@@ -497,8 +623,9 @@ function KanbanView({
   return (
     <div className="flex-1 flex overflow-hidden">
       <div className="flex-1 flex gap-3 overflow-x-auto px-4 py-4 pb-6">
-        {visibleStatuses.map((status) => {
-          const cfg = STATUS_CONFIG[status as TaskStatus];
+        {visibleStatuses.map((col) => {
+          const status = col.id;
+          const cfg = statusVisual(col);
           const Icon = cfg.icon;
           const tasks = grouped[status] || [];
           return (
@@ -584,12 +711,12 @@ function KanbanView({
 // single `sort` param that overloaded the two.
 // Legal group values are "none" or one or more axis names joined by "+"
 // ("assignee", "assignee+project") — lib/taskGrouping owns that vocabulary.
-const TASK_SORT_VALUES = new Set(["priority", "created", "updated", "title"]);
+const TASK_SORT_VALUES = new Set(["priority", "created", "updated", "title", "manual"]);
 // Natural direction per sort field — picking a field resets to this so "Created"
 // lands newest-first and "Priority"/"Title" land most-urgent / A→Z without a
 // second click. The user can still flip it with the direction toggle.
 const TASK_SORT_DEFAULT_DIR: Record<string, "asc" | "desc"> = {
-  priority: "asc", title: "asc", created: "desc", updated: "desc",
+  priority: "asc", title: "asc", created: "desc", updated: "desc", manual: "asc",
 };
 function taskDefaultDir(sort: string): "asc" | "desc" {
   return TASK_SORT_DEFAULT_DIR[sort] ?? "asc";
@@ -748,7 +875,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   const taskOriginBadges = useInboxStore((s) => s.taskOriginBadges);
   const showCreate = useInboxStore((s) => s.createModal === 'task');
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
-  const saveView = useInboxStore((s) => s.saveView);
+  const createSavedView = useInboxStore((s) => s.createSavedView);
   const taskView = useInboxStore((s) => s.clientState.ui?.task_view);
   const [hiddenStatuses, setHiddenStatuses] = useState<Set<string>>(new Set(["dropped"]));
 
@@ -771,8 +898,8 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   }, [setTaskFilter, setParam]);
   const setViewMode = useCallback((v: "list" | "kanban") => setParam({ view: v === "list" ? "" : v }), [setParam]);
   const handleSaveView = useCallback((name: string) => {
-    saveView({ name, page: "tasks", prefs: { ...taskView, status: statusFilter } as TaskViewPrefs });
-  }, [saveView, taskView, statusFilter]);
+    createSavedView({ name, page: "tasks", prefs: { ...taskView, status: statusFilter } as TaskViewPrefs });
+  }, [createSavedView, taskView, statusFilter]);
 
   useWatchEffect(() => { setTaskFilter({ status: urlStatus }); }, [urlStatus]);
 
@@ -959,6 +1086,14 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
     const prio = (t: TaskItem) => PRIORITY_ORDER[t.priority] ?? 3;
     const flip = dir === "desc" ? -1 : 1;
     const sorted = [...tasks].sort((a, b) => {
+      // Manual is an absolute rank the user placed by hand (sort_order, with
+      // created_at as the unranked fallback on the same ms scale), so the
+      // direction flip never applies — inverting it would invert what every
+      // drag insertion meant.
+      if (sort === "manual") {
+        const d = (a.sort_order ?? a.created_at) - (b.sort_order ?? b.created_at);
+        if (d !== 0) return d;
+      }
       let r = 0;
       if (sort === "priority") r = prio(a) - prio(b);
       else if (sort === "created") r = a.created_at - b.created_at;
@@ -1073,6 +1208,73 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   }, [listGroups, applyCollapse, collapsedIds]);
   const displayFlat = useMemo(() => applyCollapse(flatTasks), [applyCollapse, flatTasks]);
 
+  // --- Drag & drop semantics. GenericListView owns the gesture; these say what
+  // a drop means for tasks: into a bucket = edit the grouped-by field(s), onto
+  // a row = the combine dialog (subtask / duplicate), into a gap = manual rank.
+  const [combine, setCombine] = useState<{ source: TaskItem; target: TaskItem } | null>(null);
+
+  // Terminal statuses route through the single close gateway, same as kanban.
+  const applyDropUpdates = useCallback((task: TaskItem, updates: Record<string, any>) => {
+    const { status, ...rest } = updates;
+    if (status === "done" || status === "dropped") {
+      if (Object.keys(rest).length > 0) updateTask(task.short_id, rest);
+      const res = closeTaskWithGuard(task.short_id, status);
+      if (res.needsConfirm) return;
+    } else {
+      updateTask(task.short_id, updates);
+    }
+    // A pure reorder is its own feedback (the row lands where dropped).
+    const fields = Object.keys(updates).filter((k) => k !== "sort_order");
+    if (fields.length > 0) toast.success(`${task.short_id} moved`);
+  }, [updateTask]);
+
+  const handleDropOnGroup = useCallback((task: TaskItem, groupKey: string) => {
+    const updates = taskGroupDropUpdates(group, groupKey, task);
+    if (!updates) { toast.error("This grouping can't be changed by dragging"); return; }
+    if (Object.keys(updates).length === 0) return;
+    applyDropUpdates(task, updates);
+  }, [group, applyDropUpdates]);
+
+  const canDropOnGroup = useCallback((task: TaskItem, groupKey: string) => {
+    const updates = taskGroupDropUpdates(group, groupKey, task);
+    return updates !== null && Object.keys(updates).length > 0;
+  }, [group]);
+
+  // Manual rank: fractional midpoint between the nearest SIBLINGS (same parent)
+  // around the insertion point — display neighbors can be another parent's
+  // subtasks, which travel with their parent and would poison the math. A drop
+  // into another group's gap also applies that bucket's field edits.
+  const handleReorder = useCallback((item: TaskItem, before: TaskItem | null, after: TaskItem | null, groupKey: string | null) => {
+    let updates: Record<string, any> = {};
+    if (groupKey != null) {
+      const gu = taskGroupDropUpdates(group, groupKey, item);
+      if (gu === null) { toast.error("This grouping can't be changed by dragging"); return; }
+      updates = gu;
+    }
+    const list = groupKey != null && displayGroups
+      ? displayGroups.find((g) => g.key === groupKey)?.items ?? displayFlat
+      : displayFlat;
+    let idx: number;
+    if (after) idx = list.findIndex((t) => t._id === after._id);
+    else if (before) idx = list.findIndex((t) => t._id === before._id) + 1;
+    else idx = list.length;
+    if (idx < 0) return;
+    const orderKeyOf = (t: TaskItem) => t.sort_order ?? t.created_at;
+    const isSibling = (t: TaskItem) =>
+      String(t.parent_id ?? "") === String(item.parent_id ?? "") && t._id !== item._id;
+    let prev: TaskItem | null = null;
+    let next: TaskItem | null = null;
+    for (let i = idx - 1; i >= 0; i--) if (isSibling(list[i])) { prev = list[i]; break; }
+    for (let i = idx; i < list.length; i++) if (isSibling(list[i])) { next = list[i]; break; }
+    const pk = prev ? orderKeyOf(prev) : null;
+    const nk = next ? orderKeyOf(next) : null;
+    if (pk != null && nk != null) updates.sort_order = (pk + nk) / 2;
+    else if (pk != null) updates.sort_order = pk + 60_000;
+    else if (nk != null) updates.sort_order = nk - 60_000;
+    if (Object.keys(updates).length === 0) return;
+    applyDropUpdates(item, updates);
+  }, [group, displayGroups, displayFlat, applyDropUpdates]);
+
   // Workspace-scope pass, computed once over the whole live set: TRUE deep
   // subtask counts and direct-children progress. The clutter this page exists
   // to fix is about ROWS, not awareness — agent execution subtasks stay off
@@ -1142,6 +1344,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
             { value: "updated", label: "Updated" },
             { value: "created", label: "Created" },
             { value: "title", label: "Title" },
+            { value: "manual", label: "Manual (drag to reorder)" },
           ]}
           onSortChange={setSort}
           sortDir={dir}
@@ -1232,6 +1435,14 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
           onItemEdit={handleTitleEdit}
           listFooter={undefined}
           syncScope="tasks"
+          dnd={{
+            onDropOnGroup: handleDropOnGroup,
+            canDropOnGroup,
+            onDropOnItem: (source, target) => setCombine({ source, target }),
+            // Gaps only mean something when the user chose manual ordering;
+            // otherwise the sort field owns row positions.
+            onReorder: sort === "manual" ? handleReorder : undefined,
+          }}
           displayExtra={
             <div>
               <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">View</div>
@@ -1246,7 +1457,13 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
               />
             </div>
           }
-          customContent={viewMode === "kanban" ? ({ openPaletteForItems }) => (
+          contextMenuContent={(items) => (
+            <TaskMenuItems
+              tasks={items}
+              onOpen={(t) => router.push(projectId ? `/projects/${projectId}/${t._id}` : `/tasks/${t._id}`)}
+            />
+          )}
+          customContent={viewMode === "kanban" ? ({ openContextMenuForItems }) => (
             <KanbanView
               grouped={kanbanGrouped}
               hiddenStatuses={hiddenStatuses}
@@ -1256,7 +1473,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
                 return next;
               })}
               onCardClick={(t) => router.push(`/tasks/${t._id}`)}
-              onContextMenu={(e, task) => { e.preventDefault(); openPaletteForItems([task]); }}
+              onContextMenu={(e, task) => openContextMenuForItems(e, [task])}
               onAddTask={() => openCreateModal('task', projectId ? { project_id: projectId } : undefined)}
               onStatusChange={(task, newStatus) => {
                 // Terminal moves go through the single close gateway \u2014 a kanban
@@ -1278,6 +1495,13 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
           ) : undefined}
         >
         </GenericListView>
+        {combine && (
+          <TaskCombineDialog
+            source={combine.source}
+            target={combine.target}
+            onClose={() => setCombine(null)}
+          />
+        )}
       </>
     );
 }

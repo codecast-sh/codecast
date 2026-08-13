@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "fs";
 import {
   buildAppServerStreamingTailMessages,
   buildCodexUserTurnMessage,
@@ -77,5 +78,22 @@ describe("app-server thread registration", () => {
     expect(isTmuxSessionMetadataMatch(sessionA, sessionA)).toBe(true);
     expect(isTmuxSessionMetadataMatch(sessionA.slice(0, 8), sessionA)).toBe(false);
     expect(isTmuxSessionMetadataMatch(sessionB, sessionA)).toBe(false);
+  });
+});
+
+describe("Codex fork routing", () => {
+  test("imports copied history through app-server before generic resume", () => {
+    const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
+    const start = source.indexOf('if (resumeAgentType === "codex" && (parsed.fork === true || forceReconstitute) && conversationId)');
+    const end = source.indexOf("let resumed = false", start);
+    const branch = source.slice(start, end);
+
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    expect(branch).toContain("activeCodexAppServer.threadFork");
+    expect(branch).toContain("remapConversationSession(sessionId, realThreadId, conversationId)");
+    expect(branch).toContain('transport: "app-server"');
+    expect(branch).not.toContain("autoResumeSession");
+    expect(branch).not.toContain("tmux");
   });
 });

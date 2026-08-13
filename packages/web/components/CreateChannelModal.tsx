@@ -41,10 +41,13 @@ export function CreateChannelModal({
     () => Object.values(channels).some((c: any) => !c.archived_at && c.name === slug),
     [channels, slug],
   );
-  const valid = slug.length > 0 && !taken;
+  // A channel MUST land in the workspace the user is looking at. Omitting the
+  // team would let the server default to users.active_team_id — a second
+  // source of truth that can name a team this window is not even showing.
+  const valid = slug.length > 0 && !taken && !!teamId;
 
   const submit = () => {
-    if (!valid) return;
+    if (!valid || !teamId) return;
     const id = createChatChannel(name, { topic: topic.trim() || undefined, teamId });
     toast.success(`Created #${slug}`);
     onCreated?.(id);
@@ -88,7 +91,9 @@ export function CreateChannelModal({
         </div>
 
         <div className="px-6 pb-4 text-xs min-h-[18px]">
-          {taken ? (
+          {!teamId ? (
+            <span className="text-sol-orange">Switch to a team first — channels live in team workspaces</span>
+          ) : taken ? (
             <span className="text-sol-red">#{slug} already exists</span>
           ) : slug && slug !== name.trim() ? (
             <span className="text-sol-text-muted">

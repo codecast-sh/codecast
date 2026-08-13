@@ -5,13 +5,16 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
+import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
+import { SessionMenuItems } from "./menus/ObjectContextMenus";
+import { copyToClipboard } from "../lib/utils";
 import { ImageLightbox } from "./ImageGallery";
 import { SessionErrorBanner } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
 import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
-import { threadStateView, THREAD_STATE_PIN_CLASS } from "../lib/threadState";
+import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } from "../lib/threadState";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
@@ -41,7 +44,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, Pin } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, Pin, Copy } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -951,6 +954,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
   onNavigated?: () => void;
 }) {
   const { task, unread } = row;
+  const router = useRouter();
   // Pseudo rows (harness loops) wear the same anatomy but carry no server
   // verbs — there's no agent_tasks row to pause or cancel, and no run history
   // to query. See triggerTasks.ts.
@@ -993,11 +997,15 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
   // message that triggered that run.
   const [runsOpen, setRunsOpen] = useState(false);
   const runs = useTriggerRuns(runsOpen && !isPseudo ? task._id : null);
+  // Right-click mirrors the hover rail verb-for-verb; pseudo rows (harness
+  // loops) have no server verbs, so they get no menu.
+  const ctxMenu = useContextMenu<void>();
   return (
     <div
       data-schedrow={task._id}
       data-attached={attached || undefined}
       data-row-active={isActive || undefined}
+      onContextMenu={!isPseudo ? (e) => ctxMenu.open(e, undefined) : undefined}
       className={`group/schedrow relative transition-colors ${
         // Attached rows sit flush under their card — no separator line above and
         // no left accent bar. The ↳ arrow carries the parent/child connection,
@@ -1276,6 +1284,53 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
           )}
         </div>
       )}
+      {!isPseudo && (
+        <ContextMenu state={ctxMenu}>
+          {() => (
+            <>
+              <CtxHeader title={taskDisplayTitle(task)} id={(task as any).short_id} />
+              {task.status !== "running" && (
+                <CtxItem
+                  icon={Play}
+                  onSelect={() => { runNow({ task_id: taskId }).catch(() => {}); toast.success("Run queued"); }}
+                >
+                  Run now
+                </CtxItem>
+              )}
+              <CtxItem
+                icon={paused ? Play : Pause}
+                onSelect={() => { (paused ? resume({ task_id: taskId }) : pause({ task_id: taskId })).catch(() => {}); }}
+              >
+                {paused ? "Resume trigger" : "Pause trigger"}
+              </CtxItem>
+              <CtxItem icon={History} onSelect={() => setRunsOpen((v) => !v)}>
+                {runsOpen ? "Hide run history" : "Run history"}
+              </CtxItem>
+              <CtxItem icon={Settings2} onSelect={() => router.push(`/triggers?task=${task._id}`)}>
+                Open in Triggers
+              </CtxItem>
+              <CtxSeparator />
+              <CtxItem
+                icon={Copy}
+                onSelect={() => { copyToClipboard(task.prompt || ""); toast.success("Prompt copied"); }}
+              >
+                Copy prompt
+              </CtxItem>
+              <CtxSeparator />
+              <CtxItem
+                danger
+                icon={X}
+                onSelect={() => {
+                  cancel({ task_id: taskId }).catch(() => {});
+                  toast("Trigger canceled", { description: taskDisplayTitle(task), action: { label: "Undo", onClick: () => { reactivate({ task_id: taskId }).catch(() => {}); } } });
+                }}
+              >
+                Cancel trigger
+              </CtxItem>
+            </>
+          )}
+        </ContextMenu>
+      )}
     </div>
   );
 }
@@ -1294,6 +1349,67 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
 // can stand eight at once) would stack that many bars — cap the stack and
 // fold the rest behind a count row.
 const MAX_MONITOR_BARS = 3;
+
+// A dynamic-workflow run in flight inside the card above — the session's turn
+// has ended but it is WAITING on the fleet, so the run gets the same ↳ child
+// bar the schedule and monitor families wear, in workflow cyan. Rendered from
+// the row's enriched scalars (conversations.workflow_run_id → workflow_runs),
+// so it shows even when the launch message isn't in the loaded window. Paused
+// runs stay the card's magenta Gate chip; this bar carries running/pending.
+function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: boolean }) {
+  const router = useRouter();
+  const now = useCoarseNow(30_000);
+  if (!session.is_workflow_primary || !session.workflow_run_id) return null;
+  if (session.workflow_run_status !== "running" && session.workflow_run_status !== "pending") return null;
+  const done = session.workflow_run_agents_done ?? 0;
+  const total = session.workflow_run_agents_total ?? 0;
+  const ariaLabel = "Workflow — running inside this session";
+  return (
+    <div className={`group/wfrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
+      <button
+        className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-cyan/[0.05] transition-colors"
+        onClick={() => router.push(`/workflows/runs/${session.workflow_run_id}`)}
+        title="Open the live run — phases, agents, results"
+      >
+        <div className="flex gap-1.5 min-w-0">
+          <span className="flex items-center mt-[2px] shrink-0 text-sol-cyan/70" role="img" aria-label={ariaLabel}>
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <title>{ariaLabel}</title>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+            </svg>
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-cyan/70 shrink-0">Workflow</span>
+              <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{session.workflow_run_name || "workflow run"}</span>
+              <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
+                <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
+                running
+              </span>
+            </div>
+            <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
+              {session.workflow_run_activity ? (
+                <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-medium text-sol-text-muted">
+                  <span className="mr-0.5 text-sol-cyan/50">&gt;</span>
+                  {session.workflow_run_activity}
+                </span>
+              ) : (
+                <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-mono text-sol-text-dim">
+                  multi-agent workflow
+                </span>
+              )}
+              <span className="shrink-0 text-[10px] tabular-nums text-sol-text-dim">
+                {total > 0 ? `${done}/${total} agents` : ""}
+                {session.workflow_run_started_at ? `${total > 0 ? " · " : ""}${fmtDuration(Math.max(0, now - session.workflow_run_started_at))}` : ""}
+              </span>
+            </div>
+          </div>
+        </div>
+      </button>
+    </div>
+  );
+}
 
 function MonitorBars({ session, isActive, onOpen }: {
   session: InboxSession;
@@ -1316,11 +1432,8 @@ function MonitorBars({ session, isActive, onOpen }: {
     <>
       {shown.map((row) => {
         const isBackground = row.kind === "background";
-        const isWorkflow = row.kind === "workflow";
-        const family = isWorkflow ? "Workflow" : isBackground ? "Background" : "Monitor";
-        const ariaLabel = isWorkflow
-          ? "Multi-agent workflow — running inside this session"
-          : isBackground
+        const family = isBackground ? "Background" : "Monitor";
+        const ariaLabel = isBackground
           ? "Background command — running inside this session"
           : "Monitor — watching inside this session";
         return (
@@ -1367,10 +1480,10 @@ function MonitorBars({ session, isActive, onOpen }: {
                       space-starved (esp. with the panel narrow), so event/time
                       meta lives on the subrow and the persistent chip rides
                       the badge tooltip; the conversation block keeps the chip. */}
-                  <ShortcutTooltip label={isWorkflow ? "Multi-agent workflow — runs in the background until it completes, then wakes the agent" : isBackground ? "Background command — runs until it exits or is stopped, then wakes the agent" : row.persistent ? "Persistent watch — runs until TaskStop or session end" : `One-shot watch${row.timeoutMs !== undefined ? ` — times out after ${fmtDuration(row.timeoutMs)}` : ""}`}>
+                  <ShortcutTooltip label={isBackground ? "Background command — runs until it exits or is stopped, then wakes the agent" : row.persistent ? "Persistent watch — runs until TaskStop or session end" : `One-shot watch${row.timeoutMs !== undefined ? ` — times out after ${fmtDuration(row.timeoutMs)}` : ""}`}>
                     <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
                       <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
-                      {isBackground || isWorkflow ? "running" : "watching"}
+                      {isBackground ? "running" : "watching"}
                     </span>
                   </ShortcutTooltip>
                 </div>
@@ -1385,7 +1498,7 @@ function MonitorBars({ session, isActive, onOpen }: {
                     </span>
                   ) : (
                     <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-mono text-sol-text-dim">
-                      {row.command.split("\n").find((l) => l.trim()) || (isWorkflow ? "multi-agent workflow" : "background watch")}
+                      {row.command.split("\n").find((l) => l.trim()) || "background watch"}
                     </span>
                   )}
                   <span className="shrink-0 text-[10px] tabular-nums text-sol-text-dim">
@@ -1608,6 +1721,7 @@ export const SessionCard = memo(function SessionCard({
   onRestore,
   onKill,
   onNavigateToSession,
+  onCardContextMenu,
   variant = "default",
   forkColorKey,
   sessionLabel,
@@ -1626,6 +1740,8 @@ export const SessionCard = memo(function SessionCard({
   onRestore?: (id: string) => void;
   onKill?: (id: string) => void;
   onNavigateToSession?: (id: string) => void;
+  /** Right-click: the panel owns ONE cursor-anchored menu for all cards. */
+  onCardContextMenu?: (e: React.MouseEvent, session: InboxSession, isForeign: boolean) => void;
   variant?: "default" | "working" | "dismissed" | "stashed";
   forkColorKey?: string;
   // Force the compact child-row look for a session that isn't itself a
@@ -1876,6 +1992,7 @@ export const SessionCard = memo(function SessionCard({
         onDragOver={handleFileDragOver}
         onDragLeave={handleFileDragLeave}
         onDrop={handleFileDrop}
+        onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
         className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${
           isActive
             ? "bg-violet-500/[0.08] border-l-2 border-l-violet-400/60"
@@ -1952,11 +2069,11 @@ export const SessionCard = memo(function SessionCard({
           {stateView && (
             <div className="mt-0.5 flex items-start gap-1" title={stateView.text}>
               <Pin
-                className={`w-2 h-2 mt-[3px] shrink-0 ${THREAD_STATE_PIN_CLASS[stateView.freshness]}`}
+                className={`w-2 h-2 mt-[3px] shrink-0 ${stateView.status ? THREAD_STATE_STATUS_META[stateView.status].dot : THREAD_STATE_PIN_CLASS[stateView.freshness]}`}
                 strokeWidth={2.4}
               />
               <span className="text-[10px] text-sol-text-secondary truncate leading-snug">
-                {stateView.headline}
+                {stateView.cardLine}
               </span>
             </div>
           )}
@@ -2026,6 +2143,7 @@ export const SessionCard = memo(function SessionCard({
       onDragOver={handleFileDragOver}
       onDragLeave={handleFileDragLeave}
       onDrop={handleFileDrop}
+      onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
       className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
         session.assigned_ping ? "ring-1 ring-inset ring-sol-cyan/50 bg-sol-cyan/[0.06]" : ""
       } ${
@@ -2037,7 +2155,13 @@ export const SessionCard = memo(function SessionCard({
               ? "opacity-65 hover:opacity-85 hover:bg-sol-bg-alt/80"
               : isDismissed
                 ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
-                : "hover:bg-sol-bg-alt/80"
+                // The agent's declared status tints the resting row: amber for
+                // "needs input", green for "complete". Liveness outranks it —
+                // a running agent isn't blocked-on-you right now — and a stale
+                // state loses the tint rather than shouting an old claim.
+                : stateView?.status && stateView.status !== "working" && stateView.freshness !== "stale" && !session.implementation_session
+                  ? `${THREAD_STATE_STATUS_META[stateView.status].row} hover:bg-sol-bg-alt/80`
+                  : "hover:bg-sol-bg-alt/80"
       }`}
     >
       {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
@@ -2093,11 +2217,21 @@ export const SessionCard = memo(function SessionCard({
         {stateView && !session.implementation_session && (
           <div className="mt-0.5 flex items-start gap-1" title={stateView.text}>
             <Pin
-              className={`w-2.5 h-2.5 mt-[3px] shrink-0 ${THREAD_STATE_PIN_CLASS[stateView.freshness]}`}
+              className={`w-2.5 h-2.5 mt-[3px] shrink-0 ${stateView.status ? THREAD_STATE_STATUS_META[stateView.status].dot : THREAD_STATE_PIN_CLASS[stateView.freshness]}`}
               strokeWidth={2.4}
             />
+            {/* Blocked and done earn a loud chip — those are the states the
+                human must act on or can stop thinking about. Working stays
+                quiet: the liveness pulse already says "running". */}
+            {stateView.status && stateView.status !== "working" && (
+              <span
+                className={`shrink-0 mt-[1px] px-1 py-0 rounded border text-[9px] font-semibold uppercase tracking-wide ${THREAD_STATE_STATUS_META[stateView.status].chip} ${stateView.freshness === "stale" ? "opacity-60" : ""}`}
+              >
+                {THREAD_STATE_STATUS_META[stateView.status].label}
+              </span>
+            )}
             <span className={`text-[11px] truncate leading-snug ${stateView.freshness === "stale" ? "text-sol-text-dim" : "text-sol-text-secondary"}`}>
-              {stateView.headline}
+              {stateView.cardLine}
             </span>
           </div>
         )}
@@ -2225,6 +2359,27 @@ export const SessionCard = memo(function SessionCard({
                 <span className="w-1 h-1 rounded-full bg-sol-magenta animate-pulse" />
                 Gate
               </span>
+            )}
+            {/* A running workflow renders as its own ↳ WorkflowBar under the
+                card (same family as schedule/monitor bars) — no chip here. */}
+            {(session.open_comment_threads ?? 0) > 0 && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
+                title={`${session.open_comment_threads} open comment thread${session.open_comment_threads === 1 ? "" : "s"} — open with the comment rail`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const st = useInboxStore.getState();
+                  st.requestNavigate(session._id, { source: "gesture" });
+                  st.setCommentRailOpen(true);
+                }}
+              >
+                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h8M8 8h8m-8 8h4m9-4a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7.9 20A9 9 0 104 16.1L2 22z" />
+                </svg>
+                {session.open_comment_threads}
+              </button>
             )}
             {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
             {session.session_error && (
@@ -3304,6 +3459,16 @@ export function SessionListPanel({
   // On a stashed card the destructive slot kills (server tears the agent down
   // on the transition) — the row moves down into Killed.
   const handleKillStashed = killWithNotice;
+  // Right-click menu: ONE cursor-anchored instance serves every card in the
+  // panel; cards only report the click. Verbs reuse the exact handlers the
+  // hover toolbar uses, so animations and trigger notices stay identical.
+  const sessionCtxMenu = useContextMenu<{ session: InboxSession; isForeign: boolean }>();
+  const handleCardContextMenu = useCallback(
+    (e: React.MouseEvent, session: InboxSession, isForeign: boolean) => {
+      sessionCtxMenu.open(e, { session, isForeign });
+    },
+    [sessionCtxMenu],
+  );
   // "Kill all" on the Stashed header — two-step confirm (arm, then fire within
   // 3s) since it tears down every stashed agent at once. Kills the top-level
   // rows (each stamps its own children) plus any stashed child whose parent
@@ -3482,6 +3647,7 @@ export function SessionListPanel({
                   isActive={session._id === activeSessionId}
                   globalIndex={-1}
                   onSelect={handleSelect}
+                  onCardContextMenu={handleCardContextMenu}
                   onRestore={restoreWithNotice}
                   onKill={onKill}
                   variant={variant}
@@ -3502,6 +3668,7 @@ export function SessionListPanel({
                     attached
                   />
                 ))}
+                <WorkflowBar session={session} isActive={session._id === activeSessionId} />
                 <MonitorBars session={session} isActive={session._id === activeSessionId} onOpen={handleSelect} />
                 {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
                   <SessionCard
@@ -3511,6 +3678,7 @@ export function SessionListPanel({
                     isParentActive={session._id === activeSessionId}
                     globalIndex={-1}
                     onSelect={handleSelect}
+                  onCardContextMenu={handleCardContextMenu}
                     onRestore={restoreWithNotice}
                     onKill={onKill}
                     variant={variant}
@@ -3684,6 +3852,7 @@ export function SessionListPanel({
                   isActive={session._id === activeSessionId}
                   globalIndex={0}
                   onSelect={handleSelect}
+                  onCardContextMenu={handleCardContextMenu}
                   onDismiss={handleAnimatedDismiss}
                   onStash={handleAnimatedStash}
                   onDefer={s.deferSession}
@@ -3710,6 +3879,7 @@ export function SessionListPanel({
                     attached
                   />
                 ))}
+                <WorkflowBar session={session} isActive={session._id === activeSessionId} />
                 <MonitorBars session={session} isActive={session._id === activeSessionId} onOpen={handleSelect} />
                 {visibleSubs.map((sub) => (
                   <SessionCard
@@ -3719,6 +3889,7 @@ export function SessionListPanel({
                     isParentActive={session._id === activeSessionId}
                     globalIndex={0}
                     onSelect={handleSelect}
+                  onCardContextMenu={handleCardContextMenu}
                     onDismiss={handleAnimatedDismiss}
                     onStash={handleAnimatedStash}
                     variant={sectionVariant || "default"}
@@ -4036,6 +4207,7 @@ export function SessionListPanel({
                   isActive={session._id === activeSessionId}
                   globalIndex={0}
                   onSelect={handleSelect}
+                  onCardContextMenu={handleCardContextMenu}
                   onDismiss={handleAnimatedDismiss}
                   onStash={handleAnimatedStash}
                   onDefer={s.deferSession}
@@ -4130,6 +4302,21 @@ export function SessionListPanel({
           onOpen={openScheduleTarget}
         />
       )}
+      <ContextMenu state={sessionCtxMenu}>
+        {({ session, isForeign }) => (
+          <SessionMenuItems
+            session={session}
+            isForeign={isForeign}
+            onOpen={() => handleSelect(session)}
+            onStash={() => handleAnimatedStash(session._id)}
+            onKill={() => handleAnimatedDismiss(session._id)}
+            onRename={() => {
+              handleSelect(session);
+              useInboxStore.setState({ renamingSessionId: session._id });
+            }}
+          />
+        )}
+      </ContextMenu>
     </div>
   );
 }

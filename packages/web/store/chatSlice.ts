@@ -37,6 +37,7 @@
 // chat.sendMessage dedupes on — so a message that actually landed can never
 // double-post, however many times the user presses retry.
 
+import { inActiveWorkspace } from "../lib/workspaceScope";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
 import type { PendingEntry } from "./syncProtocol";
 import { isConvexId } from "../lib/entityLinks";
@@ -125,6 +126,22 @@ export type ChatReactionRow = {
 /** One row of chat.listChannels' `rail` — the server's own unread numbers.
  *  Kept because they are the only honest count for a channel whose messages
  *  this client has never loaded (see selectChatRail). */
+/** The server's per-root thread rollup (listMessages.threads) — a derived
+ *  snapshot, cached transiently and OVERLAID at render (lib/liveEntities'
+ *  rule): the local rows win whenever they are fresher, so an optimistic reply
+ *  bumps the count instantly and the snapshot fills in for threads this client
+ *  has never opened. */
+export type ChatThreadSummaryRow = {
+  /** Equals root_id — syncTable collections key by _id. */
+  _id: string;
+  root_id: string;
+  reply_count: number;
+  reply_capped?: boolean;
+  last_reply_at: number;
+  reply_user_ids: string[];
+  agent_status?: "thinking" | "streaming" | "error";
+};
+
 export type ChatRailRow = {
   channel_id: string;
   last_message?: {
@@ -189,6 +206,7 @@ export type ChatSliceData = {
   chatReactions: Record<string, ChatReactionRow>;
   chatReads: Record<string, ChatReadRow>;
   chatRail: ChatRailRow[];
+  chatThreadSummaries: Record<string, ChatThreadSummaryRow>;
 };
 
 export type ChatSendOptions = {
@@ -221,6 +239,12 @@ export type ChatSliceActions = {
   toggleChatReaction: (messageId: string, emoji: string) => void;
   markChannelRead: (channelId: string, lastMessageId?: string) => void;
   setChannelNotifyLevel: (channelId: string, level: ChatNotifyLevel) => void;
+  /** Rename or re-topic a channel. Optimistic: the rail and header rename the
+   *  moment you confirm; the server enforces creator-or-admin and reconciles. */
+  updateChatChannel: (channelId: string, fields: { name?: string; topic?: string }) => void;
+  /** Archive (or restore) a channel. Optimistic: the row leaves the rail at
+   *  once. Restore writes null, the tombstone a delta sync can see. */
+  archiveChatChannel: (channelId: string, archived: boolean) => void;
   /** Returns the stub channel id, so the rail can select the new channel in the
    *  same tick. The altKey supersede moves it onto the real id on echo. */
   createChatChannel: (name: string, opts?: { topic?: string; teamId?: string }) => string;
@@ -307,6 +331,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     chatReactions: {},
     chatReads: {},
     chatRail: [],
+    chatThreadSummaries: {},
 
     // ── Sending ─────────────────────────────────────────────────────────────
 
@@ -492,6 +517,23 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       });
     }),
 
+    updateChatChannel: action(function (this: ChatDraft, channelId: string, fields: { name?: string; topic?: string }) {
+      const channel = this.chatChannels[channelId];
+      if (!channel) return;
+      if (fields.name !== undefined) channel.name = fields.name;
+      if (fields.topic !== undefined) channel.topic = fields.topic;
+      channel.updated_at = Date.now();
+      return { channelId, fields };
+    }),
+
+    archiveChatChannel: action(function (this: ChatDraft, channelId: string, archived: boolean) {
+      const channel = this.chatChannels[channelId];
+      if (!channel) return;
+      channel.archived_at = archived ? Date.now() : null;
+      channel.updated_at = Date.now();
+      return { channelId, archived };
+    }),
+
     setChannelNotifyLevel: action(function (this: ChatDraft, channelId: string, level: ChatNotifyLevel) {
       upsertRead(this, channelId, { notify_level: level });
     }),
@@ -563,6 +605,10 @@ export const CHAT_SYNC_REGISTRY = {
   // One row per (viewer, channel), so the channel is the natural key — the same
   // shape bucketAssignments uses for its per-conversation row.
   chatReads: { isDelta: true, altKey: "channel_id" },
+  // Server thread rollups (listMessages.threads): a derived snapshot cache,
+  // transient — overlaid at render, the local rows winning when fresher.
+  // Delta: each page contributes its roots without pruning other channels'.
+  chatThreadSummaries: { isDelta: true },
   // No client_id column server-side: a reaction has no identity beyond
   // (message, user, emoji). chatReactionSyncOpts supersedes on that instead.
   chatReactions: { isDelta: true },
@@ -737,8 +783,17 @@ let railCacheValue: ChatRailChannel[] = [];
  * Memoized on the collection refs: the rail is always mounted, and these maps
  * change far less often than the store around them.
  */
-export function selectChatRail(state: ChatRailState, viewer: string): ChatRailChannel[] {
-  const key = [state.chatChannels, state.chatMessages, state.chatReads, state.chatRail, viewer];
+export function selectChatRail(
+  state: ChatRailState,
+  viewer: string,
+  /** The active workspace, by lib/workspaceScope's ONE rule: a team id shows
+   *  that team's channels; undefined is the PERSONAL workspace — and channels
+   *  are team-tagged by construction, so personal shows none. Re-asserted at
+   *  read time exactly like tasks/docs/plans, because the channel cache
+   *  accumulates across team switches. */
+  teamId?: string | null,
+): ChatRailChannel[] {
+  const key = [state.chatChannels, state.chatMessages, state.chatReads, state.chatRail, viewer, teamId];
   if (key.length === railCacheKey.length && key.every((v, i) => v === railCacheKey[i])) {
     return railCacheValue;
   }
@@ -767,6 +822,7 @@ export function selectChatRail(state: ChatRailState, viewer: string): ChatRailCh
   for (const id in state.chatChannels) {
     const channel = state.chatChannels[id];
     if (channel.archived_at) continue;
+    if (!inActiveWorkspace({ team_id: channel.team_id ? String(channel.team_id) : undefined }, teamId ? String(teamId) : undefined)) continue;
     const read = readByChannel.get(id);
     const rail = railByChannel.get(id);
     const loaded = messagesByChannel.get(id);
@@ -819,6 +875,7 @@ export function selectChatRail(state: ChatRailState, viewer: string): ChatRailCh
       unreadCount: unread,
       mentionCount: mentions,
       muted: notifyLevel === "none",
+      teamId: channel.team_id,
       sortAt,
       notifyLevel,
       joined: !!read || !!rail?.joined,

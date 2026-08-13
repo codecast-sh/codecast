@@ -28,10 +28,34 @@ export const THREAD_STATE_STALE_MS = 48 * 60 * 60 * 1000;
 
 export type ThreadStateFreshness = "fresh" | "aging" | "stale";
 
+/** The declared tri-state of the work, set by the agent alongside the text:
+ * still moving, waiting on the human, or finished. Declared rather than parsed
+ * from the prose — "Blocked: nothing" would defeat any keyword heuristic. */
+export type ThreadStateStatus = "working" | "blocked" | "done";
+
+/** Human label for each status, shared so the panel chip, the inbox card and
+ * the CLI print the same words. */
+export const THREAD_STATE_STATUS_LABEL: Record<ThreadStateStatus, string> = {
+  working: "In progress",
+  blocked: "Needs input",
+  done: "Complete",
+};
+
+/** Map loose spellings (CLI flag input, older rows) onto the enum. Returns null
+ * for anything unrecognized so callers can reject or fall back explicitly. */
+export function parseThreadStateStatus(input: string | null | undefined): ThreadStateStatus | null {
+  const word = (input ?? "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+  if (["working", "in-progress", "progress", "wip", "active"].includes(word)) return "working";
+  if (["blocked", "needs-input", "input", "waiting", "stuck"].includes(word)) return "blocked";
+  if (["done", "complete", "completed", "finished"].includes(word)) return "done";
+  return null;
+}
+
 export interface ThreadStateFields {
   thread_state?: string | null;
   thread_state_at?: number | null;
   thread_state_msg_count?: number | null;
+  thread_state_status?: string | null;
 }
 
 /**
@@ -58,8 +82,9 @@ export function normalizeThreadState(input: string): string {
 
 /**
  * The one line that stands in for the whole state on an inbox card. Takes the
- * first non-empty line, drops a leading bullet, and drops a leading "Status:"
- * label — on a card the label is noise, since the line IS the status.
+ * first non-empty line, drops a leading bullet, and drops a leading label
+ * ("Status:", "Goal:") — on a card the label is noise, since the line IS the
+ * status. The convention puts what the session is working on here unlabeled.
  */
 export function threadStateHeadline(text: string): string {
   const line = text
@@ -69,8 +94,24 @@ export function threadStateHeadline(text: string): string {
   if (!line) return "";
   return line
     .replace(/^[-*•]\s*/, "")
-    .replace(/^(Status|State):\s*/i, "")
+    .replace(/^(Status|State|Goal):\s*/i, "")
     .trim();
+}
+
+/**
+ * The line the inbox card shows: what is HAPPENING, not what the thread is
+ * about. Prefers the content of a `Status:` (or `Blocked:`) labeled line —
+ * that is the part that changes as the work moves — and falls back to the
+ * headline when the state has no such line. The full text stays in the
+ * tooltip/panel, so this only decides which line earns the card's one slot.
+ */
+export function threadStateCardLine(text: string): string {
+  for (const raw of text.split("\n")) {
+    const line = raw.trim().replace(/^[-*•]\s*/, "");
+    const m = line.match(/^(Status|Blocked):\s*(.+)$/i);
+    if (m) return m[2].trim();
+  }
+  return threadStateHeadline(text);
 }
 
 /**

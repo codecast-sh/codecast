@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { formatShortcutLabel } from "../shortcuts";
 import { FilterDropdown, FilterOptionList } from "./FilterDropdown";
+import { ContextMenu, useContextMenu } from "./ui/context-menu";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
 import { SyncProgressBadge } from "./SyncProgressBadge";
@@ -492,7 +493,30 @@ export interface GenericListViewProps<T> {
    *  view switch). Kept out of the always-visible toolbar to stay Linear-compact. */
   displayExtra?: ReactNode;
   listFooter?: ReactNode;
-  customContent?: (helpers: { openPaletteForItems: (items: T[], mode?: string) => void }) => ReactNode;
+  customContent?: (helpers: {
+    openPaletteForItems: (items: T[], mode?: string) => void;
+    openContextMenuForItems: (e: React.MouseEvent, items: T[]) => void;
+  }) => ReactNode;
+  /** Right-click menu content for rows (and customContent surfaces). When set,
+   *  right-click opens a cursor-anchored menu instead of the palette overlay.
+   *  Receives the selection when the clicked row is part of it, else just the
+   *  clicked row — same targeting the keyboard palette entry uses. */
+  contextMenuContent?: (items: T[]) => ReactNode;
+  /** Optional drag & drop. Rows become draggable; group headers — and rows of
+   *  other groups — accept "move into that bucket" drops; the middle of a row
+   *  is a combine target; row edges are insertion gaps when onReorder is set. */
+  dnd?: {
+    /** Move `item` into the bucket named by `groupKey`. */
+    onDropOnGroup?: (item: T, groupKey: string) => void;
+    /** Whether that bucket can accept `item` (also gates the hover highlight).
+     *  Defaults to true when onDropOnGroup is set. */
+    canDropOnGroup?: (item: T, groupKey: string) => boolean;
+    /** Drop one row onto another (combine gesture — e.g. duplicate/subtask). */
+    onDropOnItem?: (item: T, target: T) => void;
+    /** Manual reorder: insert `item` between `before` and `after` (either null
+     *  at a group edge) inside `groupKey` (null when the list is flat). */
+    onReorder?: (item: T, before: T | null, after: T | null, groupKey: string | null) => void;
+  };
   extraKeyHandler?: (e: KeyboardEvent, stop: () => void) => boolean;
   disableKeyboard?: boolean;
   activeItemId?: string;
@@ -540,6 +564,8 @@ export function GenericListView<T>({
   displayExtra,
   listFooter,
   customContent,
+  contextMenuContent,
+  dnd,
   extraKeyHandler,
   disableKeyboard,
   activeItemId,
@@ -628,7 +654,7 @@ export function GenericListView<T>({
   // keystroke. Now only the visible window (~window height) is mounted.
   type RowEntry =
     | { kind: "header"; key: string; group: ListGroup<T>; collapsed: boolean }
-    | { kind: "item"; key: string; item: T; focusIndex: number };
+    | { kind: "item"; key: string; item: T; focusIndex: number; groupKey: string | null };
   const rowModel = useMemo<RowEntry[]>(() => {
     const rows: RowEntry[] = [];
     if (displayGroups) {
@@ -638,14 +664,14 @@ export function GenericListView<T>({
         rows.push({ kind: "header", key: `__hdr_${g.key}`, group: g, collapsed });
         if (!collapsed) {
           for (const item of g.items) {
-            rows.push({ kind: "item", key: getItemId(item), item, focusIndex: fi });
+            rows.push({ kind: "item", key: getItemId(item), item, focusIndex: fi, groupKey: g.key });
             fi++;
           }
         }
       }
     } else {
       displayFlatItems.forEach((item, i) => {
-        rows.push({ kind: "item", key: getItemId(item), item, focusIndex: i });
+        rows.push({ kind: "item", key: getItemId(item), item, focusIndex: i, groupKey: null });
       });
     }
     return rows;
@@ -707,6 +733,68 @@ export function GenericListView<T>({
   const openPaletteForItems = useCallback((items: T[], mode = "root") => {
     storeOpenPalette({ targets: items as any[], targetType: paletteTargetType, mode });
   }, [storeOpenPalette, paletteTargetType]);
+
+  // One cursor-anchored menu serves every row (virtualized lists included) and
+  // any customContent surface (e.g. kanban cards).
+  const ctxMenu = useContextMenu<T[]>();
+  const openContextMenuForItems = useCallback((e: React.MouseEvent, items: T[]) => {
+    ctxMenu.open(e, items);
+  }, [ctxMenu]);
+
+  // --- Drag & drop. One dragged row id + one hint describing what a release
+  // would do: move to a bucket, combine with a row, or insert into a gap. The
+  // hint drives every highlight, so what lights up is exactly what will happen.
+  type DropHint =
+    | { kind: "group"; key: string }
+    | { kind: "item"; id: string }
+    | { kind: "gap"; id: string; edge: "before" | "after" };
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropHint, setDropHint] = useState<DropHint | null>(null);
+  const dndMaps = useMemo(() => {
+    const byId = new Map<string, T>();
+    const groupOf = new Map<string, string | null>();
+    for (const r of rowModel) if (r.kind === "item") { byId.set(r.key, r.item); groupOf.set(r.key, r.groupKey); }
+    return { byId, groupOf };
+  }, [rowModel]);
+  const draggedItem = dragId ? dndMaps.byId.get(dragId) ?? null : null;
+  const clearDrag = useCallback(() => { setDragId(null); setDropHint(null); }, []);
+  const sameHint = (a: DropHint | null, b: DropHint) =>
+    !!a && a.kind === b.kind && (a as any).key === (b as any).key && (a as any).id === (b as any).id && (a as any).edge === (b as any).edge;
+  const setHint = useCallback((h: DropHint) => {
+    setDropHint((prev) => (sameHint(prev, h) ? prev : h));
+  }, []);
+
+  const performDrop = useCallback(() => {
+    const hint = dropHint;
+    const item = draggedItem;
+    clearDrag();
+    if (!hint || !item || !dnd) return;
+    if (hint.kind === "group") { dnd.onDropOnGroup?.(item, hint.key); return; }
+    if (hint.kind === "item") {
+      const target = dndMaps.byId.get(hint.id);
+      if (target && getItemId(target) !== getItemId(item)) dnd.onDropOnItem?.(item, target);
+      return;
+    }
+    // Gap: resolve the neighbors around the insertion point, staying inside the
+    // target row's group (a header or list edge leaves that side null).
+    const idx = rowModel.findIndex((r) => r.kind === "item" && r.key === hint.id);
+    const row = rowModel[idx];
+    if (!row || row.kind !== "item") return;
+    let before: T | null = null;
+    let after: T | null = null;
+    if (hint.edge === "before") {
+      after = row.item;
+      const prev = rowModel[idx - 1];
+      if (prev?.kind === "item" && prev.groupKey === row.groupKey) before = prev.item;
+    } else {
+      before = row.item;
+      const next = rowModel[idx + 1];
+      if (next?.kind === "item" && next.groupKey === row.groupKey) after = next.item;
+    }
+    const iid = getItemId(item);
+    if ((before && getItemId(before) === iid) || (after && getItemId(after) === iid)) return;
+    dnd.onReorder?.(item, before, after, row.groupKey);
+  }, [dropHint, draggedItem, dnd, dndMaps, rowModel, getItemId, clearDrag]);
 
   const toggleGroup = useCallback((key: string) => {
     setCollapsedGroups((prev) => {
@@ -821,12 +909,57 @@ export function GenericListView<T>({
     return () => observer.disconnect();
   }, [hasMore, onLoadMore, isLoadingMore, visibleItems.length]);
 
-  const renderItemRow = (item: T, globalIdx: number) => {
+  const renderItemRow = (item: T, globalIdx: number, groupKey: string | null) => {
     const id = getItemId(item);
     const isFocused = focusIndex === globalIdx;
     const isSelected = selectedIds.has(id);
     const isEditing = editingId === id;
     const isActive = activeItemId === id;
+
+    // What a release right here would do (drives the row's highlight).
+    const combineTarget = dropHint?.kind === "item" && dropHint.id === id;
+    const gapEdge = dropHint?.kind === "gap" && dropHint.id === id ? dropHint.edge : null;
+    const inTargetGroup = dropHint?.kind === "group" && groupKey === dropHint.key;
+    const dragProps = dnd
+      ? {
+          draggable: !isEditing,
+          onDragStart: (e: React.DragEvent) => {
+            e.dataTransfer.setData("text/plain", id);
+            e.dataTransfer.effectAllowed = "move";
+            setDragId(id);
+          },
+          onDragEnd: clearDrag,
+          onDragOver: (e: React.DragEvent) => {
+            if (!draggedItem || dragId === id) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const rel = (e.clientY - rect.top) / Math.max(1, rect.height);
+            const canReorder = !!dnd.onReorder;
+            const canCombine = !!dnd.onDropOnItem;
+            const canGroupMove =
+              !!dnd.onDropOnGroup &&
+              groupKey != null &&
+              groupKey !== dndMaps.groupOf.get(dragId!) &&
+              (dnd.canDropOnGroup?.(draggedItem, groupKey) ?? true);
+            // Edges insert (or, without reorder, move into this row's bucket);
+            // the middle combines. Whatever this row can't do falls through to
+            // what it can, so a drop is never silently dead over a valid move.
+            let hint: DropHint | null = null;
+            const edge: "before" | "after" = rel < 0.5 ? "before" : "after";
+            if (rel < 0.3 || rel > 0.7) {
+              if (canReorder) hint = { kind: "gap", id, edge };
+              else if (canGroupMove) hint = { kind: "group", key: groupKey! };
+              else if (canCombine) hint = { kind: "item", id };
+            } else if (canCombine) hint = { kind: "item", id };
+            else if (canGroupMove) hint = { kind: "group", key: groupKey! };
+            else if (canReorder) hint = { kind: "gap", id, edge };
+            if (!hint) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            setHint(hint);
+          },
+          onDrop: (e: React.DragEvent) => { e.preventDefault(); performDrop(); },
+        }
+      : {};
 
     const state: ItemRowState = {
       isFocused,
@@ -836,6 +969,16 @@ export function GenericListView<T>({
       onClick: () => { setFocusIndex(globalIdx); openDetail(item); },
       onSelect: () => toggleSelect(id),
       onContextMenu: (e: React.MouseEvent) => {
+        if (contextMenuContent) {
+          // The selection travels with the right-click when the clicked row is
+          // part of it — same targeting keyboard palette entry uses.
+          const targets = selectedIds.has(id)
+            ? visibleItems.filter((it) => selectedIds.has(getItemId(it)))
+            : [item];
+          setFocusIndex(globalIdx);
+          ctxMenu.open(e, targets);
+          return;
+        }
         e.preventDefault();
         storeOpenPalette({ targets: [item] as any[], targetType: paletteTargetType, mode: "root" });
       },
@@ -855,7 +998,17 @@ export function GenericListView<T>({
         data-list-focused={isFocused || undefined}
         onClick={state.onClick}
         onContextMenu={state.onContextMenu}
-        className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left group border-b border-sol-border/20 cursor-pointer select-none ${
+        {...dragProps}
+        style={
+          combineTarget
+            ? { boxShadow: "inset 0 0 0 1.5px var(--sol-cyan)" }
+            : inTargetGroup
+              ? { background: "color-mix(in srgb, var(--sol-cyan) 6%, transparent)" }
+              : undefined
+        }
+        className={`relative w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left group border-b border-sol-border/20 cursor-pointer select-none ${
+          dragId === id ? "opacity-40" : ""
+        } ${
           isActive && isFocused
             ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan"
             : isActive
@@ -867,6 +1020,14 @@ export function GenericListView<T>({
                   : "hover:bg-sol-bg-alt/50 border-l-[3px] border-l-transparent"
         }`}
       >
+        {gapEdge && (
+          <span
+            aria-hidden
+            className={`pointer-events-none absolute left-2 right-2 h-0.5 rounded bg-sol-cyan z-10 ${
+              gapEdge === "before" ? "top-[-1px]" : "bottom-[-1px]"
+            }`}
+          />
+        )}
         <button
           onClick={(e) => { e.stopPropagation(); state.onSelect(); }}
           className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors cq-hide-compact ${
@@ -885,7 +1046,26 @@ export function GenericListView<T>({
   };
 
   const renderGroupHeader = (g: ListGroup<T>, isCollapsed: boolean) => (
-    <div className="w-full flex items-center gap-2 px-4 py-2 bg-sol-bg-alt/30 border-b border-sol-border/20">
+    <div
+      className="w-full flex items-center gap-2 px-4 py-2 bg-sol-bg-alt/30 border-b border-sol-border/20"
+      style={
+        dropHint?.kind === "group" && dropHint.key === g.key
+          ? { boxShadow: "inset 0 0 0 1.5px var(--sol-cyan)" }
+          : undefined
+      }
+      onDragOver={
+        dnd?.onDropOnGroup
+          ? (e) => {
+              if (!draggedItem) return;
+              if (!(dnd.canDropOnGroup?.(draggedItem, g.key) ?? true)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              setHint({ kind: "group", key: g.key });
+            }
+          : undefined
+      }
+      onDrop={dnd?.onDropOnGroup ? (e) => { e.preventDefault(); performDrop(); } : undefined}
+    >
       <button
         onClick={() => toggleGroup(g.key)}
         className="flex items-center gap-2 flex-1 hover:bg-sol-bg-alt/50 transition-colors text-left"
@@ -1122,7 +1302,7 @@ export function GenericListView<T>({
       </div>
 
       {/* Content area */}
-      {customContent ? customContent({ openPaletteForItems }) : (
+      {customContent ? customContent({ openPaletteForItems, openContextMenuForItems }) : (
         <div className="flex-1 flex overflow-hidden">
           <div ref={scrollRef} className="flex-1 overflow-y-auto">
             {visibleItems.length === 0 ? (
@@ -1149,7 +1329,7 @@ export function GenericListView<T>({
                     >
                       {row.kind === "header"
                         ? renderGroupHeader(row.group, row.collapsed)
-                        : renderItemRow(row.item, row.focusIndex)}
+                        : renderItemRow(row.item, row.focusIndex, row.groupKey)}
                     </div>
                   );
                 })}
@@ -1175,6 +1355,10 @@ export function GenericListView<T>({
       )}
 
       {children}
+
+      {contextMenuContent && (
+        <ContextMenu state={ctxMenu}>{(items) => contextMenuContent(items)}</ContextMenu>
+      )}
     </div>
   );
 }

@@ -1,72 +1,81 @@
 {
   "memory": {
-    "enabledKey": "memory_enabled",
-    "versionKey": "memory_version",
-    "version": "12",
+    "config": {
+      "memory_enabled": true,
+      "memory_version": "12"
+    },
     "stdout": "* Memory — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
   "messaging": {
-    "enabledKey": "messaging_enabled",
-    "versionKey": "messaging_version",
-    "version": "7",
+    "config": {
+      "messaging_enabled": true,
+      "messaging_version": "7"
+    },
     "stdout": "* Messaging — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
   "forks": {
-    "enabledKey": "forks_enabled",
-    "versionKey": "forks_version",
-    "version": "4",
+    "config": {
+      "forks_enabled": true,
+      "forks_version": "4"
+    },
     "stdout": "* Forks & Sessions — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
   "tasks": {
-    "enabledKey": "work_enabled",
-    "versionKey": "work_version",
-    "version": "7",
+    "config": {
+      "work_enabled": true,
+      "work_version": "7"
+    },
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
   "triggers": {
-    "enabledKey": "task_enabled",
-    "versionKey": "task_version",
-    "version": "5",
+    "config": {
+      "task_enabled": true,
+      "task_version": "5"
+    },
     "stdout": "* Triggers — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
   "workflows": {
-    "enabledKey": "workflow_enabled",
-    "versionKey": "workflow_version",
-    "version": "1",
+    "config": {
+      "workflow_enabled": true,
+      "workflow_version": "1"
+    },
     "stdout": "* Workflows — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
   "visual": {
-    "enabledKey": "visual_enabled",
-    "versionKey": "visual_version",
-    "version": "6",
+    "config": {
+      "visual_enabled": true,
+      "visual_version": "6"
+    },
     "stdout": "* Visual Canvas — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
   "publish": {
-    "enabledKey": "publish_enabled",
-    "versionKey": "publish_version",
-    "version": "4",
+    "config": {
+      "publish_enabled": true,
+      "publish_version": "4"
+    },
     "stdout": "* Publish — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
   "state": {
-    "enabledKey": "state_enabled",
-    "versionKey": "state_version",
-    "version": "2",
+    "config": {
+      "state_enabled": true,
+      "state_version": "3"
+    },
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
@@ -74,10 +83,29 @@
       ".claude/settings.json": "e6bbe8b54259b3bf"
     }
   },
+  "chat": {
+    "config": {
+      "chat_enabled": true,
+      "chat_version": "1"
+    },
+    "stdout": "* Team chat — installed in ~/.claude/CLAUDE.md\n",
+    "wroteClaudeMd": true,
+    "otherFiles": {}
+  },
+  "browser": {
+    "config": {
+      "browser_enabled": true,
+      "browser_version": "3"
+    },
+    "stdout": "* Browser — installed in ~/.claude/CLAUDE.md\n",
+    "wroteClaudeMd": true,
+    "otherFiles": {}
+  },
   "orchestration": {
-    "enabledKey": "orch_enabled",
-    "versionKey": "orch_version",
-    "version": "7",
+    "config": {
+      "orch_enabled": true,
+      "orch_version": "7"
+    },
     "stdout": "* Orchestration — updated in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": false,
     "otherFiles": {

@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions, InteractionManager, type TextInput as NativeTextInput, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
@@ -3269,8 +3269,22 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
 
 // --- Message input ---
 
-function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<"conversations">; isActive: boolean; draft?: string | null }) {
+function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversationId: Id<"conversations">; isActive: boolean; draft?: string | null; autoFocus?: boolean }) {
   const insets = useSafeAreaInsets();
+  const { height: winHeight } = useWindowDimensions();
+  const inputRef = useRef<NativeTextInput>(null);
+  const [expanded, setExpanded] = useState(false);
+  // Content height of the inline input; the fullscreen affordance only appears
+  // once the text actually wraps, so a one-liner keeps the card minimal.
+  const [inputHeight, setInputHeight] = useState(0);
+
+  // Focus after the push animation settles — focusing mid-transition on iOS
+  // either drops the keyboard or stutters the navigation.
+  useEffect(() => {
+    if (!autoFocus) return;
+    const task = InteractionManager.runAfterInteractions(() => inputRef.current?.focus());
+    return () => task.cancel();
+  }, [autoFocus]);
   // Seed from the local-first store draft first (survives the stub→real rekey on
   // freshly-created sessions), then fall back to the server-synced draft prop.
   const [message, setMessage] = useState<string>(
@@ -3417,42 +3431,70 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     // Sending is a completed gesture — give the conversation the screen back.
+    setExpanded(false);
     Keyboard.dismiss();
 
     store.sendMessage(conversationId, content, storageIds.length ? storageIds : undefined, clientId);
   };
 
-  return (
-    <RNView style={[styles.inputContainer, { paddingBottom: insets.bottom || 12 }]}>
-      {error && (
-        <RNView style={styles.errorBanner}>
-          <RNText style={styles.errorBannerText}>{error}</RNText>
-          <TouchableOpacity onPress={() => setError(null)}>
-            <RNText style={styles.errorBannerDismiss}>x</RNText>
+  const canSend = !!message.trim() || selectedImages.length > 0;
+
+  // Shared between the inline card and the fullscreen editor so both modes show
+  // the same attachments/errors and drive the same send.
+  const errorBannerEl = error ? (
+    <RNView style={styles.errorBanner}>
+      <RNText style={styles.errorBannerText}>{error}</RNText>
+      <TouchableOpacity onPress={() => setError(null)}>
+        <RNText style={styles.errorBannerDismiss}>x</RNText>
+      </TouchableOpacity>
+    </RNView>
+  ) : null;
+
+  const imageStripEl = selectedImages.length > 0 ? (
+    <ScrollView horizontal style={styles.imagePreviewContainer} showsHorizontalScrollIndicator={false}>
+      {selectedImages.map((img, index) => (
+        <RNView key={index} style={styles.imagePreview}>
+          <Image source={{ uri: img.uri }} style={styles.previewImage} />
+          {img.uploading && (
+            <RNView style={styles.imageUploadingOverlay}>
+              <ActivityIndicator size="small" color="#fff" />
+            </RNView>
+          )}
+          <TouchableOpacity
+            style={styles.removeImageButton}
+            onPress={() => removeImage(img.uri)}
+            activeOpacity={0.7}
+          >
+            <FontAwesome name="times-circle" size={20} color={Theme.red} />
           </TouchableOpacity>
         </RNView>
-      )}
-      {selectedImages.length > 0 && (
-        <ScrollView horizontal style={styles.imagePreviewContainer} showsHorizontalScrollIndicator={false}>
-          {selectedImages.map((img, index) => (
-            <RNView key={index} style={styles.imagePreview}>
-              <Image source={{ uri: img.uri }} style={styles.previewImage} />
-              {img.uploading && (
-                <RNView style={styles.imageUploadingOverlay}>
-                  <ActivityIndicator size="small" color="#fff" />
-                </RNView>
-              )}
-              <TouchableOpacity
-                style={styles.removeImageButton}
-                onPress={() => removeImage(img.uri)}
-                activeOpacity={0.7}
-              >
-                <FontAwesome name="times-circle" size={20} color={Theme.red} />
-              </TouchableOpacity>
-            </RNView>
-          ))}
-        </ScrollView>
-      )}
+      ))}
+    </ScrollView>
+  ) : null;
+
+  const actionsRowEl = (
+    <RNView style={styles.composerActions}>
+      <TouchableOpacity style={styles.imageButton} onPress={pickImage} activeOpacity={0.7}>
+        <FontAwesome name="plus" size={18} color={Theme.textMuted} />
+      </TouchableOpacity>
+      <RNView style={styles.composerSpacer} />
+      <TouchableOpacity
+        style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
+        onPress={handleSend}
+        disabled={!canSend}
+        activeOpacity={0.7}
+      >
+        <FontAwesome name="arrow-up" size={14} color="#fff" />
+      </TouchableOpacity>
+    </RNView>
+  );
+
+  const placeholder = isActive ? "Type a message..." : "Send to resume session...";
+
+  return (
+    <RNView style={[styles.inputContainer, { paddingBottom: insets.bottom || 12 }]}>
+      {errorBannerEl}
+      {imageStripEl}
       {managedSession?.managed && (managedSession.agent_status === "working" || managedSession.agent_status === "thinking" || managedSession.agent_status === "compacting" || managedSession.agent_status === "waiting" || managedSession.agent_status === "permission_blocked" || managedSession.agent_status === "connected") && (
         // Floats over the bottom of the message list so it costs zero
         // conversation height; the footer is just the input row.
@@ -3497,34 +3539,74 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
         </RNView>
         </RNView>
       )}
-      <RNView style={styles.inputRow}>
-        <TouchableOpacity
-          style={styles.imageButton}
-          onPress={pickImage}
-          activeOpacity={0.7}
-        >
-          <FontAwesome name="plus" size={18} color={Theme.textMuted} />
-        </TouchableOpacity>
+      <RNView style={styles.composerCard}>
         <TextInput
-          style={styles.textInput}
+          ref={inputRef}
+          style={[
+            styles.textInput,
+            // Grow with the text up to a third of the screen; beyond that it scrolls.
+            { maxHeight: Math.round(winHeight * 0.33) },
+            inputHeight > 44 && styles.textInputWithExpand,
+          ]}
           value={message}
           onChangeText={setMessage}
-          placeholder={isActive ? "Type a message..." : "Send to resume session..."}
+          placeholder={placeholder}
           placeholderTextColor={Theme.textMuted0}
           multiline
           maxLength={10000}
           blurOnSubmit={false}
           maxFontSizeMultiplier={CHROME_FONT_CAP}
+          onContentSizeChange={(e) => setInputHeight(e.nativeEvent.contentSize.height)}
         />
-        <TouchableOpacity
-          style={[styles.sendButton, (!message.trim() && selectedImages.length === 0) && styles.sendButtonDisabled]}
-          onPress={handleSend}
-          disabled={!message.trim() && selectedImages.length === 0}
-          activeOpacity={0.7}
-        >
-          <FontAwesome name="arrow-up" size={14} color="#fff" />
-        </TouchableOpacity>
+        {inputHeight > 44 && (
+          <TouchableOpacity
+            style={styles.expandButton}
+            onPress={() => setExpanded(true)}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Expand composer to full screen"
+          >
+            <FontAwesome name="expand" size={12} color={Theme.textMuted} />
+          </TouchableOpacity>
+        )}
+        {actionsRowEl}
       </RNView>
+
+      <Modal visible={expanded} animationType="slide" onRequestClose={() => setExpanded(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.expandedContainer}
+        >
+          <RNView style={[styles.expandedInner, { paddingTop: insets.top + 6, paddingBottom: insets.bottom || 12 }]}>
+            <RNView style={styles.expandedHeader}>
+              <TouchableOpacity
+                style={styles.expandButtonStatic}
+                onPress={() => setExpanded(false)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Collapse composer"
+              >
+                <FontAwesome name="compress" size={13} color={Theme.textMuted} />
+              </TouchableOpacity>
+            </RNView>
+            {errorBannerEl}
+            {imageStripEl}
+            <TextInput
+              style={styles.expandedInput}
+              value={message}
+              onChangeText={setMessage}
+              placeholder={placeholder}
+              placeholderTextColor={Theme.textMuted0}
+              multiline
+              autoFocus
+              maxLength={10000}
+              blurOnSubmit={false}
+              maxFontSizeMultiplier={CHROME_FONT_CAP}
+            />
+            {actionsRowEl}
+          </RNView>
+        </KeyboardAvoidingView>
+      </Modal>
     </RNView>
   );
 }
@@ -3616,7 +3698,7 @@ function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeN
 }
 
 export default function SessionDetailScreen() {
-  const { id, message: highlightMessageParam } = useLocalSearchParams<{ id: string; message?: string }>();
+  const { id, message: highlightMessageParam, focus: focusParam } = useLocalSearchParams<{ id: string; message?: string; focus?: string }>();
   // Wire the store's server dispatch (idempotent — just sets a ref). The inbox
   // tab mounts useSyncInboxSessions and stays mounted under this pushed screen,
   // so dispatch is usually already wired; but a cold deep-link can reach this
@@ -4958,6 +5040,7 @@ export default function SessionDetailScreen() {
             conversationId={id as Id<"conversations">}
             isActive={isActive}
             draft={conversation?.draft_message}
+            autoFocus={focusParam === '1'}
           />
         </RNView>
 
@@ -5534,26 +5617,81 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    gap: 8,
-  },
-  textInput: {
-    flex: 1,
+  // One rounded card: full-width input on top, action row underneath. Buttons
+  // living below the text (not beside it) is what gives the input the whole
+  // screen width, matching the web/reference composer.
+  composerCard: {
+    marginHorizontal: 10,
+    marginTop: 6,
     backgroundColor: Theme.bg,
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingTop: 7,
-    paddingBottom: 7,
-    color: Theme.text,
-    fontSize: 15,
-    maxHeight: 100,
-    minHeight: 32,
+    borderRadius: 20,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
+  },
+  composerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+    paddingTop: 2,
+  },
+  composerSpacer: {
+    flex: 1,
+  },
+  textInput: {
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 4,
+    color: Theme.text,
+    fontSize: 15,
+    minHeight: 38,
+    // maxHeight is set inline from the window height (grows to ~1/3 screen).
+  },
+  // Keeps wrapped text clear of the floating expand button in the top-right.
+  textInputWithExpand: {
+    paddingRight: 44,
+  },
+  expandButton: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Theme.bgHighlight,
+  },
+  expandButtonStatic: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Theme.bgHighlight,
+  },
+  expandedContainer: {
+    flex: 1,
+    backgroundColor: Theme.bgAlt,
+  },
+  expandedInner: {
+    flex: 1,
+    paddingHorizontal: 6,
+  },
+  expandedHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 6,
+    paddingBottom: 2,
+  },
+  expandedInput: {
+    flex: 1,
+    paddingHorizontal: 10,
+    paddingTop: 6,
+    color: Theme.text,
+    fontSize: 16,
+    lineHeight: 24,
+    textAlignVertical: 'top',
   },
   sendButton: {
     backgroundColor: Theme.blue,

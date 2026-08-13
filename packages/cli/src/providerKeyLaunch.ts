@@ -17,6 +17,7 @@ import * as path from "path";
 import type { AgentClientId } from "@codecast/shared/contracts";
 import { providerKeyEnv } from "@codecast/shared/contracts";
 import { readProviderKeyStore } from "./providerKeyStore.js";
+import { atomicWriteFile } from "./atomicWrite.js";
 
 // Clients whose model auth comes from provider env vars, so a managed key helps.
 // Claude/Codex use subscription OAuth and are deliberately excluded; cursor has its
@@ -56,10 +57,7 @@ export function syncProviderKeyEnvFile(configDir: string): string | null {
   }
   try {
     fs.mkdirSync(configDir, { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, renderProviderEnvFile(env), { mode: 0o600 });
-    fs.chmodSync(tmp, 0o600); // writeFileSync mode is masked by umask; force it.
-    fs.renameSync(tmp, file);
+    atomicWriteFile(file, renderProviderEnvFile(env), { mode: 0o600 });
     return file;
   } catch {
     return null;

@@ -1,6 +1,6 @@
 import { toast } from "sonner";
 import { copyToClipboard } from "./utils";
-import { useInboxStore, resolveComposeProjectPath } from "../store/inboxStore";
+import { useInboxStore, resolveComposeProjectPath, findProjectPathByName } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 
 // The one error toast. Every surface that reports a caught error to the user
@@ -31,13 +31,26 @@ export function showErrorToast(title: string, fullTrace: string) {
 function spawnFixSession(errorText: string) {
   const store = useInboxStore.getState();
   const conv = store.currentConversation;
-  const path = resolveComposeProjectPath({
+  // The trace is always a crash of the codecast client itself, so the fix
+  // session must start in a codecast checkout — never in whatever project the
+  // user happens to be viewing. The compose default still wins when it already
+  // points inside codecast (e.g. a codecast worktree is more precise than the
+  // main checkout), and remains the last resort when no checkout is known.
+  const composePath = resolveComposeProjectPath({
     conversation: conv,
     activeProjectFilter: store.activeProjectFilter,
     activeProjectPath: store.activeProjectPath,
     recentProjects: store.recentProjects,
     machineRoster: store.machineRoster,
   });
+  const insideCodecast = composePath?.split("/").includes("codecast");
+  const path = insideCodecast
+    ? composePath
+    : (findProjectPathByName("codecast", {
+        sessions: store.sessions,
+        recentProjects: store.recentProjects,
+        machineRoster: store.machineRoster,
+      }) ?? composePath);
   const agentType = conv.agentType || "claude_code";
   const { stubId } = store.beginOptimisticSession({
     agentType,

@@ -8,6 +8,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
+import { DocMenuItems } from "../../components/menus/ObjectContextMenus";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
@@ -215,11 +216,11 @@ export function DocListContent() {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const projects = useInboxStore((s) => s.projects);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
-  const saveView = useInboxStore((s) => s.saveView);
+  const createSavedView = useInboxStore((s) => s.createSavedView);
   const docView = useInboxStore((s) => s.clientState.ui?.doc_view);
   const handleSaveView = useCallback((name: string) => {
-    saveView({ name, page: "docs", prefs: { ...docView, doc_type: docType } as DocViewPrefs });
-  }, [saveView, docView, docType]);
+    createSavedView({ name, page: "docs", prefs: { ...docView, doc_type: docType } as DocViewPrefs });
+  }, [createSavedView, docView, docType]);
 
   // Strict workspace boundary at read time: `store.docs` caches rows from every
   // workspace (the sync overlay never prunes on team switch, IDB persists them
@@ -480,6 +481,9 @@ export function DocListContent() {
         { key: "t", mode: "type", label: "type" },
         { key: "l", mode: "labels", label: "labels" },
       ]}
+      contextMenuContent={(items) => (
+        <DocMenuItems docs={items} onOpen={(d) => router.push(`/docs/${d._id}`)} />
+      )}
     />
   );
 }

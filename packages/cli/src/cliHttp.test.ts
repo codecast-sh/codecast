@@ -1,4 +1,4 @@
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 
 const realFetch = globalThis.fetch;
@@ -170,5 +170,88 @@ describe("cliSearchRequest", () => {
     const result = await cliSearchRequest("https://x", { api_token: "t", query: "q", titles_only: true });
     expect(result.error).toBe("Internal error");
     expect(bodies.every((b) => b.titles_only)).toBe(true);
+  });
+});
+
+// Device binding travels in the request body, stamped here rather than at the
+// ~100 call sites that build these bodies — the same reason the server enforces
+// it inside `cliRoute` rather than in each handler.
+describe("device_id stamping", () => {
+  // The stamp is gated OFF until the server that strips the field is deployed
+  // (see the comment on withDeviceId). These tests set the flag so they describe
+  // the behaviour that ships, and the last one pins the default.
+  const originalFlag = process.env.CAST_DEVICE_BINDING;
+  beforeEach(() => { process.env.CAST_DEVICE_BINDING = "1"; });
+  afterEach(() => {
+    if (originalFlag === undefined) delete process.env.CAST_DEVICE_BINDING;
+    else process.env.CAST_DEVICE_BINDING = originalFlag;
+  });
+
+  const capture = () => {
+    const seen: RequestInit[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      seen.push(init);
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    return { seen, restore: () => { globalThis.fetch = original; } };
+  };
+
+  const bodyOf = (init: RequestInit) => JSON.parse(String(init.body));
+
+  test("stamps a device_id onto a body carrying an api_token", async () => {
+    const { seen, restore } = capture();
+    try {
+      await cliFetch("https://x/cli/spawn", {
+        method: "POST",
+        body: JSON.stringify({ api_token: "t", task: "go" }),
+      });
+      expect(typeof bodyOf(seen[0]).device_id).toBe("string");
+      expect(bodyOf(seen[0]).device_id.length).toBeGreaterThan(0);
+      expect(bodyOf(seen[0]).task).toBe("go");
+    } finally { restore(); }
+  });
+
+  test("leaves a body with no api_token completely alone", async () => {
+    const { seen, restore } = capture();
+    try {
+      const body = JSON.stringify({ hello: "world" });
+      await cliFetch("https://x/public", { method: "POST", body });
+      expect(String(seen[0].body)).toBe(body);
+    } finally { restore(); }
+  });
+
+  test("never overwrites a device_id the caller chose", async () => {
+    // The remote handoff paths act on behalf of another machine and have
+    // already said which one they mean.
+    const { seen, restore } = capture();
+    try {
+      await cliFetch("https://x/cli/spawn", {
+        method: "POST",
+        body: JSON.stringify({ api_token: "t", device_id: "explicit-other" }),
+      });
+      expect(bodyOf(seen[0]).device_id).toBe("explicit-other");
+    } finally { restore(); }
+  });
+
+  test("is OFF by default, because a backend without the strip rejects the field", async () => {
+    // A closed `v.object` validator rejects any unnamed field, so shipping the
+    // stamp before the server strip breaks every authenticated command at once.
+    delete process.env.CAST_DEVICE_BINDING;
+    const { seen, restore } = capture();
+    try {
+      const body = JSON.stringify({ api_token: "t", task: "go" });
+      await cliFetch("https://x/cli/spawn", { method: "POST", body });
+      expect(String(seen[0].body)).toBe(body);
+      expect(bodyOf(seen[0]).device_id).toBeUndefined();
+    } finally { restore(); }
+  });
+
+  test("a non-JSON body is passed through rather than breaking the request", async () => {
+    const { seen, restore } = capture();
+    try {
+      await cliFetch("https://x/cli/thing", { method: "POST", body: 'not json "api_token"' });
+      expect(String(seen[0].body)).toBe('not json "api_token"');
+    } finally { restore(); }
   });
 });

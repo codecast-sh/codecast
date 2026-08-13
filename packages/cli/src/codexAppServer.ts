@@ -41,6 +41,11 @@ export interface ThreadResumeParams {
   baseInstructions?: string;
 }
 
+export interface ThreadForkParams extends ThreadStartParams {
+  threadId: string;
+  path?: string;
+}
+
 export interface Turn {
   id: string;
   items: ThreadItem[];
@@ -49,7 +54,7 @@ export interface Turn {
 }
 
 export interface ThreadStartResponse {
-  thread: { id: string };
+  thread: { id: string; path?: string | null; forkedFromId?: string | null };
   cwd: string;
   model: string;
   sandbox: unknown;
@@ -61,10 +66,12 @@ export interface TurnStartResponse {
 }
 
 export interface ThreadResumeResponse {
-  thread: { id: string };
+  thread: { id: string; path?: string | null; forkedFromId?: string | null };
   cwd: string;
   model: string;
 }
+
+export interface ThreadForkResponse extends ThreadStartResponse {}
 
 export interface FileUpdateChange {
   path: string;
@@ -235,7 +242,7 @@ export class CodexAppServer extends EventEmitter {
   private async initialize(): Promise<void> {
     const resp = await this.sendRequest("initialize", {
       clientInfo: { name: "codecast", title: "Codecast Daemon", version: "1.0.0" },
-      capabilities: { experimentalApi: false },
+      capabilities: { experimentalApi: true },
     }, THREAD_START_TIMEOUT_MS);
     this.initialized = true;
     const r = resp as { userAgent?: string; platformOs?: string };
@@ -257,6 +264,10 @@ export class CodexAppServer extends EventEmitter {
 
   async threadResume(params: ThreadResumeParams): Promise<ThreadResumeResponse> {
     return this.sendRequest("thread/resume", params, THREAD_START_TIMEOUT_MS) as Promise<ThreadResumeResponse>;
+  }
+
+  async threadFork(params: ThreadForkParams): Promise<ThreadForkResponse> {
+    return this.sendRequest("thread/fork", params, THREAD_START_TIMEOUT_MS) as Promise<ThreadForkResponse>;
   }
 
   respondToApproval(id: number | string, approved: boolean, method?: string, params?: Record<string, unknown>): void {

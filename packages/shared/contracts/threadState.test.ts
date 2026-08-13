@@ -2,7 +2,9 @@ import { describe, test, expect } from "bun:test";
 import {
   normalizeThreadState,
   threadStateHeadline,
+  threadStateCardLine,
   threadStateFreshness,
+  parseThreadStateStatus,
   hasThreadState,
   THREAD_STATE_MAX_CHARS,
   THREAD_STATE_AGING_MSGS,
@@ -51,8 +53,9 @@ describe("threadStateHeadline", () => {
     expect(threadStateHeadline("- Waiting on CI")).toBe("Waiting on CI");
   });
 
-  test("drops a redundant Status label but keeps other labels", () => {
+  test("drops redundant Status/Goal labels but keeps other labels", () => {
     expect(threadStateHeadline("Status: waiting on CI")).toBe("waiting on CI");
+    expect(threadStateHeadline("Goal: ship the auth fix")).toBe("ship the auth fix");
     expect(threadStateHeadline("Blocked: needs a key")).toBe("Blocked: needs a key");
   });
 
@@ -125,6 +128,49 @@ describe("threadStateFreshness", () => {
       now,
     );
     expect(r.messagesSince).toBe(0);
+  });
+});
+
+describe("parseThreadStateStatus", () => {
+  test("maps loose spellings onto the three states", () => {
+    expect(parseThreadStateStatus("working")).toBe("working");
+    expect(parseThreadStateStatus("in-progress")).toBe("working");
+    expect(parseThreadStateStatus("In Progress")).toBe("working");
+    expect(parseThreadStateStatus("wip")).toBe("working");
+    expect(parseThreadStateStatus("blocked")).toBe("blocked");
+    expect(parseThreadStateStatus("needs_input")).toBe("blocked");
+    expect(parseThreadStateStatus("needs input")).toBe("blocked");
+    expect(parseThreadStateStatus("done")).toBe("done");
+    expect(parseThreadStateStatus("Complete")).toBe("done");
+  });
+
+  test("anything unrecognized is null, never a guess", () => {
+    expect(parseThreadStateStatus("")).toBeNull();
+    expect(parseThreadStateStatus(null)).toBeNull();
+    expect(parseThreadStateStatus(undefined)).toBeNull();
+    expect(parseThreadStateStatus("urgent")).toBeNull();
+  });
+});
+
+describe("threadStateCardLine", () => {
+  test("prefers the Status: line — what is happening beats what it is about", () => {
+    const text = "Projects as a first-class place to work\nStatus: all four done, tests green\nNext: nothing blocking";
+    expect(threadStateCardLine(text)).toBe("all four done, tests green");
+  });
+
+  test("a Blocked: line qualifies when there is no Status: line", () => {
+    const text = "Auth fix\nBlocked: needs a prod key\nNext: deploy";
+    expect(threadStateCardLine(text)).toBe("needs a prod key");
+  });
+
+  test("falls back to the headline when no labeled line exists", () => {
+    expect(threadStateCardLine("Waiting on CI — nothing to decide yet")).toBe(
+      "Waiting on CI — nothing to decide yet",
+    );
+  });
+
+  test("finds a bulleted Status: line and strips the bullet", () => {
+    expect(threadStateCardLine("Big migration\n- Status: half done")).toBe("half done");
   });
 });
 

@@ -16,11 +16,14 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   activeChannelId,
   onSelect,
   onCreate,
+  onChannelContextMenu,
 }: {
   channels: ChatChannelView[];
   activeChannelId?: string;
   onSelect: (channelId: string) => void;
   onCreate?: () => void;
+  /** Right-click on a row — opens the shared channel menu. */
+  onChannelContextMenu?: (e: React.MouseEvent, channel: ChatChannelView) => void;
 }) {
   return (
     <nav className="ch-rail" aria-label="Channels">
@@ -52,6 +55,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
               type="button"
               className={cls}
               onClick={() => onSelect(c.id)}
+              onContextMenu={onChannelContextMenu ? (e) => onChannelContextMenu(e, c) : undefined}
               aria-current={active ? "page" : undefined}
               title={c.topic || `#${c.name}`}
             >

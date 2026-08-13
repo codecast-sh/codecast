@@ -23,10 +23,9 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "../ui/context-menu";
 import { EntityIdPill } from "../EntityIdPill";
 import { CONVEX_URL } from "../../lib/localAuth";
 import { relativeTime, withEditParam } from "./artifactCardUtils";
@@ -114,8 +113,60 @@ export function ArtifactCard({
     }
   };
 
+  const deleteWithConfirm = async () => {
+    if (!window.confirm(`Delete "${a.title}" and its whole version history? The link stops working immediately.`)) return;
+    const r = await deleteArtifact({ slug: a.slug });
+    if (r && "error" in r && r.error) toast.error(r.error);
+    else toast.success("Page deleted");
+  };
+
+  const ctxMenu = useContextMenu();
+
+  // ONE item list serves both the hover kebab and the right-click cursor menu,
+  // so the two surfaces can never drift.
+  const menuItems = (
+    <>
+      <CtxItem icon={ExternalLink} onSelect={() => window.open(a.url, "_blank", "noopener")}>
+        Open
+      </CtxItem>
+      <CtxItem icon={Copy} onSelect={copyLink}>Copy link</CtxItem>
+      {a.manage_url && (
+        <>
+          <CtxSeparator />
+          {/* Manage opens the artifact's own owner sheet (#o= key stays in
+              the fragment); rollback, gates, viewers and stats all live
+              there. */}
+          <CtxItem icon={Settings2} onSelect={() => window.open(a.manage_url!, "_blank", "noopener")}>
+            Manage
+          </CtxItem>
+          <CtxItem
+            icon={Pencil}
+            onSelect={() => window.open(a.edit_url ?? withEditParam(a.manage_url!), "_blank", "noopener")}
+          >
+            Edit
+          </CtxItem>
+          <CtxSeparator />
+          <CtxItem danger icon={Trash2} onSelect={deleteWithConfirm}>
+            Delete
+          </CtxItem>
+        </>
+      )}
+      {a.can_team_edit && onTeamEdit && (
+        <>
+          <CtxSeparator />
+          {/* Teammate editing goes through authed convex actions — no
+              owner keys ever reach a teammate. */}
+          <CtxItem icon={Pencil} onSelect={() => onTeamEdit(a)}>Edit (team)</CtxItem>
+        </>
+      )}
+    </>
+  );
+
   return (
-    <div className="group relative flex flex-col rounded-lg border border-sol-border/40 bg-sol-bg-alt/40 overflow-hidden transition-colors hover:border-sol-border hover:bg-sol-bg-alt/70">
+    <div
+      className="group relative flex flex-col rounded-lg border border-sol-border/40 bg-sol-bg-alt/40 overflow-hidden transition-colors hover:border-sol-border hover:bg-sol-bg-alt/70"
+      onContextMenu={(e) => ctxMenu.open(e, undefined)}
+    >
       {/* Thumbnail / kind glyph */}
       <a
         href={a.url}
@@ -151,53 +202,20 @@ export function ArtifactCard({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-[190px]">
-            <DropdownMenuItem onClick={() => window.open(a.url, "_blank", "noopener")}>
-              <ExternalLink className="w-3.5 h-3.5 mr-2" /> Open
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={copyLink}>
-              <Copy className="w-3.5 h-3.5 mr-2" /> Copy link
-            </DropdownMenuItem>
-            {a.manage_url && (
-              <>
-                <DropdownMenuSeparator />
-                {/* Manage opens the artifact's own owner sheet (#o= key stays in
-                    the fragment); rollback, gates, viewers and stats all live
-                    there. */}
-                <DropdownMenuItem onClick={() => window.open(a.manage_url!, "_blank", "noopener")}>
-                  <Settings2 className="w-3.5 h-3.5 mr-2" /> Manage
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => window.open(a.edit_url ?? withEditParam(a.manage_url!), "_blank", "noopener")}
-                >
-                  <Pencil className="w-3.5 h-3.5 mr-2" /> Edit
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-sol-red focus:text-sol-red"
-                  onClick={async () => {
-                    if (!window.confirm(`Delete "${a.title}" and its whole version history? The link stops working immediately.`)) return;
-                    const r = await deleteArtifact({ slug: a.slug });
-                    if (r && "error" in r && r.error) toast.error(r.error);
-                    else toast.success("Page deleted");
-                  }}
-                >
-                  <Trash2 className="w-3.5 h-3.5 mr-2" /> Delete
-                </DropdownMenuItem>
-              </>
-            )}
-            {a.can_team_edit && onTeamEdit && (
-              <>
-                <DropdownMenuSeparator />
-                {/* Teammate editing goes through authed convex actions — no
-                    owner keys ever reach a teammate. */}
-                <DropdownMenuItem onClick={() => onTeamEdit(a)}>
-                  <Pencil className="w-3.5 h-3.5 mr-2" /> Edit (team)
-                </DropdownMenuItem>
-              </>
-            )}
+            {menuItems}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* Cursor-anchored twin of the kebab — same items, same handlers. */}
+      <ContextMenu state={ctxMenu}>
+        {() => (
+          <>
+            <CtxHeader title={a.title || a.slug} />
+            {menuItems}
+          </>
+        )}
+      </ContextMenu>
 
       {/* Body */}
       <div className="flex flex-col gap-1.5 p-3">

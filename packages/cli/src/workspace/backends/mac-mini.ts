@@ -23,6 +23,7 @@ import * as path from "node:path";
 import { execSync, spawnSync } from "../../proc.js";
 import { resolveManifest } from "../resolver.js";
 import { allocatePorts, portsToEnv } from "../ports.js";
+import { atomicWriteFile } from "../../atomicWrite.js";
 import {
   deleteState,
   readState,
@@ -90,9 +91,7 @@ function readHosts(): HostsFile {
 
 function writeHosts(h: HostsFile): void {
   fs.mkdirSync(SCALEWAY_HOSTS_DIR, { recursive: true });
-  const tmp = `${SCALEWAY_HOSTS_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(h, null, 2));
-  fs.renameSync(tmp, SCALEWAY_HOSTS_FILE);
+  atomicWriteFile(SCALEWAY_HOSTS_FILE, JSON.stringify(h, null, 2));
 }
 
 function sshKeyPath(hostId: string): string {

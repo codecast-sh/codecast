@@ -24,6 +24,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { deriveProfileName, isLegacyDerivedName } from "./ccAccounts.js";
+import { atomicWriteFile } from "./atomicWrite.js";
 import {
   codexHome,
   collectCodexUsageSnapshot,
@@ -151,15 +152,10 @@ export function readProfileIndex(): ProfileIndex {
   return { profiles: {} };
 }
 
-function atomicWriteFile(filePath: string, content: string, mode: number): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.tmp`);
-  fs.writeFileSync(tmp, content, { mode });
-  fs.renameSync(tmp, filePath);
-}
+
 
 function writeProfileIndex(index: ProfileIndex): void {
-  atomicWriteFile(indexPath(), JSON.stringify(index, null, 2), 0o644);
+  atomicWriteFile(indexPath(), JSON.stringify(index, null, 2), { mode: 0o644 });
 }
 
 // Same charset rule as Claude profiles — names land in dir names and commands.
@@ -180,7 +176,7 @@ export function saveCodexProfile(name: string): CodexProfileMeta & { name: strin
   }
   const dir = profileDir(name);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  atomicWriteFile(path.join(dir, "auth.json"), raw, 0o600);
+  atomicWriteFile(path.join(dir, "auth.json"), raw, { mode: 0o600 });
   const meta: CodexProfileMeta = {
     email: summary.email,
     account_id: summary.account_id,
@@ -392,7 +388,7 @@ export async function refreshCodexUsageSnapshots(
     for (const key of Object.keys(cache.accounts)) {
       if (!knownKeys.has(key)) delete cache.accounts[key];
     }
-    atomicWriteFile(usageCachePath(), JSON.stringify(cache, null, 2), 0o644);
+    atomicWriteFile(usageCachePath(), JSON.stringify(cache, null, 2), { mode: 0o644 });
     invalidateCodexAccountsCache();
   }
   return summary;

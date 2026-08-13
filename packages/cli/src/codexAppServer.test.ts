@@ -1,5 +1,46 @@
 import { describe, expect, test } from "bun:test";
-import { approvalResultForMethod, threadItemToMessage, threadItemsToMessages } from "./codexAppServer.js";
+import { CodexAppServer, approvalResultForMethod, threadItemToMessage, threadItemsToMessages } from "./codexAppServer.js";
+
+describe("CodexAppServer protocol", () => {
+  test("enables the experimental API and forks a rollout by path", async () => {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const server = new CodexAppServer({ log: () => {} });
+    (server as any).sendRequest = async (method: string, params: Record<string, unknown>) => {
+      requests.push({ method, params });
+      if (method === "initialize") return { userAgent: "test", platformOs: "test" };
+      return {
+        thread: { id: "real-thread", path: "/tmp/real-thread.jsonl", forkedFromId: "synthetic-thread" },
+        cwd: "/tmp/project",
+        model: "gpt-test",
+        sandbox: {},
+        approvalPolicy: "never",
+      };
+    };
+
+    await (server as any).initialize();
+    const response = await server.threadFork({
+      threadId: "",
+      path: "/tmp/synthetic-thread.jsonl",
+      cwd: "/tmp/project",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    });
+
+    expect(requests[0]).toEqual({
+      method: "initialize",
+      params: {
+        clientInfo: { name: "codecast", title: "Codecast Daemon", version: "1.0.0" },
+        capabilities: { experimentalApi: true },
+      },
+    });
+    expect(requests[1]?.method).toBe("thread/fork");
+    expect(requests[1]?.params).toMatchObject({
+      threadId: "",
+      path: "/tmp/synthetic-thread.jsonl",
+    });
+    expect(response.thread.id).toBe("real-thread");
+  });
+});
 
 describe("approvalResultForMethod", () => {
   test("returns a decision for command execution approvals", () => {

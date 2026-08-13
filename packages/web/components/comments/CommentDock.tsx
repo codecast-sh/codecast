@@ -1,7 +1,10 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { MessageSquare, CornerUpRight, Quote } from "lucide-react";
+import { MessageSquare, CornerUpRight, Quote, FileCode2, CheckCircle2, RotateCcw } from "lucide-react";
 import { SlotActions } from "../workspace/Slot";
 import { useInboxStore, selectCommentRailOpen } from "../../store/inboxStore";
+import { useDiffViewerStore } from "../../store/diffViewerStore";
+import { getRelativePath } from "@codecast/shared/render";
+import type { CommentThread as CommentThreadModel } from "../../lib/commentThread";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { isConvexId } from "../../lib/entityLinks";
 import { cleanContent } from "../../lib/conversationProcessor";
@@ -31,6 +34,16 @@ function loadWidth(): number {
 function snippetFor(content: string | undefined): string {
   if (!content) return "a message";
   return cleanContent(content).replace(/```[\s\S]*?```/g, " code ").replace(/\s+/g, " ").trim().slice(0, 64) || "a message";
+}
+
+// Jump to a code thread: open the diff panel focused on the thread's file.
+// The anchor stores the workspace-relative path; the panel's change list holds
+// raw tool paths, so match through the same normalization the anchor used.
+function jumpToFileThread(t: CommentThreadModel) {
+  const st = useDiffViewerStore.getState();
+  st.setDiffPanelOpen(true);
+  const change = st.changes.find((c) => getRelativePath(c.filePath) === t.filePath);
+  if (change) st.selectFile(change.filePath);
 }
 
 function jumpToMessage(conversationId: string, messageId: string) {
@@ -125,6 +138,42 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
             it shares this edge with. */}
         <SlotActions slot="context" onClose={() => setOpen(false)} />
       </header>
+
+      {comments.files.length > 0 && (
+        <div className="cc-railx-anchored">
+          <div className="cc-railx-anchored-label">On code</div>
+          {[...comments.files].sort((a, b) => Number(a.resolved) - Number(b.resolved)).map((t) => (
+            <div key={t.key} className={`group/fthread flex items-center${t.resolved ? " opacity-50" : ""}`}>
+              <button
+                type="button"
+                className="cc-railx-anchored-row flex-1 min-w-0"
+                title="Open the diff panel at this file"
+                onClick={() => t.filePath && jumpToFileThread(t)}
+              >
+                <FileCode2 className="w-3 h-3 shrink-0 text-sol-cyan/70" />
+                <span className="cc-railx-anchored-snip font-mono">
+                  {t.filePath}{t.lineNumber ? `:${t.lineNumber}` : ""}
+                </span>
+                <span className="cc-railx-anchored-count">{t.comments.length}</span>
+                <CornerUpRight className="w-3 h-3 shrink-0 opacity-50" />
+              </button>
+              <button
+                type="button"
+                className="cc-comment-btn shrink-0 opacity-0 group-hover/fthread:opacity-100 transition-opacity"
+                title={t.resolved ? "Reopen this thread" : "Resolve this thread"}
+                onClick={() =>
+                  useInboxStore.getState().resolveCommentThread(
+                    conversationId,
+                    { filePath: t.filePath, lineNumber: t.lineNumber },
+                    !t.resolved,
+                  )}
+              >
+                {t.resolved ? <RotateCcw className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {comments.anchored.length > 0 && (
         <div className="cc-railx-anchored">

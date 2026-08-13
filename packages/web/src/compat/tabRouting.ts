@@ -1,5 +1,6 @@
 import { useInboxStore } from "@/store/inboxStore";
 import { pathLabel } from "@/lib/pathLabel";
+import { isDetachedTabWindow } from "@/lib/desktop";
 import { settingsSectionForPath } from "@/lib/settingsSections";
 
 // Routes that live OUTSIDE the dashboard tab shell. The tab system (DashboardLayout
@@ -41,7 +42,7 @@ const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/do
 // this set equals the manifest's in-shell single-segment routes, so drift fails loudly.
 const IN_SHELL_ROOT_SEGMENTS = new Set([
   // Tab pages (TabContent patterns)
-  "inbox", "feed", "crosstalk", "chat", "search", "notifications", "docs", "plans", "tasks", "files", "vault", "pages", "artifacts",
+  "inbox", "feed", "crosstalk", "chat", "search", "notifications", "docs", "capabilities", "plans", "tasks", "files", "vault", "pages", "artifacts",
   "projects", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config",
   // Standalone shell pages (own <Route>, not in TabContent)
   "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
@@ -92,6 +93,10 @@ export function shouldUseTabRouting(
   currentPath: string = typeof window !== "undefined" ? window.location.pathname : "/",
 ): boolean {
   if (isExternal(targetPath)) return false;
+  // A detached tab window has no tab shell of its own — its store still
+  // hydrates the SHARED tabs, so routing "within the active tab" here would
+  // silently rewrite a tab owned by the main window. Navigate for real.
+  if (isDetachedTabWindow()) return false;
   if (isNonTabRoute(targetPath)) return false;
   if (isNonTabRoute(currentPath)) return false;
   const { tabs, activeTabId } = useInboxStore.getState();

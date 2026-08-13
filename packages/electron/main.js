@@ -264,6 +264,13 @@ function createWindow() {
     if (lastUpdateStatus) {
       mainWindow.webContents.send("update-status", lastUpdateStatus);
     }
+    // Tabs handed back by detached windows while the main window was closed
+    // or still loading — adopt them now that the renderer can hear us.
+    if (pendingAdoptPaths.length) {
+      const paths = pendingAdoptPaths;
+      pendingAdoptPaths = [];
+      for (const p of paths) mainWindow.webContents.send("adopt-tab", p);
+    }
   });
 
 
@@ -280,6 +287,93 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+// ---------------------------------------------------------------------------
+// Detached tab windows: a dashboard tab broken out into its own OS window.
+// The window loads the tab's path directly and its preload carries a
+// --tab-window flag, which the renderer reads to disable its tab shell and
+// any writes to shared tab/layout state. "Attach" reverses it: the sender
+// window closes and the main window adopts the path back as a tab.
+// ---------------------------------------------------------------------------
+
+const tabWindows = new Set();
+let pendingAdoptPaths = [];
+
+// Only app-internal paths may ride the detach/attach IPC — a stray absolute
+// URL would otherwise turn a tab window into a browser for arbitrary sites.
+function sanitizeTabPath(navPath) {
+  if (typeof navPath !== "string") return null;
+  if (!navPath.startsWith("/") || navPath.startsWith("//")) return null;
+  return navPath;
+}
+
+function createTabWindow(navPath) {
+  const zoom = getAutoZoomFactor();
+  // Cascade from the main window so a breakout never opens exactly on top.
+  const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 760,
+    minWidth: 700,
+    minHeight: 500,
+    ...(base ? { x: base.x + 40 + tabWindows.size * 24, y: base.y + 40 + tabWindows.size * 24 } : {}),
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 16, y: 12 },
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      zoomFactor: zoom,
+      additionalArguments: [`--zoom-factor=${zoom}`, "--tab-window"],
+      // Same as the main window: keep live-query WebSockets delivering while
+      // the window sits unfocused behind others.
+      backgroundThrottling: false,
+    },
+    icon: path.join(__dirname, "assets", "icon.png"),
+    show: false,
+    backgroundColor: "#002b36",
+  });
+  tabWindows.add(win);
+
+  win.loadURL(`${currentBaseUrl}${navPath}`);
+  win.once("ready-to-show", () => win.show());
+  win.webContents.on("did-finish-load", () => {
+    if (win.isDestroyed()) return;
+    win.webContents.setZoomFactor(getAutoZoomFactor());
+    win.webContents.executeJavaScript(
+      "document.documentElement.classList.add('electron-desktop')"
+    );
+  });
+  // Same rule as every window: new-window links open in the default browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  win.on("closed", () => tabWindows.delete(win));
+  return win;
+}
+
+ipcMain.handle("detach-tab", (_e, navPath) => {
+  const clean = sanitizeTabPath(navPath);
+  if (clean) createTabWindow(clean);
+});
+
+ipcMain.handle("attach-tab", (e, navPath) => {
+  const clean = sanitizeTabPath(navPath);
+  if (!clean) return;
+  const sender = BrowserWindow.fromWebContents(e.sender);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("adopt-tab", clean);
+    mainWindow.show();
+    mainWindow.focus();
+  } else {
+    // Main window is gone (macOS keeps the app alive) — recreate it and let
+    // its did-finish-load flush deliver the adoption.
+    pendingAdoptPaths.push(clean);
+    createWindow();
+  }
+  if (sender && tabWindows.has(sender)) sender.close();
+});
 
 function createPaletteWindow() {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;

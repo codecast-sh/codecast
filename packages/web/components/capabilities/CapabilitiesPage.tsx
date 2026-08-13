@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Blocks, Library, MonitorSmartphone } from "lucide-react";
+import { Blocks, Library, MonitorSmartphone, Plug } from "lucide-react";
 import { AuthGuard } from "../AuthGuard";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { KeyCap } from "../KeyboardShortcutsHelp";
@@ -20,6 +20,7 @@ import {
 } from "../../store/capabilities";
 import {
   buildFleetRows,
+  isBroken,
   catalogFromFleet,
   FleetMatrix,
   FleetSummary,
@@ -27,9 +28,10 @@ import {
   withFleetInstalls,
   type FleetFilter,
   type FleetInventoryItem,
-  type FleetRow,
+  type FleetGridRow,
 } from "./FleetMatrix";
 import { LibraryBrowse } from "./LibraryBrowse";
+import { AppsTab } from "./AppsTab";
 import {
   kindMeta,
   ScopeChip,
@@ -228,7 +230,7 @@ function RowDetail({
   devices,
   onClose,
 }: {
-  row: FleetRow;
+  row: FleetGridRow;
   devices: CapabilityDevice[];
   onClose: () => void;
 }) {
@@ -240,7 +242,7 @@ function RowDetail({
         <Icon className="w-4 h-4 mt-0.5 text-sol-magenta flex-shrink-0" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-mono text-sm text-sol-text">{row.name}</span>
+            <span className="font-mono text-sm text-sol-text">{row.identity}</span>
             <span className="text-[10px] text-sol-text-dim">{meta?.label ?? String(row.kind)}</span>
             {row.marketplace && (
               <span className="text-[10px] font-mono text-sol-text-dim">{row.marketplace}</span>
@@ -262,7 +264,7 @@ function RowDetail({
 
       <div className="mt-3 grid gap-1.5 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">
         {devices.map((d) => {
-          const cell = row.cells[d.deviceId] ?? { state: "unknown" as const };
+          const cell = row.byDevice[d.deviceId] ?? { status: "unknown" as const };
           return (
             <div
               key={d.deviceId}
@@ -271,25 +273,32 @@ function RowDetail({
               <span className="text-[11px] text-sol-text truncate flex-1" title={d.name}>
                 {d.name}
               </span>
-              {cell.state === "unknown" ? (
+              {cell.status === "unknown" ? (
                 <span className="text-[10px] text-sol-yellow">not reported yet</span>
-              ) : cell.state === "absent" ? (
+              ) : cell.status === "absent" ? (
                 <span className="text-[10px] text-sol-text-dim">not installed</span>
-              ) : cell.state === "broken" ? (
+              ) : isBroken(cell) ? (
                 <span className="text-[10px] text-sol-red">switched on, nothing downloaded</span>
               ) : (
                 <span className="flex items-center gap-1">
-                  {cell.scope && <ScopeChip scope={cell.scope} />}
+                  {/* Scopes stack: one capability can be switched on at user and
+                      project scope at once, and each is a separate answer to
+                      "why is this here?". The matrix cell shows only the notable
+                      one because it has to stay scannable; this panel is where
+                      the question gets answered in full, so show every scope. */}
+                  {cell.scopes.map((scope) => (
+                    <ScopeChip key={scope} scope={scope} />
+                  ))}
                   {cell.pin && (
                     <span
                       className={`text-[10px] font-mono ${
-                        cell.state === "different" ? "text-sol-orange" : "text-sol-text-muted"
+                        cell.status === "pin_differs" ? "text-sol-orange" : "text-sol-text-muted"
                       }`}
                     >
                       {cell.pin}
                     </span>
                   )}
-                  {cell.state === "disabled" && (
+                  {cell.status === "disabled" && (
                     <span className="text-[10px] text-sol-text-dim">off</span>
                   )}
                 </span>
@@ -309,7 +318,7 @@ function RowDetail({
 
 // ----------------------------------------------------------------- the page
 
-type Tab = "machines" | "library";
+type Tab = "machines" | "library" | "apps";
 
 export interface CapabilitiesPageProps {
   /**
@@ -333,7 +342,7 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
   const { devices, reports, driftKeys, loading } = useFleet();
 
   const urlTab = params.get("tab");
-  const tab: Tab = urlTab === "library" ? "library" : "machines";
+  const tab: Tab = urlTab === "library" ? "library" : urlTab === "apps" ? "apps" : "machines";
   const setTab = (t: string) => {
     const base = pathname && pathname.startsWith("/capabilities") ? pathname : "/capabilities";
     // Through the router, so the tab is in the URL, survives a reload and lands
@@ -349,7 +358,7 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
     () => buildFleetRows(devices, reports, driftKeys),
     [devices, reports, driftKeys],
   );
-  const counts = useMemo(() => summarizeFleet(rows, devices), [rows, devices]);
+  const counts = useMemo(() => summarizeFleet(rows, devices, reports), [rows, devices, reports]);
   const selected = selectedKey ? (rows.find((r) => r.key === selectedKey) ?? null) : null;
 
   // A public catalog when one is wired up, otherwise the fleet's own. Either way
@@ -387,6 +396,7 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
             items={[
               { key: "machines", label: "Machines", icon: MonitorSmartphone, title: "Compare your fleet" },
               { key: "library", label: "Library", icon: Library, title: "Browse what you could add" },
+              { key: "apps", label: "Apps", icon: Plug, title: "Connect services agents act through" },
             ]}
           />
         </header>
@@ -427,6 +437,7 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
 
               <FleetMatrix
                 devices={devices}
+                reports={reports}
                 rows={rows}
                 filter={filter}
                 query={query}
@@ -451,6 +462,8 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
               )}
             </>
           )
+        ) : tab === "apps" ? (
+          <AppsTab />
         ) : (
           <>
             {!props.catalog && catalog && (

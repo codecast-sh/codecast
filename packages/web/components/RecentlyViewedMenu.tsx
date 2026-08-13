@@ -2,20 +2,42 @@ import { useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { useLocation } from "react-router";
-import { History, MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid } from "lucide-react";
+import { History, MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid, ArrowUpRight, ExternalLink, Link2, Hash, Rss, Globe, Workflow, Zap, FolderKanban } from "lucide-react";
+import { toast } from "sonner";
 import { useInboxStore, selectSessionRailOpen } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { isNonTabRoute } from "../src/compat/tabRouting";
+import { copyToClipboard, shareOrigin } from "../lib/utils";
+import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
+
+// The standalone URL a visit maps to, when one exists. Label/project visits
+// are store filters with no URL of their own, so they get null (menu items
+// that need a URL don't render for them).
+function visitHref(item: ResolvedVisit): string | null {
+  if (item.sessionId) return `/conversation/${item.sessionId}`;
+  if (item.bucketId || item.projectName) return null;
+  return item.path ?? null;
+}
 
 const MENU_LIMIT = 10;
 
+// One surface → icon map for every place that shows a page reference (the
+// recents menu, the tab bar). Route prefix decides; LayoutGrid is the generic.
 export function PageIcon({ path, className }: { path: string; className: string }) {
   if (path.startsWith("/tasks")) return <ListTodo className={className} />;
   if (path.startsWith("/docs")) return <FileText className={className} />;
   if (path.startsWith("/plans")) return <MapIcon className={className} />;
   if (path.startsWith("/search")) return <Search className={className} />;
-  if (path.startsWith("/inbox")) return <Inbox className={className} />;
+  if (path.startsWith("/inbox") || path.startsWith("/conversation/")) return <Inbox className={className} />;
+  if (path.startsWith("/chat/")) return <Hash className={className} />;
+  if (path.startsWith("/chat")) return <MessageSquare className={className} />;
+  if (path.startsWith("/feed")) return <Rss className={className} />;
+  if (path.startsWith("/files") || path.startsWith("/vault")) return <Folder className={className} />;
+  if (path.startsWith("/pages") || path.startsWith("/artifacts")) return <Globe className={className} />;
+  if (path.startsWith("/projects")) return <FolderKanban className={className} />;
+  if (path.startsWith("/workflows") || path.startsWith("/routines")) return <Workflow className={className} />;
+  if (path.startsWith("/triggers") || path.startsWith("/schedules")) return <Zap className={className} />;
   return <LayoutGrid className={className} />;
 }
 
@@ -25,6 +47,7 @@ export function PageIcon({ path, className }: { path: string; className: string 
 export function RecentlyViewedMenu({ onSelectSession }: { onSelectSession: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const ctxMenu = useContextMenu<ResolvedVisit>();
   const router = useRouter();
   const location = useLocation();
   // recentVisits bumps on every navigation, so resolving when it changes (or
@@ -93,6 +116,7 @@ export function RecentlyViewedMenu({ onSelectSession }: { onSelectSession: (id: 
             <button
               key={item.key}
               onClick={() => handleSelect(item)}
+              onContextMenu={(e) => ctxMenu.open(e, item)}
               className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-sol-text-muted hover:bg-sol-cyan/10 hover:text-sol-text transition-colors"
             >
               {item.sessionId ? (
@@ -110,6 +134,36 @@ export function RecentlyViewedMenu({ onSelectSession }: { onSelectSession: (id: 
           ))}
         </div>
       )}
+
+      <ContextMenu state={ctxMenu}>
+        {(item) => {
+          const href = visitHref(item);
+          return (
+            <>
+              <CtxHeader title={item.title} />
+              <CtxItem icon={ArrowUpRight} onSelect={() => handleSelect(item)}>
+                Open
+              </CtxItem>
+              {href && (
+                <CtxItem icon={ExternalLink} onSelect={() => window.open(href, "_blank", "noopener")}>
+                  Open in new tab
+                </CtxItem>
+              )}
+              {href && (
+                <CtxItem
+                  icon={Link2}
+                  onSelect={() => {
+                    copyToClipboard(`${shareOrigin()}${href}`);
+                    toast.success("Link copied");
+                  }}
+                >
+                  Copy link
+                </CtxItem>
+              )}
+            </>
+          );
+        }}
+      </ContextMenu>
     </div>
   );
 }

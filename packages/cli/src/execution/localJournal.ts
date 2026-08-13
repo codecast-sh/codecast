@@ -14,6 +14,7 @@ import {
 } from "@codecast/shared/contracts";
 import type { RuntimeHandle } from "./types.js";
 import { ExecutionCoordinatorError } from "./types.js";
+import { atomicWriteFile } from "../atomicWrite.js";
 
 export const EXECUTION_JOURNAL_SCHEMA_VERSION = 1 as const;
 
@@ -294,39 +295,10 @@ export class FileExecutionOperationJournal implements ExecutionOperationJournal 
     const previous = this.readFile(filePath);
     assertTransition(previous, entry, authorization);
 
-    fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-    const tempPath = path.join(
-      this.directory,
-      `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
-    );
-    let fd: number | undefined;
-    try {
-      fd = fs.openSync(tempPath, "wx", 0o600);
-      fs.writeFileSync(fd, `${JSON.stringify(entry)}\n`, "utf8");
-      fs.fsyncSync(fd);
-      fs.closeSync(fd);
-      fd = undefined;
-      fs.renameSync(tempPath, filePath);
-
-      // Persist the directory entry where supported. Some filesystems reject
-      // fsync on a directory; the record itself has still been fsynced + renamed.
-      try {
-        const dirFd = fs.openSync(this.directory, "r");
-        try {
-          fs.fsyncSync(dirFd);
-        } finally {
-          fs.closeSync(dirFd);
-        }
-      } catch {
-        // Best effort only for the directory metadata.
-      }
-    } finally {
-      if (fd !== undefined) fs.closeSync(fd);
-      try {
-        fs.unlinkSync(tempPath);
-      } catch {
-        // The successful rename consumes the temporary path.
-      }
-    }
+    // The helper this delegates to was lifted from this very block, and keeps
+    // both guarantees the journal depends on: the payload is fsynced before the
+    // rename, and the directory entry is fsynced after it where the filesystem
+    // allows. Keeping a second copy here is how the two would drift.
+    atomicWriteFile(filePath, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
   }
 }

@@ -24,6 +24,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { atomicWriteFile } from "../../atomicWrite.js";
 
 export type PoolSlotState =
   | "empty"
@@ -77,10 +78,8 @@ export function readPoolState(repoRoot: string): PoolState | null {
 export function writePoolState(repoRoot: string, state: PoolState): void {
   const p = poolStateFile(repoRoot);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  const tmp = `${p}.tmp`;
   state.updatedAt = new Date().toISOString();
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-  fs.renameSync(tmp, p);
+  atomicWriteFile(p, JSON.stringify(state, null, 2));
 }
 
 export function deletePoolState(repoRoot: string): void {

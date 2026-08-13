@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { auth } from "./auth";
 import { internal, api } from "./_generated/api";
+import { callback as googleOAuthCallback, GOOGLE_CALLBACK_PATH } from "./googleOAuth";
 
 const http = httpRouter();
 
@@ -44,6 +45,14 @@ async function ipRateLimited(
   return null;
 }
 
+
+// Google OAuth callback (Gmail connector). GET because Google redirects the
+// browser here; the handler validates state and closes the popup.
+http.route({
+  path: GOOGLE_CALLBACK_PATH,
+  method: "GET",
+  handler: googleOAuthCallback,
+});
 
 http.route({
   path: "/cli/exchange-token",
@@ -3390,6 +3399,31 @@ function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) 
     handler: httpAction(async (ctx, request) => {
       try {
         const body = await request.json();
+        // Device binding, enforced once for every CLI endpoint rather than in
+        // each of the ~100 handlers. A token that names a device may only act
+        // from that device; a token that names none is unbound and behaves
+        // exactly as it always has, which is what makes this migration-free.
+        if (typeof body?.api_token === "string") {
+          const allowed = await ctx.runQuery(internal.apiTokens.deviceBindingAllows, {
+            api_token: body.api_token,
+            device_id: typeof body.device_id === "string" ? body.device_id : undefined,
+          });
+          if (!allowed) {
+            return new Response(
+              JSON.stringify({
+                error:
+                  "This token is bound to a different machine. Run `cast auth` on this machine to mint its own.",
+                code: "FORBIDDEN",
+              }),
+              { status: 403, headers: { "Content-Type": "application/json", ...corsHeaders } },
+            );
+          }
+        }
+        // device_id is consumed HERE and never forwarded. Most cliRoute handlers
+        // pass the body straight into a mutation whose validator is a closed
+        // `v.object`, so an unrecognised field is a hard rejection — forwarding
+        // it would break every one of them at once.
+        if (body && typeof body === "object" && "device_id" in body) delete body.device_id;
         const result = await handler(ctx, body);
         return new Response(JSON.stringify(result), {
           status: 200,

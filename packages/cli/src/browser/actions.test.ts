@@ -16,7 +16,7 @@ interface Call {
 }
 
 /** A page that records what was dispatched and answers geometry queries. */
-function recorder(opts: { quads?: number[][]; hit?: string | null; missing?: boolean } = {}) {
+function recorder(opts: { quads?: number[][]; hit?: string | null; missing?: boolean; scale?: number } = {}) {
   const calls: Call[] = [];
   const page = {
     sessionId: "s1",
@@ -30,6 +30,14 @@ function recorder(opts: { quads?: number[][]; hit?: string | null; missing?: boo
         if (method === "DOM.getContentQuads") return { quads: opts.quads ?? [[10, 20, 30, 20, 30, 40, 10, 40]] };
         if (method === "DOM.resolveNode") return { object: { objectId: "obj-1" } };
         if (method === "Runtime.callFunctionOn") return { result: { value: opts.hit ?? null } };
+        // The pointer probe asks where the page saw the cursor. `scale` fakes a
+        // page that receives input scaled, as happens under viewport emulation.
+        if (method === "Runtime.evaluate" && String(params.expression).includes("__cast")) {
+          const last = calls.filter((c) => c.params?.type === "mouseMoved").pop();
+          const at = last ? [last.params.x * (opts.scale ?? 1), last.params.y * (opts.scale ?? 1)] : null;
+          return { result: { value: JSON.stringify(at) } };
+        }
+        if (method === "Runtime.evaluate") return { result: { value: JSON.stringify(["complete", 0]) } };
         return {};
       },
     },
@@ -65,12 +73,30 @@ describe("locate", () => {
 
 describe("click", () => {
   test("moves the pointer before pressing", async () => {
-    // Hover-only menus never open for a press that arrives with no travel.
+    // Hover-only menus never open for a press that arrives with no travel. The
+    // first move is the scale probe; the second is the real approach.
     const { page, of } = recorder();
     await click(page, 5);
     expect(of("Input.dispatchMouseEvent").map((c) => c.params.type)).toEqual([
-      "mouseMoved", "mousePressed", "mouseReleased",
+      "mouseMoved", "mouseMoved", "mousePressed", "mouseReleased",
     ]);
+  });
+
+  test("aims at the measured point when input is not scaled", async () => {
+    const { page, of } = recorder();
+    await click(page, 5);
+    const press = of("Input.dispatchMouseEvent").find((c) => c.params.type === "mousePressed")!;
+    expect([press.params.x, press.params.y]).toEqual([20, 30]);
+  });
+
+  test("corrects the aim when the page receives input scaled", async () => {
+    // Under viewport emulation Chrome can deliver a click at 2.5x the
+    // coordinate it was given. Measured on Hacker News, that sent a click meant
+    // for the "new" link into an unrelated story while reporting success.
+    const { page, of } = recorder({ scale: 2.5 });
+    await click(page, 5);
+    const press = of("Input.dispatchMouseEvent").find((c) => c.params.type === "mousePressed")!;
+    expect([press.params.x, press.params.y]).toEqual([8, 12]);
   });
 
   test("refuses when another element covers the target", async () => {
@@ -81,7 +107,8 @@ describe("click", () => {
   test("--force dispatches anyway", async () => {
     const { page, of } = recorder({ hit: "<div#cookie-banner>" });
     await click(page, 5, { force: true });
-    expect(of("Input.dispatchMouseEvent")).toHaveLength(3);
+    // probe move + approach move + press + release
+    expect(of("Input.dispatchMouseEvent")).toHaveLength(4);
   });
 
   test("skips the hit test entirely when forced", async () => {

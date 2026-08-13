@@ -1,0 +1,6 @@
+{
+  "mcpServers": {
+    "typeless-remote": { "url": "https://mcp.example.com/mcp" },
+    "good-stdio": { "command": "npx", "args": ["-y", "some-server"], "env": { "API_TOKEN": "secret-value" } }
+  }
+}

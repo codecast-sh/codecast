@@ -103,7 +103,7 @@ export const processPROpenedEvent = internalAction({
     if (result.pr_id) {
       let token = result.github_access_token;
 
-      const installation = result.team_id ? await ctx.runQuery(internal.githubWebhooks.getInstallationForRepository, {
+      const installation = result.team_id ? await ctx.runQuery(internal.githubApp.getInstallationForRepoInTeam, {
         repository: repositoryFullName,
         team_id: result.team_id,
       }) : null;
@@ -188,7 +188,7 @@ export const processPRSynchronizeEvent = internalAction({
 
     let token: string | null = null;
 
-    const installation = await ctx.runQuery(internal.githubWebhooks.getInstallationForRepository, {
+    const installation = await ctx.runQuery(internal.githubApp.getInstallationForRepoInTeam, {
       repository: repositoryFullName,
       team_id: prData.team_id as Id<"teams">,
     });
@@ -431,50 +431,14 @@ export const getTokenForPR = internalQuery({
   },
 });
 
-export const getInstallationForRepository = internalQuery({
-  args: {
-    repository: v.string(),
-    team_id: v.optional(v.id("teams")),
-  },
-  handler: async (ctx, args) => {
-    const [owner] = args.repository.split("/");
-
-    if (args.team_id) {
-      const teamId = args.team_id;
-      const installations = await ctx.db
-        .query("github_app_installations")
-        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
-        .collect();
-
-      for (const installation of installations) {
-        if (installation.account_login === owner) {
-          if (installation.repository_selection === "all") {
-            return installation;
-          }
-          if (installation.repositories?.some((r) => r.full_name === args.repository)) {
-            return installation;
-          }
-        }
-      }
-    }
-
-    const byOwner = await ctx.db
-      .query("github_app_installations")
-      .withIndex("by_account_login", (q) => q.eq("account_login", owner))
-      .collect();
-
-    for (const installation of byOwner) {
-      if (installation.repository_selection === "all") {
-        return installation;
-      }
-      if (installation.repositories?.some((r) => r.full_name === args.repository)) {
-        return installation;
-      }
-    }
-
-    return null;
-  },
-});
+// getInstallationForRepository used to live here: a team-scoped lookup with a
+// `by_account_login` fallback that ignored team_id and returned the first match
+// from ANY team. Both callers below always know their team, so the fallback
+// could only ever fire to hand a webhook another tenant's credential.
+//
+// It is gone. `githubApp.getInstallationForRepoInTeam` answers the same question
+// with no fallback — one predicate, one definition of "covers this repo", and a
+// null when nothing in the team matches. Both callers already handle null.
 
 export const markEventProcessed = internalMutation({
   args: {

@@ -1598,7 +1598,8 @@ export default function InboxScreen() {
         visible={showNewSession}
         onClose={() => setShowNewSession(false)}
         onSessionCreated={(conversationId) => {
-          router.push(`/session/${conversationId}`);
+          // focus=1: a just-created session opens ready to type (composer focused).
+          router.push(`/session/${conversationId}?focus=1`);
         }}
       />
 

@@ -41,6 +41,17 @@ export interface InstanceState {
    * without needing a browser per agent.
    */
   tabsBySession?: Record<string, string>;
+  /**
+   * Viewport emulation per tab, so it survives between commands.
+   *
+   * `Emulation.setDeviceMetricsOverride` belongs to the CDP session that set
+   * it, and each `cast browser` process detaches on exit — so an override
+   * applied by one command is gone by the next, and the page silently snaps
+   * back to the real window. Recording it here and re-applying on every attach
+   * makes "the page is 390 wide" a property of the tab rather than of one
+   * command, which is what anyone checking a breakpoint expects.
+   */
+  viewportByTab?: Record<string, { width: number; height: number; scale: number; mobile: boolean; userAgent?: string }>;
   /** Fallback for callers with no session (a human at a terminal). */
   activeTargetId: string | null;
 }

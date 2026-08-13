@@ -59,4 +59,27 @@ describe("snippet catalog", () => {
   it("allSnippetSlugs mirrors the catalog order", () => {
     expect(allSnippetSlugs()).toEqual(SNIPPET_CATALOG.map((s) => s.slug));
   });
+
+  // Specs and bodies moved into the catalog (ct-42804) so daemon, CLI and tests
+  // read one table. These pin the shape that move promised.
+  it("carries each snippet's spec and body together (orchestration excepted)", () => {
+    for (const s of SNIPPET_CATALOG) {
+      if (s.slug === "orchestration") {
+        // Orchestration is files + hooks, not a markdown section.
+        expect(s.section).toBeUndefined();
+        continue;
+      }
+      expect(s.section).toBeDefined();
+      expect(s.section!.body).toContain(s.section!.spec.headings[0]);
+      expect(s.section!.body).toContain(s.section!.spec.endMarker);
+    }
+  });
+
+  it("never shares a heading or end marker between two specs", () => {
+    const specs = SNIPPET_CATALOG.filter((s) => s.section).map((s) => s.section!.spec);
+    const heads = specs.map((sp) => sp.headings[0]);
+    const ends = specs.map((sp) => sp.endMarker);
+    expect(new Set(heads).size).toBe(heads.length);
+    expect(new Set(ends).size).toBe(ends.length);
+  });
 });

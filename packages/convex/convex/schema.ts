@@ -2,8 +2,11 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
+import { TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
+import { capabilityTables } from "./capabilitiesSchema";
+import { googleOAuthTables } from "./googleOAuthSchema";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
 // schema, validators, the CLI daemon, and the browser store can never drift.
@@ -14,6 +17,18 @@ const agentStatusFieldValidator = v.union(
 const daemonCommandValidator = v.union(
   ...DAEMON_COMMANDS.map((c) => v.literal(c)),
 );
+const taskStatusCategoryValidator = v.union(
+  ...TASK_STATUS_CATEGORIES.map((s) => v.literal(s)),
+);
+// A team's editable task statuses (Linear-style): named statuses within the
+// six fixed categories, in display order. Absent = the shared defaults, one
+// per category. See @codecast/shared/tasks/statuses.ts for the contract.
+const teamTaskStatusesValidator = v.array(v.object({
+  id: v.string(),
+  name: v.string(),
+  category: taskStatusCategoryValidator,
+  color: v.optional(v.union(...TASK_STATUS_COLORS.map((c) => v.literal(c)))),
+}));
 
 // The entity kinds that can participate in entity-conversation links.
 const linkableEntityTypeValidator = v.union(
@@ -22,6 +37,11 @@ const linkableEntityTypeValidator = v.union(
 );
 
 export default defineSchema({
+  // Capability library tables (fleet mirror + catalog cache). Defined in their
+  // own module so the capability functions and their tests share one source;
+  // spread here because a deploy only ships what this file names.
+  ...capabilityTables,
+  ...googleOAuthTables,
   ...authTables,
   users: defineTable({
     email: v.optional(v.string()),
@@ -202,6 +222,7 @@ export default defineSchema({
     name: v.string(),
     icon: v.optional(v.string()),
     icon_color: v.optional(v.string()),
+    task_statuses: v.optional(teamTaskStatusesValidator),
     created_at: v.number(),
     invite_code: v.string(),
     invite_code_expires_at: v.optional(v.number()),
@@ -379,6 +400,10 @@ export default defineSchema({
     // is the honest staleness signal the UI shows ("12 messages since"), and the
     // only defence against a stale state reading as current.
     thread_state_msg_count: v.optional(v.number()),
+    // Declared tri-state of the work ("working" | "blocked" | "done"), written
+    // with the text. Drives the status chip on the panel and the row tint on
+    // the inbox card; absent on rows written before it existed.
+    thread_state_status: v.optional(v.string()),
     // Dedupe for the needs-input push: "<message_count>:<kind>" of the last
     // waiting episode already notified (see notifications.checkNeedsInput).
     // Mirrors the web idle-sound's notified-keys map so one episode pushes
@@ -1024,6 +1049,11 @@ export default defineSchema({
       v.literal("error"),
     )),
     fork_conversation_id: v.optional(v.id("conversations")),
+    // Thread resolution (GitHub-style). Stamped on EVERY comment of a thread
+    // when resolved, so "open" is simply "has an unstamped comment" — a reply
+    // posted after resolution reopens the thread with no root bookkeeping.
+    resolved_at: v.optional(v.number()),
+    resolved_by: v.optional(v.id("users")),
     // Client-generated id for the optimistic store flow: the inboxStore stub
     // carries it as altKey so the synced server row supersedes the stub, and the
     // server dedups on it so a dispatch-outbox retry can't double-insert.
@@ -1070,6 +1100,16 @@ export default defineSchema({
     created_at: v.number(),
     last_used_at: v.number(),
     expires_at: v.optional(v.number()),
+    // The machine this token was minted for. OPTIONAL, and the optionality is
+    // the migration: every token already in the wild carries none and keeps
+    // authenticating from anywhere, exactly as before. Only a token that names a
+    // device is checked against the device presenting it, so a token lifted off
+    // one machine stops working on another WITHOUT a backfill and without
+    // logging anybody out.
+    //
+    // Enforced in verifyApiToken, which stays a pure read — see the comment
+    // there. Binding is a comparison, not a write.
+    device_id: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_token_hash", ["token_hash"]),
@@ -1786,6 +1826,31 @@ export default defineSchema({
     .index("by_team_generated_at", ["team_id", "generated_at"])
     .index("by_actor_generated_at", ["actor_user_id", "generated_at"]),
 
+  // One row per conversation: the composer's suggested replies, generated
+  // against a specific tail message (anchor). Storing them (rather than
+  // returning from the action) makes them reactive and shared across the
+  // owner's devices, and the anchor doubles as the dedupe key — same anchor,
+  // no regeneration. An empty suggestions array is a valid, stored outcome:
+  // "the model looked and found nothing confident", which must also not retry.
+  composer_suggestions: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    anchor_message_uuid: v.string(),
+    suggestions: v.array(v.string()),
+    generated_at: v.number(),
+  }).index("by_conversation_id", ["conversation_id"]),
+
+  // Per-user mined composer-input corpus: how this user actually talks to
+  // their agents. `frequent` is ranked by count with a recency boost; `recent`
+  // preserves the newest inputs in order for style evidence. Refreshed lazily
+  // by the suggestions action when older than its TTL.
+  suggestion_profiles: defineTable({
+    user_id: v.id("users"),
+    frequent: v.array(v.object({ text: v.string(), count: v.number() })),
+    recent: v.array(v.string()),
+    generated_at: v.number(),
+  }).index("by_user_id", ["user_id"]),
+
   day_timelines: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
@@ -2168,6 +2233,39 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_short_id", ["short_id"]),
 
+  // Saved list views — a named set of filters/grouping/sort for /tasks, /docs or
+  // /plans. These used to live in the owner's client_state bag, which made them
+  // per-user by construction: there was nowhere for a teammate to read them
+  // from. As a table they can be SHARED, so a view one person tunes shows up on
+  // everyone's rail instead of being rebuilt by hand three times.
+  //
+  // `shared` is the whole access rule: private rows are owner-only, shared rows
+  // are readable by any member of the row's team. A shared row without a
+  // team_id is a contradiction (nobody to share with), so writes require one.
+  saved_views: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    name: v.string(),
+    page: v.union(v.literal("tasks"), v.literal("docs"), v.literal("plans")),
+    // The list preferences this view restores. Deliberately loose: the pages own
+    // their own pref vocabularies and grow new filters often, and a view is only
+    // ever handed straight back to the page that wrote it.
+    prefs: v.any(),
+    shared: v.optional(v.boolean()),
+    // Presentation, so a rail of views is scannable rather than a wall of text.
+    icon: v.optional(v.string()),
+    color: v.optional(v.string()),
+    // Client-minted idempotency key: an optimistic create writes a stub under
+    // this key and the server row supersedes it, so a retried create can never
+    // leave two copies of the same view.
+    client_key: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_team_id", ["team_id"])
+    .index("by_client_key", ["client_key"]),
+
   // Entity-to-conversation association. Messages stay in the existing
   // conversations/messages substrate; this row only records that a conversation
   // relates to a Task/Plan and how. Existing direct task/plan conversation
@@ -2367,14 +2465,15 @@ export default defineSchema({
       v.literal("task"),
       v.literal("chore")
     ),
-    status: v.union(
-      v.literal("backlog"),
-      v.literal("open"),
-      v.literal("in_progress"),
-      v.literal("in_review"),
-      v.literal("done"),
-      v.literal("dropped")
-    ),
+    // The status CATEGORY — one of the six canonical values every index,
+    // filter and close predicate keys on. A team's custom statuses refine it
+    // via status_id below; this field never holds a custom value.
+    status: taskStatusCategoryValidator,
+    // Id of a team-defined status within the category (teams.task_statuses).
+    // Absent = the category's default. Resolution falls back to the category
+    // default when the id no longer exists, so deleting a status needs no
+    // task migration.
+    status_id: v.optional(v.string()),
     priority: v.union(
       v.literal("urgent"),
       v.literal("high"),
@@ -2385,6 +2484,13 @@ export default defineSchema({
 
     assignee: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
+
+    // Manual list rank (fractional; unranked rows fall back to created_at,
+    // which shares the ms scale so midpoint inserts stay consistent).
+    sort_order: v.optional(v.number()),
+    // Short id of the canonical task this one duplicates; set when a human
+    // marks a duplicate (which also drops this task).
+    duplicate_of: v.optional(v.string()),
 
     model: v.optional(v.string()),
     verify_with: v.optional(v.string()),

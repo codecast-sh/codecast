@@ -20,6 +20,10 @@ import {
   DeviceDot,
   type Device,
 } from "../DeviceBadge";
+import {
+  requiresExplicitConsent,
+  type ExecutionSurface,
+} from "@codecast/shared/contracts";
 import { TokenCostBadge, type TokenCost } from "./TokenCostBadge";
 
 /**
@@ -136,14 +140,31 @@ export function kindMeta(kind: string): KindMeta | undefined {
  * What a capability can do to the machine, which is the axis that matters for
  * trust — not its kind. Prose is read into context; code runs.
  *
- * This is the RENDERED verdict. The classification itself belongs to the shared
- * contract: `EXECUTION_SURFACES` enumerates the eight surfaces a scanner
- * observes and `requiresExplicitConsent(surfaces)` decides which of them mean
- * "code", including the deliberate rule that an unclassified capability counts
- * as dangerous. Whatever adapts a catalog row for this surface sets
- * `executionSurface` from that call — never by re-deciding it here.
+ * This is the RENDERED verdict, and it is deliberately NOT called
+ * `ExecutionSurface`: the shared contract already exports that name for the
+ * eight surfaces a scanner observes. Two different concepts under one exported
+ * name is how a badge and the consent gate that protects the user end up
+ * disagreeing, so this one is named for what it is — a confidence bucket.
+ *
+ * `confidenceFromSurfaces` below is the only way to derive it from real
+ * findings; `defaultExecutionSurface` is the floor used when nothing has looked.
  */
-export type ExecutionSurface = "prose" | "code" | "unknown";
+export type ExecutionConfidence = "prose" | "code" | "unknown";
+
+/**
+ * The badge for a capability whose surfaces have actually been observed.
+ *
+ * Delegates the verdict to `requiresExplicitConsent` rather than re-deciding it,
+ * so the chip and the gate can never disagree — including on the contract's rule
+ * that an empty classification counts as dangerous. Undefined surfaces mean
+ * nothing has looked yet, which is `unknown`, not `prose`.
+ */
+export function confidenceFromSurfaces(
+  surfaces: readonly ExecutionSurface[] | undefined,
+): ExecutionConfidence {
+  if (surfaces === undefined) return "unknown";
+  return requiresExplicitConsent(surfaces) ? "code" : "prose";
+}
 
 /**
  * The floor used when nothing has looked inside — a guess about a kind, not a
@@ -158,7 +179,7 @@ export type ExecutionSurface = "prose" | "code" | "unknown";
  * like markdown from the outside. Calling those prose would be the one thing the
  * contract forbids, an unclassified capability rendered as harmless.
  */
-export function defaultExecutionSurface(kind: CapabilityKind | string): ExecutionSurface {
+export function defaultExecutionSurface(kind: CapabilityKind | string): ExecutionConfidence {
   if (kind === "mcp" || kind === "hook" || kind === "plugin") return "code";
   return kind === "snippet" ? "prose" : "unknown";
 }
@@ -260,7 +281,7 @@ export interface CatalogEntry {
   /** What a bundle contains, by kind. Only plugins normally carry this. */
   contents?: Partial<Record<CapabilityKind, number>>;
   cost?: TokenCost;
-  executionSurface?: ExecutionSurface;
+  executionSurface?: ExecutionConfidence;
   /** Every machine of yours that has it. Empty = installed nowhere. */
   installs: InstallSite[];
   updatedAt?: number;
@@ -311,7 +332,7 @@ export function ScopeChip({ scope }: { scope: CapabilityScope }) {
  * for a capability that certainly runs code, and if the two looked alike neither
  * would mean anything.
  */
-export function ExecutionChip({ surface }: { surface: ExecutionSurface }) {
+export function ExecutionChip({ surface }: { surface: ExecutionConfidence }) {
   if (surface === "prose") return null;
   if (surface === "unknown") {
     return (

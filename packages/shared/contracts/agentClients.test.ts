@@ -4,11 +4,15 @@ import {
   AGENT_LAUNCH_OPTIONS,
   launchRailOptions,
   agentSupportsExecutionTransport,
+  capabilitySupport,
   fromConvexAgentType,
   InvalidExecutionAgentTypeError,
   parseExecutionAgentClientId,
   toConvexAgentType,
+  type AgentClientId,
+  type CapabilityKindSupport,
 } from "./agentClients";
+import { CAPABILITY_KINDS, type CapabilityKind } from "./capabilities";
 
 // fromConvexAgentType is the single convex-spelling -> daemon-spelling translation.
 // The daemon launch/resume mutations (users.startSession, conversations.switchSessionAgent,
@@ -119,5 +123,184 @@ describe("new-session launch options", () => {
     // No-effort clients still get the default stop (opencode's effort list is empty).
     const opencode = launchRailOptions(AGENT_CLIENTS.opencode.modelConfig!);
     expect(opencode.efforts).toEqual(["default"]);
+  });
+});
+
+// capabilitySupport is derived from agentFileTargets — the same slots a driver
+// reads — so these tests pin the DERIVATION against a hand-written oracle of
+// what was actually verified on real machines (scratchpad research 2026-08-12/13).
+// A cell drifting here means either a target slot changed without its verified
+// fact, or the derivation broke — both are the "UI says supported, driver writes
+// nothing" bug this function exists to prevent.
+describe("capabilitySupport", () => {
+  const ALL_CLIENTS = Object.keys(AGENT_CLIENTS) as AgentClientId[];
+
+  // The full verified matrix. Load-bearing cells: claude/mcp native (claude mcp
+  // is the safe writer for ~/.claude.json), claude/plugin render (settings.json
+  // enabledPlugins is the mechanism, not `claude plugin install`), codex/hook
+  // write (installStableHookCodex already writes ~/.codex/hooks.json),
+  // cursor/subagent and cursor/hook unsupported (format/shape unverified).
+  const ORACLE: Record<AgentClientId, Record<CapabilityKind, CapabilityKindSupport>> = {
+    claude: {
+      snippet: "write",
+      skill: "write",
+      command: "unsupported",
+      subagent: "write",
+      mcp: "native",
+      plugin: "render",
+      hook: "write",
+    },
+    codex: {
+      snippet: "write",
+      skill: "write",
+      command: "unsupported",
+      subagent: "unsupported",
+      mcp: "native",
+      plugin: "unsupported",
+      hook: "write",
+    },
+    cursor: {
+      snippet: "write",
+      skill: "write",
+      command: "unsupported",
+      subagent: "unsupported",
+      mcp: "write",
+      plugin: "unsupported",
+      hook: "unsupported",
+    },
+    gemini: {
+      snippet: "unsupported",
+      skill: "unsupported",
+      command: "unsupported",
+      subagent: "unsupported",
+      mcp: "unsupported",
+      plugin: "unsupported",
+      hook: "unsupported",
+    },
+    opencode: {
+      snippet: "unsupported",
+      skill: "unsupported",
+      command: "unsupported",
+      subagent: "unsupported",
+      mcp: "unsupported",
+      plugin: "unsupported",
+      hook: "unsupported",
+    },
+    pi: {
+      snippet: "unsupported",
+      skill: "unsupported",
+      command: "unsupported",
+      subagent: "unsupported",
+      mcp: "unsupported",
+      plugin: "unsupported",
+      hook: "unsupported",
+    },
+  };
+
+  it("answers a defined support value for every (kind, client) pair", () => {
+    for (const client of ALL_CLIENTS) {
+      for (const kind of CAPABILITY_KINDS) {
+        const support = capabilitySupport(kind, client);
+        expect(["native", "write", "render", "unsupported"]).toContain(support);
+      }
+    }
+  });
+
+  it("matches the verified oracle matrix cell for cell", () => {
+    for (const client of ALL_CLIENTS) {
+      for (const kind of CAPABILITY_KINDS) {
+        expect(`${client}/${kind}=${capabilitySupport(kind, client)}`).toBe(
+          `${client}/${kind}=${ORACLE[client][kind]}`,
+        );
+      }
+    }
+  });
+
+  it("clients without verified file targets are wholly unsupported (honest absence)", () => {
+    for (const client of ["gemini", "opencode", "pi"] as const) {
+      expect(AGENT_CLIENTS[client].agentFileTargets).toBeUndefined();
+      for (const kind of CAPABILITY_KINDS) {
+        expect(capabilitySupport(kind, client)).toBe("unsupported");
+      }
+    }
+  });
+
+  // Adversarial: the strict AgentClientId type is one `as` cast away from a raw
+  // wire string ("claude_code", agent_type values convex/web pass around). An
+  // out-of-registry value must ANSWER "unsupported" — true of an unknown client
+  // — never crash with a TypeError on `.agentFileTargets` of undefined.
+  it("answers unsupported for out-of-registry strings instead of throwing", () => {
+    for (const bogus of ["claude_code", "cowork", "whatever", ""]) {
+      for (const kind of CAPABILITY_KINDS) {
+        expect(capabilitySupport(kind, bogus as AgentClientId)).toBe("unsupported");
+      }
+    }
+  });
+});
+
+// The path invariant: this module is isomorphic (Convex/browser/Hermes) and
+// cannot resolve a home directory, so every declared target must be a portable
+// TEMPLATE — user-level paths start with the `~/` placeholder, project-level
+// paths are repo-root-relative, and nothing is ever a resolved absolute path or
+// uses a platform separator.
+describe("agentFileTargets path templates", () => {
+  const withTargets = Object.values(AGENT_CLIENTS).filter((d) => d.agentFileTargets);
+
+  it("declares targets for exactly the verified clients", () => {
+    expect(withTargets.map((d) => d.id).sort()).toEqual(["claude", "codex", "cursor"]);
+  });
+
+  // The cross-client `.agents/skills` project dir is read by cursor (via
+  // sharedProject) AND codex (its project slot IS that dir). The two claims are
+  // coupled: a driver writing codex project skills silently serves cursor, and
+  // the fleet mirror attributes the dir to both. Claude reads neither the
+  // shared user dir nor the shared project dir (symlink-only) — a slot
+  // appearing there would tell a driver to write bytes claude never loads.
+  it("pins who reads the cross-client .agents/skills project dir", () => {
+    expect(AGENT_CLIENTS.cursor.agentFileTargets?.skillsDir?.sharedProject).toBe(".agents/skills");
+    expect(AGENT_CLIENTS.codex.agentFileTargets?.skillsDir?.project).toBe(".agents/skills");
+    expect(AGENT_CLIENTS.codex.agentFileTargets?.skillsDir?.sharedProject).toBeUndefined();
+    expect(AGENT_CLIENTS.claude.agentFileTargets?.skillsDir?.shared).toBeUndefined();
+    expect(AGENT_CLIENTS.claude.agentFileTargets?.skillsDir?.sharedProject).toBeUndefined();
+  });
+
+  it("user-level paths are ~/ templates; project paths are repo-relative; none absolute", () => {
+    for (const d of withTargets) {
+      const t = d.agentFileTargets!;
+      const userLevel = [
+        t.instructionFile?.user,
+        t.skillsDir?.user,
+        t.skillsDir?.shared,
+        t.agentsDir?.user,
+        t.mcpConfig?.user,
+        t.pluginSettings?.user,
+        t.hooksConfig?.path,
+      ].filter((p): p is string => p !== undefined);
+      const projectLevel = [
+        t.instructionFile?.project,
+        t.skillsDir?.project,
+        t.skillsDir?.sharedProject,
+        t.agentsDir?.project,
+        t.mcpConfig?.project,
+        t.pluginSettings?.project,
+        t.pluginSettings?.local,
+      ].filter((p): p is string => p !== undefined);
+
+      // Each client must declare at least one target on both sides — an empty
+      // agentFileTargets object would grant nothing while looking populated.
+      expect(userLevel.length).toBeGreaterThan(0);
+      expect(projectLevel.length).toBeGreaterThan(0);
+
+      for (const p of userLevel) {
+        expect(p.startsWith("~/")).toBe(true);
+      }
+      for (const p of projectLevel) {
+        expect(p.startsWith("~")).toBe(false);
+      }
+      for (const p of [...userLevel, ...projectLevel]) {
+        expect(p.startsWith("/")).toBe(false);
+        expect(p.includes("\\")).toBe(false);
+      }
+    }
   });
 });

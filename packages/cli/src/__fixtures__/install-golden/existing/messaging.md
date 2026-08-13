@@ -3,22 +3,6 @@
 User prose that lives ABOVE every codecast block. An install must leave this
 byte-identical.
 
-## House rules
-
-A user's own section sitting BETWEEN two codecast blocks. Nothing may move it.
-
-## Referencing objects
-
-STALE REFERENCES BODY — the shared section that ten of the eleven snippets
-refresh as a side effect of installing. The one that does not (`visual`) leaves
-this text exactly as it stands.
-<!-- /codecast-references -->
-
-## Deploy notes
-
-The last user section. It follows the codecast blocks, so anything that cuts a
-block by "everything to end of file" destroys this paragraph.
-
 ## Messaging
 
 `cast send <session_id> "<text>"` reaches any session — old or active — by its short ID. Each is a teammate: be the boss (hand a dormant one a task; it resumes with full context and runs it) or a peer (trade updates on a shared problem). Ask one to ping you when it's done or blocked, then act on the reply yourself. Collaboration is the default, but interruptions aren't free — use judgment.
@@ -51,3 +35,19 @@ cast kill <session_id>         # Tear the agent down, mark completed, cancel its
 
 Dismiss is reversible and keeps the agent alive; kill is the deliberate "done with it". When you hide or kill sessions on the human's behalf, tell them which ones and why.
 <!-- /codecast-messaging -->
+
+## House rules
+
+A user's own section sitting BETWEEN two codecast blocks. Nothing may move it.
+
+## Referencing objects
+
+STALE REFERENCES BODY — the shared section that ten of the eleven snippets
+refresh as a side effect of installing. The one that does not (`visual`) leaves
+this text exactly as it stands.
+<!-- /codecast-references -->
+
+## Deploy notes
+
+The last user section. It follows the codecast blocks, so anything that cuts a
+block by "everything to end of file" destroys this paragraph.

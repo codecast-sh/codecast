@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./functions";
+import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
@@ -179,7 +179,14 @@ export async function verifyApiToken(
   // read. Patching it forced OCC conflicts across every in-flight write, and
   // under load that compounded into a total write-path stall. Auth is now a
   // pure read; only daemonHeartbeat (one call / 30s) refreshes last_used_at.
-  updateLastUsed: boolean = false
+  updateLastUsed: boolean = false,
+  // The device presenting the token, when the caller knows it. A token that
+  // names no device is unbound and authenticates from anywhere — that is every
+  // token minted before this field existed, and the reason no backfill is
+  // needed. A BOUND token presented without a device_id is also rejected:
+  // otherwise the check would be opt-out by omission, and a thief simply
+  // stops sending the header.
+  presentedDeviceId?: string
 ): Promise<{ userId: Id<"users">; tokenId: Id<"api_tokens"> } | null> {
   const tokenHash = await hashToken(token);
   const tokenDoc = await ctx.db
@@ -192,6 +199,13 @@ export async function verifyApiToken(
   }
 
   if (tokenDoc.expires_at && tokenDoc.expires_at < Date.now()) {
+    return null;
+  }
+
+  // A comparison, never a write: this function is deliberately a pure read (see
+  // the note on updateLastUsed above), so binding must not add a stamp, a
+  // counter or a last-seen device to the hot doc.
+  if (tokenDoc.device_id && tokenDoc.device_id !== presentedDeviceId) {
     return null;
   }
 
@@ -265,5 +279,35 @@ export const exchangeSetupToken = internalMutation({
       team_id: userDoc?.team_id,
       convex_url: CONVEX_URL,
     };
+  },
+});
+
+/**
+ * Is this token allowed to act from the device presenting it?
+ *
+ * Split out from `verifyApiToken` so `cliRoute` can enforce the binding once for
+ * every CLI endpoint, instead of relying on each of the ~100 handlers to
+ * remember. A check a caller can forget is a check that will be forgotten, and
+ * the one that gets forgotten is always the newest route.
+ *
+ * Returns true for an unknown token as well: this answers only the device
+ * question, and the handler's own `verifyApiToken` is what rejects a bad token.
+ * Returning false here would turn a bad token into a device error and confuse
+ * the diagnosis.
+ */
+export const deviceBindingAllows = internalQuery({
+  args: {
+    api_token: v.string(),
+    device_id: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<boolean> => {
+    const tokenHash = await hashToken(args.api_token);
+    const tokenDoc = await ctx.db
+      .query("api_tokens")
+      .withIndex("by_token_hash", (q: any) => q.eq("token_hash", tokenHash))
+      .first();
+    if (!tokenDoc) return true;
+    if (!tokenDoc.device_id) return true; // unbound: every token minted before this existed
+    return tokenDoc.device_id === args.device_id;
   },
 });
