@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import {
   AGENT_MODEL_CONFIG,
   modelAgentKey,
+  findModelOption,
   isDynamicModelKey,
   dynamicModelOption,
   launchRailOptions,
@@ -61,6 +64,37 @@ function ModelCommandWatch({ conversationId }: { conversationId: string }) {
   return null;
 }
 
+/**
+ * The user's codecast-wide default model for one agent client, with a
+ * local-first setter. The default lives on the user row (users.default_models)
+ * and is applied server-side by enqueueStartSession, so every new session
+ * launches with an explicit model flag. The optimistic write goes through the
+ * currentUser singleton sync (the mutation's echo carries the same value);
+ * on failure the snapshot is synced back and the error toasted.
+ */
+function useDefaultModelPin(agentType: string | undefined) {
+  const clientId = modelAgentKey(agentType);
+  const defaultKey = useInboxStore(
+    (s) => ((s as any).currentUser?.default_models ?? {})[clientId] as string | undefined,
+  );
+  const update = useMutation(api.users.updateDefaultModel);
+  const setDefault = (key: string | null) => {
+    const st = useInboxStore.getState() as any;
+    const cur = st.currentUser;
+    if (cur) {
+      const merged: Record<string, string> = { ...(cur.default_models ?? {}) };
+      if (key === null) delete merged[clientId];
+      else merged[clientId] = key;
+      st.syncTable("currentUser", { ...cur, default_models: merged });
+    }
+    update({ agent: clientId, model: key }).catch((e: any) => {
+      notifyToast(`Failed to save default model: ${e?.message ?? e}`);
+      if (cur) (useInboxStore.getState() as any).syncTable("currentUser", cur);
+    });
+  };
+  return { defaultKey, setDefault };
+}
+
 export function ModelEffortMenu({
   agentType,
   modelKey,
@@ -80,6 +114,7 @@ export function ModelEffortMenu({
 }) {
   const { dynamic, featured, all, menuRows } = useDynamicModels(agentType, ownerDeviceId);
   const [search, setSearch] = useState("");
+  const { defaultKey, setDefault } = useDefaultModelPin(agentType);
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
   if (!cfg) return null;
   // Dynamic clients: Default + the curated featured head; typing searches the
@@ -101,19 +136,47 @@ export function ModelEffortMenu({
   // dynamic rows on a path-suffix match too.
   const isCurrent = (key: string) =>
     key === modelKey || (dynamic && modelKey !== "default" && key.endsWith(`/${modelKey}`));
-  const modelRow = (m: ModelOption) => (
-    <DropdownMenuItem
-      key={m.key}
-      onSelect={() => { if (!isCurrent(m.key)) onSelect({ model: m.key }); }}
-      className="flex items-start gap-2"
-    >
-      <span className={`mt-0.5 w-3 text-center text-xs ${isCurrent(m.key) ? "text-sol-cyan" : "text-transparent"}`}>●</span>
-      <span className="flex flex-col min-w-0">
-        <span className={`text-xs ${isCurrent(m.key) ? "text-sol-text font-medium" : "text-sol-text-secondary"}`}>{m.label}</span>
-        {m.hint && <span className="text-[10px] text-sol-text-dim truncate">{m.hint}</span>}
-      </span>
-    </DropdownMenuItem>
-  );
+  const modelRow = (m: ModelOption) => {
+    // Only launchable options can be the codecast default (the same bar the
+    // server holds): menu:<label> rows and Sonnet 1M have no launch alias.
+    const pinnable = m.key !== "default" && !!m.cliAlias;
+    const isDefault = m.key === defaultKey;
+    // The "Default" row resolves to the user's codecast default at launch —
+    // say which model that is.
+    const hint = m.key === "default" && defaultKey
+      ? `Launches ${findModelOption(agentType, defaultKey)?.label ?? defaultKey} (your default)`
+      : m.hint;
+    return (
+      <DropdownMenuItem
+        key={m.key}
+        onSelect={() => { if (!isCurrent(m.key)) onSelect({ model: m.key }); }}
+        className="group flex items-start gap-2"
+      >
+        <span className={`mt-0.5 w-3 text-center text-xs ${isCurrent(m.key) ? "text-sol-cyan" : "text-transparent"}`}>●</span>
+        <span className="flex flex-col min-w-0 grow">
+          <span className={`text-xs ${isCurrent(m.key) ? "text-sol-text font-medium" : "text-sol-text-secondary"}`}>{m.label}</span>
+          {hint && <span className="text-[10px] text-sol-text-dim truncate">{hint}</span>}
+        </span>
+        {pinnable && (
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setDefault(isDefault ? null : m.key);
+            }}
+            className={`mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[9px] whitespace-nowrap transition-all ${
+              isDefault
+                ? "border-sol-cyan/50 text-sol-cyan"
+                : "border-sol-border/40 text-sol-text-dim opacity-0 group-hover:opacity-100 hover:text-sol-text hover:border-sol-border"
+            }`}
+            title={isDefault ? "Clear default — new sessions fall back to the agent's own setting" : "Launch every new session with this model"}
+          >
+            {isDefault ? "default ✓" : "set default"}
+          </button>
+        )}
+      </DropdownMenuItem>
+    );
+  };
   return (
     <DropdownMenuContent align="end" className="w-72 max-w-[calc(100vw-1rem)]">
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Model</DropdownMenuLabel>
