@@ -1,4 +1,5 @@
 import type { AgentClientId } from "@codecast/shared/contracts";
+import { extractInlineImages } from "./inlineImage.js";
 import { CLIENT_ERROR_BANNER_PREFIX } from "@codecast/shared/contracts";
 
 type ContentBlock =
@@ -233,6 +234,17 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
                   });
                 }
               }
+            }
+            // A shell command can declare an image it just wrote (see
+            // inlineImage.ts). Lifting it here means a `cast browser shot`
+            // renders in the thread exactly like an extension screenshot,
+            // through the same images[] → upload → ToolBlock path.
+            if (typeof toolResultContent === "string") {
+              const inline = extractInlineImages(toolResultContent);
+              for (const localPath of inline.paths) {
+                images.push({ mediaType: "image/png", localPath, toolUseId: block.tool_use_id });
+              }
+              toolResultContent = inline.text;
             }
             toolResults.push({
               toolUseId: block.tool_use_id,

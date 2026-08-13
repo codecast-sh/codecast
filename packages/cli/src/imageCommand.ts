@@ -84,7 +84,9 @@ async function loadTargetBytes(target: string): Promise<Buffer> {
 // Oversized screenshot rescue: Retina PNG captures routinely exceed the 5MB
 // upload cap. On macOS, sips (built-in) re-encodes to a bounded JPEG; two
 // passes, progressively smaller, before giving up.
-function downscaleWithSips(bytes: Buffer, mediaType: string): Buffer | null {
+/** Exported so screenshot capture can shrink an oversized frame with the same
+ *  ladder the upload path uses, instead of growing a second one. */
+export function downscaleWithSips(bytes: Buffer, mediaType: string): Buffer | null {
   if (process.platform !== "darwin" || !DOWNSCALABLE_TYPES.has(mediaType)) return null;
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "cast-image-"));
   const src = path.join(scratch, "in");
