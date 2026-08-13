@@ -33,6 +33,7 @@ import { Badge } from "../../../components/ui/badge";
 import { TaskStatusBadge } from "../../../components/TaskStatusBadge";
 import { getLabelColor } from "../../../lib/labelColors";
 import Link from "next/link";
+import { projectDotClass } from "../../../lib/projectColors";
 import {
   Circle,
   CircleDot,
@@ -588,6 +589,14 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   const currentUser = useQuery(api.users.getCurrentUser);
   const teamMembers = useQuery(api.teams.getTeamMembers, taskTeamId ? { team_id: taskTeamId as any } : "skip");
   const teamInfo = useQuery(api.teams.getTeam, taskTeamId ? { team_id: taskTeamId as any } : "skip");
+  // The project this task is filed under — omitted when the surface around it is
+  // already that project, so the chip never repeats the breadcrumb above it.
+  const allProjects = useInboxStore((s) => s.projects);
+  const taskProject = useMemo(() => {
+    const pid = (data as any)?.project_id;
+    if (!pid || params?.id === pid) return null;
+    return (allProjects as any)[pid] ?? null;
+  }, [allProjects, data, params?.id]);
   // Derived so an optimistic re-assignment shows instantly (see resolveAssigneeInfo).
   const assigneeInfo = resolveAssigneeInfo((data as any)?.assignee, (data as any)?.assignee_info, teamMembers as any[], currentUser);
   const [comment, setComment] = useState("");
@@ -830,6 +839,19 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               </button>
               {teamInfo && (
                 <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px] truncate min-w-0">{teamInfo.name}</span>
+              )}
+              {/* Where this task lives. A link, because the project is a place
+                  you can work from — and suppressed when you are already inside
+                  that project, where the breadcrumb overhead has just said so. */}
+              {taskProject && (
+                <Link
+                  href={`/projects/${taskProject._id}`}
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 text-[10px] text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors truncate min-w-0"
+                  title={`Open project: ${taskProject.title}`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projectDotClass(taskProject)}`} />
+                  <span className="truncate">{taskProject.title}</span>
+                </Link>
               )}
               {!taskTeamId && (
                 <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-[10px] whitespace-nowrap flex-shrink-0">Personal</span>

@@ -1109,7 +1109,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   return (
     <>
     <GenericListView<TaskItem>
-          activeItemId={projectId ? undefined : (params?.id as string | undefined)}
+          activeItemId={(projectId ? params?.taskId : params?.id) as string | undefined}
           paletteTargetType="task"
           title={projectId ? "Project tasks" : "Tasks"}
           tabs={[
@@ -1215,7 +1215,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
           disableKeyboard={showCreate}
           renderRow={renderTaskRow}
           getItemId={(t) => t._id}
-          getItemRoute={(t) => `/tasks/${t._id}`}
+          getItemRoute={(t) => (projectId ? `/projects/${projectId}/${t._id}` : `/tasks/${t._id}`)}
           getSearchText={(t) => `${t.short_id} ${t.title}`}
           emptyIcon={<Circle className="w-8 h-8 opacity-30" />}
           emptyMessage="No tasks found"
