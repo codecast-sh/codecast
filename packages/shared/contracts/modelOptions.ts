@@ -22,27 +22,25 @@ export interface ModelOption {
   /** Only reachable via the in-place /model picker — hidden from new-session
    * pickers. (Sonnet 1M's launch alias is `sonnet[1m]`, which both the daemon's
    * arg allowlist and shell globbing reject; `--model sonnet-1m` silently
-   * launches a bogus "custom model".) */
+   * launches a bogus "custom model". Its one-shot form is equally unreliable —
+   * `/model sonnet[1m]` echoed plain "Sonnet 5" on CC 2026-08-12 — so 1M stays
+   * on the picker driver.) */
   midSessionOnly?: boolean;
-  /** Mid-session switch by injecting the one-shot `/model <cliAlias>` command
-   * instead of driving the picker. The one-shot also saves the model as the
-   * user's GLOBAL default for new sessions (verified live 2026-08-12) — only
-   * set this where that side effect is the intent, as it is for Fable. */
-  oneShotSwitch?: boolean;
 }
 
 export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your saved default model", menuMatch: "^Default\\b" },
-  { key: "fable", label: "Fable", hint: "Most capable, ~2× limit burn", menuMatch: "^Fable\\b", cliAlias: "fable", oneShotSwitch: true },
+  { key: "fable", label: "Fable", hint: "Most capable, ~2× limit burn", menuMatch: "^Fable\\b", cliAlias: "fable" },
   { key: "opus", label: "Opus", hint: "Best for everyday, complex tasks", menuMatch: "^Opus\\b", cliAlias: "opus" },
   { key: "sonnet", label: "Sonnet", hint: "Efficient for routine tasks", menuMatch: "^Sonnet(?!\\s*\\(1M)", cliAlias: "sonnet" },
   { key: "sonnet-1m", label: "Sonnet 1M", hint: "Sonnet with 1M context", menuMatch: "^Sonnet\\s*\\(1M", midSessionOnly: true },
   { key: "haiku", label: "Haiku", hint: "Fastest for quick answers", menuMatch: "^Haiku\\b", cliAlias: "haiku" },
 ];
 
-// Claude Code's /model picker exposes exactly these four stops (←/→, wrapping).
-// `/effort` accepts more (xhigh/auto) but persists a GLOBAL default, so the
-// picker path — and therefore this list — is what mid-session switching uses.
+// Claude Code's /model picker exposes exactly these four stops (←/→, wrapping);
+// the one-shot `/effort <x>` accepts them all and is session-only (verified
+// live 2026-08-13: "Set effort level to max (this session only)", no
+// settings.json write), so mid-session switching injects the one-shot.
 export const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "max"] as const;
 export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
 

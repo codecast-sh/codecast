@@ -6,10 +6,10 @@ import type { PaginationOptions, PaginationResult, RegisteredQuery } from "conve
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots } from "./devices";
-import { fromConvexAgentType } from "@codecast/shared/contracts";
+import { fromConvexAgentType, AGENT_CLIENTS, findModelOption } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
-import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
+import { hasRecentPendingDaemonCommand, enqueueResumeSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { ccAccountsValidator } from "./ccAccountsShared";
@@ -722,38 +722,15 @@ export const resumeSession = mutation({
       return { skipped: true, reason: "fresh_session_no_messages" } as const;
     }
 
-    const agentType = fromConvexAgentType(conversation.agent_type);
-    const pendingCommands = await ctx.db
-      .query("daemon_commands")
-      .withIndex("by_user_pending", (q) => q.eq("user_id", authUserId).eq("executed_at", undefined))
-      .collect();
+    const { deduplicated, command_id } = await enqueueResumeSession(ctx, conversation);
 
     // Re-queue any stranded messages so the resume actually delivers them. A message that
     // failed to reach a dead session sits as injected/failed/undeliverable; without this it
     // stays stuck and the user has to manually resend. restartSession already does this — the
     // missing call here was the asymmetry that left "Force resume" doing nothing visible.
-    if (hasRecentPendingDaemonCommand(pendingCommands as any, {
-      conversationId: args.conversation_id.toString(),
-      command: "resume_session",
-    })) {
-      await resetConversationPendingMessages(ctx, args.conversation_id);
-      return { deduplicated: true };
-    }
-
-    const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: authUserId,
-      command: "resume_session",
-      args: JSON.stringify({
-        session_id: conversation.session_id,
-        agent_type: agentType,
-        conversation_id: args.conversation_id,
-        project_path: conversation.project_path || conversation.git_root,
-      }),
-      created_at: Date.now(),
-    });
-
+    // Runs on the dedup path too: the queued resume still needs its messages back.
     await resetConversationPendingMessages(ctx, args.conversation_id);
-    return { command_id: commandId };
+    return deduplicated ? { deduplicated: true } : { command_id };
   },
 });
 
@@ -900,6 +877,34 @@ export const updateNotificationPreferences = mutation({
       updateData.muted_members = args.muted_members;
     }
     await ctx.db.patch(userId, updateData);
+  },
+});
+
+// Set or clear the user's default model for one agent client. The value is a
+// shared-contract option key ("fable"), validated against the same registry
+// dispatch validates launch picks with; null clears the default (fall back to
+// the agent's own saved default). Merge per key — saving claude's default must
+// not wipe codex's.
+export const updateDefaultModel = mutation({
+  args: {
+    agent: v.string(),
+    model: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    if (!(args.agent in AGENT_CLIENTS)) throw new Error(`Unknown agent client: ${args.agent}`);
+    if (args.model !== null) {
+      const opt = findModelOption(args.agent, args.model);
+      // Launchability is the bar: a default the daemon can't put on the launch
+      // line (menu keys, Sonnet 1M) would silently degrade to "no flag".
+      if (!opt?.cliAlias) throw new Error(`Model ${args.model} cannot be a launch default`);
+    }
+    const user = await ctx.db.get(userId);
+    const merged: Record<string, string> = { ...(user?.default_models ?? {}) };
+    if (args.model === null) delete merged[args.agent];
+    else merged[args.agent] = args.model;
+    await ctx.db.patch(userId, { default_models: merged });
   },
 });
 

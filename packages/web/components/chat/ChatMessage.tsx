@@ -1,13 +1,15 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2 } from "lucide-react";
-import { MD_COMPONENTS, MD_REHYPE_PLUGINS, MD_REMARK_PLUGINS } from "../tools/MarkdownRenderer";
+import { remarkSanitizeInvisibleUnicode } from "../tools/MarkdownRenderer";
+import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../ConversationView";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { remarkChatMentions } from "../../lib/remarkChatMentions";
 import { compactAge } from "../../lib/threadState";
 import { copyToClipboard } from "../../lib/utils";
 import type { ChatMessageView } from "./chatTypes";
 import "./chat.css";
+import "../editor/editor.css";
 
 // One chat message.
 //
@@ -64,6 +66,8 @@ export type ChatMessageProps = {
   knownHandles?: Set<string>;
   /** The viewer's handles, for the louder self-mention treatment. */
   selfHandles?: Set<string>;
+  /** handle → display name for the rendered chip. */
+  handleNames?: Map<string, string>;
   /** Passed in rather than read from Date.now() so a virtualized list re-renders
    *  on a coarse clock instead of per row. */
   now: number;
@@ -93,6 +97,7 @@ export const ChatMessage = memo(function ChatMessage({
   channelId,
   knownHandles,
   selfHandles,
+  handleNames,
   now,
   mine,
   onOpenThread,
@@ -109,27 +114,28 @@ export const ChatMessage = memo(function ChatMessage({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
 
-  // Registered as a [plugin, options] tuple, not as remarkChatMentions(opts):
+  // The SESSION user-message pipeline (USER_MD_REMARK: entity pills + tight
+  // newlines via remark-breaks + pasted tags shown literally), not the document
+  // pipeline — a chat message is typed text, exactly like a session prompt, and
+  // rendering the two through different codepaths is how "@x on its own airy
+  // paragraph" happened here while sessions rendered the same text tight.
+  //
+  // On top of it: the invisible-Unicode sanitizer (teammate- and agent-authored
+  // content is the last place to drop it) and the chat mention highlighter —
+  // registered as a [plugin, options] tuple, not as remarkChatMentions(opts):
   // unified calls each array entry to OBTAIN the transformer, so handing it an
   // already-built transformer makes it run with the options slot as the tree.
-  //
-  // The pair is a MUTABLE tuple: unified's Pluggable type does not accept a
-  // readonly one, so `as const` here made the whole array unassignable.
-  //
-  // Built from MD_REMARK_PLUGINS, not from entityRemarkPlugins: that list also
-  // carries the invisible-Unicode sanitizer every other markdown surface gets,
-  // which rewrites bidi overrides into visible tokens so text cannot render in a
-  // different order than it reads. Chat is the surface whose content is typed by
-  // teammates and produced by agents — the last place to drop it.
+  // (Mutable tuple: unified's Pluggable type refuses a readonly one.)
   const remarkPlugins = useMemo(
     () => [
-      ...MD_REMARK_PLUGINS,
-      [remarkChatMentions, { known: knownHandles, self: selfHandles }] as [
+      ...USER_MD_REMARK,
+      remarkSanitizeInvisibleUnicode,
+      [remarkChatMentions, { known: knownHandles, self: selfHandles, names: handleNames }] as [
         typeof remarkChatMentions,
-        { known?: Set<string>; self?: Set<string> },
+        { known?: Set<string>; self?: Set<string>; names?: Map<string, string> },
       ],
     ],
-    [knownHandles, selfHandles],
+    [knownHandles, selfHandles, handleNames],
   );
 
   const rowRef = useRef<HTMLDivElement | null>(null);
@@ -282,8 +288,8 @@ export const ChatMessage = memo(function ChatMessage({
           <div className="ch-msg-body">
             <ReactMarkdown
               remarkPlugins={remarkPlugins}
-              rehypePlugins={MD_REHYPE_PLUGINS}
-              components={MD_COMPONENTS}
+              rehypePlugins={MESSAGE_MD_REHYPE}
+              components={MESSAGE_MD_COMPONENTS}
             >
               {message.content}
             </ReactMarkdown>

@@ -4,7 +4,7 @@ import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { isTeamMember } from "./privacy";
 import { requireUser } from "./lib/auth";
-import { requireTeamAdmin, requireTeamMembership } from "./lib/access";
+import { requireTeamAdmin, requireTeamMembership, effectiveTeamForResource } from "./lib/access";
 
 const GITHUB_API_BASE = "https://api.github.com";
 
@@ -250,46 +250,101 @@ export const removeInstallation = internalMutation({
   },
 });
 
+// ── Resolving an installation for a repository ──
+//
+// An installation is a credential: resolving one is what lets a caller mint a
+// token for the repositories it covers. So the question every lookup here
+// answers is "which installations may this caller reach", never "which
+// installation matches this owner name". Both entry points below used to end in
+// a `by_account_login` scan that ignored team_id entirely and returned the first
+// match from ANY team — one team's repo work could pick up another team's
+// credential. That fallback is gone; a lookup that finds nothing in scope now
+// returns null.
+//
+// Two entry points, one predicate, because callers arrive with different
+// principals: a webhook knows the team a repository belongs to and has no user,
+// while a user-facing path knows the user and may not know the team.
+
+/** Does this installation grant access to this repository at all? */
+function installationCoversRepo(
+  installation: { account_login: string; repository_selection: string; repositories?: Array<{ full_name: string }> },
+  repository: string,
+): boolean {
+  const [owner] = repository.split("/");
+  if (installation.account_login !== owner) return false;
+  if (installation.repository_selection === "all") return true;
+  return !!installation.repositories?.some((r) => r.full_name === repository);
+}
+
+/** Every installation that covers `repository`, before any scoping. */
+async function installationsCoveringRepo(ctx: { db: any }, repository: string): Promise<any[]> {
+  const [owner] = repository.split("/");
+  const byOwner = await ctx.db
+    .query("github_app_installations")
+    .withIndex("by_account_login", (q: any) => q.eq("account_login", owner))
+    .collect();
+  return byOwner.filter((installation: any) => installationCoversRepo(installation, repository));
+}
+
+/**
+ * The governing team of an installation. Read through the access layer rather
+ * than off the row so this follows the same rule as every other resource lookup;
+ * an installation links no conversation, so today it resolves to its team_id.
+ */
+async function installationTeam(ctx: { db: any }, installation: any): Promise<Id<"teams"> | undefined> {
+  return await effectiveTeamForResource(ctx, installation);
+}
+
+/**
+ * The installation `team_id` owns for `repository`, or null.
+ *
+ * For server paths that already know which team the repository work belongs to
+ * and have no user to check — webhook processing is the case that exists. The
+ * caller is responsible for having authorized that team; this function's job is
+ * that the answer never comes from outside it.
+ */
+export const getInstallationForRepoInTeam = internalQuery({
+  args: {
+    repository: v.string(),
+    team_id: v.id("teams"),
+  },
+  handler: async (ctx, args) => {
+    for (const installation of await installationsCoveringRepo(ctx, args.repository)) {
+      const team = await installationTeam(ctx, installation);
+      if (team && String(team) === String(args.team_id)) return installation;
+    }
+    return null;
+  },
+});
+
+/**
+ * The installation that lets `user_id` act on `repository`, or null.
+ *
+ * `user_id` is required because an internalQuery carries no identity of its own:
+ * a caller that cannot name a principal cannot be scoped, and there is no safe
+ * default. `team_id` narrows the search to one workspace and fails loudly if the
+ * caller is not in it; omitting it searches every team the caller belongs to.
+ */
 export const getInstallationForRepo = internalQuery({
   args: {
     repository: v.string(),
+    user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
-    const [owner] = args.repository.split("/");
-
-    let query = ctx.db.query("github_app_installations");
-
+    // A named team is an assertion about the caller's workspace, so verify it
+    // before it can narrow anything — a caller naming a team they are not in is
+    // a bug or an attack, not a miss.
     if (args.team_id) {
-      const teamId = args.team_id;
-      const installations = await query
-        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
-        .collect();
-
-      for (const installation of installations) {
-        if (installation.account_login === owner) {
-          if (installation.repository_selection === "all") {
-            return installation;
-          }
-          if (installation.repositories?.some((r) => r.full_name === args.repository)) {
-            return installation;
-          }
-        }
-      }
+      await requireTeamMembership(ctx, args.user_id, args.team_id);
     }
 
-    const byOwner = await ctx.db
-      .query("github_app_installations")
-      .withIndex("by_account_login", (q) => q.eq("account_login", owner))
-      .collect();
-
-    for (const installation of byOwner) {
-      if (installation.repository_selection === "all") {
-        return installation;
-      }
-      if (installation.repositories?.some((r) => r.full_name === args.repository)) {
-        return installation;
-      }
+    for (const installation of await installationsCoveringRepo(ctx, args.repository)) {
+      const team = await installationTeam(ctx, installation);
+      if (!team) continue;
+      if (args.team_id && String(team) !== String(args.team_id)) continue;
+      if (!(await isTeamMember(ctx, args.user_id, team))) continue;
+      return installation;
     }
 
     return null;
@@ -414,14 +469,22 @@ export const fetchInstallationDetails = internalAction({
   },
 });
 
+/**
+ * A repository token for `user_id`, or null when they can reach no installation
+ * covering that repository. The principal is required and passed straight
+ * through: minting a token is exactly as privileged as resolving the
+ * installation, so both are scoped by the same check.
+ */
 export const getTokenForRepository = internalAction({
   args: {
     repository: v.string(),
+    user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args): Promise<{ token: string; type: "installation" | "user" } | null> => {
     const installation = await ctx.runQuery(internal.githubApp.getInstallationForRepo, {
       repository: args.repository,
+      user_id: args.user_id,
       team_id: args.team_id,
     });
 

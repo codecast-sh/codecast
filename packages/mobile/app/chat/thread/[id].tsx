@@ -83,6 +83,13 @@ export default function ChatThreadScreen() {
     return out;
   }, [teamMembers]);
 
+  // The gate for rendered mentions: exactly the handles the strip offers and
+  // the server resolves. One vocabulary end to end.
+  const knownHandles = useMemo(
+    () => new Set(mentionCandidates.map((c) => c.handle.toLowerCase())),
+    [mentionCandidates],
+  );
+
   const [pending, setPending] = useState<PendingSend[]>([]);
   const [draft, setDraft] = useState('');
 
@@ -262,6 +269,7 @@ export default function ChatThreadScreen() {
                 grouped={item.grouped}
                 now={now}
                 inThread
+                knownMentionHandles={knownHandles}
                 onToggleReaction={(mid, emoji) => void toggleReaction({ message_id: mid as any, emoji })}
                 onStopAgent={(mid) => void stopAnchor({ message_id: mid as any })}
               />
@@ -272,7 +280,7 @@ export default function ChatThreadScreen() {
           ListFooterComponent={
             thread?.root ? (
               <RNView style={styles.rootWrap}>
-                <MessageRow message={toView(thread.root)} now={now} inThread />
+                <MessageRow message={toView(thread.root)} now={now} inThread knownMentionHandles={knownHandles} />
                 <RNView style={styles.rootRule} />
               </RNView>
             ) : null

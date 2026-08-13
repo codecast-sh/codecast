@@ -1434,83 +1434,32 @@ pre[class*="language-"] {
   transition: top 140ms ease;
 }
 
-/* Rail footer: hangs under the last card and answers "now what?" — the keys that
-   move around the quotes, and the two ways to finish (write a reply around them,
-   or send them as they are). */
+/* Rail footer: one quiet line under the last card pointing at the composer. The
+   quotes attach themselves on send, so the rail only has to answer "where do I
+   type?" — it is a hint that happens to be clickable, not a toolbar. */
 .cc-rail-foot {
   position: absolute;
   left: 0;
-  right: 0;
-  padding-left: 0.55rem;
-  border-left: 2px solid transparent;
-  transition: top 140ms ease;
-}
-.cc-rail-foot-keys {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.1rem 0.5rem;
-  color: var(--sol-text-dim);
-  font-size: 0.66rem;
-}
-.cc-rail-foot-keys span {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.18rem;
-}
-.cc-rail-foot-label {
-  color: var(--sol-text-muted);
-  font-size: 0.68rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.cc-rail-foot-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem;
-  margin-top: 0.3rem;
-}
-/* Send is the primary way out of a batch, so it is the one solid control in the
-   rail; Write reply is the quieter alternative beside it. */
-.cc-rail-foot-send {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.2rem 0.6rem;
-  font-size: 0.72rem;
-  font-weight: 600;
-  border: none;
-  border-radius: 5px;
-  background: var(--sol-cyan);
-  color: var(--sol-bg);
-  cursor: pointer;
-  transition: filter 120ms;
-}
-.cc-rail-foot-send:hover {
-  filter: brightness(1.12);
-}
-.cc-rail-foot-write {
+  /* Shrink to the content, never stretch: MenuKeyCaps carries an `ml-auto` for
+     menu rows, and in a full-width flex line that margin shoves the keycaps to
+     the far edge. With max-content there is no free space for it to claim. */
+  width: max-content;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  padding: 0.2rem 0.3rem;
-  font-size: 0.72rem;
-  font-weight: 500;
+  padding: 0.15rem 0.3rem 0.15rem 0.55rem;
   border: none;
-  border-radius: 5px;
   background: transparent;
-  color: var(--sol-text-muted);
+  color: var(--sol-text-dim);
+  font: inherit;
+  font-size: 0.68rem;
+  text-align: left;
   cursor: pointer;
-  transition: background 120ms, color 120ms;
+  transition: top 140ms ease, color 120ms;
 }
-.cc-rail-foot-write:hover {
-  background: var(--sol-bg-highlight);
+.cc-rail-foot:hover {
   color: var(--sol-text);
-}
-/* Key hints sit last and dimmest — sugar, not the instruction. */
-.cc-rail-foot .cc-rail-foot-keys {
-  margin-top: 0.4rem;
 }
 
 /* Soft highlight of the block a comment points at — sits BEHIND the text. In inline
@@ -1727,31 +1676,6 @@ pre[class*="language-"] {
 }
 .cc-comment-editor-footer {
   margin-top: 0.2rem;
-}
-/* Walk between your notes without leaving the keyboard. Sits above the
-   Cancel/Save row so "where am I in the batch" reads before "am I done". */
-.cc-comment-editor-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.3rem;
-  margin-top: 0.15rem;
-  padding-top: 0.25rem;
-  border-top: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
-}
-.cc-comment-editor-nav .cc-comment-btn {
-  padding: 0.1rem 0.25rem;
-  gap: 0.15rem;
-}
-.cc-comment-editor-nav .cc-comment-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-  background: transparent;
-}
-.cc-comment-editor-count {
-  color: var(--sol-text-dim);
-  font-size: 0.66rem;
-  white-space: nowrap;
 }
 .cc-comment-chip .cc-comment-actions {
   margin-top: 0.3rem;

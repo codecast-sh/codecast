@@ -158,7 +158,7 @@ import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveR
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID } from "@codecast/shared/contracts";
-import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, MODEL_SET_ECHO_RE, countModelSetEchoes, isSwitchConfirmDialog, isStrandedModelCommand } from "./modelPicker";
+import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, countModelSetEchoes, countEffortSetEchoes, isSwitchConfirmDialog, isStrandedSlashCommand } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
@@ -2790,8 +2790,9 @@ async function executeRemoteCommand(
       case "stream_pane": {
         // A browser on another machine wants to watch a pane here. It can't
         // reach the loopback PTY, so publish the pane's screen to the relay
-        // instead — read-only by construction, and it stops on its own when
-        // the viewer's lease lapses (packages/cli/src/terminal/paneStream.ts).
+        // instead, and take keystrokes back on the same request. It stops on
+        // its own when the viewer's lease lapses; the lease is also what
+        // authorizes input (packages/cli/src/terminal/paneStream.ts).
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const target = typeof parsed.target === "string" ? parsed.target : "";
         if (!isValidPaneTarget(target)) {
@@ -2817,7 +2818,7 @@ async function executeRemoteCommand(
                 }),
               });
               if (!res.ok) return null;
-              return (await res.json()) as { stop: boolean };
+              return (await res.json()) as { stop: boolean; input?: string; fast?: boolean };
             } catch {
               return null;
             }
@@ -3519,11 +3520,13 @@ async function executeRemoteCommand(
         break;
       }
       case "set_model": {
-        // In-place model/effort switch for a running claude session: drive the
-        // /model picker and commit with `s` (session-only). The one-shot
-        // `/model <x>` / `/effort <x>` forms rewrite the user's GLOBAL default
-        // in ~/.claude/settings.json, so only options that opt in via
-        // oneShotSwitch (Fable) inject them. See modelPicker.ts.
+        // In-place model/effort switch for a running claude session. Model
+        // options with a cliAlias inject the one-shot `/model <alias>` inside
+        // the settings.json restore envelope (net session-only); effort always
+        // injects `/effort <x>` (session-only natively). Options with no
+        // reliable alias — harvested menu:<label> keys, Sonnet 1M — fall back
+        // to driving the /model picker and committing with `s`. See
+        // modelPicker.ts.
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const conversationId = parsed.conversation_id;
         const modelKey: string | undefined = typeof parsed.model === "string" ? parsed.model : undefined;
@@ -3533,7 +3536,7 @@ async function executeRemoteCommand(
           break;
         }
         const modelOpt = modelKey ? findModelOption("claude", modelKey) : undefined;
-        const oneShotAlias = modelOpt?.oneShotSwitch ? modelOpt.cliAlias : undefined;
+        const oneShotAlias = modelOpt?.midSessionOnly ? undefined : modelOpt?.cliAlias;
         if (modelKey && !modelOpt?.menuMatch && !oneShotAlias) {
           error = `Unknown model: ${modelKey}`;
           break;
@@ -3595,16 +3598,15 @@ async function executeRemoteCommand(
           break;
         }
         try {
-          if (oneShotAlias) {
-            result = await injectOneShotModelSwitch(tmuxTarget, oneShotAlias);
-            // Effort has no one-shot that spares the global default beyond the
-            // model's own opt-in, so a combined switch still adjusts effort
-            // through the picker's session-only commit.
-            if (effortKey) {
-              result += `; ${await driveModelPicker(tmuxTarget, { effort: effortKey })}`;
-            }
-          } else {
+          if (modelKey && !oneShotAlias) {
+            // Menu-key / Sonnet 1M: the picker drive commits model and effort
+            // in the same session-only `s` stroke.
             result = await driveModelPicker(tmuxTarget, { menuMatch: modelOpt?.menuMatch, effort: effortKey });
+          } else {
+            const parts: string[] = [];
+            if (oneShotAlias) parts.push(await injectOneShotModelSwitch(tmuxTarget, oneShotAlias));
+            if (effortKey) parts.push(await injectOneShotEffortSwitch(tmuxTarget, effortKey));
+            result = parts.join("; ");
           }
           log(`[SET_MODEL] ${result} (session ${sessionId.slice(0, 8)})`);
         } catch (err) {
@@ -10169,18 +10171,76 @@ async function preparePaneForModelCommand(target: string): Promise<void> {
   }
 }
 
-// One-shot `/model <alias>` injection — for options that opt out of the picker
-// drive (ModelOption.oneShotSwitch, currently Fable). Unlike the picker's `s`
-// commit, the one-shot ALSO saves the model as the user's global default for
-// new sessions — the contract flag is the deliberate opt-in to that. Verified
-// live: the one-shot applies without the cache-confirm dialog the picker
-// commit pops on a conversation with history (handled anyway, belt and
-// braces), and its echo line is what the transcript rollup already parses.
-export async function injectOneShotModelSwitch(target: string, alias: string): Promise<string> {
+// The one-shot `/model <alias>` switches the running session AND rewrites the
+// user's global default in ~/.claude/settings.json (verified live 2026-08-12).
+// The session's model is in-process state, so restoring the file afterward
+// cancels the rewrite without touching the switch — this envelope makes the
+// one-shot net session-only. Serialized through a module-level chain so two
+// concurrent switches can't interleave their snapshot/restore windows. The
+// snapshot is the `model` key alone; the restore is a fresh read-modify-write
+// so anything else CC wrote meanwhile survives. An unreadable settings file
+// skips the restore (nothing trustworthy to put back).
+let claudeSettingsRestoreChain: Promise<unknown> = Promise.resolve();
+
+export async function withClaudeSettingsModelRestore<T>(fn: () => Promise<T>): Promise<T> {
+  const run = async (): Promise<T> => {
+    const settingsPath = path.join(process.env.HOME || "", ".claude", "settings.json");
+    const readModel = (): { ok: boolean; model?: string } => {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+        return { ok: true, model: typeof parsed.model === "string" ? parsed.model : undefined };
+      } catch {
+        return { ok: false };
+      }
+    };
+    const snapshot = readModel();
+    let switched = false;
+    try {
+      const result = await fn();
+      switched = true;
+      return result;
+    } finally {
+      if (snapshot.ok) {
+        // CC's settings write can land shortly after the echo — wait for it
+        // (only on success; a failed switch gets a single immediate check).
+        const deadline = Date.now() + (switched ? 3000 : 0);
+        while (readModel().model === snapshot.model && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        const now = readModel();
+        if (now.ok && now.model !== snapshot.model) {
+          try {
+            const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+            if (snapshot.model === undefined) delete parsed.model;
+            else parsed.model = snapshot.model;
+            fs.writeFileSync(settingsPath, JSON.stringify(parsed, null, 2));
+            log(`[SET_MODEL] restored settings.json model default (${now.model} -> ${snapshot.model ?? "unset"})`);
+          } catch (err) {
+            log(`[SET_MODEL] settings.json restore failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      }
+    }
+  };
+  const chained = claudeSettingsRestoreChain.then(run, run);
+  claudeSettingsRestoreChain = chained.catch(() => {});
+  return chained;
+}
+
+// One-shot slash-command injection with echo-count confirmation. Success is
+// the pane growing one more matching echo than it had before the paste —
+// presence alone is ambiguous (old echoes linger in scrollback). A failed
+// command echoes an error line instead ("Model 'x' not found"), which never
+// matches, so the loop times out and fails loudly.
+async function injectOneShotCommand(
+  target: string,
+  commandText: string,
+  countEchoes: (paneText: string) => number,
+): Promise<string> {
   await preparePaneForModelCommand(target);
 
-  const before = countModelSetEchoes(await capturePaneText(target, 200));
-  await pasteTextIntoPane(target, `/model ${alias}`);
+  const before = countEchoes(await capturePaneText(target, 200));
+  await pasteTextIntoPane(target, commandText);
   await new Promise((r) => setTimeout(r, 150));
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
 
@@ -10190,11 +10250,14 @@ export async function injectOneShotModelSwitch(target: string, alias: string): P
   while (Date.now() - start < 12000) {
     await new Promise((r) => setTimeout(r, 400));
     const text = await capturePaneText(target, 200);
-    if (countModelSetEchoes(text) > before) {
-      const echoes = text.match(new RegExp(`${MODEL_SET_ECHO_RE.source}[^\n]*`, "gi"));
-      return echoes ? echoes[echoes.length - 1].trim() : "model_set";
+    if (countEchoes(text) > before) {
+      const lines = text.split("\n").filter((l) => countEchoes(l) > 0);
+      return lines.length ? lines[lines.length - 1].replace(/^\s*⎿\s*/, "").trim() : "committed";
     }
     const tail = text.split("\n").slice(-12).join("\n");
+    // A conversation with history can pop the cache-confirm dialog on a model
+    // switch (never observed on the one-shot, handled as belt and braces).
+    // Enter accepts the highlighted "Yes".
     if (!confirmedDialog && isSwitchConfirmDialog(tail)) {
       confirmedDialog = true;
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
@@ -10202,13 +10265,29 @@ export async function injectOneShotModelSwitch(target: string, alias: string): P
     }
     // The slash-command popup can absorb the submit Enter, stranding the
     // typed command in the composer — one discrete Enter recovers it.
-    if (!nudgedStranded && isStrandedModelCommand(tail, alias)) {
+    if (!nudgedStranded && isStrandedSlashCommand(tail, commandText)) {
       nudgedStranded = true;
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
     }
   }
   await tmuxExec(["send-keys", "-t", target, "Escape"]).catch(() => {});
-  throw new Error("Model command not confirmed (no switch echo)");
+  throw new Error(`${commandText.split(" ")[0]} command not confirmed (no switch echo)`);
+}
+
+/** Mid-session model switch via one-shot `/model <alias>`, net session-only
+ * (settings.json restore envelope). For any claude model option with a
+ * cliAlias; menu-key and Sonnet 1M switches stay on driveModelPicker. */
+export async function injectOneShotModelSwitch(target: string, alias: string): Promise<string> {
+  return withClaudeSettingsModelRestore(() =>
+    injectOneShotCommand(target, `/model ${alias}`, countModelSetEchoes),
+  );
+}
+
+/** Mid-session effort switch via one-shot `/effort <level>` — already
+ * session-only ("Set effort level to max (this session only)", no settings
+ * write), so no restore envelope. */
+export async function injectOneShotEffortSwitch(target: string, level: string): Promise<string> {
+  return injectOneShotCommand(target, `/effort ${level}`, countEffortSetEchoes);
 }
 
 export async function driveModelPicker(
@@ -10451,32 +10530,35 @@ export async function verifyTmuxSubmitAfterPaste(
 // the delivery layer's retry/backoff redelivers later instead of pasting into
 // a deaf pane and acking a message the agent never saw.
 const STDIN_PROBE_CHAR = "q"; // inert in the composer; absent from CC's footer/status text
+
+// Composer region = last ❯/› glyph line plus everything below it (a multi-line
+// draft puts the cursor below the glyph line). Null when the pane has no glyph.
+function tmuxComposerRegion(pane: string): string | null {
+  const lines = pane.replace(/[\s\n]+$/, "").split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/[❯›]/.test(lines[i])) return lines.slice(i).join("\n");
+  }
+  return null;
+}
+const countStdinProbes = (region: string): number => region.split(STDIN_PROBE_CHAR).length - 1;
+
+// Returns the pre-probe count of probe chars in the composer region (the
+// baseline drainTmuxComposer verifies against), or null when the pane could
+// not be probed (glyphless client, capture failure) and no probe was typed.
 export async function proveTmuxStdinConsumption(
   target: string,
   budgetMs = 20_000,
   exec: typeof tmuxExec = tmuxExec,
-): Promise<void> {
-  const composerRegion = (pane: string): string | null => {
-    const lines = pane.replace(/[\s\n]+$/, "").split("\n");
-    let glyphIdx = -1;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (/[❯›]/.test(lines[i])) { glyphIdx = i; break; }
-    }
-    // Composer region = glyph line plus everything below it (a multi-line
-    // draft puts the cursor below the glyph line).
-    return glyphIdx === -1 ? null : lines.slice(glyphIdx).join("\n");
-  };
-  const countProbes = (region: string): number => region.split(STDIN_PROBE_CHAR).length - 1;
-
+): Promise<number | null> {
   let before: string | null = null;
   try {
     ({ stdout: before } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
   } catch {
-    return; // capture problems are diagnosed by the paste path itself
+    return null; // capture problems are diagnosed by the paste path itself
   }
-  const beforeRegion = composerRegion(before);
-  if (beforeRegion === null) return; // no composer glyph to watch — glyphless client or unusual pane
-  const baseline = countProbes(beforeRegion);
+  const beforeRegion = tmuxComposerRegion(before);
+  if (beforeRegion === null) return null; // no composer glyph to watch — glyphless client or unusual pane
+  const baseline = countStdinProbes(beforeRegion);
 
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
@@ -10487,12 +10569,62 @@ export async function proveTmuxStdinConsumption(
       await new Promise(resolve => setTimeout(resolve, 150));
       try {
         const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]);
-        const region = composerRegion(stdout);
-        if (region !== null && countProbes(region) > baseline) return;
+        const region = tmuxComposerRegion(stdout);
+        if (region !== null && countStdinProbes(region) > baseline) return baseline;
       } catch {}
     }
   }
   throw new Error(`AGENT_STDIN_NOT_READY: composer never consumed a probe key within ${Math.round(budgetMs / 1000)}s`);
+}
+
+// Drains the composer, then — when a stdin probe ran on this pane — verifies
+// the probe chars actually left it before the caller pastes.
+//
+// Why C-a/C-k cycles and not a single C-u: in Claude Code 2.1.x's input box a
+// single C-u does not reliably empty the buffer when stale text is present
+// (e.g. a prompt recalled via Up arrow). The leftover then concatenates with
+// the paste and the trailing Enter submits both as one message — the
+// "old prompt + new follow-up" duplication seen on 2026-05-19. Cycling C-a
+// (start of line) + C-k (kill to end) drains reliably; three cycles handles
+// multi-line drafts. See daemon.inject-clear.test.ts.
+//
+// Why the verification: the probe proves keys REACH the input handler, not
+// that control bytes are interpreted yet. On a marginal cold boot the probe
+// renders while C-a/C-k are still mishandled, the accumulated probes survive
+// the blind cycles, and the paste + Enter submits "qqq<message>" (ct-43082).
+// Closed loop instead: re-drain until the region's probe count falls back to
+// the pre-probe baseline, and throw AGENT_STDIN_NOT_READY (the delivery
+// layer's retry/backoff redelivers) rather than paste into a dirty composer.
+// probeBaseline === null (busy pane, glyphless client) keeps the blind drain.
+export async function drainTmuxComposer(
+  target: string,
+  probeBaseline: number | null,
+  budgetMs = 5_000,
+  exec: typeof tmuxExec = tmuxExec,
+): Promise<void> {
+  const cycle = async () => {
+    await exec(["send-keys", "-t", target, "C-a"]);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await exec(["send-keys", "-t", target, "C-k"]);
+    await new Promise(resolve => setTimeout(resolve, 20));
+  };
+  for (let i = 0; i < 3; i++) await cycle();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  if (probeBaseline === null) return;
+
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    try {
+      const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]);
+      const region = tmuxComposerRegion(stdout);
+      if (region === null || countStdinProbes(region) <= probeBaseline) return;
+    } catch {
+      return; // capture problems are diagnosed by the paste path itself
+    }
+    await cycle();
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  throw new Error("AGENT_STDIN_NOT_READY: probe residue survived the composer drain, leaving message pending for retry");
 }
 
 export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId): Promise<void> {
@@ -10578,8 +10710,10 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // A visible prompt is not proof the TUI reads stdin yet (cold boot, ct-40212):
   // prove consumption with a probe key before sending the clear/paste sequence.
   // A busy agent is consuming by definition (it is mid-turn), so skip there.
+  // The baseline feeds the drain's verification below (ct-43082).
+  let probeBaseline: number | null = null;
   if (!busy) {
-    await proveTmuxStdinConsumption(target);
+    probeBaseline = await proveTmuxStdinConsumption(target);
   }
 
   const contentLines = content.split(/\r?\n/).length;
@@ -10589,17 +10723,9 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   const doPaste = () => pasteTextIntoPane(target, sanitized, bracketed);
 
   // Clear any stale input before pasting to prevent draft text from being
-  // prepended to the injected message or submitted by the trailing Enter.
-  //
-  // Why C-u alone is not enough: in Claude Code 2.1.x's TUI input box, a single
-  // C-u does not reliably empty the buffer when stale text is present (e.g. a
-  // prompt recalled via Up arrow, or a partial draft). When that happens, the
-  // paste-buffer content gets appended to whatever was left over and the
-  // trailing Enter submits the concatenated string as a single user message —
-  // the "old prompt + new follow-up" duplication seen on 2026-05-19.
-  // Cycling C-a (move to start of line) + C-k (kill to end) reliably drains
-  // the box, and three cycles handles multi-line drafts too. See
-  // daemon.inject-clear.test.ts for the reproduction.
+  // prepended to the injected message or submitted by the trailing Enter —
+  // see drainTmuxComposer for why C-a/C-k cycles and how the drain is
+  // verified against the probe baseline.
   //
   // Escape is the one key here that doubles as "interrupt the current turn", so
   // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
@@ -10609,13 +10735,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     await tmuxExec(["send-keys", "-t", target, "Escape"]);
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  for (let i = 0; i < 3; i++) {
-    await tmuxExec(["send-keys", "-t", target, "C-a"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
-    await tmuxExec(["send-keys", "-t", target, "C-k"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
-  }
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await drainTmuxComposer(target, probeBaseline);
 
   // Capture pane before paste for before/after comparison
   let prePaste = "";

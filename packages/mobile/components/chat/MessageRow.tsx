@@ -88,6 +88,7 @@ export const MessageRow = memo(function MessageRow({
   onStopAgent,
   onRetrySend,
   inThread,
+  knownMentionHandles,
 }: {
   message: MobileChatMessage;
   grouped?: boolean;
@@ -98,6 +99,10 @@ export const MessageRow = memo(function MessageRow({
   onStopAgent?: (id: string) => void;
   onRetrySend?: (id: string) => void;
   inThread?: boolean;
+  /** Handles the server actually resolves (the shared vocabulary). With it, an
+   *  unknown @word stays plain text instead of wearing a chip that notifies
+   *  nobody — the same gate the web renderer applies. */
+  knownMentionHandles?: Set<string>;
 }) {
   const { author, agentStatus } = message;
   const thinking = agentStatus === 'thinking' || agentStatus === 'streaming';
@@ -155,7 +160,7 @@ export const MessageRow = memo(function MessageRow({
             </RNText>
           </RNView>
         ) : (
-          <MarkdownContent text={message.content} baseStyle={styles.mdBase} />
+          <MarkdownContent text={message.content} baseStyle={styles.mdBase} knownMentionHandles={knownMentionHandles} />
         )}
 
         {message.failed && (

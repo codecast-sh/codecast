@@ -1,13 +1,18 @@
-// Pure parsing/planning for driving Claude Code's /model picker from tmux.
+// Pure parsing/planning for Claude Code model/effort switching from tmux.
 //
-// Why the picker and not the one-shot commands: `/model <x>` and `/effort <x>`
-// both REWRITE THE USER'S GLOBAL DEFAULT (~/.claude/settings.json), while the
-// picker's `s` commit is session-scoped — and it commits the ←/→ effort
-// adjustment in the same stroke ("Set model to Sonnet 4.6 for this session
-// only with max effort"). The menu is dynamic (rows shift, the current model
-// gains a ✔, numbered digits INSTANT-COMMIT AS DEFAULT), so the daemon parses
-// the live pane and navigates by arrows — never digits, never Enter (Enter =
-// save as default).
+// Mid-session switches inject the one-shot commands: `/model <alias>` for any
+// option with a cliAlias, `/effort <level>` always (it is session-only —
+// "Set effort level to max (this session only)", no settings write). The model
+// one-shot DOES rewrite the user's global default (~/.claude/settings.json),
+// so the daemon wraps it in a snapshot/restore of that file's `model` key
+// (withClaudeSettingsModelRestore in daemon.ts), making it net session-only.
+//
+// The /model picker driver remains the fallback for options with no reliable
+// one-shot alias: harvested `menu:<label>` rows and Sonnet 1M. There the menu
+// is dynamic (rows shift, the current model gains a ✔, numbered digits
+// INSTANT-COMMIT AS DEFAULT), so the daemon parses the live pane and navigates
+// by arrows — never digits, never Enter (Enter = save as default) — and
+// commits with the session-scoped `s`.
 //
 // Pane shape this parses (CC 2.1.x):
 //    Select model
@@ -109,10 +114,16 @@ export function planModelNavigation(state: PickerState, menuMatch: string): numb
  */
 export const STRANDED_MODEL_COMMAND_RE = /^\s*[❯›]\s*\/model\s*$/m;
 
-export function isStrandedModelCommand(paneTail: string, args?: string): boolean {
-  if (!args) return STRANDED_MODEL_COMMAND_RE.test(paneTail);
-  const esc = args.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^\\s*[❯›]\\s*\\/model\\s+${esc}\\s*$`, "m").test(paneTail);
+export function isStrandedModelCommand(paneTail: string): boolean {
+  return STRANDED_MODEL_COMMAND_RE.test(paneTail);
+}
+
+/** A one-shot slash command ("/model fable", "/effort max") sitting
+ * un-submitted in the composer — same Enter-eaten class as above, matched
+ * against the exact injected text. */
+export function isStrandedSlashCommand(paneTail: string, commandText: string): boolean {
+  const esc = commandText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^\\s*[❯›]\\s*${esc}\\s*$`, "m").test(paneTail);
 }
 
 /** The session-only commit echo, tolerant of ANSI bold wrapping. */
@@ -142,6 +153,16 @@ export const MODEL_SET_ECHO_RE = /Set model to \S+/i;
 
 export function countModelSetEchoes(paneText: string): number {
   return (paneText.match(new RegExp(MODEL_SET_ECHO_RE.source, "gi")) ?? []).length;
+}
+
+/** The one-shot `/effort <x>` echo ("Set effort level to max (this session
+ * only): …"). Same count-before-act contract as the model echoes. A failed
+ * one-shot echoes an error instead ("Model 'x' not found" for /model; /effort
+ * rejects unknown levels likewise), so echo-count growth is the success test. */
+export const EFFORT_SET_ECHO_RE = /Set effort level to \S+/i;
+
+export function countEffortSetEchoes(paneText: string): number {
+  return (paneText.match(new RegExp(EFFORT_SET_ECHO_RE.source, "gi")) ?? []).length;
 }
 
 // Committing a model switch on a conversation WITH HISTORY pops a cache

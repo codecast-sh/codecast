@@ -64,6 +64,13 @@ export default defineSchema({
     // (devices.last_input_at), so pushes hold until you leave the computer.
     // Read in pushRouter.readPresence.
     machine_wide_presence: v.optional(v.boolean()),
+    // Codecast-owned default model per agent client (client id → shared-contract
+    // option key, e.g. { claude: "fable" }). enqueueStartSession applies it when
+    // a launch carries no explicit per-session model, so every managed session
+    // launches with an explicit model flag and the agent's own saved default —
+    // a file any /model one-shot can rewrite — never decides. Set from the
+    // model picker's "Set as default"; validated against findModelOption.
+    default_models: v.optional(v.record(v.string(), v.string())),
     notification_preferences: v.optional(v.object({
       team_session_start: v.boolean(),
       mention: v.boolean(),
@@ -2845,6 +2852,17 @@ export default defineSchema({
     // renews its lease every few seconds; without this stamp a machine that is
     // asleep or offline would collect one command row per renewal forever.
     requested_at: v.optional(v.number()),
+    // While this is in the future a viewer has the pane FOCUSED, so the daemon
+    // polls fast enough that the first keystroke of a sentence isn't swallowed
+    // by the idle heartbeat. Only pushed forward, never cleared on blur: two
+    // tabs on one pane must not switch each other's keyboard off.
+    interactive_until: v.optional(v.number()),
+    // Keystrokes waiting to reach the pane, as lowercase hex. The viewer
+    // appends; the next frame push carries them back and clears this in the
+    // same transaction, which is what makes delivery exactly-once. Small and
+    // short-lived by construction — the daemon drains it a few times a second
+    // while typing, and sendPaneInput refuses to let it grow past a few KB.
+    pending_input: v.optional(v.string()),
     updated_at: v.number(),
   }).index("by_user_device_target", ["user_id", "device_id", "target"]),
 
@@ -3274,7 +3292,10 @@ export default defineSchema({
     created_by: v.id("users"),
     created_at: v.number(),
     updated_at: v.number(),
-    archived_at: v.optional(v.number()),
+    // null, not field-removal, when restored: a client's delta sync cannot see
+    // an ABSENT field (absence means "no information" in an overlay), so a
+    // restore that deletes the field leaves every client archived forever.
+    archived_at: v.optional(v.union(v.number(), v.null())),
     // Optimistic-create altKey: the store writes a `chatstub-…` row carrying this
     // and the server row supersedes it when it syncs back.
     client_id: v.optional(v.string()),

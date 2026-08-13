@@ -238,7 +238,7 @@
 }
 
 /* Mentions - HTML serialization fallback (simple inline) */
-.doc-editor .editor-mention {
+.editor-mention {
   display: inline;
   padding: 0.1em 0.35em;
   border-radius: 4px;
@@ -249,36 +249,36 @@
   transition: opacity 0.15s;
 }
 
-.doc-editor .editor-mention:hover {
+.editor-mention:hover {
   opacity: 0.8;
 }
 
-.doc-editor .mention-person {
+.mention-person {
   background: rgba(133, 153, 0, 0.15);
   color: #859900;
 }
 
-.doc-editor .mention-task {
+.mention-task {
   background: rgba(181, 137, 0, 0.15);
   color: #b58900;
 }
 
-.doc-editor .mention-doc {
+.mention-doc {
   background: rgba(42, 161, 152, 0.15);
   color: #2aa198;
 }
 
-.doc-editor .mention-session {
+.mention-session {
   background: rgba(38, 139, 210, 0.15);
   color: #268bd2;
 }
 
-.doc-editor .mention-plan {
+.mention-plan {
   background: rgba(108, 113, 196, 0.15);
   color: #6c71c4;
 }
 
-.doc-editor .mention-label {
+.mention-label {
   background: rgba(211, 54, 130, 0.15);
   color: #d33682;
 }

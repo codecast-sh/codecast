@@ -24,6 +24,7 @@ export function chatDraftKey(channelId: string, threadRootId?: string): string {
 export const ChatComposer = memo(function ChatComposer({
   channelId,
   threadRootId,
+  teamId,
   placeholder,
   onSend,
   autoFocus,
@@ -31,6 +32,10 @@ export const ChatComposer = memo(function ChatComposer({
 }: {
   channelId: string;
   threadRootId?: string;
+  /** The channel's team. The composer's conversationId is a draft key, not a
+   *  session, so without this the mention scope silently falls to PERSONAL and
+   *  every team task/doc/plan vanishes from the @ popup. */
+  teamId?: string;
   placeholder: string;
   onSend: (content: string) => void;
   autoFocus?: boolean;
@@ -46,6 +51,8 @@ export const ChatComposer = memo(function ChatComposer({
         key={draftKey}
         conversationId={draftKey}
         bareComposer
+        chatMentionMode
+        mentionTeamId={teamId}
         composerPlaceholder={placeholder}
         autoFocusInput={autoFocus}
         onGateSend={async (text: string) => {

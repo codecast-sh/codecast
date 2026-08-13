@@ -227,15 +227,87 @@ export async function pressKey(page: PageSession, combo: string): Promise<void> 
   );
 }
 
-export async function scroll(page: PageSession, deltaY: number, deltaX = 0): Promise<void> {
+export interface ScrollResult {
+  y: number;
+  max: number;
+  /** False when the page did not move — already at the end, or it traps wheel. */
+  moved: boolean;
+}
+
+/**
+ * Scroll the page and report where it ended up.
+ *
+ * The position has to be read AFTER the scroll has actually applied. A wheel
+ * event is handled asynchronously, and pages with `scroll-behavior: smooth`
+ * animate over several hundred milliseconds, so reading `scrollY` straight
+ * after dispatching returns the OLD position — which made every scroll report
+ * the offset it started from and the first one always say "at 0".
+ */
+export async function scroll(page: PageSession, deltaY: number, deltaX = 0): Promise<ScrollResult> {
   const { conn, sessionId } = page;
-  const vp = await conn.send<any>(
-    "Runtime.evaluate",
-    { expression: `JSON.stringify([innerWidth/2, innerHeight/2])`, returnByValue: true },
+  /**
+   * Where the thing under the cursor is scrolled to.
+   *
+   * Reading `window.scrollY` alone is wrong for most applications: the page
+   * itself often does not scroll at all, and the content sits in an inner pane
+   * with its own overflow — a chat log, a sidebar, a modal body. A wheel event
+   * scrolls whichever of those is under the pointer, so watching only the
+   * document would report "did not move" on a pane that moved perfectly well,
+   * and an agent paging through a list would conclude it had hit the end on the
+   * first try. So find the nearest scrollable ancestor of the element at the
+   * cursor and measure THAT, falling back to the document.
+   */
+  const read = async (): Promise<{ y: number; max: number; cx: number; cy: number }> => {
+    const r = await conn.send<any>(
+      "Runtime.evaluate",
+      {
+        expression: `(() => {
+          const cx = Math.round(innerWidth / 2), cy = Math.round(innerHeight / 2);
+          const docMax = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+          let el = document.elementFromPoint(cx, cy);
+          while (el && el !== document.body && el !== document.documentElement) {
+            const st = getComputedStyle(el);
+            if (/auto|scroll|overlay/.test(st.overflowY) && el.scrollHeight > el.clientHeight + 4) {
+              return JSON.stringify([Math.round(el.scrollTop),
+                                     Math.round(el.scrollHeight - el.clientHeight), cx, cy]);
+            }
+            el = el.parentElement;
+          }
+          return JSON.stringify([Math.round(scrollY), Math.round(docMax), cx, cy]);
+        })()`,
+        returnByValue: true,
+      },
+      sessionId,
+      5_000,
+    );
+    const [y, max, cx, cy] = JSON.parse(r.result.value) as number[];
+    return { y, max, cx, cy };
+  };
+
+  const start = await read();
+  await conn.send(
+    "Input.dispatchMouseEvent",
+    { type: "mouseWheel", x: start.cx, y: start.cy, deltaX, deltaY },
     sessionId,
   );
-  const [x, y] = JSON.parse(vp.result.value);
-  await conn.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX, deltaY }, sessionId);
+
+  // Wait for the position to stop changing rather than guessing a delay: a
+  // smooth-scrolling page is still moving for a few hundred ms.
+  let y = start.y;
+  let max = start.max;
+  let stable = 0;
+  for (let i = 0; i < 25; i++) {
+    await new Promise((r) => setTimeout(r, 40));
+    const cur = await read();
+    max = cur.max;
+    if (cur.y === y) {
+      if (++stable >= 2) break;
+    } else {
+      stable = 0;
+    }
+    y = cur.y;
+  }
+  return { y, max, moved: y !== start.y };
 }
 
 /**
@@ -252,7 +324,14 @@ export async function selectOption(page: PageSession, ref: number, value: string
     {
       objectId: object.objectId,
       functionDeclaration: `function(want) {
-        if (this.tagName !== "SELECT") return "not a <select>: " + this.tagName.toLowerCase();
+        // Most modern UIs render a fake dropdown from divs. Those cannot be
+        // driven by setting a value; they need the clicks a user would make,
+        // so say that rather than just refusing.
+        if (this.tagName !== "SELECT") {
+          const role = this.getAttribute("role") || this.tagName.toLowerCase();
+          return "this is a " + role + ", not a native <select> — it is a custom dropdown. " +
+                 "Click it to open, snapshot, then click the option you want.";
+        }
         const opts = [...this.options];
         const hit = opts.find(o => o.value === want) || opts.find(o => o.label === want)
                  || opts.find(o => o.text.trim() === want)

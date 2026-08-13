@@ -94,35 +94,14 @@ export const createSetupToken = mutation({
 // above). Removed rather than internalized: nothing should ever mint a token
 // for an arbitrary user without the caller proving they are that user.
 
-export const verifyToken = mutation({
-  args: {
-    token: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const tokenHash = await hashToken(args.token);
-    const tokenDoc = await (ctx.db
-      .query("api_tokens") as any)
-      .withIndex("by_token_hash", (q: any) => q.eq("token_hash", tokenHash))
-      .first();
-
-    if (!tokenDoc) {
-      return null;
-    }
-
-    if (tokenDoc.expires_at && tokenDoc.expires_at < Date.now()) {
-      return null;
-    }
-
-    await ctx.db.patch(tokenDoc._id, {
-      last_used_at: Date.now(),
-    });
-
-    return {
-      userId: tokenDoc.user_id,
-      tokenId: tokenDoc._id,
-    };
-  },
-});
+// NOTE: a public `verifyToken({ token })` mutation used to live here. It took
+// any token string and answered {userId, tokenId} when the token was valid.
+// This backend has no global auth gate, so anyone able to reach the deployment
+// could call it and learn whether a token was live and whose it was — a bearer
+// credential oracle with no authenticated caller behind it. It had zero callers:
+// every real path goes through `verifyApiToken` below, which is deliberately a
+// pure read. Removed rather than internalized, because `verifyApiToken` already
+// serves every in-process caller and a wire-callable twin only re-opens this.
 
 export const listTokens = query({
   args: {},

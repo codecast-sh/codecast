@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../components/editor/MentionList";
+import { memberHandle } from "@codecast/shared/chat";
 import { useInboxStore, convBucketMap } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { useDebounce } from "./useDebounce";
@@ -166,8 +167,20 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     const s = getStore();
     const idx = s.mentionIndex || { tasks: {}, docs: {}, plans: {} };
 
+    // The index is a 50-row cross-team window (webMentionList caps 25 per team
+    // and stops at 50, so a third team can miss it entirely). The store's own
+    // collections hold the ACTIVE workspace in full — the same source the
+    // session rows below already read. Union them, store row winning: it is
+    // fresher and carries local-first edits.
+    const merged = (windowRows: Record<string, any>, storeRows: Record<string, any> | undefined) => {
+      const out = new Map<string, any>();
+      for (const r of Object.values(windowRows)) if (r?._id) out.set(String(r._id), r);
+      for (const r of Object.values(storeRows || {})) if (r?._id && r?.title) out.set(String(r._id), r);
+      return out.values();
+    };
+
     const taskItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const t of Object.values(idx.tasks)) {
+    for (const t of merged(idx.tasks, s.tasks)) {
       if (!inScope(t, scope)) continue;
       const r = q ? matchScore(t.title || "", q) : 0;
       if (q && r === Infinity) {
@@ -189,7 +202,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     }
 
     const docItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const d of Object.values(idx.docs)) {
+    for (const d of merged(idx.docs, s.docs)) {
       if (!inScope(d, scope)) continue;
       const r = q ? matchScore(d.title || "", q) : 0;
       if (q && r === Infinity) continue;
@@ -207,7 +220,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     }
 
     const planItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const p of Object.values(idx.plans)) {
+    for (const p of merged(idx.plans, s.plans)) {
       if (!inScope(p, scope)) continue;
       const labelHit = q ? matchScore(p.title || "", q) : 0;
       const goalHit = q && p.goal ? matchScore(p.goal, q) : Infinity;
@@ -275,15 +288,21 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     for (const m of s.teamMembers || []) {
       const name = (m.name || "").toLowerCase();
       const username = (m.github_username || "").toLowerCase();
-      if (q && !name.includes(q) && !username.includes(q)) continue;
+      // The handle chat's server resolves (github → email local → bot name
+      // slug). Carried on the item so a chat composer can insert something a
+      // send will actually honour — the display label is not addressable.
+      const handle = memberHandle(m) ?? undefined;
+      if (q && !name.includes(q) && !username.includes(q) && !(handle ?? "").includes(q)) continue;
       personItems.push({
         item: {
           id: String(m._id),
           type: "person",
           label: m.name || m.github_username || "Unknown",
-          sublabel: m.github_username ? `@${m.github_username}` : m.email,
+          sublabel: m.github_username ? `@${m.github_username}` : handle ? `@${handle}` : m.email,
           image: m.image || m.github_avatar_url,
           shortId: m.github_username ? `@${m.github_username}` : undefined,
+          handle,
+          isBot: !!m.is_bot,
         },
         rank: 0,
         updated: 0,

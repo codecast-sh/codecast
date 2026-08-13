@@ -349,6 +349,7 @@ export default function ChatPage() {
                 permalinkChannelId={activeChannelId}
                 knownHandles={handles.known}
                 selfHandles={handles.self}
+                handleNames={handles.names}
                 now={now}
                 hasMoreAbove={feed.hasMoreAbove}
                 isLoadingOlder={feed.isLoadingOlder}
@@ -366,6 +367,7 @@ export default function ChatPage() {
 
             <ChatComposer
               channelId={activeChannelId}
+              teamId={activeChannel?.team_id}
               placeholder={`Message #${activeChannel?.name ?? "channel"}`}
               onSend={send}
               autoFocus
@@ -395,6 +397,8 @@ export default function ChatPage() {
           viewerId={viewerId}
           knownHandles={handles.known}
           selfHandles={handles.self}
+          handleNames={handles.names}
+          teamId={activeChannel?.team_id}
           now={now}
           // The link named a reply, and a reply only exists in this panel.
           targetMessageId={targetRow?.thread_root_id ? targetId : undefined}
