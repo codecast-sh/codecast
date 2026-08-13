@@ -3,15 +3,21 @@
 //
 // The integrated terminal's normal transport is a loopback PTY WebSocket
 // (terminalServer.ts) and it is unreachable from any other device by design.
-// This is the second, much cheaper transport for watching only: repeated
-// `capture-pane` snapshots pushed to the relay in packages/convex/convex/
-// terminalStream.ts. No PTY, no attach, no write path — a viewer on another
-// machine can never touch the pane.
+// This is the second, much cheaper transport: repeated `capture-pane` snapshots
+// pushed to the relay in packages/convex/convex/terminalStream.ts. No PTY and
+// no attach — screens out, keystrokes in, nothing else.
 //
 // The loop is driven by a LEASE the viewer renews, and every push carries the
 // answer back: `stop` means nobody is watching any more. So there is no stop
 // command to deliver and no teardown to miss — a closed tab, a killed browser
 // and a dead network all end the loop the same way, within one lease.
+//
+// TYPING RIDES THE SAME REPLY. Keystrokes the viewer queued come back in the
+// push answer and go into the pane with `send-keys -H`, which writes the exact
+// bytes with no key-name parsing anywhere in the path. Two consequences worth
+// keeping in mind: input can only flow while a lease is live (the relay clears
+// the buffer only for an authorized push), and it arrives at the loop's
+// cadence — hence the faster tick while someone is mid-sentence.
 //
 // Unchanged screens are not pushed. An agent thinking quietly for a minute
 // costs one small heartbeat every few seconds, not 150 frames.
@@ -20,7 +26,12 @@ import { tmuxRun } from "../tmux.js";
 import {
   PANE_CAPTURE_INTERVAL_MS,
   PANE_HEARTBEAT_MS,
+  PANE_INPUT_CHUNK_BYTES,
+  PANE_INPUT_POLL_MS,
   PANE_LEASE_MS,
+  PANE_TYPING_INTERVAL_MS,
+  PANE_TYPING_WINDOW_MS,
+  hexToBytes,
   isValidPaneTarget,
 } from "@codecast/shared/contracts";
 
@@ -46,8 +57,11 @@ export interface PaneStreamDeps {
   /** Read the pane now. null = the pane is gone (or tmux is). */
   capture: (target: string) => PaneSnapshot | null;
   /** Publish to the relay. Returns the relay's answer, or null if the push
-   *  itself failed (network, server down). */
-  push: (msg: PaneFramePush) => Promise<{ stop: boolean } | null>;
+   *  itself failed (network, server down). `input` is whatever the viewer typed
+   *  since the previous push, as hex. */
+  push: (msg: PaneFramePush) => Promise<{ stop: boolean; input?: string; fast?: boolean } | null>;
+  /** Type raw bytes into the pane. */
+  write: (target: string, bytes: number[]) => void;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   log?: (msg: string) => void;
@@ -67,6 +81,16 @@ export async function runPaneStream(target: string, deps: PaneStreamDeps): Promi
   let lastFrame: string | null = null;
   let lastPushAt = 0;
   let failures = 0;
+  // "A human has this pane focused." The relay says so on every push, because
+  // only it can see the viewer. It governs BOTH how often we look at the pane
+  // and how often we push an unchanged one — the second is what matters, since
+  // a push is the only thing that collects waiting keystrokes, and a quiet pane
+  // produces none on its own.
+  let fast = false;
+  // While this is in the future the loop stays at the typing cadence regardless
+  // of focus. A delivered keystroke sets it, so a burst keeps the loop quick
+  // and a pause lets it settle back without anyone announcing anything.
+  let typingUntil = 0;
   // A lease is already live when the command is dispatched — this is the
   // backstop for a relay that stops answering, not the real deadline.
   const hardDeadline = deps.now() + PANE_LEASE_MS * 30;
@@ -88,7 +112,12 @@ export async function runPaneStream(target: string, deps: PaneStreamDeps): Promi
     }
 
     const changed = snap.frame !== lastFrame;
-    const due = deps.now() - lastPushAt >= PANE_HEARTBEAT_MS;
+    // An unchanged screen is normally worth one write every few seconds. While
+    // someone is focused on the pane it is worth several a second instead —
+    // not for the picture, which hasn't moved, but because this request is the
+    // only thing that collects their keystrokes.
+    const heartbeat = fast || deps.now() < typingUntil ? PANE_INPUT_POLL_MS : PANE_HEARTBEAT_MS;
+    const due = deps.now() - lastPushAt >= heartbeat;
     if (changed || due) {
       const answer = await deps.push(
         changed
@@ -110,15 +139,31 @@ export async function runPaneStream(target: string, deps: PaneStreamDeps): Promi
       } else {
         failures = 0;
         lastPushAt = deps.now();
+        fast = !!answer.fast;
         if (changed) lastFrame = snap.frame;
         if (answer.stop) {
           deps.log?.(`[PANE] ${target}: lease lapsed, stopping`);
           return;
         }
+        if (answer.input) {
+          const bytes = hexToBytes(answer.input);
+          if (bytes === null) {
+            deps.log?.(`[PANE] ${target}: dropped malformed input`);
+          } else if (bytes.length) {
+            deps.write(target, bytes);
+            typingUntil = deps.now() + PANE_TYPING_WINDOW_MS;
+            // Don't sleep: the whole point of the fast path is that the
+            // keystroke's effect reaches the person who typed it promptly, and
+            // the next capture is where they see it.
+            continue;
+          }
+        }
       }
     }
 
-    await deps.sleep(PANE_CAPTURE_INTERVAL_MS);
+    await deps.sleep(
+      fast || deps.now() < typingUntil ? PANE_TYPING_INTERVAL_MS : PANE_CAPTURE_INTERVAL_MS,
+    );
   }
 }
 
@@ -167,6 +212,38 @@ export function capturePane(target: string): PaneSnapshot | null {
   };
 }
 
+/**
+ * Type exact bytes into a pane.
+ *
+ * `send-keys -H` takes one hex BYTE per argument and delivers each verbatim —
+ * no key-name lookup, no `-l` literal-versus-key ambiguity, no shell. That is
+ * what this path needs, because terminal input is not text: Escape, Ctrl-C,
+ * arrow keys and a pasted emoji are all byte sequences, and anything that
+ * interprets them on the way through will eventually interpret one wrong. tmux
+ * hands the pane's process what xterm produced, byte for byte.
+ *
+ * Worth knowing when a character seems to vanish: the pane's own program may
+ * still discard it. A shell whose readline is running without a UTF-8 locale
+ * drops multi-byte input at its own input layer, long after tmux delivered it
+ * correctly — a pane environment problem, not a relay one.
+ *
+ * Long input is split because every byte is its own argv entry.
+ */
+export function writePane(target: string, bytes: number[]): void {
+  if (!isValidPaneTarget(target) || bytes.length === 0) return;
+  const pane = target.includes(":") ? target : `${target}:0.0`;
+  for (let i = 0; i < bytes.length; i += PANE_INPUT_CHUNK_BYTES) {
+    const chunk = bytes.slice(i, i + PANE_INPUT_CHUNK_BYTES);
+    tmuxRun([
+      "send-keys",
+      "-t",
+      pane,
+      "-H",
+      ...chunk.map((b) => (b & 0xff).toString(16).padStart(2, "0")),
+    ]);
+  }
+}
+
 // One loop per pane, however many browsers are watching: the relay row is
 // shared, so a second viewer just extends the same lease. A repeated
 // stream_pane command for a pane already streaming is a no-op.
@@ -183,7 +260,8 @@ export function activePaneStreams(): string[] {
 /** Start the loop for `target` unless it is already running. */
 export function startPaneStream(
   target: string,
-  deps: Omit<PaneStreamDeps, "capture" | "now" | "sleep"> & Partial<Pick<PaneStreamDeps, "capture" | "now" | "sleep">>,
+  deps: Omit<PaneStreamDeps, "capture" | "write" | "now" | "sleep"> &
+    Partial<Pick<PaneStreamDeps, "capture" | "write" | "now" | "sleep">>,
 ): void {
   if (active.has(target)) {
     deps.log?.(`[PANE] ${target}: already streaming`);
@@ -191,6 +269,7 @@ export function startPaneStream(
   }
   const full: PaneStreamDeps = {
     capture: deps.capture ?? capturePane,
+    write: deps.write ?? writePane,
     push: deps.push,
     now: deps.now ?? (() => Date.now()),
     sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),

@@ -171,6 +171,22 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     versionKey: "state_version",
   },
   {
+    slug: "browser",
+    aliases: ["chrome", "browse", "web"],
+    name: "Browser",
+    desc: "Drive a real Chrome (cast browser)",
+    detail:
+      "Adds `cast browser` so agents can use the web: open a page, read it as text with a " +
+      "handle on every button and field, click, type, screenshot, and read the console and " +
+      "network log while debugging a site. It drives a real Chrome started from a COPY of " +
+      "your profile, so it is signed in to what you are signed in to — your own Chrome is " +
+      "never touched, and `cast browser start --fresh` gives a signed-out one instead. " +
+      "Nothing launches until an agent runs `cast browser start`.",
+    writesTo: "CLAUDE.md — a ## Browser section with the command reference",
+    enabledKey: "browser_enabled",
+    versionKey: "browser_version",
+  },
+  {
     slug: "orchestration",
     aliases: ["orchestrate", "orch"],
     name: "Orchestration",

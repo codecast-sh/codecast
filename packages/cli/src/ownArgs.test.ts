@@ -136,4 +136,22 @@ describe("unknown commands (subprocess)", () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("Usage: cast");
   }, 30_000);
+
+  // `cast link` is what the agent actually wanted. Its ref argument used to be
+  // required, so the one thing you could not ask for was "link to THIS
+  // session" — which is why an invented command got reached for instead.
+  test("`cast link` takes no required argument", async () => {
+    const r = await run(["link", "--help"]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("[ref]");
+    expect(r.stdout).not.toContain("<ref>");
+  }, 30_000);
+
+  test("`cast link` with no argument does not fail on a missing argument", async () => {
+    // HOME is a temp dir, so this reaches the "not authenticated" / "no session
+    // detected" path rather than commander's argument check. Either is fine;
+    // the regression is specifically `missing required argument`.
+    const r = await run(["link"]);
+    expect(r.stderr).not.toContain("missing required argument");
+  }, 30_000);
 });

@@ -88,6 +88,15 @@ describe("pickPaneForSession", () => {
     expect(pickPaneForSession(panes, SESSION, SUFFIX)).toBe("cc-resume-title-58f3cdd1");
   });
 
+  test("resume takes the pane a live session is already in — no freshness bound", () => {
+    // The contract split between the two verbs. `cast resume --tmux` kills
+    // nothing, so the long-running pane is exactly where the user wants to land;
+    // applying restart's freshness rule here would reject it and time out on a
+    // perfectly healthy session.
+    const panes = parseCodecastPaneRows(rows(row("cc-resume-title-58f3cdd1", SESSION, 100)));
+    expect(pickPaneForSession(panes, SESSION, SUFFIX)).toBe("cc-resume-title-58f3cdd1");
+  });
+
   test("a pane with no creation time can't prove it is new, so a freshness demand skips it", () => {
     const panes = parseCodecastPaneRows(rows(row("cc-resume-title-58f3cdd1", SESSION)));
     expect(pickPaneForSession(panes, SESSION, SUFFIX, 400)).toBeNull();

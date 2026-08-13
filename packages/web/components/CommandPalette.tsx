@@ -13,7 +13,7 @@ import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, resolveShowOld, selectSessionRailOpen } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { PageIcon } from "./RecentlyViewedMenu";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -337,9 +337,13 @@ function ActionSubmenu({
   const viewChipData = useMemo(() => {
     if (mode !== "view") return null;
     const st = useInboxStore.getState();
-    // Scope the chip counts the same way the inbox panel scopes its list, so the
-    // picker never counts sessions the panel isn't showing (a teammate row cached
-    // from a team-board visit, or the whole team while team mode is on).
+    // Scope like the inbox panel, but count the WHOLE scoped cache — dismissed,
+    // stashed, and aged-out rows included (showOld keeps them in the active
+    // slices; picking a view surfaces its dismissed/stashed sessions too). The
+    // header chip row counts only the active set because it summarizes the list
+    // it sits above; this picker is a catalog of views, and a label whose
+    // sessions were all dismissed is still a real view — a 0 badge here would
+    // read as "empty label".
     const scope = st.clientState.ui?.inbox_scope ?? "mine";
     const scoped = filterInboxScope(
       st.sessions,
@@ -348,20 +352,34 @@ function ActionSubmenu({
       st.teamInboxIds,
       st.currentSessionId,
     );
-    const { pinned, newSessions, needsInput, working } = categorizeSessions(
+    const cat = categorizeSessions(
       scoped,
       st.sessionsWithQueuedMessages,
       sessionsWithPendingSend(st.pendingMessages),
-      // liveInboxIds + showOld: the chip counts must reflect the SAME authoritative
-      // active set the panel renders, not the raw never-prune cache. Mine-scope
-      // only, exactly like the panel: the team board is already a bounded set and
-      // its rows aren't in liveInboxIds, so hide-old there would drop teammates.
-      scope === "team"
-        ? { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)), reviveRequestedAt: st.blockedReviveRequestedAt }
-        : { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)), liveInboxIds: st.liveInboxIds, showOld: resolveShowOld(st.clientState.ui), reviveRequestedAt: st.blockedReviveRequestedAt },
+      { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)), showOld: true, reviveRequestedAt: st.blockedReviveRequestedAt },
     );
-    const active = [...pinned, ...newSessions, ...needsInput, ...working];
-    return computeChipCounts(active, convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>));
+    const counts = computeChipCounts(
+      [...cat.sorted, ...cat.stashed, ...cat.dismissed],
+      convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>),
+    );
+    // The local session cache is windowed and boot-pruned, so a project whose
+    // sessions all fell out of it would vanish from this list even though the
+    // server still knows it. Union in the recent-projects cache (the same
+    // 30-day per-project counts the new-session picker syncs) so every project
+    // the user works in stays reachable as a view; max() because both sides
+    // undercount in different ways (cache is pruned, server list is capped).
+    const byName = new Map(counts.projectCounts);
+    for (const rp of st.recentProjects) {
+      const name = getProjectName(rp.path);
+      if (name === "unknown") continue;
+      byName.set(name, Math.max(byName.get(name) || 0, rp.count));
+      if (!counts.projectPathByName[name]) counts.projectPathByName[name] = rp.path;
+    }
+    return {
+      bucketCounts: counts.bucketCounts,
+      projectCounts: [...byName.entries()].sort((a, b) => b[1] - a[1]),
+      projectPathByName: counts.projectPathByName,
+    };
   }, [mode]);
 
   const items = useMemo(() => {

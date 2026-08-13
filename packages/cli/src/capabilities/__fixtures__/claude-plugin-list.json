@@ -1,0 +1,106 @@
+{
+  "installed": [
+    {
+      "id": "code-simplifier@claude-plugins-official",
+      "version": "1.0.0",
+      "scope": "user",
+      "enabled": true,
+      "installPath": "/Users/ashot/.claude/plugins/cache/claude-plugins-official/code-simplifier/1.0.0",
+      "installedAt": "2026-03-12T16:43:08.361Z",
+      "lastUpdated": "2026-03-12T16:43:08.361Z"
+    },
+    {
+      "id": "frontend-design@claude-plugins-official",
+      "version": "4c916814ff0e",
+      "scope": "user",
+      "enabled": true,
+      "installPath": "/Users/ashot/.claude/plugins/cache/claude-plugins-official/frontend-design/4c916814ff0e",
+      "installedAt": "2026-03-12T16:43:08.361Z",
+      "lastUpdated": "2026-08-12T17:21:00.116Z"
+    },
+    {
+      "id": "playground@claude-plugins-official",
+      "version": "4c916814ff0e",
+      "scope": "project",
+      "enabled": false,
+      "installPath": "/Users/ashot/.claude/plugins/cache/claude-plugins-official/playground/4c916814ff0e",
+      "installedAt": "2026-03-13T03:25:52.211Z",
+      "lastUpdated": "2026-06-29T23:20:41.987Z",
+      "projectPath": "/Users/ashot/src/union-mobile/outreach"
+    },
+    {
+      "id": "ralph-loop@claude-plugins-official",
+      "version": "1.0.0",
+      "scope": "user",
+      "enabled": false,
+      "installPath": "/Users/ashot/.claude/plugins/cache/claude-plugins-official/ralph-loop/1.0.0",
+      "installedAt": "2026-03-12T16:43:08.361Z",
+      "lastUpdated": "2026-03-29T06:12:07.707Z"
+    },
+    {
+      "id": "typescript-lsp@claude-plugins-official",
+      "version": "1.0.0",
+      "scope": "user",
+      "enabled": false,
+      "installPath": "/Users/ashot/.claude/plugins/cache/claude-plugins-official/typescript-lsp/1.0.0",
+      "installedAt": "2026-03-12T16:43:08.361Z",
+      "lastUpdated": "2026-03-12T16:43:08.361Z"
+    }
+  ],
+  "available": [
+    {
+      "pluginId": "agent-sdk-dev@claude-code-plugins",
+      "name": "agent-sdk-dev",
+      "description": "Development kit for working with the Claude Agent SDK",
+      "marketplaceName": "claude-code-plugins",
+      "source": "./plugins/agent-sdk-dev"
+    },
+    {
+      "pluginId": "claude-opus-4-5-migration@claude-code-plugins",
+      "name": "claude-opus-4-5-migration",
+      "description": "Migrate your code and prompts from Sonnet 4.x and Opus 4.1 to Opus 4.5.",
+      "marketplaceName": "claude-code-plugins",
+      "version": "1.0.0",
+      "source": "./plugins/claude-opus-4-5-migration"
+    },
+    {
+      "pluginId": "42crunch-api-security-testing@claude-plugins-official",
+      "name": "42crunch-api-security-testing",
+      "description": "Automate API security directly in Claude Code with 42Crunch - automatically audit OpenAPI specs, detect vulnerabilities aligned with OWASP API Security risks (including BOLA/BFLA), and apply AI-powered fixes. Designed for AI-assisted development workflows, it provides continuous guardrails through an audit->scan->remediate->validate loop, ensuring APIs meet enterprise security standards before deployment.",
+      "marketplaceName": "claude-plugins-official",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/42Crunch-AI/claude-plugins.git",
+        "path": "plugins/api-security-testing",
+        "ref": "v1.5.5",
+        "sha": "30287f5e3f122a646d1ac5ca3ab96e130c52a3ad"
+      },
+      "installCount": 2435
+    },
+    {
+      "pluginId": "agentforce-adlc@claude-plugins-official",
+      "name": "agentforce-adlc",
+      "description": "Agentforce Agent Development Life Cycle \u2014 author, discover, scaffold, deploy, test, and optimize .agent files",
+      "marketplaceName": "claude-plugins-official",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/SalesforceAIResearch/agentforce-adlc.git",
+        "sha": "d16d14ac7f817336e21bf9392cf51b6cac6194d8"
+      },
+      "installCount": 1193
+    },
+    {
+      "pluginId": "semgrep@claude-plugins-official",
+      "name": "semgrep",
+      "description": "Semgrep catches security vulnerabilities in real-time and guides Claude to write secure code from the start.",
+      "marketplaceName": "claude-plugins-official",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/semgrep/mcp-marketplace.git",
+        "path": "plugin",
+        "sha": "426442e17e135a302b220e43b57c102cb33b39bb"
+      },
+      "installCount": 19853
+    }
+  ]
+}

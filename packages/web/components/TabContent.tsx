@@ -65,6 +65,10 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/tasks\/([^/]+)$/, paramNames: ["id"], component: Tasks },
   { pattern: /^\/docs\/([^/]+)$/, paramNames: ["id"], component: DocDetail },
   { pattern: /^\/plans\/([^/]+)$/, paramNames: ["id"], component: PlanDetail },
+  // A task opened from inside a project keeps the project mounted, same trick
+  // as /tasks/<id>: one component for both URLs, so selecting a task
+  // reconciles beside the project's list instead of navigating away from it.
+  { pattern: /^\/projects\/([^/]+)\/([^/]+)$/, paramNames: ["id", "taskId"], component: ProjectDetail },
   { pattern: /^\/projects\/([^/]+)$/, paramNames: ["id"], component: ProjectDetail },
   // Same component as the bare route, so opening a channel reconciles in place
   // instead of remounting the whole surface and losing the scroll position.
