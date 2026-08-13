@@ -565,11 +565,22 @@ export const bindSession = mutation({
   args: {
     api_token: v.string(),
     short_id: v.string(),
-    conversation_id: v.string(),
+    // Both spellings are accepted because released CLIs send `session_id` while
+    // this function was written expecting `conversation_id`, and `/cli/plans/bind`
+    // forwards the request body verbatim — so the mismatch surfaced as a validator
+    // rejection on `cast task start` for any plan-bound task, on every CLI already
+    // in the wild. The VALUE has always been a session id either way: it is looked
+    // up through the by_session_id index below. Keep both until the floor of
+    // deployed CLIs has moved; deleting either one breaks a live client.
+    conversation_id: v.optional(v.string()),
+    session_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
+
+    const sessionId = args.conversation_id ?? args.session_id;
+    if (!sessionId) throw new Error("conversation_id (or session_id) is required");
 
     const plan = await ctx.db
       .query("plans")
@@ -580,7 +591,7 @@ export const bindSession = mutation({
 
     const conv = await ctx.db
       .query("conversations")
-      .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id))
+      .withIndex("by_session_id", (q) => q.eq("session_id", sessionId))
       .first();
     if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) {
       notFound("Conversation not found");
