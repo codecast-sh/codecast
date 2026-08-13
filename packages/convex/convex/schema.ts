@@ -3292,7 +3292,10 @@ export default defineSchema({
     created_by: v.id("users"),
     created_at: v.number(),
     updated_at: v.number(),
-    archived_at: v.optional(v.number()),
+    // null, not field-removal, when restored: a client's delta sync cannot see
+    // an ABSENT field (absence means "no information" in an overlay), so a
+    // restore that deletes the field leaves every client archived forever.
+    archived_at: v.optional(v.union(v.number(), v.null())),
     // Optimistic-create altKey: the store writes a `chatstub-…` row carrying this
     // and the server row supersedes it when it syncs back.
     client_id: v.optional(v.string()),

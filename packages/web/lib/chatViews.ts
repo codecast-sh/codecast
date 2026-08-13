@@ -58,23 +58,29 @@ export function memberHandles(m: ChatMember): string[] {
   return out;
 }
 
-export type HandleSets = { known: Set<string>; self: Set<string> };
+export type HandleSets = { known: Set<string>; self: Set<string>; names: Map<string, string> };
 
 /** The two sets ChatMessage hands the mention plugin: which @words resolve to a
  *  real member at all, and which of those are the viewer. */
 export function buildHandleSets(members: ChatMember[], viewerId: string): HandleSets {
   const known = new Set<string>();
   const self = new Set<string>();
+  // handle → display name, so the rendered chip can wear the person's name the
+  // way a doc mention does, while the stored text stays the resolvable handle.
+  const names = new Map<string, string>();
   for (const m of members) {
     for (const h of memberHandles(m)) {
       known.add(h);
       if (m._id === viewerId) self.add(h);
+      const display = (m.name || "").trim();
+      if (display) names.set(h, display);
     }
   }
   // @here addresses everyone including the viewer, so it reads as a self-mention.
   known.add("here");
   self.add("here");
-  return { known, self };
+  names.set("here", "here");
+  return { known, self, names };
 }
 
 export function authorFor(
