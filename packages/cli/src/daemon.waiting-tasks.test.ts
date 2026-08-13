@@ -22,6 +22,8 @@ const timeoutPromoted = (id: string) =>
   toolResult(`Command did not complete within its 300s timeout and was moved to the background (ID: ${id}).`);
 const monitorStart = (id: string) =>
   toolResult(`Monitor started (task ${id}, timeout 900000ms). You will be notified on each event.`);
+const workflowStart = (id: string) =>
+  toolResult(`Workflow launched in background. Task ID: ${id}\nSummary: Implement the thing\nTranscript dir: /x/subagents/workflows/wf_abc\nScript file: /x/workflows/scripts/my-flow-wf_abc.js`);
 const notification = (id: string, status?: string, sessionId = SID) =>
   line({
     type: "user",
@@ -47,6 +49,15 @@ describe("scanOpenBackgroundTasks", () => {
   test("timeout-promoted commands and Monitors count as open tasks", () => {
     const open = scanOpenBackgroundTasks(transcript(timeoutPromoted("b2"), monitorStart("m1")));
     expect([...open].sort()).toEqual(["b2", "m1"]);
+  });
+
+  test("a launched Workflow is open until its terminal notification (jx70xxy shape)", () => {
+    // A session that ends its turn right after launching a multi-agent
+    // Workflow is the harness's move, not the user's — it must read as open
+    // work, or the inbox shows an "idle" session with 6 agents running.
+    expect([...scanOpenBackgroundTasks(transcript(workflowStart("wdbvz98da")))]).toEqual(["wdbvz98da"]);
+    expect([...scanOpenBackgroundTasks(transcript(workflowStart("wdbvz98da"), notification("wdbvz98da", "completed")))]).toEqual([]);
+    expect([...scanOpenBackgroundTasks(transcript(workflowStart("wdbvz98da"), notification("wdbvz98da", "stopped")))]).toEqual([]);
   });
 
   test("Monitor interim event notifications (no <status>) do NOT close the task", () => {
