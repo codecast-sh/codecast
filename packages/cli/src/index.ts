@@ -9557,6 +9557,7 @@ program
       visual: { getVersion: getVisualVersion, install: installVisualSnippet, reEnable: "cast install" },
       publish: { getVersion: getPublishVersion, install: installPublishSnippet, reEnable: "cast install" },
       state: { getVersion: getStateVersion, install: installStateSnippet, reEnable: "cast install" },
+      browser: { getVersion: getBrowserVersion, install: installBrowserSnippet, reEnable: "cast install" },
       orchestration: { getVersion: getWorkVersion, install: installOrchestration, reEnable: "cast install" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
