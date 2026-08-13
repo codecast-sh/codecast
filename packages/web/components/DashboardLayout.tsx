@@ -63,6 +63,7 @@ import { SessionSwitcher } from "./SessionSwitcher";
 import { TabBar } from "./TabBar";
 import { pathLabel } from "../lib/pathLabel";
 import { TabContent } from "./TabContent";
+import { BreadcrumbBar } from "./BreadcrumbBar";
 import { TerminalDock } from "./terminal/TerminalDock";
 import { VaultQuickSwitcherDock } from "./vault/VaultQuickSwitcherDock";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
@@ -802,10 +803,18 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const hasTabs = s.tabs.length > 0 && !isNonTabRoute(routerLocation.pathname);
   const content = hasTabs ? <TabContent /> : children;
 
-  const pageContentInner = isFullWidthPage || hasTabs ? (
+  // The trail sits above whatever surface is open — one bar for every page, so
+  // no surface has to grow its own. It draws nothing on a bare list page.
+  const pageBody = isFullWidthPage || hasTabs ? (
     <div className="h-full">{content}</div>
   ) : (
     <PageShell pathname={pathname ?? ""}>{content}</PageShell>
+  );
+  const pageContentInner = (
+    <div className="h-full flex flex-col min-h-0">
+      <BreadcrumbBar />
+      <div className="flex-1 min-h-0">{pageBody}</div>
+    </div>
   );
 
   // THE STAGE: at most two panes, ever — the page, and (optionally) one
