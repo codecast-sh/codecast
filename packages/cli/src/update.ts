@@ -14,6 +14,7 @@ const MESSAGING_VERSION = "7"; // bumped: target on evidence (cast diff/read bef
 const VISUAL_VERSION = "6"; // bumped: image captions from alt text + side-by-side rows for adjacent images
 const FORKS_VERSION = "4"; // bumped: fan-out is a handoff — one cast fork call, no orchestration; default anchor excludes the fork request so branches never know they are forks
 const PUBLISH_VERSION = "4"; // bumped: cast image cross-reference for single-image sharing; never link local paths
+const BROWSER_VERSION = "1"; // new: cast browser — CDP driver over a cloned Chrome profile
 const STATE_VERSION = "2"; // bumped: update at event boundaries, not on an abstract condition
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
@@ -136,6 +137,10 @@ export function getStateVersion(): string {
 
 export function getPublishVersion(): string {
   return PUBLISH_VERSION;
+}
+
+export function getBrowserVersion(): string {
+  return BROWSER_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {

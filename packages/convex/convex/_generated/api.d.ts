@@ -23,6 +23,8 @@ import type * as blameCore from "../blameCore.js";
 import type * as bookmarkViewWrites from "../bookmarkViewWrites.js";
 import type * as bookmarks from "../bookmarks.js";
 import type * as buckets from "../buckets.js";
+import type * as capabilities from "../capabilities.js";
+import type * as capabilitiesSchema from "../capabilitiesSchema.js";
 import type * as ccAccountsShared from "../ccAccountsShared.js";
 import type * as changeFeed from "../changeFeed.js";
 import type * as changeLog from "../changeLog.js";
@@ -156,6 +158,8 @@ declare const fullApi: ApiFromModules<{
   bookmarkViewWrites: typeof bookmarkViewWrites;
   bookmarks: typeof bookmarks;
   buckets: typeof buckets;
+  capabilities: typeof capabilities;
+  capabilitiesSchema: typeof capabilitiesSchema;
   ccAccountsShared: typeof ccAccountsShared;
   changeFeed: typeof changeFeed;
   changeLog: typeof changeLog;

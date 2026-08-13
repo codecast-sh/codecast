@@ -43,8 +43,8 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
-import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet } from "./snippets.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
+import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -2538,6 +2538,7 @@ const SECTION_BY_ENABLED_KEY: Record<string, SectionSpec> = {
   state_enabled: SNIPPET_SECTIONS.state.spec,
   messaging_enabled: MESSAGING_SECTION,
   publish_enabled: PUBLISH_SECTION,
+  browser_enabled: BROWSER_SECTION,
 };
 
 /**
@@ -2808,6 +2809,15 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     }
   }
 
+  if (config.browser_enabled && config.browser_version !== getBrowserVersion()) {
+    const result = installBrowserSnippet(true);
+    config.browser_version = getBrowserVersion();
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Browser snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  }
   if (config.state_enabled && config.state_version !== getStateVersion()) {
     const result = installStateSnippet(true);
     config.state_version = getStateVersion();
@@ -3159,13 +3169,7 @@ registerRemoteCommand(program);
 registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId }, () => {
-  // First successful launch teaches the agents on this machine that the
-  // command exists, and marks it for refresh on future upgrades.
-  const cfg = readConfig();
-  if (cfg && !cfg.browser_enabled) { cfg.browser_enabled = true; writeConfig(cfg); }
-  installBrowserSnippet(true);
-});
+registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
 
 program
   .command("auth")
@@ -4662,29 +4666,140 @@ function attachOrSwitchTmux(target: string): boolean {
   return r.status === 0;
 }
 
+/** What /cli/sessions/resume and /cli/sessions/restart both hand back. */
+type SessionCommandResult = {
+  short_id: string;
+  session_id: string;
+  title?: string | null;
+  device_id?: string | null;
+  deduplicated?: boolean;
+  was_hidden?: boolean;
+  rearmed_schedules?: number;
+  repaired?: boolean;
+};
+
+/**
+ * Follow a resume/restart to the pane the daemon puts the agent in, and attach.
+ *
+ * The pane is the daemon's, not ours: it is stamped with the agent's session id,
+ * the web session's tmux pill points at it, and the browser's read-only split
+ * renders it — so attaching here puts your keyboard on the terminal the web
+ * session is already watching.
+ *
+ * `newerThanSec` is what separates the two verbs. A RESTART rebuilds the pane
+ * under the same name, so a pane older than our request is the pre-restart one
+ * the daemon is about to kill — attaching to it would drop us the moment it
+ * does. A RESUME kills nothing, so the pane a live session is already sitting in
+ * is exactly the right answer and must not be filtered out.
+ */
+async function attachToManagedPane(
+  result: SessionCommandResult,
+  opts: { timeoutMs: number; newerThanSec?: number; retryCmd: string },
+): Promise<void> {
+  if (!hasTmux()) {
+    console.log(`${c.dim}tmux is not installed here, so there is no pane to attach to.${c.reset}`);
+    return;
+  }
+  // A pane exists on exactly ONE machine — the daemon that runs the session.
+  // When that is not this one, waiting for a local pane would just time out.
+  const here = deviceId();
+  if (result.device_id && result.device_id !== here) {
+    console.log(`${c.dim}This session runs on another machine, so its pane comes up there, not here.${c.reset}`);
+    console.log(`${c.dim}Open it from the web session's tmux pill instead.${c.reset}`);
+    return;
+  }
+
+  const sessionId = result.session_id;
+  const nameSuffix = `-${resumeShortId(sessionId)}`;
+  const deadline = Date.now() + opts.timeoutMs;
+  // The waiting line is transient — it exists to be erased. Piped output keeps
+  // no cursor, so print it only to a terminal rather than leaving raw escapes
+  // in a log.
+  const transient = !!process.stdout.isTTY;
+
+  // A live session's pane is already there, so look before waiting.
+  let target = pickPaneForSession(listCodecastPanes(), sessionId, nameSuffix, opts.newerThanSec);
+  if (!target) {
+    if (transient) process.stdout.write(`${c.dim}Waiting for the pane...${c.reset}`);
+    while (!target && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, PANE_POLL_INTERVAL_MS));
+      target = pickPaneForSession(listCodecastPanes(), sessionId, nameSuffix, opts.newerThanSec);
+    }
+    // Nothing new came up. A deduplicated command never promised a new pane, so
+    // take the standing one; otherwise say plainly that the resume didn't land.
+    if (!target && result.deduplicated) {
+      target = pickPaneForSession(listCodecastPanes(), sessionId, nameSuffix);
+    }
+    if (transient) process.stdout.write("\r\x1b[2K");
+  }
+
+  if (!target) {
+    console.log(`${c.yellow}!${c.reset} No pane came up within ${Math.round(opts.timeoutMs / 1000)}s.`);
+    console.log(`  ${c.dim}Check the daemon:${c.reset} cast status`);
+    console.log(`  ${c.dim}Then retry:${c.reset} ${opts.retryCmd}`);
+    process.exit(1);
+  }
+
+  console.log(`${c.dim}Attaching to${c.reset} ${target}`);
+  if (!attachOrSwitchTmux(target)) {
+    console.log(`${c.yellow}!${c.reset} Couldn't attach. Run it yourself: tmux attach -t '${target}'`);
+    process.exit(1);
+  }
+}
+
+/** Seconds since the epoch — the stamp a pane must beat to count as "new". */
+const nowSec = () => Math.floor(Date.now() / 1000);
+
+/** Minutes-to-milliseconds for the shared --timeout option (default 45s). */
+function attachTimeoutMs(timeout?: string): number {
+  return (Number.parseInt(timeout ?? "", 10) || 45) * 1000;
+}
+
+/**
+ * `cast resume <session> --tmux` — bring a session up in the pane the web
+ * session is attached to, and put this terminal on it.
+ *
+ * Nothing is killed. If the agent is already alive the daemon hands back its
+ * existing pane, so this is also the way to simply attach to a running session
+ * without disturbing the turn it is in the middle of.
+ */
+async function resumeSessionIntoPane(
+  session: string,
+  options: { timeout?: string },
+): Promise<void> {
+  const result = await cliPost("/cli/sessions/resume", { session }) as SessionCommandResult;
+
+  const title = result.title ? ` ${c.dim}${result.title}${c.reset}` : "";
+  const back = result.was_hidden ? ", back in the inbox" : "";
+  const rearmed = result.rearmed_schedules
+    ? `, rearmed ${result.rearmed_schedules} trigger${result.rearmed_schedules === 1 ? "" : "s"}`
+    : "";
+  console.log(
+    `${c.green}ok${c.reset} resuming ${c.cyan}${result.short_id}${c.reset}${title}${back || rearmed ? ` ${c.dim}—${back}${rearmed}${c.reset}` : ""}`,
+  );
+
+  // No freshness bound: a session that never died keeps the pane it is in.
+  await attachToManagedPane(result, {
+    timeoutMs: attachTimeoutMs(options.timeout),
+    retryCmd: `cast resume ${result.short_id} --tmux`,
+  });
+}
+
 /**
  * `cast restart <session>` — restart a session's AGENT (the daemon form takes no
  * argument). Same backend as the web header's "Restart session".
- *
- * With --tmux we then follow the restart to its pane and attach. The pane is the
- * daemon's, not ours: it is stamped with the agent's session id, the web
- * session's tmux pill points at it, and the browser's read-only split renders
- * it — so attaching here puts your keyboard on the terminal the web session is
- * already watching.
- *
- * We only accept a pane created after we asked. The resume rebuilds the pane
- * under the same name, so an older one of that name is the pre-restart pane the
- * daemon is about to kill — attaching to it would drop us the moment it does.
- * The one exception is a deduplicated restart, where no new pane is coming and
- * the standing one is the honest answer.
  */
 async function restartSessionAgent(
   session: string,
   options: { tmux?: boolean; repair?: boolean; timeout?: string },
 ): Promise<void> {
-  // Before the call: a pane created while the request is in flight is ours.
-  const requestedAtSec = Math.floor(Date.now() / 1000);
-  const result = await cliPost("/cli/sessions/restart", { session, repair: !!options.repair });
+  // Read the clock BEFORE the call: a pane created while the request is in
+  // flight is the one this restart is bringing up.
+  const requestedAtSec = nowSec();
+  const result = await cliPost("/cli/sessions/restart", {
+    session,
+    repair: !!options.repair,
+  }) as SessionCommandResult;
 
   const title = result.title ? ` ${c.dim}${result.title}${c.reset}` : "";
   if (result.deduplicated) {
@@ -4704,54 +4819,11 @@ async function restartSessionAgent(
     return;
   }
 
-  if (!hasTmux()) {
-    console.log(`${c.dim}tmux is not installed here, so there is no pane to attach to.${c.reset}`);
-    return;
-  }
-  // A pane exists on exactly ONE machine — the daemon that runs the session.
-  // When that is not this one, waiting for a local pane would just time out.
-  const here = deviceId();
-  if (result.device_id && result.device_id !== here) {
-    console.log(`${c.dim}This session runs on another machine, so its pane comes up there, not here.${c.reset}`);
-    console.log(`${c.dim}Open it from the web session's tmux pill instead.${c.reset}`);
-    return;
-  }
-
-  const sessionId: string = result.session_id;
-  const nameSuffix = `-${resumeShortId(sessionId)}`;
-  const timeoutMs = (Number.parseInt(options.timeout ?? "", 10) || 45) * 1000;
-  const deadline = Date.now() + timeoutMs;
-  // The waiting line is transient — it exists to be erased. Piped output keeps
-  // no cursor, so print it only to a terminal rather than leaving raw escapes
-  // in a log.
-  const transient = !!process.stdout.isTTY;
-  if (transient) process.stdout.write(`${c.dim}Waiting for the pane...${c.reset}`);
-
-  let target: string | null = null;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, PANE_POLL_INTERVAL_MS));
-    target = pickPaneForSession(listCodecastPanes(), sessionId, nameSuffix, requestedAtSec);
-    if (target) break;
-  }
-  // Nothing new came up. A deduplicated restart never promised a new pane, so
-  // take the standing one; otherwise say plainly that the resume didn't land.
-  if (!target && result.deduplicated) {
-    target = pickPaneForSession(listCodecastPanes(), sessionId, nameSuffix);
-  }
-  if (transient) process.stdout.write("\r\x1b[2K");
-
-  if (!target) {
-    console.log(`${c.yellow}!${c.reset} No pane came up within ${Math.round(timeoutMs / 1000)}s.`);
-    console.log(`  ${c.dim}Check the daemon:${c.reset} cast status`);
-    console.log(`  ${c.dim}Then retry:${c.reset} cast restart ${result.short_id} --tmux`);
-    process.exit(1);
-  }
-
-  console.log(`${c.dim}Attaching to${c.reset} ${target}`);
-  if (!attachOrSwitchTmux(target)) {
-    console.log(`${c.yellow}!${c.reset} Couldn't attach. Run it yourself: tmux attach -t '${target}'`);
-    process.exit(1);
-  }
+  await attachToManagedPane(result, {
+    timeoutMs: attachTimeoutMs(options.timeout),
+    newerThanSec: requestedAtSec,
+    retryCmd: `cast restart ${result.short_id} --tmux`,
+  });
 }
 
 program
@@ -4762,7 +4834,9 @@ program
     "available). With a session ID, restarts that session's AGENT the same way\n" +
     "the web header's \"Restart session\" does: the daemon stops it, then resumes\n" +
     "the transcript in a fresh pane. The pair to `cast kill <session>`.\n\n" +
-    "--tmux attaches you to that pane. It is the same pane the web session is\n" +
+    "This DISCARDS the running agent. To attach to a session without disturbing\n" +
+    "it, use `cast resume <session> --tmux` instead.\n\n" +
+    "--tmux attaches you to the new pane. It is the same pane the web session is\n" +
     "attached to, so what you type and what the browser shows are one terminal.\n\n" +
     "Examples:\n" +
     "  cast restart                  # restart the daemon\n" +
@@ -7168,7 +7242,10 @@ async function selectAndAttachFromLiveSessions(
 
   if (session.tmuxSession) {
     console.log(`\nAttaching to tmux session: ${session.tmuxSession}`);
-    spawnSync("tmux", ["attach-session", "-t", session.tmuxSession], { stdio: "inherit" });
+    // Nesting-safe: a bare attach-session from inside tmux refuses to run.
+    if (!attachOrSwitchTmux(session.tmuxSession)) {
+      console.log(`${c.yellow}!${c.reset} Couldn't attach. Run it yourself: tmux attach -t '${session.tmuxSession}'`);
+    }
     return;
   }
 
@@ -7192,6 +7269,12 @@ program
     "With a query, searches history and opens the matching session.\n\n" +
     "Multiple words are AND-ed (all must match).\n" +
     "Use \"quotes\" for exact phrase matching.\n\n" +
+    "--tmux resumes into the session's own tmux pane instead of this terminal.\n" +
+    "That is the pane the web session is attached to, so the browser and your\n" +
+    "keyboard are on one terminal — messages you send from the web land in the\n" +
+    "same agent you are typing to. It takes a session ID, not a search query,\n" +
+    "and never kills a live agent: if the session is already running you simply\n" +
+    "attach to where it is.\n\n" +
     "Configure default args:\n" +
     "  cast config claude_args \"--dangerously-skip-permissions\"\n" +
     "  cast config codex_args \"--dangerously-bypass-approvals-and-sandbox\"\n\n" +
@@ -7199,6 +7282,7 @@ program
     "  cast resume                          # list live sessions\n" +
     "  cast resume logo design              # search: 'logo' AND 'design'\n" +
     "  cast resume \"logo design\"            # exact phrase\n" +
+    "  cast resume jx7c6zk --tmux           # resume/attach in the web session's pane\n" +
     "  cast resume <session-id> --as codex  # convert/resume by exact session id\n" +
     "  cast resume auth --as codex          # resume Claude session in Codex"
   )
@@ -7207,6 +7291,8 @@ program
   .option("-n, --limit <n>", "Max results to show (use -n 10 for more)", "4")
   .option("--dry-run", "Show matches without opening Claude")
   .option("--here", "Open session in current directory (don't switch to session's project)")
+  .option("--tmux", "Resume in the session's tmux pane (the one the web session is attached to) and attach")
+  .option("--timeout <seconds>", "How long --tmux waits for the pane", "45")
   .option("--as <agent>", "Resume in a different agent (claude or codex)")
   .option("--claude-args <args>", "Additional args to pass to claude (overrides config)")
   .option("--claude-tail <n>", "When converting to Claude, keep only the last N messages (+ a truncation notice)")
@@ -7221,6 +7307,23 @@ program
     if (options.as && !isReconstitutionTarget(options.as)) {
       console.error(`Invalid --as value: "${options.as}". Use "claude" or "codex".`);
       process.exit(1);
+    }
+
+    // --tmux hands the whole job to the daemon (it owns the pane the web session
+    // watches), so it takes a session reference rather than a search query and
+    // shares none of the foreground launch path below.
+    if (options.tmux) {
+      if (!queryWords || queryWords.length !== 1) {
+        console.error("--tmux needs exactly one session ID: cast resume jx7c6zk --tmux");
+        console.error(`${c.dim}Find it with: cast sessions${c.reset}`);
+        process.exit(1);
+      }
+      if (options.as) {
+        console.error("--as converts the session locally and can't run in the daemon's pane; drop --tmux to convert.");
+        process.exit(1);
+      }
+      await resumeSessionIntoPane(queryWords[0], { timeout: options.timeout });
+      return;
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
@@ -9405,6 +9508,7 @@ program
       visual: { getVersion: getVisualVersion, install: installVisualSnippet, reEnable: "cast install" },
       publish: { getVersion: getPublishVersion, install: installPublishSnippet, reEnable: "cast install" },
       state: { getVersion: getStateVersion, install: installStateSnippet, reEnable: "cast install" },
+      browser: { getVersion: getBrowserVersion, install: installBrowserSnippet, reEnable: "cast install" },
       orchestration: { getVersion: getWorkVersion, install: installOrchestration, reEnable: "cast install" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
