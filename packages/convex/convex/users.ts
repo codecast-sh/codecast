@@ -6,10 +6,10 @@ import type { PaginationOptions, PaginationResult, RegisteredQuery } from "conve
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots } from "./devices";
-import { fromConvexAgentType } from "@codecast/shared/contracts";
+import { fromConvexAgentType, AGENT_CLIENTS, findModelOption } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
-import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
+import { hasRecentPendingDaemonCommand, enqueueResumeSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { ccAccountsValidator } from "./ccAccountsShared";
@@ -900,6 +900,34 @@ export const updateNotificationPreferences = mutation({
       updateData.muted_members = args.muted_members;
     }
     await ctx.db.patch(userId, updateData);
+  },
+});
+
+// Set or clear the user's default model for one agent client. The value is a
+// shared-contract option key ("fable"), validated against the same registry
+// dispatch validates launch picks with; null clears the default (fall back to
+// the agent's own saved default). Merge per key — saving claude's default must
+// not wipe codex's.
+export const updateDefaultModel = mutation({
+  args: {
+    agent: v.string(),
+    model: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    if (!(args.agent in AGENT_CLIENTS)) throw new Error(`Unknown agent client: ${args.agent}`);
+    if (args.model !== null) {
+      const opt = findModelOption(args.agent, args.model);
+      // Launchability is the bar: a default the daemon can't put on the launch
+      // line (menu keys, Sonnet 1M) would silently degrade to "no flag".
+      if (!opt?.cliAlias) throw new Error(`Model ${args.model} cannot be a launch default`);
+    }
+    const user = await ctx.db.get(userId);
+    const merged: Record<string, string> = { ...(user?.default_models ?? {}) };
+    if (args.model === null) delete merged[args.agent];
+    else merged[args.agent] = args.model;
+    await ctx.db.patch(userId, { default_models: merged });
   },
 });
 
