@@ -12,12 +12,12 @@ import { cleanNotificationBody } from '@codecast/web/lib/notificationText';
 
 type Notification = {
   _id: Id<"notifications">;
-  type: "mention" | "comment_reply" | "conversation_comment" | "team_invite" | "session_idle" | "permission_request" | "session_error" | "team_session_start" | "task_completed" | "task_failed" | "task_assigned" | "task_status_changed" | "task_commented" | "doc_updated" | "doc_commented" | "plan_status_changed" | "plan_task_completed";
+  type: "mention" | "comment_reply" | "conversation_comment" | "team_invite" | "session_idle" | "permission_request" | "session_error" | "team_session_start" | "task_completed" | "task_failed" | "task_assigned" | "task_status_changed" | "task_commented" | "doc_updated" | "doc_commented" | "plan_status_changed" | "plan_task_completed" | "artifact_commented" | "session_assigned" | "chat_mention" | "chat_reply" | "chat_here";
   message: string;
   read: boolean;
   created_at: number;
   conversation_id?: Id<"conversations">;
-  entity_type?: "task" | "doc" | "plan" | "conversation";
+  entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel";
   entity_id?: string;
   actor: {
     _id: Id<"users">;
@@ -60,6 +60,9 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "team_session_start": return { name: "play-circle", color: Theme.blue };
     case "task_completed": return { name: "check-circle", color: Theme.greenBright };
     case "task_failed": return { name: "exclamation-circle", color: Theme.red };
+    case "chat_mention": return { name: "at", color: Theme.blue };
+    case "chat_reply": return { name: "comments", color: Theme.accent };
+    case "chat_here": return { name: "bullhorn", color: "#f59e0b" };
     default: return { name: "bell", color: Theme.textMuted };
   }
 }

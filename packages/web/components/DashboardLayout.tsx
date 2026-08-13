@@ -52,6 +52,8 @@ import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { useSyncTeamInboxSessions } from "../hooks/useSyncTeamInboxSessions";
 import { useSyncChangeFeed } from "../hooks/useSyncChangeFeed";
 import { useSyncBuckets } from "../hooks/useSyncBuckets";
+import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
+import { useChatToasts } from "../hooks/useChatToasts";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
@@ -200,6 +202,32 @@ function DashboardSyncEffects() {
   useSyncTeamInboxSessions();
   useSyncChangeFeed();
   useSyncBuckets();
+  // Chat's channel rail runs app-wide, not on the chat page: the sidebar badge,
+  // the document title and the arrival toasts all read it, and a toast that only
+  // fires while chat is open is a toast nobody needs.
+  useChatChannelsSync();
+  useChatToasts();
+  useChatTitleBadge();
+  return null;
+}
+
+// Unread mentions in the browser tab title.
+//
+// Only mentions. An unread COUNT in the title turns every busy afternoon into a
+// number that never reaches zero, and a title that always shouts is a title
+// nobody reads. Being named is the one thing worth interrupting a different app
+// for, which is exactly what a tab title does.
+function useChatTitleBadge() {
+  const { mentions } = useChatUnread();
+  // The conversation view writes the title too (its own "codecast | <session>"),
+  // so the badge is re-asserted on a slow tick rather than only when the count
+  // changes — otherwise opening a session silently drops it.
+  const tick = useCoarseNow(5_000);
+  useWatchEffect(() => {
+    const base = document.title.replace(/^\(\d+\)\s*/, "");
+    const next = mentions > 0 ? `(${mentions}) ${base}` : base;
+    if (document.title !== next) document.title = next;
+  }, [mentions, tick]);
   return null;
 }
 

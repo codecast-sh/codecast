@@ -472,3 +472,102 @@ export function toolSummary(tc: ToolCallLike): string {
 
   return "";
 }
+
+// The collapsed receipt chip stands in for a whole turn's tool activity, so it
+// needs two phrases per family of tools: a count for a busy turn, and the real
+// subject for a quiet one.
+//
+// `one`/`many` are the counting forms ("ran 2 commands"). `verb` is the past
+// tense word a small group uses to name what it actually did ("ran npm test");
+// families where verb + subject wouldn't read as a phrase omit it and always
+// count. `path` marks the families whose subject is a file path, which clips
+// from the other end (see clipSubject).
+type ToolPhrase = { verb?: string; path?: boolean; one: string; many: (n: number) => string };
+
+function toolPhrase(rawName: string): ToolPhrase {
+  switch (rawName) {
+    case "Read":
+    case "read":
+    case "file_read": return { verb: "read", path: true, one: "read 1 file", many: (n) => `read ${n} files` };
+    case "Edit":
+    case "edit":
+    case "file_edit":
+    case "apply_patch":
+    case "fileChange":
+    case "NotebookEdit": return { verb: "edited", path: true, one: "1 edit", many: (n) => `${n} edits` };
+    case "Write":
+    case "write":
+    case "file_write": return { verb: "wrote", path: true, one: "wrote 1 file", many: (n) => `wrote ${n} files` };
+    case "Bash":
+    case "bash":
+    case "shell":
+    case "shell_command":
+    case "exec_command":
+    case "container.exec":
+    case "commandExecution": return { verb: "ran", one: "ran 1 command", many: (n) => `ran ${n} commands` };
+    case "Grep":
+    case "grep":
+    case "Glob":
+    case "glob":
+    case "code_search":
+    case "code_analysis": return { verb: "searched", one: "1 search", many: (n) => `${n} searches` };
+    case "WebFetch":
+    case "web_fetch":
+    case "WebSearch":
+    case "web_search":
+    case "web__run": return { verb: "looked up", one: "1 web lookup", many: (n) => `${n} web lookups` };
+    case "Task":
+    case "Agent": return { one: "ran 1 agent", many: (n) => `ran ${n} agents` };
+    case "TodoWrite": return { one: "updated todos", many: () => "updated todos" };
+    case "update_plan": return { one: "updated plan", many: () => "updated plan" };
+    case "view_image": return { verb: "viewed", path: true, one: "viewed 1 image", many: (n) => `viewed ${n} images` };
+    case "image_gen__imagegen": return { verb: "generated", one: "generated 1 image", many: (n) => `generated ${n} images` };
+    default: {
+      const label = formatToolName(rawName) || rawName;
+      return { verb: label, one: label, many: (n) => `${label} ×${n}` };
+    }
+  }
+}
+
+// Aggregate tool counts into a human phrase: "read 3 files · ran 2 commands".
+export function describeToolGroup(rawName: string, count: number): string {
+  const phrase = toolPhrase(rawName);
+  return count === 1 ? phrase.one : phrase.many(count);
+}
+
+// One or two tools fit in the same space a count would take, so say WHAT they
+// did instead: "ran npm test", or "read lib/foo.ts · ran npm test". A pair of
+// the same kind states the verb once ("ran git status · npm test"), and a lone
+// tool spends the whole line on its subject. Returns "" when a subject is
+// missing (unparsed args, a tool with nothing to show), which leaves the caller
+// on the counting phrase.
+export function describeSmallToolGroup(actions: readonly ToolCallLike[]): string {
+  if (actions.length === 0) return "";
+  const budget = actions.length === 1 ? 72 : 30;
+  const parts: string[] = [];
+  let previousVerb = "";
+  for (const action of actions) {
+    const { verb, path } = toolPhrase(action.name);
+    // Multi-line commands (heredocs, chained shell) collapse to one line first,
+    // so the clip spends its budget on words rather than indentation.
+    const subject = clipSubject(toolSummary(action).replace(/\s+/g, " ").trim(), budget, path === true);
+    if (!verb || !subject) return "";
+    parts.push(verb === previousVerb ? subject : `${verb} ${subject}`);
+    previousVerb = verb;
+  }
+  return parts.join(" · ");
+}
+
+// A command or a query leads with what identifies it, so it clips from the end.
+// A path is the opposite — `codecast/packages/cli/src/stateCommand.ts` clipped
+// that way keeps only the directories and drops the one word the reader wants —
+// so a path sheds leading segments instead and keeps its filename.
+function clipSubject(subject: string, budget: number, isPath: boolean): string {
+  if (!isPath || subject.length <= budget) return truncateStr(subject, budget);
+  const segments = subject.split("/");
+  let kept = segments[segments.length - 1];
+  for (let i = segments.length - 2; i >= 0 && `${segments[i]}/${kept}`.length <= budget; i--) {
+    kept = `${segments[i]}/${kept}`;
+  }
+  return truncateStr(kept, budget);
+}

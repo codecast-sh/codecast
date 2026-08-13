@@ -159,6 +159,7 @@ const NAV_PAGES: ReadonlyArray<{
 }> = [
   { label: "Dashboard", path: "/team/activity", icon: "grid", keywords: "home sessions main activity feed team" },
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
+  { label: "Chat", path: "/chat", icon: "message", keywords: "channels team talk messages rooms" },
   { label: "Tasks", path: "/tasks", icon: "check", keywords: "todo work items" },
   { label: "Plans", path: "/plans", icon: "map", keywords: "roadmap goals milestones planning" },
   { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
@@ -224,6 +225,8 @@ function NavIcon({ type, className }: { type: string; className?: string }) {
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>;
     case "folder":
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>;
+    case "message":
+      return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h8M8 14h5M21 12a8 8 0 01-8 8H7l-4 3v-4.5A8 8 0 0113 4a8 8 0 018 8z" /></svg>;
     case "map":
       return <MapIcon className={c} />;
     case "clock":

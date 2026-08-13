@@ -12,6 +12,7 @@ import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
+import { useChatUnread } from "../hooks/useChatSync";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useWorkspaceArgs, workspaceStamp } from "../hooks/useWorkspaceArgs";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -19,7 +20,8 @@ import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
-import { Globe, Workflow, Zap } from "lucide-react";
+import { CreateChannelModal } from "./CreateChannelModal";
+import { Globe, Workflow, Zap, MessageSquare } from "lucide-react";
 
 const api = _api as any;
 
@@ -50,6 +52,8 @@ function NavSection({
   onMobileClose,
   onAdd,
   addTitle,
+  badge,
+  unread,
   views,
   expanded,
   onToggle,
@@ -63,6 +67,12 @@ function NavSection({
   icon: React.ReactNode;
   title?: string;
   simpleHide?: boolean;
+  /** Rendered beside the label in the wide rail — an unread count or dot. */
+  badge?: React.ReactNode;
+  /** Unread carried by WEIGHT, the same rule the channel rail follows: colour is
+   *  already busy marking the active row, so using it for both makes neither
+   *  legible. */
+  unread?: boolean;
   onMobileClose?: () => void;
   onAdd?: () => void;
   addTitle?: string;
@@ -89,7 +99,8 @@ function NavSection({
           title={title ?? label}
         >
           {icon}
-          {!isNarrow && <span>{label}</span>}
+          {!isNarrow && <span className={unread && !isActive ? "font-semibold text-sol-text" : undefined}>{label}</span>}
+          {!isNarrow && badge}
         </Link>
         {hasViews && (
           <button
@@ -160,6 +171,45 @@ const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
   );
 });
 
+// Chat's sidebar row. Isolated for the same reason NeedsInputCountBadge is: the
+// unread numbers move whenever anyone on the team says anything, and that must
+// re-render one row rather than the whole rail.
+//
+// The rule the rail already follows, applied one level up: unread is WEIGHT plus
+// a dot, and only a mention gets a number. A count of ordinary chatter teaches
+// people to ignore counts, and then the one that matters is invisible inside it.
+const ChatNavRow = memo(function ChatNavRow({
+  isActive,
+  isNarrow,
+  onMobileClose,
+}: {
+  isActive: boolean;
+  isNarrow: boolean;
+  onMobileClose?: () => void;
+}) {
+  const { channels, mentions } = useChatUnread();
+  return (
+    <NavSection
+      label="Chat"
+      href="/chat"
+      isActive={isActive}
+      isNarrow={isNarrow}
+      onMobileClose={onMobileClose}
+      unread={channels > 0 || mentions > 0}
+      badge={
+        mentions > 0 ? (
+          <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-sol-orange text-sol-bg rounded-full">
+            {mentions > 99 ? "99+" : mentions}
+          </span>
+        ) : channels > 0 && !isActive ? (
+          <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan" aria-label="Unread messages" />
+        ) : null
+      }
+      icon={<MessageSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+    />
+  );
+});
+
 export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -168,6 +218,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isAnchor = pathname?.startsWith("/anchor");
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
+  const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
@@ -192,6 +243,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const createDoc = useInboxStore((s) => s.createDoc);
   const wsStamp = workspaceStamp(useWorkspaceArgs());
   const createModal = useInboxStore((s) => s.createModal);
+  const createModalDefaults = useInboxStore((s) => s.createModalDefaults);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
   const openCompose = useInboxStore((s) => s.openCompose);
@@ -403,6 +455,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               )}
             </Link>
           )}
+          <ChatNavRow isActive={!!isChat} isNarrow={isNarrow} onMobileClose={onMobileClose} />
           <NavSection
             label="Tasks"
             href="/tasks"
@@ -695,10 +748,18 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         </a>
       )}
       {createModal === "task" && (
-        <CreateTaskModal onClose={() => closeCreateModal()} teamMembers={teamMembers} currentUser={currentUser} />
+        <CreateTaskModal onClose={() => closeCreateModal()} teamMembers={teamMembers} currentUser={currentUser} defaults={createModalDefaults} />
       )}
       {createModal === "plan" && (
         <CreateDocModal onClose={() => closeCreateModal()} initialType="plan" />
+      )}
+      {createModal === "chat" && (
+        <CreateChannelModal
+          onClose={() => closeCreateModal()}
+          // The stub id is what the rail already shows; the tab path follows the
+          // supersede when the server row lands (rekeyId).
+          onCreated={(channelId) => router.push(`/chat/${channelId}`)}
+        />
       )}
     </nav>
   );

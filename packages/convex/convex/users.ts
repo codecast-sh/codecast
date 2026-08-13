@@ -859,10 +859,17 @@ export const updateNotificationPreferences = mutation({
       permission_request: v.boolean(),
       session_idle: v.optional(v.boolean()),
       session_error: v.optional(v.boolean()),
+      session_assigned: v.optional(v.boolean()),
       task_activity: v.optional(v.boolean()),
       doc_activity: v.optional(v.boolean()),
       plan_activity: v.optional(v.boolean()),
       artifact_activity: v.optional(v.boolean()),
+      // This list must hold every key the schema holds. A Convex object
+      // validator REJECTS a field it does not declare, so a key the schema has
+      // and this does not can never be written — and, worse, once such a key
+      // reaches a user row by any other route, the settings page echoes the
+      // stored object back and every toggle on web and mobile fails validation.
+      chat_activity: v.optional(v.boolean()),
     })),
     muted_members: v.optional(v.array(v.id("users"))),
     machine_wide_presence: v.optional(v.boolean()),
@@ -880,7 +887,14 @@ export const updateNotificationPreferences = mutation({
       updateData.machine_wide_presence = args.machine_wide_presence;
     }
     if (args.notification_preferences !== undefined) {
-      updateData.notification_preferences = args.notification_preferences;
+      // MERGE, don't replace. A client that saves one toggle sends the object it
+      // holds, and a key it has not learned about yet (a newer app version's, or
+      // one this build does not render) would otherwise be wiped on every save.
+      const user = await ctx.db.get(userId);
+      updateData.notification_preferences = {
+        ...(user?.notification_preferences ?? {}),
+        ...args.notification_preferences,
+      };
     }
     if (args.muted_members !== undefined) {
       updateData.muted_members = args.muted_members;

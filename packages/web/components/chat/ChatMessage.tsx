@@ -1,9 +1,11 @@
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Bot, SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle } from "lucide-react";
-import { MD_COMPONENTS } from "../tools/MarkdownRenderer";
+import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2 } from "lucide-react";
+import { MD_COMPONENTS, MD_REHYPE_PLUGINS, MD_REMARK_PLUGINS } from "../tools/MarkdownRenderer";
+import { CommentAvatar } from "../comments/CommentAvatar";
 import { remarkChatMentions } from "../../lib/remarkChatMentions";
-import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
+import { compactAge } from "../../lib/threadState";
+import { copyToClipboard } from "../../lib/utils";
 import type { ChatMessageView } from "./chatTypes";
 import "./chat.css";
 
@@ -37,80 +39,27 @@ function headerTime(ts: number, now: number): string {
   return `${d.toLocaleDateString(undefined, { weekday: "short" })} ${clockTime(ts)}`;
 }
 
+/** "3m ago" / "2h ago", on the app's one relative clock (lib/threadState's
+ *  compactAge). Chat had its own copy that ROUNDED where every other surface
+ *  floors, so a 90 minute old thread read "2h ago" here and "1h" everywhere
+ *  else. */
 export function relativeReplyTime(ts: number, now: number): string {
-  const secs = Math.max(0, Math.round((now - ts) / 1000));
-  if (secs < 60) return "just now";
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
+  const age = compactAge(Math.max(0, now - ts));
+  return age === "just now" ? age : `${age} ago`;
 }
 
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2);
-  return parts[0][0] + parts[parts.length - 1][0];
-}
-
-// Stable per-name colour for the initials fallback, so a person keeps the same
-// identity colour everywhere without storing one.
-const AVATAR_HUES = [
-  "var(--sol-blue)",
-  "var(--sol-cyan)",
-  "var(--sol-green)",
-  "var(--sol-violet)",
-  "var(--sol-magenta)",
-  "var(--sol-orange)",
-];
-
-function hueFor(seed: string): string {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  return AVATAR_HUES[h % AVATAR_HUES.length];
-}
-
-export function ChatAvatar({
-  name,
-  avatarUrl,
-  isAgent,
-  size = 22,
-  className = "",
-}: {
-  name: string;
-  avatarUrl?: string;
-  isAgent?: boolean;
-  size?: number;
-  className?: string;
-}) {
-  const style = { width: size, height: size };
-  if (isAgent) {
-    return (
-      <span className={`ch-avatar ch-avatar-agent ${className}`} style={style} title={name}>
-        <Bot style={{ width: size * 0.6, height: size * 0.6 }} />
-      </span>
-    );
-  }
-  if (avatarUrl) {
-    return <img className={`ch-avatar ${className}`} style={style} src={avatarUrl} alt={name} title={name} />;
-  }
-  return (
-    <span
-      className={`ch-avatar ch-avatar-fallback ${className}`}
-      style={{ ...style, background: hueFor(name) }}
-      title={name}
-    >
-      {initials(name)}
-    </span>
-  );
-}
+/** The one-tap reactions the toolbar offers. Small on purpose: a full picker is
+ *  a different surface, and six covers what people actually press. */
+export const QUICK_REACTIONS = ["👍", "🎉", "❤️", "👀", "🚀", "😄"];
 
 export type ChatMessageProps = {
   message: ChatMessageView;
   /** Suppress the header and avatar: this message continues the one above. */
   grouped?: boolean;
+  /** The room this message is in. The timestamp is a PERMALINK
+   *  (/chat/<channel>?m=<id>) — the one place a reader instinctively
+   *  right-clicks to copy a link to a message — so the row has to know it. */
+  channelId?: string;
   /** Handles that resolve to real members, so unknown @words stay plain text. */
   knownHandles?: Set<string>;
   /** The viewer's handles, for the louder self-mention treatment. */
@@ -118,10 +67,21 @@ export type ChatMessageProps = {
   /** Passed in rather than read from Date.now() so a virtualized list re-renders
    *  on a coarse clock instead of per row. */
   now: number;
+  /** True when the viewer wrote this message: the only one who may edit or
+   *  delete it, and the server agrees. */
+  mine?: boolean;
   onOpenThread?: (messageId: string) => void;
-  onReact?: (messageId: string) => void;
-  onMore?: (messageId: string) => void;
+  /** The emoji is the ARGUMENT. A pill reports its own emoji, the toolbar
+   *  reports whichever one the picker was pointed at — a control that always
+   *  posted a thumbs-up made the pill the reader pressed look broken. */
+  onReact?: (messageId: string, emoji: string) => void;
+  onEdit?: (messageId: string, content: string) => void;
+  onDelete?: (messageId: string) => void;
   onRetryAgent?: (messageId: string) => void;
+  /** Re-drive a send that failed. Local-first means the row appears instantly;
+   *  if delivery then fails and nothing says so, the message sits there looking
+   *  sent. That is the failure that makes people stop trusting a chat product. */
+  onRetrySend?: (messageId: string) => void;
   /** Hides the thread affordance and hover tools — used inside the thread panel,
    *  where a nested thread would be meaningless. */
   inThread?: boolean;
@@ -130,33 +90,95 @@ export type ChatMessageProps = {
 export const ChatMessage = memo(function ChatMessage({
   message,
   grouped,
+  channelId,
   knownHandles,
   selfHandles,
   now,
+  mine,
   onOpenThread,
   onReact,
-  onMore,
+  onEdit,
+  onDelete,
   onRetryAgent,
+  onRetrySend,
   inThread,
 }: ChatMessageProps) {
   const { author, agentStatus } = message;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(message.content);
 
   // Registered as a [plugin, options] tuple, not as remarkChatMentions(opts):
   // unified calls each array entry to OBTAIN the transformer, so handing it an
   // already-built transformer makes it run with the options slot as the tree.
+  //
+  // The pair is a MUTABLE tuple: unified's Pluggable type does not accept a
+  // readonly one, so `as const` here made the whole array unassignable.
+  //
+  // Built from MD_REMARK_PLUGINS, not from entityRemarkPlugins: that list also
+  // carries the invisible-Unicode sanitizer every other markdown surface gets,
+  // which rewrites bidi overrides into visible tokens so text cannot render in a
+  // different order than it reads. Chat is the surface whose content is typed by
+  // teammates and produced by agents — the last place to drop it.
   const remarkPlugins = useMemo(
     () => [
-      ...entityRemarkPlugins,
-      [remarkChatMentions, { known: knownHandles, self: selfHandles }] as const,
+      ...MD_REMARK_PLUGINS,
+      [remarkChatMentions, { known: knownHandles, self: selfHandles }] as [
+        typeof remarkChatMentions,
+        { known?: Set<string>; self?: Set<string> },
+      ],
     ],
     [knownHandles, selfHandles],
   );
+
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  // One outside click closes whichever popover is open. Both are anchored to the
+  // hover toolbar, which disappears the moment the pointer leaves the row.
+  useEffect(() => {
+    if (!menuOpen && !pickerOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (rowRef.current?.contains(e.target as Node)) return;
+      setMenuOpen(false);
+      setPickerOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setMenuOpen(false);
+        setPickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen, pickerOpen]);
+
+  const permalink = channelId ? `/chat/${channelId}?m=${message.id}` : undefined;
+  const canEdit = !!mine && !!onEdit && !message.deletedAt && !author.isAgent;
+  const canDelete = !!mine && !!onDelete && !message.deletedAt;
+
+  const react = (emoji: string) => {
+    setPickerOpen(false);
+    onReact?.(message.id, emoji);
+  };
+
+  const saveEdit = () => {
+    const next = draft.trim();
+    setEditing(false);
+    if (next && next !== message.content) onEdit?.(message.id, next);
+  };
 
   const rowClass = [
     "ch-msg",
     grouped ? "" : "ch-msg-lead",
     message.mentionsMe ? "ch-msg-mentions-me" : "",
-    message.pending ? "opacity-60" : "",
+    // Sending is a dimmed row, not a spinner: the message is already readable,
+    // and a spinner on every send would make an ordinary action look risky.
+    message.pending && !message.failed ? "ch-msg-pending" : "",
+    message.failed ? "ch-msg-failed" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -165,14 +187,14 @@ export const ChatMessage = memo(function ChatMessage({
   const errored = agentStatus === "error";
 
   return (
-    <div className={rowClass} data-message-id={message.id} id={`chatmsg-${message.id}`}>
+    <div className={rowClass} data-message-id={message.id} id={`chatmsg-${message.id}`} ref={rowRef}>
       <div className="ch-msg-gutter">
         {grouped ? (
           <span className="ch-msg-hovertime" aria-hidden="true">
             {clockTime(message.createdAt)}
           </span>
         ) : (
-          <ChatAvatar name={author.name} avatarUrl={author.avatarUrl} isAgent={author.isAgent} />
+          <CommentAvatar name={author.name} image={author.avatarUrl} isAgent={author.isAgent} letters={2} />
         )}
       </div>
 
@@ -183,7 +205,10 @@ export const ChatMessage = memo(function ChatMessage({
             {author.isAgent && <span className="ch-agent-chip">agent</span>}
             <a
               className="ch-msg-time"
-              href={`#chatmsg-${message.id}`}
+              // The permalink the server mints, not a DOM fragment: a fragment
+              // is meaningless outside this tab, and clicking one asks the
+              // browser to scroll a row the virtualizer may have unmounted.
+              href={permalink ?? `#chatmsg-${message.id}`}
               title={FULL_TIME.format(new Date(message.createdAt))}
             >
               {headerTime(message.createdAt, now)}
@@ -215,15 +240,69 @@ export const ChatMessage = memo(function ChatMessage({
               </button>
             )}
           </div>
+        ) : editing ? (
+          // Editing in place, not in the composer: the message stays where it is
+          // in the transcript, so you can still see what you are answering.
+          <div className="ch-edit">
+            <textarea
+              className="ch-edit-box"
+              value={draft}
+              autoFocus
+              rows={Math.min(8, draft.split("\n").length + 1)}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setEditing(false);
+                  setDraft(message.content);
+                }
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  saveEdit();
+                }
+              }}
+            />
+            <div className="ch-edit-foot">
+              <button type="button" className="ch-edit-save" onClick={saveEdit}>
+                Save
+              </button>
+              <button
+                type="button"
+                className="ch-edit-cancel"
+                onClick={() => {
+                  setEditing(false);
+                  setDraft(message.content);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="ch-msg-body">
-            <ReactMarkdown remarkPlugins={remarkPlugins} components={MD_COMPONENTS}>
+            <ReactMarkdown
+              remarkPlugins={remarkPlugins}
+              rehypePlugins={MD_REHYPE_PLUGINS}
+              components={MD_COMPONENTS}
+            >
               {message.content}
             </ReactMarkdown>
             {message.editedAt && (
               <span className="ch-msg-edited" title={FULL_TIME.format(new Date(message.editedAt))}>
                 (edited)
               </span>
+            )}
+          </div>
+        )}
+
+        {message.failed && (
+          <div className="ch-send-failed">
+            <AlertTriangle className="w-3 h-3" />
+            <span>Not sent</span>
+            {onRetrySend && (
+              <button type="button" className="ch-send-retry" onClick={() => onRetrySend(message.id)}>
+                Retry
+              </button>
             )}
           </div>
         )}
@@ -236,7 +315,7 @@ export const ChatMessage = memo(function ChatMessage({
                 type="button"
                 className={`ch-reaction ${r.mine ? "ch-reaction-mine" : ""}`}
                 title={r.names?.join(", ")}
-                onClick={() => onReact?.(message.id)}
+                onClick={() => react(r.emoji)}
               >
                 <span aria-hidden="true">{r.emoji}</span>
                 <span className="ch-reaction-count">{r.count}</span>
@@ -249,12 +328,13 @@ export const ChatMessage = memo(function ChatMessage({
           <button type="button" className="ch-thread-link" onClick={() => onOpenThread?.(message.id)}>
             <span className="ch-thread-faces">
               {(message.replyFaces ?? []).slice(0, 4).map((f) => (
-                <ChatAvatar
+                <CommentAvatar
                   key={f.id}
                   name={f.name}
-                  avatarUrl={f.avatarUrl}
+                  image={f.avatarUrl}
                   isAgent={f.isAgent}
                   size={16}
+                  letters={2}
                   className="ch-thread-face"
                 />
               ))}
@@ -269,24 +349,117 @@ export const ChatMessage = memo(function ChatMessage({
         )}
       </div>
 
-      {!message.deletedAt && (
-        <div className="ch-tools">
-          <button type="button" className="ch-tool" title="React" onClick={() => onReact?.(message.id)}>
-            <SmilePlus className="w-3.5 h-3.5" />
-          </button>
-          {!inThread && (
+      {!message.deletedAt && !editing && (
+        <div className={`ch-tools ${menuOpen || pickerOpen ? "ch-tools-open" : ""}`}>
+          {onReact && (
+            <button
+              type="button"
+              className="ch-tool"
+              title="React"
+              aria-haspopup="true"
+              aria-expanded={pickerOpen}
+              onClick={() => {
+                setMenuOpen(false);
+                setPickerOpen((v) => !v);
+              }}
+            >
+              <SmilePlus className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {!inThread && onOpenThread && (
             <button
               type="button"
               className="ch-tool"
               title="Reply in thread"
-              onClick={() => onOpenThread?.(message.id)}
+              onClick={() => onOpenThread(message.id)}
             >
               <MessageSquare className="w-3.5 h-3.5" />
             </button>
           )}
-          <button type="button" className="ch-tool" title="More" onClick={() => onMore?.(message.id)}>
-            <MoreHorizontal className="w-3.5 h-3.5" />
-          </button>
+          {/* Rendered only when it can do something, the way the retry buttons
+              already are. An overflow button that opens nothing is worse than
+              no overflow button. */}
+          {(permalink || canEdit || canDelete) && (
+            <button
+              type="button"
+              className="ch-tool"
+              title="More"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              onClick={() => {
+                setPickerOpen(false);
+                setMenuOpen((v) => !v);
+              }}
+            >
+              <MoreHorizontal className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {pickerOpen && (
+            <div className="ch-picker" role="menu" aria-label="React">
+              {QUICK_REACTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  className="ch-picker-item"
+                  title={`React ${emoji}`}
+                  onClick={() => react(emoji)}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {menuOpen && (
+            <div className="ch-menu" role="menu" aria-label="Message actions">
+              {permalink && (
+                <button
+                  type="button"
+                  className="ch-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    void copyToClipboard(
+                      typeof window === "undefined" ? permalink : new URL(permalink, window.location.origin).toString(),
+                    );
+                  }}
+                >
+                  <Link2 className="w-3 h-3" />
+                  Copy link
+                </button>
+              )}
+              {canEdit && (
+                <button
+                  type="button"
+                  className="ch-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setDraft(message.content);
+                    setEditing(true);
+                  }}
+                >
+                  <Pencil className="w-3 h-3" />
+                  Edit
+                </button>
+              )}
+              {canDelete && (
+                <button
+                  type="button"
+                  className="ch-menu-item ch-menu-danger"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onDelete?.(message.id);
+                  }}
+                >
+                  <Trash2 className="w-3 h-3" />
+                  Delete
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

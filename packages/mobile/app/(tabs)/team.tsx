@@ -10,6 +10,7 @@ import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Theme, Spacing } from '@/constants/Theme';
 import { SessionData, SessionItem, formatRelativeTime } from '@/components/SessionItem';
 import { SessionListSkeleton, MemberSkeleton } from '@/components/SkeletonLoader';
+import { ChannelList, useChatRail } from '@/components/chat/ChannelList';
 
 const ICON_EMOJI: Record<string, string> = {
   rocket: '🚀', flame: '🔥', zap: '⚡', star: '⭐', diamond: '💎', crown: '👑',
@@ -18,7 +19,10 @@ const ICON_EMOJI: Record<string, string> = {
   hexagon: '⬡', triangle: '🔺', cube: '🧊', sphere: '🔵', infinity: '♾️', omega: 'Ω',
 };
 
-type Segment = 'sessions' | 'members';
+// Chat lives here rather than on its own tab: the bar already carries five tabs
+// and a sixth would squeeze every label. Chat is the team talking — it belongs
+// with the team.
+type Segment = 'sessions' | 'chat' | 'members';
 
 function getMemberStatus(daemonLastSeen: number | undefined): 'online' | 'recent' | 'offline' {
   if (!daemonLastSeen) return 'offline';
@@ -57,6 +61,11 @@ export default function TeamScreen() {
     api.teams.getTeamMembers,
     activeTeamId ? { team_id: activeTeamId } : "skip"
   );
+
+  // Mentions of you across all channels put a number on the Chat segment — the
+  // same rule as everywhere: unread is quiet, being named is not.
+  const chatRail = useChatRail(activeTeamId);
+  const chatMentions = chatRail?.mentionTotal ?? 0;
 
   const filteredMembers = useMemo(() => {
     if (!teamMembers) return [];
@@ -141,7 +150,7 @@ export default function TeamScreen() {
           )}
         </TouchableOpacity>
         <RNView style={styles.segmentRow}>
-          {(['sessions', 'members'] as const).map((s) => (
+          {(['sessions', 'chat', 'members'] as const).map((s) => (
             <TouchableOpacity
               key={s}
               style={[styles.segmentTab, segment === s && styles.segmentTabActive]}
@@ -149,14 +158,27 @@ export default function TeamScreen() {
               activeOpacity={0.7}
             >
               <RNText style={[styles.segmentText, segment === s && styles.segmentTextActive]}>
-                {s === 'sessions' ? 'Sessions' : `Members${filteredMembers.length ? ` (${filteredMembers.length})` : ''}`}
+                {s === 'sessions'
+                  ? 'Sessions'
+                  : s === 'chat'
+                    ? 'Chat'
+                    : `Members${filteredMembers.length ? ` (${filteredMembers.length})` : ''}`}
               </RNText>
+              {s === 'chat' && chatMentions > 0 && (
+                <RNView style={styles.segmentBadge}>
+                  <RNText style={styles.segmentBadgeText}>
+                    {chatMentions > 99 ? '99+' : chatMentions}
+                  </RNText>
+                </RNView>
+              )}
             </TouchableOpacity>
           ))}
         </RNView>
       </RNView>
 
-      {segment === 'sessions' ? (
+      {segment === 'chat' ? (
+        <ChannelList teamId={activeTeamId} />
+      ) : segment === 'sessions' ? (
         <FlatList
           data={sessions}
           renderItem={({ item }) => (
@@ -293,7 +315,9 @@ const styles = StyleSheet.create({
   },
   segmentTab: {
     flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     paddingVertical: 8,
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
@@ -301,6 +325,17 @@ const styles = StyleSheet.create({
   segmentTabActive: {
     borderBottomColor: Theme.accent,
   },
+  segmentBadge: {
+    marginLeft: 5,
+    minWidth: 16,
+    height: 15,
+    borderRadius: 8,
+    backgroundColor: Theme.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  segmentBadgeText: { fontSize: 9, fontWeight: '700', color: Theme.bg },
   segmentText: {
     fontSize: 14,
     fontWeight: '500',

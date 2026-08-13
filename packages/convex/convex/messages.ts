@@ -851,9 +851,14 @@ export const getConversationImages = query({
     if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
       return [];
     }
+    // Newest-first, so a session past the cap keeps its RECENT images (the
+    // gallery opens on the last one) instead of its oldest. Both writers append
+    // in transcript order — live ingest as messages arrive, the sweep walking
+    // by_conversation_timestamp ascending — so creation order tracks it.
     const rows = await ctx.db
       .query("conversation_images")
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .order("desc")
       .take(SESSION_GALLERY_ROW_LIMIT);
     // Rows land in insertion order, which is transcript order for live ingest
     // but not for a backfilled history (old images inserted after new ones).

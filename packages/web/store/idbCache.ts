@@ -36,6 +36,10 @@ class CacheDB extends Dexie {
   buckets!: Dexie.Table<any, string>;
   bucketAssignments!: Dexie.Table<any, string>;
   comments!: Dexie.Table<any, string>;
+  chatChannels!: Dexie.Table<any, string>;
+  chatMessages!: Dexie.Table<any, string>;
+  chatReactions!: Dexie.Table<any, string>;
+  chatReads!: Dexie.Table<any, string>;
   meta!: Dexie.Table<{ key: string; value: any }, string>;
   conversationMessages!: Dexie.Table<{ convId: string; messages: any[]; latestTimestamp: number; pagination: any }, string>;
   dispatchOutbox!: Dexie.Table<OutboxEntry, string>;
@@ -131,6 +135,26 @@ class CacheDB extends Dexie {
       buckets: "_id",
       bucketAssignments: "_id",
       comments: "_id",
+      meta: "key",
+      conversationMessages: "convId, latestTimestamp",
+      dispatchOutbox: "id, ts",
+    });
+    // v9: team chat. Messages and reactions carry a secondary index on the id
+    // they hang off, so a channel (or a thread) can be read off disk without
+    // scanning every message the client has ever cached.
+    this.version(9).stores({
+      sessions: "_id",
+      tasks: "_id",
+      docs: "_id",
+      plans: "_id",
+      projects: "_id",
+      buckets: "_id",
+      bucketAssignments: "_id",
+      comments: "_id",
+      chatChannels: "_id",
+      chatMessages: "_id, channel_id, thread_root_id",
+      chatReactions: "_id, message_id",
+      chatReads: "_id, channel_id",
       meta: "key",
       conversationMessages: "convId, latestTimestamp",
       dispatchOutbox: "id, ts",

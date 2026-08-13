@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -33,6 +33,8 @@ import {
   entityReferenceLabel,
   type EntityType,
 } from "../lib/entityLinks";
+import { findEntityInStore } from "../lib/liveEntities";
+import { useInboxStore } from "../store/inboxStore";
 import { DocEmbed } from "./DocEmbed";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
@@ -662,7 +664,18 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
   // docs/projects are only ever addressed by a full Convex id.
   const doc = useQuery(api.docs.webGet, type === "doc" && looksConvex ? { id: rawId } : "skip");
   const project = useQuery(api.projects.webGet, type === "project" && looksConvex ? { id: rawId } : "skip");
-  const entity = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : undefined;
+  const served = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : undefined;
+
+  // Local-first: the client usually already holds this row, so paint the title
+  // on the FIRST frame instead of flashing the raw id until the query answers.
+  // Read once and non-reactively (getState, not a subscription) — a pill must
+  // not re-render on the churn of a collection with thousands of rows; the live
+  // query above is what keeps the label fresh.
+  const seed = useMemo(
+    () => (type ? findEntityInStore(useInboxStore.getState(), type, rawId) : undefined),
+    [type, rawId],
+  );
+  const entity: any = served ?? seed;
   const status = entity?.status;
 
   const Icon = isSession

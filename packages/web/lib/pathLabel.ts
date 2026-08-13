@@ -6,6 +6,9 @@
 // updating whenever anything in that loop changed.
 export function pathLabel(path: string): string {
   if (path.startsWith("/conversation/")) return "Conversation";
+  // A chat tab is titled by the surface, not the channel id — the id is opaque,
+  // and the channel's own name is only knowable from the store.
+  if (path.startsWith("/chat/")) return "Chat";
   if (path.startsWith("/tasks/")) return "Task";
   if (path.startsWith("/docs/")) return "Doc";
   if (path.startsWith("/plans/")) return "Plan";
@@ -33,6 +36,7 @@ export function pathLabel(path: string): string {
     "/inbox": "Inbox",
     "/feed": "Feed",
     "/crosstalk": "Crosstalk",
+    "/chat": "Chat",
     "/settings": "Settings",
     "/team/activity": "Activity",
   };

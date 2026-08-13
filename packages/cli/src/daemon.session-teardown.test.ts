@@ -177,7 +177,10 @@ describe("resumeOwnerVerdict", () => {
 });
 
 describe("parseReapCandidateRow", () => {
-  const row = (name: string, session = "", conv = "") => [name, session, conv].join("\t");
+  // Field order is stamps-then-name, separated by a PRINTABLE character — see
+  // REAP_LIST_FORMAT. tmux rewrites control characters in format output to `_`
+  // whenever the caller is not itself inside tmux, which the daemon never is.
+  const row = (name: string, session = "", conv = "") => [session, conv, name].join("|");
 
   test("resume shells are candidates with or without stamps", () => {
     expect(parseReapCandidateRow(row("cc-resume-7206623b", "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31")))
@@ -207,22 +210,40 @@ describe("parseReapCandidateRow", () => {
   });
 
   test("unset stamps arrive as EMPTY fields, not missing ones (the real tmux output)", () => {
-    // REAP_LIST_FORMAT always emits two tabs; tmux expands an unset user option
-    // to the empty string. Verified against live tmux:
-    //   "cc-resume-7206623b\t7206623b-…\t"   (no conversation stamp)
+    // REAP_LIST_FORMAT always emits two separators; tmux expands an unset user
+    // option to the empty string. Verified against live tmux:
+    //   "7206623b-…||cc-resume-7206623b"   (no conversation stamp)
     expect(parseReapCandidateRow(row("cc-resume-7206623b", "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", "")))
       .toEqual({ tmux: "cc-resume-7206623b", sessionId: "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", convId: null, kind: "resume" });
-    // A foreign pane: both stamps empty, tabs still present.
+    // A foreign pane: both stamps empty, separators still present.
     expect(parseReapCandidateRow(row("my-editor", "", ""))).toBeNull();
   });
 
-  test("a tmux too old to expand #{@opt} emits no tabs at all — still safe", () => {
-    // Degenerate input the format string can't produce on a modern tmux, but an
-    // ancient one yields the bare name: the pane is uncollected unless its NAME
-    // identifies it, which is exactly the conservative outcome we want.
+  test("a separator inside a session name is part of the name", () => {
+    expect(parseReapCandidateRow(row("my|odd|pane", "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31")))
+      .toEqual({ tmux: "my|odd|pane", sessionId: "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", convId: null, kind: "stamped" });
+  });
+
+  test("a tmux too old to expand #{@opt} is read as unstamped, never as a session id", () => {
+    // Two degenerate shapes a modern tmux can't produce: the placeholder handed
+    // back verbatim, and the bare name with no separators. Both must land on
+    // "no stamps" — the pane is uncollected unless its NAME identifies it, the
+    // conservative outcome. Reading a literal "#{@codecast_session_id}" as a
+    // session id would hand the reaper a pane it cannot resolve.
+    expect(parseReapCandidateRow("#{@codecast_session_id}|#{@codecast_conversation_id}|my-editor")).toBeNull();
+    expect(parseReapCandidateRow("#{@codecast_session_id}|#{@codecast_conversation_id}|cc-claude-6f68a98bqm7z")).toBeNull();
     expect(parseReapCandidateRow("my-editor")).toBeNull();
     expect(parseReapCandidateRow("cc-resume-7206623b")?.kind).toBe("resume");
     expect(parseReapCandidateRow("cc-claude-6f68a98bqm7z")).toBeNull(); // unidentifiable without stamps
+  });
+
+  test("the pane name survives intact — a welded row would name a pane that doesn't exist", () => {
+    // The bug this format change fixes: with a tab separator, tmux returned
+    // "cc-resume-abc_<sessionid>_<convid>" as ONE field. It still looked like a
+    // resume candidate (right prefix), so the reaper spent every pass trying to
+    // kill panes under names no tmux session has ever had.
+    const parsed = parseReapCandidateRow(row("cc-resume-7206623b", "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", "jx7conv"));
+    expect(parsed?.tmux).toBe("cc-resume-7206623b");
   });
 });
 

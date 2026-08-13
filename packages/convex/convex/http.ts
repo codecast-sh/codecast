@@ -3366,6 +3366,18 @@ http.route({
 });
 
 
+// The HTTP status for each structured failure code a mutation can raise (see
+// chat.ts `chatFail`). Anything unmapped is a 500, which is what an unstructured
+// throw already was.
+const CLI_ERROR_STATUS: Record<string, number> = {
+  UNAUTHENTICATED: 401,
+  FORBIDDEN: 403,
+  NOT_FOUND: 404,
+  INVALID: 400,
+  CONFLICT: 409,
+  RATE_LIMITED: 429,
+};
+
 function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) {
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -3384,6 +3396,21 @@ function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) 
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });
       } catch (error) {
+        // A ConvexError carries structured data — { code, message, retryable } —
+        // and flattening it to a string is what makes a caller unable to tell
+        // "wait and retry" from "this will never be accepted". Pass the data
+        // through, with a status that says the same thing, so an outbox can make
+        // that decision without parsing prose.
+        const data = (error as any)?.data;
+        if (data && typeof data === "object" && typeof data.code === "string") {
+          return new Response(
+            JSON.stringify({ ...data, error: data.message ?? data.code }),
+            {
+              status: CLI_ERROR_STATUS[data.code] ?? 500,
+              headers: { "Content-Type": "application/json", ...corsHeaders },
+            },
+          );
+        }
         const msg = error instanceof Error ? error.message : String(error);
         return new Response(JSON.stringify({ error: msg }), {
           status: msg.includes("Unauthorized") ? 401 : 500,
@@ -3445,6 +3472,55 @@ cliRoute("/cli/anchor/channels", async (ctx, body) => {
 });
 cliRoute("/cli/anchor/say", async (ctx, body) => {
   return await ctx.runAction(api.slack.postMessage, body);
+});
+
+// Team chat. Every one of these authorizes the caller inside the function — this
+// route only forwards the request body, so the mutation's own argument list is
+// what keeps identity and scope out of the caller's hands.
+cliRoute("/cli/chat/channels", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.listChannels, body);
+});
+cliRoute("/cli/chat/create-channel", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.createChannel, body);
+});
+cliRoute("/cli/chat/read", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.listMessages, body);
+});
+cliRoute("/cli/chat/thread", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.getThread, body);
+});
+cliRoute("/cli/chat/message", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.getMessage, body);
+});
+cliRoute("/cli/chat/search", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.searchMessages, body);
+});
+cliRoute("/cli/chat/send", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.sendMessage, body);
+});
+cliRoute("/cli/chat/mark-read", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.markRead, body);
+});
+// What the anchor runs to fill the placeholder already showing in the thread.
+cliRoute("/cli/chat/reply", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.replyAsAnchor, body);
+});
+// Stop the anchor answering plain replies in one thread, or hand it a thread it
+// has not spoken in. body: { api_token, root_id, follow }.
+cliRoute("/cli/chat/anchor-follow", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.setAnchorFollow, body);
+});
+cliRoute("/cli/chat/react", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.toggleReaction, body);
+});
+// Stop one in-flight anchor turn now, instead of waiting out the deadline.
+// body: { api_token, message_id } — the thinking placeholder's id.
+cliRoute("/cli/chat/stop", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.stopAnchorReply, body);
+});
+// Archive (or restore) a channel. body: { api_token, channel_id, archived }.
+cliRoute("/cli/chat/archive", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.archiveChannel, body);
 });
 
 // Tasks
@@ -3679,6 +3755,11 @@ cliRoute("/cli/sessions/dismiss", async (ctx, body) => ctx.runMutation(api.conve
 cliRoute("/cli/sessions/undismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "undismiss" }));
 cliRoute("/cli/sessions/kill", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "kill" }));
 
+// Restart (cast restart <session>): kill the agent and resume it through the
+// daemon's resume ladder — the web header's "Restart session", from a shell.
+// body: { api_token, session, repair? }.
+cliRoute("/cli/sessions/restart", async (ctx, body) => ctx.runMutation(api.conversations.cliRestartSession, body));
+
 // Rename (cast rename): set a session's title with the custom flag so the
 // auto-titler never overwrites it. body: { api_token, session, title }.
 cliRoute("/cli/sessions/rename", async (ctx, body) => ctx.runMutation(api.conversations.cliRenameSession, body));
@@ -3756,6 +3837,9 @@ cliRoute("/cli/vault/upload-url", async (ctx, body) => ctx.runMutation(api.image
 // reply carries that lease, so the capture loop learns when to stop from the
 // request it was already making.
 cliRoute("/cli/terminal/frame", async (ctx, body) => ctx.runMutation(api.terminalStream.cliPushFrame, body));
+// The viewer half, for callers with a token instead of a browser session.
+cliRoute("/cli/terminal/watch", async (ctx, body) => ctx.runMutation(api.terminalStream.watchPane, body));
+cliRoute("/cli/terminal/pane", async (ctx, body) => ctx.runQuery(api.terminalStream.getPane, body));
 
 // Image sharing (cast image): upload a screenshot/image to storage, then
 // resolve its stable public /api/storage/<uuid> URL for inline embedding in

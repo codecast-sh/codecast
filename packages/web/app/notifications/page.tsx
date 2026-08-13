@@ -8,6 +8,14 @@ import { useState, useCallback, useMemo } from "react";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../../store/inboxStore";
 import { useConvexSync } from "../../hooks/useConvexSync";
+import {
+  notificationRoute,
+  sessionTypes,
+  socialTypes,
+  taskTypes,
+  typeColors,
+  typeLabels,
+} from "../../lib/notificationTypes";
 
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -98,54 +106,8 @@ const agentNames: Record<string, string> = {
   pi: "pi",
 };
 
-const sessionTypes = new Set(["session_idle", "session_error", "permission_request"]);
-
-const typeLabels: Record<string, string> = {
-  team_session_start: "started coding",
-  session_idle: "ready",
-  session_error: "error",
-  permission_request: "needs permission",
-  mention: "mentioned you",
-  comment_reply: "replied",
-  conversation_comment: "commented",
-  team_invite: "team invite",
-  task_completed: "task done",
-  task_failed: "task failed",
-  task_assigned: "assigned to you",
-  task_status_changed: "status changed",
-  task_commented: "commented",
-  doc_updated: "doc updated",
-  doc_commented: "commented on doc",
-  plan_status_changed: "plan updated",
-  plan_task_completed: "plan task done",
-  artifact_commented: "commented on your page",
-};
-
-const typeColors: Record<string, string> = {
-  team_session_start: "text-sol-green",
-  session_idle: "text-sol-green",
-  session_error: "text-red-400",
-  permission_request: "text-sol-orange",
-  mention: "text-sol-blue",
-  comment_reply: "text-sol-cyan",
-  conversation_comment: "text-sol-cyan",
-  team_invite: "text-sol-violet",
-  task_completed: "text-sol-green",
-  task_failed: "text-red-400",
-  task_assigned: "text-sol-yellow",
-  task_status_changed: "text-sol-yellow",
-  task_commented: "text-sol-cyan",
-  doc_updated: "text-sol-violet",
-  doc_commented: "text-sol-cyan",
-  plan_status_changed: "text-sol-green",
-  plan_task_completed: "text-sol-green",
-  artifact_commented: "text-sol-cyan",
-};
-
 type FilterTab = "all" | "unread" | "sessions" | "social" | "tasks";
 
-const socialTypes = new Set(["mention", "comment_reply", "conversation_comment", "team_invite", "artifact_commented"]);
-const taskTypes = new Set(["task_assigned", "task_status_changed", "task_commented", "task_completed", "task_failed", "plan_status_changed", "plan_task_completed", "doc_updated", "doc_commented"]);
 
 function sessionLabel(conversation: { title?: string; project_path?: string; agent_type?: string } | null): string | null {
   if (!conversation) return null;
@@ -176,7 +138,8 @@ export default function NotificationsPage() {
     conversationId?: Id<"conversations">,
     entityType?: string,
     entityId?: string,
-    link?: string
+    link?: string,
+    chatMessageId?: string
   ) => {
     markAsRead(notificationId);
     // A deep link wins (artifact comments: opens the published page with that
@@ -185,11 +148,8 @@ export default function NotificationsPage() {
       window.open(link, "_blank", "noopener");
       return;
     }
-    if (entityType && entityId) {
-      const routes: Record<string, string> = { task: "/tasks/", doc: "/docs/", plan: "/plans/" };
-      const base = routes[entityType];
-      if (base) { router.push(`${base}${entityId}`); return; }
-    }
+    const route = notificationRoute(entityType, entityId, chatMessageId);
+    if (route) { router.push(route); return; }
     if (conversationId) {
       router.push(`/conversation/${conversationId}`);
     } else {
@@ -294,7 +254,7 @@ export default function NotificationsPage() {
                 return (
                   <button
                     key={notification._id}
-                    onClick={() => handleNotificationClick(notification._id, notification.conversation_id, (notification as any).entity_type, (notification as any).entity_id, (notification as any).link)}
+                    onClick={() => handleNotificationClick(notification._id, notification.conversation_id, (notification as any).entity_type, (notification as any).entity_id, (notification as any).link, (notification as any).chat_message_id)}
                     className={`w-full px-5 py-4 text-left border-b border-sol-border/40 last:border-b-0 hover:bg-sol-bg-alt transition-colors ${
                       !notification.read ? "bg-sol-bg-alt/40" : "bg-sol-bg"
                     }`}

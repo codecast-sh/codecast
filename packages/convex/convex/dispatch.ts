@@ -116,6 +116,15 @@ export const dispatch = mutation({
   },
 });
 
+// A Convex document id is 32 base32 characters. The store's optimistic rows are
+// keyed by shorter local stub ids until their server row supersedes them, and a
+// stub reaching a mutation's `v.id()` validator is an argument error the outbox
+// would then re-drive forever. Handlers that can receive one check first.
+const SERVER_ID_RE = /^[a-z0-9]{32}$/;
+function isServerId(value: unknown): value is string {
+  return typeof value === "string" && SERVER_ID_RE.test(value);
+}
+
 type HandlerCtx = { db: any; storage?: any; runMutation?: any };
 type HandlerFn = (ctx: HandlerCtx, userId: Id<"users">, args: any, result?: any) => Promise<any>;
 
@@ -1417,6 +1426,98 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       id,
       parent_id: parentId ?? undefined,
       sort_order: sortOrder ?? undefined,
+    });
+  },
+
+  // ── Team chat ─────────────────────────────────────────────────────────────
+  //
+  // The store paints every one of these locally and hands delivery to the
+  // outbox; here they delegate to the chat mutations, which own authorization,
+  // rate limits, mention resolution and the anchor wake. Nothing is re-derived.
+  //
+  // Every handler refuses a stub id. The store's optimistic rows are keyed by a
+  // local `chat…stub-` id until the server row supersedes them, and a gesture
+  // that names one (reacting to a message still in flight) has no server row to
+  // act on — passing it through would only turn a harmless local race into an
+  // argument validation error the outbox then re-drives forever.
+  dispatchChatSend: async (
+    ctx,
+    _userId,
+    [channelId, content, clientId, opts]: [
+      string,
+      string,
+      string,
+      { threadRootId?: string; attachments?: any[]; origin?: "agent" }?,
+    ],
+  ) => {
+    if (!isServerId(channelId)) return;
+    return await ctx.runMutation!(api.chat.sendMessage, {
+      channel_id: channelId as Id<"chat_channels">,
+      content,
+      // The dedupe key: a re-driven delivery returns the existing row instead of
+      // inserting a twin, and does not wake the anchor a second time.
+      client_id: clientId,
+      ...(opts?.threadRootId && isServerId(opts.threadRootId)
+        ? { thread_root_id: opts.threadRootId as Id<"chat_messages"> }
+        : {}),
+      ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}),
+      ...(opts?.origin ? { origin: opts.origin } : {}),
+    });
+  },
+  dispatchChatEdit: async (ctx, _userId, [messageId, content]: [string, string]) => {
+    if (!isServerId(messageId)) return;
+    return await ctx.runMutation!(api.chat.editMessage, {
+      message_id: messageId as Id<"chat_messages">,
+      content,
+    });
+  },
+  dispatchChatDelete: async (ctx, _userId, [messageId]: [string]) => {
+    if (!isServerId(messageId)) return;
+    return await ctx.runMutation!(api.chat.deleteMessage, {
+      message_id: messageId as Id<"chat_messages">,
+    });
+  },
+  // An intent, not a state: the mutation splices the caller's own id in or out,
+  // so a replayed toggle can never forge or wipe a teammate's reaction.
+  toggleChatReaction: async (ctx, _userId, [messageId, emoji]: [string, string]) => {
+    if (!isServerId(messageId)) return;
+    return await ctx.runMutation!(api.chat.toggleReaction, {
+      message_id: messageId as Id<"chat_messages">,
+      emoji,
+    });
+  },
+  markChannelRead: async (ctx, _userId, [channelId, lastMessageId]: [string, string?]) => {
+    if (!isServerId(channelId)) return;
+    return await ctx.runMutation!(api.chat.markRead, {
+      channel_id: channelId as Id<"chat_channels">,
+      ...(lastMessageId && isServerId(lastMessageId)
+        ? { last_read_message_id: lastMessageId as Id<"chat_messages"> }
+        : {}),
+    });
+  },
+  setChannelNotifyLevel: async (
+    ctx,
+    _userId,
+    [channelId, level]: [string, "all" | "mentions" | "none"],
+  ) => {
+    if (!isServerId(channelId)) return;
+    return await ctx.runMutation!(api.chat.setNotifyLevel, {
+      channel_id: channelId as Id<"chat_channels">,
+      notify_level: level,
+    });
+  },
+  // Idempotent on client_id, so a replayed create returns the same channel
+  // rather than a second one with the same name.
+  dispatchCreateChatChannel: async (
+    ctx,
+    _userId,
+    [clientId, name, opts]: [string, string, { topic?: string; teamId?: string }?],
+  ) => {
+    return await ctx.runMutation!(api.chat.createChannel, {
+      name,
+      client_id: clientId,
+      ...(opts?.topic ? { topic: opts.topic } : {}),
+      ...(opts?.teamId && isServerId(opts.teamId) ? { team_id: opts.teamId as Id<"teams"> } : {}),
     });
   },
 

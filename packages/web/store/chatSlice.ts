@@ -1,0 +1,842 @@
+// Team chat: the local-first store layer.
+//
+// Everything the chat surface renders comes from here, and every gesture paints
+// from the draft before any round trip — the same law the rest of the store
+// obeys. The four synced collections mirror the four chat tables, and each one
+// syncs as a DELTA overlay: opening #design must never prune the page of
+// #general the user just read, and a thread's replies must stay reachable while
+// only the channel's roots are in view. One flat `chatMessages` map, keyed by
+// row id and carrying `channel_id` / `thread_root_id`, gives both — a channel is
+// a filter, a thread is a filter, and neither disturbs the other.
+//
+// WHY THESE COLLECTIONS ARE NOT `localFirst`
+//
+// Pending FIELD protection reconciles by exact equality: the local value clears
+// only when the server echoes it back identically. That works for `comments`,
+// whose optimistic writes are strings the server stores verbatim. It cannot work
+// for chat, whose interesting fields are SERVER CLOCK stamps — `deleted_at`,
+// `edited_at`, `updated_at` — which the backend deliberately derives itself (see
+// chat.ts's header: identity and time are never caller arguments). An optimistic
+// `deleted_at: Date.now()` would never equal the server's, so its pending entry
+// would never retire and would mask the real row forever, one immortal entry per
+// delete. So chat opts out of auto-pending entirely and reconciles the way the
+// data actually behaves: the delta overlay replaces a row wholesale on echo, an
+// optimistic send is superseded by `client_id` (the altKey), and the two REAL
+// removals — discarding a failed send, taking a reaction back — plant their
+// exclude tombstone explicitly, which is also what authorizes the IDB diff to
+// delete the row from disk.
+//
+// WHERE A FAILED SEND COMES FROM
+//
+// Nothing here decides that a send failed. The dispatch/outbox machinery does:
+// `dispatchChatSend` is an ordinary action, so its args are journaled to the
+// durable outbox and re-driven on reconnect, on tab focus and at boot, and when
+// delivery finally gives up the middleware calls the dispatch error hook, which
+// calls `markChatSendFailed` with the client id carried in those same args (see
+// hooks/useEnsureDispatch.ts). A retry re-dispatches the SAME client id, which
+// chat.sendMessage dedupes on — so a message that actually landed can never
+// double-post, however many times the user presses retry.
+
+import { action, asyncAction, sync } from "./mutativeMiddleware";
+import type { PendingEntry } from "./syncProtocol";
+import { isConvexId } from "../lib/entityLinks";
+import { tallyUnread } from "../lib/chatTimeline";
+import { foldReactions } from "../lib/chatViews";
+import type { ChatChannelView, ChatReaction } from "../components/chat/chatTypes";
+
+// ── Row shapes ──────────────────────────────────────────────────────────────
+//
+// Mirrors of the convex tables, with the id fields widened to string (an
+// optimistic row is keyed by a stub id until the server row supersedes it) and
+// two local-only fields on a message.
+
+export type ChatNotifyLevel = "all" | "mentions" | "none";
+export type ChatAgentStatus = "thinking" | "streaming" | "done" | "error";
+
+export type ChatAttachment = {
+  storage_id: string;
+  name?: string;
+  mime?: string;
+  width?: number;
+  height?: number;
+};
+
+export type ChatChannelRow = {
+  _id: string;
+  team_id?: string;
+  name: string;
+  topic?: string;
+  is_default?: boolean;
+  created_by?: string;
+  created_at: number;
+  updated_at: number;
+  archived_at?: number;
+  client_id?: string;
+};
+
+export type ChatMessageRow = {
+  _id: string;
+  team_id?: string;
+  channel_id: string;
+  thread_root_id?: string;
+  user_id: string;
+  author_kind?: "user" | "agent";
+  content: string;
+  mentions?: string[];
+  mention_scope?: "here";
+  attachments?: ChatAttachment[];
+  client_id?: string;
+  origin?: "agent";
+  created_at: number;
+  updated_at: number;
+  edited_at?: number;
+  deleted_at?: number;
+  agent_status?: ChatAgentStatus;
+  agent_anchor_id?: string;
+  anchor_follow?: boolean;
+  fork_conversation_id?: string;
+  // Local only. Set when delivery gave up, cleared when the user retries, and
+  // gone for good the moment the server row supersedes the stub.
+  _failedAt?: number;
+  _failReason?: string;
+};
+
+export type ChatReadRow = {
+  _id: string;
+  user_id?: string;
+  channel_id: string;
+  team_id?: string;
+  last_read_at: number;
+  last_read_message_id?: string;
+  notify_level: ChatNotifyLevel;
+  joined_at?: number;
+  updated_at: number;
+};
+
+export type ChatReactionRow = {
+  _id: string;
+  message_id: string;
+  channel_id?: string;
+  user_id: string;
+  emoji: string;
+  created_at: number;
+};
+
+/** One row of chat.listChannels' `rail` — the server's own unread numbers.
+ *  Kept because they are the only honest count for a channel whose messages
+ *  this client has never loaded (see selectChatRail). */
+export type ChatRailRow = {
+  channel_id: string;
+  last_message?: {
+    _id: string;
+    user_id: string;
+    author_kind?: "user" | "agent";
+    created_at: number;
+    preview: string;
+  } | null;
+  sort_at: number;
+  unread: number;
+  unread_capped?: boolean;
+  unread_mentions: number;
+  notify_level: ChatNotifyLevel;
+  joined: boolean;
+};
+
+// ── Stub ids ────────────────────────────────────────────────────────────────
+//
+// A local row the server has never seen. Not a Convex id, so the generic patch
+// collector skips it, `isConvexId` tells the two apart everywhere, and the
+// altKey supersede rekeys it onto the real row when the echo lands.
+
+export const CHAT_CHANNEL_STUB_PREFIX = "chatstub-";
+export const CHAT_MESSAGE_STUB_PREFIX = "chatmsgstub-";
+export const CHAT_READ_STUB_PREFIX = "chatreadstub-";
+export const CHAT_REACTION_STUB_PREFIX = "chatreactstub-";
+
+function randomSuffix(): string {
+  return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+}
+
+export function newChatMessageClientId(): string {
+  return `${CHAT_MESSAGE_STUB_PREFIX}${randomSuffix()}`;
+}
+
+export function newChatChannelClientId(): string {
+  return `${CHAT_CHANNEL_STUB_PREFIX}${randomSuffix()}`;
+}
+
+/** The one reaction row this viewer can own for (message, emoji). Deterministic
+ *  so a double-tap finds and removes its own optimistic row rather than adding
+ *  a second one. */
+export function chatReactionStubId(messageId: string, emoji: string): string {
+  return `${CHAT_REACTION_STUB_PREFIX}${messageId}-${emoji}`;
+}
+
+/** How a message row should render while it is on its way out.
+ *   "sent"    — the server has it.
+ *   "pending" — optimistic, still riding the outbox.
+ *   "failed"  — delivery gave up; the row is the only copy of what was typed. */
+export function chatSendState(row: Pick<ChatMessageRow, "_id" | "_failedAt">): "sent" | "pending" | "failed" {
+  if (row._failedAt) return "failed";
+  return isConvexId(row._id) ? "sent" : "pending";
+}
+
+// ── State + action surface ──────────────────────────────────────────────────
+
+export type ChatSliceData = {
+  chatChannels: Record<string, ChatChannelRow>;
+  chatMessages: Record<string, ChatMessageRow>;
+  chatReactions: Record<string, ChatReactionRow>;
+  chatReads: Record<string, ChatReadRow>;
+  chatRail: ChatRailRow[];
+};
+
+export type ChatSendOptions = {
+  threadRootId?: string;
+  attachments?: ChatAttachment[];
+  /** Set by an agent session posting through the web client. Only ever takes
+   *  privilege away (chat.ts refuses to wake an anchor for a machine's line). */
+  origin?: "agent";
+};
+
+export type ChatSliceActions = {
+  /** Paints the message and hands back its client id — the row id the list
+   *  renders, the retry handle, and the server's dedupe key. */
+  sendChatMessage: (channelId: string, content: string, opts?: ChatSendOptions) => string;
+  /** The durable half of a send. Called by sendChatMessage and by retry; never
+   *  call it directly — the client id has to exist first. */
+  dispatchChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => void;
+  retryChatSend: (rowId: string) => void;
+  markChatSendFailed: (rowId: string, reason?: string) => void;
+  discardChatSend: (rowId: string) => void;
+
+  /** Edits a sent message, or rewrites one that never left — a failed send is
+   *  edited by editing what will be sent, under the same client id. */
+  editChatMessage: (messageId: string, content: string) => void;
+  dispatchChatEdit: (messageId: string, content: string) => void;
+  /** Tombstones a sent message. A message the server never accepted has nothing
+   *  to tombstone, so discarding it is the delete. */
+  deleteChatMessage: (messageId: string) => void;
+  dispatchChatDelete: (messageId: string) => void;
+  toggleChatReaction: (messageId: string, emoji: string) => void;
+  markChannelRead: (channelId: string, lastMessageId?: string) => void;
+  setChannelNotifyLevel: (channelId: string, level: ChatNotifyLevel) => void;
+  /** Returns the stub channel id, so the rail can select the new channel in the
+   *  same tick. The altKey supersede moves it onto the real id on echo. */
+  createChatChannel: (name: string, opts?: { topic?: string; teamId?: string }) => string;
+  dispatchCreateChatChannel: (
+    clientId: string,
+    name: string,
+    opts?: { topic?: string; teamId?: string },
+  ) => Promise<any>;
+};
+
+export type ChatSliceState = ChatSliceData & ChatSliceActions;
+
+// The middleware wraps an asyncAction so its CALLER receives the server result as
+// a promise; the function BODY returns nothing. The slice is written against the
+// body's signature, the store interface against the caller's.
+type ChatSliceImpl = ChatSliceData &
+  Omit<ChatSliceActions, "dispatchCreateChatChannel"> & {
+    dispatchCreateChatChannel: (
+      clientId: string,
+      name: string,
+      opts?: { topic?: string; teamId?: string },
+    ) => void;
+  };
+
+// What a chat action may touch on the draft. Deliberately narrow: chat writes
+// its own collections, reads the signed-in user for authorship, and plants its
+// own exclude tombstones.
+type ChatDraft = ChatSliceData & {
+  currentUser: { _id?: string } | null;
+  pending: Record<string, PendingEntry>;
+};
+
+function viewerId(draft: ChatDraft): string {
+  return draft.currentUser?._id ?? "";
+}
+
+function findReadRow(draft: ChatDraft, channelId: string): ChatReadRow | undefined {
+  for (const id in draft.chatReads) {
+    if (draft.chatReads[id]?.channel_id === channelId) return draft.chatReads[id];
+  }
+  return undefined;
+}
+
+/** Upsert this viewer's read row for a channel. A missing row is meaningful
+ *  server-side ("never opened"), so the optimistic write creates it the same way
+ *  the server does — the first read or post joins the channel. */
+function upsertRead(
+  draft: ChatDraft,
+  channelId: string,
+  patch: Partial<ChatReadRow>,
+): void {
+  const now = Date.now();
+  const existing = findReadRow(draft, channelId);
+  if (existing) {
+    Object.assign(existing, patch, { updated_at: now });
+    return;
+  }
+  const stubId = `${CHAT_READ_STUB_PREFIX}${channelId}`;
+  draft.chatReads[stubId] = {
+    _id: stubId,
+    user_id: viewerId(draft),
+    channel_id: channelId,
+    last_read_at: 0,
+    notify_level: "all",
+    joined_at: now,
+    updated_at: now,
+    ...patch,
+  };
+}
+
+/** The store's deletion contract. A row removed locally leaves IDB only when an
+ *  exclude tombstone says the removal was deliberate (see writePatchesToIDB), and
+ *  the tombstone also stops a sync push that predates the delete from re-adding
+ *  the row. These collections generate no automatic pending entries, so the two
+ *  gestures that really remove something plant theirs here, by hand. */
+function excludeRow(draft: ChatDraft, collection: string, id: string): void {
+  draft.pending[`${collection}:${id}`] = { type: "exclude", ts: Date.now() };
+}
+
+export function createChatSlice(set: any, get: any): ChatSliceImpl {
+  return {
+    chatChannels: {},
+    chatMessages: {},
+    chatReactions: {},
+    chatReads: {},
+    chatRail: [],
+
+    // ── Sending ─────────────────────────────────────────────────────────────
+
+    sendChatMessage: (channelId: string, content: string, opts?: ChatSendOptions) => {
+      const clientId = newChatMessageClientId();
+      get().dispatchChatSend(channelId, content, clientId, opts);
+      return clientId;
+    },
+
+    // The optimistic row is written HERE rather than in the wrapper so paint and
+    // durable enqueue happen in one action: a reload between the two would
+    // otherwise leave a message on screen with nothing to deliver it, or a
+    // delivery with nothing on screen.
+    dispatchChatSend: action(function (
+      this: ChatDraft,
+      channelId: string,
+      content: string,
+      clientId: string,
+      opts?: ChatSendOptions,
+    ) {
+      const existing = this.chatMessages[clientId];
+      if (existing) {
+        // A retry, or an edit of something that never left. Same row, same client
+        // id — the list keeps its place instead of the message jumping to the end,
+        // and chat.sendMessage still dedupes anything that did land.
+        existing.content = content;
+        delete existing._failedAt;
+        delete existing._failReason;
+        delete this.pending[`chatMessages:${clientId}`];
+        return;
+      }
+      const now = Date.now();
+      this.chatMessages[clientId] = {
+        _id: clientId,
+        client_id: clientId,
+        channel_id: channelId,
+        thread_root_id: opts?.threadRootId,
+        user_id: viewerId(this),
+        author_kind: "user",
+        content,
+        attachments: opts?.attachments,
+        origin: opts?.origin,
+        created_at: now,
+        updated_at: now,
+      };
+      // Posting is reading, exactly as the server treats it.
+      upsertRead(this, channelId, { last_read_at: now });
+    }),
+
+    retryChatSend: (rowId: string) => {
+      const row = get().chatMessages[rowId] as ChatMessageRow | undefined;
+      if (!row || isConvexId(row._id)) return;
+      get().dispatchChatSend(row.channel_id, row.content, rowId, {
+        threadRootId: row.thread_root_id,
+        attachments: row.attachments,
+        origin: row.origin,
+      });
+    },
+
+    // Called by the dispatch error hook, not by a component: the store learns a
+    // send failed the same way every other durable write does.
+    markChatSendFailed: sync(function (this: ChatDraft, rowId: string, reason?: string) {
+      const row = this.chatMessages[rowId];
+      if (!row || isConvexId(row._id)) return;
+      row._failedAt = Date.now();
+      if (reason) row._failReason = reason;
+    }),
+
+    // The other half of a visible failure: throwing the message away. Only a row
+    // the server never accepted can be discarded this way — anything it holds is
+    // deleted, not forgotten.
+    //
+    // What this does NOT promise: the outbox owns delivery, and a chat send is
+    // never given up on, so a send that failed transiently and later succeeds
+    // will land. When it does, the message comes back as the ordinary sent
+    // message it now is, with a real delete available. That is the honest
+    // outcome — the alternative is a line that is gone from the sender's screen
+    // and present on everyone else's.
+    discardChatSend: sync(function (this: ChatDraft, rowId: string) {
+      const row = this.chatMessages[rowId];
+      if (!row || isConvexId(row._id)) return;
+      delete this.chatMessages[rowId];
+      excludeRow(this, "chatMessages", rowId);
+    }),
+
+    // ── Editing and deleting ────────────────────────────────────────────────
+
+    // A message still riding the outbox has no server row to edit, and rewriting
+    // the local row would not be enough — the parked send carries the ORIGINAL
+    // text. Re-driving the send with the new content under the same client id is
+    // both halves at once, and is what makes "edit or discard" a real answer to a
+    // failed send.
+    editChatMessage: (messageId: string, content: string) => {
+      const row = get().chatMessages[messageId] as ChatMessageRow | undefined;
+      if (!row || row.deleted_at) return;
+      if (isConvexId(messageId)) get().dispatchChatEdit(messageId, content);
+      else {
+        get().dispatchChatSend(row.channel_id, content, messageId, {
+          threadRootId: row.thread_root_id,
+          attachments: row.attachments,
+          origin: row.origin,
+        });
+      }
+    },
+
+    // `content` is the only field written optimistically. `edited_at` is a server
+    // clock stamp: painting a local guess would put a value in the row that the
+    // echo then corrects, for a marker that is a second away anyway.
+    dispatchChatEdit: action(function (this: ChatDraft, messageId: string, content: string) {
+      const row = this.chatMessages[messageId];
+      if (row) row.content = content;
+    }),
+
+    deleteChatMessage: (messageId: string) => {
+      if (isConvexId(messageId)) get().dispatchChatDelete(messageId);
+      else get().discardChatSend(messageId);
+    },
+
+    // A tombstone, not a removal: replies keep their root, so a thread does not
+    // lose its shape. Mirrors what chat.deleteMessage writes.
+    dispatchChatDelete: action(function (this: ChatDraft, messageId: string) {
+      const row = this.chatMessages[messageId];
+      if (!row) return;
+      row.deleted_at = Date.now();
+      row.content = "";
+      row.attachments = undefined;
+      row.mentions = undefined;
+      row.mention_scope = undefined;
+    }),
+
+    // ── Reactions ───────────────────────────────────────────────────────────
+    //
+    // A reaction is a row, not a field on the message, so a toggle is an insert
+    // or a delete and two people reacting at once cannot overwrite each other.
+    // The optimistic insert is keyed deterministically by (message, emoji) for
+    // this viewer; selectChatReactions counts distinct users, so the stub and its
+    // server twin read as one reaction during the window they overlap.
+    toggleChatReaction: action(function (this: ChatDraft, messageId: string, emoji: string) {
+      // Nothing to react to until the message itself exists server-side.
+      if (!isConvexId(messageId)) return;
+      const me = viewerId(this);
+      const stubId = chatReactionStubId(messageId, emoji);
+      let mine: ChatReactionRow | undefined;
+      for (const id in this.chatReactions) {
+        const row = this.chatReactions[id];
+        if (row.message_id === messageId && row.user_id === me && row.emoji === emoji) {
+          mine = row;
+          break;
+        }
+      }
+      if (mine) {
+        const id = mine._id;
+        delete this.chatReactions[id];
+        excludeRow(this, "chatReactions", id);
+        return;
+      }
+      delete this.pending[`chatReactions:${stubId}`];
+      this.chatReactions[stubId] = {
+        _id: stubId,
+        message_id: messageId,
+        channel_id: this.chatMessages[messageId]?.channel_id,
+        user_id: me,
+        emoji,
+        created_at: Date.now(),
+      };
+    }),
+
+    // ── Read state ──────────────────────────────────────────────────────────
+
+    // Passing the message id makes the local stamp EXACTLY what the server will
+    // write (chat.markRead clamps to that message's created_at), so the badge
+    // that clears here does not flicker back when the echo lands.
+    markChannelRead: action(function (this: ChatDraft, channelId: string, lastMessageId?: string) {
+      const marker = lastMessageId ? this.chatMessages[lastMessageId] : undefined;
+      const readAt = marker ? Math.min(marker.created_at, Date.now()) : Date.now();
+      const existing = findReadRow(this, channelId);
+      // Never move the mark backwards: a stale "reached bottom" from a list that
+      // has since grown would re-unread what the viewer already saw.
+      if (existing && existing.last_read_at >= readAt) return;
+      upsertRead(this, channelId, {
+        last_read_at: readAt,
+        ...(lastMessageId && isConvexId(lastMessageId) ? { last_read_message_id: lastMessageId } : {}),
+      });
+    }),
+
+    setChannelNotifyLevel: action(function (this: ChatDraft, channelId: string, level: ChatNotifyLevel) {
+      upsertRead(this, channelId, { notify_level: level });
+    }),
+
+    // ── Channels ────────────────────────────────────────────────────────────
+
+    createChatChannel: (name: string, opts?: { topic?: string; teamId?: string }) => {
+      const clientId = newChatChannelClientId();
+      void (get().dispatchCreateChatChannel(clientId, name, opts) as Promise<any>).catch(() => {
+        // Delivery is the outbox's problem: the entry is journaled and re-driven.
+        // Swallowing here only stops an unhandled rejection.
+      });
+      return clientId;
+    },
+
+    // asyncAction, so a caller that needs the REAL id (a deep link, a follow-up
+    // write) can await it. The rail does not: it selects the stub and the altKey
+    // supersede carries the selection across. chat.createChannel is idempotent on
+    // client_id, so a replayed create returns the same row instead of a twin.
+    dispatchCreateChatChannel: asyncAction(function (
+      this: ChatDraft,
+      clientId: string,
+      name: string,
+      opts?: { topic?: string; teamId?: string },
+    ) {
+      const now = Date.now();
+      this.chatChannels[clientId] = {
+        _id: clientId,
+        client_id: clientId,
+        name: name.trim().toLowerCase().replace(/\s+/g, "-"),
+        topic: opts?.topic,
+        team_id: opts?.teamId,
+        created_by: viewerId(this),
+        created_at: now,
+        updated_at: now,
+      };
+      // Creating a channel joins it, loudly — the same thing the server does.
+      upsertRead(this, clientId, { last_read_at: now, notify_level: "all" });
+    }),
+  };
+}
+
+// ── Sync configuration ──────────────────────────────────────────────────────
+
+/** Spread into SYNC_REGISTRY. Every collection is a delta overlay so one
+ *  channel's page never prunes another's, and the two collections with an
+ *  optimistic create carry the altKey that supersedes their stub. */
+export const CHAT_SYNC_REGISTRY = {
+  // The stub carries client_id === its own stub id; the server row arrives with
+  // the same client_id and rekeys the stub onto the real _id.
+  chatChannels: { isDelta: true, altKey: "client_id" },
+  chatMessages: {
+    isDelta: true,
+    altKey: "client_id",
+    // Retire the tombstone of a discarded send that delivered anyway. Its stub is
+    // gone, so the altKey rekey never sees it and the entry would sit in the
+    // persisted pending map forever. Clearing it is also what lets the delivered
+    // message render as the ordinary sent message it now is — see
+    // discardChatSend for why that is the honest outcome.
+    transform: (draft: any, _table: any, incoming: ChatMessageRow[]) => {
+      for (const row of incoming) {
+        const clientId = row?.client_id;
+        if (clientId && draft.pending[`chatMessages:${clientId}`]) {
+          delete draft.pending[`chatMessages:${clientId}`];
+        }
+      }
+    },
+  },
+  // One row per (viewer, channel), so the channel is the natural key — the same
+  // shape bucketAssignments uses for its per-conversation row.
+  chatReads: { isDelta: true, altKey: "channel_id" },
+  // No client_id column server-side: a reaction has no identity beyond
+  // (message, user, emoji). chatReactionSyncOpts supersedes on that instead.
+  chatReactions: { isDelta: true },
+  chatRail: { kind: "list" as const },
+};
+
+/**
+ * Sync options for a reaction push whose payload is the COMPLETE server set for
+ * a known group of messages — which is what chat.listMessages and chat.getThread
+ * return alongside their page.
+ *
+ * Three things happen that a plain delta cannot do:
+ *   - a row absent from the page is a real removal (someone took their reaction
+ *     back), so it is pruned rather than kept forever;
+ *   - the exclude tombstone from this viewer's own optimistic un-react has done
+ *     its job once the server agrees, so it is retired instead of accumulating
+ *     one dead entry per reaction ever removed;
+ *   - an optimistic stub whose real row has arrived is dropped, which is the
+ *     supersede a client_id altKey would do if the table had one.
+ */
+export function chatReactionSyncOpts(messageIds: Iterable<string>) {
+  const scope = new Set<string>();
+  for (const id of messageIds) scope.add(String(id));
+  return {
+    isDelta: true,
+    pruneAbsentScope: (row: any) => scope.has(String(row?.message_id)),
+    transform: (draft: any, table: Record<string, ChatReactionRow>, incoming: ChatReactionRow[]) => {
+      const confirmed = new Set<string>();
+      for (const row of incoming) {
+        confirmed.add(`${row.message_id}\x1f${row.user_id}\x1f${row.emoji}`);
+      }
+      for (const id of Object.keys(table)) {
+        const row = table[id];
+        if (!row || !scope.has(String(row.message_id))) continue;
+        if (isConvexId(id)) continue;
+        // A stub whose server twin is in this authoritative page.
+        if (confirmed.has(`${row.message_id}\x1f${row.user_id}\x1f${row.emoji}`)) {
+          delete table[id];
+          delete draft.pending[`chatReactions:${id}`];
+        }
+      }
+      // Retire tombstones the server has now confirmed. The row is already out of
+      // `table` (pruned above, or never re-added), and prev no longer holds it, so
+      // nothing can bring it back.
+      const prefix = "chatReactions:";
+      for (const key of Object.keys(draft.pending)) {
+        if (!key.startsWith(prefix)) continue;
+        const id = key.slice(prefix.length);
+        if (id.includes(":")) continue; // a field entry, not a record tombstone
+        if (table[id]) continue;
+        delete draft.pending[key];
+      }
+    },
+  };
+}
+
+// ── Selectors ───────────────────────────────────────────────────────────────
+
+const EMPTY_MESSAGES: ChatMessageRow[] = [];
+
+function byCreatedAsc(a: ChatMessageRow, b: ChatMessageRow): number {
+  return a.created_at - b.created_at || (a._id < b._id ? -1 : a._id > b._id ? 1 : 0);
+}
+
+/** A channel's timeline: roots only, oldest first. Thread replies live in the
+ *  thread panel, so folding them into the channel would show every reply twice. */
+export function selectChannelMessages(
+  state: Pick<ChatSliceData, "chatMessages">,
+  channelId: string,
+): ChatMessageRow[] {
+  if (!channelId) return EMPTY_MESSAGES;
+  const out: ChatMessageRow[] = [];
+  for (const id in state.chatMessages) {
+    const row = state.chatMessages[id];
+    if (row.channel_id !== channelId || row.thread_root_id) continue;
+    out.push(row);
+  }
+  return out.sort(byCreatedAsc);
+}
+
+/** A thread's replies, oldest first. The root is read by id — it is a channel
+ *  row, and putting it in both halves is how a root ends up rendered twice. */
+export function selectThreadReplies(
+  state: Pick<ChatSliceData, "chatMessages">,
+  rootId: string,
+): ChatMessageRow[] {
+  if (!rootId) return EMPTY_MESSAGES;
+  const out: ChatMessageRow[] = [];
+  for (const id in state.chatMessages) {
+    const row = state.chatMessages[id];
+    if (row.thread_root_id === rootId) out.push(row);
+  }
+  return out.sort(byCreatedAsc);
+}
+
+/** Everyone's reactions to one message, folded into the pills the message row
+ *  renders. The counting rule lives in ONE place — lib/chatViews' foldReactions,
+ *  which the sync layer already calls with rows it holds. This selector is the
+ *  entry point for a caller that has the whole map instead: it filters, then
+ *  delegates. Two copies of "count distinct users" is how a stub and its server
+ *  twin end up counted twice on one surface and once on the other. */
+export function selectChatReactions(
+  state: Pick<ChatSliceData, "chatReactions">,
+  messageId: string,
+  viewer: string,
+  nameOf?: (userId: string) => string | undefined,
+): ChatReaction[] {
+  const rows: ChatReactionRow[] = [];
+  for (const id in state.chatReactions) {
+    const row = state.chatReactions[id];
+    if (row.message_id === messageId) rows.push(row);
+  }
+  return foldReactions(rows, viewer, nameOf);
+}
+
+/** The newest message in a channel, REPLIES INCLUDED — the read marker.
+ *
+ *  The transcript shows roots only, so the newest row on screen is not the
+ *  newest thing in the room. The rail's unread tally counts every row with this
+ *  channel_id, replies among them, so a marker taken from the newest root can
+ *  never clear a badge raised by a thread reply. Both halves have to count the
+ *  same set; this is that set. */
+export function selectChannelReadMarker(
+  state: Pick<ChatSliceData, "chatMessages">,
+  channelId: string,
+): ChatMessageRow | undefined {
+  let newest: ChatMessageRow | undefined;
+  for (const id in state.chatMessages) {
+    const row = state.chatMessages[id];
+    if (row.channel_id !== channelId) continue;
+    if (!newest || byCreatedAsc(newest, row) < 0) newest = row;
+  }
+  return newest;
+}
+
+export type ChatRailChannel = ChatChannelView & {
+  /** What the rail sorts by: the newest message, or the channel's creation. */
+  sortAt: number;
+  notifyLevel: ChatNotifyLevel;
+  joined: boolean;
+  lastReadAt?: number;
+  lastMessagePreview?: string;
+  unreadCapped?: boolean;
+};
+
+type ChatRailState = ChatSliceData;
+
+let railCacheKey: unknown[] = [];
+let railCacheValue: ChatRailChannel[] = [];
+
+/**
+ * The channel rail: unarchived channels, newest activity first, each with the
+ * two numbers the rail is allowed to show.
+ *
+ * The counts come from `tallyUnread` over the messages this client actually
+ * holds — that is what makes a badge clear the instant the viewer reads, and
+ * what counts a teammate's line that arrived while the channel was open. Mixing
+ * the two any other way (a max, a sum) would invent a number neither side
+ * believes.
+ *
+ * BUT the local page is only allowed to answer when it REACHES THE NEWEST
+ * MESSAGE. chatMessages is persisted and hydrates from IndexedDB at boot, while
+ * only the open channel is subscribed — so after a reload every channel visited
+ * before holds a stale page, and tallying it would return 0 while the server
+ * says 12. The page reaches the tip when it holds the rail's own newest message,
+ * or when its newest row is at least as new as the rail's sort stamp (an
+ * optimistic send the rail has not caught up with). Otherwise the server's
+ * number stands — except when this viewer's read mark is already at or past
+ * that newest activity, which means nothing the server knows about is unread and
+ * the badge must clear without waiting for a round trip.
+ *
+ * Memoized on the collection refs: the rail is always mounted, and these maps
+ * change far less often than the store around them.
+ */
+export function selectChatRail(state: ChatRailState, viewer: string): ChatRailChannel[] {
+  const key = [state.chatChannels, state.chatMessages, state.chatReads, state.chatRail, viewer];
+  if (key.length === railCacheKey.length && key.every((v, i) => v === railCacheKey[i])) {
+    return railCacheValue;
+  }
+
+  const readByChannel = new Map<string, ChatReadRow>();
+  for (const id in state.chatReads) {
+    const row = state.chatReads[id];
+    const prev = readByChannel.get(row.channel_id);
+    // A hydrated stub can outlive its server row for one sync; the newer stamp
+    // is the one the viewer last acted on.
+    if (!prev || prev.updated_at <= row.updated_at) readByChannel.set(row.channel_id, row);
+  }
+
+  const railByChannel = new Map<string, ChatRailRow>();
+  for (const row of state.chatRail ?? []) railByChannel.set(String(row.channel_id), row);
+
+  const messagesByChannel = new Map<string, ChatMessageRow[]>();
+  for (const id in state.chatMessages) {
+    const row = state.chatMessages[id];
+    const list = messagesByChannel.get(row.channel_id);
+    if (list) list.push(row);
+    else messagesByChannel.set(row.channel_id, [row]);
+  }
+
+  const out: ChatRailChannel[] = [];
+  for (const id in state.chatChannels) {
+    const channel = state.chatChannels[id];
+    if (channel.archived_at) continue;
+    const read = readByChannel.get(id);
+    const rail = railByChannel.get(id);
+    const loaded = messagesByChannel.get(id);
+
+    let unread = rail?.unread ?? 0;
+    let mentions = rail?.unread_mentions ?? 0;
+    let sortAt = rail?.sort_at ?? channel.created_at;
+
+    // Does the page we hold reach the newest message the server knows about?
+    let newestLocal = 0;
+    for (const m of loaded ?? []) if (m.created_at > newestLocal) newestLocal = m.created_at;
+    const railTipId = rail?.last_message?._id;
+    const reachesTip =
+      !rail ||
+      (railTipId ? !!state.chatMessages[railTipId] : true) ||
+      newestLocal >= (rail.sort_at ?? 0);
+
+    if (!reachesTip && read && read.last_read_at >= (rail?.sort_at ?? 0)) {
+      // The mark is past everything the server has. Nothing is unread, whatever
+      // the last rail push said.
+      unread = 0;
+      mentions = 0;
+    }
+
+    if (loaded && loaded.length > 0 && reachesTip) {
+      const tally = tallyUnread(
+        loaded.map((m) => ({
+          createdAt: m.created_at,
+          authorId: m.user_id,
+          mentionsViewer:
+            m.mention_scope === "here" || !!m.mentions?.includes(viewer),
+          deletedAt: m.deleted_at,
+          // Engages the server-mirrored rule: replies do not tick the channel
+          // number; mentions count wherever they live.
+          threadRootId: m.thread_root_id,
+        })),
+        read?.last_read_at,
+        viewer,
+      );
+      unread = tally.unread;
+      mentions = tally.mentions;
+      for (const m of loaded) if (m.created_at > sortAt) sortAt = m.created_at;
+    }
+
+    const notifyLevel = read?.notify_level ?? rail?.notify_level ?? "mentions";
+    out.push({
+      id,
+      name: channel.name,
+      topic: channel.topic,
+      unreadCount: unread,
+      mentionCount: mentions,
+      muted: notifyLevel === "none",
+      sortAt,
+      notifyLevel,
+      joined: !!read || !!rail?.joined,
+      lastReadAt: read?.last_read_at,
+      lastMessagePreview: rail?.last_message?.preview,
+      unreadCapped: loaded && loaded.length > 0 && reachesTip ? false : rail?.unread_capped,
+    });
+  }
+
+  out.sort((a, b) => b.sortAt - a.sortAt || a.name.localeCompare(b.name));
+  railCacheKey = key;
+  railCacheValue = out;
+  return out;
+}
+
+/** Test seam: the rail memo is module-level, so a test that rebuilds the same
+ *  object shapes would otherwise read a previous run's answer. */
+export function _resetChatRailMemo(): void {
+  railCacheKey = [];
+  railCacheValue = [];
+}

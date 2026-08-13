@@ -36,7 +36,14 @@ export const RECORDER_MAX = 500;
 export function recorderSource(max = RECORDER_MAX): string {
   return `(() => {
   if (window.__cast && window.__cast.v === 1) return;
-  const S = { v: 1, console: [], network: [], errors: [], start: Date.now() };
+  // Whether the recorder beat the page's own scripts. readyState is the honest
+  // test: "loading" means the parser has not finished, so we are ahead of
+  // everything. Elapsed time is NOT a substitute — performance.now() counts
+  // from navigation start, so a document-start script on a slow site reads as
+  // "600ms late" when it was in fact first. Getting this wrong would make every
+  // clean capture look untrustworthy.
+  const S = { v: 1, console: [], network: [], errors: [], start: Date.now(),
+              late: document.readyState !== "loading" };
   window.__cast = S;
   const push = (arr, item) => { arr.push(item); if (arr.length > ${max}) arr.splice(0, arr.length - ${max}); };
   const t = () => Date.now() - S.start;
@@ -129,15 +136,23 @@ export interface Recording {
   console: ConsoleEntry[];
   network: NetworkEntry[];
   errors: PageErrorEntry[];
-  /** False when the recorder was not installed before the page ran. */
+  /** False when the recorder is not present at all. */
   armed: boolean;
+  /** True when the recorder was injected into a document that had already begun
+   *  running its own scripts, so earlier output was never captured. */
+  late: boolean;
 }
 
 /**
- * Install the recorder so it runs on every future document in this target, and
- * also inject it into the document already loaded. Without the second half, an
- * agent that opens a page and only then arms the recorder sees nothing until it
- * navigates — which reads exactly like a broken feature.
+ * Install the recorder for every future document in this target, and inject it
+ * into the document already loaded.
+ *
+ * This must run on EVERY command, not once at startup. A new-document script
+ * registered through `Page.addScriptToEvaluateOnNewDocument` belongs to the CDP
+ * session that registered it, and each `cast browser` process detaches when it
+ * exits — so the registration dies with it, and the next navigation would load
+ * a page with no recorder in it. Re-arming costs two messages and makes the
+ * behaviour the same whichever command the agent happens to run first.
  */
 export async function armRecorder(page: PageSession): Promise<void> {
   const src = recorderSource();
@@ -150,17 +165,17 @@ export async function readRecording(page: PageSession): Promise<Recording> {
     .send<any>(
       "Runtime.evaluate",
       {
-        expression: `JSON.stringify(window.__cast ? {console: __cast.console, network: __cast.network, errors: __cast.errors, armed: true} : {console: [], network: [], errors: [], armed: false})`,
+        expression: `JSON.stringify(window.__cast ? {console: __cast.console, network: __cast.network, errors: __cast.errors, armed: true, late: !!__cast.late} : {console: [], network: [], errors: [], armed: false, late: true})`,
         returnByValue: true,
       },
       page.sessionId,
     )
     .catch(() => null);
-  if (!res?.result?.value) return { console: [], network: [], errors: [], armed: false };
+  if (!res?.result?.value) return { console: [], network: [], errors: [], armed: false, late: true };
   try {
     return JSON.parse(res.result.value) as Recording;
   } catch {
-    return { console: [], network: [], errors: [], armed: false };
+    return { console: [], network: [], errors: [], armed: false, late: true };
   }
 }
 

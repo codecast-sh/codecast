@@ -13,6 +13,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/commit\//,
   /^\/pr\//,
   /^\/inbox(\/|$)/,
+  // Chat owns its whole canvas: three columns, each with its own scroll region.
+  /^\/chat(\/|$)/,
   /^\/tasks(\/|$)/,
   /^\/workflows(\/|$)/,
   /^\/routines(\/|$)/,

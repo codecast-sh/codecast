@@ -22,9 +22,16 @@ export type ResolvedVisit = {
 };
 
 function resolvePageTitle(state: any, path: string): string | null {
-  const m = path.match(/^\/(tasks|docs|plans)\/([^/?#]+)/);
+  const m = path.match(/^\/(tasks|docs|plans|chat)\/([^/?#]+)/);
   if (!m) return null;
   const [, kind, id] = m;
+  // Without this every open channel is a tab called "Chat" — pathLabel can only
+  // say what the PATH means, and a channel's name lives in the store. That is
+  // exactly what this resolver is for.
+  if (kind === "chat") {
+    const name = state.chatChannels?.[id]?.name;
+    return name ? `#${name}` : null;
+  }
   if (kind === "tasks") {
     const t = state.tasks?.[id] ?? Object.values(state.tasks ?? {}).find((t: any) => t._id === id || t.short_id === id);
     return (t as any)?.title ?? null;

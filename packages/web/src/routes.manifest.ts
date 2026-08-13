@@ -108,6 +108,7 @@ const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
+const Chat = lazy(() => import("@/app/chat/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
@@ -213,6 +214,11 @@ export const ROUTES: RouteEntry[] = [
   { path: "inbox", component: cast(Inbox), layout: "dashboardShell", tab: "/inbox", fullWidth: true },
   { path: "feed", component: cast(Feed), layout: "dashboardShell", tab: "/feed" },
   { path: "crosstalk", component: cast(Crosstalk), layout: "dashboardShell", tab: "/crosstalk", fullWidth: true },
+  // Chat is full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions and
+  // /anchor), not via a DashboardLayout isOnXPage flag — so it carries no
+  // fullWidth here. See the reverse-drift check in routes.manifest.test.ts.
+  { path: "chat", component: cast(Chat), layout: "dashboardShell", tab: "/chat" },
+  { path: "chat/:channelId", component: cast(Chat), layout: "dashboardShell", tab: "/chat/:channelId" },
   { path: "search", component: cast(Search), layout: "dashboardShell", tab: "/search" },
   { path: "notifications", component: cast(Notifications), layout: "dashboardShell", tab: "/notifications" },
   { path: "conversation/:id", component: cast(Conversation), layout: "dashboardShell", tab: "/conversation/:id", fullWidth: true, guestOk: true, guestKind: "shell" },

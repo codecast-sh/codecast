@@ -98,6 +98,12 @@ export interface RenameReport {
   skipped: number;
 }
 
+/** Every way the vault page can fail to reach a machine's files: the shared
+ *  endpoint-discovery outcomes plus the ones only the vault routes produce.
+ *  Named so the teaching panel can bind to it instead of restating the members
+ *  — a new discovery outcome must not be able to drift out of the UI. */
+export type VaultUnreachableReason = DiscoveryFailure | "old-daemon" | "refused" | "error";
+
 interface VaultState {
   connection: VaultConnection;
   endpoint: VaultEndpoint | null;
@@ -120,7 +126,7 @@ interface VaultState {
   isRemote: boolean;
   /** Why the local daemon couldn't be reached — drives cause-specific guidance
    *  instead of one message that blames the daemon for a browser permission. */
-  unreachableReason: DiscoveryFailure | "old-daemon" | "refused" | "error";
+  unreachableReason: VaultUnreachableReason;
   /** The underlying failure text, shown verbatim in the teaching state so a
    *  cause we did not anticipate is still diagnosable from the screen. */
   unreachableDetail: string | null;

@@ -26,6 +26,8 @@ import type * as buckets from "../buckets.js";
 import type * as ccAccountsShared from "../ccAccountsShared.js";
 import type * as changeFeed from "../changeFeed.js";
 import type * as changeLog from "../changeLog.js";
+import type * as chat from "../chat.js";
+import type * as chatText from "../chatText.js";
 import type * as cleanup from "../cleanup.js";
 import type * as cliAuth from "../cliAuth.js";
 import type * as client_state from "../client_state.js";
@@ -157,6 +159,8 @@ declare const fullApi: ApiFromModules<{
   ccAccountsShared: typeof ccAccountsShared;
   changeFeed: typeof changeFeed;
   changeLog: typeof changeLog;
+  chat: typeof chat;
+  chatText: typeof chatText;
   cleanup: typeof cleanup;
   cliAuth: typeof cliAuth;
   client_state: typeof client_state;

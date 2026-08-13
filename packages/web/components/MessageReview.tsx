@@ -496,21 +496,27 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
                   <MenuKeyCaps action="compose.focus" />
                 </button>
               </div>
-              <div className="cc-rail-foot-keys">
-                <span>
-                  <KeyCap size="xs">↑</KeyCap>
-                  <KeyCap size="xs">↓</KeyCap>
-                  move
-                </span>
-                <span>
-                  <KeyCap size="xs">N</KeyCap>
-                  note
-                </span>
-                <span>
-                  <KeyCap size="xs">⌫</KeyCap>
-                  remove
-                </span>
-              </div>
+              {/* These keys only reach the region while it holds focus, so the
+                  hints appear only then — after Escape the footer keeps saying
+                  what the batch is and how to send it, without advertising keys
+                  that would do nothing. */}
+              {isReviewTarget && (
+                <div className="cc-rail-foot-keys">
+                  <span>
+                    <KeyCap size="xs">↑</KeyCap>
+                    <KeyCap size="xs">↓</KeyCap>
+                    move
+                  </span>
+                  <span>
+                    <KeyCap size="xs">N</KeyCap>
+                    note
+                  </span>
+                  <span>
+                    <KeyCap size="xs">⌫</KeyCap>
+                    remove
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -32,6 +32,7 @@ const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"))
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
+const Chat = lazy(() => import("@/app/chat/page"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 const Routines = lazy(() => import("@/app/workflows/page"));
 // Triggers (renamed from "Schedules"; /schedules stays routable as an alias).
@@ -65,6 +66,9 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/docs\/([^/]+)$/, paramNames: ["id"], component: DocDetail },
   { pattern: /^\/plans\/([^/]+)$/, paramNames: ["id"], component: PlanDetail },
   { pattern: /^\/projects\/([^/]+)$/, paramNames: ["id"], component: ProjectDetail },
+  // Same component as the bare route, so opening a channel reconciles in place
+  // instead of remounting the whole surface and losing the scroll position.
+  { pattern: /^\/chat\/([^/]+)$/, paramNames: ["channelId"], component: Chat },
   { pattern: /^\/team\/activity$/, paramNames: [], component: TeamActivity },
   { pattern: /^\/team\/([^/]+)$/, paramNames: ["username"], component: TeamMember },
   // Static routes
@@ -75,6 +79,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
   { pattern: /^\/feed$/, paramNames: [], component: Feed },
   { pattern: /^\/crosstalk$/, paramNames: [], component: Crosstalk },
+  { pattern: /^\/chat$/, paramNames: [], component: Chat },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
   { pattern: /^\/routines$/, paramNames: [], component: Routines },
   { pattern: /^\/triggers$/, paramNames: [], component: Triggers },

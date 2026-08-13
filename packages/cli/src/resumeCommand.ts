@@ -256,6 +256,35 @@ export function resumeTmuxPrefix(agentType: AgentClientId): string {
 }
 
 /**
+ * Short id used in resume tmux names (`cc-resume-<shortId>`) and log lines.
+ * UUIDs keep the conventional 8-char prefix. Prefixed ids (agent-*, forked-*,
+ * session-*) need more: their first 8 chars are almost all prefix, so distinct
+ * sessions collapse onto one tmux name and each resume kills the other's pane
+ * (two workflow agents both mapped to "agent-a9" on 2026-07-16). The reaper's
+ * name fallback matches transcripts by startsWith, so a longer prefix stays
+ * compatible.
+ */
+export function resumeShortId(sessionId: string): string {
+  return CLAUDE_UUID_RE.test(sessionId) ? sessionId.slice(0, 8) : sessionId.slice(0, 16);
+}
+
+/**
+ * The tmux session name the daemon resumes an agent into. Lives here, beside
+ * the prefix table, because two sides now depend on the rule: the daemon BUILDS
+ * the name, and `cast restart --tmux` MATCHES it to attach the caller to the
+ * pane the resume created.
+ *
+ * The title slug is decoration for a human reading `tmux ls` — it comes from
+ * the transcript, so a caller without one still names the same pane family.
+ * That is why the id suffix, not the whole name, is the matchable part.
+ */
+export function resumeTmuxName(agentType: AgentClientId, sessionId: string, titleSlug?: string): string {
+  const prefix = resumeTmuxPrefix(agentType);
+  const shortId = resumeShortId(sessionId);
+  return titleSlug ? `${prefix}-resume-${titleSlug}-${shortId}` : `${prefix}-resume-${shortId}`;
+}
+
+/**
  * Every tmux-name prefix a codecast-managed pane can carry, as `startsWith`
  * fragments: one per client from the registry (`cc-`, `cx-`, `cu-`, `gm-`,
  * `oc-`, `pi-`) plus `ct-`, the task-scheduler's pane prefix (taskScheduler.ts),

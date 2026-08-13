@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, countSessionOnlyCommits, isSwitchConfirmDialog, isStrandedModelCommand } from "./modelPicker.js";
+import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, countSessionOnlyCommits, countModelSetEchoes, isSwitchConfirmDialog, isStrandedModelCommand } from "./modelPicker.js";
 import { CLAUDE_MODEL_OPTIONS } from "@codecast/shared/contracts";
 
 // Fixtures are verbatim tmux capture-pane output from CC 2.1.173 (2026-06-11).
@@ -213,6 +213,14 @@ describe("isStrandedModelCommand", () => {
   test("the transcript echo of a submitted /model matches too — callers must pass only the pane's bottom lines", () => {
     expect(isStrandedModelCommand("❯ /model\n  ⎿  Set model to Fable 5 for this session only")).toBe(true);
   });
+
+  test("with args: matches only the exact stranded one-shot command", () => {
+    expect(isStrandedModelCommand("❯ /model fable\n────", "fable")).toBe(true);
+    expect(isStrandedModelCommand("❯ /model\n────", "fable")).toBe(false);
+    expect(isStrandedModelCommand("❯ /model sonnet\n────", "fable")).toBe(false);
+    // The bare-command regex must not fire on the argument form.
+    expect(isStrandedModelCommand("❯ /model fable\n────")).toBe(false);
+  });
 });
 
 describe("SESSION_ONLY_COMMIT_RE", () => {
@@ -238,6 +246,20 @@ describe("countSessionOnlyCommits", () => {
     ].join("\n");
     expect(countSessionOnlyCommits(pane)).toBe(2);
     expect(countSessionOnlyCommits("")).toBe(0);
+  });
+});
+
+describe("countModelSetEchoes", () => {
+  test("counts one-shot and session-only echoes alike (verbatim one-shot capture, CC 2026-08-12)", () => {
+    const pane = [
+      "❯ /model fable",
+      "  ⎿  Set model to Fable 5 and saved as your default for new sessions",
+      "❯ /model",
+      "  ⎿  Set model to Sonnet 5 for this session only",
+    ].join("\n");
+    expect(countModelSetEchoes(pane)).toBe(2);
+    expect(countModelSetEchoes("❯ /model fable\n────")).toBe(0);
+    expect(countModelSetEchoes("")).toBe(0);
   });
 });
 

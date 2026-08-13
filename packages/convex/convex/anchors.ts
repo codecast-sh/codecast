@@ -322,10 +322,16 @@ export const provisionAnchor = mutation({
 // dormant (the normal pending-message rail does the resume). This is the
 // primitive every trigger (Slack mention, schedule, a finished hand) funnels
 // into. Shared by the auth'd `wakeAnchor` and the internal `wakeAnchorInternal`.
+// `clientId` makes the delivery both idempotent and CANCELLABLE: the enqueue
+// dedupes on it, and a caller that owns a deadline (chat's placeholder timeout)
+// can find the queued row by the same key and drop it when the answer is no
+// longer wanted. Without that, a wake queued while a laptop was shut is injected
+// hours later and the agent spends a turn on a question nobody is waiting for.
 export async function deliverToAnchor(
   ctx: any,
   anchorId: Id<"anchors">,
   message: string,
+  clientId?: string,
 ) {
   const anchor = await ctx.db.get(anchorId);
   if (!anchor) throw new Error("Anchor not found");
@@ -335,6 +341,7 @@ export async function deliverToAnchor(
   if (!conversation) throw new Error("Anchor session missing");
   await enqueuePendingMessage(ctx, conversation, conversation.user_id, {
     content: message,
+    client_id: clientId,
   });
   return { conversation_id: anchor.conversation_id, woke: true };
 }

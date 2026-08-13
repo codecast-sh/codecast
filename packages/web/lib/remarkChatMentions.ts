@@ -9,9 +9,12 @@ import { findAndReplace } from "mdast-util-find-and-replace";
 // the source cannot tell those apart and would corrupt pasted code — which, in
 // this product, is most of what people paste.
 //
-// Same character class as artifacts.ts:1080 rather than the narrower /@(\w+)/ in
-// comments.ts:341, so dotted and hyphenated handles resolve. Keep the two in
-// step: a handle the server notifies must be a handle the client highlights.
+// The character class MUST equal the server's mention vocabulary
+// (@codecast/shared/chat/handles): no dots, 39 chars max. A wider class here
+// once made "@maya.x" notify maya on the server (its regex stops at the dot)
+// while the web showed no highlight at all — this capture included the dot,
+// failed the known-handle lookup, and the two halves of the feature disagreed
+// about the same three characters.
 //
 // Pairs with .ch-mention / .ch-mention-self in components/chat/chat.css.
 
@@ -19,10 +22,11 @@ import { findAndReplace } from "mdast-util-find-and-replace";
 // input rather than captured, because a leading capture group would have to
 // re-emit that character as a sibling text node, and splicing text back around
 // a replacement is exactly where findAndReplace's tree walk goes wrong.
-const MENTION_RE = /@([A-Za-z0-9][A-Za-z0-9_.-]*)/g;
+const MENTION_RE = /@([A-Za-z0-9][A-Za-z0-9_-]{0,38})/g;
 
-// "@" glued to the end of a word is an email address or a path, not a mention.
-const BOUNDARY_RE = /[\s(<[{,:;"'*_~-]/;
+// "@" glued to the end of a word is an email address, and "/@" is a path
+// segment — the same boundary the server draws ([^\w/]).
+const BOUNDARY_RE = /[\s(<[{,:;"'*~]/;
 
 export type ChatMentionOptions = {
   /** Handles that resolve to a real member. Anything else stays plain text, so

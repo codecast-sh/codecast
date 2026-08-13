@@ -74,12 +74,21 @@ export interface RealProfile {
  * Read Chrome's `Local State` to enumerate profiles with their human names.
  * The directory names alone ("Profile 7") are useless for choosing.
  */
-export function listRealProfiles(channel: ChromeChannel = "chrome"): RealProfile[] {
-  const root = chromeUserDataRoot(channel);
+export function listRealProfiles(channel: ChromeChannel = "chrome", rootOverride?: string): RealProfile[] {
+  const root = rootOverride ?? chromeUserDataRoot(channel);
   if (!root) return [];
+  try {
+    return parseLocalState(fs.readFileSync(path.join(root, "Local State"), "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+/** Split out from file reading so the parsing rules can be tested directly. */
+export function parseLocalState(raw: string): RealProfile[] {
   let state: any;
   try {
-    state = JSON.parse(fs.readFileSync(path.join(root, "Local State"), "utf-8"));
+    state = JSON.parse(raw);
   } catch {
     return [];
   }
@@ -113,11 +122,16 @@ const PROFILE_FILES = [
   "Trust Tokens",
 ];
 
+// IndexedDB is deliberately absent. It is where the bulk lives — 1.2G of the
+// 1.3G on the development machine, against 4.5M of cookies — and copying it
+// pushed Chrome's cold start past twenty seconds while adding no logins that
+// cookies and Local Storage had not already carried. Sites that keep a refresh
+// token only in IndexedDB will ask the agent to sign in again; that is the
+// right trade for a clone that copies in a second.
 const PROFILE_DIRS = [
   "Network", // cookies + transport security on newer builds
   "Local Storage", // where most SPAs park their session token
   "Session Storage",
-  "IndexedDB", // some auth flows persist refresh tokens here
 ];
 
 // SQLite may be mid-transaction while the real Chrome is running; the sidecars
@@ -177,8 +191,10 @@ export function cloneProfile(opts: {
   sourceDir: string; // "Default", "Profile 7", …
   destRoot: string; // managed user-data-dir
   channel?: ChromeChannel;
+  /** Point at a different user-data root. Used by tests. */
+  sourceRoot?: string;
 }): CloneResult {
-  const root = chromeUserDataRoot(opts.channel ?? "chrome");
+  const root = opts.sourceRoot ?? chromeUserDataRoot(opts.channel ?? "chrome");
   if (!root) throw new Error(`No Chrome user data found for channel '${opts.channel ?? "chrome"}'`);
   const src = path.join(root, opts.sourceDir);
   if (!fs.existsSync(src)) {

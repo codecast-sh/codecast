@@ -81,6 +81,21 @@ export function useEnsureDispatch() {
           useInboxStore.getState().markServerDeleted(convId);
         }
       }
+      // The same rule for a chat send, through the same one mechanism. Args
+      // mirror dispatchChatSend: [channel_id, content, client_id, opts]. The
+      // optimistic row is the only copy of what was typed, so mark it failed —
+      // the message then renders with its retry affordance instead of sitting
+      // there looking sent. A retry re-dispatches the SAME client id, which
+      // chat.sendMessage dedupes, so this can never double-post.
+      if (action === "dispatchChatSend" && Array.isArray(args)) {
+        const clientId = args[2];
+        if (typeof clientId === "string") {
+          useInboxStore.getState().markChatSendFailed(
+            clientId,
+            String((error as Error)?.message ?? error),
+          );
+        }
+      }
     });
     const bindDispatch = () => {
       _setDispatch(
