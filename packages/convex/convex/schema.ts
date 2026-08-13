@@ -2852,6 +2852,17 @@ export default defineSchema({
     // renews its lease every few seconds; without this stamp a machine that is
     // asleep or offline would collect one command row per renewal forever.
     requested_at: v.optional(v.number()),
+    // While this is in the future a viewer has the pane FOCUSED, so the daemon
+    // polls fast enough that the first keystroke of a sentence isn't swallowed
+    // by the idle heartbeat. Only pushed forward, never cleared on blur: two
+    // tabs on one pane must not switch each other's keyboard off.
+    interactive_until: v.optional(v.number()),
+    // Keystrokes waiting to reach the pane, as lowercase hex. The viewer
+    // appends; the next frame push carries them back and clears this in the
+    // same transaction, which is what makes delivery exactly-once. Small and
+    // short-lived by construction — the daemon drains it a few times a second
+    // while typing, and sendPaneInput refuses to let it grow past a few KB.
+    pending_input: v.optional(v.string()),
     updated_at: v.number(),
   }).index("by_user_device_target", ["user_id", "device_id", "target"]),
 
