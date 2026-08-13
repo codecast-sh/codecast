@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, countSessionOnlyCommits, countModelSetEchoes, isSwitchConfirmDialog, isStrandedModelCommand } from "./modelPicker.js";
+import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, countSessionOnlyCommits, countModelSetEchoes, countEffortSetEchoes, isSwitchConfirmDialog, isStrandedModelCommand, isStrandedSlashCommand } from "./modelPicker.js";
 import { CLAUDE_MODEL_OPTIONS } from "@codecast/shared/contracts";
 
 // Fixtures are verbatim tmux capture-pane output from CC 2.1.173 (2026-06-11).
@@ -214,10 +214,14 @@ describe("isStrandedModelCommand", () => {
     expect(isStrandedModelCommand("❯ /model\n  ⎿  Set model to Fable 5 for this session only")).toBe(true);
   });
 
-  test("with args: matches only the exact stranded one-shot command", () => {
-    expect(isStrandedModelCommand("❯ /model fable\n────", "fable")).toBe(true);
-    expect(isStrandedModelCommand("❯ /model\n────", "fable")).toBe(false);
-    expect(isStrandedModelCommand("❯ /model sonnet\n────", "fable")).toBe(false);
+});
+
+describe("isStrandedSlashCommand", () => {
+  test("matches only the exact stranded one-shot command", () => {
+    expect(isStrandedSlashCommand("❯ /model fable\n────", "/model fable")).toBe(true);
+    expect(isStrandedSlashCommand("❯ /effort max\n────", "/effort max")).toBe(true);
+    expect(isStrandedSlashCommand("❯ /model\n────", "/model fable")).toBe(false);
+    expect(isStrandedSlashCommand("❯ /model sonnet\n────", "/model fable")).toBe(false);
     // The bare-command regex must not fire on the argument form.
     expect(isStrandedModelCommand("❯ /model fable\n────")).toBe(false);
   });
@@ -260,6 +264,20 @@ describe("countModelSetEchoes", () => {
     expect(countModelSetEchoes(pane)).toBe(2);
     expect(countModelSetEchoes("❯ /model fable\n────")).toBe(0);
     expect(countModelSetEchoes("")).toBe(0);
+  });
+});
+
+describe("countEffortSetEchoes", () => {
+  test("counts the one-shot effort echo (verbatim capture, CC 2026-08-13)", () => {
+    const pane = [
+      "❯ /effort max",
+      "  ⎿  Set effort level to max (this session only): Maximum capability with",
+      "     deepest reasoning. May use excessive tokens resulting in long response",
+    ].join("\n");
+    expect(countEffortSetEchoes(pane)).toBe(1);
+    // The model echoes and the stranded command must not count.
+    expect(countEffortSetEchoes("Set model to Fable 5 and saved as your default")).toBe(0);
+    expect(countEffortSetEchoes("❯ /effort max\n────")).toBe(0);
   });
 });
 

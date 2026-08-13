@@ -64,6 +64,13 @@ export default defineSchema({
     // (devices.last_input_at), so pushes hold until you leave the computer.
     // Read in pushRouter.readPresence.
     machine_wide_presence: v.optional(v.boolean()),
+    // Codecast-owned default model per agent client (client id → shared-contract
+    // option key, e.g. { claude: "fable" }). enqueueStartSession applies it when
+    // a launch carries no explicit per-session model, so every managed session
+    // launches with an explicit model flag and the agent's own saved default —
+    // a file any /model one-shot can rewrite — never decides. Set from the
+    // model picker's "Set as default"; validated against findModelOption.
+    default_models: v.optional(v.record(v.string(), v.string())),
     notification_preferences: v.optional(v.object({
       team_session_start: v.boolean(),
       mention: v.boolean(),

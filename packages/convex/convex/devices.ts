@@ -15,7 +15,7 @@ import {
 } from "./deviceRouting";
 import { normalizeProjectPath } from "./projectPaths";
 import { checkConversationAccess } from "./privacy";
-import { fromConvexAgentType } from "@codecast/shared/contracts";
+import { fromConvexAgentType, findModelOption } from "@codecast/shared/contracts";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -193,6 +193,31 @@ export async function enqueueStartSession(
     await ctx.db.patch(opts.conversationId, { owner_device_id: target });
   }
 
+  // Codecast-owned model default: a launch with no explicit per-session pick
+  // falls back to the user's default for this client (users.default_models),
+  // so every managed session gets an explicit launch flag and the agent's own
+  // saved default — a file any /model one-shot can rewrite — never decides
+  // what a codecast session runs. Resolved here, the single start_session
+  // chokepoint, so web creates, task assigns, spawns and triggers all inherit
+  // it. Only launchable options qualify (cliAlias); resumes are unaffected —
+  // the daemon re-derives a resumed session's model from its transcript.
+  let model = opts.model;
+  if (!model) {
+    const userRow = await ctx.db.get(userId);
+    const preferred = userRow?.default_models?.[opts.agentType];
+    if (preferred && findModelOption(opts.agentType, preferred)?.cliAlias) {
+      model = preferred;
+      // Stamp the badge like dispatch does for explicit picks, but never
+      // clobber a model the conversation already knows (an explicit pick's
+      // stamp, or a prior session's rollup).
+      if (conv && !conv.model) {
+        await ctx.db.patch(opts.conversationId, {
+          model: opts.agentType === "claude" ? `claude-${preferred}` : preferred,
+        });
+      }
+    }
+  }
+
   const args: Record<string, any> = {
     agent_type: opts.agentType,
     conversation_id: opts.conversationId,
@@ -202,7 +227,7 @@ export async function enqueueStartSession(
   if (opts.isolated) args.isolated = true;
   if (opts.worktreeName) args.worktree_name = opts.worktreeName;
   if (opts.prompt) args.prompt = opts.prompt;
-  if (opts.model) args.model = opts.model;
+  if (model) args.model = model;
   if (opts.effort) args.effort = opts.effort;
   if (opts.stableMode) args.stable_mode = opts.stableMode;
   if (opts.stableExclude?.length) args.stable_exclude = opts.stableExclude;
