@@ -298,7 +298,7 @@ cast browser text                  # visible text, for reading rather than actin
 
 **Showing the human what you saw**: \`cast browser shot --share\` uploads the screenshot and prints markdown that renders inline in the thread. Never link a local path — their browser cannot read files on this machine.
 
-Tabs: \`cast browser tabs\`, \`cast browser tab <id>\`, \`cast browser open --new-tab <url>\`, \`cast browser close\`. Commands act on the active tab unless you pass \`--tab\`.
+**One browser, many agents.** Every agent on this machine drives the SAME Chrome, so tabs are owned per session: commands act on YOUR tab, and \`cast browser tabs\` marks it \`*\` and other agents' tabs \`~\`. Open your own with \`cast browser open --new-tab <url>\` and pass \`--tab <id>\` when you want to be certain. If a page suddenly looks wrong, run \`cast browser tabs\` before you debug the app — a tab someone else navigated looks exactly like a broken feature.
 
 The browser keeps running between commands, so this is stateful: what you opened stays open until you close it or run \`cast browser stop\`. It starts from a COPY of the real Chrome profile, so it is signed in to what you are signed in to, and nothing it does touches the real browser. Treat that access the way the human would — it is their logged-in accounts. \`cast browser start --fresh\` gives a signed-out browser when that is what you want, and \`cast browser stop --wipe\` removes the copy.
 ${BROWSER_SNIPPET_END}

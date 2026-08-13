@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../components/editor/MentionList";
+import { memberHandle } from "@codecast/shared/chat";
 import { useInboxStore, convBucketMap } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { useDebounce } from "./useDebounce";
@@ -275,15 +276,21 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     for (const m of s.teamMembers || []) {
       const name = (m.name || "").toLowerCase();
       const username = (m.github_username || "").toLowerCase();
-      if (q && !name.includes(q) && !username.includes(q)) continue;
+      // The handle chat's server resolves (github → email local → bot name
+      // slug). Carried on the item so a chat composer can insert something a
+      // send will actually honour — the display label is not addressable.
+      const handle = memberHandle(m) ?? undefined;
+      if (q && !name.includes(q) && !username.includes(q) && !(handle ?? "").includes(q)) continue;
       personItems.push({
         item: {
           id: String(m._id),
           type: "person",
           label: m.name || m.github_username || "Unknown",
-          sublabel: m.github_username ? `@${m.github_username}` : m.email,
+          sublabel: m.github_username ? `@${m.github_username}` : handle ? `@${handle}` : m.email,
           image: m.image || m.github_avatar_url,
           shortId: m.github_username ? `@${m.github_username}` : undefined,
+          handle,
+          isBot: !!m.is_bot,
         },
         rank: 0,
         updated: 0,

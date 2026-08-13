@@ -15,6 +15,7 @@ import ReactMarkdownBase from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { compressImage } from "../lib/compressImage";
+import { textareaCaretRect } from "../lib/textareaCaret";
 import { useStorageImageUrl, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
@@ -164,7 +165,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot } from "lucide-react";
 import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
 import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
@@ -325,8 +326,8 @@ const ReactMarkdown = memo(function ReactMarkdown(props: ReactMarkdownProps) {
 // the call sites made react-markdown re-run its full parse + rehype-highlight pass on
 // EVERY block re-render — measured as the single largest cost during a session switch
 // (~4.2s self-time / 775 renders). None of these overrides close over props.
-const MESSAGE_MD_REHYPE = [rehypeHighlight];
-const MESSAGE_MD_COMPONENTS = {
+export const MESSAGE_MD_REHYPE = [rehypeHighlight];
+export const MESSAGE_MD_COMPONENTS = {
   code: EntityAwareCode,
   a: EntityAwareLink,
   img: ({ src, alt }: { src?: string | Blob; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
@@ -365,7 +366,7 @@ function remarkUserHtmlAsText() {
   };
   return (tree: any) => walk(tree, true);
 }
-const USER_MD_REMARK = [...entityRemarkPlugins, remarkBreaks, remarkUserHtmlAsText];
+export const USER_MD_REMARK = [...entityRemarkPlugins, remarkBreaks, remarkUserHtmlAsText];
 
 // Cross-mount markdown render cache. React.memo only helps while a component
 // stays MOUNTED — but the message virtualizer constantly unmounts and remounts
@@ -8923,7 +8924,7 @@ function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolL
   );
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, chatMentionMode, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -9060,10 +9061,29 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     goal?: string;
     model?: string;
     image?: string;
+    handle?: string;
+    isBot?: boolean;
   };
   const [acTrigger, setAcTrigger] = useState<AutocompleteTrigger>(null);
   const [acIndex, setAcIndex] = useState(0);
   const acRef = useRef<HTMLDivElement>(null);
+  // Chat mode anchors the popup at the @ itself. The zero-height div right
+  // above the form is the positioning context; this is the popup's left within
+  // it, measured from the @'s pixel position inside the textarea.
+  const acAnchorRef = useRef<HTMLDivElement>(null);
+  const [acCaretLeft, setAcCaretLeft] = useState(0);
+  useLayoutEffect(() => {
+    if (!chatMentionMode || !acTrigger || acTrigger.type !== "@") return;
+    const ta = textareaRef.current;
+    const host = acAnchorRef.current;
+    if (!ta || !host) return;
+    const caret = textareaCaretRect(ta, acTrigger.startPos);
+    const taRect = ta.getBoundingClientRect();
+    const hostRect = host.getBoundingClientRect();
+    const raw = taRect.left - hostRect.left + caret.left - ta.scrollLeft;
+    const popupWidth = 340;
+    setAcCaretLeft(Math.max(0, Math.min(raw, Math.max(0, hostRect.width - popupWidth))));
+  }, [chatMentionMode, acTrigger]);
   const filePathsRef = useRef(filePaths);
   filePathsRef.current = filePaths;
 
@@ -9117,6 +9137,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const entityMatches: AcItem[] = [];
       if (currentMentionItems?.length) {
         for (const m of currentMentionItems) {
+          // Chat: a label tags nothing here, and a person with no resolvable
+          // handle cannot be notified — offering either is a lie the composer
+          // tells about what the send will do.
+          if (chatMentionMode && m.type === "label") continue;
+          if (chatMentionMode && m.type === "person" && !m.handle) continue;
           if (acQuery) {
             const hit =
               matchScore(m.label, acQuery) !== Infinity ||
@@ -9138,6 +9163,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             projectPath: m.projectPath,
             updatedAt: m.updatedAt,
             idleSummary: m.idleSummary,
+            handle: m.handle,
+            isBot: m.isBot,
           });
         }
       }
@@ -9184,7 +9211,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
     return [];
     // localMentionTick re-runs this when the fallback query resolves into the ref.
-  }, [acTrigger, acQuery, skills, acServerItems, localMentionTick]);
+  }, [acTrigger, acQuery, skills, acServerItems, localMentionTick, chatMentionMode]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
 
@@ -9204,7 +9231,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const after = message.slice(cursorPos);
 
       let inserted: string;
-      if (item.type === "file" || item.type === "skill") {
+      if (chatMentionMode && item.type === "person" && item.handle) {
+        // The handle the server resolves, at the @ the user typed. The ref form
+        // (`@[Name id]`) is the session vocabulary; for people in chat it only
+        // notified when the label happened to contain the handle — and the
+        // anchor's label never did, which is how "@[Anchor] hi" woke nothing.
+        inserted = `@${item.handle} `;
+      } else if (item.type === "file" || item.type === "skill") {
         inserted = `@${item.label} `;
       } else {
         const truncTitle = item.label.length > 30 ? item.label.slice(0, 30) + "..." : item.label;
@@ -9225,7 +9258,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     setAcTrigger(null);
     setAcIndex(0);
     textareaRef.current?.focus();
-  }, [acTrigger, message]);
+  }, [acTrigger, message, chatMentionMode]);
 
   const messageStatus = useQuery(
     api.pendingMessages.getMessageStatus,
@@ -10825,8 +10858,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               group.items.push(item);
               idx++;
             }
-            return (
-              <div ref={acRef} className={`mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "conv-col" : "max-w-md"}`}>
+            const dropdown = (
+              <div
+                ref={acRef}
+                className={chatMentionMode
+                  ? "absolute bottom-0 mb-1 w-[340px] z-30"
+                  : `mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "conv-col" : "max-w-md"}`}
+                style={chatMentionMode ? { left: acCaretLeft } : undefined}
+              >
                 <div className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 max-h-[320px] overflow-y-auto">
                   {grouped.map(group => {
                     const config = typeConfig[group.type] || typeConfig.doc;
@@ -10855,6 +10894,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                             >
                               {item.image ? (
                                 <img src={item.image} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
+                              ) : item.isBot ? (
+                                <Bot className="w-3.5 h-3.5 flex-shrink-0 text-sol-violet" />
                               ) : (
                                 <Hash className={`w-3.5 h-3.5 flex-shrink-0 ${config.color} opacity-60`} />
                               )}
@@ -10900,6 +10941,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 </div>
               </div>
             );
+            if (!chatMentionMode) return dropdown;
+            // Zero height on purpose: it contributes no layout, only the
+            // positioning context the caret-anchored popup hangs from.
+            return <div ref={acAnchorRef} className="relative h-0">{dropdown}</div>;
           })()}
           <form onSubmit={handleFormSubmit} className={bareComposer ? "w-full" : `mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-md"}`}>
             <div className={`flex flex-col ${bareComposer ? "" : "border"} transition-colors duration-150 ${bareComposer ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${isExpanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[40vh]" : ""} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bareComposer ? "" : "border-sol-border"}`}>

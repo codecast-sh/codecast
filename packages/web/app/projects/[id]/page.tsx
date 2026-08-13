@@ -7,9 +7,14 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, PlanItem, DocItem } from "../../../store/inboxStore";
 import { useSyncTasks } from "../../../hooks/useSyncTasks";
 import { TaskListContent } from "../../tasks/page";
+import { TaskDetailContent } from "../../tasks/[id]/page";
+import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
+import { ErrorBoundary } from "../../../components/ErrorBoundary";
+import { projectDotClass } from "../../../lib/projectColors";
 import { useSyncPlans } from "../../../hooks/useSyncPlans";
 import { useSyncDocs } from "../../../hooks/useSyncDocs";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { toast } from "sonner";
@@ -195,6 +200,7 @@ function ProjectDetailContent() {
   const router = useRouter();
   const params = useParams();
   const projectId = params.id as string;
+  const openTaskId = params.taskId as string | undefined;
 
   useSyncProjects();
   useSyncTasks();
@@ -212,7 +218,13 @@ function ProjectDetailContent() {
   useSyncPlans();
   useSyncDocs();
 
-  const project = useQuery(api.projects.webGet, projectId ? { id: projectId } : "skip");
+  // Local-first: the store already holds every project the rail lists, so a
+  // project you click renders NOW and the server row enriches it when it lands.
+  // Gating the whole surface on the query meant a spinner on every open — and,
+  // offline, a spinner forever beside a sidebar happily naming the same project.
+  const { data: serverProject } = useQueryNoThrow(api.projects.webGet, projectId ? { id: projectId } : "skip");
+  const storeProjects = useInboxStore((s) => s.projects);
+  const project = serverProject ?? (projectId ? (storeProjects as any)[projectId] : undefined);
 
   const tasks = useInboxStore((s) => s.tasks);
   const plans = useInboxStore((s) => s.plans);
@@ -272,6 +284,14 @@ function ProjectDetailContent() {
     [projectTasks]
   );
 
+  // The open task, for the trail's leaf. Read from the store so the crumb lands
+  // with the click rather than after a round-trip.
+  const openTask = useMemo(() => {
+    if (!openTaskId) return null;
+    const t = (tasks as any)[openTaskId] as TaskItem | undefined;
+    return t ?? Object.values(tasks).find((x: any) => x.short_id === openTaskId) ?? null;
+  }, [tasks, openTaskId]);
+
   // Docs in this project
   const projectDocs = useMemo(() =>
     Object.values(docs).filter((d: any) => d.project_id === projectId)
@@ -302,7 +322,7 @@ function ProjectDetailContent() {
   if (!project) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="text-sm text-sol-text-dim">Loading project...</div>
+        <div className="text-sm text-sol-text-dim">Loading project…</div>
       </div>
     );
   }
@@ -322,14 +342,8 @@ function ProjectDetailContent() {
     <div className="h-full flex flex-col">
       {/* Header */}
       <div className="px-6 py-4 border-b border-sol-border/20">
-        <div className="flex items-center gap-3 mb-3">
-          <button
-            onClick={() => router.push("/projects")}
-            className="text-sol-text-dim hover:text-sol-text transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-
+        <div className="flex items-center gap-3 mb-3 min-w-0">
+          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${projectDotClass(project)}`} />
           {editingTitle ? (
             <div className="flex items-center gap-2 flex-1">
               <input
@@ -357,7 +371,7 @@ function ProjectDetailContent() {
           )}
         </div>
 
-        <div className="flex items-center gap-4 ml-7">
+        <div className="flex items-center gap-4 ml-5">
           {/* Status dropdown */}
           <div className="relative group/status">
             <button className={`flex items-center gap-1.5 text-xs ${status.color}`}>
@@ -413,7 +427,7 @@ function ProjectDetailContent() {
 
         {/* Tasks is the working surface; Overview is the summary of everything
             filed here — plans, their tasks, and docs. */}
-        <div className="flex items-center gap-1 ml-7 mt-3 -mb-1">
+        <div className="flex items-center gap-1 ml-5 mt-3 -mb-1">
           {/* The Tasks tab carries no count of its own: the list below reports
               what it is actually showing (the board hides agent-internal tasks
               by default), and the project's raw totals sit in the header row.
@@ -501,10 +515,27 @@ function ProjectDetailContent() {
 }
 
 export default function ProjectDetailPage() {
+  // Selection stays in the URL and inside the project: /projects/<id> is the
+  // project, /projects/<id>/<taskId> is a task within it. Both render this same
+  // component (see TabContent), so opening a task reconciles in place — the
+  // project's list never unmounts and you never leave the project.
+  const params = useParams();
+  const projectId = params?.id as string | undefined;
+  const taskId = params?.taskId as string | undefined;
   return (
     <AuthGuard>
       <DashboardLayout>
-        <ProjectDetailContent />
+        <DetailSplitLayout
+          list={<ProjectDetailContent />}
+          surface="projects"
+          closeHref={`/projects/${projectId}`}
+        >
+          {taskId ? (
+            <ErrorBoundary name="ProjectTaskDetail" level="panel">
+              <TaskDetailContent taskId={taskId} variant="page" />
+            </ErrorBoundary>
+          ) : null}
+        </DetailSplitLayout>
       </DashboardLayout>
     </AuthGuard>
   );
