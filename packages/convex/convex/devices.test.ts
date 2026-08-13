@@ -124,6 +124,60 @@ describe("enqueueStartSession execution-protocol gate", () => {
   });
 });
 
+describe("enqueueStartSession codecast default model", () => {
+  const USER = "users_1" as any;
+  const CONVERSATION = "conversations_1" as any;
+
+  const seed = (userExtra: Record<string, any>, convExtra: Record<string, any> = {}) =>
+    makeFakeDb({
+      users: [{ _id: USER, ...userExtra }],
+      conversations: [{ _id: CONVERSATION, user_id: USER, project_path: "/work/project", ...convExtra }],
+      devices: [],
+      daemon_commands: [],
+    });
+
+  const commandModel = (db: any) => JSON.parse(db._tables.daemon_commands[0].args).model;
+
+  test("no explicit model → user default rides the command and stamps the badge", async () => {
+    const db = seed({ default_models: { claude: "fable" } });
+    await enqueueStartSession({ db } as any, USER, { conversationId: CONVERSATION, agentType: "claude" });
+    expect(commandModel(db)).toBe("fable");
+    expect(db._tables.conversations[0].model).toBe("claude-fable");
+  });
+
+  test("explicit per-session model wins over the default", async () => {
+    const db = seed({ default_models: { claude: "fable" } });
+    await enqueueStartSession({ db } as any, USER, { conversationId: CONVERSATION, agentType: "claude", model: "sonnet" });
+    expect(commandModel(db)).toBe("sonnet");
+  });
+
+  test("a conversation with a known model keeps its badge", async () => {
+    const db = seed({ default_models: { claude: "fable" } }, { model: "claude-sonnet" });
+    await enqueueStartSession({ db } as any, USER, { conversationId: CONVERSATION, agentType: "claude" });
+    expect(commandModel(db)).toBe("fable");
+    expect(db._tables.conversations[0].model).toBe("claude-sonnet");
+  });
+
+  test("no default → no model on the command (agent's own default decides)", async () => {
+    const db = seed({});
+    await enqueueStartSession({ db } as any, USER, { conversationId: CONVERSATION, agentType: "claude" });
+    expect(commandModel(db)).toBeUndefined();
+    expect(db._tables.conversations[0].model).toBeUndefined();
+  });
+
+  test("unlaunchable default (menu key) is ignored", async () => {
+    const db = seed({ default_models: { claude: "menu:Sonnet (1M context)" } });
+    await enqueueStartSession({ db } as any, USER, { conversationId: CONVERSATION, agentType: "claude" });
+    expect(commandModel(db)).toBeUndefined();
+  });
+
+  test("default is per client: codex default doesn't leak onto a claude launch", async () => {
+    const db = seed({ default_models: { codex: "gpt-5.5" } });
+    await enqueueStartSession({ db } as any, USER, { conversationId: CONVERSATION, agentType: "claude" });
+    expect(commandModel(db)).toBeUndefined();
+  });
+});
+
 describe("resolveOwnerDeviceView", () => {
   // A session Mr Bot's account RUNS (conv.user_id) but Ashot OWNS. The device
   // row lives under the runner, so a lookup scoped to the viewer finds nothing
