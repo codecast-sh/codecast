@@ -758,6 +758,103 @@ describe("comments write-choke coverage", () => {
     expect(ctx.db._tables.pending_messages).toHaveLength(1);
   });
 
+  test("a file:line anchor scopes the agent thread and shows up in the prompt", async () => {
+    const forkId = "conversation-comment-fork" as any;
+    const ctx = context(OWNER, {
+      conversations: [conversation(), conversation(forkId)],
+    }, {
+      async runMutation() {
+        return { conversation_id: forkId };
+      },
+    });
+
+    // One comment in each thread kind: global, and two different code lines.
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-global",
+      conversation_id: CONVERSATION,
+      content: "global note",
+      client_id: "client-global",
+    });
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-line",
+      conversation_id: CONVERSATION,
+      content: "this null check is wrong",
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 42,
+      client_id: "client-line",
+    });
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-other-line",
+      conversation_id: CONVERSATION,
+      content: "unrelated other-line note",
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 7,
+      client_id: "client-other-line",
+    });
+    expect(commentsFor(ctx)[1]).toMatchObject({
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 42,
+    });
+
+    const receipt = await (askAgentInThreadV2 as any)._handler(ctx, {
+      command_id: "ask-agent-line",
+      conversation_id: CONVERSATION,
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 42,
+      client_id: "optimistic-line-agent",
+    });
+    expect(receipt).toMatchObject({ status: "acknowledged" });
+
+    // The placeholder inherits the anchor so it renders inside the same thread.
+    const placeholder = commentsFor(ctx).find((c: any) => c.author_kind === "agent");
+    expect(placeholder).toMatchObject({
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 42,
+      agent_status: "thinking",
+    });
+
+    // The delivered prompt names the anchor and carries ONLY this line's thread.
+    const prompt = ctx.db._tables.pending_messages[0].content as string;
+    expect(prompt).toContain("codecast/packages/web/foo.ts:42");
+    expect(prompt).toContain("this null check is wrong");
+    expect(prompt).not.toContain("global note");
+    expect(prompt).not.toContain("unrelated other-line note");
+  });
+
+  test("the global agent thread excludes code-anchored comments", async () => {
+    const forkId = "conversation-comment-fork" as any;
+    const ctx = context(OWNER, {
+      conversations: [conversation(), conversation(forkId)],
+    }, {
+      async runMutation() {
+        return { conversation_id: forkId };
+      },
+    });
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-global",
+      conversation_id: CONVERSATION,
+      content: "global note",
+      client_id: "client-global",
+    });
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-line",
+      conversation_id: CONVERSATION,
+      content: "line-anchored note",
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 42,
+      client_id: "client-line",
+    });
+
+    await (askAgentInThreadV2 as any)._handler(ctx, {
+      command_id: "ask-agent-global",
+      conversation_id: CONVERSATION,
+      client_id: "optimistic-global-agent",
+    });
+    const prompt = ctx.db._tables.pending_messages[0].content as string;
+    expect(prompt).toContain("global note");
+    expect(prompt).not.toContain("line-anchored note");
+  });
+
   test("v2 ask-agent requires a non-blank optimistic identity", async () => {
     const ctx = context(OWNER, { conversations: [conversation()] });
     const receipt = await (askAgentInThreadV2 as any)._handler(ctx, {

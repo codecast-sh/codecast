@@ -215,11 +215,11 @@ export function DocListContent() {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const projects = useInboxStore((s) => s.projects);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
-  const saveView = useInboxStore((s) => s.saveView);
+  const createSavedView = useInboxStore((s) => s.createSavedView);
   const docView = useInboxStore((s) => s.clientState.ui?.doc_view);
   const handleSaveView = useCallback((name: string) => {
-    saveView({ name, page: "docs", prefs: { ...docView, doc_type: docType } as DocViewPrefs });
-  }, [saveView, docView, docType]);
+    createSavedView({ name, page: "docs", prefs: { ...docView, doc_type: docType } as DocViewPrefs });
+  }, [createSavedView, docView, docType]);
 
   // Strict workspace boundary at read time: `store.docs` caches rows from every
   // workspace (the sync overlay never prunes on team switch, IDB persists them

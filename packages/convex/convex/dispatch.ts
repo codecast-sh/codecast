@@ -1075,6 +1075,19 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.projects.webUpdate, { id, ...fields });
   },
 
+  // Saved views. Creates carry a client_key so a retry returns the same row
+  // rather than a second copy of the view (savedViews.webCreate is idempotent
+  // on that key), and the optimistic stub supersedes onto it.
+  createSavedView: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.savedViews.webCreate, opts);
+  },
+  updateSavedView: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    await (ctx as any).runMutation(api.savedViews.webUpdate, { id, ...fields });
+  },
+  deleteSavedView: async (ctx, userId, [id]: [string]) => {
+    await (ctx as any).runMutation(api.savedViews.webDelete, { id });
+  },
+
   linkEntityConversation: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.conversationLinks.webLinkConversation, opts);
   },
@@ -1183,6 +1196,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       content: string;
       messageId?: string;
       parentCommentId?: string;
+      filePath?: string;
+      lineNumber?: number;
       clientId: string;
       commandId?: string;
     }>(result);
@@ -1196,6 +1211,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       content: r.content,
       message_id: r.messageId ? (r.messageId as Id<"messages">) : undefined,
       parent_comment_id: r.parentCommentId ? (r.parentCommentId as Id<"comments">) : undefined,
+      file_path: r.filePath || undefined,
+      line_number: typeof r.lineNumber === "number" ? r.lineNumber : undefined,
       client_id: r.clientId,
     });
   },
@@ -1273,6 +1290,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const r = receiptLocalResult<{
       conversationId: string;
       messageId?: string;
+      filePath?: string;
+      lineNumber?: number;
       clientId: string;
       commandId?: string;
     }>(result);
@@ -1284,6 +1303,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ),
       conversation_id: r.conversationId as Id<"conversations">,
       message_id: r.messageId ? (r.messageId as Id<"messages">) : undefined,
+      file_path: r.filePath || undefined,
+      line_number: typeof r.lineNumber === "number" ? r.lineNumber : undefined,
       client_id: r.clientId,
     });
   },
@@ -1480,6 +1501,29 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return await ctx.runMutation!(api.chat.setNotifyLevel, {
       channel_id: channelId as Id<"chat_channels">,
       notify_level: level,
+    });
+  },
+  updateChatChannel: async (
+    ctx,
+    _userId,
+    [channelId, fields]: [string, { name?: string; topic?: string }],
+  ) => {
+    if (!isServerId(channelId)) return;
+    return await ctx.runMutation!(api.chat.updateChannel, {
+      channel_id: channelId as Id<"chat_channels">,
+      ...(fields?.name !== undefined ? { name: fields.name } : {}),
+      ...(fields?.topic !== undefined ? { topic: fields.topic } : {}),
+    });
+  },
+  archiveChatChannel: async (
+    ctx,
+    _userId,
+    [channelId, archived]: [string, boolean],
+  ) => {
+    if (!isServerId(channelId)) return;
+    return await ctx.runMutation!(api.chat.archiveChannel, {
+      channel_id: channelId as Id<"chat_channels">,
+      archived: !!archived,
     });
   },
   // Idempotent on client_id, so a replayed create returns the same channel

@@ -15,15 +15,19 @@ import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useChatUnread } from "../hooks/useChatSync";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useSyncProjects } from "../hooks/useSyncProjects";
+import { useSyncSavedViews } from "../hooks/useSyncSavedViews";
+import { activeViewId } from "../lib/savedViews";
 import { projectDotClass } from "../lib/projectColors";
 import { useWorkspaceArgs, workspaceStamp } from "../hooks/useWorkspaceArgs";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
+import { toast } from "sonner";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
 import { CreateChannelModal } from "./CreateChannelModal";
-import { Globe, Workflow, Zap, MessageSquare, FolderKanban } from "lucide-react";
+import { Globe, Workflow, Zap, MessageSquare, FolderKanban, Layers, Users, UserMinus } from "lucide-react";
+import { filterToWorkspace } from "../lib/workspaceScope";
 
 const api = _api as any;
 
@@ -94,9 +98,13 @@ function NavSection({
     id: string;
     name: string;
     icon?: React.ReactNode;
+    /** Highlighted as the row you are currently looking at. */
+    active?: boolean;
+    /** Rendered at the row's end — a shared marker, an owner avatar. */
+    trailing?: React.ReactNode;
+    /** Hover actions, in order. Each is its own small button. */
+    actions?: Array<{ key: string; title: string; icon: React.ReactNode; onClick: () => void }>;
     onSelect: () => void;
-    onRemove?: () => void;
-    removeTitle?: string;
   }>;
   expanded?: boolean;
   onToggle?: () => void;
@@ -150,26 +158,39 @@ function NavSection({
         <div className={`overflow-hidden transition-all duration-200 ease-out ${expanded ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
           <div className="ml-[17px] my-0.5 border-l border-sol-border/50 overflow-y-auto max-h-96">
             {items!.map((child) => (
-              <div key={child.id} className="flex items-center group/v">
+              <div
+                key={child.id}
+                className={`flex items-center group/v transition-colors ${
+                  child.active
+                    ? "bg-sol-bg-highlight text-sol-text"
+                    : "text-sol-text-muted hover:bg-sol-bg-highlight/40"
+                }`}
+              >
                 <button
                   onClick={child.onSelect}
-                  className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 transition-colors flex-1 min-w-0 text-left"
+                  className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 hover:text-sol-text transition-colors flex-1 min-w-0 text-left"
                   title={child.name}
+                  aria-current={child.active ? "page" : undefined}
                 >
                   {child.icon}
-                  <span className="truncate text-[13px] min-w-0">{child.name}</span>
+                  <span className={`truncate text-[13px] min-w-0 ${child.active ? "text-sol-text" : ""}`}>{child.name}</span>
                 </button>
-                {child.onRemove && (
+                {child.trailing}
+                {/* Actions reveal on hover — and stay revealed on the active row,
+                    which is the one you are most likely to act on. */}
+                {child.actions?.map((action) => (
                   <button
-                    onClick={(e) => { e.stopPropagation(); child.onRemove!(); }}
-                    className="p-1 mr-1.5 rounded opacity-0 group-hover/v:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0"
-                    title={child.removeTitle ?? "Remove"}
+                    key={action.key}
+                    onClick={(e) => { e.stopPropagation(); action.onClick(); }}
+                    className={`p-1 rounded text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0 ${
+                      child.active ? "opacity-70" : "opacity-0 group-hover/v:opacity-100"
+                    }`}
+                    title={action.title}
                   >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
+                    {action.icon}
                   </button>
-                )}
+                ))}
+                <span className="w-1.5 flex-shrink-0" />
               </div>
             ))}
           </div>
@@ -306,16 +327,38 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   }, [bookmarks, showAllBookmarks, prefetchBookmark]);
   const toggleBookmark = useInboxStore((s) => s.toggleBookmark);
   const openConversationId = useInboxStore((s) => s.currentSessionId);
-  const allSavedViews = useInboxStore((s) => s.clientState.ui?.saved_views);
+  // Saved views live on the server now, so a shared one shows up here for every
+  // member of the team — see convex/savedViews.ts.
+  useSyncSavedViews();
+  const savedViewRows = useInboxStore((s) => s.savedViews);
   const savedViews = useMemo(
-    () => allSavedViews?.filter((v: any) => !v.team_id || v.team_id === activeTeamId),
-    [allSavedViews, activeTeamId]
+    () => Object.values(savedViewRows ?? {})
+      .filter((v: any) => !v.team_id || v.team_id === activeTeamId)
+      // Yours first, then teammates' shared ones; alphabetical within each, so
+      // the rail is stable rather than reordering as people edit their views.
+      .sort((a: any, b: any) =>
+        Number(!!b.is_mine) - Number(!!a.is_mine) || (a.name || "").localeCompare(b.name || "")),
+    [savedViewRows, activeTeamId]
   );
-  const deleteView = useInboxStore((s) => s.deleteView);
+  const deleteSavedView = useInboxStore((s) => s.deleteSavedView);
+  const updateSavedView = useInboxStore((s) => s.updateSavedView);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   // Saved views nest under their page's nav row instead of a separate section.
-  const taskViews = useMemo(() => savedViews?.filter((v: any) => v.page === "tasks") ?? [], [savedViews]);
-  const docViews = useMemo(() => savedViews?.filter((v: any) => v.page === "docs" || v.page === "plans") ?? [], [savedViews]);
+  const taskViews = useMemo(() => savedViews.filter((v: any) => v.page === "tasks"), [savedViews]);
+  const docViews = useMemo(() => savedViews.filter((v: any) => v.page === "docs" || v.page === "plans"), [savedViews]);
+
+  // Which view the list is currently arranged as — a view is a set of prefs, not
+  // a route, so "selected" is a comparison against the live prefs (lib/savedViews).
+  const taskPrefs = useInboxStore((s) => s.clientState.ui?.task_view);
+  const docPrefs = useInboxStore((s) => s.clientState.ui?.doc_view);
+  const activeTaskViewId = useMemo(
+    () => (isTasks ? activeViewId(taskViews.map((v: any) => ({ id: v._id, prefs: v.prefs })), taskPrefs) : undefined),
+    [isTasks, taskViews, taskPrefs]
+  );
+  const activeDocViewId = useMemo(
+    () => (isDocs ? activeViewId(docViews.map((v: any) => ({ id: v._id, prefs: v.prefs })), docPrefs) : undefined),
+    [isDocs, docViews, docPrefs]
+  );
   // They reveal when you open that page (navigation is the default); the chevron
   // pins a section open or closed regardless of which page you're on.
   const [viewSectionOverride, setViewSectionOverride] = useState<Record<string, boolean>>({});
@@ -326,15 +369,56 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     onMobileClose?.();
   }, [updateClientUI, router, onMobileClose]);
 
-  const viewItems = useCallback((views: any[]) => views.map((v: any) => ({
-    id: v.id,
+  const viewItems = useCallback((views: any[], activeId?: string) => views.map((v: any) => ({
+    id: v._id,
     name: v.name,
+    active: v._id === activeId,
+    icon: <Layers className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
+    // A shared view is marked, and a teammate's says whose it is — otherwise a
+    // rail of everyone's views is a list of names with no owners.
+    trailing: v.shared ? (
+      <span
+        className="flex items-center flex-shrink-0 mr-0.5"
+        title={v.is_mine ? "Shared with your team" : `Shared by ${v.owner_name ?? "a teammate"}`}
+      >
+        {v.is_mine || !v.owner_image ? (
+          <Users className="w-3 h-3 text-sol-text-dim" />
+        ) : (
+          <img src={v.owner_image} alt={v.owner_name ?? ""} className="w-3.5 h-3.5 rounded-full" />
+        )}
+      </span>
+    ) : undefined,
+    // Only the author can share or delete: silently rewriting a view other
+    // people rely on is what makes shared views untrustworthy.
+    actions: v.is_mine === false ? undefined : [
+      {
+        key: "share",
+        title: v.shared ? "Stop sharing with your team" : "Share with your team",
+        icon: v.shared ? <UserMinus className="w-3 h-3" /> : <Users className="w-3 h-3" />,
+        onClick: () => {
+          if (!activeTeamId && !v.shared) {
+            toast.error("Pick a team first — a shared view needs a team to share with");
+            return;
+          }
+          updateSavedView(v._id, { shared: !v.shared, team_id: v.team_id ?? activeTeamId });
+          toast.success(v.shared ? `"${v.name}" is private again` : `"${v.name}" shared with your team`);
+        },
+      },
+      {
+        key: "remove",
+        title: "Remove saved view",
+        icon: (
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        ),
+        onClick: () => deleteSavedView(v._id),
+      },
+    ],
     onSelect: () => applyView(v),
-    onRemove: () => deleteView(v.id),
-    removeTitle: "Remove saved view",
-  })), [applyView, deleteView]);
-  const taskViewItems = useMemo(() => viewItems(taskViews), [viewItems, taskViews]);
-  const docViewItems = useMemo(() => viewItems(docViews), [viewItems, docViews]);
+  })), [applyView, deleteSavedView, updateSavedView, activeTeamId]);
+  const taskViewItems = useMemo(() => viewItems(taskViews, activeTaskViewId), [viewItems, taskViews, activeTaskViewId]);
+  const docViewItems = useMemo(() => viewItems(docViews, activeDocViewId), [viewItems, docViews, activeDocViewId]);
 
   // The projects themselves nest under the Projects row, so a project is one
   // click from anywhere — the whole point of putting it at the top of the rail.
@@ -343,16 +427,19 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const projects = useInboxStore((s) => s.projects);
   const projectItems = useMemo(() => {
     const order: Record<string, number> = { active: 0, planning: 1, paused: 2, done: 3 };
-    return Object.values(projects)
+    // store.projects is a cross-workspace cache (sync never prunes on team
+    // switch) — re-assert the active workspace here like every other list view.
+    return filterToWorkspace(Object.values(projects), activeTeamId)
       .sort((a: any, b: any) =>
         (order[a.status] ?? 9) - (order[b.status] ?? 9) || (a.title || "").localeCompare(b.title || ""))
       .map((p: any) => ({
+        active: pathname === `/projects/${p._id}` || !!pathname?.startsWith(`/projects/${p._id}/`),
         id: p._id,
         name: p.title,
         icon: <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projectDotClass(p)}`} />,
         onSelect: () => { router.push(`/projects/${p._id}`); onMobileClose?.(); },
       }));
-  }, [projects, router, onMobileClose]);
+  }, [projects, activeTeamId, router, onMobileClose]);
 
   useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []));
   useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));

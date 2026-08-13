@@ -185,7 +185,7 @@ export type RowStatus =
   | "not_comparable";
 
 export interface FleetDiffRow {
-  /** `<kind>:<identity, lowercased>`. Unique within a diff, stable across runs
+  /** `fleetRowKey(kind, identity)`. Unique within a diff, stable across runs
    *  and across machines — safe as a React key or a server side id. */
   key: string;
   kind: FleetRowKind;
@@ -339,6 +339,23 @@ export function capabilityIdentity(
   if (kind !== "plugin" || base.includes("@")) return base;
   const marketplace = text(meta?.marketplace);
   return marketplace ? `${base}@${marketplace}` : base;
+}
+
+/**
+ * The row key for a capability: `<kind>:<identity, case folded>`.
+ *
+ * Case folded because two machines that spell one skill `Domain-Search` and
+ * `domain-search` mean the same skill, and showing it twice would invent drift
+ * out of a filename.
+ *
+ * Exported because everything that joins against a row derives this string —
+ * the browser's display index, the store's drift table
+ * (`packages/web/store/capabilities.ts`, `capabilityRowKey`) — and a consumer
+ * that spells it itself is a second definition of identity, waiting to disagree
+ * with this one on the first input where case or separator matters.
+ */
+export function fleetRowKey(kind: FleetRowKind | string, identity: string): string {
+  return `${kind}:${identity.toLowerCase()}`;
 }
 
 /**
@@ -608,10 +625,9 @@ export function buildFleetDiff(reports: DeviceReport[]): FleetDiff {
     devices[index].reported = true;
 
     for (const item of items) {
-      // Case folding the key, not the display name: two machines that spell one
-      // skill `Domain-Search` and `domain-search` mean the same skill, and
-      // showing it twice would invent drift out of a filename.
-      const key = `${item.kind}:${item.identity.toLowerCase()}`;
+      // Case folded by `fleetRowKey`, and only in the key — the display name
+      // keeps the first spelling a machine used.
+      const key = fleetRowKey(item.kind, item.identity);
       let row = rows.get(key);
       if (!row) {
         row = { key, kind: item.kind, identity: item.identity, description: item.description, byDevice: new Map() };

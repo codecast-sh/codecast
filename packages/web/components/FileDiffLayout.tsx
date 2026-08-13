@@ -29,6 +29,9 @@ import { useTrackedStore } from "../store/inboxStore";
 
 export interface DiffFile {
   filename: string;
+  // Pre-strip path (stripCommonPrefix rewrites `filename` for display); anchors
+  // like line comments need the real path, so keep the original alongside.
+  originalFilename?: string;
   status: string;
   additions: number;
   deletions: number;
@@ -45,6 +48,9 @@ export interface FileDiffLayoutProps {
   onFileComment?: (filename: string, lineNumber?: number) => void;
   renderFileExtra?: (file: DiffFile) => React.ReactNode;
   onCloseDiffPanel?: () => void;
+  // Enables inline line comments (ephemeral review batch + durable file:line
+  // threads) on each file's DiffView. Called with the file's ORIGINAL path.
+  commentContextFor?: (filename: string) => { conversationId: string; anchorKey: string; filePath: string } | undefined;
 }
 
 type Layout = { [key: string]: number };
@@ -179,6 +185,7 @@ function stripCommonPrefix(files: DiffFile[]): DiffFile[] {
   const prefixWithSlash = prefix + "/";
   return files.map(f => ({
     ...f,
+    originalFilename: f.originalFilename ?? f.filename,
     filename: f.filename.startsWith(prefixWithSlash)
       ? f.filename.slice(prefixWithSlash.length)
       : f.filename
@@ -478,6 +485,7 @@ function FileDiffContent({
   totalFiles,
   onToggleSidebar,
   sidebarOpen,
+  commentContextFor,
 }: {
   file: DiffFile | null;
   onComment?: (filename: string, lineNumber?: number) => void;
@@ -486,6 +494,7 @@ function FileDiffContent({
   totalFiles?: number;
   onToggleSidebar?: () => void;
   sidebarOpen?: boolean;
+  commentContextFor?: FileDiffLayoutProps["commentContextFor"];
 }) {
   if (!file) {
     return (
@@ -607,6 +616,7 @@ function FileDiffContent({
         hunks={hunks}
         language={language}
         maxLines={100}
+        commentContext={commentContextFor?.(file.originalFilename ?? file.filename)}
       />
       {renderExtra && renderExtra(file)}
     </div>
@@ -617,10 +627,12 @@ function UnifiedDiffView({
   files,
   onComment,
   renderExtra,
+  commentContextFor,
 }: {
   files: DiffFile[];
   onComment?: (filename: string, lineNumber?: number) => void;
   renderExtra?: (file: DiffFile) => React.ReactNode;
+  commentContextFor?: FileDiffLayoutProps["commentContextFor"];
 }) {
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
@@ -652,6 +664,7 @@ function UnifiedDiffView({
                 hunks={patchData.hunks}
                 language={language}
                 maxLines={500}
+                commentContext={commentContextFor?.(file.originalFilename ?? file.filename)}
               />
             ) : (
               <div className="text-sol-text-muted text-sm py-4 text-center">
@@ -683,6 +696,7 @@ export function FileDiffLayout({
   onFileComment,
   renderFileExtra,
   onCloseDiffPanel,
+  commentContextFor,
 }: FileDiffLayoutProps) {
   // Strip common prefix once for consistent comparisons
   const commonPrefix = useMemo(() => findCommonPrefix(files.map(f => f.filename)), [files]);
@@ -822,6 +836,7 @@ export function FileDiffLayout({
     totalFiles: files.length,
     onToggleSidebar: toggleSidebar,
     sidebarOpen,
+    commentContextFor,
   };
 
   const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0);
@@ -894,6 +909,7 @@ export function FileDiffLayout({
             files={strippedFiles}
             onComment={onFileComment}
             renderExtra={renderFileExtra}
+            commentContextFor={commentContextFor}
           />
         </div>
       </div>

@@ -17734,31 +17734,115 @@ async function main(): Promise<void> {
           last_tool_name: e.lastToolName,
           last_tool_summary: e.lastToolSummary,
         }));
-      const siteUrl = (config.convex_url || "").replace(".cloud", ".site");
-      const token = config.auth_token;
-      if (!siteUrl || !token) return;
-      const resp = await fetch(`${siteUrl}/cli/workflow-runs/ingest`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_token: token,
-          external_run_id: runId,
-          session_id: sessionId,
-          project_path: projectPath,
-          workflow_name: snap.workflowName || "workflow",
-          status: snap.status || "running",
-          phases: snap.phases || [],
-          agents,
-          total_tokens: snap.totalTokens,
-          agent_count: snap.agentCount ?? agents.length,
-          started_at: snap.startTime,
-        }),
+      await postWorkflowRunIngest({
+        external_run_id: runId,
+        session_id: sessionId,
+        project_path: projectPath,
+        workflow_name: snap.workflowName || "workflow",
+        status: snap.status || "running",
+        phases: snap.phases || [],
+        agents,
+        total_tokens: snap.totalTokens,
+        agent_count: snap.agentCount ?? agents.length,
+        started_at: snap.startTime,
       });
-      const respText = await resp.text().catch(() => "");
-      const ok = resp.ok && !respText.includes('"error"');
-      log(`Workflow snapshot ${ok ? "synced" : `FAILED(${resp.status}) ${respText.slice(0, 120)}`}: ${runId} (${agents.length} agents, ${snap.status || "running"})`);
     } catch (err) {
       logError(`processWorkflowSnapshot failed for ${runId}`, err as Error);
+    }
+  }
+
+  // Shared /cli ingest channel for both snapshot shapes (completion file and
+  // the journal-derived live model below).
+  async function postWorkflowRunIngest(payload: {
+    external_run_id: string;
+    session_id: string;
+    project_path?: string;
+    workflow_name: string;
+    status: string;
+    phases: Array<{ title: string; detail?: string }>;
+    agents: Array<Record<string, unknown>>;
+    total_tokens?: number;
+    agent_count?: number;
+    started_at?: number;
+  }): Promise<void> {
+    const siteUrl = (config.convex_url || "").replace(".cloud", ".site");
+    const token = config.auth_token;
+    if (!siteUrl || !token) return;
+    const resp = await fetch(`${siteUrl}/cli/workflow-runs/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: token, ...payload }),
+    });
+    const respText = await resp.text().catch(() => "");
+    const ok = resp.ok && !respText.includes('"error"');
+    log(`Workflow snapshot ${ok ? "synced" : `FAILED(${resp.status}) ${respText.slice(0, 120)}`}: ${payload.external_run_id} (${payload.agents.length} agents, ${payload.status})`);
+  }
+
+  // A dynamic-workflow run writes its materialized snapshot (workflows/wf_<id>.json)
+  // only when it COMPLETES. While it runs, the only on-disk record is under
+  // subagents/workflows/<runId>/ — the agent transcripts plus a journal of
+  // started/result entries per agentId. Without a mid-run ingest the run row is
+  // born already-completed, so no surface can ever say a workflow is RUNNING —
+  // the "session looks idle while 19 agents work" hole (jx70xxy, ct-43094).
+  // Derive a running model from the journal whenever an agent transcript under
+  // the run dir changes, debounced per run; the completion snapshot later
+  // overwrites it with the full model (tokens, previews, phases).
+  const liveWorkflowIngestAt = new Map<string, number>();
+  const LIVE_WORKFLOW_INGEST_INTERVAL_MS = 30_000;
+
+  function liveWorkflowRunFromPath(filePath: string): { runDir: string; runId: string; hostSessionId: string } | undefined {
+    const parts = filePath.split(path.sep);
+    // .../<hostSession>/subagents/workflows/<wf_runId>/agent-<id>.jsonl
+    if (parts.length < 5) return undefined;
+    const [hostSessionId, subagents, workflows, runId, file] = parts.slice(-5);
+    if (subagents !== "subagents" || workflows !== "workflows" || !runId.startsWith("wf_")) return undefined;
+    if (!file.startsWith("agent-") || !file.endsWith(".jsonl")) return undefined;
+    return { runDir: path.dirname(filePath), runId, hostSessionId };
+  }
+
+  async function ingestLiveWorkflowRun(runDir: string, runId: string, hostSessionId: string, projectPath: string): Promise<void> {
+    const now = Date.now();
+    if (now - (liveWorkflowIngestAt.get(runId) ?? 0) < LIVE_WORKFLOW_INGEST_INTERVAL_MS) return;
+    liveWorkflowIngestAt.set(runId, now);
+    try {
+      const hostDir = path.resolve(runDir, "..", "..", "..");
+      // Once the completion snapshot exists it is the authoritative model —
+      // never re-assert "running" over it.
+      if (fs.existsSync(path.join(hostDir, "workflows", `${runId}.json`))) return;
+      // Journal: "started"/"result" per agentId, in order. started-without-result = running.
+      const startedOrder: string[] = [];
+      const started = new Set<string>();
+      const done = new Set<string>();
+      for (const line of fs.readFileSync(path.join(runDir, "journal.jsonl"), "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const e = JSON.parse(line) as { type?: string; agentId?: string };
+          if (!e.agentId) continue;
+          if (e.type === "started" && !started.has(e.agentId)) { started.add(e.agentId); startedOrder.push(e.agentId); }
+          else if (e.type === "result") done.add(e.agentId);
+        } catch {}
+      }
+      if (startedOrder.length === 0) return;
+      const agents = startedOrder.map((id) => ({ agent_id: id, state: done.has(id) ? "done" : "running" }));
+      // The script file is named <workflowName>-<runId>.js — the only mid-run
+      // source of the run's human name.
+      let workflowName = "workflow";
+      try {
+        const hit = fs.readdirSync(path.join(hostDir, "workflows", "scripts")).find((f) => f.endsWith(`-${runId}.js`));
+        if (hit) workflowName = hit.slice(0, -`-${runId}.js`.length);
+      } catch {}
+      await postWorkflowRunIngest({
+        external_run_id: runId,
+        session_id: hostSessionId,
+        project_path: projectPath,
+        workflow_name: workflowName,
+        status: "running",
+        phases: [],
+        agents,
+        agent_count: agents.length,
+      });
+    } catch (err) {
+      logError(`ingestLiveWorkflowRun failed for ${runId}`, err as Error);
     }
   }
 
@@ -17809,6 +17893,13 @@ async function main(): Promise<void> {
       void processWorkflowSnapshot(filePath, event.sessionId, event.workflowRunId, projectPath);
       return;
     }
+
+    // Mid-run signal for a dynamic workflow: an agent transcript under
+    // subagents/workflows/<runId>/ changed while no completion snapshot exists
+    // yet. Ingest the journal-derived running model, then fall through — the
+    // transcript itself still syncs as a subagent conversation.
+    const liveWf = liveWorkflowRunFromPath(filePath);
+    if (liveWf) void ingestLiveWorkflowRun(liveWf.runDir, liveWf.runId, liveWf.hostSessionId, projectPath);
 
     // Dedup duplicate-UUID transcripts: skip a resume-copy artifact whose
     // resolved project dir doesn't exist locally when another already-watched

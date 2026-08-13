@@ -528,10 +528,14 @@ export const getComments = query({
         .withIndex("by_message_id", (q) => q.eq("message_id", args.message_id))
         .collect();
     } else {
+      // The global thread: anchored to neither a message nor a code line.
       comments = await ctx.db
         .query("comments")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-        .filter((q) => q.eq(q.field("message_id"), undefined))
+        .filter((q) => q.and(
+          q.eq(q.field("message_id"), undefined),
+          q.eq(q.field("file_path"), undefined),
+        ))
         .collect();
     }
 
@@ -869,9 +873,13 @@ export const updateGitHubCommentId = internalMutation({
 // "only lives in this thread." When its agent answers, addMessages schedules
 // mirrorAgentReply, which copies the reply back into the placeholder comment.
 
+type ThreadAnchor =
+  | { kind: "message"; snippet: string }
+  | { kind: "file"; filePath: string; lineNumber?: number };
+
 function buildAgentThreadPrompt(
   entries: Array<{ name: string; content: string; isAgent: boolean }>,
-  anchorSnippet: string | undefined,
+  anchor: ThreadAnchor | undefined,
   followUp: boolean,
 ): string {
   const lines: string[] = [];
@@ -885,10 +893,17 @@ function buildAgentThreadPrompt(
       "A teammate asked you to reply inside a COMMENT THREAD on this conversation. " +
         "These are side-channel comments between teammates (and you), not the main task.",
     );
-    if (anchorSnippet) {
+    if (anchor?.kind === "message") {
       lines.push("");
       lines.push("The thread is anchored to this message in the transcript:");
-      lines.push(`> ${anchorSnippet}`);
+      lines.push(`> ${anchor.snippet}`);
+    } else if (anchor?.kind === "file") {
+      lines.push("");
+      lines.push(
+        `The thread is anchored to ${anchor.filePath}${anchor.lineNumber ? `:${anchor.lineNumber}` : ""} ` +
+          "— a line of code from this session's changes. Read that spot before replying. " +
+          "If the thread asks for a change there, make the change, then reply confirming what you did.",
+      );
     }
   }
   lines.push("");
@@ -910,6 +925,8 @@ function buildAgentThreadPrompt(
 type AskAgentArgs = {
   conversation_id: Id<"conversations">;
   message_id?: Id<"messages">;
+  file_path?: string;
+  line_number?: number;
   client_id?: string;
 };
 
@@ -938,7 +955,9 @@ async function executeAskAgentInThread(
     if (duplicate) {
       const matches = String(duplicate.user_id) === String(userId)
         && duplicate.author_kind === "agent"
-        && sameOptionalId(duplicate.message_id, args.message_id);
+        && sameOptionalId(duplicate.message_id, args.message_id)
+        && duplicate.file_path === args.file_path
+        && duplicate.line_number === args.line_number;
       if (!matches) {
         return {
           ok: false,
@@ -960,10 +979,18 @@ async function executeAskAgentInThread(
     }
   }
 
+  // Thread identity mirrors the client's grouping: a message anchor, a code
+  // (file:line) anchor, or the global thread (neither).
   const threadComments = allInConversation
-    .filter((comment) => args.message_id
-      ? String(comment.message_id) === String(args.message_id)
-      : !comment.message_id)
+    .filter((comment) => {
+      if (args.message_id) return String(comment.message_id) === String(args.message_id);
+      if (args.file_path) {
+        return !comment.message_id
+          && comment.file_path === args.file_path
+          && comment.line_number === args.line_number;
+      }
+      return !comment.message_id && !comment.file_path;
+    })
     .sort((left, right) =>
       left.created_at - right.created_at || String(left._id).localeCompare(String(right._id)));
 
@@ -1002,10 +1029,14 @@ async function executeAskAgentInThread(
     entries.push({ name, content: comment.content, isAgent });
   }
 
-  const anchorSnippet = validated.message
-    ? (validated.message.content || "").replace(/\s+/g, " ").trim().slice(0, 240) || undefined
-    : undefined;
-  const prompt = buildAgentThreadPrompt(entries, anchorSnippet, reuse);
+  let anchor: ThreadAnchor | undefined;
+  if (validated.message) {
+    const snippet = (validated.message.content || "").replace(/\s+/g, " ").trim().slice(0, 240);
+    if (snippet) anchor = { kind: "message", snippet };
+  } else if (args.file_path) {
+    anchor = { kind: "file", filePath: args.file_path, lineNumber: args.line_number };
+  }
+  const prompt = buildAgentThreadPrompt(entries, anchor, reuse);
   const now = Date.now();
 
   const transition = await runCommentViewTransition(
@@ -1016,6 +1047,8 @@ async function executeAskAgentInThread(
       const commentId = await writer.insert({
         conversation_id: args.conversation_id,
         message_id: args.message_id,
+        file_path: args.file_path,
+        line_number: args.line_number,
         user_id: userId,
         content: "",
         created_at: now,
@@ -1072,6 +1105,8 @@ async function executeAskAgentInThread(
 const askAgentValidators = {
   conversation_id: v.id("conversations"),
   message_id: v.optional(v.id("messages")),
+  file_path: v.optional(v.string()),
+  line_number: v.optional(v.number()),
   client_id: v.optional(v.string()),
 };
 
@@ -1102,6 +1137,8 @@ export const askAgentInThreadV2 = mutation({
       arguments: {
         conversationId: args.conversation_id,
         messageId: args.message_id,
+        filePath: args.file_path,
+        lineNumber: args.line_number,
         clientId: args.client_id,
       },
     }, async () => {

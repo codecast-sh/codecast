@@ -221,6 +221,12 @@ export type ChatSliceActions = {
   toggleChatReaction: (messageId: string, emoji: string) => void;
   markChannelRead: (channelId: string, lastMessageId?: string) => void;
   setChannelNotifyLevel: (channelId: string, level: ChatNotifyLevel) => void;
+  /** Rename or re-topic a channel. Optimistic: the rail and header rename the
+   *  moment you confirm; the server enforces creator-or-admin and reconciles. */
+  updateChatChannel: (channelId: string, fields: { name?: string; topic?: string }) => void;
+  /** Archive (or restore) a channel. Optimistic: the row leaves the rail at
+   *  once. Restore writes null, the tombstone a delta sync can see. */
+  archiveChatChannel: (channelId: string, archived: boolean) => void;
   /** Returns the stub channel id, so the rail can select the new channel in the
    *  same tick. The altKey supersede moves it onto the real id on echo. */
   createChatChannel: (name: string, opts?: { topic?: string; teamId?: string }) => string;
@@ -490,6 +496,23 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         last_read_at: readAt,
         ...(lastMessageId && isConvexId(lastMessageId) ? { last_read_message_id: lastMessageId } : {}),
       });
+    }),
+
+    updateChatChannel: action(function (this: ChatDraft, channelId: string, fields: { name?: string; topic?: string }) {
+      const channel = this.chatChannels[channelId];
+      if (!channel) return;
+      if (fields.name !== undefined) channel.name = fields.name;
+      if (fields.topic !== undefined) channel.topic = fields.topic;
+      channel.updated_at = Date.now();
+      return { channelId, fields };
+    }),
+
+    archiveChatChannel: action(function (this: ChatDraft, channelId: string, archived: boolean) {
+      const channel = this.chatChannels[channelId];
+      if (!channel) return;
+      channel.archived_at = archived ? Date.now() : null;
+      channel.updated_at = Date.now();
+      return { channelId, archived };
     }),
 
     setChannelNotifyLevel: action(function (this: ChatDraft, channelId: string, level: ChatNotifyLevel) {

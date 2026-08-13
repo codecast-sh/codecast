@@ -1,5 +1,6 @@
 import { mutation, query } from "./functions";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
@@ -611,6 +612,8 @@ export const ingestSnapshot = mutation({
       if (conv && conv.user_id === auth.userId) primaryConvId = conv._id;
     }
 
+    const isTerminal = runStatus === "completed" || runStatus === "failed";
+
     const fields = {
       run_kind: "workflow" as const,
       external_run_id: args.external_run_id,
@@ -626,32 +629,48 @@ export const ingestSnapshot = mutation({
       updated_at: now,
     };
 
+    let runId: Id<"workflow_runs">;
     if (existing) {
       await ctx.db.patch(existing._id, fields);
-      return { ok: true, run_id: existing._id };
+      runId = existing._id;
+    } else {
+      runId = await ctx.db.insert("workflow_runs", {
+        user_id: auth.userId,
+        ...fields,
+        created_at: now,
+      });
+      // Post one inline anchor message so the run shows in its host conversation.
+      // The card reads live run state by run_id, so we post once (on creation), not per update.
+      if (primaryConvId) {
+        const conv = await ctx.db.get(primaryConvId);
+        if (conv) {
+          await ctx.db.insert("messages", {
+            conversation_id: primaryConvId,
+            role: "assistant",
+            content: JSON.stringify({ __wf: "workflow_run", run_id: runId, external_run_id: args.external_run_id, name: args.workflow_name }),
+            subtype: "workflow_event",
+            timestamp: now,
+          });
+          await ctx.db.patch(primaryConvId, {
+            message_count: (conv.message_count || 0) + 1,
+            updated_at: now,
+            last_message_role: "assistant",
+          });
+        }
+      }
     }
-    const runId = await ctx.db.insert("workflow_runs", {
-      user_id: auth.userId,
-      ...fields,
-      created_at: now,
-    });
-    // Post one inline anchor message so the run shows in its host conversation.
-    // The card reads live run state by run_id, so we post once (on creation), not per update.
+    // Stamp the host conversation with its current run, the same link the DOT
+    // path writes in updateProgress. This is what feeds the inbox row's
+    // workflow_run_status enrichment — without it a session running a workflow
+    // has no card-level "workflow running" signal at all. A live run always
+    // claims the pointer (a session runs its waves one after another; the
+    // newest live run is the current one); a terminal snapshot only claims it
+    // when nothing is stamped yet, so a finished wave's final re-post can't
+    // steal the pointer back from the wave that's running now.
     if (primaryConvId) {
       const conv = await ctx.db.get(primaryConvId);
-      if (conv) {
-        await ctx.db.insert("messages", {
-          conversation_id: primaryConvId,
-          role: "assistant",
-          content: JSON.stringify({ __wf: "workflow_run", run_id: runId, external_run_id: args.external_run_id, name: args.workflow_name }),
-          subtype: "workflow_event",
-          timestamp: now,
-        });
-        await ctx.db.patch(primaryConvId, {
-          message_count: (conv.message_count || 0) + 1,
-          updated_at: now,
-          last_message_role: "assistant",
-        });
+      if (conv && conv.workflow_run_id !== runId && (!isTerminal || !conv.workflow_run_id)) {
+        await ctx.db.patch(primaryConvId, { workflow_run_id: runId, is_workflow_primary: true });
       }
     }
     return { ok: true, run_id: runId };

@@ -379,6 +379,10 @@ export default defineSchema({
     // is the honest staleness signal the UI shows ("12 messages since"), and the
     // only defence against a stale state reading as current.
     thread_state_msg_count: v.optional(v.number()),
+    // Declared tri-state of the work ("working" | "blocked" | "done"), written
+    // with the text. Drives the status chip on the panel and the row tint on
+    // the inbox card; absent on rows written before it existed.
+    thread_state_status: v.optional(v.string()),
     // Dedupe for the needs-input push: "<message_count>:<kind>" of the last
     // waiting episode already notified (see notifications.checkNeedsInput).
     // Mirrors the web idle-sound's notified-keys map so one episode pushes
@@ -2167,6 +2171,39 @@ export default defineSchema({
     .index("by_user_status", ["user_id", "status"])
     .index("by_team_id", ["team_id"])
     .index("by_short_id", ["short_id"]),
+
+  // Saved list views — a named set of filters/grouping/sort for /tasks, /docs or
+  // /plans. These used to live in the owner's client_state bag, which made them
+  // per-user by construction: there was nowhere for a teammate to read them
+  // from. As a table they can be SHARED, so a view one person tunes shows up on
+  // everyone's rail instead of being rebuilt by hand three times.
+  //
+  // `shared` is the whole access rule: private rows are owner-only, shared rows
+  // are readable by any member of the row's team. A shared row without a
+  // team_id is a contradiction (nobody to share with), so writes require one.
+  saved_views: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    name: v.string(),
+    page: v.union(v.literal("tasks"), v.literal("docs"), v.literal("plans")),
+    // The list preferences this view restores. Deliberately loose: the pages own
+    // their own pref vocabularies and grow new filters often, and a view is only
+    // ever handed straight back to the page that wrote it.
+    prefs: v.any(),
+    shared: v.optional(v.boolean()),
+    // Presentation, so a rail of views is scannable rather than a wall of text.
+    icon: v.optional(v.string()),
+    color: v.optional(v.string()),
+    // Client-minted idempotency key: an optimistic create writes a stub under
+    // this key and the server row supersedes it, so a retried create can never
+    // leave two copies of the same view.
+    client_key: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_team_id", ["team_id"])
+    .index("by_client_key", ["client_key"]),
 
   // Entity-to-conversation association. Messages stay in the existing
   // conversations/messages substrate; this row only records that a conversation

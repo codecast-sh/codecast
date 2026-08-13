@@ -14,6 +14,7 @@ import type { FileChange } from "../store/diffViewerStore";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { getRelativePath } from "@codecast/shared/render";
 
 const MOBILE_BREAKPOINT = 768;
 const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
@@ -222,7 +223,7 @@ export function ConversationDiffLayout({
             <ConversationView {...conversationViewProps} />
           </TabsContent>
           <TabsContent value="diff" className="flex-1 overflow-auto m-0">
-            <DiffPane />
+            <DiffPane conversationId={conversation?._id} />
           </TabsContent>
         </Tabs>
       </div>
@@ -267,7 +268,7 @@ export function ConversationDiffLayout({
             </div>
             {/* Diff Content */}
             <div className="flex-1 h-full min-w-0">
-              <DiffPane />
+              <DiffPane conversationId={conversation?._id} />
             </div>
           </div>
         </Panel>
@@ -478,12 +479,24 @@ function generateUnifiedPatch(filename: string, oldContent: string, newContent: 
   return patch;
 }
 
-function DiffPane() {
+function DiffPane({ conversationId }: { conversationId?: string }) {
   const { selectedChangeIndex, changes } = useDiffViewerStore();
 
   const diffFiles = useMemo(() => {
     return computeCumulativeFiles(changes, selectedChangeIndex);
   }, [changes, selectedChangeIndex]);
+
+  // Line comments in the panel share anchors with the transcript's inline diffs:
+  // the same conversation + getRelativePath(file) identity, so a durable thread
+  // left in either surface renders in both.
+  const commentContextFor = useMemo(() => {
+    if (!conversationId || !isConvexId(conversationId)) return undefined;
+    return (filename: string) => ({
+      conversationId,
+      anchorKey: `diffpanel:${filename}`,
+      filePath: getRelativePath(filename),
+    });
+  }, [conversationId]);
 
   if (changes.length === 0) {
     return (
@@ -519,6 +532,7 @@ function DiffPane() {
     <div className="h-full w-full flex flex-col bg-background">
       <FileDiffLayout
         files={diffFiles}
+        commentContextFor={commentContextFor}
         sidebarHeader={
           <div className="px-3 py-2 border-b border-sol-border/50 bg-sol-bg-alt/30">
             <span className="text-xs text-sol-text-dim">{positionLabel}</span>

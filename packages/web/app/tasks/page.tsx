@@ -748,7 +748,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   const taskOriginBadges = useInboxStore((s) => s.taskOriginBadges);
   const showCreate = useInboxStore((s) => s.createModal === 'task');
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
-  const saveView = useInboxStore((s) => s.saveView);
+  const createSavedView = useInboxStore((s) => s.createSavedView);
   const taskView = useInboxStore((s) => s.clientState.ui?.task_view);
   const [hiddenStatuses, setHiddenStatuses] = useState<Set<string>>(new Set(["dropped"]));
 
@@ -771,8 +771,8 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   }, [setTaskFilter, setParam]);
   const setViewMode = useCallback((v: "list" | "kanban") => setParam({ view: v === "list" ? "" : v }), [setParam]);
   const handleSaveView = useCallback((name: string) => {
-    saveView({ name, page: "tasks", prefs: { ...taskView, status: statusFilter } as TaskViewPrefs });
-  }, [saveView, taskView, statusFilter]);
+    createSavedView({ name, page: "tasks", prefs: { ...taskView, status: statusFilter } as TaskViewPrefs });
+  }, [createSavedView, taskView, statusFilter]);
 
   useWatchEffect(() => { setTaskFilter({ status: urlStatus }); }, [urlStatus]);
 

@@ -107,6 +107,7 @@ import type * as pushRouter from "../pushRouter.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as redact from "../redact.js";
 import type * as reviews from "../reviews.js";
+import type * as savedViews from "../savedViews.js";
 import type * as searchCore from "../searchCore.js";
 import type * as searchMirror from "../searchMirror.js";
 import type * as sessionImages from "../sessionImages.js";
@@ -242,6 +243,7 @@ declare const fullApi: ApiFromModules<{
   rateLimit: typeof rateLimit;
   redact: typeof redact;
   reviews: typeof reviews;
+  savedViews: typeof savedViews;
   searchCore: typeof searchCore;
   searchMirror: typeof searchMirror;
   sessionImages: typeof sessionImages;
