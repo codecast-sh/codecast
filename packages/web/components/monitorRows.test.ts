@@ -364,3 +364,68 @@ describe("notification parsing helpers", () => {
     expect(isOrphanSummaryNotification(n)).toBe(false);
   });
 });
+
+// Workflow runs (the harness Workflow tool) wear the same row anatomy: born
+// from the tool_use, armed by the "Workflow launched in background. Task ID:"
+// result — which also carries the run's Summary line and script filename —
+// and closed by the terminal task notification. Shapes mirror session
+// jx70xxy, whose live 6-agent run was invisible before this projection.
+describe("monitorRowsFor — workflow rows", () => {
+  const workflowCall = (id: string, input: object = { script: "export const meta = {...}" }) => ({
+    role: "assistant",
+    timestamp: 1000,
+    tool_calls: [{ id, name: "Workflow", input: JSON.stringify(input) }],
+  });
+  const workflowLaunched = (toolUseId: string, taskId: string) => ({
+    role: "user",
+    timestamp: 1001,
+    content: "",
+    tool_results: [{
+      tool_use_id: toolUseId,
+      content: `Workflow launched in background. Task ID: ${taskId}\nSummary: Drive the ready tasks to done\nTranscript dir: /x/subagents/workflows/wf_dbe2b22d-fc5\nScript file: /x/workflows/scripts/capability-library-wave2-wf_dbe2b22d-fc5.js\n(Edit this file with Write/Edit and re-invoke Workflow with {scriptPath: ...})`,
+    }],
+  });
+  const terminalNotif = (taskId: string, toolUseId: string, status: string, ts: number) => ({
+    role: "user",
+    timestamp: ts,
+    content: `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<status>${status}</status>\n<summary>Workflow finished</summary>\n</task-notification>`,
+  });
+
+  test("a launched workflow is watching, named by its Summary and script file", () => {
+    const rows = monitorRowsFor([workflowCall("tu1"), workflowLaunched("tu1", "wdbvz98da")]);
+    expect(rows.length).toBe(1);
+    expect(rows[0].kind).toBe("workflow");
+    expect(rows[0].status).toBe("watching");
+    expect(rows[0].taskId).toBe("wdbvz98da");
+    expect(rows[0].description).toBe("Drive the ready tasks to done");
+    expect(rows[0].command).toBe("capability-library-wave2");
+  });
+
+  test("a saved-workflow invocation is named by input.name until the result lands", () => {
+    const rows = monitorRowsFor([workflowCall("tu1", { name: "review-changes" })]);
+    expect(rows[0].description).toBe("review-changes");
+  });
+
+  test("completed closes it; failed closes it and marks failed", () => {
+    const done = monitorRowsFor([workflowCall("tu1"), workflowLaunched("tu1", "w1"), terminalNotif("w1", "tu1", "completed", 5000)]);
+    expect(done[0].status).toBe("ended");
+    expect(done[0].failed).toBeUndefined();
+    const failed = monitorRowsFor([workflowCall("tu2"), workflowLaunched("tu2", "w2"), terminalNotif("w2", "tu2", "failed", 5000)]);
+    expect(failed[0].status).toBe("ended");
+    expect(failed[0].failed).toBe(true);
+  });
+
+  test("an error result (script never launched) kills the row", () => {
+    const errored = monitorRowsFor([workflowCall("tu1"), {
+      role: "user", timestamp: 1001, content: "",
+      tool_results: [{ tool_use_id: "tu1", content: "Workflow script error: unexpected token", is_error: true }],
+    }]);
+    expect(errored.length).toBe(0);
+    // Same verdict for a non-error result missing the launch line.
+    const noLaunch = monitorRowsFor([workflowCall("tu2"), {
+      role: "user", timestamp: 1001, content: "",
+      tool_results: [{ tool_use_id: "tu2", content: "Something else entirely" }],
+    }]);
+    expect(noLaunch.length).toBe(0);
+  });
+});
