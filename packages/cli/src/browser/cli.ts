@@ -24,7 +24,8 @@ import type { Command } from "commander";
 import { CdpConnection, listTargets, type CdpTarget } from "./cdp.js";
 import {
   attachToTarget, clearState, freePort, isLive, killStrayChrome, launchManagedChrome,
-  readState, resolveTarget, setActiveTarget, settle, stopInstance, writeState,
+  pruneTabOwnership, readState, resolveTarget, setActiveTarget, settle, stopInstance,
+  TabUnresponsive, writeState,
   type InstanceState, type PageSession,
 } from "./instance.js";
 import {
@@ -36,7 +37,10 @@ import {
   scroll, selectOption, type, uploadFiles,
 } from "./actions.js";
 import { armRecorder, clearRecording, readRecording } from "./observe.js";
-import { uploadOne } from "../imageCommand.js";
+import { ownerKey } from "./owner.js";
+import { downscaleWithSips, uploadOne } from "../imageCommand.js";
+import { inlineImageMarker } from "../inlineImage.js";
+import { MAX_IMAGE_SIZE } from "../syncService.js";
 import type { PublishDeps } from "../publish.js";
 import { fmt, icons } from "../colors.js";
 
@@ -57,6 +61,7 @@ function die(msg: string, hint?: string): never {
 async function withPage<T>(
   opts: { tab?: string },
   fn: (page: PageSession, state: InstanceState, conn: CdpConnection) => Promise<T>,
+  sessionId?: string | null,
 ): Promise<T> {
   const state = readState();
   if (!(await isLive(state))) {
@@ -68,9 +73,9 @@ async function withPage<T>(
   const s = state!;
   const conn = await CdpConnection.fromPort(s.port);
   try {
-    const target = await resolveTarget(s.port, s, opts.tab);
+    const target = await resolveTarget(s.port, s, opts.tab, sessionId);
     const page = await attachToTarget(conn, target.targetId);
-    setActiveTarget(s, target.targetId);
+    setActiveTarget(s, target.targetId, sessionId);
     // Re-arm every time: the previous process's registration died with its
     // session, so without this any navigation this command triggers would land
     // on a page with no console capture at all.
@@ -88,9 +93,22 @@ function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
-function describeTab(t: CdpTarget, active: boolean): string {
-  const mark = active ? fmt.success("*") : " ";
-  return `${mark} ${fmt.muted(shortId(t.targetId))}  ${(t.title || "(untitled)").slice(0, 50).padEnd(50)} ${fmt.muted(t.url.slice(0, 70))}`;
+/**
+ * One tab per line. `*` marks the caller's own tab and `~` one owned by another
+ * agent — the browser is shared, so knowing which pages are somebody else's is
+ * what stops a hijacked tab from being mistaken for a broken app.
+ */
+function describeTab(t: CdpTarget, mine: boolean, otherOwner: boolean): string {
+  const mark = mine ? fmt.success("*") : otherOwner ? fmt.warning("~") : " ";
+  return `${mark} ${fmt.muted(shortId(t.targetId))}  ${(t.title || "(untitled)").slice(0, 46).padEnd(46)} ${fmt.muted(t.url.slice(0, 66))}`;
+}
+
+/** Split live tabs into "mine" and "another agent's" for display. */
+function ownership(state: InstanceState, sessionId: string | null) {
+  const map = state.tabsBySession ?? {};
+  const mine = sessionId ? map[sessionId] : state.activeTargetId;
+  const others = new Set(Object.entries(map).filter(([sid]) => sid !== sessionId).map(([, id]) => id));
+  return { mine, others };
 }
 
 /** Print the page header every action shares, so the agent always knows where it is. */
@@ -98,17 +116,16 @@ function pageLine(url: string, title: string): string {
   return `${fmt.highlight(title || "(untitled)")}\n${fmt.muted(url)}`;
 }
 
-/**
- * `onReady` is called the first time a browser comes up on this machine. It is
- * how the CLAUDE.md section gets written: an agent cannot use a command it has
- * never been told about, and asking the human to run a separate install step
- * for something they have already started is a step that will be skipped.
- */
-export function registerBrowserCommand(
-  program: Command,
-  deps: PublishDeps,
-  onReady: () => void = () => {},
-): void {
+export function registerBrowserCommand(program: Command, deps: PublishDeps): void {
+  // Which agent is calling. Tabs are owned per session so parallel agents on
+  // one machine do not drive each other's pages; a human at a terminal has no
+  // session and falls back to the last tab touched.
+  const me = (): string | null => ownerKey(deps.detectCurrentSessionId);
+  const act = <T>(
+    opts: { tab?: string },
+    fn: (page: PageSession, state: InstanceState, conn: CdpConnection) => Promise<T>,
+  ) => withPage(opts, fn, me());
+
   const br = program
     .command("browser")
     .alias("br")
@@ -204,7 +221,6 @@ export function registerBrowserCommand(
         activeTargetId: null,
       };
       writeState(state);
-      onReady();
       console.log(`${OK} browser up — pid ${pid}, CDP 127.0.0.1:${port}${o.headless ? ", headless" : ""}`);
       if (!o.fresh) {
         console.log(
@@ -229,8 +245,9 @@ export function registerBrowserCommand(
       console.log(`${OK} running  pid ${state.pid}  port ${state.port}  up ${mins}m${state.headless ? "  headless" : ""}`);
       console.log(`  profile: ${state.sourceProfile ? `clone of ${state.sourceProfile}` : "fresh"}  ${fmt.muted(state.userDataDir)}`);
       const targets = await listTargets(state.port);
+      const { mine, others } = ownership(state, me());
       console.log(`  ${targets.length} tab(s):`);
-      for (const t of targets) console.log(`  ${describeTab(t, t.targetId === state.activeTargetId)}`);
+      for (const t of targets) console.log(`  ${describeTab(t, t.targetId === mine, others.has(t.targetId))}`);
     });
 
   br.command("stop")
@@ -262,26 +279,49 @@ export function registerBrowserCommand(
         die("no managed browser is running", "run `cast browser start` first");
       }
       const s = state!;
+      const sessionId = me();
       const conn = await CdpConnection.fromPort(s.port);
       try {
         let targetId: string;
         const targets = await listTargets(s.port);
         const blank = targets.find((t) => t.url === "about:blank");
-        if (o.newTab || (!targets.length && !blank)) {
+        const mine = sessionId ? s.tabsBySession?.[sessionId] : null;
+        if (o.newTab || !targets.length) {
           const res = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
           targetId = res.targetId;
-        } else if (s.activeTargetId && targets.some((t) => t.targetId === s.activeTargetId)) {
-          targetId = s.activeTargetId;
+        } else if (mine && targets.some((t) => t.targetId === mine)) {
+          // Reuse the tab this session already owns rather than the last tab
+          // anyone touched — otherwise two agents navigating at once trade
+          // pages under each other.
+          targetId = mine;
+        } else if (blank) {
+          targetId = blank.targetId;
         } else {
-          targetId = (blank ?? targets[targets.length - 1]).targetId;
+          // No tab of our own and none spare: take a new one instead of
+          // commandeering a page another agent may be mid-flow on.
+          const res = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+          targetId = res.targetId;
         }
 
-        const page = await attachToTarget(conn, targetId);
+        // A wedged tab must not block a navigation request. `open` means "get me
+        // to this URL", so if the tab we picked has stopped answering we say so
+        // and go to a fresh one rather than failing the whole command — the
+        // agent asked for a page, not for that particular tab.
+        let page: PageSession;
+        try {
+          page = await attachToTarget(conn, targetId);
+        } catch (err) {
+          if (!(err instanceof TabUnresponsive)) throw err;
+          console.log(fmt.muted(`  tab ${shortId(targetId)} was not responding — opening a new one`));
+          const res = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+          targetId = res.targetId;
+          page = await attachToTarget(conn, targetId);
+        }
         // Arm BEFORE navigating so the recorder sees the page's own boot logs —
         // the errors an agent is usually looking for happen during startup.
         await armRecorder(page);
         await conn.send("Page.navigate", { url }, page.sessionId);
-        setActiveTarget(s, targetId);
+        setActiveTarget(s, targetId, sessionId);
 
         if (o.wait !== false) {
           const r = await settle(page);
@@ -290,6 +330,8 @@ export function registerBrowserCommand(
         const snap = await snapshotPage(page, { maxChars: 1 });
         console.log(pageLine(snap.url, snap.title));
         console.log(fmt.muted(`  tab ${shortId(targetId)} — next: cast browser snapshot`));
+      } catch (err) {
+        die((err as Error).message);
       } finally {
         conn.close();
       }
@@ -303,7 +345,7 @@ export function registerBrowserCommand(
       .description(desc)
       .option("--tab <id>", "Act on a specific tab")
       .action(async (o: { tab?: string }) => {
-        await withPage(o, async (page) => {
+        await act(o, async (page) => {
           const hist = await page.conn.send<any>("Page.getNavigationHistory", {}, page.sessionId);
           const idx = method === "back" ? hist.currentIndex - 1 : hist.currentIndex + 1;
           const entry = hist.entries[idx];
@@ -321,7 +363,7 @@ export function registerBrowserCommand(
     .option("--hard", "Bypass the cache")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (o: { hard?: boolean; tab?: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         await page.conn.send("Page.reload", { ignoreCache: !!o.hard }, page.sessionId);
         await settle(page);
         const snap = await snapshotPage(page, { maxChars: 1 });
@@ -337,7 +379,12 @@ export function registerBrowserCommand(
       const state = readState();
       if (!(await isLive(state))) die("no managed browser is running");
       const targets = await listTargets(state!.port);
-      for (const t of targets) console.log(describeTab(t, t.targetId === state!.activeTargetId));
+      const { mine, others } = ownership(state!, me());
+      for (const t of targets) console.log(describeTab(t, t.targetId === mine, others.has(t.targetId)));
+      if (others.size) {
+        console.log(fmt.muted(`\n  ~ = another agent's tab. Yours is marked *; pass --tab to be explicit.`));
+      }
+      pruneTabOwnership(state!, new Set(targets.map((t) => t.targetId)));
     });
 
   br.command("tab <id>")
@@ -345,8 +392,8 @@ export function registerBrowserCommand(
     .action(async (id: string) => {
       const state = readState();
       if (!(await isLive(state))) die("no managed browser is running");
-      const target = await resolveTarget(state!.port, state!, id);
-      setActiveTarget(state!, target.targetId);
+      const target = await resolveTarget(state!.port, state!, id, me());
+      setActiveTarget(state!, target.targetId, me());
       // Bring it to the front so a watching human sees what the agent sees.
       const conn = await CdpConnection.fromPort(state!.port);
       try {
@@ -385,7 +432,7 @@ export function registerBrowserCommand(
     .option("--no-frames", "Skip child frames")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (o: { interactive?: boolean; maxChars: string; frames: boolean; tab?: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         const snap = await snapshotPage(page, {
           interactiveOnly: o.interactive,
           maxChars: parseInt(o.maxChars, 10),
@@ -405,7 +452,7 @@ export function registerBrowserCommand(
     .description("Find refs whose accessible name matches")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (text: string, o: { tab?: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         const snap = await snapshotPage(page);
         const hits = matchRefs(snap.refs, text);
         if (!hits.length) {
@@ -422,7 +469,7 @@ export function registerBrowserCommand(
     .option("--tab <id>", "Act on a specific tab")
     .option("--max-chars <n>", "Truncate beyond this", "20000")
     .action(async (o: { tab?: string; maxChars: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         const max = parseInt(o.maxChars, 10);
         const text = (await evaluate(page, `document.body ? document.body.innerText : ""`)) as string;
         console.log(text.slice(0, max));
@@ -436,10 +483,12 @@ export function registerBrowserCommand(
     .option("--ref <n>", "Just this element")
     .option("--out <path>", "Where to write it")
     .option("--share", "Upload and print a URL that renders inline in the thread")
+    .option("--alt <text>", "Caption for the shared image — say what it shows")
+    .option("--no-inline", "Do not show the image in the conversation")
     .option("--jpeg", "JPEG instead of PNG — much smaller for photos")
     .option("--tab <id>", "Act on a specific tab")
-    .action(async (o: { full?: boolean; ref?: string; out?: string; share?: boolean; jpeg?: boolean; tab?: string }) => {
-      await withPage(o, async (page) => {
+    .action(async (o: { full?: boolean; ref?: string; out?: string; share?: boolean; alt?: string; jpeg?: boolean; inline?: boolean; tab?: string }) => {
+      await act(o, async (page) => {
         const buf = await screenshot(page, {
           fullPage: o.full,
           ref: o.ref ? parseInt(o.ref.replace(/^#?e/, ""), 10) : undefined,
@@ -449,13 +498,36 @@ export function registerBrowserCommand(
           o.out ??
           path.join(os.tmpdir(), `cast-shot-${Date.now()}.${o.jpeg ? "jpg" : "png"}`);
         fs.mkdirSync(path.dirname(out), { recursive: true });
-        fs.writeFileSync(out, buf);
-        console.log(`${OK} ${out} (${formatBytes(buf.length)})`);
+
+        // A retina full-page capture runs to several megabytes, and anything
+        // over the sync cap is dropped on its way to the thread — silently, so
+        // the screenshot would simply never appear. Shrink it here with the
+        // same ladder the upload path uses rather than let that happen.
+        let bytes = buf;
+        let shrunk = false;
+        if (bytes.length > MAX_IMAGE_SIZE) {
+          const smaller = downscaleWithSips(bytes, o.jpeg ? "image/jpeg" : "image/png");
+          if (smaller && smaller.length < bytes.length) {
+            bytes = smaller;
+            shrunk = true;
+          }
+        }
+        fs.writeFileSync(out, bytes);
+        console.log(
+          `${OK} ${out} (${formatBytes(bytes.length)}${shrunk ? `, downscaled from ${formatBytes(buf.length)}` : ""})`,
+        );
+        // Puts the picture in the conversation under this command's output,
+        // the way an extension screenshot appears. `--no-inline` opts out.
+        if (o.inline !== false && bytes.length <= MAX_IMAGE_SIZE) {
+          console.log(inlineImageMarker(path.resolve(out)));
+        }
         if (o.share) {
           // Same upload path as `cast image`, so the URL renders inline for the
-          // human instead of being a dead local path.
+          // human instead of being a dead local path. The alt text becomes the
+          // caption under the image, so it should describe what is being shown
+          // — the page title is only a fallback for when the agent says nothing.
           const snap = await snapshotPage(page, { maxChars: 1 });
-          const img = await uploadOne(deps, out, snap.title || "screenshot");
+          const img = await uploadOne(deps, out, o.alt || snap.title || "screenshot");
           console.log(img.markdown);
         }
       });
@@ -488,7 +560,7 @@ export function registerBrowserCommand(
     .option("--double", "Double click")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (ref: string, o: { force?: boolean; right?: boolean; double?: boolean; tab?: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
         try {
           const pt = await click(page, refOf(ref), {
@@ -508,7 +580,7 @@ export function registerBrowserCommand(
     .description("Click raw viewport coordinates (escape hatch when no ref fits)")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (x: string, y: string, o: { tab?: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
         await clickAt(page, { x: parseFloat(x), y: parseFloat(y) });
         console.log(`${OK} clicked ${x},${y}`);
@@ -524,7 +596,7 @@ export function registerBrowserCommand(
     .option("--delay <ms>", "Delay between keys with --per-key", "20")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (ref: string, text: string, o: any) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
         try {
           await type(page, refOf(ref), text, {
@@ -542,7 +614,7 @@ export function registerBrowserCommand(
     .description('Press a key: Enter, Escape, Tab, ArrowDown, "cmd+a", "/"')
     .option("--tab <id>", "Act on a specific tab")
     .action(async (key: string, o: { tab?: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
         await pressKey(page, key);
         console.log(`${OK} pressed ${key}`);
@@ -554,7 +626,7 @@ export function registerBrowserCommand(
     .description("Hover an element (reveals menus and tooltips)")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (ref: string, o: { tab?: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         const pt = await hover(page, refOf(ref));
         console.log(`${OK} hovered #e${refOf(ref)} at ${Math.round(pt.x)},${Math.round(pt.y)}`);
       });
@@ -564,7 +636,7 @@ export function registerBrowserCommand(
     .description("Focus an element without clicking it")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (ref: string, o: { tab?: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         await focus(page, refOf(ref));
         console.log(`${OK} focused #e${refOf(ref)}`);
       });
@@ -574,7 +646,7 @@ export function registerBrowserCommand(
     .description("Choose an option in a <select>")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (ref: string, value: string, o: { tab?: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
         try {
           await selectOption(page, refOf(ref), value);
@@ -586,16 +658,28 @@ export function registerBrowserCommand(
       });
     });
 
+  // `--up` rather than a negative amount: commander parses a leading "-" as an
+  // option, so `scroll -900` fails with "unknown option" before the action ever
+  // runs. Both forms are accepted anyway — the amount is read from the raw argv
+  // when commander has swallowed it — because the obvious thing an agent types
+  // should not be an error.
   br.command("scroll [amount]")
-    .description("Scroll the page (positive is down; default one screen)")
+    .description("Scroll the page (default one screen). Use --up, or a negative amount, to go up")
+    .option("--up", "Scroll up instead of down")
     .option("--tab <id>", "Act on a specific tab")
-    .action(async (amount: string | undefined, o: { tab?: string }) => {
-      await withPage(o, async (page) => {
-        const dy = amount ? parseFloat(amount) : 600;
-        await scroll(page, dy);
-        const pos = await evaluate(page, `JSON.stringify([Math.round(scrollY), Math.round(document.documentElement.scrollHeight - innerHeight)])`);
-        const [y, max] = JSON.parse(pos as string);
-        console.log(`${OK} scrolled ${dy > 0 ? "down" : "up"} — at ${y} of ${max}`);
+    .allowUnknownOption(true)
+    .action(async (amount: string | undefined, o: { up?: boolean; tab?: string }) => {
+      const negative = process.argv.find((a) => /^-\d+$/.test(a));
+      const magnitude = amount ? Math.abs(parseFloat(amount)) : negative ? Math.abs(parseFloat(negative)) : 600;
+      const dy = o.up || negative ? -magnitude : magnitude;
+      await act(o, async (page) => {
+        const r = await scroll(page, dy);
+        const where = r.max === 0 ? "page does not scroll" : `at ${r.y} of ${r.max}`;
+        if (!r.moved) {
+          console.log(`${WARN} did not move (${where}) — already at the ${dy > 0 ? "bottom" : "top"}, or the page handles wheel itself`);
+        } else {
+          console.log(`${OK} scrolled ${dy > 0 ? "down" : "up"} — ${where}`);
+        }
       });
     });
 
@@ -605,7 +689,7 @@ export function registerBrowserCommand(
     .action(async (ref: string, files: string[], o: { tab?: string }) => {
       const abs = files.map((f) => path.resolve(f));
       for (const f of abs) if (!fs.existsSync(f)) die(`no such file: ${f}`);
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         await uploadFiles(page, refOf(ref), abs);
         console.log(`${OK} attached ${abs.length} file(s) to #e${refOf(ref)}`);
       });
@@ -615,7 +699,7 @@ export function registerBrowserCommand(
     .description("Run JavaScript in the page and print the result")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (expression: string, o: { tab?: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         try {
           const v = await evaluate(page, expression);
           console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
@@ -633,7 +717,7 @@ export function registerBrowserCommand(
     .option("--timeout <ms>", "Give up after this", "15000")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (o: { text?: string; ref?: string; ms?: string; timeout: string; tab?: string }) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         const timeout = parseInt(o.timeout, 10);
         if (o.ms) {
           await new Promise((r) => setTimeout(r, parseInt(o.ms!, 10)));
@@ -675,7 +759,7 @@ export function registerBrowserCommand(
     .option("-n <count>", "How many lines", "50")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (o: any) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         if (o.clear) {
           await clearRecording(page);
           return console.log(`${OK} cleared`);
@@ -710,7 +794,7 @@ export function registerBrowserCommand(
     .option("-n <count>", "How many rows", "40")
     .option("--tab <id>", "Act on a specific tab")
     .action(async (o: any) => {
-      await withPage(o, async (page) => {
+      await act(o, async (page) => {
         const rec = await readRecording(page);
         if (!rec.armed) {
           console.log(`${WARN} could not read this page's network (the recorder did not install).`);
