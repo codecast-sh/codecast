@@ -1,0 +1,13 @@
+typescript-lsp 1.0.0
+  TypeScript/JavaScript language server for enhanced code intelligence
+  Source: typescript-lsp@claude-plugins-official
+
+Component inventory
+  Skills (0)
+  Agents (0)
+  Hooks (0)
+  MCP servers (0)
+  LSP servers (1)  typescript  (out-of-process tooling; no model context cost)
+
+Projected token cost
+  Always-on:   ~0 tok   added to every session

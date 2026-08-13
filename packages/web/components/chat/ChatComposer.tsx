@@ -46,6 +46,7 @@ export const ChatComposer = memo(function ChatComposer({
         key={draftKey}
         conversationId={draftKey}
         bareComposer
+        chatMentionMode
         composerPlaceholder={placeholder}
         autoFocusInput={autoFocus}
         onGateSend={async (text: string) => {

@@ -7,6 +7,11 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, PlanItem, DocItem } from "../../../store/inboxStore";
 import { useSyncTasks } from "../../../hooks/useSyncTasks";
 import { TaskListContent } from "../../tasks/page";
+import { TaskDetailContent } from "../../tasks/[id]/page";
+import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
+import { ErrorBoundary } from "../../../components/ErrorBoundary";
+import { Breadcrumbs } from "../../../components/Breadcrumbs";
+import { projectColorClass } from "../../../lib/projectColors";
 import { useSyncPlans } from "../../../hooks/useSyncPlans";
 import { useSyncDocs } from "../../../hooks/useSyncDocs";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
@@ -195,6 +200,7 @@ function ProjectDetailContent() {
   const router = useRouter();
   const params = useParams();
   const projectId = params.id as string;
+  const openTaskId = params.taskId as string | undefined;
 
   useSyncProjects();
   useSyncTasks();
@@ -272,6 +278,14 @@ function ProjectDetailContent() {
     [projectTasks]
   );
 
+  // The open task, for the trail's leaf. Read from the store so the crumb lands
+  // with the click rather than after a round-trip.
+  const openTask = useMemo(() => {
+    if (!openTaskId) return null;
+    const t = (tasks as any)[openTaskId] as TaskItem | undefined;
+    return t ?? Object.values(tasks).find((x: any) => x.short_id === openTaskId) ?? null;
+  }, [tasks, openTaskId]);
+
   // Docs in this project
   const projectDocs = useMemo(() =>
     Object.values(docs).filter((d: any) => d.project_id === projectId)
@@ -322,14 +336,21 @@ function ProjectDetailContent() {
     <div className="h-full flex flex-col">
       {/* Header */}
       <div className="px-6 py-4 border-b border-sol-border/20">
-        <div className="flex items-center gap-3 mb-3">
-          <button
-            onClick={() => router.push("/projects")}
-            className="text-sol-text-dim hover:text-sol-text transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-
+        <div className="flex items-center gap-3 mb-3 min-w-0">
+          <Breadcrumbs
+            items={[
+              { label: "Projects", href: "/projects" },
+              {
+                label: project.title,
+                icon: <span className={`w-2 h-2 rounded-full flex-shrink-0 ${projectColorClass(project.color)}`} />,
+              },
+              // The open task extends the trail rather than replacing it — that
+              // is the whole point: you are in a task, inside this project.
+              ...(openTask ? [{ label: `${openTask.short_id} ${openTask.title}` }] : []),
+            ]}
+            className="min-w-0"
+          />
+          <div className="hidden">
           {editingTitle ? (
             <div className="flex items-center gap-2 flex-1">
               <input
@@ -355,6 +376,7 @@ function ProjectDetailContent() {
               <Pencil className="w-3 h-3 text-sol-text-dim opacity-0 group-hover:opacity-100 transition-opacity" />
             </h1>
           )}
+          </div>
         </div>
 
         <div className="flex items-center gap-4 ml-7">
@@ -501,10 +523,27 @@ function ProjectDetailContent() {
 }
 
 export default function ProjectDetailPage() {
+  // Selection stays in the URL and inside the project: /projects/<id> is the
+  // project, /projects/<id>/<taskId> is a task within it. Both render this same
+  // component (see TabContent), so opening a task reconciles in place — the
+  // project's list never unmounts and you never leave the project.
+  const params = useParams();
+  const projectId = params?.id as string | undefined;
+  const taskId = params?.taskId as string | undefined;
   return (
     <AuthGuard>
       <DashboardLayout>
-        <ProjectDetailContent />
+        <DetailSplitLayout
+          list={<ProjectDetailContent />}
+          surface="projects"
+          closeHref={`/projects/${projectId}`}
+        >
+          {taskId ? (
+            <ErrorBoundary name="ProjectTaskDetail" level="panel">
+              <TaskDetailContent taskId={taskId} variant="page" />
+            </ErrorBoundary>
+          ) : null}
+        </DetailSplitLayout>
       </DashboardLayout>
     </AuthGuard>
   );

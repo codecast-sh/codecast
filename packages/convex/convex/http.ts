@@ -3755,6 +3755,10 @@ cliRoute("/cli/sessions/dismiss", async (ctx, body) => ctx.runMutation(api.conve
 cliRoute("/cli/sessions/undismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "undismiss" }));
 cliRoute("/cli/sessions/kill", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "kill" }));
 
+// Resume (cast resume <session> --tmux): bring the agent up in its managed pane
+// without killing a live one. body: { api_token, session }.
+cliRoute("/cli/sessions/resume", async (ctx, body) => ctx.runMutation(api.conversations.cliResumeSession, body));
+
 // Restart (cast restart <session>): kill the agent and resume it through the
 // daemon's resume ladder — the web header's "Restart session", from a shell.
 // body: { api_token, session, repair? }.
@@ -3840,6 +3844,7 @@ cliRoute("/cli/terminal/frame", async (ctx, body) => ctx.runMutation(api.termina
 // The viewer half, for callers with a token instead of a browser session.
 cliRoute("/cli/terminal/watch", async (ctx, body) => ctx.runMutation(api.terminalStream.watchPane, body));
 cliRoute("/cli/terminal/pane", async (ctx, body) => ctx.runQuery(api.terminalStream.getPane, body));
+cliRoute("/cli/terminal/input", async (ctx, body) => ctx.runMutation(api.terminalStream.sendPaneInput, body));
 
 // Image sharing (cast image): upload a screenshot/image to storage, then
 // resolve its stable public /api/storage/<uuid> URL for inline embedding in

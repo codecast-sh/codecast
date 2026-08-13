@@ -15,7 +15,7 @@ import { latestImagePreviewUrl } from "./messages";
 import { inboxVisibilityFields } from "./inboxProjection";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
-import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
+import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, findModelOption, fromConvexAgentType, toConvexAgentType, normalizeThreadState } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, ACTIVE_AGENT_STATUSES, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
@@ -9289,6 +9289,93 @@ export const cliSetSessionVisibility = mutation({
   },
 });
 
+/**
+ * Resolve a session the caller may command, for the CLI's session-scoped verbs
+ * (`cast resume`, `cast restart`). Accepts any ref the user can type — short
+ * id, conversation id, agent session id. Access is the runner or the
+ * second-party owner, the same rule as cliSetSessionVisibility and killSession.
+ * `verb` only shapes the error, which quotes back what the user actually typed.
+ */
+async function resolveCommandableSession(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  session: string,
+  verb: string,
+): Promise<Doc<"conversations">> {
+  const conv = await findConversationByAnyRefWhere(ctx, session, (c) =>
+    c.user_id?.toString() === userId.toString() ||
+    c.owner_user_id?.toString() === userId.toString()
+  );
+  if (!conv) {
+    throw new Error(
+      `No session found for "${session}" (you can only ${verb} sessions you run or own)`
+    );
+  }
+  if (!conv.session_id) {
+    const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
+    throw new Error(`Session ${shortId} has no agent transcript yet — nothing to ${verb}`);
+  }
+  return conv;
+}
+
+/**
+ * What the CLI needs to follow a resume/restart to its pane: the agent's
+ * session_id (which the daemon stamps on the pane as @codecast_session_id) and
+ * the device that will host it, so `--tmux` can tell "coming up here" apart
+ * from "coming up on another machine, don't wait for it".
+ */
+function sessionCommandResult(conv: Doc<"conversations">) {
+  return {
+    ok: true as const,
+    short_id: conv.short_id ?? conv._id.toString().slice(0, 7),
+    title: conv.title ?? null,
+    session_id: conv.session_id!,
+    conversation_id: conv._id,
+    agent_type: fromConvexAgentType(conv.agent_type),
+    project_path: conv.project_path ?? conv.git_root ?? null,
+    device_id: (conv as any).owner_device_id ?? null,
+  };
+}
+
+// Agent-facing resume (cast resume <session> --tmux via /cli/sessions/resume) —
+// the same backend as the web's Resume button. Asks the session's daemon to
+// bring the agent up in a managed pane, WITHOUT killing anything: a session
+// already alive keeps its pane and its running turn (the daemon reuses a
+// healthy pane, see enqueueResumeSession), so this is safe to call on a live
+// session just to find out where it lives.
+//
+// That is the whole difference from cliRestartSession below, and it is why
+// `--tmux` belongs here: attaching to a session should never cost you the turn
+// it was in the middle of.
+export const cliResumeSession = mutation({
+  args: {
+    session: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await resolveCommandableSession(ctx, userId, args.session, "resume");
+    // A pane nobody can see is the same problem here as on restart: the card
+    // comes back to the inbox before its agent does.
+    const { wasHidden, rearmed } = await resurfaceHiddenSession(ctx, conv, userId);
+    const { deduplicated } = await enqueueResumeSession(ctx, conv);
+    // Re-queue stranded messages so the resume actually delivers them — the
+    // same reason users.resumeSession does it.
+    await resetConversationPendingMessages(ctx, conv._id);
+
+    return {
+      ...sessionCommandResult(conv),
+      deduplicated,
+      was_hidden: wasHidden,
+      rearmed_schedules: rearmed,
+    };
+  },
+});
+
 // Agent-facing restart (cast restart <session> via /cli/sessions/restart) — the
 // pair to `cast kill <session>`, and the same backend as the web header's
 // "Restart session": kill the agent, then resume it through the daemon's resume
@@ -9297,18 +9384,8 @@ export const cliSetSessionVisibility = mutation({
 // forces the rebuild from the server copy even when a plain resume would appear
 // to succeed — for a stale or corrupt local transcript.
 //
-// A restart resurfaces the card first. Reviving an agent whose session is filed
-// under Killed would otherwise leave it running where nobody can see it, and the
-// restart's own pane would be reaped as a hidden pane.
-//
-// The daemon commands are addressed to the RUNNER (conv.user_id), not the caller,
-// so a second-party owner's restart reaches the machine actually running the
-// session — same routing as restartSession/dispatch.resumeSession.
-//
-// Returns what the caller needs to follow the restart to its pane: the agent's
-// session_id (which stamps the pane as @codecast_session_id) and the device that
-// will host it, so `cast restart --tmux` can tell "coming up here" apart from
-// "coming up on another machine, don't wait for it".
+// Unlike cliResumeSession this DISCARDS the running agent, so it is the wrong
+// verb for merely attaching to a session.
 export const cliRestartSession = mutation({
   args: {
     session: v.string(),
@@ -9321,34 +9398,14 @@ export const cliRestartSession = mutation({
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
-      c.user_id?.toString() === userId.toString() ||
-      c.owner_user_id?.toString() === userId.toString()
-    );
-    if (!conv) {
-      throw new Error(
-        `No session found for "${args.session}" (you can only restart sessions you run or own)`
-      );
-    }
-    const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
-    if (!conv.session_id) {
-      throw new Error(`Session ${shortId} has no agent transcript yet — nothing to restart`);
-    }
-
+    const conv = await resolveCommandableSession(ctx, userId, args.session, "restart");
     const { wasHidden, rearmed } = await resurfaceHiddenSession(ctx, conv, userId);
     const { deduplicated } = await enqueueKillAndResume(ctx, conv.user_id, conv, {
       forceReconstitute: !!args.repair,
     });
 
     return {
-      ok: true as const,
-      short_id: shortId,
-      title: conv.title ?? null,
-      session_id: conv.session_id,
-      conversation_id: conv._id,
-      agent_type: fromConvexAgentType(conv.agent_type),
-      project_path: conv.project_path ?? conv.git_root ?? null,
-      device_id: (conv as any).owner_device_id ?? null,
+      ...sessionCommandResult(conv),
       repaired: !!args.repair,
       deduplicated: !!deduplicated,
       was_hidden: wasHidden,

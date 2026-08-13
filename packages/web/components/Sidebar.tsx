@@ -14,6 +14,8 @@ import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useChatUnread } from "../hooks/useChatSync";
 import { useConvexSync } from "../hooks/useConvexSync";
+import { useSyncProjects } from "../hooks/useSyncProjects";
+import { projectColorClass } from "../lib/projectColors";
 import { useWorkspaceArgs, workspaceStamp } from "../hooks/useWorkspaceArgs";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
@@ -21,7 +23,7 @@ import { isDesktop } from "../lib/desktop";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
 import { CreateChannelModal } from "./CreateChannelModal";
-import { Globe, Workflow, Zap, MessageSquare } from "lucide-react";
+import { Globe, Workflow, Zap, MessageSquare, FolderKanban } from "lucide-react";
 
 const api = _api as any;
 
@@ -33,6 +35,17 @@ interface SidebarProps {
   isMobileOpen?: boolean;
   onMobileClose?: () => void;
   isNarrow?: boolean;
+}
+
+/** A group label in the rail. Hidden when the rail is narrow, where the icons
+ *  stand on their own and a heading would just be a stripe of unreadable text. */
+function RailHeading({ label, isNarrow }: { label: string; isNarrow: boolean }) {
+  if (isNarrow) return null;
+  return (
+    <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 mt-4 first:mt-0">
+      {label}
+    </div>
+  );
 }
 
 function getShortPath(projectPath: string): string {
@@ -54,11 +67,9 @@ function NavSection({
   addTitle,
   badge,
   unread,
-  views,
+  items,
   expanded,
   onToggle,
-  onSelectView,
-  onRemoveView,
 }: {
   label: string;
   href: string;
@@ -76,14 +87,22 @@ function NavSection({
   onMobileClose?: () => void;
   onAdd?: () => void;
   addTitle?: string;
-  views?: any[];
+  /** Rows nested under this one — the projects under Projects, the saved views
+   *  under Tasks and Docs. One list shape for both: what it's called, what
+   *  opening it does, and (for a saved view) how to forget it. */
+  items?: Array<{
+    id: string;
+    name: string;
+    icon?: React.ReactNode;
+    onSelect: () => void;
+    onRemove?: () => void;
+    removeTitle?: string;
+  }>;
   expanded?: boolean;
   onToggle?: () => void;
-  onSelectView?: (view: any) => void;
-  onRemoveView?: (id: string) => void;
 }) {
-  // Only the wide rail nests saved views; the narrow rail stays icon-only.
-  const hasViews = !isNarrow && !!views && views.length > 0;
+  // Only the wide rail nests children; the narrow rail stays icon-only.
+  const hasChildren = !isNarrow && !!items && items.length > 0;
   return (
     <div data-simple-hide={simpleHide ? "" : undefined}>
       <div className={`flex items-center border-l-2 transition-colors motion-reduce:transition-none ${
@@ -102,11 +121,11 @@ function NavSection({
           {!isNarrow && <span className={unread && !isActive ? "font-semibold text-sol-text" : undefined}>{label}</span>}
           {!isNarrow && badge}
         </Link>
-        {hasViews && (
+        {hasChildren && (
           <button
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggle?.(); }}
             className="p-1 text-sol-text-dim hover:text-sol-text transition-colors"
-            title={expanded ? `Hide saved ${label.toLowerCase()} views` : `Show saved ${label.toLowerCase()} views`}
+            title={expanded ? `Collapse ${label.toLowerCase()}` : `Expand ${label.toLowerCase()}`}
             aria-expanded={expanded}
           >
             <svg className={`w-3 h-3 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
@@ -126,27 +145,31 @@ function NavSection({
           </button>
         )}
       </div>
-      {/* Saved views for this page — a slide-open list aligned under the row's icon. */}
-      {hasViews && (
+      {/* Nested rows — a slide-open list aligned under this row's icon. */}
+      {hasChildren && (
         <div className={`overflow-hidden transition-all duration-200 ease-out ${expanded ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
-          <div className="ml-[27px] my-0.5 border-l border-sol-border/50">
-            {views!.map((view) => (
-              <div key={view.id} className="flex items-center group/v">
+          <div className="ml-[27px] my-0.5 border-l border-sol-border/50 overflow-y-auto max-h-96">
+            {items!.map((child) => (
+              <div key={child.id} className="flex items-center group/v">
                 <button
-                  onClick={() => onSelectView?.(view)}
-                  className="flex items-center pl-4 pr-2 py-1 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 transition-colors flex-1 min-w-0 text-left"
+                  onClick={child.onSelect}
+                  className="flex items-center gap-1.5 pl-4 pr-2 py-1 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 transition-colors flex-1 min-w-0 text-left"
+                  title={child.name}
                 >
-                  <span className="truncate text-[13px] min-w-0">{view.name}</span>
+                  {child.icon}
+                  <span className="truncate text-[13px] min-w-0">{child.name}</span>
                 </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); onRemoveView?.(view.id); }}
-                  className="p-1 mr-1.5 rounded opacity-0 group-hover/v:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0"
-                  title="Remove saved view"
-                >
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                {child.onRemove && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); child.onRemove!(); }}
+                    className="p-1 mr-1.5 rounded opacity-0 group-hover/v:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0"
+                    title={child.removeTitle ?? "Remove"}
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -220,6 +243,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
+  const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
   const isVault = pathname === "/files" || pathname?.startsWith("/files/") ||
@@ -301,6 +325,34 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     router.push(`/${view.page}`);
     onMobileClose?.();
   }, [updateClientUI, router, onMobileClose]);
+
+  const viewItems = useCallback((views: any[]) => views.map((v: any) => ({
+    id: v.id,
+    name: v.name,
+    onSelect: () => applyView(v),
+    onRemove: () => deleteView(v.id),
+    removeTitle: "Remove saved view",
+  })), [applyView, deleteView]);
+  const taskViewItems = useMemo(() => viewItems(taskViews), [viewItems, taskViews]);
+  const docViewItems = useMemo(() => viewItems(docViews), [viewItems, docViews]);
+
+  // The projects themselves nest under the Projects row, so a project is one
+  // click from anywhere — the whole point of putting it at the top of the rail.
+  // Active work first, then alphabetical; finished projects sink but stay reachable.
+  useSyncProjects();
+  const projects = useInboxStore((s) => s.projects);
+  const projectItems = useMemo(() => {
+    const order: Record<string, number> = { active: 0, planning: 1, paused: 2, done: 3 };
+    return Object.values(projects)
+      .sort((a: any, b: any) =>
+        (order[a.status] ?? 9) - (order[b.status] ?? 9) || (a.title || "").localeCompare(b.title || ""))
+      .map((p: any) => ({
+        id: p._id,
+        name: p.title,
+        icon: <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projectColorClass(p.color)}`} />,
+        onSelect: () => { router.push(`/projects/${p._id}`); onMobileClose?.(); },
+      }));
+  }, [projects, router, onMobileClose]);
 
   useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []));
   useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));
@@ -400,11 +452,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const sidebarContent = (
     <>
       <div className="flex-1 flex flex-col min-h-0">
-        {!isNarrow && (
-          <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2">
-            Conversations
-          </div>
-        )}
+        <RailHeading label="Conversations" isNarrow={isNarrow} />
         <div className="text-sm">
           <button
             onClick={() => {
@@ -456,6 +504,24 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             </Link>
           )}
           <ChatNavRow isActive={!!isChat} isNarrow={isNarrow} onMobileClose={onMobileClose} />
+        </div>
+
+        {/* What you are working on. Projects leads: it is the container the rest
+            of this group files into, so the rail reads top-down as project →
+            its tasks → the docs and files around them. */}
+        <RailHeading label="Work" isNarrow={isNarrow} />
+        <div className="text-sm">
+          <NavSection
+            label="Projects"
+            href="/projects"
+            isActive={isProjects}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            items={projectItems}
+            expanded={viewSectionOverride.projects ?? isProjects}
+            onToggle={() => setViewSectionOverride((o) => ({ ...o, projects: !(o.projects ?? isProjects) }))}
+            icon={<FolderKanban className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+          />
           <NavSection
             label="Tasks"
             href="/tasks"
@@ -463,11 +529,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             onAdd={() => openCreateModal("task")}
-            views={taskViews}
+            items={taskViewItems}
             expanded={viewSectionOverride.tasks ?? isTasks}
             onToggle={() => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? isTasks) }))}
-            onSelectView={applyView}
-            onRemoveView={deleteView}
             icon={
               <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -488,11 +552,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                 { version: 1, kind: "navigate" },
               );
             }}
-            views={docViews}
+            items={docViewItems}
             expanded={viewSectionOverride.docs ?? (isDocs || isPlans)}
             onToggle={() => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) }))}
-            onSelectView={applyView}
-            onRemoveView={deleteView}
             icon={
               <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -521,6 +583,24 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             simpleHide
             icon={<Globe className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
           />
+        </div>
+
+        {/* The machinery that does the work: what is running right now, and the
+            standing things that set it running. */}
+        <RailHeading label="Agents" isNarrow={isNarrow} />
+        <div className="text-sm">
+          <NavSection
+            label="Sessions"
+            href="/sessions"
+            isActive={!!isSessions}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            icon={
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            }
+          />
           <NavSection
             label="Workflows"
             href="/workflows"
@@ -548,18 +628,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <circle cx="12" cy="5" r="2.5" strokeWidth={1.5} />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 7.5V21M5 12H3a9 9 0 0018 0h-2" />
-              </svg>
-            }
-          />
-          <NavSection
-            label="Sessions"
-            href="/sessions"
-            isActive={!!isSessions}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            icon={
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
             }
           />

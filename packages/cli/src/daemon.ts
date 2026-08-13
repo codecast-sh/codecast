@@ -2790,8 +2790,9 @@ async function executeRemoteCommand(
       case "stream_pane": {
         // A browser on another machine wants to watch a pane here. It can't
         // reach the loopback PTY, so publish the pane's screen to the relay
-        // instead — read-only by construction, and it stops on its own when
-        // the viewer's lease lapses (packages/cli/src/terminal/paneStream.ts).
+        // instead, and take keystrokes back on the same request. It stops on
+        // its own when the viewer's lease lapses; the lease is also what
+        // authorizes input (packages/cli/src/terminal/paneStream.ts).
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const target = typeof parsed.target === "string" ? parsed.target : "";
         if (!isValidPaneTarget(target)) {
@@ -2817,7 +2818,7 @@ async function executeRemoteCommand(
                 }),
               });
               if (!res.ok) return null;
-              return (await res.json()) as { stop: boolean };
+              return (await res.json()) as { stop: boolean; input?: string; fast?: boolean };
             } catch {
               return null;
             }

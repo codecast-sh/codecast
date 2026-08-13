@@ -1158,7 +1158,12 @@ export const markRead = mutation({
       if (!marker || marker.channel_id.toString() !== channel._id.toString()) {
         chatFail("INVALID", "That message is not in this channel");
       }
-      readAt = Math.min(marker.created_at, now);
+      // The marker's own stamp, unclamped. Stamps are server-written and
+      // strictly monotonic per channel, which puts a same-millisecond send up
+      // to a few ms in the FUTURE of Date.now() — clamping to now would leave
+      // that row eternally unread. A client cannot forge the stamp: it can only
+      // name a row, and only one in this channel.
+      readAt = marker.created_at;
     }
     await upsertRead(
       ctx, userId, channel.team_id, channel._id, readAt, args.last_read_message_id, undefined,
@@ -1275,7 +1280,17 @@ export const sendMessage = mutation({
 
     await chatRateLimit(ctx, userId, "chat.send", SEND_LIMIT);
 
-    const now = Date.now();
+    // Strictly monotonic per channel. created_at is load-bearing three ways —
+    // pagination order, the unread scan's `gt(lastReadAt)`, and the read mark
+    // itself — and two rows in the same millisecond break all three at once:
+    // a message landing in the read mark's millisecond is unread yet invisible
+    // to the badge forever. One indexed read per send buys the invariant.
+    const newestRow = await ctx.db
+      .query("chat_messages")
+      .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channel._id))
+      .order("desc")
+      .first();
+    const now = Math.max(Date.now(), (newestRow?.created_at ?? 0) + 1);
     const mentions = await resolveMentions(ctx, channel.team_id, content, userId);
     const here = mentionsHere(content);
     if (here) await chatRateLimit(ctx, userId, "chat.here", HERE_LIMIT);
@@ -1712,9 +1727,6 @@ async function maybeWakeAnchor(
 ): Promise<{ placeholder_id: Id<"chat_messages"> | null; skipped: string | null }> {
   const no = (skipped: string | null) => ({ placeholder_id: null, skipped });
 
-  // (1) A line a session typed never reaches a person's machine.
-  if (opts.message.origin === "agent") return no("agent_authored");
-
   const anchor = await resolveChannelAnchor(ctx, opts.channel);
   if (!anchor) return no(null);
   const addressed = opts.mentions.some(
@@ -1726,18 +1738,18 @@ async function maybeWakeAnchor(
     && await anchorHoldsThread(ctx, anchor, opts.root, opts.message._id);
   if (!addressed && !followUp) return no(null);
 
+  // (1) A line a session typed never reaches a person's machine. Checked AFTER
+  // the addressed test so a skip reason only surfaces when the anchor was
+  // actually asked for — an agent's plain message must not report anchor state
+  // it never touched.
+  if (opts.message.origin === "agent") return no("agent_authored");
+
   // (4) Anchor access is its own relation — and the HOST's is the one that
   // matters most here. The wake enqueues the thread excerpt onto the host's
   // machine and bills the turn to them, so an anchor whose host has left the
   // team must not carry this team's chat any further. Membership is verified
   // once, at provisioning, and never again.
   if (!(await userCanAccessAnchor(ctx, opts.senderId, anchor))) return no(null);
-  if (!(await isTeamMember(ctx as any, anchor.host_user_id, opts.channel.team_id))) {
-    return no("host_not_in_team");
-  }
-  // A dormant anchor with no session row is a wake that cannot be delivered.
-  // `deliverToAnchor` throws for it, which used to take the send down with it.
-  if (!anchor.conversation_id) return no("anchor_has_no_session");
 
   // (2) Idempotency, keyed on the authoritative message id — the client can
   // neither supply nor poison it.
@@ -1748,6 +1760,44 @@ async function maybeWakeAnchor(
   // Mentioning inside a thread answers in that thread; mentioning at channel
   // level starts a thread on the message that did the mentioning.
   const threadRootId = opts.root?._id ?? opts.message._id;
+
+  // A skip the ASKER can see. Someone addressed the anchor and it cannot run —
+  // saying so in the thread, in the same error row a timeout produces, is the
+  // difference between "the anchor is down" and "the anchor ignored me". The
+  // row carries the wake's own idempotency key, so a retried delivery finds it
+  // in the dedupe read above instead of stacking a second explanation.
+  const visibleSkip = async (skipped: string, content: string) => {
+    const now = Math.max(Date.now(), opts.message.created_at + 1);
+    const id = await ctx.db.insert("chat_messages", {
+      team_id: opts.channel.team_id,
+      channel_id: opts.channel._id,
+      thread_root_id: threadRootId,
+      user_id: anchor.bot_user_id,
+      author_kind: "agent" as const,
+      content,
+      agent_status: "error" as const,
+      agent_anchor_id: anchor._id,
+      client_id: key,
+      created_at: now,
+      updated_at: now,
+    });
+    return { placeholder_id: id, skipped };
+  };
+
+  if (!(await isTeamMember(ctx as any, anchor.host_user_id, opts.channel.team_id))) {
+    return await visibleSkip(
+      "host_not_in_team",
+      "The anchor's host is no longer on this team, so it cannot answer here.",
+    );
+  }
+  // A dormant anchor with no session row is a wake that cannot be delivered.
+  // `deliverToAnchor` throws for it, which used to take the send down with it.
+  if (!anchor.conversation_id) {
+    return await visibleSkip(
+      "anchor_has_no_session",
+      "The anchor could not be reached — its session is not running. Mention it again to retry.",
+    );
+  }
   // One question, one turn. A second placeholder while the first is still
   // thinking spends a second billed run on an answer already being written.
   if (await anchorTurnInFlight(ctx, anchor, threadRootId)) return no("turn_in_flight");
@@ -1762,7 +1812,12 @@ async function maybeWakeAnchor(
       ctx, anchor.host_user_id, "chat.anchor_host_wake", ANCHOR_HOST_WAKE_LIMIT,
     );
   } catch (error) {
-    if (error instanceof ConvexError) return no("rate_limited");
+    if (error instanceof ConvexError) {
+      return await visibleSkip(
+        "rate_limited",
+        "The anchor is getting too many requests right now. Try again in a few minutes.",
+      );
+    }
     throw error;
   }
 
@@ -1772,7 +1827,10 @@ async function maybeWakeAnchor(
     await patchChat(ctx, opts.root._id, { anchor_follow: true });
   }
 
-  const now = Date.now();
+  // The same monotonic rule as the send that triggered this: the placeholder
+  // must sort AFTER its question, and Date.now() alone can tie with — or trail —
+  // a bumped message stamp from the same millisecond.
+  const now = Math.max(Date.now(), opts.message.created_at + 1);
   const placeholderId = await ctx.db.insert("chat_messages", {
     team_id: opts.channel.team_id,
     channel_id: opts.channel._id,

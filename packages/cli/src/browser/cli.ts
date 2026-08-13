@@ -24,7 +24,7 @@ import type { Command } from "commander";
 import { CdpConnection, listTargets, type CdpTarget } from "./cdp.js";
 import {
   attachToTarget, clearState, freePort, isLive, killStrayChrome, launchManagedChrome,
-  readState, resolveTarget, setActiveTarget, settle, stopInstance, writeState,
+  readState, resolveTarget, setActiveTarget, settle, stopInstance, TabUnresponsive, writeState,
   type InstanceState, type PageSession,
 } from "./instance.js";
 import {
@@ -98,17 +98,7 @@ function pageLine(url: string, title: string): string {
   return `${fmt.highlight(title || "(untitled)")}\n${fmt.muted(url)}`;
 }
 
-/**
- * `onReady` is called the first time a browser comes up on this machine. It is
- * how the CLAUDE.md section gets written: an agent cannot use a command it has
- * never been told about, and asking the human to run a separate install step
- * for something they have already started is a step that will be skipped.
- */
-export function registerBrowserCommand(
-  program: Command,
-  deps: PublishDeps,
-  onReady: () => void = () => {},
-): void {
+export function registerBrowserCommand(program: Command, deps: PublishDeps): void {
   const br = program
     .command("browser")
     .alias("br")
@@ -204,7 +194,6 @@ export function registerBrowserCommand(
         activeTargetId: null,
       };
       writeState(state);
-      onReady();
       console.log(`${OK} browser up — pid ${pid}, CDP 127.0.0.1:${port}${o.headless ? ", headless" : ""}`);
       if (!o.fresh) {
         console.log(
@@ -276,7 +265,20 @@ export function registerBrowserCommand(
           targetId = (blank ?? targets[targets.length - 1]).targetId;
         }
 
-        const page = await attachToTarget(conn, targetId);
+        // A wedged tab must not block a navigation request. `open` means "get me
+        // to this URL", so if the tab we picked has stopped answering we say so
+        // and go to a fresh one rather than failing the whole command — the
+        // agent asked for a page, not for that particular tab.
+        let page: PageSession;
+        try {
+          page = await attachToTarget(conn, targetId);
+        } catch (err) {
+          if (!(err instanceof TabUnresponsive)) throw err;
+          console.log(fmt.muted(`  tab ${shortId(targetId)} was not responding — opening a new one`));
+          const res = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+          targetId = res.targetId;
+          page = await attachToTarget(conn, targetId);
+        }
         // Arm BEFORE navigating so the recorder sees the page's own boot logs —
         // the errors an agent is usually looking for happen during startup.
         await armRecorder(page);
@@ -290,6 +292,8 @@ export function registerBrowserCommand(
         const snap = await snapshotPage(page, { maxChars: 1 });
         console.log(pageLine(snap.url, snap.title));
         console.log(fmt.muted(`  tab ${shortId(targetId)} — next: cast browser snapshot`));
+      } catch (err) {
+        die((err as Error).message);
       } finally {
         conn.close();
       }
