@@ -10531,32 +10531,35 @@ export async function verifyTmuxSubmitAfterPaste(
 // the delivery layer's retry/backoff redelivers later instead of pasting into
 // a deaf pane and acking a message the agent never saw.
 const STDIN_PROBE_CHAR = "q"; // inert in the composer; absent from CC's footer/status text
+
+// Composer region = last ❯/› glyph line plus everything below it (a multi-line
+// draft puts the cursor below the glyph line). Null when the pane has no glyph.
+function tmuxComposerRegion(pane: string): string | null {
+  const lines = pane.replace(/[\s\n]+$/, "").split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/[❯›]/.test(lines[i])) return lines.slice(i).join("\n");
+  }
+  return null;
+}
+const countStdinProbes = (region: string): number => region.split(STDIN_PROBE_CHAR).length - 1;
+
+// Returns the pre-probe count of probe chars in the composer region (the
+// baseline drainTmuxComposer verifies against), or null when the pane could
+// not be probed (glyphless client, capture failure) and no probe was typed.
 export async function proveTmuxStdinConsumption(
   target: string,
   budgetMs = 20_000,
   exec: typeof tmuxExec = tmuxExec,
-): Promise<void> {
-  const composerRegion = (pane: string): string | null => {
-    const lines = pane.replace(/[\s\n]+$/, "").split("\n");
-    let glyphIdx = -1;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (/[❯›]/.test(lines[i])) { glyphIdx = i; break; }
-    }
-    // Composer region = glyph line plus everything below it (a multi-line
-    // draft puts the cursor below the glyph line).
-    return glyphIdx === -1 ? null : lines.slice(glyphIdx).join("\n");
-  };
-  const countProbes = (region: string): number => region.split(STDIN_PROBE_CHAR).length - 1;
-
+): Promise<number | null> {
   let before: string | null = null;
   try {
     ({ stdout: before } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
   } catch {
-    return; // capture problems are diagnosed by the paste path itself
+    return null; // capture problems are diagnosed by the paste path itself
   }
-  const beforeRegion = composerRegion(before);
-  if (beforeRegion === null) return; // no composer glyph to watch — glyphless client or unusual pane
-  const baseline = countProbes(beforeRegion);
+  const beforeRegion = tmuxComposerRegion(before);
+  if (beforeRegion === null) return null; // no composer glyph to watch — glyphless client or unusual pane
+  const baseline = countStdinProbes(beforeRegion);
 
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
@@ -10567,12 +10570,62 @@ export async function proveTmuxStdinConsumption(
       await new Promise(resolve => setTimeout(resolve, 150));
       try {
         const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]);
-        const region = composerRegion(stdout);
-        if (region !== null && countProbes(region) > baseline) return;
+        const region = tmuxComposerRegion(stdout);
+        if (region !== null && countStdinProbes(region) > baseline) return baseline;
       } catch {}
     }
   }
   throw new Error(`AGENT_STDIN_NOT_READY: composer never consumed a probe key within ${Math.round(budgetMs / 1000)}s`);
+}
+
+// Drains the composer, then — when a stdin probe ran on this pane — verifies
+// the probe chars actually left it before the caller pastes.
+//
+// Why C-a/C-k cycles and not a single C-u: in Claude Code 2.1.x's input box a
+// single C-u does not reliably empty the buffer when stale text is present
+// (e.g. a prompt recalled via Up arrow). The leftover then concatenates with
+// the paste and the trailing Enter submits both as one message — the
+// "old prompt + new follow-up" duplication seen on 2026-05-19. Cycling C-a
+// (start of line) + C-k (kill to end) drains reliably; three cycles handles
+// multi-line drafts. See daemon.inject-clear.test.ts.
+//
+// Why the verification: the probe proves keys REACH the input handler, not
+// that control bytes are interpreted yet. On a marginal cold boot the probe
+// renders while C-a/C-k are still mishandled, the accumulated probes survive
+// the blind cycles, and the paste + Enter submits "qqq<message>" (ct-43082).
+// Closed loop instead: re-drain until the region's probe count falls back to
+// the pre-probe baseline, and throw AGENT_STDIN_NOT_READY (the delivery
+// layer's retry/backoff redelivers) rather than paste into a dirty composer.
+// probeBaseline === null (busy pane, glyphless client) keeps the blind drain.
+export async function drainTmuxComposer(
+  target: string,
+  probeBaseline: number | null,
+  budgetMs = 5_000,
+  exec: typeof tmuxExec = tmuxExec,
+): Promise<void> {
+  const cycle = async () => {
+    await exec(["send-keys", "-t", target, "C-a"]);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await exec(["send-keys", "-t", target, "C-k"]);
+    await new Promise(resolve => setTimeout(resolve, 20));
+  };
+  for (let i = 0; i < 3; i++) await cycle();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  if (probeBaseline === null) return;
+
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    try {
+      const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]);
+      const region = tmuxComposerRegion(stdout);
+      if (region === null || countStdinProbes(region) <= probeBaseline) return;
+    } catch {
+      return; // capture problems are diagnosed by the paste path itself
+    }
+    await cycle();
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  throw new Error("AGENT_STDIN_NOT_READY: probe residue survived the composer drain, leaving message pending for retry");
 }
 
 export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId): Promise<void> {
@@ -10658,8 +10711,10 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // A visible prompt is not proof the TUI reads stdin yet (cold boot, ct-40212):
   // prove consumption with a probe key before sending the clear/paste sequence.
   // A busy agent is consuming by definition (it is mid-turn), so skip there.
+  // The baseline feeds the drain's verification below (ct-43082).
+  let probeBaseline: number | null = null;
   if (!busy) {
-    await proveTmuxStdinConsumption(target);
+    probeBaseline = await proveTmuxStdinConsumption(target);
   }
 
   const contentLines = content.split(/\r?\n/).length;
@@ -10669,17 +10724,9 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   const doPaste = () => pasteTextIntoPane(target, sanitized, bracketed);
 
   // Clear any stale input before pasting to prevent draft text from being
-  // prepended to the injected message or submitted by the trailing Enter.
-  //
-  // Why C-u alone is not enough: in Claude Code 2.1.x's TUI input box, a single
-  // C-u does not reliably empty the buffer when stale text is present (e.g. a
-  // prompt recalled via Up arrow, or a partial draft). When that happens, the
-  // paste-buffer content gets appended to whatever was left over and the
-  // trailing Enter submits the concatenated string as a single user message —
-  // the "old prompt + new follow-up" duplication seen on 2026-05-19.
-  // Cycling C-a (move to start of line) + C-k (kill to end) reliably drains
-  // the box, and three cycles handles multi-line drafts too. See
-  // daemon.inject-clear.test.ts for the reproduction.
+  // prepended to the injected message or submitted by the trailing Enter —
+  // see drainTmuxComposer for why C-a/C-k cycles and how the drain is
+  // verified against the probe baseline.
   //
   // Escape is the one key here that doubles as "interrupt the current turn", so
   // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
@@ -10689,13 +10736,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     await tmuxExec(["send-keys", "-t", target, "Escape"]);
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  for (let i = 0; i < 3; i++) {
-    await tmuxExec(["send-keys", "-t", target, "C-a"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
-    await tmuxExec(["send-keys", "-t", target, "C-k"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
-  }
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await drainTmuxComposer(target, probeBaseline);
 
   // Capture pane before paste for before/after comparison
   let prePaste = "";
