@@ -101,10 +101,11 @@ export function findOwnedSections(text: string, spec: SectionSpec): Array<{ star
       if (owned) {
         end = markerIdx + spec.endMarker.length;
         // Take the blank lines that separated this block from what follows.
-        // An update cuts the block here and re-appends it at the end, so
-        // leaving the separator behind would grow the file by one blank line
-        // on every refresh. The text before our heading already carries the
-        // separation the next section needs.
+        // The separator is ours to re-emit: an update writes exactly one blank
+        // line back when something follows the block, so a run over a file we
+        // already wrote reproduces it byte for byte. Leaving the old separator
+        // in place instead would stack a second blank line on every refresh —
+        // the shipped CLI grew the file by one line per snippet per run.
         while (text[end] === "\n") end++;
       } else if (spec.contentProbes?.some((p) => text.slice(start, nextSection).includes(p))) {
         // Pre-marker-era block: bounded by the next heading, never by EOF.
@@ -128,47 +129,119 @@ export function hasOwnedSection(text: string, spec: SectionSpec): boolean {
   return findOwnedSections(text, spec).length > 0;
 }
 
-/** Remove every block we own, leaving everything else byte-identical. */
-export function cutOwnedSections(text: string, spec: SectionSpec): string {
-  const blocks = findOwnedSections(text, spec);
+/**
+ * What one install run did.
+ *
+ * `installed` — the section is present for this spec (it was written, or it was
+ * already there and we were not updating). `updated` — an existing block was
+ * refreshed rather than a new one appended. `unchanged` — nothing was written,
+ * so no mtime moved.
+ */
+export interface SnippetInstallResult {
+  installed: boolean;
+  updated: boolean;
+  unchanged: boolean;
+}
+
+/**
+ * Rewrite the blocks we own in one pass: the first becomes `body`, the rest go
+ * away. `body: null` removes them all — that is uninstall.
+ *
+ * Back to front, so the offsets `findOwnedSections` measured on the original
+ * text still address the same bytes when we reach them.
+ *
+ * Collapsing to the FIRST block, rather than the last, is what makes an update
+ * idempotent: our section lands where our section already was, so running the
+ * writer again finds one block in that same place and reproduces the same file.
+ */
+function replaceOwnedBlocks(
+  text: string,
+  blocks: Array<{ start: number; end: number }>,
+  body: string | null,
+): string {
   let out = text;
   for (let i = blocks.length - 1; i >= 0; i--) {
-    out = out.slice(0, blocks[i].start) + out.slice(blocks[i].end);
+    const after = out.slice(blocks[i].end);
+    // The block's end swallowed whatever blank lines separated it from the next
+    // section, so re-emit exactly one — and none at end of file.
+    const insert = body !== null && i === 0 ? (after === "" ? body : body + "\n") : "";
+    out = out.slice(0, blocks[i].start) + insert + after;
   }
   return out;
 }
 
+/** Remove every block we own, leaving everything else byte-identical. */
+export function cutOwnedSections(text: string, spec: SectionSpec): string {
+  return replaceOwnedBlocks(text, findOwnedSections(text, spec), null);
+}
+
+/**
+ * A snippet as a standalone block: no leading blank line (the text above the
+ * block already ends in one, or the block starts the file) and exactly one
+ * trailing newline. The constants below are template literals padded with a
+ * newline at each end, which is what the append path wants and the in-place
+ * path does not.
+ */
+function sectionBody(snippet: string): string {
+  return snippet.replace(/^\n+/, "").replace(/\n+$/, "") + "\n";
+}
+
 /**
  * The single install algorithm behind every snippet: skip when present and not
- * updating, otherwise cut what we own and append the fresh section.
- * Pure — the filesystem lives in the callers, so this is directly testable.
+ * updating, append when absent, otherwise refresh what we own IN PLACE.
+ *
+ * In place matters. Cutting the block and re-appending it at the end walked
+ * codecast's sections downward past the user's own content a little further on
+ * every update, quietly reordering a file they wrote. Duplicate blocks left by
+ * an older writer collapse into the first one's position.
+ *
+ * `unchanged` reports that the result is byte-identical to `existing`, so a
+ * caller can skip a pointless write. Pure — the filesystem lives in the
+ * callers, so this is directly testable.
  */
 export function applySnippet(
   existing: string,
   spec: SectionSpec,
   snippet: string,
   update: boolean,
-): { text: string; installed: boolean; updated: boolean } {
-  const has = hasOwnedSection(existing, spec);
-  if (has && !update) return { text: existing, installed: false, updated: false };
-  if (!has) return { text: existing + snippet, installed: true, updated: false };
-  const cut = cutOwnedSections(existing, spec);
-  return { text: cut.trimEnd() + "\n" + snippet, installed: true, updated: true };
+): SnippetInstallResult & { text: string } {
+  const blocks = findOwnedSections(existing, spec);
+  const has = blocks.length > 0;
+  if (has && !update) return { text: existing, installed: false, updated: false, unchanged: true };
+  const text = has
+    ? replaceOwnedBlocks(existing, blocks, sectionBody(snippet))
+    : existing + snippet;
+  return { text, installed: true, updated: has, unchanged: text === existing };
 }
 
-/** Write `spec`'s section into one file, creating its directory if needed. */
+/**
+ * Write `spec`'s section into one file, creating its directory if needed.
+ *
+ * A file whose content already matches is left alone — not rewritten with the
+ * same bytes. `refreshEnabledSnippets` (index.ts) reinstalls every enabled
+ * section at once, and it runs on `cast update`, on `cast restart`, and on
+ * daemon boot after a self-update — so a machine that changed nothing still
+ * rewrote up to ten sections across up to three files. Each write moves the
+ * mtime, which wakes every watcher on it: editors, the agents reading
+ * CLAUDE.md, anything tailing the file. `installed` still reports the section's
+ * state, so callers that print "installed"/"updated" read the same as before.
+ */
 export function installSectionToFile(
   filePath: string,
   dirPath: string,
   spec: SectionSpec,
   snippet: string,
   update: boolean,
-): { installed: boolean; updated: boolean } {
+): SnippetInstallResult {
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
-  const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
+  const exists = fs.existsSync(filePath);
+  const existing = exists ? fs.readFileSync(filePath, "utf-8") : "";
   const result = applySnippet(existing, spec, snippet, update);
-  if (result.installed) fs.writeFileSync(filePath, result.text, { mode: 0o600 });
-  return { installed: result.installed, updated: result.updated };
+  // An absent file still gets created even when the text works out identical,
+  // so "the section is installed" stays true on disk and not only in the value.
+  const write = result.installed && (!result.unchanged || !exists);
+  if (write) fs.writeFileSync(filePath, result.text, { mode: 0o600 });
+  return { installed: result.installed, updated: result.updated, unchanged: !write };
 }
 
 /** Write `spec`'s section into every agent instruction file on this machine. */
@@ -176,15 +249,19 @@ export function installSectionToTargets(
   spec: SectionSpec,
   snippet: string,
   update: boolean,
-): { installed: boolean; updated: boolean } {
+): SnippetInstallResult {
   let anyInstalled = false;
   let anyUpdated = false;
+  let anyWritten = false;
   for (const target of getSnippetTargets()) {
     const r = installSectionToFile(target.filePath, target.dirPath, spec, snippet, update);
     if (r.installed) anyInstalled = true;
     if (r.updated) anyUpdated = true;
+    if (!r.unchanged) anyWritten = true;
   }
-  return { installed: anyInstalled, updated: anyUpdated };
+  // Unchanged only when NO target needed a write: one stale file out of three
+  // is still a change to this machine.
+  return { installed: anyInstalled, updated: anyUpdated, unchanged: !anyWritten };
 }
 
 export const MESSAGING_SNIPPET_END = "<!-- /codecast-messaging -->";
@@ -298,7 +375,7 @@ cast browser text                  # visible text, for reading rather than actin
 
 **Showing the human what you saw**: \`cast browser shot --share\` uploads the screenshot and prints markdown that renders inline in the thread. Never link a local path — their browser cannot read files on this machine.
 
-Tabs: \`cast browser tabs\`, \`cast browser tab <id>\`, \`cast browser open --new-tab <url>\`, \`cast browser close\`. Commands act on the active tab unless you pass \`--tab\`.
+**One browser, many agents.** Every agent on this machine drives the SAME Chrome, so tabs are owned per session: commands act on YOUR tab, and \`cast browser tabs\` marks it \`*\` and other agents' tabs \`~\`. Open your own with \`cast browser open --new-tab <url>\` and pass \`--tab <id>\` when you want to be certain. If a page suddenly looks wrong, run \`cast browser tabs\` before you debug the app — a tab someone else navigated looks exactly like a broken feature.
 
 The browser keeps running between commands, so this is stateful: what you opened stays open until you close it or run \`cast browser stop\`. It starts from a COPY of the real Chrome profile, so it is signed in to what you are signed in to, and nothing it does touches the real browser. Treat that access the way the human would — it is their logged-in accounts. \`cast browser start --fresh\` gives a signed-out browser when that is what you want, and \`cast browser stop --wipe\` removes the copy.
 ${BROWSER_SNIPPET_END}
@@ -309,7 +386,7 @@ export const BROWSER_SECTION: SectionSpec = {
   endMarker: BROWSER_SNIPPET_END,
 };
 
-export function installBrowserSnippet(update = false): { installed: boolean; updated: boolean } {
+export function installBrowserSnippet(update = false): SnippetInstallResult {
   return installSectionToTargets(BROWSER_SECTION, BROWSER_SNIPPET, update);
 }
 
@@ -338,7 +415,7 @@ export const REFERENCES_SECTION: SectionSpec = {
   endMarker: REFERENCES_SNIPPET_END,
 };
 
-export function installReferencesSnippet(update = false): { installed: boolean; updated: boolean } {
+export function installReferencesSnippet(update = false): SnippetInstallResult {
   return installSectionToTargets(REFERENCES_SECTION, REFERENCES_SNIPPET, update);
 }
 
@@ -347,7 +424,7 @@ export const PUBLISH_SECTION: SectionSpec = {
   endMarker: PUBLISH_SNIPPET_END,
 };
 
-export function installPublishSnippet(update = false): { installed: boolean; updated: boolean } {
+export function installPublishSnippet(update = false): SnippetInstallResult {
   return installSectionToTargets(PUBLISH_SECTION, PUBLISH_SNIPPET, update);
 }
 
@@ -356,7 +433,7 @@ export const MESSAGING_SECTION: SectionSpec = {
   endMarker: MESSAGING_SNIPPET_END,
 };
 
-export function installMessagingSnippet(update = false): { installed: boolean; updated: boolean } {
+export function installMessagingSnippet(update = false): SnippetInstallResult {
   return installSectionToTargets(MESSAGING_SECTION, MESSAGING_SNIPPET, update);
 }
 

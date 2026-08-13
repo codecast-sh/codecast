@@ -43,8 +43,8 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
-import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet } from "./snippets.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
+import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -2538,6 +2538,7 @@ const SECTION_BY_ENABLED_KEY: Record<string, SectionSpec> = {
   state_enabled: SNIPPET_SECTIONS.state.spec,
   messaging_enabled: MESSAGING_SECTION,
   publish_enabled: PUBLISH_SECTION,
+  browser_enabled: BROWSER_SECTION,
 };
 
 /**
@@ -2808,6 +2809,15 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     }
   }
 
+  if (config.browser_enabled && config.browser_version !== getBrowserVersion()) {
+    const result = installBrowserSnippet(true);
+    config.browser_version = getBrowserVersion();
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Browser snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  }
   if (config.state_enabled && config.state_version !== getStateVersion()) {
     const result = installStateSnippet(true);
     config.state_version = getStateVersion();
@@ -3159,13 +3169,7 @@ registerRemoteCommand(program);
 registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId }, () => {
-  // First successful launch teaches the agents on this machine that the
-  // command exists, and marks it for refresh on future upgrades.
-  const cfg = readConfig();
-  if (cfg && !cfg.browser_enabled) { cfg.browser_enabled = true; writeConfig(cfg); }
-  installBrowserSnippet(true);
-});
+registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
 
 program
   .command("auth")
