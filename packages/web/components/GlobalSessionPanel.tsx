@@ -1316,8 +1316,11 @@ function MonitorBars({ session, isActive, onOpen }: {
     <>
       {shown.map((row) => {
         const isBackground = row.kind === "background";
-        const family = isBackground ? "Background" : "Monitor";
-        const ariaLabel = isBackground
+        const isWorkflow = row.kind === "workflow";
+        const family = isWorkflow ? "Workflow" : isBackground ? "Background" : "Monitor";
+        const ariaLabel = isWorkflow
+          ? "Multi-agent workflow — running inside this session"
+          : isBackground
           ? "Background command — running inside this session"
           : "Monitor — watching inside this session";
         return (
@@ -1364,10 +1367,10 @@ function MonitorBars({ session, isActive, onOpen }: {
                       space-starved (esp. with the panel narrow), so event/time
                       meta lives on the subrow and the persistent chip rides
                       the badge tooltip; the conversation block keeps the chip. */}
-                  <ShortcutTooltip label={isBackground ? "Background command — runs until it exits or is stopped, then wakes the agent" : row.persistent ? "Persistent watch — runs until TaskStop or session end" : `One-shot watch${row.timeoutMs !== undefined ? ` — times out after ${fmtDuration(row.timeoutMs)}` : ""}`}>
+                  <ShortcutTooltip label={isWorkflow ? "Multi-agent workflow — runs in the background until it completes, then wakes the agent" : isBackground ? "Background command — runs until it exits or is stopped, then wakes the agent" : row.persistent ? "Persistent watch — runs until TaskStop or session end" : `One-shot watch${row.timeoutMs !== undefined ? ` — times out after ${fmtDuration(row.timeoutMs)}` : ""}`}>
                     <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
                       <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
-                      {isBackground ? "running" : "watching"}
+                      {isBackground || isWorkflow ? "running" : "watching"}
                     </span>
                   </ShortcutTooltip>
                 </div>
@@ -1382,7 +1385,7 @@ function MonitorBars({ session, isActive, onOpen }: {
                     </span>
                   ) : (
                     <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-mono text-sol-text-dim">
-                      {row.command.split("\n").find((l) => l.trim()) || "background watch"}
+                      {row.command.split("\n").find((l) => l.trim()) || (isWorkflow ? "multi-agent workflow" : "background watch")}
                     </span>
                   )}
                   <span className="shrink-0 text-[10px] tabular-nums text-sol-text-dim">

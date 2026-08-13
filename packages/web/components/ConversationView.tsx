@@ -3484,10 +3484,11 @@ function getFileExtension(filePath: string): string | undefined {
 }
 
 function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
-  // Monitor, background Bash, and ScheduleWakeup stay visible in condensed
-  // feeds: all are standing state the reader needs to know is armed (a watch,
-  // a detached command, a loop's next fire), not a transient tool step.
-  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
+  // Monitor, background Bash, Workflow, and ScheduleWakeup stay visible in
+  // condensed feeds: all are standing state the reader needs to know is armed
+  // (a watch, a detached command, a running multi-agent fleet, a loop's next
+  // fire), not a transient tool step.
+  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor" || tc.name === "Workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
 }
 
 interface ToolChangeRange {
@@ -5173,14 +5174,16 @@ const MONITOR_BADGE: Record<MonitorStatus, { label: string; cls: string }> = {
   stopped: { label: "stopped", cls: "bg-sol-bg-alt text-sol-text-dim border-sol-border/50" },
 };
 // A detached command "runs" rather than "watches", and finishing is its
-// purpose ("done"), not a stream folding ("ended").
+// purpose ("done"), not a stream folding ("ended"). Workflow runs share the
+// same voice.
 const BACKGROUND_BADGE_LABEL: Record<MonitorStatus, string> = {
   watching: "running", ended: "done", timed_out: "timed out", stopped: "stopped",
 };
 
 function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId?: string }) {
-  const isBackground = tool.name !== "Monitor";
-  let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean } = {};
+  const isWorkflow = tool.name === "Workflow";
+  const isBackground = !isWorkflow && tool.name !== "Monitor";
+  let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean; name?: string } = {};
   try { input = JSON.parse(tool.input); } catch {}
   const [showCommand, setShowCommand] = useState(false);
   const messages = useInboxStore((s) => (conversationId ? s.messages[conversationId] : undefined));
@@ -5203,25 +5206,31 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
   );
   const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now, agentStartedAt) : "watching";
   const status: MonitorStatus = rawStatus === "watching" && sessionDead ? "stopped" : rawStatus;
-  const failed = isBackground && status === "ended" && (row?.exitCode ?? 0) > 0;
+  const failed = status === "ended" && (isBackground ? (row?.exitCode ?? 0) > 0 : isWorkflow && !!row?.failed);
   const badge = failed
-    ? { label: `exit ${row!.exitCode}`, cls: "bg-sol-red/10 text-sol-red border-sol-red/30" }
-    : { cls: MONITOR_BADGE[status].cls, label: isBackground ? BACKGROUND_BADGE_LABEL[status] : MONITOR_BADGE[status].label };
+    ? { label: isWorkflow ? "failed" : `exit ${row!.exitCode}`, cls: "bg-sol-red/10 text-sol-red border-sol-red/30" }
+    : { cls: MONITOR_BADGE[status].cls, label: isBackground || isWorkflow ? BACKGROUND_BADGE_LABEL[status] : MONITOR_BADGE[status].label };
   const watching = status === "watching";
   const commandFirstLine = (input.command || "").split("\n").find((l) => l.trim()) || "";
-  const Icon = isBackground ? Terminal : Radar;
+  const Icon = isWorkflow ? Workflow : isBackground ? Terminal : Radar;
+  // A workflow's identity lives on the row (Summary + script name from the
+  // launch result), not in the tool input (a script blob). The input's `name`
+  // covers the window before the result lands / saved-workflow calls.
+  const description = isWorkflow
+    ? row?.description || input.name || "workflow run"
+    : input.description || (isBackground ? "background command" : "background watch");
 
   return (
     <div className={`my-1 rounded border-l-2 ${watching ? "border-sol-blue/60 bg-sol-blue/5" : "border-sol-border/60 bg-sol-bg-alt/30"}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 min-w-0">
         <Icon className={`w-3.5 h-3.5 shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`} />
-        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isBackground ? "Background" : "Monitor"}</span>
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isWorkflow ? "Workflow" : isBackground ? "Background" : "Monitor"}</span>
         {input.persistent && (
           <ShortcutTooltip label="Runs until TaskStop or session end — not a one-shot watch">
             <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-blue/40 text-sol-blue/90 bg-sol-blue/10">persistent</span>
           </ShortcutTooltip>
         )}
-        <span className="text-xs text-sol-text truncate min-w-0">{input.description || (isBackground ? "background command" : "background watch")}</span>
+        <span className="text-xs text-sol-text truncate min-w-0">{description}</span>
         {(row?.eventCount ?? 0) > 0 && (
           <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">
             {row!.eventCount} event{row!.eventCount === 1 ? "" : "s"}
@@ -5247,6 +5256,11 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
             <span className="block truncate">{commandFirstLine}</span>
           )}
         </button>
+      )}
+      {/* A workflow has no command to expand — its script name (parsed from
+          the launch result) is the one-line identity under the summary. */}
+      {isWorkflow && row?.command && (
+        <div className="px-3 pb-1.5 font-mono text-[11px] text-sol-text-dim truncate">{row.command}</div>
       )}
       {row?.lastEvent && (
         <div className="mx-3 mb-2 flex items-baseline gap-1.5 min-w-0 text-[11px] leading-snug">
@@ -7956,7 +7970,7 @@ function AssistantBlockImpl({
             <WorkflowToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : tc.name === "Skill" ? (
             <SkillBlock key={tc.id} tool={tc} />
-          ) : tc.name === "Monitor" || isBackgroundBashToolCall(tc) ? (
+          ) : tc.name === "Monitor" || tc.name === "Workflow" || isBackgroundBashToolCall(tc) ? (
             <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
           ) : tc.name === "ScheduleWakeup" ? (
             <ScheduleWakeupBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} timestamp={timestamp} />
