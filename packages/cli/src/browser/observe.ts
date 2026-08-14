@@ -100,6 +100,38 @@ export function recorderSource(max = RECORDER_MAX): string {
     return XS.apply(this, arguments);
   };
 
+  // Last pointer position the page actually received. Used to verify that a
+  // dispatched coordinate arrives where it was aimed — under viewport
+  // emulation Chrome can scale input, and a click that lands elsewhere while
+  // reporting success is the worst failure this driver can have.
+  S.ptr = null;
+  addEventListener("mousemove", (e) => { S.ptr = [e.clientX, e.clientY]; }, { capture: true, passive: true });
+
+  // Modal dialogs are neutralised rather than answered.
+  //
+  // A native alert/confirm/prompt blocks the renderer until a human clicks it,
+  // and CDP can only dismiss one if a client was already attached with Page
+  // enabled — which a short-lived CLI never is. So a single alert() leaves the
+  // tab dead to every later command, which is exactly why the Chrome extension
+  // tells agents never to trigger one. Replacing the three functions before any
+  // page script runs means the dialog never opens: the call is recorded, a
+  // sensible answer is returned, and the page carries on. Nothing is hidden —
+  // 'cast browser dialogs' lists everything the page tried to ask.
+  S.dialogs = [];
+  const answer = (kind, message, fallback) => {
+    push(S.dialogs, { t: t(), kind, message: String(message == null ? "" : message).slice(0, 500) });
+    return fallback;
+  };
+  window.alert = (m) => { answer("alert", m, undefined); };
+  window.confirm = (m) => answer("confirm", m, true);
+  window.prompt = (m, d) => answer("prompt", m, d == null ? "" : d);
+  // "Leave site?" blocks navigation the same way. Returning nothing from every
+  // handler tells the browser there is nothing to confirm.
+  window.addEventListener("beforeunload", (e) => {
+    push(S.dialogs, { t: t(), kind: "beforeunload", message: "page asked to confirm leaving" });
+    delete e.returnValue;
+  }, { capture: true });
+
   try {
     new PerformanceObserver((list) => {
       for (const e of list.getEntries()) {
@@ -141,6 +173,14 @@ export interface Recording {
   /** True when the recorder was injected into a document that had already begun
    *  running its own scripts, so earlier output was never captured. */
   late: boolean;
+  /** Modal dialogs the page tried to open, which were answered without blocking. */
+  dialogs: DialogEntry[];
+}
+
+export interface DialogEntry {
+  t: number;
+  kind: "alert" | "confirm" | "prompt" | "beforeunload";
+  message: string;
 }
 
 /**
@@ -165,17 +205,17 @@ export async function readRecording(page: PageSession): Promise<Recording> {
     .send<any>(
       "Runtime.evaluate",
       {
-        expression: `JSON.stringify(window.__cast ? {console: __cast.console, network: __cast.network, errors: __cast.errors, armed: true, late: !!__cast.late} : {console: [], network: [], errors: [], armed: false, late: true})`,
+        expression: `JSON.stringify(window.__cast ? {console: __cast.console, network: __cast.network, errors: __cast.errors, armed: true, late: !!__cast.late, dialogs: __cast.dialogs||[]} : {console: [], network: [], errors: [], armed: false, late: true, dialogs: []})`,
         returnByValue: true,
       },
       page.sessionId,
     )
     .catch(() => null);
-  if (!res?.result?.value) return { console: [], network: [], errors: [], armed: false, late: true };
+  if (!res?.result?.value) return { console: [], network: [], errors: [], armed: false, late: true, dialogs: [] };
   try {
     return JSON.parse(res.result.value) as Recording;
   } catch {
-    return { console: [], network: [], errors: [], armed: false, late: true };
+    return { console: [], network: [], errors: [], armed: false, late: true, dialogs: [] };
   }
 }
 
@@ -183,7 +223,7 @@ export async function clearRecording(page: PageSession): Promise<void> {
   await page.conn
     .send(
       "Runtime.evaluate",
-      { expression: `(() => { if (window.__cast) { __cast.console.length = 0; __cast.network.length = 0; __cast.errors.length = 0; } })()` },
+      { expression: `(() => { if (window.__cast) { __cast.console.length = 0; __cast.network.length = 0; __cast.errors.length = 0; if (__cast.dialogs) __cast.dialogs.length = 0; } })()` },
       page.sessionId,
     )
     .catch(() => {});
