@@ -313,17 +313,24 @@ export function surfaceForPath(pathname: string): SurfaceKind {
   return "plain";
 }
 
-/** Which slots a surface may host. Anything not listed is emptied on arrival. */
+/**
+ * Which slots a surface may host, and HOW the secondary slot may present.
+ * Anything not listed is emptied on arrival.
+ *  - "split"   the working-page companion: a real column beside the stage
+ *  - "overlay" the fleet board's drill-in: a transient visit OVER the stage
+ *  - false     the slot stays empty on this surface
+ */
 export function slotPolicyFor(surface: SurfaceKind): {
   context: boolean;
-  secondary: boolean;
+  secondary: false | "split" | "overlay";
 } {
   switch (surface) {
-    // The inbox IS conversations: no companion (it would duplicate the stage).
-    case "inbox": return { context: true, secondary: false };
+    // The inbox stage can be the fleet board; a tile click drills in as an
+    // overlay that returns to the board. Never a split — the board is the home.
+    case "inbox": return { context: true, secondary: "overlay" };
     case "conversation": return { context: true, secondary: false };
     // A task/doc on the stage can run one conversation beside it.
-    case "working": return { context: true, secondary: true };
+    case "working": return { context: true, secondary: "split" };
     case "settings": return { context: true, secondary: false };
     default: return { context: true, secondary: false };
   }

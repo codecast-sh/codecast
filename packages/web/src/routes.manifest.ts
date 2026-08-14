@@ -116,6 +116,7 @@ const Notifications = lazy(() => import("@/app/notifications/page"));
 const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
 const Docs = lazy(() => import("@/app/docs/page"));
+const Capabilities = lazy(() => import("@/app/capabilities/page"));
 const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
@@ -228,6 +229,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "conversation/:id", component: cast(Conversation), layout: "dashboardShell", tab: "/conversation/:id", fullWidth: true, guestOk: true, guestKind: "shell" },
   { path: "conversation/:id/diff", component: cast(ConversationDiff), layout: "dashboardShell", tab: "/conversation/:id/diff", fullWidth: true, guestOk: true, guestKind: "shell" },
   { path: "docs", component: cast(Docs), layout: "dashboardShell", tab: "/docs", fullWidth: true },
+  { path: "capabilities", component: cast(Capabilities), layout: "dashboardShell", tab: "/capabilities", fullWidth: true },
   { path: "files", component: cast(Vault), layout: "dashboardShell", tab: "/files", fullWidth: true },
   { path: "vault", component: cast(Vault), layout: "dashboardShell", tab: "/vault", fullWidth: true }, // permanent pre-rename alias for /files
   { path: "pages", component: cast(Artifacts), layout: "dashboardShell", tab: "/pages" },

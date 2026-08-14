@@ -169,11 +169,12 @@ describe("route → slot defaults", () => {
     expect(surfaceForPath("/workflows")).toBe("plain");
   });
 
-  // The companion only makes sense where a page owns the stage; on the inbox
-  // the conversation IS the stage, so hosting it twice is meaningless.
-  it("allows a companion only on working surfaces", () => {
-    expect(slotPolicyFor("working").secondary).toBe(true);
-    expect(slotPolicyFor("inbox").secondary).toBe(false);
+  // The split companion only makes sense where a page owns the stage. The
+  // inbox instead hosts the board's drill-in as an overlay — a visit over the
+  // stage, never a second column duplicating it.
+  it("allows a split companion only on working surfaces, an overlay drill-in on the inbox", () => {
+    expect(slotPolicyFor("working").secondary).toBe("split");
+    expect(slotPolicyFor("inbox").secondary).toBe("overlay");
     expect(slotPolicyFor("conversation").secondary).toBe(false);
     expect(slotPolicyFor("settings").secondary).toBe(false);
   });

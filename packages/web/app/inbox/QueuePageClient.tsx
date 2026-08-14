@@ -1,5 +1,4 @@
 import { useState, useCallback, useEffect, useRef, memo, useMemo, useDeferredValue } from "react";
-import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
@@ -16,7 +15,8 @@ import { ConversationDiffLayout } from "../../components/ConversationDiffLayout"
 import { ConversationData } from "../../components/ConversationView";
 import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated, selectSessionRailOpen, selectSessionRailUserClosed } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated, sessionRowFromSummary, resolveInboxHome } from "../../store/inboxStore";
+import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
 import { SharePopover } from "../../components/SharePopover";
 import { SessionErrorBanner } from "../../components/SessionErrorBanner";
 import { ActivityFeed } from "../../components/ActivityFeed";
@@ -238,14 +238,9 @@ export function QueuePageClient() {
   const tabCtx = useTabContext();
   const isActiveTab = tabCtx ? tabCtx.isActive : true;
 
-  // Auto-open session panel when entering inbox (DashboardLayout renders it)
-  useMountEffect(() => {
-    const store = useInboxStore.getState();
-    if (!selectSessionRailOpen(store) && !selectSessionRailUserClosed(store)) {
-      store.toggleSidePanel();
-    }
-  });
-
+  // The session rail's route defaults (auto-open on entering the inbox) live
+  // in DashboardLayout's navigation effects, gated so a tab switch — which
+  // mounts this pane lazily on first activation — never reshapes the frame.
 
   // Wake on STRUCTURAL session change (membership/bucket/order), never on the
   // ~1s liveness heartbeat: the raw s.sessions ref flips on every tick, and this
@@ -269,6 +264,9 @@ export function QueuePageClient() {
   const touchMru = useInboxStore((s) => s.touchMru);
   const showMySessions = useInboxStore((s) => s.showMySessions);
   const setShowMySessions = useInboxStore((s) => s.setShowMySessions);
+  // Which surface the inbox home shows: the fleet board (default) or the
+  // chronological feed. Persisted per-user (stamped LWW).
+  const inboxHome = useInboxStore((s) => resolveInboxHome(s.clientState.ui));
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
 
   // inbox_shortcuts_hidden is mirrored to localStorage (see CRITICAL_UI_KEYS in
@@ -363,34 +361,16 @@ export function QueuePageClient() {
       paramProcessedRef.current = true;
       return;
     }
-    injectSession({
+    // sessionRowFromSummary carries the triage stamps through (and derives
+    // is_pinned), so a stashed/dismissed deep-link target seeds hidden instead
+    // of flashing into the inbox as an active card at boot (ct-42666) — and
+    // injectSession's own hidden check routes the view through the peek path.
+    injectSession(sessionRowFromSummary({
+      ...directConv,
       _id: pendingInjectId,
-      session_id: directConv.session_id || pendingInjectId,
-      title: directConv.title,
-      updated_at: directConv.updated_at,
-      project_path: directConv.project_path,
-      git_root: directConv.git_root,
-      agent_type: directConv.agent_type || "claude_code",
-      message_count: directConv.message_count || 0,
-      is_idle: true,
-      has_pending: false,
-      forked_from: directConv.forked_from || null,
-      parent_message_uuid: directConv.parent_message_uuid || null,
       // Carry the author so a deep-linked teammate session shows whose it is.
-      user_id: directConv.user_id,
       author_name: directConv.user?.name ?? null,
-      // Triage/visibility state (free on the getConversation doc). Injected
-      // rows persist in the sessions cache, so dropping these seeded a
-      // stashed/dismissed session as an ACTIVE row that flashed into the
-      // inbox as a needs-input card on every boot (ct-42666). It also lets
-      // injectSession's own hidden check route the view through the peek path
-      // instead of silently resurrecting a triaged session.
-      inbox_dismissed_at: directConv.inbox_dismissed_at ?? null,
-      inbox_stashed_at: directConv.inbox_stashed_at ?? null,
-      inbox_killed_at: directConv.inbox_killed_at ?? null,
-      inbox_pinned_at: directConv.inbox_pinned_at ?? null,
-      is_pinned: !!directConv.inbox_pinned_at,
-    });
+    }));
     setPendingInjectId(null);
     paramProcessedRef.current = true;
   }, [pendingInjectId, directConv, sessions, navigateToSession, injectSession]);
@@ -601,13 +581,22 @@ export function QueuePageClient() {
   const inboxContent = (
     <>
       {renderShowMine ? (
-        <div className="h-full overflow-y-auto" data-main-scroll>
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-8">
-            <ErrorBoundary name="ActivityFeed" level="inline">
-              <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
-            </ErrorBoundary>
+        inboxHome === "board" ? (
+          <ErrorBoundary name="FleetBoard" level="inline">
+            <FleetBoard />
+          </ErrorBoundary>
+        ) : (
+          <div className="h-full overflow-y-auto" data-main-scroll>
+            <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-8">
+              <div className="flex justify-end pb-2">
+                <InboxHomeToggle />
+              </div>
+              <ErrorBoundary name="ActivityFeed" level="inline">
+                <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
+              </ErrorBoundary>
+            </div>
           </div>
-        </div>
+        )
       ) : renderDismissedSession ? (
         <ErrorBoundary name="Conversation" level="inline">
           <InboxConversation
