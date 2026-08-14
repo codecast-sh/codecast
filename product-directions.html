@@ -1,0 +1,489 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codecast · Four Directions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0f0d0a; --ink2:#171410; --ink3:#211d17;
+    --paper:#ece4d2; --dim:#9d947f; --faint:#6b6455;
+    --hair:rgba(236,228,210,.13);
+    --amber:#c9922b; --green:#7f9b2e; --cyan:#3a9a92; --red:#c1462c; --violet:#7b6fbf; --blue:#3d82c4;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{color-scheme:dark}
+  body{background:var(--ink);color:var(--paper);font-family:"JetBrains Mono",monospace;font-size:14px;line-height:1.6;
+    background-image:radial-gradient(1100px 460px at 78% -12%,rgba(201,146,43,.10),transparent 62%),
+                     radial-gradient(820px 460px at -5% 108%,rgba(58,154,146,.07),transparent 60%);}
+  .wrap{max-width:1180px;margin:0 auto;padding:44px 26px 110px}
+
+  .kicker{font-size:10.5px;letter-spacing:.3em;text-transform:uppercase;color:var(--faint);margin-bottom:16px}
+  h1{font-family:"Instrument Serif",serif;font-weight:400;font-size:46px;line-height:1.08;letter-spacing:.01em}
+  h1 em{font-style:italic;color:var(--amber)}
+  .lede{max-width:74ch;color:var(--dim);margin-top:18px;font-size:13.5px}
+  .lede b{color:var(--paper);font-weight:600}
+  .lede code{background:var(--ink3);padding:1px 5px;border-radius:4px;font-size:12.5px;color:var(--amber)}
+
+  .facts{display:flex;gap:0;margin:30px 0 6px;border:1px solid var(--hair);border-radius:12px;overflow:hidden;flex-wrap:wrap}
+  .fact{flex:1 1 190px;padding:16px 18px;border-right:1px solid var(--hair)}
+  .fact:last-child{border-right:none}
+  .fact .n{font-family:"Instrument Serif",serif;font-size:30px;color:var(--amber);line-height:1}
+  .fact .l{font-size:11px;color:var(--dim);margin-top:6px}
+
+  nav.tabs{position:sticky;top:0;z-index:60;display:flex;gap:7px;padding:16px 0 12px;margin-top:30px;
+    background:linear-gradient(var(--ink) 76%,transparent);flex-wrap:wrap}
+  .tab{font:inherit;font-size:12px;cursor:pointer;color:var(--dim);background:var(--ink2);border:1px solid var(--hair);
+    border-radius:999px;padding:8px 15px 8px 9px;display:flex;align-items:center;gap:9px;transition:all .16s}
+  .tab .n{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:6px;
+    background:var(--ink3);border:1px solid var(--hair);font-size:10.5px}
+  .tab:hover{color:var(--paper);border-color:rgba(236,228,210,.28)}
+  .tab.on{color:var(--ink);background:var(--paper);border-color:var(--paper)}
+  .tab.on .n{background:rgba(0,0,0,.14);border-color:transparent;color:var(--ink)}
+
+  section.dir{display:none}
+  section.dir.on{display:grid;grid-template-columns:335px minmax(0,1fr);gap:24px;align-items:start}
+  @media(max-width:960px){section.dir.on{grid-template-columns:1fr}}
+
+  .note{position:sticky;top:78px;background:var(--ink2);border:1px solid var(--hair);border-radius:14px;padding:21px}
+  .note .tag{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--amber)}
+  .note h2{font-family:"Instrument Serif",serif;font-weight:400;font-size:27px;margin:5px 0 2px}
+  .note .one{font-size:12.5px;color:var(--paper);margin-top:10px;font-style:italic;
+    border-left:2px solid var(--amber);padding-left:11px}
+  .note p{font-size:12.5px;color:var(--dim);margin-top:13px}
+  .note .h{font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);margin-top:17px}
+  .note ul{margin-top:7px;list-style:none}
+  .note li{font-size:12.5px;color:var(--dim);padding:3px 0 3px 15px;position:relative}
+  .note li::before{content:"·";position:absolute;left:2px;color:var(--amber)}
+  .note li b{color:var(--paper);font-weight:600}
+
+  .stage{background:#080a0c;border:1px solid rgba(0,0,0,.6);border-radius:12px;overflow:hidden;
+    box-shadow:0 26px 70px -18px rgba(0,0,0,.65),0 0 0 1px var(--hair);height:620px;position:relative;
+    font-size:11px;user-select:none}
+  .hint{margin-top:11px;font-size:11.5px;color:var(--faint);min-height:18px}
+  .hint b{color:var(--dim)}
+  kbd{font:inherit;font-size:10px;background:var(--ink3);border:1px solid var(--hair);border-bottom-width:2px;
+    border-radius:4px;padding:1px 5px;color:var(--paper)}
+
+  /* ============ shared mock atoms ============ */
+  .mono{font-family:"JetBrains Mono",monospace}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:0 0 7px}
+  .d-run{background:var(--green);box-shadow:0 0 7px rgba(127,155,46,.8)}
+  .d-need{background:var(--amber);box-shadow:0 0 7px rgba(201,146,43,.85)}
+  .d-idle{background:#4a5560}
+  .d-err{background:var(--red);box-shadow:0 0 7px rgba(193,70,44,.8)}
+  @keyframes pulse{50%{opacity:.35}}
+  .pulsing{animation:pulse 1.7s infinite}
+
+  /* ---------- D1 mission control ---------- */
+  .mc{padding:12px;height:100%;display:flex;flex-direction:column;gap:10px;background:#080a0c}
+  .mc-top{display:flex;gap:8px;align-items:center;color:var(--faint);font-size:10px;letter-spacing:.14em;text-transform:uppercase}
+  .mc-top .spacer{flex:1}
+  .mc-band{border:1px solid rgba(236,228,210,.09);border-radius:9px;padding:8px;background:rgba(255,255,255,.012)}
+  .mc-band h4{font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);margin-bottom:7px;display:flex;gap:7px;align-items:center}
+  .mc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:6px}
+  .tile{border:1px solid rgba(236,228,210,.10);border-radius:7px;padding:7px 8px;background:#0c0f12;cursor:pointer;
+    transition:border-color .15s,transform .15s}
+  .tile:hover{border-color:rgba(236,228,210,.34);transform:translateY(-1px)}
+  .tile .t{display:flex;gap:6px;align-items:center;color:var(--paper);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tile .m{color:var(--faint);font-size:9px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tile .bar{height:2px;background:rgba(255,255,255,.07);border-radius:2px;margin-top:6px;overflow:hidden}
+  .tile .bar i{display:block;height:100%;background:var(--green)}
+  .tile.need{border-color:rgba(201,146,43,.5);background:rgba(201,146,43,.07)}
+  .tile.need .t{color:#f0d9a4}
+  .mc-drill{position:absolute;inset:0;background:rgba(6,8,10,.93);backdrop-filter:blur(3px);padding:22px;display:none;flex-direction:column;gap:10px}
+  .mc-drill.on{display:flex}
+  .mc-drill h3{font-family:"Instrument Serif",serif;font-size:23px;font-weight:400}
+  .mc-drill .body{flex:1;border:1px solid var(--hair);border-radius:9px;padding:14px;overflow:hidden;color:var(--dim);font-size:11px;line-height:1.75;background:#0a0d10}
+  .xbtn{position:absolute;top:14px;right:16px;cursor:pointer;color:var(--faint);font-size:16px}
+  .xbtn:hover{color:var(--paper)}
+
+  /* ---------- D2 queue ---------- */
+  .q{height:100%;display:flex;flex-direction:column;background:#080a0c}
+  .q-top{padding:11px 16px;border-bottom:1px solid rgba(236,228,210,.08);display:flex;align-items:center;gap:10px;
+    font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+  .q-prog{flex:1;height:2px;background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden}
+  .q-prog i{display:block;height:100%;background:var(--amber);transition:width .35s}
+  .q-body{flex:1;display:flex;flex-direction:column;justify-content:center;padding:26px 46px;gap:16px}
+  .q-who{display:flex;gap:9px;align-items:center;color:var(--dim);font-size:11px}
+  .q-ask{font-family:"Instrument Serif",serif;font-size:26px;line-height:1.32;color:var(--paper);max-width:60ch}
+  .q-ctx{color:var(--faint);font-size:11.5px;line-height:1.7;border-left:2px solid rgba(236,228,210,.14);padding-left:13px;max-width:70ch}
+  .q-acts{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap}
+  .q-btn{font:inherit;font-size:11.5px;cursor:pointer;background:var(--ink3);border:1px solid var(--hair);color:var(--paper);
+    padding:7px 13px;border-radius:7px;display:flex;gap:8px;align-items:center;transition:all .14s}
+  .q-btn:hover{border-color:var(--amber);color:#f4dfae}
+  .q-btn.pri{background:var(--amber);color:#12100c;border-color:var(--amber);font-weight:600}
+  .q-empty{text-align:center;color:var(--faint);display:flex;flex-direction:column;gap:9px;align-items:center;justify-content:center;height:100%}
+  .q-empty .big{font-family:"Instrument Serif",serif;font-size:34px;color:var(--green)}
+
+  /* ---------- D3 workbench ---------- */
+  .wb{height:100%;display:flex;flex-direction:column;background:#080a0c}
+  .wb-switch{display:flex;gap:0;border-bottom:1px solid rgba(236,228,210,.09);background:#0b0e11}
+  .wb-sw{flex:1;padding:9px 6px;text-align:center;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
+    color:var(--faint);cursor:pointer;border-bottom:2px solid transparent;transition:all .16s}
+  .wb-sw:hover{color:var(--dim)}
+  .wb-sw.on{color:var(--paper);border-bottom-color:var(--amber);background:rgba(201,146,43,.07)}
+  .wb-sw .k{display:block;font-size:8.5px;color:var(--faint);letter-spacing:.06em;margin-top:2px}
+  .wb-body{flex:1;display:flex;min-height:0;transition:opacity .2s}
+  .wb-pane{border-right:1px solid rgba(236,228,210,.08);overflow:hidden;display:flex;flex-direction:column;min-width:0}
+  .wb-pane:last-child{border-right:none}
+  .wb-h{padding:6px 9px;font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);
+    border-bottom:1px solid rgba(236,228,210,.07);background:rgba(255,255,255,.015);white-space:nowrap}
+  .wb-c{flex:1;padding:8px 9px;overflow:hidden;color:var(--dim);font-size:10.5px;line-height:1.8}
+  .wb-row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;gap:6px;align-items:center}
+
+  /* ---------- D4 canvas ---------- */
+  .cv{height:100%;position:relative;overflow:hidden;background:
+     radial-gradient(circle at 1px 1px,rgba(236,228,210,.075) 1px,transparent 0) 0 0/26px 26px,#080a0c;cursor:grab}
+  .cv-world{position:absolute;inset:0;transform-origin:center center;transition:transform .5s cubic-bezier(.3,.8,.3,1)}
+  .cv-node{position:absolute;border:1px solid rgba(236,228,210,.13);border-radius:9px;background:#0c0f13;
+    padding:9px 10px;width:186px;transition:box-shadow .2s}
+  .cv-node:hover{box-shadow:0 0 0 1px var(--amber)}
+  .cv-node .t{color:var(--paper);font-size:10.5px;display:flex;gap:6px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cv-node .b{color:var(--faint);font-size:9px;margin-top:5px;line-height:1.55;max-height:0;overflow:hidden;transition:max-height .4s}
+  .cv-node .conv{color:var(--dim);font-size:9px;margin-top:7px;line-height:1.6;max-height:0;overflow:hidden;transition:max-height .4s}
+  .cv.z2 .cv-node .b{max-height:44px}
+  .cv.z3 .cv-node .b{max-height:44px}
+  .cv.z3 .cv-node .conv{max-height:130px}
+  .cv-cluster{position:absolute;border:1px dashed rgba(236,228,210,.13);border-radius:14px;pointer-events:none}
+  .cv-cluster span{position:absolute;top:-9px;left:12px;background:#080a0c;padding:0 7px;font-size:9px;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+  .cv-zoom{position:absolute;right:12px;bottom:12px;display:flex;gap:5px;z-index:5}
+  .cv-zb{font:inherit;font-size:10.5px;cursor:pointer;background:rgba(12,15,19,.94);border:1px solid var(--hair);
+    color:var(--dim);padding:5px 11px;border-radius:6px}
+  .cv-zb.on{color:var(--ink);background:var(--paper);border-color:var(--paper)}
+  .cv-scale{position:absolute;left:12px;bottom:12px;font-size:9.5px;color:var(--faint);letter-spacing:.1em;z-index:5}
+
+  /* ---------- closing ---------- */
+  .close{margin-top:58px;border-top:1px solid var(--hair);padding-top:32px;display:grid;
+    grid-template-columns:335px minmax(0,1fr);gap:24px}
+  @media(max-width:960px){.close{grid-template-columns:1fr}}
+  .close h2{font-family:"Instrument Serif",serif;font-weight:400;font-size:29px}
+  .rec{background:var(--ink2);border:1px solid var(--hair);border-left:3px solid var(--amber);border-radius:11px;padding:19px 21px}
+  .rec p{font-size:13px;color:var(--dim);margin-bottom:12px}
+  .rec p:last-child{margin-bottom:0}
+  .rec b{color:var(--paper);font-weight:600}
+  .matrix{width:100%;border-collapse:collapse;margin-top:18px;font-size:11.5px}
+  .matrix th{text-align:left;color:var(--faint);font-weight:500;padding:7px 9px;border-bottom:1px solid var(--hair);
+    font-size:9.5px;letter-spacing:.14em;text-transform:uppercase}
+  .matrix td{padding:8px 9px;border-bottom:1px solid rgba(236,228,210,.06);color:var(--dim);vertical-align:top}
+  .matrix td:first-child{color:var(--paper)}
+</style>
+
+<div class="wrap">
+  <div class="kicker">Codecast · product directions · august 2026</div>
+  <h1>You are not browsing documents.<br><em>You are running a fleet.</em></h1>
+
+  <p class="lede">Right now this account has <b>34 sessions, 30 of them live</b>. The interface treats each one as a document you navigate to — a list, a detail pane, a back button. That framing is why every layout fix has been a fight: we keep tuning columns for a filing cabinet while the actual job is <b>supervising autonomous workers who interrupt you</b>. These four directions each take that job seriously, and each optimizes for something different. They are not variations on a theme — pick by what you want the app to be <em>best</em> at.</p>
+
+  <div class="facts">
+    <div class="fact"><div class="n">34</div><div class="l">sessions on this account</div></div>
+    <div class="fact"><div class="n">30</div><div class="l">live right now</div></div>
+    <div class="fact"><div class="n">21</div><div class="l">UI regions competing for space</div></div>
+    <div class="fact"><div class="n">1</div><div class="l">that can hold your attention</div></div>
+  </div>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab on" data-t="d1"><span class="n">1</span>Mission Control</button>
+    <button class="tab" data-t="d2"><span class="n">2</span>The Queue</button>
+    <button class="tab" data-t="d3"><span class="n">3</span>Workbenches</button>
+    <button class="tab" data-t="d4"><span class="n">4</span>Canvas</button>
+  </nav>
+
+  <!-- ================= D1 ================= -->
+  <section class="dir on" id="d1">
+    <aside class="note">
+      <div class="tag">Direction 1</div>
+      <h2>Mission Control</h2>
+      <div class="one">The home screen is the fleet, not a conversation.</div>
+      <p>Codecast opens on a live board of every agent: what it is doing, how long it has been doing it, and whether it is stuck. You <b>scan</b> rather than read. Conversations are drill-ins that overlay the board and return you to it — never a place you navigate away into.</p>
+      <div class="h">What it optimizes</div>
+      <ul>
+        <li><b>Situational awareness.</b> "What is running?" is answered by looking, not hunting.</li>
+        <li>Blocked work surfaces itself — the amber band is always at the top.</li>
+        <li>Scales with the fleet: 30 agents is the normal case, not the stress case.</li>
+      </ul>
+      <div class="h">Borrowed from</div>
+      <ul><li>Network operations centres, trading desks, flight boards</li></ul>
+      <div class="h">What it costs</div>
+      <ul>
+        <li>Deep reading gets worse — a drill-in is a visit, not a home.</li>
+        <li>Needs genuinely trustworthy state. A board that lies is worse than a list.</li>
+      </ul>
+    </aside>
+    <div>
+      <div class="stage" id="d1s"></div>
+      <div class="hint" id="d1h"></div>
+    </div>
+  </section>
+
+  <!-- ================= D2 ================= -->
+  <section class="dir" id="d2">
+    <aside class="note">
+      <div class="tag">Direction 2</div>
+      <h2>The Queue</h2>
+      <div class="one">The scarce resource is your attention, not your screen.</div>
+      <p>The app hands you <b>exactly one thing that needs a decision</b>, full width, with the context to decide it. You answer; it advances. There is no layout, because there is only ever one thing on screen. When the queue empties, the app says so and gets out of the way.</p>
+      <div class="h">What it optimizes</div>
+      <ul>
+        <li><b>Throughput on interruptions.</b> 30 agents asking questions becomes a stack you can clear.</li>
+        <li>Zero layout management — the problem is deleted, not solved.</li>
+        <li>Every decision gets the full width for its context.</li>
+      </ul>
+      <div class="h">Borrowed from</div>
+      <ul><li>Superhuman, code review queues, air traffic handoff</li></ul>
+      <div class="h">What it costs</div>
+      <ul>
+        <li>Hostile to exploration — you cannot wander, only advance.</li>
+        <li>Side by side is impossible by construction.</li>
+        <li>Mis-ranking is fatal: the queue's order becomes your priorities.</li>
+      </ul>
+    </aside>
+    <div>
+      <div class="stage" id="d2s"></div>
+      <div class="hint" id="d2h"></div>
+    </div>
+  </section>
+
+  <!-- ================= D3 ================= -->
+  <section class="dir" id="d3">
+    <aside class="note">
+      <div class="tag">Direction 3</div>
+      <h2>Workbenches</h2>
+      <div class="one">Stop arranging panels. Name the activity instead.</div>
+      <p>You never want "a doc beside a session" — you want to <b>be reviewing</b>, or <b>be triaging</b>. Define a handful of workbenches, each a fixed arrangement built for one activity, and switch between them wholesale with one key. No pins, no closes, no per-panel controls: the layout is a property of what you are doing.</p>
+      <div class="h">What it optimizes</div>
+      <ul>
+        <li><b>Side by side without fiddling</b> — the pairing is designed once, per activity.</li>
+        <li>Switching context is one keystroke and total.</li>
+        <li>Nothing to get into a broken state, because no state is user-assembled.</li>
+      </ul>
+      <div class="h">Borrowed from</div>
+      <ul><li>Blender workspaces, Logic Pro screensets, tmux layouts</li></ul>
+      <div class="h">What it costs</div>
+      <ul>
+        <li>The presets have to be <em>right</em>; a wrong workbench is a cage.</li>
+        <li>Adding a fifth and sixth workbench recreates the original mess.</li>
+      </ul>
+    </aside>
+    <div>
+      <div class="stage" id="d3s"></div>
+      <div class="hint" id="d3h"></div>
+    </div>
+  </section>
+
+  <!-- ================= D4 ================= -->
+  <section class="dir" id="d4">
+    <aside class="note">
+      <div class="tag">Direction 4</div>
+      <h2>Canvas</h2>
+      <div class="one">Parallel work is spatial. Give it space.</div>
+      <p>One infinite board. Every session, task and doc is an object with a <b>place</b>, and related work sits together. Zoom is the only navigation: far out you see status, mid you see cards, close in you are in the conversation. You never open or close anything — you move.</p>
+      <div class="h">What it optimizes</div>
+      <ul>
+        <li><b>Parallelism.</b> Ten agents on one problem can be one visible cluster.</li>
+        <li>Spatial memory replaces navigation — things stay where you left them.</li>
+        <li>Zoom is a continuous overview/detail control, not a mode.</li>
+      </ul>
+      <div class="h">Borrowed from</div>
+      <ul><li>Figma, tldraw, Muse; semantic zoom from cartography</li></ul>
+      <div class="h">What it costs</div>
+      <ul>
+        <li>Spatial upkeep is real work, and it decays.</li>
+        <li>Weak on small screens; poor for pure keyboard flow.</li>
+        <li>The most unfamiliar of the four — the biggest bet.</li>
+      </ul>
+    </aside>
+    <div>
+      <div class="stage" id="d4s"></div>
+      <div class="hint" id="d4h"></div>
+    </div>
+  </section>
+
+  <!-- ================= CLOSE ================= -->
+  <div class="close">
+    <div>
+      <h2>How they compare</h2>
+      <p style="font-size:12.5px;color:var(--dim);margin-top:12px">These are not mutually exclusive, but they <em>are</em> different bets about what the app is for. The honest read is in the table.</p>
+    </div>
+    <div>
+      <table class="matrix">
+        <tr><th>Direction</th><th>Best at</th><th>Worst at</th><th>Bet size</th></tr>
+        <tr><td>Mission Control</td><td>Knowing what is happening across 30 agents</td><td>Long-form reading and writing</td><td>Medium</td></tr>
+        <tr><td>The Queue</td><td>Clearing interruptions fast; zero layout</td><td>Exploring; anything side by side</td><td>Small, high conviction</td></tr>
+        <tr><td>Workbenches</td><td>Side by side that never needs adjusting</td><td>Anything the presets did not anticipate</td><td>Small</td></tr>
+        <tr><td>Canvas</td><td>Parallel work with spatial structure</td><td>Small screens; keyboard-only flow</td><td>Large</td></tr>
+      </table>
+      <div class="rec" style="margin-top:22px">
+        <p><b>If you want my read:</b> the two that fit the evidence are <b>Mission Control</b> and <b>The Queue</b>, and they compose — the board is where you look, the queue is where you act. One answers "what is happening", the other answers "what needs me now". Together they cover the whole loop of supervising a fleet, and neither requires you to arrange anything.</p>
+        <p><b>Workbenches</b> is the pragmatic choice if the current shape is roughly right and the problem is only that arranging it is tedious. It is the smallest change that would have prevented every layout fight in this session.</p>
+        <p><b>Canvas</b> is the real swing. It is the only direction that treats parallelism as a first-class spatial fact rather than a list that got long, and the only one that would look like nothing else. It is also the one most likely to be abandoned after a month of upkeep.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------------- data ---------------- */
+const AGENTS=[
+ {n:"Terminal emulator integration",s:"run",m:"opus-5 · 789 msgs · 12m",p:72},
+ {n:"Obsidian markdown explorer",s:"run",m:"fable-5 · 1604 msgs · 3m",p:54},
+ {n:"Artifact version history",s:"run",m:"opus-5 · 782 msgs · 1m",p:88},
+ {n:"Vault index engine",s:"need",m:"asks: which schema wins?",p:0},
+ {n:"Model picker injection",s:"run",m:"fable-5 · 294 msgs · 6m",p:41},
+ {n:"Browser automation agent",s:"run",m:"opus-5 · 779 msgs · <1m",p:63},
+ {n:"Session workflow visibility",s:"need",m:"asks: approve the migration?",p:0},
+ {n:"Sync engine review",s:"run",m:"fable-5 · 277 msgs · 9m",p:35},
+ {n:"Codebase cleanup",s:"idle",m:"finished · 3h ago",p:100},
+ {n:"Landing page redesign",s:"run",m:"opus-5 · 410 msgs · 2m",p:77},
+ {n:"Cold email reply rates",s:"err",m:"rate limited · retry in 4m",p:0},
+ {n:"Market growth mandate",s:"run",m:"fable-5 · 8512 msgs · 5m",p:29},
+ {n:"Trigger run linking",s:"idle",m:"finished · 1h ago",p:100},
+ {n:"Plan bind hook",s:"run",m:"opus-5 · 35 msgs · 11m",p:18},
+];
+const DOTC={run:"d-run",need:"d-need",idle:"d-idle",err:"d-err"};
+
+const QUEUE=[
+ {who:"Vault index engine",ask:"Two schemas both claim the note id. Which one wins?",
+  ctx:"The daemon writes note ids from the file path; the web index derives them from frontmatter. A file renamed on disk keeps its frontmatter id but changes its path id, so the same note indexes twice. I can make either side authoritative — path is stable across edits, frontmatter is stable across renames.",
+  acts:["Frontmatter wins","Path wins","Explain more"]},
+ {who:"Session workflow visibility",ask:"Approve dropping the legacy run table?",
+  ctx:"Nothing has written to agent_runs_v1 in 40 days and every reader now goes through agent_tasks. Dropping it frees the last blocking migration. It is not recoverable without a backup restore.",
+  acts:["Approve","Hold","Explain more"]},
+ {who:"Cold email reply rates",ask:"Rate limited by the provider — back off or switch keys?",
+  ctx:"429s started 4 minutes ago on the research key. The fallback key has 60% quota left but bills to the other account. Backing off costs about 20 minutes of throughput.",
+  acts:["Back off","Switch keys","Explain more"]},
+];
+
+const BENCH={
+ triage:{panes:[["Needs you",["Vault index engine — schema?","Session visibility — approve?","Cold email — rate limited"]],
+                ["The one you picked",["› asks: which schema wins?","The daemon writes ids from path…","I can make either authoritative."]],
+                ["Everything else",["Terminal integration · 12m","Obsidian explorer · 3m","Artifact history · 1m","Browser agent · <1m"]]],
+        w:["26%","48%","26%"]},
+ build:{panes:[["The task",["ct-40960 Repair main CI","status in_progress","BLOCKED: two unit tests fail"]],
+               ["The agent working it",["› fix the provider filter","Reading getMarketResearchTools…","43 pass, 0 fail"]]],
+        w:["38%","62%"]},
+ review:{panes:[["Changed files",["ConversationView.tsx +21","globals.css +8","workspace.ts +64"]],
+                ["The diff",["+ const pinned = presentation…","- flex-shrink-0","+ cq-header-collapse"]],
+                ["The conversation",["› why did the title collapse?","The badge is 200px, shrink 0.","340px in a 332px row."]]],
+        w:["22%","46%","32%"]},
+ plan:{panes:[["Plans",["pl-232 Overnight hardening","pl-249 Steering action loop","pl-285 Workspace slots"]],
+              ["The plan",["Goal: one layout system","6 tasks · 4 done","Next: page-local rails"]]],
+       w:["30%","70%"]},
+};
+
+/* ---------------- tabs ---------------- */
+const SECT=["d1","d2","d3","d4"];
+let active="d1";
+function show(id){active=id;
+  document.querySelectorAll("section.dir").forEach(s=>s.classList.toggle("on",s.id===id));
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("on",t.dataset.t===id));}
+document.getElementById("tabs").addEventListener("click",e=>{const t=e.target.closest(".tab");if(t)show(t.dataset.t);});
+
+/* ---------------- D1 ---------------- */
+function d1(){
+  const band=(title,list,cls="")=>`<div class="mc-band"><h4>${title} <span style="color:var(--faint)">(${list.length})</span></h4>
+    <div class="mc-grid">${list.map(a=>`<div class="tile ${cls}" data-a="${a.n}">
+      <div class="t"><span class="dot ${DOTC[a.s]} ${a.s==='run'||a.s==='need'?'pulsing':''}"></span><span style="overflow:hidden;text-overflow:ellipsis">${a.n}</span></div>
+      <div class="m">${a.m}</div>${a.s==='run'?`<div class="bar"><i style="width:${a.p}%"></i></div>`:""}
+    </div>`).join("")}</div></div>`;
+  const need=AGENTS.filter(a=>a.s==="need"||a.s==="err"), run=AGENTS.filter(a=>a.s==="run"), idle=AGENTS.filter(a=>a.s==="idle");
+  document.getElementById("d1s").innerHTML=`<div class="mc">
+    <div class="mc-top"><span style="color:var(--amber)">●</span> fleet<span class="spacer"></span>${run.length} running · ${need.length} need you · ${idle.length} idle</div>
+    ${band("Needs you",need,"need")}${band("Running",run)}${band("Finished",idle)}
+  </div>
+  <div class="mc-drill" id="d1d"><span class="xbtn" data-x>✕</span><h3 id="d1t"></h3>
+    <div class="body">› continue<br><br>Working through the connector fork. The normalizer drops the trailing segment, so
+    two records collide on the same key. I am rewriting the match to compare the full path before the merge, and adding a
+    regression test that reproduces the collision.<br><br><span style="color:var(--green)">✓ 43 pass · 0 fail</span></div></div>`;
+  document.getElementById("d1h").innerHTML=`<b>Click any tile</b> to drill in — it overlays the board and returns you to it. The board never goes away.`;
+}
+document.getElementById("d1s").addEventListener("click",e=>{
+  if(e.target.closest("[data-x]")){document.getElementById("d1d").classList.remove("on");return;}
+  const t=e.target.closest(".tile"); if(!t)return;
+  document.getElementById("d1t").textContent=t.dataset.a;
+  document.getElementById("d1d").classList.add("on");
+});
+
+/* ---------------- D2 ---------------- */
+let qi=0;
+function d2(){
+  const el=document.getElementById("d2s");
+  if(qi>=QUEUE.length){
+    el.innerHTML=`<div class="q"><div class="q-top">queue<div class="q-prog"><i style="width:100%"></i></div>clear</div>
+      <div class="q-empty"><div class="big">Nothing needs you.</div>
+      <div>30 agents are running. You will be interrupted when that changes.</div>
+      <button class="q-btn" data-r style="margin-top:10px">↻ replay</button></div></div>`;
+    document.getElementById("d2h").innerHTML=`<b>Queue cleared.</b> The app's job is now to stay silent until something changes.`;
+    return;
+  }
+  const q=QUEUE[qi];
+  el.innerHTML=`<div class="q">
+    <div class="q-top">decision ${qi+1} of ${QUEUE.length}<div class="q-prog"><i style="width:${(qi/QUEUE.length)*100}%"></i></div>${QUEUE.length-qi} left</div>
+    <div class="q-body">
+      <div class="q-who"><span class="dot d-need pulsing"></span>${q.who}</div>
+      <div class="q-ask">${q.ask}</div>
+      <div class="q-ctx">${q.ctx}</div>
+      <div class="q-acts">${q.acts.map((a,i)=>`<button class="q-btn ${i===0?'pri':''}" data-adv><kbd>${i+1}</kbd> ${a}</button>`).join("")}
+        <button class="q-btn" data-adv>skip</button></div>
+    </div></div>`;
+  document.getElementById("d2h").innerHTML=`<b>Answer it and it advances.</b> One decision at a time, full width for its context. <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> to choose.`;
+}
+document.getElementById("d2s").addEventListener("click",e=>{
+  if(e.target.closest("[data-r]")){qi=0;d2();return;}
+  if(e.target.closest("[data-adv]")){qi++;d2();}
+});
+
+/* ---------------- D3 ---------------- */
+let bench="triage";
+function d3(){
+  const b=BENCH[bench];
+  const names={triage:["Triage","⌥1"],build:["Build","⌥2"],review:["Review","⌥3"],plan:["Plan","⌥4"]};
+  document.getElementById("d3s").innerHTML=`<div class="wb">
+    <div class="wb-switch">${Object.keys(BENCH).map(k=>`<div class="wb-sw ${k===bench?'on':''}" data-b="${k}">${names[k][0]}<span class="k">${names[k][1]}</span></div>`).join("")}</div>
+    <div class="wb-body">${b.panes.map((p,i)=>`<div class="wb-pane" style="flex:0 0 ${b.w[i]}">
+      <div class="wb-h">${p[0]}</div><div class="wb-c">${p[1].map(r=>`<div class="wb-row">${r.startsWith("›")?`<span style="color:var(--amber)">${r}</span>`:r}</div>`).join("")}</div></div>`).join("")}</div>
+  </div>`;
+  document.getElementById("d3h").innerHTML=`<b>${names[bench][0]}.</b> The arrangement belongs to the activity — switch it whole, never adjust it. <kbd>⌥1</kbd>–<kbd>⌥4</kbd>`;
+}
+document.getElementById("d3s").addEventListener("click",e=>{const s=e.target.closest("[data-b]");if(s){bench=s.dataset.b;d3();}});
+
+/* ---------------- D4 ---------------- */
+let zoom=2;
+const NODES=[
+ {x:60,y:70,t:"Terminal integration",s:"run",b:"xterm + tmux bridge; resize contract landed",c:"› what is this little resize burger?<br>It is the drag handle — I have made it a 3px hit area with a hover cue."},
+ {x:290,y:52,t:"Browser automation",s:"run",b:"CDP driver; profile clone working",c:"› verify the snapshot path<br>Snapshot returns the a11y tree with #eNN refs."},
+ {x:520,y:88,t:"Model picker",s:"run",b:"inject /model into the pane",c:"› just inject that message<br>Done — the picker now writes the slash command."},
+ {x:120,y:250,t:"Vault index engine",s:"need",b:"blocked: two schemas claim the id",c:"› which schema wins?<br>Path is stable across edits, frontmatter across renames."},
+ {x:360,y:268,t:"Obsidian explorer",s:"run",b:"backlinks + graph view",c:"› reach parity with obsidian<br>Backlinks land tonight; graph is behind a flag."},
+ {x:600,y:250,t:"Artifact history",s:"run",b:"version list + rollback",c:"› keep a history of all versions<br>Every publish writes a version row; rollback restores as new."},
+ {x:250,y:430,t:"Sync engine review",s:"run",b:"doc duplication root cause",c:"› is this related to his changes?<br>Yes — the reconcile scope diverged on rename."},
+ {x:500,y:445,t:"Cold email rates",s:"err",b:"rate limited · retry 4m",c:"› back off or switch keys?<br>429s on the research key; fallback bills elsewhere."},
+];
+function d4(){
+  const scale=zoom===1?0.62:zoom===2?1:1.42;
+  document.getElementById("d4s").innerHTML=`<div class="cv z${zoom}" id="cvw">
+    <div class="cv-world" style="transform:scale(${scale})">
+      <div class="cv-cluster" style="left:36px;top:32px;width:700px;height:150px"><span>infrastructure</span></div>
+      <div class="cv-cluster" style="left:96px;top:214px;width:640px;height:150px"><span>knowledge surfaces</span></div>
+      <div class="cv-cluster" style="left:226px;top:396px;width:450px;height:132px"><span>growth</span></div>
+      ${NODES.map(n=>`<div class="cv-node" style="left:${n.x}px;top:${n.y}px">
+        <div class="t"><span class="dot ${DOTC[n.s]} ${n.s!=='idle'?'pulsing':''}"></span><span style="overflow:hidden;text-overflow:ellipsis">${n.t}</span></div>
+        <div class="b">${n.b}</div><div class="conv">${n.c}</div></div>`).join("")}
+    </div>
+    <div class="cv-scale">zoom ${zoom===1?"far · status":zoom===2?"mid · cards":"near · conversations"}</div>
+    <div class="cv-zoom">${[1,2,3].map(z=>`<button class="cv-zb ${z===zoom?'on':''}" data-z="${z}">${z===1?"far":z===2?"mid":"near"}</button>`).join("")}</div>
+  </div>`;
+  document.getElementById("d4h").innerHTML=`<b>Zoom is the navigation.</b> Far shows status, mid shows cards, near shows the conversations themselves — same objects, same places.`;
+}
+document.getElementById("d4s").addEventListener("click",e=>{const z=e.target.closest("[data-z]");if(z){zoom=+z.dataset.z;d4();}});
+
+/* ---------------- keys ---------------- */
+document.addEventListener("keydown",e=>{
+  if(e.metaKey||e.ctrlKey)return;
+  if(e.key>="1"&&e.key<="4"&&!e.altKey&&active!=="d2"){show(SECT[+e.key-1]);return;}
+  if(active==="d2"&&e.key>="1"&&e.key<="3"){qi++;d2();}
+  if(active==="d3"&&e.altKey){const m={"1":"triage","2":"build","3":"review","4":"plan"};if(m[e.key]){bench=m[e.key];d3();}}
+});
+
+d1();d2();d3();d4();
+</script>
