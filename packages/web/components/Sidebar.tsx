@@ -12,18 +12,25 @@ import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
-import { useChatUnread } from "../hooks/useChatSync";
+import { useChatUnread, useChatRail } from "../hooks/useChatSync";
+import { ChannelContextMenu, useChannelMenu } from "./chat/ChannelMenu";
+import { readPins, isPinned, togglePin, type SidebarPin } from "../lib/sidebarPins";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useSyncProjects } from "../hooks/useSyncProjects";
+import { useSyncSavedViews } from "../hooks/useSyncSavedViews";
+import { activeViewId, currentViewId, VIEW_ID_KEY } from "../lib/savedViews";
 import { projectDotClass } from "../lib/projectColors";
 import { useWorkspaceArgs, workspaceStamp } from "../hooks/useWorkspaceArgs";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
+import { toast } from "sonner";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
 import { CreateChannelModal } from "./CreateChannelModal";
-import { Globe, Workflow, Zap, MessageSquare, FolderKanban } from "lucide-react";
+import { Globe, Workflow, Zap, MessageSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff } from "lucide-react";
+import { WorkbenchSection } from "./WorkbenchSection";
+import { filterToWorkspace } from "../lib/workspaceScope";
 
 const api = _api as any;
 
@@ -94,9 +101,15 @@ function NavSection({
     id: string;
     name: string;
     icon?: React.ReactNode;
+    /** Highlighted as the row you are currently looking at. */
+    active?: boolean;
+    /** Rendered at the row's end — a shared marker, an owner avatar. */
+    trailing?: React.ReactNode;
+    /** Hover actions, in order. Each is its own small button. */
+    actions?: Array<{ key: string; title: string; icon: React.ReactNode; onClick: (e?: React.MouseEvent) => void }>;
     onSelect: () => void;
-    onRemove?: () => void;
-    removeTitle?: string;
+    /** Right-click, for rows that have a context menu. */
+    onContextMenu?: (e: React.MouseEvent) => void;
   }>;
   expanded?: boolean;
   onToggle?: () => void;
@@ -150,26 +163,47 @@ function NavSection({
         <div className={`overflow-hidden transition-all duration-200 ease-out ${expanded ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
           <div className="ml-[17px] my-0.5 border-l border-sol-border/50 overflow-y-auto max-h-96">
             {items!.map((child) => (
-              <div key={child.id} className="flex items-center group/v">
+              <div
+                key={child.id}
+                onContextMenu={child.onContextMenu}
+                className={`flex items-center group/v transition-colors ${
+                  child.active
+                    ? "bg-sol-bg-highlight text-sol-text"
+                    : "text-sol-text-muted hover:bg-sol-bg-highlight/40"
+                }`}
+              >
                 <button
                   onClick={child.onSelect}
-                  className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 transition-colors flex-1 min-w-0 text-left"
+                  className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 hover:text-sol-text transition-colors flex-1 min-w-0 text-left"
                   title={child.name}
+                  aria-current={child.active ? "page" : undefined}
                 >
                   {child.icon}
-                  <span className="truncate text-[13px] min-w-0">{child.name}</span>
+                  <span className={`truncate text-[13px] min-w-0 ${child.active ? "text-sol-text" : ""}`}>{child.name}</span>
                 </button>
-                {child.onRemove && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); child.onRemove!(); }}
-                    className="p-1 mr-1.5 rounded opacity-0 group-hover/v:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0"
-                    title={child.removeTitle ?? "Remove"}
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
+                {/* Marker and actions trade places on hover rather than
+                    competing for the row's width — otherwise the name of the
+                    row you are pointing at is the first thing to truncate. */}
+                {child.trailing && (
+                  <span className={child.actions?.length ? "flex group-hover/v:hidden" : "flex"}>
+                    {child.trailing}
+                  </span>
                 )}
+                {!!child.actions?.length && (
+                  <span className="hidden group-hover/v:flex items-center flex-shrink-0">
+                    {child.actions.map((action) => (
+                      <button
+                        key={action.key}
+                        onClick={(e) => { e.stopPropagation(); action.onClick(e); }}
+                        className="p-1 rounded text-sol-text-dim hover:text-sol-text flex-shrink-0"
+                        title={action.title}
+                      >
+                        {action.icon}
+                      </button>
+                    ))}
+                  </span>
+                )}
+                <span className="w-1.5 flex-shrink-0" />
               </div>
             ))}
           </div>
@@ -204,34 +238,178 @@ const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
 const ChatNavRow = memo(function ChatNavRow({
   isActive,
   isNarrow,
+  pathname,
+  expanded,
+  onToggle,
   onMobileClose,
 }: {
   isActive: boolean;
   isNarrow: boolean;
+  pathname: string | null;
+  expanded: boolean;
+  onToggle: () => void;
   onMobileClose?: () => void;
 }) {
   const { channels, mentions } = useChatUnread();
+  const rail = useChatRail();
+  const router = useRouter();
+  const openCreateModal = useInboxStore((s) => s.openCreateModal);
+  const activeWorkspaceTeam = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  // The app's one context-menu system: one instance for the whole list, rows
+  // open it from the ⋯ button and from right-click alike.
+  const channelMenu = useChannelMenu();
+
+  const items = rail.map((c) => ({
+    id: c.id,
+    name: c.name,
+    icon: c.muted
+      ? <BellOff className="w-3 h-3 flex-shrink-0 opacity-50" aria-label="Muted" />
+      : <Hash className="w-3 h-3 flex-shrink-0 opacity-60" />,
+    active: pathname === `/chat/${c.id}`,
+    // The rail's own signal rules, unchanged: only a mention gets a number;
+    // plain unread is a dot; a muted channel keeps only the dot.
+    trailing:
+      (c.mentionCount ?? 0) > 0 ? (
+        <span className="min-w-[16px] h-[15px] px-1 flex items-center justify-center text-[9.5px] font-bold bg-sol-orange text-sol-bg rounded-full flex-shrink-0">
+          {(c.mentionCount ?? 0) > 99 ? "99+" : c.mentionCount}
+        </span>
+      ) : (c.unreadCount ?? 0) > 0 ? (
+        <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" aria-label="Unread" />
+      ) : null,
+    actions: [
+      {
+        key: "pin",
+        title: "Pin to top of sidebar",
+        icon: <Pin className="w-3 h-3" />,
+        onClick: () => togglePin("channel", c.id, c.name),
+      },
+      {
+        key: "manage",
+        title: "Channel settings",
+        icon: <MoreHorizontal className="w-3 h-3" />,
+        onClick: (e?: React.MouseEvent) => {
+          if (e) channelMenu.open(e, { channelId: c.id, notifyLevel: c.notifyLevel });
+        },
+      },
+    ],
+    onSelect: () => {
+      router.push(`/chat/${c.id}`);
+      onMobileClose?.();
+    },
+    onContextMenu: (e: React.MouseEvent) =>
+      channelMenu.open(e, { channelId: c.id, notifyLevel: c.notifyLevel }),
+  }));
+
   return (
-    <NavSection
-      label="Chat"
-      href="/chat"
-      isActive={isActive}
-      isNarrow={isNarrow}
-      onMobileClose={onMobileClose}
-      unread={channels > 0 || mentions > 0}
-      badge={
-        mentions > 0 ? (
-          <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-sol-orange text-sol-bg rounded-full">
-            {mentions > 99 ? "99+" : mentions}
-          </span>
-        ) : channels > 0 && !isActive ? (
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan" aria-label="Unread messages" />
-        ) : null
-      }
-      icon={<MessageSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-    />
+    <>
+      <NavSection
+        label="Chat"
+        href="/chat"
+        isActive={isActive}
+        isNarrow={isNarrow}
+        onMobileClose={onMobileClose}
+        unread={channels > 0 || mentions > 0}
+        badge={
+          mentions > 0 ? (
+            <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-sol-orange text-sol-bg rounded-full">
+              {mentions > 99 ? "99+" : mentions}
+            </span>
+          ) : channels > 0 && !isActive ? (
+            <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan" aria-label="Unread messages" />
+          ) : null
+        }
+        icon={<MessageSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+        items={items}
+        expanded={expanded}
+        onToggle={onToggle}
+        onAdd={activeWorkspaceTeam ? () => openCreateModal("chat") : undefined}
+        addTitle="New channel"
+      />
+      <ChannelContextMenu state={channelMenu} />
+    </>
   );
 });
+
+// The rail of pinned subsection rows — projects, saved views, channels —
+// resolved LIVE from the store so renames follow, with the pin-time label as
+// the fallback for objects the cache no longer holds.
+function PinnedRail({
+  onNavigate,
+  applyView,
+}: {
+  onNavigate: (href: string) => void;
+  applyView: (view: any) => void;
+}) {
+  const pins = useInboxStore((s) => readPins(s));
+  const projects = useInboxStore((s) => s.projects);
+  // "kind:id" keys of current pins — one subscription serves every section's
+  // pin/unpin affordance and keeps the memos honest about pin state.
+  const pinnedKeys = useInboxStore((s) => readPins(s).map((x) => `${x.kind}:${x.id}`).join(","));
+  const pinned = useCallback((key: string) => pinnedKeys.split(",").includes(key), [pinnedKeys]);
+  const savedViews = useInboxStore((s) => (s as any).savedViews);
+  const chatChannels = useInboxStore((s) => s.chatChannels);
+  if (pins.length === 0) return null;
+
+  const resolve = (pin: SidebarPin): { label: string; icon: React.ReactNode; go: () => void } => {
+    if (pin.kind === "project") {
+      const p = (projects as any)?.[pin.id];
+      return {
+        label: p?.title ?? pin.label,
+        icon: <FolderKanban className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
+        go: () => onNavigate(`/projects/${pin.id}`),
+      };
+    }
+    if (pin.kind === "channel") {
+      const c = (chatChannels as any)?.[pin.id];
+      return {
+        label: `#${c?.name ?? pin.label}`,
+        icon: <Hash className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
+        go: () => onNavigate(`/chat/${pin.id}`),
+      };
+    }
+    const rows: any[] = Array.isArray(savedViews) ? savedViews : Object.values(savedViews ?? {});
+    const v = rows.find((r: any) => String(r?._id) === pin.id);
+    return {
+      label: v?.name ?? pin.label,
+      icon: <Layers className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
+      // A view pin replays the SAME apply the section row runs — one codepath,
+      // so a pinned view can never drift from its source row's behavior.
+      go: () => (v ? applyView(v) : undefined),
+    };
+  };
+
+  return (
+    <div className="mb-1">
+      <RailHeading label="Pinned" isNarrow={false} />
+      {pins.map((pin) => {
+        const r = resolve(pin);
+        return (
+          <div
+            key={`${pin.kind}:${pin.id}`}
+            className="flex items-center group/v transition-colors text-sol-text-muted hover:bg-sol-bg-highlight/40 mx-2 rounded"
+          >
+            <button
+              onClick={r.go}
+              className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 hover:text-sol-text transition-colors flex-1 min-w-0 text-left"
+              title={r.label}
+            >
+              {r.icon}
+              <span className="truncate text-[13px] min-w-0">{r.label}</span>
+            </button>
+            <button
+              onClick={() => togglePin(pin.kind, pin.id, pin.label)}
+              className="p-1 rounded text-sol-text-dim hover:text-sol-text opacity-0 group-hover/v:opacity-100 transition-opacity flex-shrink-0"
+              title="Unpin"
+            >
+              <PinOff className="w-3 h-3" />
+            </button>
+            <span className="w-1.5 flex-shrink-0" />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
   const pathname = usePathname();
@@ -306,53 +484,150 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   }, [bookmarks, showAllBookmarks, prefetchBookmark]);
   const toggleBookmark = useInboxStore((s) => s.toggleBookmark);
   const openConversationId = useInboxStore((s) => s.currentSessionId);
-  const allSavedViews = useInboxStore((s) => s.clientState.ui?.saved_views);
+  // Saved views live on the server now, so a shared one shows up here for every
+  // member of the team — see convex/savedViews.ts.
+  useSyncSavedViews();
+  const savedViewRows = useInboxStore((s) => s.savedViews);
   const savedViews = useMemo(
-    () => allSavedViews?.filter((v: any) => !v.team_id || v.team_id === activeTeamId),
-    [allSavedViews, activeTeamId]
+    () => Object.values(savedViewRows ?? {})
+      .filter((v: any) => !v.team_id || v.team_id === activeTeamId)
+      // Yours first, then teammates' shared ones; alphabetical within each, so
+      // the rail is stable rather than reordering as people edit their views.
+      .sort((a: any, b: any) =>
+        Number(!!b.is_mine) - Number(!!a.is_mine) || (a.name || "").localeCompare(b.name || "")),
+    [savedViewRows, activeTeamId]
   );
-  const deleteView = useInboxStore((s) => s.deleteView);
+  const deleteSavedView = useInboxStore((s) => s.deleteSavedView);
+  const updateSavedView = useInboxStore((s) => s.updateSavedView);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   // Saved views nest under their page's nav row instead of a separate section.
-  const taskViews = useMemo(() => savedViews?.filter((v: any) => v.page === "tasks") ?? [], [savedViews]);
-  const docViews = useMemo(() => savedViews?.filter((v: any) => v.page === "docs" || v.page === "plans") ?? [], [savedViews]);
+  const taskViews = useMemo(() => savedViews.filter((v: any) => v.page === "tasks"), [savedViews]);
+  const docViews = useMemo(() => savedViews.filter((v: any) => v.page === "docs" || v.page === "plans"), [savedViews]);
+
+  // Which view the list is currently arranged as — a view is a set of prefs, not
+  // a route, so "selected" is a comparison against the live prefs (lib/savedViews).
+  const taskPrefs = useInboxStore((s) => s.clientState.ui?.task_view);
+  const docPrefs = useInboxStore((s) => s.clientState.ui?.doc_view);
+  // The stamped view wins: it stays right while you edit filters, where
+  // matching would go blank. Matching is the fallback for a list that simply
+  // happens to be arranged like a view you never opened.
+  const activeTaskViewId = useMemo(
+    () => (isTasks
+      ? currentViewId(taskPrefs) ?? activeViewId(taskViews.map((v: any) => ({ id: v._id, prefs: v.prefs })), taskPrefs)
+      : undefined),
+    [isTasks, taskViews, taskPrefs]
+  );
+  const activeDocViewId = useMemo(
+    () => (isDocs
+      ? currentViewId(docPrefs) ?? activeViewId(docViews.map((v: any) => ({ id: v._id, prefs: v.prefs })), docPrefs)
+      : undefined),
+    [isDocs, docViews, docPrefs]
+  );
   // They reveal when you open that page (navigation is the default); the chevron
   // pins a section open or closed regardless of which page you're on.
   const [viewSectionOverride, setViewSectionOverride] = useState<Record<string, boolean>>({});
   const applyView = useCallback((view: any) => {
     const pagePrefsKey = view.page === "tasks" ? "task_view" : view.page === "docs" ? "doc_view" : "plan_view";
-    updateClientUI({ [pagePrefsKey]: view.prefs });
+    // Stamp which view this is, so the page can still name it after you change
+    // a filter — the moment matching alone stops being able to answer.
+    updateClientUI({ [pagePrefsKey]: { ...(view.prefs ?? {}), [VIEW_ID_KEY]: view._id } });
     router.push(`/${view.page}`);
     onMobileClose?.();
   }, [updateClientUI, router, onMobileClose]);
 
-  const viewItems = useCallback((views: any[]) => views.map((v: any) => ({
-    id: v.id,
+  const viewItems = useCallback((views: any[], activeId?: string) => views.map((v: any) => ({
+    id: v._id,
     name: v.name,
+    active: v._id === activeId,
+    icon: <Layers className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
+    // A shared view is marked, and a teammate's says whose it is — otherwise a
+    // rail of everyone's views is a list of names with no owners.
+    trailing: v.shared ? (
+      <span
+        className="flex items-center flex-shrink-0 mr-0.5"
+        title={v.is_mine ? "Shared with your team" : `Shared by ${v.owner_name ?? "a teammate"}`}
+      >
+        {v.is_mine || !v.owner_image ? (
+          <Users className="w-3 h-3 text-sol-text-dim" />
+        ) : (
+          <img src={v.owner_image} alt={v.owner_name ?? ""} className="w-3.5 h-3.5 rounded-full" />
+        )}
+      </span>
+    ) : undefined,
+    // Only the author can share or delete: silently rewriting a view other
+    // people rely on is what makes shared views untrustworthy.
+    actions: [
+      {
+        key: "pin",
+        title: pinned(`view:${v._id}`) ? "Unpin from top" : "Pin to top of sidebar",
+        icon: pinned(`view:${v._id}`) ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />,
+        onClick: () => togglePin("view", v._id, v.name || "View"),
+      },
+      ...(v.is_mine === false ? [] : [
+      {
+        key: "share",
+        title: v.shared ? "Stop sharing with your team" : "Share with your team",
+        icon: v.shared ? <UserMinus className="w-3 h-3" /> : <Users className="w-3 h-3" />,
+        onClick: () => {
+          if (!activeTeamId && !v.shared) {
+            toast.error("Pick a team first — a shared view needs a team to share with");
+            return;
+          }
+          updateSavedView(v._id, { shared: !v.shared, team_id: v.team_id ?? activeTeamId });
+          toast.success(v.shared ? `"${v.name}" is private again` : `"${v.name}" shared with your team`);
+        },
+      },
+      {
+        key: "remove",
+        title: "Remove saved view",
+        icon: (
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        ),
+        onClick: () => deleteSavedView(v._id),
+      },
+    ]),
+    ],
     onSelect: () => applyView(v),
-    onRemove: () => deleteView(v.id),
-    removeTitle: "Remove saved view",
-  })), [applyView, deleteView]);
-  const taskViewItems = useMemo(() => viewItems(taskViews), [viewItems, taskViews]);
-  const docViewItems = useMemo(() => viewItems(docViews), [viewItems, docViews]);
+  })), [applyView, deleteSavedView, updateSavedView, activeTeamId, pinned]);
+  const taskViewItems = useMemo(() => viewItems(taskViews, activeTaskViewId), [viewItems, taskViews, activeTaskViewId]);
+  const docViewItems = useMemo(() => viewItems(docViews, activeDocViewId), [viewItems, docViews, activeDocViewId]);
 
   // The projects themselves nest under the Projects row, so a project is one
   // click from anywhere — the whole point of putting it at the top of the rail.
   // Active work first, then alphabetical; finished projects sink but stay reachable.
   useSyncProjects();
   const projects = useInboxStore((s) => s.projects);
+  // "kind:id" keys of current pins — one subscription serves every section's
+  // pin/unpin affordance and keeps the memos honest about pin state.
+  const pinnedKeys = useInboxStore((s) => readPins(s).map((x) => `${x.kind}:${x.id}`).join(","));
+  const pinned = useCallback((key: string) => pinnedKeys.split(",").includes(key), [pinnedKeys]);
   const projectItems = useMemo(() => {
     const order: Record<string, number> = { active: 0, planning: 1, paused: 2, done: 3 };
-    return Object.values(projects)
+    // store.projects is a cross-workspace cache (sync never prunes on team
+    // switch) — re-assert the active workspace here like every other list view.
+    return filterToWorkspace(Object.values(projects), activeTeamId)
       .sort((a: any, b: any) =>
         (order[a.status] ?? 9) - (order[b.status] ?? 9) || (a.title || "").localeCompare(b.title || ""))
       .map((p: any) => ({
+        active: pathname === `/projects/${p._id}` || !!pathname?.startsWith(`/projects/${p._id}/`),
         id: p._id,
         name: p.title,
         icon: <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projectDotClass(p)}`} />,
+        actions: [
+          {
+            key: "pin",
+            title: pinned(`project:${p._id}`) ? "Unpin from top" : "Pin to top of sidebar",
+            icon: pinned(`project:${p._id}`) ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />,
+            onClick: () => togglePin("project", p._id, p.title || "Project"),
+          },
+        ],
         onSelect: () => { router.push(`/projects/${p._id}`); onMobileClose?.(); },
       }));
-  }, [projects, router, onMobileClose]);
+    // pathname is a dep: without it the highlight is computed once and never
+    // moves as you navigate between projects.
+  }, [projects, activeTeamId, router, onMobileClose, pathname, pinned]);
 
   useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []));
   useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));
@@ -452,6 +727,15 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const sidebarContent = (
     <>
       <div className="flex-1 flex flex-col min-h-0">
+        {/* Workbenches first: switching the whole arrangement is the rail's
+            fastest gesture, so it sits at the top (see store/workbench.ts). */}
+        <WorkbenchSection isNarrow={isNarrow} onMobileClose={onMobileClose} />
+        {!isNarrow && (
+          <PinnedRail
+            onNavigate={(href) => { router.push(href); onMobileClose?.(); }}
+            applyView={applyView}
+          />
+        )}
         <RailHeading label="Conversations" isNarrow={isNarrow} />
         <div className="text-sm">
           <button
@@ -503,7 +787,14 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               )}
             </Link>
           )}
-          <ChatNavRow isActive={!!isChat} isNarrow={isNarrow} onMobileClose={onMobileClose} />
+          <ChatNavRow
+            isActive={!!isChat}
+            isNarrow={isNarrow}
+            pathname={pathname}
+            expanded={viewSectionOverride.chat ?? !!isChat}
+            onToggle={() => setViewSectionOverride((v) => ({ ...v, chat: !(v.chat ?? !!isChat) }))}
+            onMobileClose={onMobileClose}
+          />
         </div>
 
         {/* What you are working on. Projects leads: it is the container the rest

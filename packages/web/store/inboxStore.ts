@@ -11,6 +11,7 @@ import {
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
 import { createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, promote as wsPromotePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
+import { applyWorkbench as applyWorkbenchPure, captureWorkbench, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
@@ -160,6 +161,10 @@ function writeCriticalUiPrefs(partial: Record<string, any>) {
 // per-device sync as the other layout prefs. In CRITICAL_UI_KEYS, so the shell
 // paints the right arrangement immediately instead of flashing a default.
 function persistWorkspace(draft: any) {
+  // A detached tab window keeps its own in-memory arrangement but never
+  // persists it — the ui bag and device key are the MAIN window's layout, and
+  // a breakout window writing them would reshape every other window's frame.
+  if (typeof window !== "undefined" && (window as any).__CODECAST_ELECTRON__?.isTabWindow === true) return;
   const ws = draft.workspace as WorkspaceState;
   if (!draft.clientState) draft.clientState = {};
   if (!draft.clientState.ui) draft.clientState.ui = {};
@@ -283,6 +288,8 @@ export type ProjectItem = {
   title: string;
   description?: string;
   status: string;
+  /** Workspace truth (server row field): set = team project, absent = personal. */
+  team_id?: string | null;
   color?: string;
   icon?: string;
   target_date?: number;
@@ -346,6 +353,9 @@ export type InboxSession = {
   thread_state?: string | null;
   thread_state_at?: number | null;
   thread_state_msg_count?: number | null;
+  // Declared tri-state of that line: "working" | "blocked" | "done". Changes
+  // only on a state write, so thread_state_at in the wake signature covers it.
+  thread_state_status?: string | null;
   is_idle: boolean;
   // True when an AskUserQuestion poll is open and unanswered. The agent is
   // blocked on the user, so this always means "needs input" regardless of the
@@ -384,6 +394,9 @@ export type InboxSession = {
   // Presence doubles as "this session has images"; rendered as the inbox row
   // thumbnail when the inbox_image_thumbs pref is on.
   image_preview_url?: string | null;
+  // Teammate comment threads (message/code/global anchors) still unresolved —
+  // the card's "someone flagged this" chip. Server-derived on the inbox row.
+  open_comment_threads?: number;
   session_error?: string;
   // True when the session's latest turn is an unresolved Claude Code auth/API
   // error banner ("Please run /login · API Error: 401 …") — the CLI was signed
@@ -413,6 +426,11 @@ export type InboxSession = {
   workflow_run_id?: string | null;
   is_workflow_primary?: boolean;
   workflow_run_status?: string | null;
+  workflow_run_name?: string | null;
+  workflow_run_agents_done?: number | null;
+  workflow_run_agents_total?: number | null;
+  workflow_run_activity?: string | null;
+  workflow_run_started_at?: number | null;
   // The schedule (agent_tasks row) that spawned this conversation as a run.
   // Lets the sidebar badge/strip attribute any historical run to its schedule.
   agent_task_id?: string | null;
@@ -587,6 +605,88 @@ export type ForkChild = {
   inbox_pinned_at?: number | null;
 };
 
+// The loose conversation-summary shape every cache-seeding surface maps its
+// server payload into: fork preloads (ForkChild), the ?s= deep-link inject
+// (getConversation), the palette inject (performListRecentSessions rows and
+// favorite store rows), and task/doc/workflow linked-session opens
+// (taskMining snapshots). All of them seed `store.sessions` from data narrower
+// than a synced row, so they share ONE constructor below instead of each
+// hand-picking fields — hand-picked shapes are how stashed sessions seeded as
+// active cards and flashed into the inbox at boot (ct-42666).
+export type SessionSummary = {
+  _id: string;
+  session_id?: string;
+  title?: string;
+  updated_at?: number;
+  started_at?: number;
+  agent_type?: string | null;
+  message_count?: number;
+  is_idle?: boolean;
+  project_path?: string | null;
+  git_root?: string | null;
+  forked_from?: string | null;
+  parent_message_uuid?: string | null;
+  parent_conversation_id?: string | null;
+  user_id?: string;
+  author_name?: string | null;
+  author_avatar?: string | null;
+  inbox_dismissed_at?: number | null;
+  inbox_stashed_at?: number | null;
+  inbox_killed_at?: number | null;
+  inbox_pinned_at?: number | null;
+};
+
+const SUMMARY_PASSTHROUGH_KEYS = [
+  "project_path",
+  "git_root",
+  "forked_from",
+  "parent_message_uuid",
+  "parent_conversation_id",
+  "user_id",
+  "author_name",
+  "author_avatar",
+] as const;
+
+export const TRIAGE_STAMP_KEYS = [
+  "inbox_dismissed_at",
+  "inbox_stashed_at",
+  "inbox_killed_at",
+  "inbox_pinned_at",
+] as const;
+
+// Build a session cache row from a server summary. The one rule that makes
+// this sound: a key the payload does not carry stays ABSENT on the row —
+// never defaulted. The inbox categorizer cannot tell "field missing" from
+// "field false", so fabricating `inbox_stashed_at: null` from a projection
+// that simply omitted the field would un-hide a triaged session; leaving it
+// absent lets a later, richer payload (or preloadForkSessions' heal pass)
+// fill it. Keys the payload DOES carry are copied even when null — an
+// explicit null is a real "not stashed". Unknown extra keys on the summary
+// are dropped (whitelist), so a caller spreading a fat server object can't
+// smuggle a new field shape past this contract.
+export function sessionRowFromSummary(summary: SessionSummary): InboxSession {
+  const row = {
+    _id: summary._id,
+    session_id: summary.session_id || summary._id,
+    title: summary.title,
+    updated_at: summary.updated_at ?? summary.started_at ?? Date.now(),
+    started_at: summary.started_at,
+    agent_type: summary.agent_type || "claude_code",
+    message_count: summary.message_count ?? 0,
+    is_idle: summary.is_idle ?? true,
+    has_pending: false,
+  } as InboxSession;
+  for (const k of SUMMARY_PASSTHROUGH_KEYS) {
+    if (summary[k] !== undefined) (row as any)[k] = summary[k];
+  }
+  for (const k of TRIAGE_STAMP_KEYS) {
+    if (summary[k] !== undefined) (row as any)[k] = summary[k] ?? null;
+  }
+  // The buckets read the enriched twin, so derive it the way the server does —
+  // but only when the stamp was actually delivered.
+  if (summary.inbox_pinned_at !== undefined) row.is_pinned = !!summary.inbox_pinned_at;
+  return row;
+}
 
 export type CurrentConversationContext = {
   conversationId?: string;
@@ -625,6 +725,10 @@ export type TaskItem = {
   // workspace (convex resolveParentTask enforces that), so nesting can never
   // pull a row across the workspace boundary the views scope by.
   parent_id?: string | null;
+  // Manual list rank; unranked rows fall back to created_at (same ms scale).
+  sort_order?: number;
+  // Short id of the canonical task this one duplicates (set with drop status).
+  duplicate_of?: string;
   labels?: string[];
   blocked_by?: string[];
   blocks?: string[];
@@ -803,6 +907,33 @@ export type SavedView = {
   created_at: number;
 };
 
+/**
+ * A saved view as it now lives on the server (convex/savedViews.ts). The legacy
+ * SavedView above is the client_state shape these were kept in before they could
+ * be shared; useSyncSavedViews migrates those across once and then they are gone.
+ */
+export type SavedViewRow = {
+  _id: string;
+  client_key?: string;
+  user_id?: string;
+  team_id?: string;
+  name: string;
+  // "workspace" = a layout workbench: the saved arrangement of the chrome
+  // itself (store/workbench.ts), riding the same rows as the list views.
+  page: "tasks" | "docs" | "plans" | "workspace";
+  prefs: TaskViewPrefs | DocViewPrefs | PlanViewPrefs | WorkbenchSnapshot;
+  /** Visible to the whole team's rail, not just its author's. */
+  shared?: boolean;
+  icon?: string;
+  color?: string;
+  /** Enrichment from webList — who authored a view you did not. */
+  owner_name?: string;
+  owner_image?: string;
+  is_mine?: boolean;
+  created_at: number;
+  updated_at: number;
+};
+
 // The inbox panel's session-ordering modes. "grouped" = status sections;
 // "recent" = flat, newest-first by last activity (updated_at) — reshuffles as
 // sessions work; "time" = flat, newest-first by creation (started_at) — a
@@ -863,6 +994,11 @@ export type ClientUI = {
   // header toggle when a conversation has none yet). Off by default — you still
   // SEE and can reply to comments others leave regardless of this.
   comments_enabled?: boolean;
+  // Suggested replies above the composer ("suggestion pills"), predicted by a
+  // small model from the session tail plus the user's own frequent past
+  // inputs. Off by default; stamped LWW — a behavior pref that follows the
+  // user, not the device.
+  composer_suggestions?: boolean;
   // Fold the pinned thread-state panel above the composer down to its headline
   // row. Expanded by default — the panel exists to be read on arrival — and
   // left unstamped, so it stays a per-device reading preference like the other
@@ -898,6 +1034,10 @@ export type ClientUI = {
   // images (session.image_preview_url). Independent of simple_view — applies
   // in both. Off by default; per-user preference → stamped LWW.
   inbox_image_thumbs?: boolean;
+  // What the inbox opens on when no conversation is selected: the fleet board
+  // (a live band-grouped tile grid of every session) or the chronological
+  // activity feed. Board is the default. Per-user → stamped LWW.
+  inbox_home?: "board" | "feed";
 };
 
 export type ClientLayouts = {
@@ -931,14 +1071,16 @@ export type ClientTips = {
   _inlineSuppressed?: boolean;
 };
 
+// Tabs carry CONTENT identity only (path, session). The panel arrangement —
+// which rails are open, their widths, the dock — is global chrome shared by
+// every tab: switching tabs must reveal another page under the exact same
+// frame, never reshape the frame. (Tabs used to snapshot/restore a per-tab
+// workspace; that made the right rail open/close and resize on every switch.)
 export type AppTab = {
   id: string;
   title: string;
   path: string;
   sessionId?: string;
-  sidePanelSessionId?: string;
-  /** The tab's own arrangement — one snapshot instead of a flag per region. */
-  workspace?: PersistedWorkspace;
   createdAt: number;
 };
 
@@ -1586,6 +1728,10 @@ export function sessionStructuralSig(s: InboxSession): string {
     // signature stays short while still waking the card on a rewrite. Set by
     // `cast state` only — a few times per session, never on heartbeats.
     s.thread_state_at || 0,
+    // Open teammate-comment threads — the card's comment chip. Changes only
+    // when a human posts/resolves a comment, never on heartbeats. Paints a
+    // chip; never moves a row between buckets, so it stays out of sortRank.
+    s.open_comment_threads || 0,
   ].join("\x1f");
 }
 
@@ -1945,6 +2091,36 @@ export function resolveComposeProjectPath(opts: {
   return context?.projectPath || context?.gitRoot || convPath || activeProjectPath || recentProjects?.[0]?.path || undefined;
 }
 
+// Find a checkout of a project by name among everything we know about —
+// recent projects first (the user's own machines, freshest), then session
+// rows, then the machine roster's project roots. Paths a machine of mine
+// doesn't have are skipped (same roster rule as resolveComposeProjectPath).
+// The error toast uses this to pin "Just fix" sessions to the codecast repo:
+// those errors are crashes of the codecast client itself, so the fix belongs
+// there no matter what project the user happens to be viewing.
+export function findProjectPathByName(
+  name: string,
+  opts: {
+    sessions?: Record<string, InboxSession>;
+    recentProjects?: Array<{ path: string }>;
+    machineRoster?: Array<Pick<MachineCandidate, "local_project_roots">>;
+  },
+): string | undefined {
+  const { sessions, recentProjects, machineRoster } = opts;
+  const onMine = (p: string) => !machineRoster || pathOnMyMachines(machineRoster, p);
+  const recent = recentProjects?.find((r) => getProjectName(r.path) === name && onMine(r.path));
+  if (recent) return recent.path;
+  for (const s of Object.values(sessions ?? {})) {
+    const p = s.git_root || s.project_path;
+    if (p && getProjectName(s.git_root, s.project_path) === name && onMine(p)) return p;
+  }
+  for (const d of machineRoster ?? []) {
+    const root = d.local_project_roots?.find((r) => getProjectName(r) === name);
+    if (root) return root;
+  }
+  return undefined;
+}
+
 // Drag-reorder math. Express the drop as "move ordered[fromIndex] so it ends
 // up at finalIndex", and return the minimal sort_order writes that realize it.
 // Fractional midpoints keep a typical reorder to ONE write; the first-ever
@@ -2167,6 +2343,13 @@ export function resolveInboxViewMode(ui: { inbox_view_mode?: InboxViewMode; inbo
 // cruft-mode bug resurrects.
 export function resolveShowOld(ui: { inbox_show_old?: boolean } | undefined): boolean {
   return ui?.inbox_show_old ?? false;
+}
+
+// Resolve what the inbox opens on when no conversation is selected: the fleet
+// board (default) or the chronological feed. Shared by the boot adoption below
+// and the inbox stage so they can't land on different surfaces.
+export function resolveInboxHome(ui: { inbox_home?: "board" | "feed" } | undefined): "board" | "feed" {
+  return ui?.inbox_home ?? "board";
 }
 
 // A session's creation-time sort key for the "time" view: started_at, falling
@@ -2726,8 +2909,8 @@ interface InboxStoreState extends ChatSliceState {
   // -- Close-guard: one shared dialog for "close a parent with open subtasks".
   // Any surface (list, kanban, palette, plan board, detail) sets this via
   // closeTaskWithGuard; a single CloseGuardDialog in DashboardLayout renders it.
-  taskCloseGuard: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[] } | null;
-  setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[] } | null) => void;
+  taskCloseGuard: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[]; statusId?: string } | null;
+  setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[]; statusId?: string } | null) => void;
 
   // -- Fork navigation --
   // Forks are first-class conversations; we navigate to them by URL. No overlay state.
@@ -2986,8 +3169,9 @@ interface InboxStoreState extends ChatSliceState {
   updateClientTips: (partial: Partial<ClientTips>) => void;
 
   // -- Saved views --
-  saveView: (view: Omit<SavedView, "id" | "created_at" | "team_id">) => void;
-  deleteView: (id: string) => void;
+  createSavedView: (opts: { name: string; page: "tasks" | "docs" | "plans" | "workspace"; prefs: any; shared?: boolean; icon?: string; client_key?: string; team_id?: string }) => any;
+  updateSavedView: (id: string, fields: Record<string, any>) => void;
+  deleteSavedView: (id: string) => void;
 
   // -- Tabs --
   tabs: AppTab[];
@@ -3046,10 +3230,11 @@ interface InboxStoreState extends ChatSliceState {
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
   // Teammate comment actions (optimistic → dispatch side-effect → live-query reconcile).
-  addComment: (conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string }) => Promise<unknown>;
+  addComment: (conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string; filePath?: string; lineNumber?: number }) => Promise<unknown>;
   editComment: (commentId: string, content: string) => Promise<unknown>;
   deleteComment: (commentId: string) => Promise<unknown>;
-  askAgentInThread: (conversationId: string, opts?: { messageId?: string }) => Promise<unknown>;
+  askAgentInThread: (conversationId: string, opts?: { messageId?: string; filePath?: string; lineNumber?: number }) => Promise<unknown>;
+  resolveCommentThread: (conversationId: string, anchor: { messageId?: string; filePath?: string; lineNumber?: number }, resolved: boolean) => void;
 
   // -- Sidebar nav expanded sections --
   sidebarNavExpanded: Record<string, boolean>;
@@ -3085,6 +3270,7 @@ interface InboxStoreState extends ChatSliceState {
   docs: Record<string, DocItem>;
   plans: Record<string, PlanItem>;
   projects: Record<string, ProjectItem>;
+  savedViews: Record<string, SavedViewRow>;
   notifications: Record<string, any>;
   docProjectPaths: string[];
   docDetails: Record<string, DocDetail>;
@@ -3133,6 +3319,10 @@ interface InboxStoreState extends ChatSliceState {
   wsToggle: (slot: SlotId, pane: Pane) => void;
   wsPromote: (slot: SlotId) => void;
   wsSetPresentation: (slot: SlotId, presentation: Presentation) => void;
+  /** Restore a saved arrangement wholesale — every slot, plus zen. */
+  applyWorkbench: (snap: WorkbenchSnapshot) => void;
+  /** Name the current arrangement and persist it as a saved view. */
+  saveWorkbench: (name: string, path?: string) => any;
   setNavCollapsed: (collapsed: boolean) => void;
   setDockOpen: (open: boolean) => void;
   wsSetSize: (slot: SlotId, size: number) => void;
@@ -3148,7 +3338,7 @@ interface InboxStoreState extends ChatSliceState {
 
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string, subtaskResolution?: "cascade" | "only_parent") => Promise<any>;
-  updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string; parent?: string; subtask_resolution?: "cascade" | "only_parent" }) => Promise<any>;
+  updateTask: (shortId: string, fields: { status?: string; status_id?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string; parent?: string; sort_order?: number; duplicate_of?: string; subtask_resolution?: "cascade" | "only_parent" }) => Promise<any>;
   createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string; parent?: string; client_key?: string }) => Promise<any>;
   removeTaskStub: (clientKey: string) => void;
   createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[]; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
@@ -3442,7 +3632,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // silently globalizing them would yank screens out from under people.
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "inbox_show_old",
-  "simple_view", "inbox_image_thumbs",
+  "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home",
 ]);
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
@@ -3547,6 +3737,14 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       if (!draft.currentSessionId && !draft.showMySessions &&
           Object.keys(table).length > 0 && draft.clientStateInitialized &&
           !hasViewNavigated()) {
+        // The fleet board is the home surface: when it's the resolved inbox
+        // home, boot lands on the board (showMySessions) instead of adopting a
+        // conversation — "what is happening" before "where was I". A deep link
+        // or any real navigation still wins (hasViewNavigated above).
+        if (resolveInboxHome(draft.clientState.ui) === "board") {
+          draft.showMySessions = true;
+          return;
+        }
         // Prefer this client's OWN last position. The per-user synced pointer
         // is consulted only by a client that has never had one (fresh
         // profile): any other client — another device, an agent-driven tab —
@@ -3575,13 +3773,26 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // the stub onto the real _id and drops the stub (moving its pending tombstone
   // too). webCreate is idempotent on client_key, so a retry never doubles the
   // server row either. Replaces the manual stub-adopt path.
-  tasks: { isDelta: true, altKey: "client_key" },
+  tasks: {
+    isDelta: true,
+    altKey: "client_key",
+    // Activity (comments + history) rides only the detail queries
+    // (webGetTaskDetail live while a task is open, webGetByIds on the change
+    // feed); the list channels (webList, webListPaginated) never carry it.
+    // Preserve it across their deltas so a fetched task's activity renders
+    // instantly from cache on the next open instead of reloading async.
+    preserveFields: ["comments", "history"],
+  },
   docs: { isDelta: true },
   plans: { isDelta: true },
   // Like the others: a liberal delta cache. useSyncProjects' call site passes no
   // opts, so without this projects synced as an authoritative snapshot — the one
   // remaining collection that still pruned the cache by absence.
   projects: { isDelta: true },
+  // NOT delta: savedViews.webList returns the complete visible set on every
+  // push, so absence means removed. Delta mode would treat a deleted or
+  // un-shared view as "unchanged" and leave it on the rail forever.
+  savedViews: { altKey: "client_key" },
   // altKey supersede for optimistic create-stubs: the incoming server row with
   // the same name rekeys the stub away (names are per-user and practically
   // unique; a rare duplicate-name create just retires the stub onto the older
@@ -4783,7 +4994,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   closeCreateModal: () => set({ createModal: null, createModalDefaults: null }),
 
   taskCloseGuard: null,
-  setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[] } | null) => set({ taskCloseGuard: g }),
+  setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[]; statusId?: string } | null) => set({ taskCloseGuard: g }),
 
   optimisticForkChildren: [],
   recentProjects: [],
@@ -5636,26 +5847,55 @@ const inboxStoreConfig = (set: any, get: any) => ({
     return stamped;
   }),
 
-  saveView: action(function (this: Draft, view: Omit<SavedView, "id" | "created_at" | "team_id">) {
-    const current = this.clientState.ui?.saved_views ?? [];
-    const newView: SavedView = {
-      ...view,
-      id: `sv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      team_id: this.clientState.ui?.active_team_id,
+  // Saved views are a server collection now, so they can be shared. All three
+  // writes are local-first: the row renders from the draft immediately and the
+  // server echo reconciles, superseding the stub via the client_key altKey.
+  createSavedView: action(function (this: Draft, opts: {
+    name: string;
+    page: "tasks" | "docs" | "plans" | "workspace";
+    prefs: any;
+    shared?: boolean;
+    icon?: string;
+    client_key?: string;
+    team_id?: string;
+  }) {
+    // MUTATE opts, don't just return the enriched copy: the dispatch forwards
+    // the original args to the server, so anything computed only into the return
+    // value never leaves this machine. That is what made shared views invisible
+    // to teammates — every row reached the server with no team_id, so the
+    // by_team_id query on their side could never find it.
+    if (!opts.client_key) {
+      opts.client_key = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    }
+    const teamId = this.clientState.ui?.active_team_id;
+    if (teamId && opts.team_id === undefined) opts.team_id = teamId;
+    // Sharing needs a team to share with; without one the row stays personal.
+    opts.shared = !!opts.shared && !!opts.team_id;
+    const key = opts.client_key;
+    const stubId = `temp_view_${key}`;
+    this.savedViews[stubId] = {
+      _id: stubId,
+      client_key: key,
+      team_id: opts.team_id,
+      name: opts.name,
+      page: opts.page,
+      prefs: opts.prefs ?? {},
+      shared: opts.shared,
+      icon: opts.icon,
+      is_mine: true,
       created_at: Date.now(),
-    };
-    const newViews = [...current, newView];
-    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
-    this.clientState.ui.saved_views = newViews;
-    return newViews;
+      updated_at: Date.now(),
+    } as SavedViewRow;
+    return { ...opts };
   }),
 
-  deleteView: action(function (this: Draft, id: string) {
-    const current = this.clientState.ui?.saved_views ?? [];
-    const newViews = current.filter((v: SavedView) => v.id !== id);
-    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
-    this.clientState.ui.saved_views = newViews;
-    return newViews;
+  updateSavedView: action(function (this: Draft, id: string, fields: Record<string, any>) {
+    const row = (this.savedViews as any)[id];
+    if (row) Object.assign(row, fields, { updated_at: Date.now() });
+  }),
+
+  deleteSavedView: action(function (this: Draft, id: string) {
+    delete (this.savedViews as any)[id];
   }),
 
   updateClientLayout: action(function (this: Draft, key: string, value: any) {
@@ -6156,57 +6396,32 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // because this is incoming-data seeding, not a user edit — it persists to IDB
   // (branches stay preloaded across reloads) but dispatches nothing to the server.
   preloadForkSessions: sync(function (this: Draft, forks: ForkChild[], forkedFrom?: string) {
-    // Per-user triage/visibility state off the server row. A seeded row MUST
-    // carry these: without them a stashed/dismissed branch reads as an active
-    // idle session, and since it persists to IDB it renders as a needs-input
-    // card on every boot until the live payload re-delivers the stamps (the
-    // "forks flash in the inbox on reload" bug).
-    const triageFields = (f: ForkChild) => ({
-      inbox_dismissed_at: f.inbox_dismissed_at ?? null,
-      inbox_stashed_at: f.inbox_stashed_at ?? null,
-      inbox_killed_at: f.inbox_killed_at ?? null,
-      inbox_pinned_at: f.inbox_pinned_at ?? null,
-      // The buckets read the enriched twin, so derive it the way the server does.
-      is_pinned: !!f.inbox_pinned_at,
-    });
-    // A payload that carries neither stash nor dismiss was built without triage
-    // state (a synthesized {_id,title} parent stub, or a pre-upgrade server) —
-    // never fabricate "not stashed" nulls from it.
-    const hasTriage = (f: ForkChild) =>
-      f.inbox_stashed_at !== undefined || f.inbox_dismissed_at !== undefined;
     for (const f of forks) {
       const id = f?._id;
       if (!id || !isConvexId(id)) continue;               // skip optimistic/stub ids
       if (this.pending[`sessions:${id}`]?.type === "exclude") continue; // killed locally
       const existing = this.sessions[id];
       if (existing) {
-        // Don't clobber live data — but DO heal a row seeded before the payload
-        // carried triage state (undefined = the field was never delivered; an
-        // explicit null is a real "not stashed/dismissed" and stays). This is
-        // what retires the stampless stubs already persisted in caches.
-        if (!hasTriage(f)) continue;
-        for (const [k, v] of Object.entries(triageFields(f))) {
-          if ((existing as any)[k] === undefined) (existing as any)[k] = v;
+        // Don't clobber live data — but DO heal a row seeded before payloads
+        // carried triage state: fill exactly the stamp keys this payload
+        // delivers into fields the row never had (undefined = never delivered;
+        // an explicit null is a real "not stashed/dismissed" and stays). This
+        // is what retires the stampless stubs persisted in old caches.
+        for (const k of TRIAGE_STAMP_KEYS) {
+          if (f[k] !== undefined && (existing as any)[k] === undefined) {
+            (existing as any)[k] = f[k] ?? null;
+            if (k === "inbox_pinned_at" && existing.is_pinned === undefined) {
+              existing.is_pinned = !!f[k];
+            }
+          }
         }
         continue;
       }
       if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
-      this.sessions[id] = {
-        _id: id,
-        session_id: id,
-        title: f.title,
-        updated_at: f.updated_at ?? f.started_at ?? Date.now(),
-        started_at: f.started_at,
-        agent_type: f.agent_type || "claude_code",
-        message_count: f.message_count ?? 0,
-        is_idle: true,
-        has_pending: false,
+      this.sessions[id] = sessionRowFromSummary({
+        ...f,
         forked_from: f.forked_from ?? forkedFrom ?? null,
-        parent_message_uuid: f.parent_message_uuid ?? null,
-        project_path: f.project_path,
-        git_root: f.git_root,
-        ...(hasTriage(f) ? triageFields(f) : null),
-      } as InboxSession;
+      });
     }
   }),
 
@@ -6933,6 +7148,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   docs: {},
   plans: {},
   projects: {},
+  savedViews: {},
   notifications: {},
   docDetails: {},
   taskFilter: { status: "" },
@@ -6964,6 +7180,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   updateTaskStatus: action(function (this: Draft, shortId: string, status: string, subtaskResolution?: "cascade" | "only_parent") {
     const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as TaskItem | undefined;
     if (task) {
+      // Category change orphans a custom-status refinement (server rule in
+      // tasks.resolveStatusWrite); mirror it so the row re-renders honestly.
+      if (status !== task.status) (task as any).status_id = undefined;
       task.status = status;
       task.updated_at = Date.now();
       if (status === "done" || status === "dropped") {
@@ -6980,6 +7199,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // mirrors it onto parent_id so the row re-nests instantly. The caller
       // (setTaskParent) has already run the shared cycle/workspace guards.
       const { parent, subtask_resolution, ...rest } = fields;
+      // Mirror the server's custom-status rules (tasks.resolveStatusWrite):
+      // "" clears the refinement, and a category change without an explicit
+      // refinement clears the stale one — else the row would keep rendering
+      // the old category's custom status until the echo.
+      if (rest.status_id === "" || (rest.status && rest.status !== (task as any).status && rest.status_id === undefined)) {
+        delete rest.status_id;
+        (task as any).status_id = undefined;
+      }
       Object.assign(task, rest, { updated_at: Date.now() });
       if (parent !== undefined) {
         if (!parent) {
@@ -7195,7 +7422,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // the comments altKey config, and the server dedups on client_id so an outbox
   // retry can't double-insert. The same-named dispatch side effect does the
   // durable write (notifications, mentions, github sync) via comments.addComment.
-  addComment: receiptAsyncAction(function (this: Draft, conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string }) {
+  addComment: receiptAsyncAction(function (this: Draft, conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string; filePath?: string; lineNumber?: number }) {
     const body = content.trim();
     if (!body) return;
     const clientId = `commentstub-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
@@ -7206,6 +7433,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
       conversation_id: conversationId,
       message_id: opts?.messageId,
       parent_comment_id: opts?.parentCommentId,
+      file_path: opts?.filePath,
+      line_number: opts?.lineNumber,
       content: body,
       user_id: me?._id ?? "",
       created_at: Date.now(),
@@ -7217,6 +7446,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
       content: body,
       messageId: opts?.messageId,
       parentCommentId: opts?.parentCommentId,
+      filePath: opts?.filePath,
+      lineNumber: opts?.lineNumber,
       clientId,
       commandId: `legacy-comments-create:${clientId}`,
     };
@@ -7265,9 +7496,29 @@ const inboxStoreConfig = (set: any, get: any) => ({
     };
   }),
 
+  // Resolve/reopen one comment thread. Stamps (or clears) resolved_at on every
+  // cached comment sharing the anchor — mirroring the server, which does the
+  // same to the authoritative rows; the live echo reconciles. Idempotent, so
+  // the plain dispatch path (no receipt) is enough.
+  resolveCommentThread: action(function (this: Draft, conversationId: string, anchor: { messageId?: string; filePath?: string; lineNumber?: number }, resolved: boolean) {
+    const me = (this as any).currentUser;
+    const now = Date.now();
+    for (const comment of Object.values(this.comments) as CommentRow[]) {
+      if (comment.conversation_id !== conversationId) continue;
+      const inThread = anchor.messageId
+        ? comment.message_id === anchor.messageId
+        : anchor.filePath
+          ? !comment.message_id && comment.file_path === anchor.filePath && comment.line_number === anchor.lineNumber
+          : !comment.message_id && !comment.file_path;
+      if (!inThread) continue;
+      comment.resolved_at = resolved ? now : undefined;
+      comment.resolved_by = resolved ? me?._id : undefined;
+    }
+  }),
+
   // Opt-in agent reply: drop an optimistic "thinking" agent comment so the UI
   // reacts instantly; the side effect spawns/reuses the thread's fork.
-  askAgentInThread: receiptAsyncAction(function (this: Draft, conversationId: string, opts?: { messageId?: string }) {
+  askAgentInThread: receiptAsyncAction(function (this: Draft, conversationId: string, opts?: { messageId?: string; filePath?: string; lineNumber?: number }) {
     const clientId = `commentstub-agent-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
     const me = (this as any).currentUser;
     this.comments[clientId] = {
@@ -7275,6 +7526,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
       client_id: clientId,
       conversation_id: conversationId,
       message_id: opts?.messageId,
+      file_path: opts?.filePath,
+      line_number: opts?.lineNumber,
       content: "",
       user_id: me?._id ?? "",
       created_at: Date.now(),
@@ -7284,6 +7537,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     return {
       conversationId,
       messageId: opts?.messageId,
+      filePath: opts?.filePath,
+      lineNumber: opts?.lineNumber,
       clientId,
       commandId: `legacy-comments-ask:${clientId}`,
     };
@@ -7489,7 +7744,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   addTaskComment: action(function (this: Draft, shortId: string, text: string, commentType?: string, imageIds?: string[]) {
     const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as any;
-    if (task?.comments) {
+    if (task) {
+      // The row may not carry activity yet (list channels never send it) —
+      // start the array so the optimistic comment renders instantly; the live
+      // detail query reconciles it with the full server set.
+      if (!task.comments) task.comments = [];
       task.comments.push({
         _id: `temp_${Date.now()}`,
         author: "You",
@@ -7622,6 +7881,34 @@ const inboxStoreConfig = (set: any, get: any) => ({
     persistWorkspace(this);
   }),
 
+  // Switch to a workbench: the WHOLE chrome — every slot, every size, zen —
+  // restores in one draft, so the frame changes in a single paint. Subjects are
+  // re-derived from where you are (the comments pane gets the conversation on
+  // screen); a device that cannot host a terminal never inherits one.
+  applyWorkbench: action(function (this: Draft, snap: WorkbenchSnapshot) {
+    const conversationId = this.currentSessionId ?? this.viewingDismissedId ?? null;
+    const allowTerminal = typeof window === "undefined" || window.innerWidth >= 768;
+    this.workspace = applyWorkbenchPure(this.workspace as WorkspaceState, snap, { conversationId, allowTerminal });
+    persistWorkspace(this);
+    const zen = snap.zen ?? false;
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    if ((this.clientState.ui.zen_mode ?? false) !== zen) {
+      this.clientState.ui.zen_mode = zen;
+      writeCriticalUiPrefs({ zen_mode: zen });
+    }
+  }),
+
+  // Saving reuses the saved-view pipeline wholesale (optimistic stub, outbox,
+  // share/delete); a workbench is just a view whose page is the workspace.
+  saveWorkbench: (name: string, path?: string) => {
+    const st = get();
+    const snap = captureWorkbench(st.workspace as WorkspaceState, {
+      zen: st.clientState.ui?.zen_mode ?? false,
+      path,
+    });
+    return st.createSavedView({ name, page: "workspace", prefs: snap });
+  },
+
 
 
 
@@ -7679,14 +7966,20 @@ const inboxStoreConfig = (set: any, get: any) => ({
   activeTabId: null,
 
   openTab: action(function (this: Draft, opts: { title: string; path: string; sessionId?: string; makeActive?: boolean }) {
+    // A detached tab window renders no tab shell, so a tab opened there would
+    // be invisible here AND appear out of nowhere in the main window (tabs are
+    // shared state). Whatever asked for a tab really asked to show a page —
+    // navigate this window to it instead.
+    if (typeof window !== "undefined" && (window as any).__CODECAST_ELECTRON__?.isTabWindow === true) {
+      window.location.assign(opts.path);
+      return "";
+    }
     const id = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const tab: AppTab = {
       id,
       title: opts.title,
       path: opts.path,
       sessionId: opts.sessionId,
-      sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-      workspace: serializeWorkspace(this.workspace as WorkspaceState),
       createdAt: Date.now(),
     };
     this.tabs = [...this.tabs, tab];
@@ -7718,22 +8011,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.tabs = newTabs;
   }),
 
+  // Switching tabs changes ONLY what the stage shows. The workspace (rails,
+  // sizes, dock) is global chrome — it never rides along, so the frame is
+  // pixel-identical across tabs.
   switchTab: action(function (this: Draft, id: string) {
     if (this.activeTabId === id) return;
     if (this.activeTabId) {
       this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
         ...t,
-        sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-        workspace: serializeWorkspace(this.workspace as WorkspaceState),
         path: stampedTabPath(t),
       } : t);
     }
-    const target = this.tabs.find((t: AppTab) => t.id === id);
     this.activeTabId = id;
-    if (target) {
-      this.sidePanelSessionId = target.sidePanelSessionId ?? null;
-      if (target.workspace) this.workspace = hydrateWorkspace(target.workspace);
-    }
   }),
 
   updateTab: action(function (this: Draft, id: string, patch: Partial<AppTab>) {
@@ -7751,8 +8040,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!this.activeTabId) return;
     this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
       ...t,
-      sidePanelSessionId: this.sidePanelSessionId ?? undefined,
-      workspace: serializeWorkspace(this.workspace as WorkspaceState),
       path: stampedTabPath(t),
       ...patch,
     } : t);
