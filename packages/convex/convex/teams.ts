@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createTeamFeedFilter } from "./privacy";
+import { normalizeTeamTaskStatuses } from "@codecast/shared/tasks";
 import { purgeChatMembership } from "./chat";
 import { readLocalViewRevision } from "./localFirstCommands";
 import {
@@ -69,6 +70,7 @@ export const getUserTeams = query({
           name: team.name,
           icon: team.icon,
           icon_color: team.icon_color,
+          task_statuses: team.task_statuses,
           role: m.role,
           joined_at: m.joined_at,
           visibility: m.visibility || "summary",
@@ -1050,6 +1052,40 @@ export const updateTeamIcon = mutation({
       await ctx.db.patch(args.team_id, updates);
     }
 
+    return { success: true };
+  },
+});
+
+// Replace the team's task-status list wholesale (the editor saves the whole
+// list; it is tiny and edited rarely). Validation lives in the shared
+// contract — normalizeTeamTaskStatuses enforces names, categories, unique ids
+// and the one-status-per-category floor — so the web editor and this mutation
+// can never disagree about what a legal list is. Loose arg validator on
+// purpose: the normalizer is the authority and produces human messages.
+export const updateTaskStatuses = mutation({
+  args: {
+    team_id: v.id("teams"),
+    statuses: v.array(v.object({
+      id: v.string(),
+      name: v.string(),
+      category: v.string(),
+      color: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", args.team_id))
+      .unique();
+    if (!membership || membership.role !== "admin") {
+      throw new Error("Only admins can edit task statuses");
+    }
+    const statuses = normalizeTeamTaskStatuses(args.statuses);
+    await ctx.db.patch(args.team_id, { task_statuses: statuses });
     return { success: true };
   },
 });

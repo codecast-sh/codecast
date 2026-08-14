@@ -4,7 +4,13 @@ import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
-import { MAX_TASK_DEPTH, isActiveTask, subtaskProgressOf } from "@codecast/shared/tasks";
+import {
+  MAX_TASK_DEPTH,
+  TASK_STATUS_CATEGORIES,
+  isActiveTask,
+  subtaskProgressOf,
+  teamTaskStatuses,
+} from "@codecast/shared/tasks";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopeByProject } from "./data";
@@ -35,7 +41,9 @@ import {
 import { forbidden, notFound } from "./lib/auth";
 export { canAccessTask };
 
-const VALID_TASK_STATUSES = ["backlog", "open", "in_progress", "in_review", "done", "dropped"] as const;
+// The six status CATEGORIES (see @codecast/shared/tasks/statuses.ts). Teams
+// refine them with named statuses; tasks.status always holds the category.
+const VALID_TASK_STATUSES = TASK_STATUS_CATEGORIES;
 
 // Resolve the orchestrator conversation a task's worker session should nest
 // under: the session that created the task's plan
@@ -143,6 +151,46 @@ function assertValidTaskStatus(status: string | undefined): asserts status is Ta
   if (status !== undefined && !VALID_TASK_STATUSES.includes(status as TaskStatus)) {
     throw new Error(`Invalid task status '${status}'. Valid: ${VALID_TASK_STATUSES.join(", ")}`);
   }
+}
+
+// Resolve a status write against the team's configured statuses (Linear-style
+// custom statuses; see @codecast/shared/tasks/statuses.ts).
+//
+// - `status_id` names a team status: it sets the category, and a `status` sent
+//   alongside must agree (a mismatch is a client bug, not a preference).
+//   The id is stored only when it refines the category default — a task on the
+//   default needs no pointer to it.
+// - `status_id: ""` clears the refinement (back to the category default).
+// - a category-only write that CHANGES the category clears the refinement too:
+//   the old id belongs to the old category and would lie about where the task
+//   is. Same-category writes (e.g. `cast task start` on a task already
+//   refined within in_progress) keep it.
+//
+// Returns the category to write (if any) and whether/what to write into
+// status_id — `set` distinguishes "clear the field" from "leave it alone".
+export async function resolveStatusWrite(
+  ctx: any,
+  teamId: Id<"teams"> | undefined | null,
+  currentStatus: string | undefined,
+  args: { status?: string; status_id?: string },
+): Promise<{ status?: TaskStatus; statusId: { set: boolean; value?: string } }> {
+  assertValidTaskStatus(args.status);
+  let status = args.status;
+  if (args.status_id) {
+    const team = teamId ? await ctx.db.get(teamId) : null;
+    const statuses = teamTaskStatuses(team?.task_statuses);
+    const match = statuses.find((s: { id: string }) => s.id === args.status_id);
+    if (!match) throw new Error(`Unknown status '${args.status_id}' for this team`);
+    if (status && status !== match.category) {
+      throw new Error(`Status '${args.status_id}' is in category '${match.category}', not '${status}'`);
+    }
+    status = match.category;
+    return { status, statusId: { set: true, value: match.id === match.category ? undefined : match.id } };
+  }
+  if (args.status_id === "" || (status && status !== currentStatus)) {
+    return { status, statusId: { set: true, value: undefined } };
+  }
+  return { status, statusId: { set: false } };
 }
 
 // Resolve a free-form assignee ("Jason", "Jason Benn", an email, a github
@@ -509,7 +557,9 @@ async function cascadeClose(ctx: any, ids: Id<"tasks">[], newStatus: string, use
   for (const id of ids) {
     const t: any = await ctx.db.get(id);
     if (!t || !isSameWorkspace(t, scope)) continue;
-    await ctx.db.patch(id, { status: newStatus, closed_at: now, updated_at: now });
+    // status_id cleared: the cascade moves the subtree to a terminal category,
+    // so any custom-status refinement from the old category is stale.
+    await ctx.db.patch(id, { status: newStatus, status_id: undefined, closed_at: now, updated_at: now });
     // Release a session bound to this child so it isn't stuck on a closed task.
     for (const convId of t.conversation_ids ?? []) {
       const conv: any = await ctx.db.get(convId);
@@ -546,6 +596,8 @@ async function rollUpParentStart(ctx: any, task: any, newStatus: string | undefi
     if (parent.status !== "open" && parent.status !== "backlog") break;
     await ctx.db.patch(parent._id, {
       status: "in_progress",
+      // The old refinement belonged to the open/backlog category; stale now.
+      status_id: undefined,
       updated_at: now,
       last_attempted_at: now,
       attempt_count: (parent.attempt_count || 0) + 1,
@@ -1186,6 +1238,8 @@ export const update = mutation({
     api_token: v.string(),
     short_id: v.string(),
     status: v.optional(v.string()),
+    // Team status id refining the category; "" clears back to the default.
+    status_id: v.optional(v.string()),
     priority: v.optional(v.string()),
     title: v.optional(v.string()),
     description: v.optional(v.string()),
@@ -1229,9 +1283,15 @@ export const update = mutation({
       .first();
     if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
+    // The category every status side effect below keys on. args.status alone
+    // is not enough: a status_id-only write still moves the category.
+    const statusWrite = await resolveStatusWrite(ctx, task.team_id, task.status, args);
+    const nextStatus = statusWrite.status;
+
     const now = Date.now();
     const updates: any = { updated_at: now };
-    if (args.status) updates.status = args.status;
+    if (statusWrite.statusId.set) updates.status_id = statusWrite.statusId.value;
+    if (nextStatus) updates.status = nextStatus;
     if (args.priority) updates.priority = args.priority;
     if (args.title) updates.title = args.title;
     if (args.description !== undefined) updates.description = args.description;
@@ -1304,7 +1364,7 @@ export const update = mutation({
     if (args.files_changed) updates.files_changed = args.files_changed;
     if (args.estimated_minutes !== undefined) updates.estimated_minutes = args.estimated_minutes;
 
-    if (args.status === "done" || args.status === "dropped") {
+    if (nextStatus === "done" || nextStatus === "dropped") {
       updates.closed_at = now;
     }
 
@@ -1340,7 +1400,7 @@ export const update = mutation({
         }
       }
       // Only bind conversation to task on explicit start (cast task start)
-      if (convMatchesWorkspace && args.status === "in_progress" && (!conv.active_task_id || conv.active_task_id === task._id)) {
+      if (convMatchesWorkspace && nextStatus === "in_progress" && (!conv.active_task_id || conv.active_task_id === task._id)) {
         await ctx.db.patch(conv._id, { active_task_id: task._id });
         if (task.plan_id && !conv.active_plan_id) {
           const relatedPlan = await ctx.db.get(task.plan_id);
@@ -1354,31 +1414,31 @@ export const update = mutation({
         }
       }
       // Clear active_task_id when task is closed
-      if ((args.status === "done" || args.status === "dropped") && conv.active_task_id === task._id) {
+      if ((nextStatus === "done" || nextStatus === "dropped") && conv.active_task_id === task._id) {
         await ctx.db.patch(conv._id, { active_task_id: undefined });
       }
     }
 
-    if (args.status === "in_progress") {
+    if (nextStatus === "in_progress") {
       updates.attempt_count = (task.attempt_count || 0) + 1;
       updates.last_attempted_at = now;
       if (!task.started_at) updates.started_at = now;
     }
 
-    if (args.status === "done" && task.started_at) {
+    if (nextStatus === "done" && task.started_at) {
       updates.actual_minutes = Math.round((now - task.started_at) / 60000);
     }
 
     // Close-guard: refuses done/dropped on a parent with open subtasks unless
     // resolved; returns the subtree to cascade-close. Runs before any write.
-    const cascadeIds = await guardParentClose(ctx, task, args.status, args.subtask_resolution);
+    const cascadeIds = await guardParentClose(ctx, task, nextStatus, args.subtask_resolution);
 
     // Did the parent actually change? (Reparent/detach need history + plan reconcile.)
     const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
 
     // Record history for changed fields
     const trackFields: [string, any, any][] = [];
-    if (args.status && args.status !== task.status) trackFields.push(["status", task.status, args.status]);
+    if (nextStatus && nextStatus !== task.status) trackFields.push(["status", task.status, nextStatus]);
     if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
     if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
     if (args.assignee !== undefined && updates.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", updates.assignee || ""]);
@@ -1399,10 +1459,10 @@ export const update = mutation({
     }
 
     await ctx.db.patch(task._id, updates);
-    if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, args.status!, auth.userId, task);
+    if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, nextStatus!, auth.userId, task);
     // Rollup walks the EFFECTIVE parent (the new one on a reparent+start), not
     // the pre-patch parent, so the task's actual parent flips to in_progress.
-    await rollUpParentStart(ctx, { ...task, parent_id: "parent_id" in updates ? updates.parent_id : task.parent_id }, args.status);
+    await rollUpParentStart(ctx, { ...task, parent_id: "parent_id" in updates ? updates.parent_id : task.parent_id }, nextStatus);
 
     // Reparent/detach changed the task's subtask-ness: reconcile plan.task_ids
     // and progress on the plan it now belongs to (its own or its new parent's).
@@ -1411,11 +1471,11 @@ export const update = mutation({
       await reconcilePlanMembership(ctx, task._id, finalPlan, !!updates.parent_id);
     }
 
-    if (args.status && args.status !== task.status) {
+    if (nextStatus && nextStatus !== task.status) {
       if (task.plan_id) {
-        await recalcPlanProgress(ctx, task.plan_id, task._id, args.status);
+        await recalcPlanProgress(ctx, task.plan_id, task._id, nextStatus);
       }
-      await notifySubscribers(ctx, "task_status_changed", auth.userId, task as any, `changed ${task.short_id} to ${args.status}`, linkedConvId);
+      await notifySubscribers(ctx, "task_status_changed", auth.userId, task as any, `changed ${task.short_id} to ${nextStatus}`, linkedConvId);
     }
     if (args.assignee !== undefined && updates.assignee !== task.assignee) {
       const assigneeId = await resolveAssigneeToUserId(ctx, updates.assignee || "", task.team_id);
@@ -1446,6 +1506,34 @@ export const update = mutation({
     return { success: true, plan_id: planShortId };
   },
 });
+
+// Insert a comment AND bump the task row in the same mutation. task_comments
+// is not a change-feed-tracked table, so a bare insert is invisible to sync —
+// no client cache learns about it until the task's detail query happens to run.
+// Bumping updated_at stamps the change log; the feed then re-fetches the row
+// through webGetByIds, which carries comments, so every client's cached
+// activity stays fresh without opening the task.
+async function insertTaskComment(
+  ctx: any,
+  taskId: Id<"tasks">,
+  fields: {
+    author: string;
+    text: string;
+    comment_type: string;
+    conversation_id?: Id<"conversations">;
+    image_storage_ids?: string[];
+  },
+) {
+  const now = Date.now();
+  const id = await ctx.db.insert("task_comments", {
+    task_id: taskId,
+    ...fields,
+    comment_type: fields.comment_type as any,
+    created_at: now,
+  });
+  await ctx.db.patch(taskId, { updated_at: now });
+  return id;
+}
 
 export const addComment = mutation({
   args: {
@@ -1484,13 +1572,11 @@ export const addComment = mutation({
       }
     }
 
-    const id = await ctx.db.insert("task_comments", {
-      task_id: task._id,
+    const id = await insertTaskComment(ctx, task._id, {
       author: args.author || user?.name || "unknown",
       text: args.text,
       conversation_id,
-      comment_type: (args.comment_type || "note") as any,
-      created_at: Date.now(),
+      comment_type: args.comment_type || "note",
     });
 
     await subscribeUser(ctx, auth.userId, task._id, "commenter");
@@ -2057,6 +2143,16 @@ export const webGetByIds = query({
       result.push(task);
     }
     await enrichTasks(ctx, userId, result);
+    // Carry comments so the change-feed catch-up keeps each client's cached
+    // activity fresh (the store preserves the field across list deltas, which
+    // never send it). Bounded: ≤300 ids, one indexed lookup each. History is
+    // heavier (needs user enrichment) and still rides only webGetTaskDetail.
+    for (const task of result) {
+      task.comments = await ctx.db
+        .query("task_comments")
+        .withIndex("by_task_id", (q: any) => q.eq("task_id", task._id))
+        .collect();
+    }
     return { items: result };
   },
 });
@@ -2394,6 +2490,8 @@ export const webUpdate = mutation({
   args: {
     short_id: v.string(),
     status: v.optional(v.string()),
+    // Team status id refining the category; "" clears back to the default.
+    status_id: v.optional(v.string()),
     priority: v.optional(v.string()),
     title: v.optional(v.string()),
     description: v.optional(v.string()),
@@ -2407,6 +2505,10 @@ export const webUpdate = mutation({
     parent: v.optional(v.string()),
     // Close-guard resolution when closing a parent with open subtasks.
     subtask_resolution: v.optional(v.union(v.literal("cascade"), v.literal("only_parent"))),
+    // Manual list rank (fractional midpoints; see schema).
+    sort_order: v.optional(v.number()),
+    // Short id of the canonical task; empty string clears the link.
+    duplicate_of: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -2419,8 +2521,14 @@ export const webUpdate = mutation({
       .first();
     if (!task || !(await canAccessTask(ctx, userId, task))) throw new Error("Task not found");
 
+    // The category every status side effect below keys on. args.status alone
+    // is not enough: a status_id-only write still moves the category.
+    const statusWrite = await resolveStatusWrite(ctx, task.team_id, task.status, args);
+    const nextStatus = statusWrite.status;
+
     const now = Date.now();
     const updates: any = { updated_at: now };
+    if (statusWrite.statusId.set) updates.status_id = statusWrite.statusId.value;
     // Reparent through the single entry point (access, workspace, cycle,
     // depth). Same semantics as the CLI path: "" detaches.
     if (args.parent !== undefined) {
@@ -2437,7 +2545,7 @@ export const webUpdate = mutation({
         updates.parent_id = parent._id;
       }
     }
-    if (args.status) updates.status = args.status;
+    if (nextStatus) updates.status = nextStatus;
     if (args.priority) updates.priority = args.priority;
     if (args.title) updates.title = args.title;
     if (args.description !== undefined) updates.description = args.description;
@@ -2461,27 +2569,43 @@ export const webUpdate = mutation({
     }
     if (args.project_path !== undefined) updates.project_path = args.project_path || undefined;
     if (args.execution_status !== undefined) updates.execution_status = args.execution_status || undefined;
+    if (args.sort_order !== undefined) updates.sort_order = args.sort_order;
+    if (args.duplicate_of !== undefined) {
+      if (!args.duplicate_of) {
+        updates.duplicate_of = undefined;
+      } else {
+        // The canonical task must exist, be visible to this user, and not be
+        // the task itself — a dangling or self link renders as a dead chip.
+        const canonical = await ctx.db
+          .query("tasks")
+          .withIndex("by_short_id", (q) => q.eq("short_id", args.duplicate_of!))
+          .first();
+        if (!canonical || !(await canAccessTask(ctx, userId, canonical))) notFound("Canonical task not found");
+        if (canonical._id === task._id) throw new Error("A task can't duplicate itself");
+        updates.duplicate_of = args.duplicate_of;
+      }
+    }
     if (args.triage_status) {
       updates.triage_status = args.triage_status;
       if (args.triage_status === "active") updates.promoted = true;
     }
 
-    if (args.status === "done" || args.status === "dropped") {
+    if (nextStatus === "done" || nextStatus === "dropped") {
       updates.closed_at = now;
     }
-    if (args.status === "in_progress") {
+    if (nextStatus === "in_progress") {
       updates.attempt_count = (task.attempt_count || 0) + 1;
       updates.last_attempted_at = now;
     }
 
     // Close-guard: refuses done/dropped on a parent with open subtasks unless
     // resolved; returns the subtree to cascade-close. Runs before any write.
-    const cascadeIds = await guardParentClose(ctx, task, args.status, args.subtask_resolution);
+    const cascadeIds = await guardParentClose(ctx, task, nextStatus, args.subtask_resolution);
 
     const resolvedAssignee = updates.assignee || args.assignee;
     // Record history for changed fields
     const trackFields: [string, any, any][] = [];
-    if (args.status && args.status !== task.status) trackFields.push(["status", task.status, args.status]);
+    if (nextStatus && nextStatus !== task.status) trackFields.push(["status", task.status, nextStatus]);
     if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
     if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
     if (args.assignee !== undefined && resolvedAssignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", resolvedAssignee || ""]);
@@ -2503,17 +2627,17 @@ export const webUpdate = mutation({
     }
 
     await ctx.db.patch(task._id, updates);
-    if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, args.status!, userId, task);
-    await rollUpParentStart(ctx, { ...task, parent_id: "parent_id" in updates ? updates.parent_id : task.parent_id }, args.status);
+    if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, nextStatus!, userId, task);
+    await rollUpParentStart(ctx, { ...task, parent_id: "parent_id" in updates ? updates.parent_id : task.parent_id }, nextStatus);
     if (parentChanged) {
       await reconcilePlanMembership(ctx, task._id, task.plan_id as Id<"plans"> | undefined, !!updates.parent_id);
     }
 
-    if (args.status && args.status !== task.status) {
+    if (nextStatus && nextStatus !== task.status) {
       if (task.plan_id) {
-        await recalcPlanProgress(ctx, task.plan_id, task._id, args.status);
+        await recalcPlanProgress(ctx, task.plan_id, task._id, nextStatus);
       }
-      await notifySubscribers(ctx, "task_status_changed", userId, task as any, `changed ${task.short_id} to ${args.status}`);
+      await notifySubscribers(ctx, "task_status_changed", userId, task as any, `changed ${task.short_id} to ${nextStatus}`);
     }
     if (args.assignee !== undefined && resolvedAssignee !== task.assignee) {
       const assigneeUserId = resolvedAssignee === userId?.toString()
@@ -2555,13 +2679,11 @@ export const webAddComment = mutation({
 
     const user = await ctx.db.get(userId);
 
-    await ctx.db.insert("task_comments", {
-      task_id: task._id,
+    await insertTaskComment(ctx, task._id, {
       author: user?.name || "unknown",
       text: args.text,
-      comment_type: (args.comment_type || "note") as any,
+      comment_type: args.comment_type || "note",
       image_storage_ids: args.image_storage_ids,
-      created_at: Date.now(),
     });
 
     await subscribeUser(ctx, userId, task._id, "commenter");
@@ -2715,6 +2837,8 @@ export const webCreate = mutation({
     description: v.optional(v.string()),
     task_type: v.optional(v.string()),
     status: v.optional(v.string()),
+    // Team status id refining the category (kanban "add to column").
+    status_id: v.optional(v.string()),
     priority: v.optional(v.string()),
     project_id: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
@@ -2825,6 +2949,16 @@ export const webCreate = mutation({
       if (found) resolvedAssignee = found._id.toString();
     }
 
+    // Category + custom-status resolution against the resolved workspace's
+    // team. Also validates args.status (this path used to skip the assert and
+    // let a bad value surface as a raw schema error at insert).
+    const statusWrite = await resolveStatusWrite(
+      ctx,
+      db.workspace.type === "team" ? db.workspace.teamId : undefined,
+      undefined,
+      args,
+    );
+
     const now = Date.now();
     const id = await db.insert("tasks", {
       project_id,
@@ -2835,7 +2969,8 @@ export const webCreate = mutation({
       title: args.title,
       description: args.description,
       task_type: (args.task_type || "task") as any,
-      status: (args.status || "open") as any,
+      status: (statusWrite.status || "open") as any,
+      status_id: statusWrite.statusId.set ? statusWrite.statusId.value : undefined,
       priority: (args.priority || "medium") as any,
       labels: args.labels,
       assignee: resolvedAssignee,
@@ -2847,7 +2982,7 @@ export const webCreate = mutation({
 
     // A subtask created directly in progress flips its parent chain.
     if (parentDoc) {
-      await rollUpParentStart(ctx, { parent_id: parentDoc._id, user_id: userId }, args.status);
+      await rollUpParentStart(ctx, { parent_id: parentDoc._id, user_id: userId }, statusWrite.status);
     }
 
     // Subtasks carry plan_id for context but never join plan.task_ids — the
@@ -3110,6 +3245,9 @@ export const batchUpdateStatus = mutation({
       }
 
       const updates: any = { status: args.status, updated_at: now };
+      // A category change orphans any custom-status refinement (its id belongs
+      // to the old category); same rule as resolveStatusWrite.
+      if (args.status !== task.status) updates.status_id = undefined;
       if (args.status === "done" || args.status === "dropped") {
         updates.closed_at = now;
       }
