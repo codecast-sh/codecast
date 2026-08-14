@@ -116,6 +116,13 @@ export default function ProfilePage() {
             </div>
             <CommentsToggle />
           </div>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <span className="text-sol-base1">Suggested replies</span>
+              <p className="text-xs text-sol-base01 mt-0.5">Show one-tap reply suggestions above the composer when a session waits on you, predicted from the session and how you usually reply</p>
+            </div>
+            <SuggestionsToggle />
+          </div>
           <DesktopVersionRow />
           <DesktopLinksRow />
         </div>
@@ -342,6 +349,17 @@ function ModelBadgeToggle() {
     <Switch
       checked={enabled}
       onCheckedChange={(v) => updateUI({ show_model_badge: v })}
+    />
+  );
+}
+
+function SuggestionsToggle() {
+  const enabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  const updateUI = useInboxStore((s) => s.updateClientUI);
+  return (
+    <Switch
+      checked={enabled}
+      onCheckedChange={(v) => updateUI({ composer_suggestions: v })}
     />
   );
 }
