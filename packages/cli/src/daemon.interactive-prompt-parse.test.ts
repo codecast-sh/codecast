@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { parseInteractivePrompt, jsonlHasPendingAskUserQuestion } from "./daemon.js";
+import { parseInteractivePrompt, jsonlHasPendingAskUserQuestion, spendLimitDialogBanner } from "./daemon.js";
+import { classifyApiErrorBanner } from "@codecast/shared/contracts";
 
 // Regression coverage for dropped Q&A descriptions: Claude Code's AskUserQuestion
 // menu renders each option's description on indented continuation lines BELOW the
@@ -538,6 +539,11 @@ describe("parseInteractivePrompt rejects prose when the live composer is below i
   // rule — the old extraction took the topmost non-hint line of the tail and
   // shipped "singleton merge implementation:" (assistant prose above the
   // dialog) as the card's question.
+  //
+  // NOTE: this asserts the PARSE layer only. checkForInteractivePrompt
+  // intercepts this dialog before the card is emitted (spendLimitDialogBanner)
+  // and ships the canonical limit banner instead — the Continue/Cancel card
+  // must never reach the web for a billing dialog.
   test("usage-limit dialog: real confirmation with the dialog's own question", () => {
     const pane = [
       "⏺ This is bug-fix work — let me create a task to track it, then find the",
@@ -590,5 +596,64 @@ describe("parseInteractivePrompt strips fused dialog rules from the question", (
     const prompt = parseInteractivePrompt(pane);
     expect(prompt).not.toBeNull();
     expect(prompt!.question).toBe("What do you want to do?");
+  });
+});
+
+// The spend-limit interstitial writes nothing to the JSONL (2026-08-14 incident,
+// session 1e954d8e: the 1:40pm park left the transcript untouched), so this pane
+// signature is codecast's ONLY limit-park signal. The banner it produces must
+// classify as kind "limit" — that classification is what drives the blocked
+// badge, the auto-switch check, and continue-on-reset.
+describe("spendLimitDialogBanner", () => {
+  test("recognizes the live interstitial and emits a canonical limit banner", () => {
+    const pane = [
+      "⏺ Still nothing on Apple's side — dropped again.",
+      "",
+      "▔".repeat(80),
+      "   What do you want to do?                       Usage credit balance: $0.00",
+      "",
+      "   ❯ Adjust monthly spend limit: $702.77              ← or → to set a limit",
+      "     Wait for limit to reset                 Resets 2:50pm (America/New_York)",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    const banner = spendLimitDialogBanner(pane);
+    expect(banner).toBe("You've hit your monthly spend limit · Resets 2:50pm (America/New_York)");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+  });
+
+  test("no reset column still yields a limit-classified banner", () => {
+    const pane = [
+      "▔".repeat(80),
+      "   What do you want to do?",
+      "",
+      "   ❯ Adjust monthly spend limit: $702.77",
+      "     Wait for limit to reset",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    const banner = spendLimitDialogBanner(pane);
+    expect(banner).toBe("You've hit your monthly spend limit · parked at the spend limit dialog");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+  });
+
+  test("dialog text without its footer (scrollback echo) does not match", () => {
+    const pane = [
+      "⏺ Earlier the pane showed:",
+      "   ❯ Adjust monthly spend limit: $702.77",
+      "     Wait for limit to reset",
+      "",
+      "❯ ",
+    ].join("\n");
+    expect(spendLimitDialogBanner(pane)).toBeNull();
+  });
+
+  test("an unrelated confirmation dialog does not match", () => {
+    const pane = [
+      "⏺ I'm about to delete the file.",
+      "",
+      "Press Enter to continue, Esc to cancel",
+    ].join("\n");
+    expect(spendLimitDialogBanner(pane)).toBeNull();
   });
 });

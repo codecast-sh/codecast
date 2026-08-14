@@ -9,6 +9,7 @@ import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from ".
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
+import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent } from "./capabilities/heartbeat.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostname } from "./remote/device.js";
 import { readInputIdleMs } from "./inputIdle.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
@@ -96,6 +97,7 @@ import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
 import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
 import { ensureMessagingForMemory } from "./snippets.js";
+import { readInventory, toInvocableList } from "./capabilities/inventory.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import {
   isTranscriptFileInSyncScope,
@@ -1144,70 +1146,17 @@ export function mapCodexAppServerThreadStatusToAgentStatus(status: AppServerThre
   }
 }
 
+/**
+ * The `/` menu inventory: skills + commands, project over user on a name clash.
+ *
+ * Delegates to the capability scanner, which reads the same directories plus
+ * everything else a machine has (plugins, MCP, codex, cursor). The bespoke
+ * walker that lived here was the scanner's ancestor; `toInvocableList` was
+ * verified byte-identical against it on a real machine before the repoint, and
+ * keeping both meant every frontmatter quirk had to be fixed twice.
+ */
 export function readAvailableSkills(projectPath?: string): Array<{ name: string; description: string }> {
-  const skills: Array<{ name: string; description: string }> = [];
-  const seen = new Set<string>();
-  const home = process.env.HOME || "";
-  const commandDirs = [
-    path.join(home, ".claude", "commands"),
-    ...(projectPath ? [path.join(projectPath, ".claude", "commands")] : []),
-  ];
-  for (const dir of commandDirs) {
-    try {
-      if (!fs.existsSync(dir)) continue;
-      for (const file of fs.readdirSync(dir)) {
-        if (!file.endsWith(".md")) continue;
-        const name = file.replace(/\.md$/, "");
-        if (seen.has(name)) continue;
-        seen.add(name);
-        try {
-          const content = fs.readFileSync(path.join(dir, file), "utf-8");
-          const m = content.match(/^---[\s\S]*?description:\s*(.+?)[\r\n]/m);
-          skills.push({ name, description: m?.[1]?.trim() || "" });
-        } catch {}
-      }
-    } catch {}
-  }
-  const skillDirs = [
-    path.join(home, ".claude", "skills"),
-    ...(projectPath ? [path.join(projectPath, ".claude", "skills")] : []),
-  ];
-  for (const dir of skillDirs) {
-    try {
-      if (!fs.existsSync(dir)) continue;
-      for (const entry of fs.readdirSync(dir)) {
-        const entryPath = path.join(dir, entry);
-        let content = "";
-        try {
-          if (fs.statSync(entryPath).isDirectory()) {
-            // CC's convention is an uppercase SKILL.md, but a case-insensitive
-            // macOS FS lets a lowercase skill.md work locally and then vanish on
-            // a case-sensitive volume (e.g. the remote Mac). Match either casing
-            // so a skill surfaces regardless of how its manifest file is cased.
-            const manifest = fs.readdirSync(entryPath).find((f) => /^skill\.md$/i.test(f));
-            if (!manifest) continue;
-            content = fs.readFileSync(path.join(entryPath, manifest), "utf-8");
-          } else if (entry.endsWith(".md")) {
-            content = fs.readFileSync(entryPath, "utf-8");
-          } else continue;
-        } catch { continue; }
-        const nameMatch = content.match(/^---[\s\S]*?name:\s*(.+?)[\r\n]/m);
-        const descMatch = content.match(/^---[\s\S]*?description:\s*(.+?)[\r\n]/m);
-        // Claude Code shows skills in the `/` menu BY DEFAULT; a skill opts out
-        // only by setting `user-invocable: false` in frontmatter (CC's real field
-        // is hyphenated — tolerate the underscore spelling too). Mirror that
-        // default rather than requiring an opt-in flag, so a normal project skill
-        // like mac-remote (name + description only) surfaces just as it does in
-        // the CLI instead of being silently filtered out of the compose box.
-        const hiddenFromMenu = /^---[\s\S]*?user[-_]invocable:\s*false\b/im.test(content);
-        const name = nameMatch?.[1]?.trim() || entry.replace(/\.md$/, "");
-        if (hiddenFromMenu || seen.has(name)) continue;
-        seen.add(name);
-        skills.push({ name, description: descMatch?.[1]?.trim() || "" });
-      }
-    } catch {}
-  }
-  return skills;
+  return toInvocableList(readInventory(process.env.HOME || "", projectPath));
 }
 
 function syncSkillsForConversation(conversationId: string, projectPath: string | undefined, syncService: SyncService): void {
@@ -2193,6 +2142,10 @@ async function sendHeartbeat(): Promise<void> {
   // fresh set rides a beat only until the server acks it (hash-gated).
   ensureModelInventoryFresh();
   const modelInventory = pendingModelInventoryPayload();
+  // Capability inventory (skills/plugins/MCP): same ride — background scan,
+  // hash-gated, with an hourly liveness floor. See capabilities/heartbeat.ts.
+  ensureCapabilityInventoryFresh();
+  const capabilityPayload = pendingCapabilityPayload();
 
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -2249,6 +2202,7 @@ async function sendHeartbeat(): Promise<void> {
         // Live model inventory for dynamic clients (opencode/pi), hash-gated so
         // the ~10KB list rides a beat only when it actually changed.
         model_inventory: modelInventory,
+        capability_state: capabilityPayload,
         ...syncHealthFields(),
       }),
     });
@@ -2259,6 +2213,7 @@ async function sendHeartbeat(): Promise<void> {
       return;
     }
     if (modelInventory) markModelInventorySent(modelInventory.hash);
+    if (capabilityPayload) markCapabilityPayloadSent(capabilityPayload.hash);
 
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
@@ -4025,6 +3980,62 @@ async function executeRemoteCommand(
             log(`[REPARENT] ${sessionId.slice(0, 8)} resuming in ${reparentCheckout.cloned ? "fresh clone" : "existing checkout"} ${reparentCheckout.path}${reparentCheckout.branch ? ` on branch ${reparentCheckout.branch}` : ""}`);
           }
         }
+        if (resumeAgentType === "codex" && (parsed.fork === true || forceReconstitute) && conversationId) {
+          try {
+            const activeCodexAppServer = codexAppServerInstance?.running ? codexAppServerInstance : null;
+            if (!activeCodexAppServer) {
+              throw new Error("Codex app-server is unavailable; cannot import fork history");
+            }
+            const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
+            const recordedCwd = projectPath || exportData.conversation.project_path || exportData.conversation.git_root || undefined;
+            const cwd = await resolveResumeCwdOrRefuse({ recordedCwd, cwdOverride: recordedCwd, conversationId });
+            if (!cwd) {
+              await refuseResumeNoLocalCheckout(sessionId, conversationId, recordedCwd || "unknown project");
+              result = JSON.stringify({ forked: false, reason: "no_local_checkout" });
+              break;
+            }
+            const { jsonl, sessionId: importSessionId } = generateCodexJsonl(exportData, { sessionId });
+            const { filePath: importPath } = writeCodexSession(jsonl, importSessionId, "codecast-fork");
+            setPosition(importPath, fs.statSync(importPath).size);
+            const approvalPolicy = resolveCodexApprovalPolicy(config);
+            const forked = await activeCodexAppServer.threadFork({
+              threadId: "",
+              path: importPath,
+              cwd,
+              approvalPolicy,
+              sandbox: approvalPolicy === "never" ? "danger-full-access" : "workspace-write",
+            });
+            const realThreadId = forked.thread.id;
+            remapConversationSession(sessionId, realThreadId, conversationId);
+            registerAppServerConversation(conversationId, realThreadId, {
+              cwd,
+              persist: true,
+              approvalPolicy,
+            });
+            if (forked.thread.path && fs.existsSync(forked.thread.path)) {
+              setPosition(forked.thread.path, fs.statSync(forked.thread.path).size);
+            }
+            const forkGitInfo = getGitInfo(cwd);
+            await syncServiceRef?.updateSessionId(conversationId, realThreadId, cwd, forkGitInfo?.repoRoot || forkGitInfo?.root);
+            syncServiceRef?.claimSession(conversationId).catch(logConvexFailure);
+            syncServiceRef?.markSessionActive(conversationId).catch(logConvexFailure);
+            syncServiceRef?.registerManagedSession(realThreadId, process.pid, undefined, conversationId).catch(logConvexFailure);
+            syncServiceRef?.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
+            ensureManagedSessionHeartbeat(realThreadId);
+            conversationResumeFailures.delete(conversationId);
+            await clearConversationDeliveryAndResumeState(conversationId, sessionId, "codex_app_server_fork");
+            result = JSON.stringify({ forked: true, session_id: realThreadId, transport: "app-server" });
+            log(`[REMOTE] Codex fork ${sessionId.slice(0, 8)} imported as app-server thread ${realThreadId.slice(0, 8)} for conv ${conversationId.slice(0, 12)}`);
+          } catch (forkErr) {
+            const message = forkErr instanceof Error ? forkErr.message : String(forkErr);
+            logError(`[REMOTE] Codex app-server fork import failed for ${sessionId.slice(0, 8)}`, forkErr instanceof Error ? forkErr : new Error(message));
+            error = `Codex history import failed: ${message}`;
+            syncServiceRef?.setSessionError(conversationId, error).catch(logConvexFailure);
+          } finally {
+            restartingSessionIds.delete(sessionId);
+          }
+          break;
+        }
         let resumed = false;
         if (forceReconstitute) {
           log(`[REMOTE] Force-reconstituting session ${sessionId.slice(0, 8)} from DB${projectPath ? ` in ${projectPath}` : ""}`);
@@ -4092,7 +4103,7 @@ async function executeRemoteCommand(
                 let reconFilePath: string;
                 if (reconAgent === "codex") {
                   ({ jsonl: reconJsonl, sessionId: newSessionId } = generateCodexJsonl(exportData, { sessionId }));
-                  reconFilePath = writeCodexSession(reconJsonl, newSessionId);
+                  ({ filePath: reconFilePath } = writeCodexSession(reconJsonl, newSessionId));
                 } else {
                   const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
                   const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
@@ -4284,11 +4295,13 @@ async function executeRemoteCommand(
         const home = process.env.HOME || "";
         const allowed = [path.join(home, ".claude"), path.join(home, ".codex")];
         const resolved = path.resolve(readPath);
+        // Suffix arms stay (config_list advertises project files for viewing);
+        // the includes() arms are gone — '/anything/.claude/x' matched another
+        // user's home on a shared box, same hole the write fence closed.
         const isAllowed = allowed.some((a) => resolved.startsWith(a + path.sep) || resolved === a) ||
           readPath.endsWith("/CLAUDE.md") || readPath.endsWith("/AGENTS.md") ||
           readPath.endsWith("/.mcp.json") || readPath.endsWith("/settings.json") ||
-          readPath.endsWith("/settings.local.json") || readPath.endsWith("/config.toml") ||
-          readPath.includes("/.claude/") || readPath.includes("/.codex/");
+          readPath.endsWith("/settings.local.json") || readPath.endsWith("/config.toml");
         if (!isAllowed) {
           error = "Path not allowed";
           break;
@@ -4307,22 +4320,72 @@ async function executeRemoteCommand(
           error = "Missing file_path or content";
           break;
         }
+        // The old predicate accepted any path merely CONTAINING '/.claude/' or
+        // ENDING in settings.json — which matches another user's home on a
+        // shared box and any settings.json anywhere on disk. The fence now:
+        //   1. this user's ~/.claude and ~/.codex subtrees, canonically resolved
+        //      (realpath, so a symlink cannot walk the write out of the tree);
+        //   2. the small set of agent config basenames inside a project root
+        //      this daemon actually tracks — kept because config_list advertises
+        //      project CLAUDE.md/.mcp.json for editing, and a fence that breaks
+        //      the feature it guards just gets widened again later;
+        //   3. nothing else.
         const home = process.env.HOME || "";
-        const allowed = [path.join(home, ".claude"), path.join(home, ".codex")];
         const resolved = path.resolve(writePath);
-        const isAllowed = allowed.some((a) => resolved.startsWith(a + path.sep)) ||
-          writePath.endsWith("/CLAUDE.md") || writePath.endsWith("/AGENTS.md") ||
-          writePath.endsWith("/.mcp.json") || writePath.endsWith("/settings.json") ||
-          writePath.endsWith("/settings.local.json") || writePath.endsWith("/config.toml") ||
-          writePath.includes("/.claude/") || writePath.includes("/.codex/");
-        if (!isAllowed) {
+        const dirReal = (() => {
+          try {
+            return fs.realpathSync(path.dirname(resolved));
+          } catch {
+            // Parent does not exist yet. Resolve the nearest existing ancestor
+            // so a symlinked segment cannot smuggle the write elsewhere.
+            let probe = path.dirname(resolved);
+            const tail: string[] = [];
+            while (!fs.existsSync(probe)) {
+              tail.unshift(path.basename(probe));
+              const up = path.dirname(probe);
+              if (up === probe) return null;
+              probe = up;
+            }
+            try {
+              return path.join(fs.realpathSync(probe), ...tail);
+            } catch {
+              return null;
+            }
+          }
+        })();
+        if (!dirReal) {
           error = "Path not allowed";
           break;
         }
-        fs.mkdirSync(path.dirname(resolved), { recursive: true });
-        fs.writeFileSync(resolved, writeContent, "utf-8");
+        const realTarget = path.join(dirReal, path.basename(resolved));
+        const underOwnConfig = [path.join(home, ".claude"), path.join(home, ".codex")]
+          .some((a) => realTarget === a || realTarget.startsWith(a + path.sep));
+        const AGENT_CONFIG_BASENAMES = new Set([
+          "CLAUDE.md", "AGENTS.md", ".mcp.json", "settings.json", "settings.local.json", "config.toml",
+        ]);
+        const underTrackedProject =
+          AGENT_CONFIG_BASENAMES.has(path.basename(realTarget)) &&
+          computeLocalProjectRoots().some((root) => realTarget.startsWith(root + path.sep));
+        if (!underOwnConfig && !underTrackedProject) {
+          error = "Path not allowed";
+          break;
+        }
+        // A file the capability materializer owns keys for is written through
+        // its ledger, never over it: a raw whole-file write here would clobber
+        // owned keys and orphan the ledger, voiding the ownership argument the
+        // materializer rests on. The caller can pass override_owned after
+        // showing the user the conflict.
+        const { readLedger } = await import("./capabilities/ownedJson.js");
+        const parsedArgs = commandArgs ? JSON.parse(commandArgs) : {};
+        if (Object.keys(readLedger(realTarget)).length > 0 && !parsedArgs.override_owned) {
+          error = "File carries capability-managed keys; pass override_owned to replace it wholesale";
+          break;
+        }
+        fs.mkdirSync(path.dirname(realTarget), { recursive: true });
+        const { atomicWriteFile } = await import("./atomicWrite.js");
+        atomicWriteFile(realTarget, writeContent);
         result = JSON.stringify({ success: true });
-        log(`[CONFIG] Wrote ${resolved}`);
+        log(`[CONFIG] Wrote ${realTarget}`);
         break;
       }
       case "config_create": {
@@ -8875,6 +8938,28 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   return null;
 }
 
+// Claude Code's spend-limit interstitial — "What do you want to do?" over the
+// unnumbered "Adjust monthly spend limit" / "Wait for limit to reset" rows — is
+// TUI-only: unlike the one-line limit banners, it writes NO isApiErrorMessage
+// entry to the JSONL (verified 2026-08-14: a 1:40pm park left the transcript
+// untouched), so the pane scrape is the only place the park is visible. Shipping
+// the generic Continue/Cancel confirmation card for it is worse than nothing:
+// the card's "Continue" sends Enter, and Enter here CONFIRMS the highlighted
+// billing option (the near-miss documented on the 2026-07-13 paywall incident).
+// Instead the daemon emits the canonical limit banner text this function
+// returns — classifyApiErrorBanner reads it as kind "limit", which is the same
+// path a CLI-written banner takes: pending_api_error_kind="limit", the blocked
+// badge, the auto-switch check, and continue-on-reset all follow from it.
+export function spendLimitDialogBanner(paneContent: string): string | null {
+  const tail = paneContent.split("\n").slice(-20).join("\n");
+  if (!/Adjust monthly spend limit/i.test(tail) || !/Wait for limit to reset/i.test(tail)) return null;
+  // A live dialog carries its key-hint footer in the same tail; a scrollback
+  // echo of the dialog text (e.g. quoted in prose) doesn't.
+  if (!/enter to confirm/i.test(tail)) return null;
+  const resets = tail.match(/\b(Resets [^\n]+?)(?:\s{3,}|\s*$)/im)?.[1]?.trim();
+  return `You've hit your monthly spend limit · ${resets ?? "parked at the spend limit dialog"}`;
+}
+
 // Claude Code renders each assistant message with a leading bullet ("⏺" on current
 // builds, "●" on older ones) and indents its continuation lines two spaces. A turn
 // that ends in AskUserQuestion is buffered out of the JSONL until answered, so while
@@ -9113,6 +9198,32 @@ async function checkForInteractivePrompt(
     }
 
     log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options (confirmation=${!!prompt.isConfirmation})`);
+
+    // The spend-limit interstitial is a limit park, not a question: emit the
+    // canonical limit banner (see spendLimitDialogBanner) instead of a scraped
+    // card whose "Continue" would confirm a billing action. The banner message
+    // is what stamps pending_api_error_kind="limit" server-side, so the blocked
+    // badge and the auto-switch check fire exactly as for a CLI-written banner.
+    if (prompt.isConfirmation) {
+      const limitBanner = spendLimitDialogBanner(paneContent);
+      if (limitBanner) {
+        const now = Date.now();
+        const digest = createHash("sha256").update(limitBanner).digest("hex").slice(0, 12);
+        // Hour-bucketed uuid: the same park re-detected upserts one row, while a
+        // fresh park later (after resumed turns superseded the first banner)
+        // still re-emits instead of being swallowed by the re-emit guard.
+        const bannerUuid = `limit-dialog-${sessionId}-${digest}-${Math.floor(now / 3_600_000)}`;
+        if (lastEmittedSyntheticPrompt.get(sessionId) === bannerUuid) return;
+        pendingInteractivePrompts.set(sessionId, { timestamp: now, options: prompt.options, isConfirmation: true });
+        await syncService.addMessages({
+          conversationId,
+          messages: [{ messageUuid: bannerUuid, role: "assistant" as const, content: limitBanner, timestamp: now }],
+        });
+        lastEmittedSyntheticPrompt.set(sessionId, bannerUuid);
+        log(`Spend-limit dialog parked ${sessionId.slice(0, 8)} — emitted limit banner instead of a scraped card`);
+        return;
+      }
+    }
 
     // If this live menu is a real AskUserQuestion tool call, its tool_use is already
     // in the JSONL and the file watcher syncs it as a full-fidelity card. Emitting a
@@ -14080,7 +14191,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         ? cwdOverride
         : localSessionDir(data.conversation.project_path || undefined);
       const result = reconAgentType === "codex"
-        ? { sessionId: reconId, filePath: writeCodexSession(jsonl, reconId) }
+        ? writeCodexSession(jsonl, reconId)
         : writeClaudeCodeSession(jsonl, reconId, reconDir);
       logDelivery(`Reconstituted ${sessionId.slice(0, 8)} (${data.messages.length} msgs)`);
       if (conversationId && reconId !== sessionId) {
@@ -17734,31 +17845,115 @@ async function main(): Promise<void> {
           last_tool_name: e.lastToolName,
           last_tool_summary: e.lastToolSummary,
         }));
-      const siteUrl = (config.convex_url || "").replace(".cloud", ".site");
-      const token = config.auth_token;
-      if (!siteUrl || !token) return;
-      const resp = await fetch(`${siteUrl}/cli/workflow-runs/ingest`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_token: token,
-          external_run_id: runId,
-          session_id: sessionId,
-          project_path: projectPath,
-          workflow_name: snap.workflowName || "workflow",
-          status: snap.status || "running",
-          phases: snap.phases || [],
-          agents,
-          total_tokens: snap.totalTokens,
-          agent_count: snap.agentCount ?? agents.length,
-          started_at: snap.startTime,
-        }),
+      await postWorkflowRunIngest({
+        external_run_id: runId,
+        session_id: sessionId,
+        project_path: projectPath,
+        workflow_name: snap.workflowName || "workflow",
+        status: snap.status || "running",
+        phases: snap.phases || [],
+        agents,
+        total_tokens: snap.totalTokens,
+        agent_count: snap.agentCount ?? agents.length,
+        started_at: snap.startTime,
       });
-      const respText = await resp.text().catch(() => "");
-      const ok = resp.ok && !respText.includes('"error"');
-      log(`Workflow snapshot ${ok ? "synced" : `FAILED(${resp.status}) ${respText.slice(0, 120)}`}: ${runId} (${agents.length} agents, ${snap.status || "running"})`);
     } catch (err) {
       logError(`processWorkflowSnapshot failed for ${runId}`, err as Error);
+    }
+  }
+
+  // Shared /cli ingest channel for both snapshot shapes (completion file and
+  // the journal-derived live model below).
+  async function postWorkflowRunIngest(payload: {
+    external_run_id: string;
+    session_id: string;
+    project_path?: string;
+    workflow_name: string;
+    status: string;
+    phases: Array<{ title: string; detail?: string }>;
+    agents: Array<Record<string, unknown>>;
+    total_tokens?: number;
+    agent_count?: number;
+    started_at?: number;
+  }): Promise<void> {
+    const siteUrl = (config.convex_url || "").replace(".cloud", ".site");
+    const token = config.auth_token;
+    if (!siteUrl || !token) return;
+    const resp = await fetch(`${siteUrl}/cli/workflow-runs/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: token, ...payload }),
+    });
+    const respText = await resp.text().catch(() => "");
+    const ok = resp.ok && !respText.includes('"error"');
+    log(`Workflow snapshot ${ok ? "synced" : `FAILED(${resp.status}) ${respText.slice(0, 120)}`}: ${payload.external_run_id} (${payload.agents.length} agents, ${payload.status})`);
+  }
+
+  // A dynamic-workflow run writes its materialized snapshot (workflows/wf_<id>.json)
+  // only when it COMPLETES. While it runs, the only on-disk record is under
+  // subagents/workflows/<runId>/ — the agent transcripts plus a journal of
+  // started/result entries per agentId. Without a mid-run ingest the run row is
+  // born already-completed, so no surface can ever say a workflow is RUNNING —
+  // the "session looks idle while 19 agents work" hole (jx70xxy, ct-43094).
+  // Derive a running model from the journal whenever an agent transcript under
+  // the run dir changes, debounced per run; the completion snapshot later
+  // overwrites it with the full model (tokens, previews, phases).
+  const liveWorkflowIngestAt = new Map<string, number>();
+  const LIVE_WORKFLOW_INGEST_INTERVAL_MS = 30_000;
+
+  function liveWorkflowRunFromPath(filePath: string): { runDir: string; runId: string; hostSessionId: string } | undefined {
+    const parts = filePath.split(path.sep);
+    // .../<hostSession>/subagents/workflows/<wf_runId>/agent-<id>.jsonl
+    if (parts.length < 5) return undefined;
+    const [hostSessionId, subagents, workflows, runId, file] = parts.slice(-5);
+    if (subagents !== "subagents" || workflows !== "workflows" || !runId.startsWith("wf_")) return undefined;
+    if (!file.startsWith("agent-") || !file.endsWith(".jsonl")) return undefined;
+    return { runDir: path.dirname(filePath), runId, hostSessionId };
+  }
+
+  async function ingestLiveWorkflowRun(runDir: string, runId: string, hostSessionId: string, projectPath: string): Promise<void> {
+    const now = Date.now();
+    if (now - (liveWorkflowIngestAt.get(runId) ?? 0) < LIVE_WORKFLOW_INGEST_INTERVAL_MS) return;
+    liveWorkflowIngestAt.set(runId, now);
+    try {
+      const hostDir = path.resolve(runDir, "..", "..", "..");
+      // Once the completion snapshot exists it is the authoritative model —
+      // never re-assert "running" over it.
+      if (fs.existsSync(path.join(hostDir, "workflows", `${runId}.json`))) return;
+      // Journal: "started"/"result" per agentId, in order. started-without-result = running.
+      const startedOrder: string[] = [];
+      const started = new Set<string>();
+      const done = new Set<string>();
+      for (const line of fs.readFileSync(path.join(runDir, "journal.jsonl"), "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const e = JSON.parse(line) as { type?: string; agentId?: string };
+          if (!e.agentId) continue;
+          if (e.type === "started" && !started.has(e.agentId)) { started.add(e.agentId); startedOrder.push(e.agentId); }
+          else if (e.type === "result") done.add(e.agentId);
+        } catch {}
+      }
+      if (startedOrder.length === 0) return;
+      const agents = startedOrder.map((id) => ({ agent_id: id, state: done.has(id) ? "done" : "running" }));
+      // The script file is named <workflowName>-<runId>.js — the only mid-run
+      // source of the run's human name.
+      let workflowName = "workflow";
+      try {
+        const hit = fs.readdirSync(path.join(hostDir, "workflows", "scripts")).find((f) => f.endsWith(`-${runId}.js`));
+        if (hit) workflowName = hit.slice(0, -`-${runId}.js`.length);
+      } catch {}
+      await postWorkflowRunIngest({
+        external_run_id: runId,
+        session_id: hostSessionId,
+        project_path: projectPath,
+        workflow_name: workflowName,
+        status: "running",
+        phases: [],
+        agents,
+        agent_count: agents.length,
+      });
+    } catch (err) {
+      logError(`ingestLiveWorkflowRun failed for ${runId}`, err as Error);
     }
   }
 
@@ -17809,6 +18004,13 @@ async function main(): Promise<void> {
       void processWorkflowSnapshot(filePath, event.sessionId, event.workflowRunId, projectPath);
       return;
     }
+
+    // Mid-run signal for a dynamic workflow: an agent transcript under
+    // subagents/workflows/<runId>/ changed while no completion snapshot exists
+    // yet. Ingest the journal-derived running model, then fall through — the
+    // transcript itself still syncs as a subagent conversation.
+    const liveWf = liveWorkflowRunFromPath(filePath);
+    if (liveWf) void ingestLiveWorkflowRun(liveWf.runDir, liveWf.runId, liveWf.hostSessionId, projectPath);
 
     // Dedup duplicate-UUID transcripts: skip a resume-copy artifact whose
     // resolved project dir doesn't exist locally when another already-watched
