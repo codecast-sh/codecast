@@ -139,12 +139,28 @@ export type ViewContext = {
    *  whether reaction state is even loaded. */
   reactionsFor?: (messageId: string) => ChatReaction[] | undefined;
   rollups?: Map<string, ThreadRollup>;
+  /** The server's per-root rollups (a derived snapshot). Merged per root by
+   *  recency: local rows include the optimistic reply typed a moment ago, the
+   *  snapshot covers threads this client never opened — whichever saw the
+   *  thread LAST is the one telling the truth right now. */
+  summaries?: Record<string, {
+    reply_count: number;
+    last_reply_at: number;
+    reply_user_ids: string[];
+    agent_status?: "thinking" | "streaming" | "error";
+  }>;
   /** "sent" | "pending" | "failed" for a row — store/chatSlice's chatSendState. */
   sendState?: (row: ChatMessageRow) => "sent" | "pending" | "failed";
 };
 
 export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessageView {
-  const rollup = ctx.rollups?.get(row._id);
+  const local = ctx.rollups?.get(row._id);
+  const summary = ctx.summaries?.[row._id];
+  // Whichever source saw the thread last wins the affordance.
+  const useSummary = !!summary && (!local || summary.last_reply_at > local.lastReplyAt);
+  const replyCount = useSummary ? summary!.reply_count : local?.replyCount;
+  const lastReplyAt = useSummary ? summary!.last_reply_at : local?.lastReplyAt;
+  const faceIds = useSummary ? summary!.reply_user_ids : local?.faces;
   const state = ctx.sendState?.(row) ?? "sent";
   const reactions = ctx.reactionsFor?.(row._id);
   return {
@@ -157,12 +173,13 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
     mentionsMe: mentionsViewer(row, ctx.viewerId),
     reactions: reactions && reactions.length > 0 ? reactions : undefined,
     agentStatus: row.agent_status,
-    replyCount: rollup?.replyCount,
-    lastReplyAt: rollup?.lastReplyAt || undefined,
-    replyFaces: rollup?.faces.slice(0, 4).map((id) => {
+    replyCount: replyCount || undefined,
+    lastReplyAt: lastReplyAt || undefined,
+    replyFaces: faceIds?.slice(0, 4).map((id) => {
       const a = authorFor(id, undefined, ctx.members);
       return { id: a.id, name: a.name, avatarUrl: a.avatarUrl, isAgent: a.isAgent };
     }),
+    threadAgentStatus: useSummary ? summary!.agent_status : undefined,
     pending: state === "pending",
     failed: state === "failed",
   };

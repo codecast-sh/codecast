@@ -967,6 +967,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.tasks.webUpdate, {
       short_id: shortId,
       status: fields.status,
+      status_id: fields.status_id,
       priority: fields.priority,
       title: fields.title,
       description: fields.description,
@@ -977,6 +978,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       project_id: fields.project_id,
       project_path: fields.project_path,
       parent: fields.parent,
+      sort_order: fields.sort_order,
+      duplicate_of: fields.duplicate_of,
       subtask_resolution:
         fields.subtask_resolution === "cascade" || fields.subtask_resolution === "only_parent"
           ? fields.subtask_resolution
@@ -996,6 +999,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       description: opts.description,
       task_type: opts.task_type,
       status: opts.status,
+      status_id: opts.status_id,
       priority: opts.priority,
       project_id: opts.project_id,
       labels: opts.labels,
@@ -1073,6 +1077,19 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   updateProject: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
     await (ctx as any).runMutation(api.projects.webUpdate, { id, ...fields });
+  },
+
+  // Saved views. Creates carry a client_key so a retry returns the same row
+  // rather than a second copy of the view (savedViews.webCreate is idempotent
+  // on that key), and the optimistic stub supersedes onto it.
+  createSavedView: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.savedViews.webCreate, opts);
+  },
+  updateSavedView: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    await (ctx as any).runMutation(api.savedViews.webUpdate, { id, ...fields });
+  },
+  deleteSavedView: async (ctx, userId, [id]: [string]) => {
+    await (ctx as any).runMutation(api.savedViews.webDelete, { id });
   },
 
   linkEntityConversation: async (ctx, userId, [opts]: [any]) => {
@@ -1183,6 +1200,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       content: string;
       messageId?: string;
       parentCommentId?: string;
+      filePath?: string;
+      lineNumber?: number;
       clientId: string;
       commandId?: string;
     }>(result);
@@ -1196,6 +1215,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       content: r.content,
       message_id: r.messageId ? (r.messageId as Id<"messages">) : undefined,
       parent_comment_id: r.parentCommentId ? (r.parentCommentId as Id<"comments">) : undefined,
+      file_path: r.filePath || undefined,
+      line_number: typeof r.lineNumber === "number" ? r.lineNumber : undefined,
       client_id: r.clientId,
     });
   },
@@ -1269,10 +1290,31 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       comment_id: r.commentId as Id<"comments">,
     });
   },
+  // Thread resolution is idempotent (stamp/clear the same fields), so the
+  // plain optimistic-action path is enough — no receipt machinery needed.
+  resolveCommentThread: async (
+    ctx,
+    _userId,
+    [conversationId, anchor, resolved]: [string, { messageId?: string; filePath?: string; lineNumber?: number } | undefined, boolean],
+  ) => {
+    if (!isServerId(conversationId)) return;
+    return ctx.runMutation!(api.comments.resolveThread, {
+      conversation_id: conversationId as Id<"conversations">,
+      message_id: anchor?.messageId && isServerId(anchor.messageId)
+        ? (anchor.messageId as Id<"messages">)
+        : undefined,
+      file_path: anchor?.filePath || undefined,
+      line_number: typeof anchor?.lineNumber === "number" ? anchor.lineNumber : undefined,
+      resolved: !!resolved,
+    });
+  },
+
   askAgentInThread: async (ctx, _userId, _args, result) => {
     const r = receiptLocalResult<{
       conversationId: string;
       messageId?: string;
+      filePath?: string;
+      lineNumber?: number;
       clientId: string;
       commandId?: string;
     }>(result);
@@ -1284,6 +1326,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ),
       conversation_id: r.conversationId as Id<"conversations">,
       message_id: r.messageId ? (r.messageId as Id<"messages">) : undefined,
+      file_path: r.filePath || undefined,
+      line_number: typeof r.lineNumber === "number" ? r.lineNumber : undefined,
       client_id: r.clientId,
     });
   },
@@ -1480,6 +1524,29 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return await ctx.runMutation!(api.chat.setNotifyLevel, {
       channel_id: channelId as Id<"chat_channels">,
       notify_level: level,
+    });
+  },
+  updateChatChannel: async (
+    ctx,
+    _userId,
+    [channelId, fields]: [string, { name?: string; topic?: string }],
+  ) => {
+    if (!isServerId(channelId)) return;
+    return await ctx.runMutation!(api.chat.updateChannel, {
+      channel_id: channelId as Id<"chat_channels">,
+      ...(fields?.name !== undefined ? { name: fields.name } : {}),
+      ...(fields?.topic !== undefined ? { topic: fields.topic } : {}),
+    });
+  },
+  archiveChatChannel: async (
+    ctx,
+    _userId,
+    [channelId, archived]: [string, boolean],
+  ) => {
+    if (!isServerId(channelId)) return;
+    return await ctx.runMutation!(api.chat.archiveChannel, {
+      channel_id: channelId as Id<"chat_channels">,
+      archived: !!archived,
     });
   },
   // Idempotent on client_id, so a replayed create returns the same channel

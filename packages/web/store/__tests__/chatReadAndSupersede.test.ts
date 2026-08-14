@@ -5,6 +5,7 @@ import {
   selectChatReactions,
   selectChannelReadMarker,
 } from "../inboxStore";
+import { toMessageView, threadRollups } from "../../lib/chatViews";
 import { _resetChatRailMemo } from "../chatSlice";
 import { foldReactions } from "../../lib/chatViews";
 
@@ -306,5 +307,80 @@ describe("chat: reads, supersede and the rail's numbers", () => {
       ["🎉", 2, true],
       ["🚀", 1, false],
     ]);
+  });
+});
+
+describe("the rail is scoped to the active team", () => {
+  it("channels cached from another team stay out of the rail", () => {
+    useInboxStore.getState().syncTable("chatChannels", [
+      { _id: "chanteamA1234567890123456789012a", name: "ours", team_id: "teamA", created_at: 1, updated_at: 1 },
+      { _id: "chanteamB1234567890123456789012b", name: "theirs", team_id: "teamB", created_at: 1, updated_at: 1 },
+    ], { isDelta: true });
+    _resetChatRailMemo();
+    const names = selectChatRail(chatState(), ME, "teamA").map((c) => c.name);
+    expect(names).toContain("ours");
+    expect(names).not.toContain("theirs");
+  });
+});
+
+describe("thread affordances from server summaries", () => {
+  const CHAN = "chansumm123456789012345678901234";
+  const ROOT = "rootsumm123456789012345678901234";
+
+  it("a thread this client never opened still shows its rollup", () => {
+    useInboxStore.getState().syncTable("chatChannels", [
+      { _id: CHAN, name: "general", team_id: "teamA", created_at: 1, updated_at: 1 },
+    ], { isDelta: true });
+    useInboxStore.getState().syncTable("chatMessages", [
+      { _id: ROOT, channel_id: CHAN, user_id: "them", content: "root", created_at: 100, updated_at: 100 },
+    ], { isDelta: true });
+    // The server's summary — no local reply rows exist at all.
+    useInboxStore.getState().syncTable("chatThreadSummaries", [
+      { _id: ROOT, root_id: ROOT, reply_count: 5, last_reply_at: 500, reply_user_ids: ["bot1"], agent_status: "thinking" },
+    ]);
+
+    const view = toMessageView(
+      useInboxStore.getState().chatMessages[ROOT] as any,
+      {
+        members: new Map(),
+        viewerId: "me",
+        rollups: threadRollups(Object.values(useInboxStore.getState().chatMessages)),
+        summaries: useInboxStore.getState().chatThreadSummaries as any,
+      },
+    );
+    expect(view.replyCount).toBe(5);
+    expect(view.threadAgentStatus).toBe("thinking");
+  });
+
+  it("local rows win once they are FRESHER — the optimistic reply bumps instantly", () => {
+    useInboxStore.getState().syncTable("chatMessages", [
+      { _id: "replyfresh1234567890123456789012", channel_id: CHAN, thread_root_id: ROOT, user_id: "me", content: "new", created_at: 900, updated_at: 900 },
+    ], { isDelta: true });
+    const view = toMessageView(
+      useInboxStore.getState().chatMessages[ROOT] as any,
+      {
+        members: new Map(),
+        viewerId: "me",
+        rollups: threadRollups(Object.values(useInboxStore.getState().chatMessages)),
+        summaries: useInboxStore.getState().chatThreadSummaries as any,
+      },
+    );
+    // The local row (at 900) postdates the summary (at 500): local truth wins,
+    // even though it holds fewer rows than the server counted.
+    expect(view.replyCount).toBe(1);
+    expect(view.lastReplyAt).toBe(900);
+    expect(view.threadAgentStatus).toBeUndefined();
+  });
+});
+
+describe("the workspace law (lib/workspaceScope) applies to chat", () => {
+  it("the personal workspace shows NO channels — they are all team-tagged", () => {
+    useInboxStore.getState().syncTable("chatChannels", [
+      { _id: "chanpersonal12345678901234567890", name: "ours", team_id: "teamA", created_at: 1, updated_at: 1 },
+    ], { isDelta: true });
+    _resetChatRailMemo();
+    // undefined teamId IS the personal workspace, same as tasks/docs/plans.
+    const names = selectChatRail(chatState(), ME, undefined).map((c) => c.name);
+    expect(names).not.toContain("ours");
   });
 });

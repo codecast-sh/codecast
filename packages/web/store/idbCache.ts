@@ -232,6 +232,14 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
         const deletes: string[] = [];
         for (const id of rawDeletes) {
           if (pending[`${key}:${id}`]?.type === "exclude") deletes.push(id);
+          // A stub (non-Convex id) is client-minted: no server window or paused
+          // hydration can explain its absence, so a stub leaving the store is
+          // always an intentional local removal — the altKey supersede or a
+          // create rollback. Protecting stubs here is what kept every sent
+          // message's stub on disk forever; boot hydration then resurrected it
+          // NEXT TO its server twin, and the transcript rendered each of your
+          // own messages twice until the next live delivery collapsed them.
+          else if (!isConvexId(String(id))) deletes.push(id);
           else if (prevShadow?.has(id)) next.set(id, prevShadow.get(id));
         }
         lastPersisted.set(key, next);

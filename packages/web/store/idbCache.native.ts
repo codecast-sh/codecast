@@ -22,6 +22,7 @@ import {
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection } from "./idbCollectionDiff";
+import { isConvexId } from "../lib/entityLinks";
 
 let Storage: any = null;
 try {
@@ -104,6 +105,12 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
         const kept: any[] = [];
         for (const id of rawDeletes) {
           if (pending[`${key}:${id}`]?.type === "exclude") continue; // intentional → drop
+          // Stubs (non-Convex ids) are client-minted, so their absence is always
+          // an intentional local removal (altKey supersede, create rollback) —
+          // never a windowed payload. Keeping them resurrects a sent message's
+          // stub NEXT TO its server twin on the next boot. Same fix as the web
+          // engine (idbCache.ts).
+          if (!isConvexId(String(id))) continue;
           if (prevShadow?.has(id)) { next.set(id, prevShadow.get(id)); kept.push(prevShadow.get(id)); }
         }
         lastPersisted.set(key, next);

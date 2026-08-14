@@ -816,6 +816,12 @@ export const createChannel = mutation({
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const teamId = await requireTeam(ctx, userId, args.team_id);
+    // Named in every return: when the caller omitted team_id the server GUESSED
+    // (users.active_team_id), and a write must never be silent about where it
+    // landed — a stale pointer here is exactly how a channel ends up in the
+    // wrong team. The CLI prints this.
+    const team = await ctx.db.get(teamId);
+    const teamName = team?.name ?? "";
     const name = normalizeChannelName(args.name);
     if (!name) chatFail("INVALID", "Channel name must contain a letter or a number");
     if ((args.topic ?? "").length > MAX_CHANNEL_TOPIC) {
@@ -836,7 +842,7 @@ export const createChannel = mutation({
         if (existing.team_id.toString() !== teamId.toString()) {
           chatFail("CONFLICT", "This client id is already bound to another channel");
         }
-        return { channel_id: existing._id, client_id: args.client_id, created: false };
+        return { channel_id: existing._id, client_id: args.client_id, created: false, team_id: teamId, team_name: teamName };
       }
     }
 
@@ -849,7 +855,7 @@ export const createChannel = mutation({
     // Best effort only: two concurrent creates can both read no row. That is why
     // routing is by _id and a name is never resolved to a channel.
     if (existingName) {
-      return { channel_id: existingName._id, client_id: args.client_id, created: false };
+      return { channel_id: existingName._id, client_id: args.client_id, created: false, team_id: teamId, team_name: teamName };
     }
 
     const count = await ctx.db
@@ -876,7 +882,7 @@ export const createChannel = mutation({
     });
     // Creating a channel joins it, loudly: you asked for this one.
     await upsertRead(ctx, userId, teamId, channelId, now, undefined, "all");
-    return { channel_id: channelId, client_id: args.client_id, created: true };
+    return { channel_id: channelId, client_id: args.client_id, created: true, team_id: teamId, team_name: teamName };
   },
 });
 

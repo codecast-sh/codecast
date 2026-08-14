@@ -126,17 +126,32 @@ describe("idbCache.native", () => {
   });
 
   it("NEVER clears the cache from a store-shrink — a row missing without an exclude is kept", async () => {
-    const a = { _id: "a", title: "Alpha" };
-    const b = { _id: "b", title: "Beta" };
-    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { a, b } });
+    // Convex-shaped ids: the keep-on-shrink guarantee is for SERVER rows. A
+    // non-Convex id is a client-minted stub, and those DO delete (next test).
+    const a = { _id: "k97aaaaaaaaaaaaaaaaaaaaaaaaaaaa1", title: "Alpha" };
+    const b = { _id: "k97bbbbbbbbbbbbbbbbbbbbbbbbbbbb2", title: "Beta" };
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { [a._id]: a, [b._id]: b } });
     await Promise.resolve();
-    expect((await loadCache())!.sessions).toEqual({ a, b });
+    expect((await loadCache())!.sessions).toEqual({ [a._id]: a, [b._id]: b });
 
     // b vanished from the store with NO exclude (an incomplete store / a bug, not
     // a deletion) → it MUST survive on disk so the durable cache is never wiped.
-    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { a } });
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { [a._id]: a } });
     await Promise.resolve();
-    expect((await loadCache())!.sessions).toEqual({ a, b });
+    expect((await loadCache())!.sessions).toEqual({ [a._id]: a, [b._id]: b });
+  });
+
+  it("a client-minted stub DOES delete on removal — supersede must reach disk", async () => {
+    // The chat-transcript twin bug: the altKey supersede removed the stub from
+    // the store, this engine kept it on disk, and the next boot resurrected it
+    // beside its server twin — every message you sent rendered twice.
+    const server = { _id: "k97cccccccccccccccccccccccccccc3", client_id: "chatmsgstub-x1", content: "hi" };
+    const stub = { _id: "chatmsgstub-x1", client_id: "chatmsgstub-x1", content: "hi" };
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { [stub._id]: stub, [server._id]: server } });
+    await Promise.resolve();
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { [server._id]: server } });
+    await Promise.resolve();
+    expect((await loadCache())!.sessions).toEqual({ [server._id]: server });
   });
 
   it("removes a row ONLY when it was explicitly excluded (kill/archive)", async () => {

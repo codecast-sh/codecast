@@ -145,7 +145,11 @@ export function useChatChannelsSync(): { error?: Error } {
   // channels they already had, not unmount the surface into an ErrorBoundary.
   const { data: result, error } = useQueryNoThrow(
     api.chat.listChannels,
-    teamId && isConvexId(teamId) ? { team_id: teamId } : {},
+    // Explicit team or nothing. Passing {} lets the SERVER pick a team from
+    // users.active_team_id — a second source of truth that can disagree with
+    // the workspace the client is actually showing. In the personal workspace
+    // chat has no scope at all, so there is nothing to subscribe to.
+    teamId && isConvexId(teamId) ? { team_id: teamId } : "skip",
   );
 
   useConvexSync(
@@ -233,6 +237,13 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
           data.reactions ?? [],
           chatReactionSyncOpts(messages.map((m) => m._id)),
         );
+        // The server's per-root reply rollups. Without them a thread this
+        // client never opened shows NO affordance at all — the anchor answers
+        // and the room looks like it ignored you.
+        syncTable(
+          "chatThreadSummaries",
+          (data.threads ?? []).map((t: any) => ({ ...t, _id: String(t.root_id) })),
+        );
         // Only seed the history cursor; never let a live re-push rewind a
         // cursor the reader has already paged past.
         setOlderCursor((prev) => (prev === null ? (data.next_cursor ?? null) : prev));
@@ -256,6 +267,9 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
         useInboxStore
           .getState()
           .syncTable("chatReactions", page?.reactions ?? [], chatReactionSyncOpts(messages.map((m) => m._id)));
+        useInboxStore
+          .getState()
+          .syncTable("chatThreadSummaries", (page?.threads ?? []).map((t: any) => ({ ...t, _id: String(t.root_id) })));
         setOlderCursor(page?.next_cursor ?? null);
         if (!page?.has_more) setOlderExhausted(true);
       })
@@ -365,8 +379,13 @@ export function useChatRail(): ChatRailChannel[] {
     (s: any) => railSig(s.chatRail),
     (s: any) => railMessagesSig(s.chatMessages),
     (s: any) => s.currentUser?._id,
+    (s: any) => s.clientState?.ui?.active_team_id,
   ]);
-  return selectChatRail(s as any, String(s.currentUser?._id ?? ""));
+  // The canonical workspace source (useWorkspaceArgs reads the same field).
+  // No currentUser fallback: undefined MEANS the personal workspace, and
+  // falling back to a team would resurrect team rooms the user left.
+  const teamId = s.clientState?.ui?.active_team_id;
+  return selectChatRail(s as any, String(s.currentUser?._id ?? ""), teamId ? String(teamId) : undefined);
 }
 
 function useMessageViews(
@@ -375,6 +394,7 @@ function useMessageViews(
   byId: Map<string, ChatMember>,
   viewerId: string,
   rollupSource: Record<string, ChatMessageRow>,
+  summaries?: Record<string, any>,
 ): ChatMessageView[] {
   return useMemo(() => {
     const rollups = threadRollups(Object.values(rollupSource));
@@ -390,13 +410,14 @@ function useMessageViews(
       members: byId,
       viewerId,
       rollups,
+      summaries,
       sendState: chatSendState,
       reactionsFor: (messageId) => {
         const list = byMessage.get(messageId);
         return list ? foldReactions(list, viewerId, nameOf) : undefined;
       },
     });
-  }, [rows, reactionRows, byId, viewerId, rollupSource]);
+  }, [rows, reactionRows, byId, viewerId, rollupSource, summaries]);
 }
 
 /** One channel's timeline, ready to render. Roots only — replies live in the
@@ -406,6 +427,9 @@ export function useChannelMessages(channelId: string | undefined): ChatMessageVi
   const s = useTrackedStore([
     (s: any) => messagesSig(s.chatMessages),
     (s: any) => reactionsSig(s.chatReactions),
+    // Ref identity: syncTable's no-change bail keeps it stable, so this wakes
+    // only when a delivery actually changed some root's rollup.
+    (s: any) => s.chatThreadSummaries,
   ]);
   const rows = useMemo(
     () => (channelId ? selectChannelMessages(s as any, channelId) : []),
@@ -413,7 +437,7 @@ export function useChannelMessages(channelId: string | undefined): ChatMessageVi
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [channelId, messagesSig(s.chatMessages)],
   );
-  return useMessageViews(rows, s.chatReactions, byId, viewerId, s.chatMessages);
+  return useMessageViews(rows, s.chatReactions, byId, viewerId, s.chatMessages, s.chatThreadSummaries);
 }
 
 /** A thread: its root message and its replies, both ready to render. */
