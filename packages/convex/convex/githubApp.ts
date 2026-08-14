@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery, internalAction } from "./functions";
+import type { QueryCtx } from "./functions";
 import { internal } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { isTeamMember } from "./privacy";
 import { requireUser } from "./lib/auth";
 import { requireTeamAdmin, requireTeamMembership, effectiveTeamForResource } from "./lib/access";
@@ -255,8 +256,8 @@ export const removeInstallation = internalMutation({
 // An installation is a credential: resolving one is what lets a caller mint a
 // token for the repositories it covers. So the question every lookup here
 // answers is "which installations may this caller reach", never "which
-// installation matches this owner name". Both entry points below used to end in
-// a `by_account_login` scan that ignored team_id entirely and returned the first
+// installation matches this owner name". The lookup this replaced ended in a
+// `by_account_login` scan that ignored team_id entirely and returned the first
 // match from ANY team — one team's repo work could pick up another team's
 // credential. That fallback is gone; a lookup that finds nothing in scope now
 // returns null.
@@ -265,34 +266,58 @@ export const removeInstallation = internalMutation({
 // principals: a webhook knows the team a repository belongs to and has no user,
 // while a user-facing path knows the user and may not know the team.
 
-/** Does this installation grant access to this repository at all? */
+const repoOwner = (repository: string) => repository.split("/")[0];
+
+/** Does this installation grant access to this repository right now? */
 function installationCoversRepo(
-  installation: { account_login: string; repository_selection: string; repositories?: Array<{ full_name: string }> },
+  installation: Doc<"github_app_installations">,
   repository: string,
 ): boolean {
-  const [owner] = repository.split("/");
-  if (installation.account_login !== owner) return false;
+  // A suspended installation still names the repository, but GitHub refuses
+  // every token minted from it. Answering with it trades a clean null for a
+  // failed round trip and a thrown error at the mint call.
+  if (installation.suspended_at) return false;
+  if (installation.account_login !== repoOwner(repository)) return false;
   if (installation.repository_selection === "all") return true;
   return !!installation.repositories?.some((r) => r.full_name === repository);
 }
 
 /** Every installation that covers `repository`, before any scoping. */
-async function installationsCoveringRepo(ctx: { db: any }, repository: string): Promise<any[]> {
-  const [owner] = repository.split("/");
+async function installationsCoveringRepo(
+  ctx: QueryCtx,
+  repository: string,
+): Promise<Doc<"github_app_installations">[]> {
   const byOwner = await ctx.db
     .query("github_app_installations")
-    .withIndex("by_account_login", (q: any) => q.eq("account_login", owner))
+    .withIndex("by_account_login", (q) => q.eq("account_login", repoOwner(repository)))
     .collect();
-  return byOwner.filter((installation: any) => installationCoversRepo(installation, repository));
+  return byOwner.filter((installation) => installationCoversRepo(installation, repository));
 }
 
 /**
- * The governing team of an installation. Read through the access layer rather
- * than off the row so this follows the same rule as every other resource lookup;
- * an installation links no conversation, so today it resolves to its team_id.
+ * The team that governs an installation. Read through the access layer so an
+ * installation answers the same "which team owns this record" question as every
+ * other resource.
+ *
+ * `team_id` is required on this table and the row links no conversation, so the
+ * answer today is always that team_id. An undefined answer would mean the
+ * access layer had started narrowing a credential by conversation visibility,
+ * which reads to the caller exactly like "nobody installed this app" — the
+ * owning team would silently stop resolving its own installation. Say it.
  */
-async function installationTeam(ctx: { db: any }, installation: any): Promise<Id<"teams"> | undefined> {
-  return await effectiveTeamForResource(ctx, installation);
+async function installationTeam(
+  ctx: QueryCtx,
+  installation: Doc<"github_app_installations">,
+): Promise<Id<"teams">> {
+  const team = await effectiveTeamForResource(ctx, installation);
+  if (!team) {
+    throw new Error(
+      `GitHub installation ${installation.installation_id} (row ${installation._id}) resolved to no team. ` +
+        `team_id is required on github_app_installations, so repair that row — and do not let a ` +
+        `credential lookup be narrowed by conversation visibility.`,
+    );
+  }
+  return team;
 }
 
 /**
@@ -311,7 +336,7 @@ export const getInstallationForRepoInTeam = internalQuery({
   handler: async (ctx, args) => {
     for (const installation of await installationsCoveringRepo(ctx, args.repository)) {
       const team = await installationTeam(ctx, installation);
-      if (team && String(team) === String(args.team_id)) return installation;
+      if (String(team) === String(args.team_id)) return installation;
     }
     return null;
   },
@@ -341,7 +366,6 @@ export const getInstallationForRepo = internalQuery({
 
     for (const installation of await installationsCoveringRepo(ctx, args.repository)) {
       const team = await installationTeam(ctx, installation);
-      if (!team) continue;
       if (args.team_id && String(team) !== String(args.team_id)) continue;
       if (!(await isTeamMember(ctx, args.user_id, team))) continue;
       return installation;
