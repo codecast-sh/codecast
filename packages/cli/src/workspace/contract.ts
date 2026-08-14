@@ -17,6 +17,7 @@ import { execSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isPortFree } from "./ports.js";
+import { atomicWriteFile } from "../atomicWrite.js";
 import type {
   ChromeBinding,
   ContractCheck,
@@ -68,10 +69,7 @@ export function readState(repoRoot: string, name: string): PersistedWorkspaceSta
 export function writeState(repoRoot: string, state: PersistedWorkspaceState): void {
   const p = stateFilePath(repoRoot, state.name);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  // Atomic write via temp + rename to avoid partial-state on crash.
-  const tmp = `${p}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-  fs.renameSync(tmp, p);
+  atomicWriteFile(p, JSON.stringify(state, null, 2));
 }
 
 export function deleteState(repoRoot: string, name: string): void {

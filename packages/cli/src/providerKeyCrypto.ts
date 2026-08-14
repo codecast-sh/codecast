@@ -14,6 +14,7 @@ import {
   type EncryptedProviderKeyPayload,
 } from "@codecast/shared/contracts";
 import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
+import { atomicWriteFile } from "./atomicWrite.js";
 
 const PRIV_FILE = ".provider-key-ecdh"; // base64 raw private scalar, 0600
 
@@ -33,10 +34,7 @@ function loadOrCreateEcdh(configDir: string): crypto.ECDH {
     ecdh.generateKeys();
     try {
       fs.mkdirSync(configDir, { recursive: true });
-      const tmp = `${file}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, ecdh.getPrivateKey().toString("base64") + "\n", { mode: 0o600 });
-      fs.chmodSync(tmp, 0o600);
-      fs.renameSync(tmp, file);
+      atomicWriteFile(file, ecdh.getPrivateKey().toString("base64") + "\n", { mode: 0o600 });
     } catch {
       // If we can't persist, the in-memory keypair still works for this run; the
       // published pubkey just changes on restart (the web re-reads it each time).

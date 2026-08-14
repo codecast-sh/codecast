@@ -30,6 +30,7 @@ import type { VaultInfo } from "@codecast/shared/contracts";
 import type { Config } from "../config/types.js";
 import { enumerateProjectRoots } from "../projectRoots.js";
 import { probeProjectVault } from "./vaultScope.js";
+import { atomicWriteFile } from "../atomicWrite.js";
 
 function configFile(configDir: string): string {
   return path.join(configDir, "config.json");
@@ -49,9 +50,7 @@ function readConfig(configDir: string): Config {
 function writeConfig(configDir: string, config: Config): void {
   const file = configFile(configDir);
   fs.mkdirSync(configDir, { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n");
-  fs.renameSync(tmp, file);
+  atomicWriteFile(file, JSON.stringify(config, null, 2) + "\n");
 }
 
 /** Stable vault id: 12-hex sha256 prefix of the absolute root path. Derived, not
