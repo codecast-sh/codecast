@@ -81,6 +81,52 @@ describe("setThreadState", () => {
     expect(row.thread_state_msg_count).toBeUndefined();
   });
 
+  test("a write without a status defaults to working — older CLIs stay honest", async () => {
+    const tables = tablesWith();
+    const db = makeFakeDb(tables);
+    const res = await (setThreadState as any)._handler(ctxAs(db, RUNNER), {
+      session: "abc1234",
+      text: "Waiting on CI",
+    });
+    expect(res.status).toBe("working");
+    expect((tables.conversations[0] as any).thread_state_status).toBe("working");
+  });
+
+  test("a declared status is normalized and stored with the text", async () => {
+    const tables = tablesWith();
+    const db = makeFakeDb(tables);
+    const res = await (setThreadState as any)._handler(ctxAs(db, RUNNER), {
+      session: "abc1234",
+      text: "Shipped the auth fix",
+      status: "Complete",
+    });
+    expect(res.status).toBe("done");
+    expect((tables.conversations[0] as any).thread_state_status).toBe("done");
+  });
+
+  test("an unrecognized status falls back to working rather than storing junk", async () => {
+    const tables = tablesWith();
+    const db = makeFakeDb(tables);
+    const res = await (setThreadState as any)._handler(ctxAs(db, RUNNER), {
+      session: "abc1234",
+      text: "Waiting",
+      status: "urgent",
+    });
+    expect(res.status).toBe("working");
+  });
+
+  test("clearing drops the status with the text", async () => {
+    const tables = tablesWith({
+      thread_state: "Waiting on CI",
+      thread_state_at: 1,
+      thread_state_msg_count: 3,
+      thread_state_status: "blocked",
+    });
+    const db = makeFakeDb(tables);
+    await (setThreadState as any)._handler(ctxAs(db, RUNNER), { session: "abc1234", text: "" });
+    expect((tables.conversations[0] as any).thread_state_status).toBeUndefined();
+  });
+
   test("clearing a session that had none is a quiet no-op", async () => {
     const tables = tablesWith();
     const db = makeFakeDb(tables);
@@ -115,11 +161,12 @@ describe("setThreadState", () => {
 
 describe("getThreadState", () => {
   test("returns the state with both counts, so a reader can judge staleness", async () => {
-    const tables = tablesWith({ thread_state: "Waiting on CI", thread_state_at: 5, thread_state_msg_count: 3 });
+    const tables = tablesWith({ thread_state: "Waiting on CI", thread_state_at: 5, thread_state_msg_count: 3, thread_state_status: "blocked" });
     const db = makeFakeDb(tables);
     const res = await (getThreadState as any)._handler(ctxAs(db, RUNNER), { session: "abc1234" });
 
     expect(res.state).toBe("Waiting on CI");
+    expect(res.status).toBe("blocked");
     expect(res.msg_count_at_write).toBe(3);
     expect(res.message_count).toBe(42);
     expect(res.title).toBe("Auth fix");

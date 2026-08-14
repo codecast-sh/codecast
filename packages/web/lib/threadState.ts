@@ -6,15 +6,24 @@
 import {
   threadStateFreshness,
   threadStateHeadline,
+  threadStateCardLine,
+  parseThreadStateStatus,
+  THREAD_STATE_STATUS_LABEL,
   type ThreadStateFields,
   type ThreadStateFreshness,
+  type ThreadStateStatus,
 } from "@codecast/shared/contracts";
 
 export interface ThreadStateView {
   /** Full text, as the agent wrote it. */
   text: string;
-  /** First line, for one-line surfaces. */
+  /** First line — what the session is working on. */
   headline: string;
+  /** What is HAPPENING: the Status:/Blocked: line when present, else the
+   * headline. The inbox card's one slot. */
+  cardLine: string;
+  /** Declared tri-state, null on rows written before it existed. */
+  status: ThreadStateStatus | null;
   freshness: ThreadStateFreshness;
   /** "4m" / "2h" / "3d", or null when the row predates the timestamp. */
   age: string | null;
@@ -29,6 +38,37 @@ export const THREAD_STATE_PIN_CLASS: Record<ThreadStateFreshness, string> = {
   fresh: "text-sol-cyan/70",
   aging: "text-sol-yellow/70",
   stale: "text-sol-orange/70",
+};
+
+/** Everything a surface needs to mark a status: the chip on the panel, the dot
+ * on the card, the tint on the row. One table so the three never disagree on
+ * what color "blocked" is. Amber deliberately matches the needs-input bucket's
+ * accent — both mean "ball in the human's court". */
+export const THREAD_STATE_STATUS_META: Record<
+  ThreadStateStatus,
+  { label: string; dot: string; chip: string; bar: string; row: string }
+> = {
+  working: {
+    label: THREAD_STATE_STATUS_LABEL.working,
+    dot: "text-sol-cyan/80",
+    chip: "bg-sol-cyan/10 text-sol-cyan/90 border-sol-cyan/30",
+    bar: "border-l-sol-cyan/70",
+    row: "",
+  },
+  blocked: {
+    label: THREAD_STATE_STATUS_LABEL.blocked,
+    dot: "text-sol-yellow/90",
+    chip: "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/30",
+    bar: "border-l-sol-yellow/80",
+    row: "border-l-2 border-l-sol-yellow/50 bg-sol-yellow/[0.04]",
+  },
+  done: {
+    label: THREAD_STATE_STATUS_LABEL.done,
+    dot: "text-sol-green/90",
+    chip: "bg-sol-green/10 text-sol-green border-sol-green/30",
+    bar: "border-l-sol-green/70",
+    row: "border-l-2 border-l-sol-green/45 bg-sol-green/[0.03]",
+  },
 };
 
 /** "4m" / "2h" / "3d" — the compact age used across the inbox chrome. */
@@ -65,6 +105,8 @@ export function threadStateView(
   return {
     text,
     headline: threadStateHeadline(text),
+    cardLine: threadStateCardLine(text),
+    status: parseThreadStateStatus(fields?.thread_state_status),
     freshness,
     age,
     messagesSince,
