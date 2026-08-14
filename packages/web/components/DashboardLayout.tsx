@@ -43,7 +43,7 @@ import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
-import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
+import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
 import { StageCompanion } from "./StageCompanion";
 import { companionId, autoAllowed as wsAutoAllowed, surfaceForPath, slotPolicyFor } from "../store/workspace";
@@ -60,7 +60,7 @@ import { useSyncMentionTasks } from "../hooks/useSyncTasks";
 import { isInboxSessionView, resolveSessionSelectKind } from "../lib/inboxRouting";
 import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
-import { TabBar } from "./TabBar";
+import { TabBar, AttachTabButton } from "./TabBar";
 import { pathLabel } from "../lib/pathLabel";
 import { TabContent } from "./TabContent";
 import { BreadcrumbBar } from "./BreadcrumbBar";
@@ -244,6 +244,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.clientState.ui?.zen_mode,
     s => selectNavCollapsed(s),
     s => s.clientState.layouts?.dashboard,
+    // Slot sizes: a workbench switch rewrites these, and the panels below
+    // apply them imperatively.
+    s => s.workspace.nav.size,
+    s => s.workspace.context.size,
+    s => s.workspace.context.pane?.kind,
+    s => s.workspace.secondary.size,
     s => s.currentConversation?.source,
     s => selectSessionRailOpen(s),
     s => s.sidePanelSessionId,
@@ -279,10 +285,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   }, [activeTabPath]);
   const isZenMode = s.clientState.ui?.zen_mode ?? false;
   const sidebarCollapsed = selectNavCollapsed(s);
+  // The nav slot owns the sidebar's width (so a workbench restores it with the
+  // rest of the chrome); the legacy layouts.dashboard value seeds it once for
+  // users whose width predates the slot taking ownership.
   const rawLayout = s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT;
+  const navSize = s.workspace.nav.size ?? rawLayout.sidebar ?? 25;
   const layout = {
-    sidebar: Math.max(10, Math.min(50, rawLayout.sidebar ?? 25)),
-    main: Math.max(30, Math.min(90, rawLayout.main ?? 75)),
+    sidebar: Math.max(10, Math.min(50, navSize)),
+    main: Math.max(30, Math.min(90, 100 - navSize)),
   };
   const [isMobile, setIsMobile] = useState(false);
   const pathname = usePathname();
@@ -337,6 +347,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isOnSchedulesPage = pathname === "/schedules" || (pathname?.startsWith("/schedules/") ?? false);
   const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
+  const isOnCapabilitiesPage = pathname === "/capabilities";
   const isOnFilesPage = pathname === "/files" || (pathname?.startsWith("/files/") ?? false);
   // /vault = pre-rename alias for /files. Kept as its own flag rather than
   // folded into the one above because the routes.manifest parity test reads the
@@ -358,8 +369,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // router URL because the tab-aware pathname reports the carried inbox tab.
   const surface = isOnSettingsPage ? "settings" : surfaceForPath(pathname ?? "");
   const slotPolicy = slotPolicyFor(surface);
-  const isOnWorkingPage = slotPolicy.secondary;
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
+  const isOnWorkingPage = slotPolicy.secondary === "split";
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
@@ -422,11 +433,16 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         store.wsShow("secondary", pane, { presentation: "split" });
       }
     } else if (companion) {
-      // The surface that can hold it is gone — pure bookkeeping, not a
-      // dismissal, so returning to a working surface brings it back.
-      store.wsHide("secondary", { remember: false });
+      // The fleet board's drill-in lives in this same slot as an OVERLAY on
+      // the inbox surface, owned by the board, not by this mirror — leave it.
+      const isBoardDrillIn = slotPolicy.secondary === "overlay" && s.workspace.secondary.presentation === "overlay";
+      if (!isBoardDrillIn) {
+        // The surface that can hold it is gone — pure bookkeeping, not a
+        // dismissal, so returning to a working surface brings it back.
+        store.wsHide("secondary", { remember: false });
+      }
     }
-  }, [isOnWorkingPage, isMobile, companionId(s.workspace), s.currentSessionId, s.viewingDismissedId]);
+  }, [isOnWorkingPage, slotPolicy.secondary, s.workspace.secondary.presentation, isMobile, companionId(s.workspace), s.currentSessionId, s.viewingDismissedId]);
 
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
@@ -489,11 +505,29 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     setIsMobile(window.innerWidth < 768);
   });
 
+  // The route-default effects below adjust the rail when you NAVIGATE between
+  // surfaces. A tab switch also changes `pathname` (it reports the active
+  // tab's path), but revealing an already-open tab is not navigation — the
+  // frame must stay pixel-identical — so each effect stands down when the
+  // pathname change arrived with a tab switch. The ref is updated in a
+  // separate effect declared AFTER the consumers: effects run in declaration
+  // order, so during a switch they still compare against the pre-switch tab.
+  const prevActiveTabRef = useRef(s.activeTabId);
+
   useWatchEffect(() => {
     const wasInbox = prevWasInboxRef.current;
     prevWasInboxRef.current = isOnInboxPage;
+    if (prevActiveTabRef.current !== s.activeTabId) return;
+    const store = useInboxStore.getState();
+    // Entering the inbox opens the session list beside it (unless you closed
+    // it by hand). Runs on first mount too — a boot landing on /inbox seeds
+    // the rail for a fresh workspace.
+    if (!wasInbox && isOnInboxPage) {
+      if (!selectSessionRailOpen(store) && !selectSessionRailUserClosed(store)) {
+        store.toggleSidePanel();
+      }
+    }
     if (wasInbox && !isOnInboxPage) {
-      const store = useInboxStore.getState();
       // The Favorites view is a mode of the inbox's session list; leaving the
       // inbox drops back to the active desk so the rail isn't stuck on the shelf.
       if (store.showFavorites) store.setShowFavorites(false);
@@ -511,6 +545,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     const prev = prevPathnameRef.current;
     prevPathnameRef.current = pathname;
     if (!prev || prev === pathname) return;
+    if (prevActiveTabRef.current !== s.activeTabId) return;
     const store = useInboxStore.getState();
     if (selectSessionRailUserClosed(store)) return;
     const wasConvPage = prev.includes("/conversation/");
@@ -529,6 +564,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       }
     }
   }, [pathname, isOnInboxPage]);
+
+  // Keep LAST of the trio: the consumers above must see the pre-switch tab id.
+  useWatchEffect(() => {
+    prevActiveTabRef.current = s.activeTabId;
+  }, [s.activeTabId]);
 
   const resolveNewSessionContext = useCallback(() => {
     const store = useInboxStore.getState();
@@ -666,6 +706,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       }
       if (popped.inboxId) return;
       if (isNonTabRoute(window.location.pathname)) return;
+      // A detached tab window navigates via React Router only — the shared
+      // tabs its store hydrates belong to the main window, so mirroring this
+      // window's URL into the "active tab" would rewrite someone else's tab.
+      if (isDetachedTabWindow()) return;
       const store = useInboxStore.getState();
       const id = store.activeTabId;
       if (!id) return;
@@ -711,9 +755,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Imperative collapse and synced-in layout echoes fire onLayoutChange too —
   // ignoring those keeps a collapsed sidebar from sticking as a 0-size layout
   // and keeps two windows from rewriting each other's clamped values forever.
+  // The width a drag just persisted: the store echo of our own gesture, which
+  // the apply-external-width effect below must not "re-apply".
+  const navDragEchoRef = useRef<number | null>(layout.sidebar);
   const handleLayoutChange = useDragGatedLayoutPersist((newLayout) => {
     if ((newLayout.sidebar ?? 0) < 5) return;
-    s.updateClientLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
+    navDragEchoRef.current = newLayout.sidebar || 25;
+    useInboxStore.getState().wsSetSize("nav", newLayout.sidebar || 25);
   });
 
   // Stable layout shell: panels stay mounted across zen/sidebar/sidePanel toggles to
@@ -771,20 +819,58 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     else ref.resize(`${layout.sidebar}%`);
   }, [sidebarHidden]);
 
+  // An external width change (a workbench switch, another window's sync) lands
+  // in the nav slot; apply it to the live panel. Our own drag already moved the
+  // panel — its store echo is skipped so the gesture never fights itself.
+  useWatchEffect(() => {
+    const ref = sidebarPanelRef.current;
+    if (!ref || sidebarHidden) return;
+    if (navDragEchoRef.current === layout.sidebar) return;
+    navDragEchoRef.current = layout.sidebar;
+    sidebarProgrammaticRef.current = true;
+    ref.resize(`${layout.sidebar}%`);
+    setTimeout(() => { sidebarProgrammaticRef.current = false; }, 50);
+  }, [layout.sidebar]);
+
   // Hover-peek: with a side panel collapsed, touching the screen edge slides the
   // full panel out as an overlay (state machine + markup in EdgePeek). Left edge
   // peeks the sidebar; right edge peeks the session list (rightPeekEnabled above).
   const peekEnabled = sidebarCollapsed && !hideSidebar && !isZenMode && !isMobile;
 
+  // The context slot owns the rail's width. Its size field serves whichever
+  // pane holds the edge — a percent for the session list, pixels for the
+  // comment rail — so only a plausibly-percent value is read here.
+  const handleStageLayoutChange = useDragGatedLayoutPersist((newLayout) => {
+    const size = newLayout["stage-companion"];
+    if (!size || size < 5) return;
+    useInboxStore.getState().wsSetSize("secondary", size);
+  });
+
+  const ctxSize = s.workspace.context.size;
+  const railSize = ctxSize !== undefined && ctxSize >= 5 && ctxSize <= 50 ? ctxSize : 30;
+  const railDragEchoRef = useRef<number | null>(railSize);
+  const handleRightLayoutChange = useDragGatedLayoutPersist((newLayout) => {
+    const size = newLayout["session-list"];
+    if (!size || size < 5 || !showSessionList) return;
+    railDragEchoRef.current = size;
+    useInboxStore.getState().wsSetSize("context", size);
+  });
+
   useWatchEffect(() => {
     const ref = sessionListPanelRef.current;
     if (!ref) return;
     if (showSessionList) {
-      if (ref.isCollapsed()) ref.expand();
+      // Resize (not expand): it both opens a collapsed panel and applies a
+      // workbench-restored width; expand() can clamp back to 0 (see the
+      // sidebar note above). Skip the echo of our own drag.
+      if (ref.isCollapsed() || railDragEchoRef.current !== railSize) {
+        railDragEchoRef.current = railSize;
+        ref.resize(`${railSize}%`);
+      }
     } else {
       if (!ref.isCollapsed()) ref.collapse();
     }
-  }, [showSessionList]);
+  }, [showSessionList, railSize]);
 
   // Guest/unauthenticated: minimal layout, no top header — branding lives in the
   // bottom bar. Always simple-view: anonymous share viewers get the calm reading
@@ -800,7 +886,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     );
   }
 
-  const hasTabs = s.tabs.length > 0 && !isNonTabRoute(routerLocation.pathname);
+  // A detached tab window shows exactly its URL via React Router — no tab
+  // shell, even though the shared tabs hydrate into its store too.
+  const hasTabs = s.tabs.length > 0 && !isNonTabRoute(routerLocation.pathname) && !isDetachedTabWindow();
   const content = hasTabs ? <TabContent /> : children;
 
   // The trail sits above whatever surface is open — one bar for every page, so
@@ -822,8 +910,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // (there is a single companionSessionId), so panes cannot accumulate.
   // Only working surfaces host a companion; elsewhere the page owns the stage.
   const showCompanion = !!companionId(s.workspace) && isOnWorkingPage && !isMobile;
+  // The secondary slot owns the companion's share of the stage, so a workbench
+  // restores it. Group remounts with showCompanion, which re-reads this.
+  const rawCompanionSize = s.workspace.secondary.size;
+  const companionSize = rawCompanionSize !== undefined && rawCompanionSize >= 20 && rawCompanionSize <= 65 ? rawCompanionSize : 42;
   const pageContent = showCompanion ? (
-    <Group orientation="horizontal" className="h-full" defaultLayout={{ "stage-page": 58, "stage-companion": 42 }}>
+    <Group orientation="horizontal" className="h-full" defaultLayout={{ "stage-page": 100 - companionSize, "stage-companion": companionSize }} onLayoutChange={handleStageLayoutChange}>
       <Panel id="stage-page" minSize={320}>{pageContentInner}</Panel>
       <Separator className={separatorClass} />
       <Panel id="stage-companion" minSize={320} maxSize="65%">
@@ -839,7 +931,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const rightArea = (
     <div className="h-full flex">
       <div className="flex-1 min-w-0 h-full">
-        <Group orientation="horizontal" className="h-full" defaultLayout={{ "right-content": showSessionList ? 70 : 100, "session-list": showSessionList ? 30 : 0 }}>
+        <Group orientation="horizontal" className="h-full" defaultLayout={{ "right-content": showSessionList ? 100 - railSize : 100, "session-list": showSessionList ? railSize : 0 }} onLayoutChange={handleRightLayoutChange}>
           <Panel id="right-content" minSize={400}><div className="h-full">{pageContent}</div></Panel>
           <Separator className={`${separatorClass} ${showSessionList ? "" : "invisible"}`} />
           <Panel
@@ -847,7 +939,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             panelRef={sessionListPanelRef}
             minSize={200}
             maxSize="50%"
-            defaultSize={showSessionList ? 30 : 0}
+            defaultSize={showSessionList ? railSize : 0}
             collapsible
             collapsedSize={0}
             onResize={(size) => {
@@ -1006,6 +1098,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 </button>
               </ShortcutTooltip>
             )}
+            {/* Detached tab window only: merge this surface back into the
+                main window as a tab (renders null everywhere else). */}
+            <AttachTabButton />
             <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
               <button
                 onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
