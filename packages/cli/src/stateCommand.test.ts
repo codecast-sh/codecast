@@ -1,5 +1,19 @@
 import { describe, test, expect } from "bun:test";
-import { parseStateArgs, formatAge, describeProvenance, staleStateNotice } from "./stateCommand.js";
+import { parseStateArgs, formatAge, describeProvenance, staleStateNotice, statusTag } from "./stateCommand.js";
+
+describe("statusTag", () => {
+  test("labels each declared status, colored", () => {
+    expect(statusTag("working")).toContain("[in progress]");
+    expect(statusTag("blocked")).toContain("[needs input]");
+    expect(statusTag("done")).toContain("[complete]");
+  });
+
+  test("rows that predate the status get no tag", () => {
+    expect(statusTag(null)).toBe("");
+    expect(statusTag(undefined)).toBe("");
+    expect(statusTag("junk")).toBe("");
+  });
+});
 
 describe("parseStateArgs", () => {
   test("no args reads the current state", () => {

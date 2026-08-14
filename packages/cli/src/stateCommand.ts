@@ -19,7 +19,10 @@ import { fmt, c } from "./colors.js";
 import {
   normalizeThreadState,
   threadStateFreshness,
+  parseThreadStateStatus,
   THREAD_STATE_MAX_CHARS,
+  THREAD_STATE_STATUS_LABEL,
+  type ThreadStateStatus,
 } from "@codecast/shared/contracts";
 
 // ── the local stamp the reminder hook reads ──────────────────────────────────
@@ -168,6 +171,19 @@ export async function warnIfThreadStateStale(deps: PublishDeps): Promise<void> {
   } catch {}
 }
 
+/** Colored "[in progress]" / "[needs input]" / "[complete]" tag, or "" when the
+ * row predates the status field. */
+export function statusTag(status: string | null | undefined): string {
+  const parsed = parseThreadStateStatus(status);
+  if (!parsed) return "";
+  const color: Record<ThreadStateStatus, string> = {
+    working: c.cyan,
+    blocked: c.yellow,
+    done: c.green,
+  };
+  return `${color[parsed]}[${THREAD_STATE_STATUS_LABEL[parsed].toLowerCase()}]${c.reset}`;
+}
+
 function printState(text: string, provenance: string): void {
   for (const line of text.split("\n")) {
     console.log(`  ${line ? c.reset + line : ""}`);
@@ -180,11 +196,12 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
     .command("state [args...]")
     .description(
       "Pin the current state of this thread — the standing answer to \"where does this stand?\"\n\n" +
-      "The text renders pinned above the composer in the dashboard and truncated on the\n" +
-      "inbox card, so the human sees the situation the moment they open the session\n" +
-      "instead of reading back through it. You own it: rewrite it whenever the answer\n" +
-      "changes, and clear it when it stops being true. The dashboard shows how many\n" +
-      "messages have passed since you wrote it, so a stale state is visible as stale.\n\n" +
+      "The text renders pinned above the composer in the dashboard and on the inbox\n" +
+      "card, so the human sees the situation the moment they open the session instead\n" +
+      "of reading back through it. First line: what this session is working on, plain\n" +
+      "and unlabeled. You own it: rewrite it whenever the answer changes, and clear it\n" +
+      "when it stops being true. The dashboard shows how many messages have passed\n" +
+      "since you wrote it, so a stale state is visible as stale.\n\n" +
       "Subcommands:\n" +
       "  cast state                     Print the pinned state of this session\n" +
       "  cast state \"<text>\"            Pin (or replace) the state\n" +
@@ -192,16 +209,21 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       "  cast state show <session>      Print another session's state\n\n" +
       "Examples:\n" +
       "  cast state \"Waiting on CI for the auth fix — nothing to decide yet\"\n" +
-      "  cast state - <<'EOF'\n" +
-      "  Status: rewrote the sync layer, tests green\n" +
+      "  cast state --status blocked - <<'EOF'\n" +
+      "  Migrating the sync layer to wake signatures\n" +
+      "  Status: rewrite done, tests green\n" +
       "  Blocked: needs a prod key before the last check\n" +
-      "  Next: deploy once the key lands\n" +
       "  EOF\n" +
-      "  cast state clear               # the work is done or the state no longer holds",
+      "  cast state --status done \"Shipped — all four fixes verified in the browser\"\n" +
+      "  cast state clear               # the state no longer holds",
+    )
+    .option(
+      "--status <status>",
+      "The work's tri-state: working (default) | blocked | done — the dashboard marks the session with it",
     )
     .option("--for <session>", "Target another session (default: the current one)")
     .option("--json", "Machine-readable output")
-    .action(async (rawArgs: string[], options: { for?: string; json?: boolean }) => {
+    .action(async (rawArgs: string[], options: { for?: string; json?: boolean; status?: string }) => {
       let args = rawArgs ?? [];
       if (args.includes("-")) {
         try {
@@ -231,7 +253,8 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
           console.log(`${fmt.muted(`${row.short_id} has no pinned state`)}`);
           return;
         }
-        console.log(`${c.cyan}${row.short_id}${c.reset} ${fmt.muted(row.title ?? "")}`);
+        const tag = statusTag(row.status);
+        console.log(`${c.cyan}${row.short_id}${c.reset}${tag ? ` ${tag}` : ""} ${fmt.muted(row.title ?? "")}`);
         printState(row.state, describeProvenance(row, Date.now()));
         return;
       }
@@ -242,7 +265,15 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
         process.exit(1);
       }
 
-      const result = await apiPost(deps, "/cli/sessions/state/set", { session, text });
+      const status = intent.mode === "set" ? parseThreadStateStatus(options.status ?? "working") : null;
+      if (intent.mode === "set" && !status) {
+        console.error(
+          `Unknown --status "${options.status}" — use working, blocked, or done`,
+        );
+        process.exit(1);
+      }
+
+      const result = await apiPost(deps, "/cli/sessions/state/set", { session, text, status: status ?? undefined });
       // Keep the reminder hook's local stamp in step with the write — but only
       // for THIS session. `--for` writes to somebody else's thread, and their
       // agent's reminder is keyed to their own machine's stamp, not ours.
@@ -265,11 +296,15 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
         return;
       }
 
+      // Confirmation only — never echo the state back. The caller just wrote
+      // it; reprinting it doubles the tokens an agent spends on every update.
       const truncated = intent.mode === "set" && intent.text.length > THREAD_STATE_MAX_CHARS;
+      const tag = statusTag(result.status ?? status);
       console.log(
         `${c.green}ok${c.reset} pinned the state of ${c.cyan}${result.short_id}${c.reset}` +
-        (truncated ? ` ${fmt.muted(`(truncated to ${THREAD_STATE_MAX_CHARS} chars)`)}` : ""),
+        (tag ? ` ${tag}` : "") +
+        (truncated ? ` ${fmt.muted(`(truncated to ${THREAD_STATE_MAX_CHARS} chars)`)}` : "") +
+        ` ${fmt.muted("— rewrite it when this changes; `cast state clear` when it no longer holds")}`,
       );
-      printState(result.state, "rewrite it when this changes; `cast state clear` when it no longer holds");
     });
 }
