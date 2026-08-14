@@ -63,6 +63,7 @@ import {
 } from "lucide-react";
 import { MAX_TASK_DEPTH, directChildren, isActiveTask, subtaskProgressOf, taskDepth } from "@codecast/shared/tasks";
 import { closeTaskWithGuard, createTaskAndAdopt, setTaskParent } from "../../../lib/taskActions";
+import { statusByKey, statusEntityOptions, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
 
 const STATUS_OPTIONS = [
   { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
@@ -450,6 +451,8 @@ function SubtasksSection({ task, requestClose, onNavigate }: {
 }) {
   const allTasks = useInboxStore((s) => s.tasks);
   const updateTask = useInboxStore((s) => s.updateTask);
+  // Subtasks share the parent's workspace, so one vocabulary covers the list.
+  const taskStatuses = useTeamTaskStatusList((task as any)?.team_id);
   const [title, setTitle] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -496,7 +499,7 @@ function SubtasksSection({ task, requestClose, onNavigate }: {
       </div>
       <div className="space-y-0.5">
         {children.map((t: any) => {
-          const cfg = STATUS_MAP[t.status] || STATUS_MAP.open;
+          const cfg = statusVisual(taskStatusOf(t, taskStatuses));
           const RowIcon = cfg.icon;
           const closed = t.status === "done" || t.status === "dropped";
           // A stub whose server row hasn't synced yet has no real id/short_id —
@@ -573,6 +576,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   const allTasks = useInboxStore((s) => s.tasks);
   const data = (allTasks[id] || Object.values(allTasks).find((t: any) => t.short_id === id) || directData) as TaskDetail | undefined;
   const taskTeamId = data?.team_id as string | undefined;
+  // The task's team status vocabulary (per-team custom statuses).
+  const taskStatuses = useTeamTaskStatusList(taskTeamId);
+  const statusOptions = useMemo(() => statusEntityOptions(taskStatuses), [taskStatuses]);
   // The id may be a conversation's (legacy phantom-task cache rows, malformed
   // /tasks/<conversationId> links). When the server says "not a task" and the
   // id is a session we know, land in the conversation instead of a dead-end.
@@ -626,9 +632,16 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   }, []);
   const handleStatusChange = useCallback((v: string) => {
     if (!data?.short_id) return;
-    if (v === "done" || v === "dropped") requestClose(data.short_id, v);
-    else handleUpdate({ status: v });
-  }, [data?.short_id, requestClose, handleUpdate]);
+    // v is a team status id (dropdown options come from statusEntityOptions).
+    const picked = statusByKey(taskStatuses, v);
+    if (!picked) return;
+    const fields = statusWriteFields(picked);
+    if (fields.status === "done" || fields.status === "dropped") {
+      closeTaskWithGuard(data.short_id, fields.status, undefined, fields.status_id);
+    } else {
+      handleUpdate(fields);
+    }
+  }, [data?.short_id, taskStatuses, handleUpdate]);
 
   // Parent breadcrumb + set-parent state. The parent row resolves live from
   // the store so a re-parent elsewhere updates the chip instantly.
@@ -808,7 +821,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     return <AppLoader className={isInline ? "w-[480px] flex-shrink-0 border-l border-sol-border/30 min-h-[16rem] h-full" : "min-h-[16rem] h-full"} />;
   }
 
-  const status = STATUS_MAP[data.status] || STATUS_MAP.open;
+  const status = statusVisual(taskStatusOf(data as any, taskStatuses));
   const StatusIcon = status.icon;
 
   return (
@@ -931,7 +944,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
           {/* Primary properties — inline, editable (the card look) */}
           <div className="flex items-center gap-1 flex-wrap mb-4 -ml-1">
-            <Dropdown value={data.status} options={STATUS_OPTIONS} onChange={handleStatusChange} shortcutHint="s to cycle" />
+            <Dropdown value={taskStatusKey(data as any, taskStatuses)} options={statusOptions} onChange={handleStatusChange} shortcutHint="s to cycle" />
             <Dropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
             <button
               onClick={() => openCmd("assign")}

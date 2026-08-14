@@ -17,14 +17,23 @@ import { User, MessageSquare, FolderKanban, Tag, ListChecks } from "lucide-react
 import type { TaskItem, ProjectItem } from "../store/inboxStore";
 import type { ListGroup } from "../components/GenericListView";
 import { getLabelColor } from "./labelColors";
-import { TASK_STATUS, TASK_STATUS_ORDER } from "../components/TaskStatusBadge";
+import { orderedStatuses, statusByKey, statusVisual, statusWriteFields, taskStatusKey } from "./taskStatuses";
+import { DEFAULT_TASK_STATUSES, type TeamTaskStatus } from "@codecast/shared/tasks";
 
 /** What an axis needs from the page to draw a header (projects aren't on the
  *  task row, and the label header offers a one-click filter). */
 export type TaskGroupContext = {
   projects: Record<string, ProjectItem>;
   onFilterLabel: (label: string) => void;
+  /** The active workspace's status vocabulary (per-team custom statuses),
+   *  already board-ordered. Defaults keep callers that predate the field working. */
+  taskStatuses?: TeamTaskStatus[];
 };
+
+// Board-ordered regardless of how the caller's list arrived, so the status
+// axis's bucket order (work-first) never depends on config array order.
+const ctxStatuses = (ctx: TaskGroupContext | undefined): TeamTaskStatus[] =>
+  orderedStatuses(ctx?.taskStatuses ?? DEFAULT_TASK_STATUSES);
 
 /** One bucket, seen through a single axis. `key` is "" for the none bucket
  *  (unassigned, no project, unplanned…), which always sorts last. */
@@ -43,13 +52,17 @@ export type TaskAxis = {
   /** Menu label, e.g. "Assignee". */
   label: string;
   /** Bucket key for a task; "" collects into the trailing none bucket. */
-  keyOf: (t: TaskItem) => string;
+  keyOf: (t: TaskItem, ctx: TaskGroupContext) => string;
   /** Bucket order within this axis. Never sees a none bucket — those are
    *  pushed last by buildTaskGroups, so no axis repeats that rule. */
   compare: (a: AxisBucket, b: AxisBucket, ctx: TaskGroupContext) => number;
   header: (b: AxisBucket, ctx: TaskGroupContext) => HeaderPart;
   /** Header text for this axis's none bucket. */
   noneLabel: string;
+  /** updateTask fields that move a task into this axis's bucket `key` ("" =
+   *  the none bucket). Omitted on axes a drop can't edit (plan membership,
+   *  session provenance), which makes their groups refuse drops entirely. */
+  dropUpdates?: (key: string, t: TaskItem, ctx: TaskGroupContext) => Record<string, any> | null;
 };
 
 const byTitle = (a?: string, b?: string) => (a || "").localeCompare(b || "");
@@ -57,10 +70,17 @@ const byTitle = (a?: string, b?: string) => (a || "").localeCompare(b || "");
 export const TASK_AXES: Record<string, TaskAxis> = {
   status: {
     label: "Status",
-    keyOf: (t) => t.status as string,
-    compare: (a, b) => TASK_STATUS_ORDER.indexOf(a.key as any) - TASK_STATUS_ORDER.indexOf(b.key as any),
-    header: (b) => {
-      const cfg = TASK_STATUS[b.key as keyof typeof TASK_STATUS];
+    // Buckets by the RESOLVED team status (custom "Working on" and its
+    // category default are different buckets), so headers match the board.
+    keyOf: (t, ctx) => taskStatusKey(t, ctxStatuses(ctx)),
+    compare: (a, b, ctx) => {
+      const statuses = ctxStatuses(ctx);
+      const idx = (key: string) => statuses.findIndex((s) => s.id === key);
+      return idx(a.key) - idx(b.key);
+    },
+    header: (b, ctx) => {
+      const status = statusByKey(ctxStatuses(ctx), b.key);
+      const cfg = status ? statusVisual(status) : undefined;
       const Icon = cfg?.icon;
       return {
         label: cfg?.label || b.key,
@@ -69,6 +89,10 @@ export const TASK_AXES: Record<string, TaskAxis> = {
     },
     // Every task has a status, so this bucket never fills.
     noneLabel: "No status",
+    dropUpdates: (key, _t, ctx) => {
+      const status = statusByKey(ctxStatuses(ctx), key);
+      return status ? statusWriteFields(status) : null;
+    },
   },
 
   project: {
@@ -92,6 +116,8 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       };
     },
     noneLabel: "No project",
+    // "" clears the project (webUpdate treats an empty id as detach).
+    dropUpdates: (key) => ({ project_id: key }),
   },
 
   plan: {
@@ -154,6 +180,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       };
     },
     noneLabel: "Unassigned",
+    dropUpdates: (key) => ({ assignee: key }),
   },
 
   label: {
@@ -179,6 +206,10 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       ),
     }),
     noneLabel: "No label",
+    // The axis buckets by the FIRST label, so a drop makes the target label
+    // primary and keeps the rest; the none bucket clears them all.
+    dropUpdates: (key, t) =>
+      key ? { labels: [key, ...(t.labels ?? []).filter((l) => l !== key)] } : { labels: [] },
   },
 
   session: {
@@ -238,6 +269,35 @@ const KEY_SEP = "\u0001";
 const bucketId = (keys: string[]) => keys.map((k) => k || NONE_BUCKET).join(KEY_SEP);
 
 /**
+ * The updateTask fields that move `task` into the bucket `groupKey` names under
+ * the grouping `group` — the inverse of buildTaskGroups's bucketing, one axis at
+ * a time. Returns null when the move can't be honored (an axis without
+ * dropUpdates, e.g. plan/session), so callers refuse the whole drop rather than
+ * half-apply a combined grouping. Axes where the task already sits in the
+ * target bucket contribute nothing, so a same-bucket drop yields {}.
+ */
+export function taskGroupDropUpdates(
+  group: string,
+  groupKey: string,
+  task: TaskItem,
+  ctx: TaskGroupContext,
+): Record<string, any> | null {
+  const axisKeys = parseTaskGroup(group);
+  if (axisKeys.length === 0) return null;
+  const keys = groupKey.split(KEY_SEP).map((k) => (k === NONE_BUCKET ? "" : k));
+  if (keys.length !== axisKeys.length) return null;
+  const updates: Record<string, any> = {};
+  for (let i = 0; i < axisKeys.length; i++) {
+    const axis = TASK_AXES[axisKeys[i]];
+    if (axis.keyOf(task, ctx) === keys[i]) continue;
+    const u = axis.dropUpdates?.(keys[i], task, ctx);
+    if (!u) return null;
+    Object.assign(updates, u);
+  }
+  return updates;
+}
+
+/**
  * Bucket tasks by every axis in `group` and return the flat header list
  * GenericListView renders. `sortTasks` orders rows inside each bucket (it also
  * nests subtasks under parents), so grouping never changes row order.
@@ -268,7 +328,7 @@ export function buildTaskGroups({
   const axes = axisKeys.map((k) => TASK_AXES[k]);
   const buckets = new Map<string, { keys: string[]; sample: TaskItem; tasks: TaskItem[] }>();
   for (const task of tasks) {
-    const keys = axes.map((axis) => axis.keyOf(task));
+    const keys = axes.map((axis) => axis.keyOf(task, ctx));
     const id = bucketId(keys);
     let bucket = buckets.get(id);
     if (!bucket) {

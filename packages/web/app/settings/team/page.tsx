@@ -16,6 +16,7 @@ import {
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../../../store/inboxStore";
 import { TeamIcon, TEAM_ICONS, TEAM_COLORS, colorBgClassMap } from "../../../components/TeamIcon";
+import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatusEditor";
 import { ChevronDown } from "lucide-react";
 
 export default function TeamPage() {
@@ -437,6 +438,14 @@ export default function TeamPage() {
           </div>
         </div>
       </Card>
+
+      {effectiveTeamId && (
+        <TeamTaskStatusEditor
+          teamId={effectiveTeamId}
+          configured={(team as any)?.task_statuses}
+          isAdmin={isAdmin}
+        />
+      )}
 
       <Dialog open={!!memberToRemove} onOpenChange={() => setMemberToRemove(null)}>
         <DialogContent className="bg-sol-bg border-sol-border">

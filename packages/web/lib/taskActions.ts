@@ -33,27 +33,31 @@ export function closeTaskWithGuard(
   shortId: string,
   status: "done" | "dropped",
   resolution?: "cascade" | "only_parent",
+  // Team status id when closing onto a CUSTOM terminal status (per-team
+  // statuses). Rides the same guarded write — a status_id sent on its own
+  // would move the category server-side and skirt this gateway.
+  statusId?: string,
 ): { needsConfirm: boolean } {
   const s = useInboxStore.getState();
   const task = (Object.values(s.tasks) as TaskItem[]).find((t) => t.short_id === shortId);
   if (task && !resolution) {
     const open = openSubtasksOf(task._id);
     if (open.length > 0) {
-      s.setTaskCloseGuard({ shortId, status, open });
+      s.setTaskCloseGuard({ shortId, status, open, statusId } as any);
       return { needsConfirm: true };
     }
   }
-  s.updateTask(shortId, { status, subtask_resolution: resolution });
+  s.updateTask(shortId, { status, ...(statusId !== undefined ? { status_id: statusId } : {}), subtask_resolution: resolution });
   return { needsConfirm: false };
 }
 
 /** Resolve the pending close-guard dialog with the user's choice. */
 export function resolveTaskCloseGuard(resolution: "cascade" | "only_parent") {
   const s = useInboxStore.getState();
-  const g = s.taskCloseGuard;
+  const g = s.taskCloseGuard as any;
   if (!g) return;
   s.setTaskCloseGuard(null);
-  s.updateTask(g.shortId, { status: g.status, subtask_resolution: resolution });
+  s.updateTask(g.shortId, { status: g.status, ...(g.statusId !== undefined ? { status_id: g.statusId } : {}), subtask_resolution: resolution });
 }
 
 /**

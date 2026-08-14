@@ -13,7 +13,7 @@ import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { PageIcon } from "./RecentlyViewedMenu";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -26,6 +26,8 @@ import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
 import { undoableArchiveDoc, undoableHideSession, undoableDeferSession } from "../store/undoActions";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
+import { STATUS_OPTIONS, PRIORITY_OPTIONS, PLAN_STATUS_OPTIONS, DOC_TYPE_OPTIONS } from "./menus/entityOptions";
+import { statusByKey, statusEntityOptions, statusWriteFields, taskStatusKey, useTeamTaskStatusList } from "../lib/taskStatuses";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
@@ -86,50 +88,17 @@ type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_s
 
 const DEFAULT_AGENT_RUN_MESSAGE = "lets do this task";
 
-const PLAN_STATUS_OPTIONS = [
-  { key: "draft", icon: Circle, label: "Draft", color: "text-neutral-500" },
-  { key: "active", icon: CircleDot, label: "Active", color: "text-cyan-400" },
-  { key: "paused", icon: PauseCircle, label: "Paused", color: "text-yellow-400" },
-  { key: "done", icon: CheckCircle2, label: "Done", color: "text-green-400" },
-  { key: "abandoned", icon: XCircle, label: "Abandoned", color: "text-neutral-500" },
-];
-
 function isTask(item: any): item is TaskItem {
   return item && "status" in item && "short_id" in item;
 }
 
-const STATUS_OPTIONS = [
-  { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-neutral-500" },
-  { key: "open", icon: Circle, label: "Open", color: "text-blue-400" },
-  { key: "in_progress", icon: CircleDot, label: "In Progress", color: "text-yellow-400" },
-  { key: "in_review", icon: CircleDot, label: "In Review", color: "text-violet-400" },
-  { key: "done", icon: CheckCircle2, label: "Done", color: "text-green-400" },
-  { key: "dropped", icon: XCircle, label: "Dropped", color: "text-neutral-500" },
-];
-
-const PRIORITY_OPTIONS = [
-  { key: "urgent", icon: AlertTriangle, label: "Urgent", color: "text-red-400" },
-  { key: "high", icon: ArrowUp, label: "High", color: "text-orange-400" },
-  { key: "medium", icon: Minus, label: "Medium", color: "text-neutral-400" },
-  { key: "low", icon: ArrowDown, label: "Low", color: "text-neutral-500" },
-  { key: "none", icon: Minus, label: "None", color: "text-neutral-600" },
-];
-
 // Status key → {label,color}, derived from the option arrays above so the
 // palette's entity rows reuse the same labels/colors as the action submenus.
 const TASK_STATUS_META: Record<string, { label: string; color: string }> =
-  Object.fromEntries(STATUS_OPTIONS.map((o) => [o.key, { label: o.label, color: o.color }]));
+  Object.fromEntries(STATUS_OPTIONS.map((o) => [o.key, { label: o.label, color: o.color ?? "" }]));
 const PLAN_STATUS_META: Record<string, { label: string; color: string }> =
-  Object.fromEntries(PLAN_STATUS_OPTIONS.map((o) => [o.key, { label: o.label, color: o.color }]));
+  Object.fromEntries(PLAN_STATUS_OPTIONS.map((o) => [o.key, { label: o.label, color: o.color ?? "" }]));
 
-const DOC_TYPE_OPTIONS = [
-  { key: "note", label: "Note" },
-  { key: "plan", label: "Plan" },
-  { key: "design", label: "Design" },
-  { key: "spec", label: "Spec" },
-  { key: "investigation", label: "Investigation" },
-  { key: "handoff", label: "Handoff" },
-];
 
 const AGENT_OPTIONS = [
   { key: "agent:claude_code", label: "Claude Code" },
@@ -308,6 +277,10 @@ function ActionSubmenu({
 
   const target = targets[0];
   const currentLabels = target?.labels || [];
+  // The targets' team status vocabulary (per-team custom statuses). A palette
+  // selection is one workspace's rows, so the first target's team speaks for
+  // the set; non-task targets fall back to the defaults harmlessly.
+  const taskStatuses = useTeamTaskStatusList((target as any)?.team_id);
   // Dynamic-client (opencode/pi) live model inventory for the model mode; the
   // hook internally skips its query for static clients.
   const dynamicModels = useDynamicModels(
@@ -416,11 +389,11 @@ function ActionSubmenu({
     }
 
     if (mode === "status") {
-      return STATUS_OPTIONS
+      return statusEntityOptions(taskStatuses)
         .filter((o) => o.label.toLowerCase().includes(q))
         .map((o) => ({
           ...o,
-          active: isTask(target) && target.status === o.key,
+          active: isTask(target) && taskStatusKey(target as any, taskStatuses) === o.key,
         }));
     }
     if (mode === "priority") {
@@ -568,7 +541,7 @@ function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, dynamicModels]);
+  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, dynamicModels, taskStatuses]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
@@ -681,17 +654,22 @@ function ActionSubmenu({
       const label = count === 1 ? (targets[0] as TaskItem).short_id : `${count} tasks`;
 
       if (mode === "status") {
+        // Keys are team status ids; the status carries its category, which is
+        // what the terminal check and the server's side effects key on.
+        const picked = statusByKey(taskStatuses, item.key);
+        if (!picked) return;
+        const fields = statusWriteFields(picked);
         // Terminal moves route through the single close gateway so a parent
         // with open subtasks opens the shared dialog instead of writing Done
         // and stranding a doomed local state the server refuses.
-        if (item.key === "done" || item.key === "dropped") {
+        if (fields.status === "done" || fields.status === "dropped") {
           let deferred = false;
           for (const t of targets as TaskItem[]) {
-            if (closeTaskWithGuard(t.short_id, item.key as "done" | "dropped").needsConfirm) deferred = true;
+            if (closeTaskWithGuard(t.short_id, fields.status, undefined, fields.status_id).needsConfirm) deferred = true;
           }
           if (!deferred) toast.success(`${label} \u2192 ${item.label}`);
         } else {
-          applyTaskUpdate({ status: item.key });
+          applyTaskUpdate(fields);
           toast.success(`${label} \u2192 ${item.label}`);
         }
       } else if (mode === "priority") {
@@ -736,7 +714,7 @@ function ActionSubmenu({
       }
     }
     onClose();
-  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, updatePlan, assignToAgent, updateDoc, teamMembers, router, search]);
+  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, updatePlan, assignToAgent, updateDoc, teamMembers, router, search, taskStatuses]);
 
   // Launch a session per selected task with the chosen agent + initial message.
   const launchAgentRun = useCallback(() => {
@@ -1520,37 +1498,18 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       if (opts?.highlight) pending.pendingHighlightQuery = opts.highlight;
       if (Object.keys(pending).length > 0) useInboxStore.setState(pending);
       if (!store.sessions[conv._id]) {
-        store.injectSession({
-          _id: conv._id,
-          session_id: conv.session_id || conv._id,
-          title: conv.title,
-          updated_at: conv.updated_at ?? Date.now(),
-          project_path: conv.project_path,
-          git_root: conv.git_root,
-          agent_type: conv.agent_type || "claude_code",
-          message_count: conv.message_count || 0,
-          is_idle: conv.is_idle ?? true,
-          has_pending: false,
-          // Carry the retired marker or an injected killed row renders alive
-          // (working dot, needs-input bucket) until the next sync corrects it.
-          // Both palette sources supply it: favorites pass whole store rows,
-          // and performListRecentSessions projects the field off the
-          // conversation doc. Unlike is_idle just above, which that projection
-          // still omits — so `?? true` there is always the fallback.
-          // Stash/dismiss/pin ride along for the same reason — an injected row
-          // persists in the sessions cache, and one seeded without its triage
-          // state flashes into the inbox as an active card at boot (ct-42666).
-          inbox_killed_at: conv.inbox_killed_at ?? null,
-          inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
-          inbox_stashed_at: conv.inbox_stashed_at ?? null,
-          inbox_pinned_at: conv.inbox_pinned_at ?? null,
-          is_pinned: !!conv.inbox_pinned_at,
+        // sessionRowFromSummary carries the triage stamps (killed/stash/
+        // dismiss/pin) through — an injected killed row used to render alive,
+        // and a stashed one flashed into the inbox as an active card at boot
+        // (ct-42666). Both palette sources supply them: favorites pass whole
+        // store rows, performListRecentSessions projects them off the doc.
+        store.injectSession(sessionRowFromSummary({
+          ...conv,
           // Search/recent results null out author for own sessions, so a present
           // authorName means "not mine" — carry it so the card labels whose it is.
-          user_id: conv.user_id,
           author_name: conv.authorName ?? null,
           author_avatar: conv.authorAvatar ?? null,
-        } as InboxSession);
+        }));
       } else {
         store.navigateToSession(conv._id);
       }
