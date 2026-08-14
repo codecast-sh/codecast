@@ -27,7 +27,6 @@ import {
   kindMeta,
   type CapabilityDevice,
   type CapabilityKind,
-  type CapabilityScope,
   type CatalogEntry,
   type InstallSite,
 } from "./CapabilityCard";
@@ -80,7 +79,10 @@ export interface FleetInventoryItem {
   /** The catalog slug when the machine knew one. Identity, when present. */
   slug?: string;
   description?: string;
-  scope: CapabilityScope;
+  /** The contract's own scope union (`OBSERVED_SCOPES`), not a second spelling
+   *  of it. The daemon reports one of these three and the diff reasons about
+   *  the same three, so a local copy could only ever drift from them. */
+  scope: ObservedScope;
   /** False = switched off on purpose. A decision, not an absence. */
   enabled: boolean;
   /**
@@ -674,7 +676,7 @@ export function FleetSummary({
  * that is the one that answers "why is this here?". The full stack is in the
  * cell's tooltip, where a second scope is a detail rather than the headline.
  */
-function notableScope(scopes: readonly CapabilityScope[]): CapabilityScope | undefined {
+function notableScope(scopes: readonly ObservedScope[]): ObservedScope | undefined {
   // `FleetDiffCell.scopes` arrives narrowest first, so the first non-user entry
   // is the narrowest one.
   return scopes.find((s) => s !== "user");
