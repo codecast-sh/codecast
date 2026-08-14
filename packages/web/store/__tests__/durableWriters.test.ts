@@ -33,9 +33,11 @@ describe("named durable store writers", () => {
     const store = useInboxStore.getState();
 
     store.updateClientUI({ inbox_scope: "team" });
-    store.saveView({ name: "Mine", filters: { scope: "mine" } } as any);
-    const savedViewId = useInboxStore.getState().clientState.ui?.saved_views?.[0]?.id;
-    store.deleteView(savedViewId);
+    // Saved views moved out of the client_state bag into their own server
+    // collection so they can be shared; they still dispatch by name.
+    store.createSavedView({ name: "Mine", page: "tasks", prefs: { status: "open" } } as any);
+    const savedViewId = Object.keys(useInboxStore.getState().savedViews)[0];
+    store.deleteSavedView(savedViewId);
     store.updateClientLayout("sidebar" as any, { width: 288 });
     store.updateClientTips({ seen: ["first"], _inlineSuppressed: true });
 
@@ -50,8 +52,8 @@ describe("named durable store writers", () => {
 
     expect(calls.map((call) => call.action)).toEqual([
       "updateClientUI",
-      "saveView",
-      "deleteView",
+      "createSavedView",
+      "deleteSavedView",
       "updateClientLayout",
       "persistClientTips",
       "clearDraftFinal",
@@ -62,10 +64,11 @@ describe("named durable store writers", () => {
     expect(ui["inbox_scope:ts"]).toBeTypeOf("number");
     expect(calls[0].result).toEqual(ui);
 
-    expect(calls[1].patches?.client_state?._?.ui?.saved_views).toHaveLength(1);
-    expect(calls[1].result).toEqual(calls[1].patches?.client_state?._?.ui?.saved_views);
-    expect(calls[2].patches?.client_state?._?.ui?.saved_views).toEqual([]);
-    expect(calls[2].result).toEqual([]);
+    // The create carries a minted client_key so the server row supersedes the
+    // optimistic stub instead of landing beside it.
+    expect(calls[1].args?.[0]?.name).toBe("Mine");
+    expect(calls[1].result?.client_key).toBeTypeOf("string");
+    expect(calls[2].args).toEqual([savedViewId]);
     expect(calls[3].patches?.client_state?._?.layouts?.sidebar).toEqual({ width: 288 });
     expect(calls[4].args).toEqual([{ seen: ["first"] }]);
     expect(calls[4].patches).toBeUndefined();
