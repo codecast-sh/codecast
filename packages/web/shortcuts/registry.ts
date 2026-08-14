@@ -55,6 +55,10 @@ export type ShortcutAction =
   | 'sidebar.toggleRight'
   | 'sidebar.toggleComments'
   | 'terminal.toggle'
+  | 'workbench.1'
+  | 'workbench.2'
+  | 'workbench.3'
+  | 'workbench.4'
   | 'diff.prevChange'
   | 'diff.nextChange'
   | 'diff.toggleFileTree'
@@ -272,6 +276,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   // raw file, and back to live preview when you're done looking.
   { key: 'ctrl+shift+e', mac: 'meta+shift+e', action: 'vault.sourceMode', skipInputCheck: true, description: 'Toggle note source mode' },
   { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
+  // Workbenches: switch the whole chrome to a named arrangement (the preset
+  // order in store/workbench.ts). One key, wholesale — never a per-panel tweak.
+  { key: 'alt+1', action: 'workbench.1', skipInputCheck: true, description: 'Switch to the Triage workbench' },
+  { key: 'alt+2', action: 'workbench.2', skipInputCheck: true, description: 'Switch to the Build workbench' },
+  { key: 'alt+3', action: 'workbench.3', skipInputCheck: true, description: 'Switch to the Review workbench' },
+  { key: 'alt+4', action: 'workbench.4', skipInputCheck: true, description: 'Switch to the Plan workbench' },
 
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
   { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },

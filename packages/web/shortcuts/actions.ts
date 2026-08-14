@@ -10,6 +10,8 @@ import { performUndo, performRedo } from "../store/undoStack";
 import { animatedHideSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { checkMilestone } from "../tips/useTips";
+import { WORKBENCH_PRESETS } from "../store/workbench";
+import { switchToWorkbench } from "../lib/workbenchSwitch";
 
 // The session a per-session chord (stash/kill/defer/pin/rename/label) acts on:
 // the row the user sees highlighted. On the inbox page that's the
@@ -198,6 +200,17 @@ export function useGlobalShortcutActions() {
     const store = useInboxStore.getState();
     store.setDockOpen(store.workspace.dock.pane == null);
   }, []));
+
+  // ⌥1–⌥4: the four preset workbenches, in their declared order. Saved custom
+  // ones are one click in the sidebar; the presets earn the keys.
+  const switchPreset = useCallback((i: number) => {
+    const preset = WORKBENCH_PRESETS[i];
+    if (preset) switchToWorkbench(preset.snapshot, router, pathname);
+  }, [router, pathname]);
+  useShortcutAction('workbench.1', useCallback(() => switchPreset(0), [switchPreset]));
+  useShortcutAction('workbench.2', useCallback(() => switchPreset(1), [switchPreset]));
+  useShortcutAction('workbench.3', useCallback(() => switchPreset(2), [switchPreset]));
+  useShortcutAction('workbench.4', useCallback(() => switchPreset(3), [switchPreset]));
 
   useShortcutAction('ui.undo', useCallback(() => {
     return performUndo() || false;
