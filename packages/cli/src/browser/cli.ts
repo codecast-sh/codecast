@@ -33,11 +33,12 @@ import {
 } from "./profile.js";
 import { matchRefs, snapshotPage } from "./snapshot.js";
 import {
-  click, clickAt, evaluate, focus, hover, locate, pressKey, screenshot,
-  scroll, selectOption, type, uploadFiles,
+  clearViewport, click, clickAt, DEVICES, evaluate, focus, hover, locate, pressKey,
+  screenshot, scroll, selectOption, setViewport, type, uploadFiles,
 } from "./actions.js";
 import { armRecorder, clearRecording, readRecording } from "./observe.js";
 import { ownerKey } from "./owner.js";
+import { runBatch, type BatchContext } from "./batch.js";
 import { downscaleWithSips, uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
@@ -80,6 +81,10 @@ async function withPage<T>(
     // session, so without this any navigation this command triggers would land
     // on a page with no console capture at all.
     await armRecorder(page);
+    // Same reason: an emulated viewport is session-scoped and would evaporate
+    // between commands, so re-apply whatever this tab was last set to.
+    const vp = s.viewportByTab?.[target.targetId];
+    if (vp) await setViewport(page, vp).catch(() => {});
     return await fn(page, s, conn);
   } catch (err) {
     // A stack trace tells an agent nothing it can act on; the message does.
@@ -683,6 +688,60 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
+  br.command("viewport [size]")
+    .description("Resize the page, or emulate a device: desktop, laptop, wide, tablet, mobile, mobile-small")
+    .option("--reset", "Back to the real window size")
+    .option("--tab <id>", "Act on a specific tab")
+    .action(async (size: string | undefined, o: { reset?: boolean; tab?: string }) => {
+      await act(o, async (page) => {
+        if (o.reset || size === "reset") {
+          await clearViewport(page);
+          const cur = readState();
+          if (cur?.viewportByTab?.[page.targetId]) {
+            const rest = { ...cur.viewportByTab };
+            delete rest[page.targetId];
+            writeState({ ...cur, viewportByTab: rest });
+          }
+          return console.log(`${OK} viewport reset to the real window`);
+        }
+        if (!size) {
+          const cur = await evaluate(
+            page,
+            `JSON.stringify([innerWidth, innerHeight, devicePixelRatio, "ontouchstart" in window])`,
+          );
+          const [w, h, dpr, touch] = JSON.parse(cur as string);
+          console.log(`${w}x${h} @${dpr}x${touch ? ", touch" : ""}`);
+          console.log(fmt.muted(`  presets: ${Object.keys(DEVICES).join(", ")}  ·  or a size like 1024x768`));
+          return;
+        }
+        const preset = DEVICES[size];
+        const explicit = /^(\d+)x(\d+)$/.exec(size);
+        if (!preset && !explicit) {
+          die(`unknown size '${size}'`, `use a preset (${Object.keys(DEVICES).join(", ")}) or WxH like 1024x768`);
+        }
+        const device = preset ?? {
+          width: parseInt(explicit![1], 10),
+          height: parseInt(explicit![2], 10),
+          scale: 1,
+          mobile: false,
+        };
+        await setViewport(page, device);
+        // Remember it so every later command sees the same page size.
+        const cur = readState();
+        if (cur) {
+          writeState({
+            ...cur,
+            viewportByTab: { ...(cur.viewportByTab ?? {}), [page.targetId]: device },
+          });
+        }
+        console.log(
+          `${OK} ${size} — ${device.width}x${device.height} @${device.scale}x${device.mobile ? ", touch" : ""}`,
+        );
+        // Layout only reflows once the page reacts to the new metrics.
+        await settle(page, { timeoutMs: 5000 });
+      });
+    });
+
   br.command("upload <ref> <files...>")
     .description("Attach files to a file input, with no OS picker")
     .option("--tab <id>", "Act on a specific tab")
@@ -750,6 +809,106 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
+  br.command("do [steps...]")
+    .description("Run several steps in one go — much faster than separate commands")
+    .option("--keep-going", "Carry on after a step fails")
+    .option("--tab <id>", "Act on a specific tab")
+    .addHelpText(
+      "after",
+      `
+Steps use the same verbs as the commands:
+  cast browser do "open example.com" "find Sign in" click shot
+
+Or one per line from stdin, which keeps long flows readable:
+  cast browser do - <<'EOF'
+  open https://example.com
+  find "Sign in"
+  click
+  wait --text "Password"
+  type #e42 "hunter2" --submit
+  shot
+  EOF
+
+A step with no ref uses whatever the last \`find\` matched.`,
+    )
+    .action(async (steps: string[], o: { keepGoing?: boolean; tab?: string }) => {
+      // `-` reads the flow from stdin, the same convention as `cast send -`.
+      let plan = steps;
+      if (steps.length === 1 && steps[0] === "-") {
+        const stdin = await new Promise<string>((resolve) => {
+          let buf = "";
+          process.stdin.setEncoding("utf-8");
+          process.stdin.on("data", (d) => (buf += d));
+          process.stdin.on("end", () => resolve(buf));
+        });
+        plan = stdin.split("\n").map((l) => l.trim()).filter(Boolean);
+      }
+      if (!plan.length) die("no steps given", 'try: cast browser do "open example.com" snapshot');
+
+      await act(o, async (page, state, conn) => {
+        const started = Date.now();
+        const ctx: BatchContext = {
+          page,
+          shots: [],
+          // Reuse the same capture and navigate paths the single commands use,
+          // so a batched shot behaves identically — downscale, inline marker.
+          capture: async (args) => {
+            const buf = await screenshot(page, { fullPage: args.includes("--full") });
+            const out = path.join(os.tmpdir(), `cast-shot-${Date.now()}.png`);
+            let bytes = buf;
+            if (bytes.length > MAX_IMAGE_SIZE) {
+              const smaller = downscaleWithSips(bytes, "image/png");
+              if (smaller && smaller.length < bytes.length) bytes = smaller;
+            }
+            fs.writeFileSync(out, bytes);
+            return out;
+          },
+          navigate: async (url) => {
+            const target = /^[a-z]+:\/\//i.test(url) ? url : `https://${url}`;
+            await conn.send("Page.navigate", { url: target }, page.sessionId);
+            await settle(page);
+            const snap = await snapshotPage(page, { maxChars: 1 });
+            return `${snap.title || "(untitled)"} — ${snap.url}`;
+          },
+        };
+
+        const results = await runBatch(ctx, plan, { keepGoing: o.keepGoing });
+        for (const r of results) {
+          if (r.ok) {
+            console.log(`${OK} ${fmt.highlight(r.step)}`);
+            if (r.output) console.log(r.output.split("\n").map((l) => `    ${l}`).join("\n"));
+          } else {
+            console.log(`${BAD} ${fmt.highlight(r.step)}`);
+            console.log(`    ${r.error}`);
+          }
+        }
+
+        for (const shot of ctx.shots) console.log(inlineImageMarker(path.resolve(shot)));
+
+        // A viewport set inside a batch has to outlive it, like one set by the
+        // command — otherwise the next command silently snaps back.
+        if (ctx.viewport) {
+          const cur = readState();
+          if (cur) {
+            writeState({
+              ...cur,
+              viewportByTab: { ...(cur.viewportByTab ?? {}), [page.targetId]: ctx.viewport },
+            });
+          }
+        }
+
+        const failed = results.filter((r) => !r.ok).length;
+        const skipped = plan.length - results.length;
+        console.log(
+          fmt.muted(
+            `\n${results.length - failed}/${plan.length} steps in ${((Date.now() - started) / 1000).toFixed(1)}s` +
+              (skipped ? ` — ${skipped} not attempted after the failure` : ""),
+          ),
+        );
+        if (failed) process.exitCode = 1;
+      });
+    });
+
   // -------------------------------------------------------------- diagnostics
 
   br.command("console")
@@ -784,7 +943,31 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           console.log(`${fmt.muted(`+${(e.t / 1000).toFixed(1)}s`)} ${fmt.error("UNCAUGHT")} ${e.text}`);
           if (e.stack) console.log(fmt.muted(e.stack.split("\n").slice(1, 4).map((l) => `    ${l.trim()}`).join("\n")));
         }
-        if (!wanted.length && !rec.errors.length) console.log(fmt.muted("(nothing logged)"));
+        for (const d of rec.dialogs ?? []) {
+          console.log(`${fmt.muted(`+${(d.t / 1000).toFixed(1)}s`)} ${fmt.warning("DIALOG")} ${d.kind}: ${d.message}`);
+        }
+        if (!wanted.length && !rec.errors.length && !(rec.dialogs ?? []).length) {
+          console.log(fmt.muted("(nothing logged)"));
+        }
+      });
+    });
+
+  br.command("dialogs")
+    .description("Modal dialogs the page tried to open (answered without blocking)")
+    .option("--tab <id>", "Act on a specific tab")
+    .action(async (o: { tab?: string }) => {
+      await act(o, async (page) => {
+        const rec = await readRecording(page);
+        if (!rec.dialogs?.length) return console.log(fmt.muted("(the page opened no dialogs)"));
+        for (const d of rec.dialogs) {
+          console.log(`${fmt.muted(`+${(d.t / 1000).toFixed(1)}s`)} ${d.kind.padEnd(12)} ${d.message}`);
+        }
+        console.log(
+          fmt.muted(
+            "\n  These were answered automatically (confirm→OK, prompt→default) so they could not\n" +
+              "  freeze the tab. Drive the real flow with clicks if the answer matters.",
+          ),
+        );
       });
     });
 

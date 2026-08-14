@@ -37,6 +37,34 @@ export interface Point {
   y: number;
 }
 
+/** Block until the page has stopped scrolling, so a measurement stays true. */
+async function settleScroll(page: PageSession, timeoutMs = 1500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let last = Number.NaN;
+  let stable = 0;
+  while (Date.now() < deadline) {
+    let pos: number;
+    try {
+      const r = await page.conn.send<any>(
+        "Runtime.evaluate",
+        { expression: `Math.round(scrollY) + ":" + Math.round(scrollX)`, returnByValue: true },
+        page.sessionId,
+        2000,
+      );
+      pos = r.result.value;
+    } catch {
+      return; // mid-navigation; the caller will fail with a clearer error
+    }
+    if (pos === (last as unknown as number)) {
+      if (++stable >= 2) return;
+    } else {
+      stable = 0;
+    }
+    last = pos as unknown as number;
+    await new Promise((r) => setTimeout(r, 40));
+  }
+}
+
 /** Centre of an element's first content box, after scrolling it into view. */
 export async function locate(page: PageSession, ref: number): Promise<Point> {
   const { conn, sessionId } = page;
@@ -46,6 +74,16 @@ export async function locate(page: PageSession, ref: number): Promise<Point> {
     // "Node with given id does not belong to the document" means it is gone.
     throw new ElementGone(ref);
   }
+  // Wait for the scroll to finish before measuring.
+  //
+  // `scrollIntoViewIfNeeded` returns once the scroll has been STARTED, not when
+  // it lands — and any page with smooth scrolling keeps moving for a few
+  // hundred milliseconds. Measuring immediately captures a position the element
+  // is still travelling away from, so the click lands wherever that spot ends
+  // up: on Hacker News this opened an unrelated story while cheerfully
+  // reporting success, which is the worst way for this to fail.
+  await settleScroll(page);
+
   let quads: number[][];
   try {
     const res = await conn.send<{ quads: number[][] }>("DOM.getContentQuads", { backendNodeId: ref }, sessionId);
@@ -107,17 +145,64 @@ export async function click(page: PageSession, ref: number, opts: ClickOptions =
   return pt;
 }
 
+/**
+ * Where a dispatched coordinate actually lands, as a multiplier.
+ *
+ * Under viewport emulation Chrome may render scaled, and input coordinates are
+ * then mapped through the window rather than the page — so a click aimed at
+ * [43,30] can be delivered at [107,75]. That is measurable: move the pointer to
+ * a known point and ask the page where it thinks the pointer is. A harmless
+ * mousemove costs one round trip and removes the need to reason about window
+ * geometry, display scaling and device pixel ratios, none of which are reliably
+ * reported together.
+ *
+ * Returns 1 when the page cannot answer, which is the correct assumption.
+ */
+async function inputScale(page: PageSession, at: Point): Promise<number> {
+  const { conn, sessionId } = page;
+  try {
+    await conn.send(
+      "Input.dispatchMouseEvent",
+      { type: "mouseMoved", x: at.x, y: at.y, button: "none" },
+      sessionId,
+      3000,
+    );
+    const r = await conn.send<any>(
+      "Runtime.evaluate",
+      { expression: `JSON.stringify(window.__cast && window.__cast.ptr)`, returnByValue: true },
+      sessionId,
+      3000,
+    );
+    const seen = JSON.parse(r.result?.value ?? "null") as [number, number] | null;
+    if (!seen || !at.x) return 1;
+    const scale = seen[0] / at.x;
+    // Only trust a clear, consistent scaling. Anything near 1 is 1, and a wild
+    // value means the page moved under us rather than that input is scaled.
+    if (!Number.isFinite(scale) || scale < 0.2 || scale > 8) return 1;
+    return Math.abs(scale - 1) < 0.02 ? 1 : scale;
+  } catch {
+    return 1;
+  }
+}
+
 /** Click raw viewport coordinates. The escape hatch when no ref fits. */
 export async function clickAt(page: PageSession, pt: Point, opts: ClickOptions = {}): Promise<void> {
   const { conn, sessionId } = page;
   const button = opts.button ?? "left";
   const clickCount = opts.clickCount ?? 1;
   const modifiers = opts.modifiers ?? 0;
+
+  // Aim in the space the browser routes input through, which is not always the
+  // page's own. Dividing by the measured scale makes the two agree.
+  const scale = await inputScale(page, pt);
+  const x = pt.x / scale;
+  const y = pt.y / scale;
+
   // The move matters: hover styles, menus and tooltips only appear for a
   // pointer that actually travelled there.
-  await conn.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y, button: "none", modifiers }, sessionId);
-  await conn.send("Input.dispatchMouseEvent", { type: "mousePressed", x: pt.x, y: pt.y, button, clickCount, modifiers }, sessionId);
-  await conn.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: pt.x, y: pt.y, button, clickCount, modifiers }, sessionId);
+  await conn.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", modifiers }, sessionId);
+  await conn.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount, modifiers }, sessionId);
+  await conn.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount, modifiers }, sessionId);
 }
 
 export async function hover(page: PageSession, ref: number): Promise<Point> {
@@ -404,4 +489,121 @@ export async function evaluate(page: PageSession, expression: string): Promise<u
     throw new Error(e.exception?.description ?? e.text ?? "evaluation failed");
   }
   return res.result?.value;
+}
+
+/** A device preset: viewport, pixel density, touch, and user agent. */
+export interface DeviceProfile {
+  width: number;
+  height: number;
+  scale: number;
+  mobile: boolean;
+  userAgent?: string;
+}
+
+// Enough to cover the breakpoints frontend work actually targets. Names are
+// what a developer would say out loud rather than model numbers.
+export const DEVICES: Record<string, DeviceProfile> = {
+  desktop: { width: 1440, height: 900, scale: 1, mobile: false },
+  laptop: { width: 1280, height: 800, scale: 2, mobile: false },
+  wide: { width: 1920, height: 1080, scale: 1, mobile: false },
+  tablet: {
+    width: 820, height: 1180, scale: 2, mobile: true,
+    userAgent: "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  },
+  mobile: {
+    width: 390, height: 844, scale: 3, mobile: true,
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  },
+  "mobile-small": {
+    width: 320, height: 568, scale: 2, mobile: true,
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  },
+};
+
+/**
+ * Resize the viewport, optionally emulating a device.
+ *
+ * This overrides the metrics the PAGE sees rather than resizing the OS window,
+ * so it works headless, it is exact (a real window carries chrome and is
+ * subject to the display size), and it can emulate a density and a touch
+ * screen that the machine does not have. That is what makes it useful for
+ * checking a layout at a breakpoint: media queries, `innerWidth` and
+ * `devicePixelRatio` all report the emulated values.
+ */
+export async function setViewport(page: PageSession, d: DeviceProfile): Promise<void> {
+  const { conn, sessionId } = page;
+
+  // The window's CONTENT area must be at least as wide as the viewport we are
+  // emulating, or Chrome scales the rendering to fit and input stops following.
+  //
+  // When the emulated width exceeds the content area, `elementFromPoint`
+  // answers in emulated space while `Input.dispatchMouseEvent` is routed
+  // through window space. The occlusion check passes and the click still lands
+  // somewhere else. Measured on Hacker News: a click aimed at [43,30] was
+  // delivered at [107,75] — 2.5x out, exactly the ratio of the 390px emulated
+  // width to the 156px content area — and opened an unrelated story while
+  // reporting success.
+  //
+  // The content width has to be MEASURED, not derived from the window bounds:
+  // those are in display units, and with any display scaling a 1440-wide
+  // window can have a 156px content area. So clear any override, read the real
+  // width, and grow until it fits. Only ever grow — shrinking to match a small
+  // device is what caused the bug in the first place.
+  try {
+    const realWidth = async (): Promise<number> => {
+      const r = await conn.send<any>(
+        "Runtime.evaluate",
+        { expression: "innerWidth", returnByValue: true },
+        sessionId,
+        2000,
+      );
+      return Number(r.result?.value) || 0;
+    };
+    await conn.send("Emulation.clearDeviceMetricsOverride", {}, sessionId);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const have = await realWidth();
+      if (have >= d.width) break;
+      const { windowId, bounds } = await conn.send<any>("Browser.getWindowForTarget", { targetId: page.targetId });
+      if (!windowId || bounds?.windowState === "minimized") break;
+      // Scale the window by the shortfall rather than setting an absolute size,
+      // which is the only way to be right without knowing the display scaling.
+      const grown = Math.ceil((bounds.width || d.width) * (d.width / Math.max(have, 1)) * 1.05);
+      await conn.send("Browser.setWindowBounds", {
+        windowId,
+        bounds: { width: Math.min(grown, 4000), height: Math.max(bounds.height || 0, 900) },
+      });
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  } catch {
+    // Headless has no window; there the emulated size IS the rendering size.
+  }
+
+  await conn.send(
+    "Emulation.setDeviceMetricsOverride",
+    {
+      width: d.width,
+      height: d.height,
+      deviceScaleFactor: d.scale,
+      mobile: d.mobile,
+      screenWidth: d.width,
+      screenHeight: d.height,
+    },
+    sessionId,
+  );
+  // Touch changes real behaviour: hover-only menus never open, and libraries
+  // branch on it. Emulating the size without it gives a misleading picture.
+  await conn
+    .send("Emulation.setTouchEmulationEnabled", { enabled: d.mobile, maxTouchPoints: d.mobile ? 5 : 0 }, sessionId)
+    .catch(() => {});
+  if (d.userAgent) {
+    await conn.send("Emulation.setUserAgentOverride", { userAgent: d.userAgent }, sessionId).catch(() => {});
+  }
+}
+
+/** Drop every emulation override, back to the real window. */
+export async function clearViewport(page: PageSession): Promise<void> {
+  const { conn, sessionId } = page;
+  await conn.send("Emulation.clearDeviceMetricsOverride", {}, sessionId).catch(() => {});
+  await conn.send("Emulation.setTouchEmulationEnabled", { enabled: false }, sessionId).catch(() => {});
+  await conn.send("Emulation.setUserAgentOverride", { userAgent: "" }, sessionId).catch(() => {});
 }
