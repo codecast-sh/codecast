@@ -32,6 +32,16 @@ ipcRenderer.on("update-status", (_e, status) => {
   if (updateStatusHandler) updateStatusHandler(status);
 });
 
+// Tabs handed back by detached tab windows. Buffered like deep links: an
+// adoption can land while the main renderer is still booting, and a dropped
+// one would silently lose the user's tab.
+let adoptTabHandler = null;
+let adoptTabBuffer = [];
+ipcRenderer.on("adopt-tab", (_e, navPath) => {
+  if (adoptTabHandler) adoptTabHandler(navPath);
+  else adoptTabBuffer.push(navPath);
+});
+
 contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   getVersion: () => ipcRenderer.invoke("get-app-version"),
   setBadgeCount: (count) => ipcRenderer.invoke("set-badge-count", count),
@@ -77,5 +87,18 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   composeSubmit: (data) => ipcRenderer.send("compose-submit", data),
   openExternal: (url) => ipcRenderer.invoke("open-external", url),
   getSystemIdleSeconds: () => ipcRenderer.invoke("get-system-idle-seconds"),
+  // Detached tab windows: this renderer IS one (flag set by createTabWindow's
+  // additionalArguments), break a tab out, hand one back, adopt one returned.
+  isTabWindow: process.argv.includes("--tab-window"),
+  detachTab: (navPath) => ipcRenderer.invoke("detach-tab", navPath),
+  attachTab: (navPath) => ipcRenderer.invoke("attach-tab", navPath),
+  onAdoptTab: (cb) => {
+    adoptTabHandler = cb;
+    if (adoptTabBuffer.length) {
+      const pending = adoptTabBuffer;
+      adoptTabBuffer = [];
+      for (const p of pending) cb(p);
+    }
+  },
   platform: process.platform,
 });

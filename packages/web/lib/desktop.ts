@@ -25,6 +25,12 @@ declare global {
       // Machine-wide seconds since last user input (Electron powerMonitor).
       // Absent on older builds — gate on it.
       getSystemIdleSeconds: () => Promise<number>;
+      // Detached tab windows: a dashboard tab broken out into its own OS
+      // window. All absent on older builds — gate on them.
+      isTabWindow?: boolean;
+      detachTab: (path: string) => Promise<void>;
+      attachTab: (path: string) => Promise<void>;
+      onAdoptTab: (cb: (path: string) => void) => void;
       platform: string;
     };
   }
@@ -50,6 +56,15 @@ export function bridge<K extends keyof NonNullable<Window["__CODECAST_ELECTRON__
 
 export function isDesktop(): boolean {
   return isElectron();
+}
+
+// This renderer is a DETACHED TAB WINDOW — one dashboard surface broken out
+// into its own OS window (main.js createTabWindow, flagged via preload argv).
+// Such a window renders its route directly with no tab shell of its own, and
+// must never write shared tab state or persist layout — the main window owns
+// both. Checked by the tab router, TabBar, DashboardLayout and the store.
+export function isDetachedTabWindow(): boolean {
+  return typeof window !== "undefined" && window.__CODECAST_ELECTRON__?.isTabWindow === true;
 }
 
 // ---------------------------------------------------------------------------
