@@ -532,3 +532,61 @@ describe("chat store slice", () => {
     });
   });
 });
+
+describe("channel management actions", () => {
+  const CHAN = "chanmgmt12345678901234567890123x";
+
+  beforeEach(() => {
+    useInboxStore.getState().syncTable("chatChannels", [
+      { _id: CHAN, name: "old-name", topic: "old topic", created_at: 1, updated_at: 1 },
+    ]);
+  });
+
+  it("updateChatChannel renames and re-topics optimistically", () => {
+    useInboxStore.getState().updateChatChannel(CHAN, { name: "new-name" });
+    expect(useInboxStore.getState().chatChannels[CHAN].name).toBe("new-name");
+    useInboxStore.getState().updateChatChannel(CHAN, { topic: "what this room is for" });
+    const row = useInboxStore.getState().chatChannels[CHAN];
+    expect(row.topic).toBe("what this room is for");
+    expect(row.name).toBe("new-name");
+  });
+
+  it("archiveChatChannel hides the row from the rail at once; restore writes the null tombstone", () => {
+    useInboxStore.getState().archiveChatChannel(CHAN, true);
+    expect(useInboxStore.getState().chatChannels[CHAN].archived_at).toBeGreaterThan(0);
+    _resetChatRailMemo();
+    expect(selectChatRail(chatState(), "me").some((c) => c.id === CHAN)).toBe(false);
+
+    // Restore is null, never field-removal — the clear a delta sync can SEE.
+    useInboxStore.getState().archiveChatChannel(CHAN, false);
+    expect(useInboxStore.getState().chatChannels[CHAN].archived_at).toBe(null);
+    _resetChatRailMemo();
+    expect(selectChatRail(chatState(), "me").some((c) => c.id === CHAN)).toBe(true);
+  });
+});
+
+describe("boot with a persisted stub AND its server twin", () => {
+  const CHAN = "chanboot123456789012345678901234";
+  const SERVER_ID = "msgboot123456789012345678901234x";
+  const STUB_ID = "chatmsgstub-boottwin";
+
+  it("one live sync collapses the pair — the screenshot-duplicate case", () => {
+    // IDB persistence saves BOTH the optimistic stub and, after supersede, the
+    // server row. A crash between the stub write and the supersede leaves both
+    // on disk; boot hydration then seeds both keys, and every message you ever
+    // sent renders twice until something collapses them.
+    useInboxStore.getState().syncTable("chatMessages", [
+      { _id: STUB_ID, client_id: STUB_ID, channel_id: CHAN, user_id: "me", content: "ping", created_at: 100, updated_at: 100 },
+      { _id: SERVER_ID, client_id: STUB_ID, channel_id: CHAN, user_id: "me", content: "ping", created_at: 100, updated_at: 100 },
+    ], { isDelta: true });
+
+    // The live page for the channel arrives.
+    useInboxStore.getState().syncTable("chatMessages", [
+      { _id: SERVER_ID, client_id: STUB_ID, channel_id: CHAN, user_id: "me", content: "ping", created_at: 100, updated_at: 100 },
+    ], { isDelta: true });
+
+    const rows = selectChannelMessages(chatState(), CHAN);
+    expect(rows.map((r) => r._id)).toEqual([SERVER_ID]);
+    expect(useInboxStore.getState().chatMessages[STUB_ID]).toBeUndefined();
+  });
+});

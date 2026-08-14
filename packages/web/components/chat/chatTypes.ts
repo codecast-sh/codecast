@@ -44,6 +44,9 @@ export type ChatMessageView = {
   replyCount?: number;
   lastReplyAt?: number;
   replyFaces?: { id: string; name: string; avatarUrl?: string; isAgent?: boolean }[];
+  /** An agent turn in flight (or failed) inside this root's thread, so the
+   *  affordance can say "thinking…" without the panel open. */
+  threadAgentStatus?: "thinking" | "streaming" | "error";
   /** Optimistic rows render at reduced opacity until the server echoes them. */
   pending?: boolean;
   failed?: boolean;
@@ -58,4 +61,6 @@ export type ChatChannelView = {
   mentionCount?: number;
   muted?: boolean;
   isPrivate?: boolean;
+  /** The channel's team — the mention scope for its composer. */
+  teamId?: string;
 };

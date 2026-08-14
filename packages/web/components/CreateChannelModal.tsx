@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Hash } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
+import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 
 // New channel.
 //
@@ -16,9 +17,10 @@ import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
 // Review" becomes "design-review"; making the reader discover that after the
 // fact is the kind of small dishonesty that erodes trust in a surface.
 
-export function slugChannelName(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, "-");
-}
+// The server's own rule (convex/chatText), under the name this surface has
+// always used. A local copy drifted: it kept invalid characters and uncapped
+// length, so the previewed slug was not the name the channel got.
+export const slugChannelName = normalizeChannelName;
 
 export function CreateChannelModal({
   onClose,
@@ -41,10 +43,13 @@ export function CreateChannelModal({
     () => Object.values(channels).some((c: any) => !c.archived_at && c.name === slug),
     [channels, slug],
   );
-  const valid = slug.length > 0 && !taken;
+  // A channel MUST land in the workspace the user is looking at. Omitting the
+  // team would let the server default to users.active_team_id — a second
+  // source of truth that can name a team this window is not even showing.
+  const valid = slug.length > 0 && !taken && !!teamId;
 
   const submit = () => {
-    if (!valid) return;
+    if (!valid || !teamId) return;
     const id = createChatChannel(name, { topic: topic.trim() || undefined, teamId });
     toast.success(`Created #${slug}`);
     onCreated?.(id);
@@ -88,7 +93,9 @@ export function CreateChannelModal({
         </div>
 
         <div className="px-6 pb-4 text-xs min-h-[18px]">
-          {taken ? (
+          {!teamId ? (
+            <span className="text-sol-orange">Switch to a team first — channels live in team workspaces</span>
+          ) : taken ? (
             <span className="text-sol-red">#{slug} already exists</span>
           ) : slug && slug !== name.trim() ? (
             <span className="text-sol-text-muted">

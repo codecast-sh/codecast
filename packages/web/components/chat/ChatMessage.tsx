@@ -346,7 +346,9 @@ export const ChatMessage = memo(function ChatMessage({
               ))}
             </span>
             <span className="ch-thread-count">
-              {message.replyCount} {message.replyCount === 1 ? "reply" : "replies"}
+              {message.threadAgentStatus === "thinking" || message.threadAgentStatus === "streaming"
+                ? "thinking…"
+                : `${message.replyCount} ${message.replyCount === 1 ? "reply" : "replies"}`}
             </span>
             {message.lastReplyAt && (
               <span className="ch-thread-last">{relativeReplyTime(message.lastReplyAt, now)}</span>

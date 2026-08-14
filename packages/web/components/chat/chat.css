@@ -1289,3 +1289,70 @@
 .ch-edit-cancel {
   color: var(--sol-text-muted);
 }
+
+/* ── Channel management menu (ChannelMenu.tsx) ──────────────────────────── */
+
+
+
+
+
+
+
+
+
+
+
+
+.ch-channel-menu-edit {
+  display: flex;
+  gap: 5px;
+  padding: 5px 6px;
+}
+
+.ch-channel-menu-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+  border-radius: 5px;
+  background: var(--sol-bg);
+  color: var(--sol-text);
+  font-size: 12px;
+}
+
+.ch-channel-menu-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--sol-blue) 60%, transparent);
+}
+
+.ch-channel-menu-save {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: 5px;
+  background: var(--sol-blue);
+  color: var(--sol-bg);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* The rename/topic editor the menu hands off to (ChannelFieldEditor). */
+.ch-channel-edit {
+  position: fixed;
+  z-index: 60;
+  width: 280px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  border-radius: 10px;
+  background: var(--sol-card);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--sol-text) 20%, transparent);
+}
+
+.ch-channel-edit-label {
+  padding: 0 2px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--sol-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
