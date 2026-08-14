@@ -3,11 +3,13 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import {
+  invocableSkills,
   readInstalledPluginPins,
   readInventory,
   readKnownMarketplaces,
   toInvocableList,
 } from "./inventory.js";
+import { buildFleetDiff } from "./fleetDiff.js";
 
 // One fixture tree shaped like a real machine: a HOME with user-scope skills,
 // commands, agents, plugins and MCP servers, plus a project carrying its own
@@ -109,7 +111,17 @@ write(
   }),
 );
 
-afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }));
+afterAll(() => {
+  // Restore the permissions the EACCES fixtures dropped, or rmSync cannot
+  // clear the tree.
+  for (const p of restoreModes) {
+    try {
+      fs.chmodSync(p, 0o755);
+    } catch {}
+  }
+  fs.rmSync(ROOT, { recursive: true, force: true });
+});
+const restoreModes: string[] = [];
 
 const find = (inv: ReturnType<typeof readInventory>, kind: string, name: string) =>
   inv.items.find((i) => i.kind === kind && i.name === name);
@@ -263,8 +275,409 @@ describe("robustness", () => {
   });
 });
 
+// ct-42815 — absent and unreadable are different answers. Every case here pins
+// the invariant that a read failure can never masquerade as an empty machine.
+describe("unreadable", () => {
+  test("the clean fixture reports zero unreadable paths", () => {
+    expect(readInventory(HOME, PROJ).unreadable).toEqual([]);
+  });
+
+  test("malformed JSON is reported with its path, not folded into empty", () => {
+    const home = path.join(ROOT, "mangled");
+    const settings = path.join(home, ".claude", "settings.json");
+    write(settings, "{ trailing: comma, }");
+    const inv = readInventory(home);
+    expect(inv.items.filter((i) => i.kind === "plugin")).toEqual([]);
+    expect(inv.unreadable.map((u) => u.path)).toContain(settings);
+  });
+
+  test("a chmod-000 file reports EACCES — unknown, not an empty machine", () => {
+    const home = path.join(ROOT, "denied");
+    const settings = path.join(home, ".claude", "settings.json");
+    write(settings, JSON.stringify({ enabledPlugins: { "x@m": true } }));
+    fs.chmodSync(settings, 0o000);
+    restoreModes.push(settings);
+    const inv = readInventory(home);
+    expect(inv.unreadable).toContainEqual({ path: settings, error: "EACCES" });
+    expect(inv.items.filter((i) => i.kind === "plugin")).toEqual([]);
+  });
+
+  test("an unreadable directory is distinguishable from an empty one", () => {
+    const emptyHome = path.join(ROOT, "empty-skills");
+    fs.mkdirSync(path.join(emptyHome, ".claude", "skills"), { recursive: true });
+    expect(readInventory(emptyHome).unreadable).toEqual([]);
+
+    const deniedHome = path.join(ROOT, "denied-skills");
+    const skillsDir = path.join(deniedHome, ".claude", "skills");
+    fs.mkdirSync(skillsDir, { recursive: true });
+    fs.chmodSync(skillsDir, 0o000);
+    restoreModes.push(skillsDir);
+    expect(readInventory(deniedHome).unreadable).toContainEqual({ path: skillsDir, error: "EACCES" });
+  });
+
+  // The client gate stats `~/.codex` / `~/.cursor`. With exec denied on HOME
+  // that stat fails EACCES — which must surface as unknown, not fold into
+  // "this machine has no codex", the exact conflation ct-42815 bans.
+  test("a stat-denied client dot-dir is unknown, never client-absent", () => {
+    const home = path.join(ROOT, "denied-home");
+    fs.mkdirSync(home, { recursive: true });
+    fs.chmodSync(home, 0o000);
+    restoreModes.push(home);
+    const paths = readInventory(home).unreadable.map((u) => u.path);
+    expect(paths).toContain(path.join(home, ".codex"));
+    expect(paths).toContain(path.join(home, ".cursor"));
+  });
+
+  test("a dangling symlink is unknown: readdir listed it, so ENOENT is recorded", () => {
+    const home = path.join(ROOT, "dangling");
+    const skillsDir = path.join(home, ".claude", "skills");
+    write(path.join(skillsDir, "ok", "SKILL.md"), "---\nname: ok\ndescription: fine\n---\n");
+    const link = path.join(skillsDir, "gone");
+    fs.symlinkSync(path.join(home, "no-such-target"), link);
+    const inv = readInventory(home);
+    expect(inv.unreadable).toContainEqual({ path: link, error: "ENOENT" });
+    // The healthy neighbour still reports — one bad entry poisons nothing.
+    expect(find(inv, "skill", "ok")).toBeDefined();
+  });
+});
+
+// ct-42818 — codex state files, read from the slots codex's `agentFileTargets`
+// descriptor declares and tagged with their client.
+describe("codex", () => {
+  const home = path.join(ROOT, "codex-home");
+  const proj = path.join(ROOT, "codex-proj");
+  write(
+    path.join(home, ".codex", "config.toml"),
+    [
+      "model = \"gpt-5\"",
+      "",
+      "[mcp_servers]",
+      "inline = { command = \"uvx\", args = [\"inline-mcp\"] }",
+      "",
+      "[mcp_servers.docs]",
+      "command = \"npx\"",
+      "args = [\"-y\", \"docs-mcp\"]",
+      "",
+      "[mcp_servers.\"dotted.name\"]",
+      "url = \"https://mcp.example.dev/mcp\"",
+      "",
+      "[mcp_servers.docs.env] # a nested table must not bleed into the next server",
+      "KEY = \"v\"",
+      "",
+      "[mcp_servers.longpkg]",
+      "command = \"npx\"",
+      "args = [",
+      "  \"-y\",",
+      "  \"@scope/very-long-package\",",
+      "]",
+      "",
+      "[features]",
+      "hooks = true",
+    ].join("\n"),
+  );
+  // Project-scope codex config + the cross-client project skills dir — both
+  // declared by codex's descriptor (mcpConfig.project, skillsDir.project).
+  write(
+    path.join(proj, ".codex", "config.toml"),
+    ["[mcp_servers.projsrv]", "command = \"deno\"", "args = [\"run\", \"srv.ts\"]"].join("\n"),
+  );
+  write(
+    path.join(proj, ".agents", "skills", "proj-skill", "SKILL.md"),
+    "---\nname: proj-skill\ndescription: project codex skill\n---\n",
+  );
+  write(
+    path.join(home, ".codex", "hooks.json"),
+    JSON.stringify({
+      hooks: {
+        SessionStart: [{ hooks: [{ type: "command", command: "/x/.codecast/hooks/stable-feed-codex.sh", additionalContextLimit: 0 }] }],
+      },
+    }),
+  );
+  write(path.join(home, ".codex", "AGENTS.md"), "# global instructions\n");
+  write(path.join(proj, "AGENTS.md"), "# project instructions\n");
+
+  test("one mcp item per [mcp_servers.*] section, tagged client codex", () => {
+    const inv = readInventory(home);
+    const docs = find(inv, "mcp", "docs");
+    expect(docs).toMatchObject({ client: "codex", scope: "user", enabled: true });
+    expect(docs?.meta).toMatchObject({ transport: "stdio", command: "npx -y docs-mcp" });
+    expect(find(inv, "mcp", "dotted.name")?.meta).toMatchObject({
+      transport: "http",
+      url: "https://mcp.example.dev/mcp",
+    });
+    // The nested [mcp_servers.docs.env] table is docs's config, not a server.
+    // The real ~/.codex/config.toml has one, and the first parser cut minted a
+    // phantom `node_repl.env` server from it.
+    expect(inv.items.filter((i) => i.client === "codex" && i.kind === "mcp")).toHaveLength(4);
+    expect(inv.unreadable).toEqual([]);
+  });
+
+  // A truncated command line is worse than an unknown one — the command is the
+  // main thing the UI shows before enabling a server, so an array spanning
+  // lines must accumulate to the last element, not stop at `[`'s line.
+  test("an args array that spans lines is read whole", () => {
+    expect(find(readInventory(home), "mcp", "longpkg")?.meta?.command).toBe(
+      "npx -y @scope/very-long-package",
+    );
+  });
+
+  test("an inline-table server under bare [mcp_servers] is a server too", () => {
+    expect(find(readInventory(home), "mcp", "inline")?.meta).toMatchObject({
+      transport: "stdio",
+      command: "uvx inline-mcp",
+    });
+  });
+
+  // Both read because codex's descriptor declares mcpConfig.project and
+  // skillsDir.project — the seam the tasks demanded, so a slot verified into
+  // the registry is scanned without this module learning a path.
+  test("the project .codex/config.toml and .agents/skills report at project scope", () => {
+    const inv = readInventory(home, proj);
+    expect(find(inv, "mcp", "projsrv")).toMatchObject({ client: "codex", scope: "project" });
+    expect(find(inv, "mcp", "projsrv")?.meta?.command).toBe("deno run srv.ts");
+    expect(find(inv, "skill", "proj-skill")).toMatchObject({ client: "codex", scope: "project" });
+  });
+
+  test("hooks.json entries report as hook items", () => {
+    const hook = readInventory(home).items.find((i) => i.kind === "hook");
+    expect(hook).toMatchObject({ client: "codex", scope: "user" });
+    expect(hook?.meta).toMatchObject({ event: "SessionStart", command: "/x/.codecast/hooks/stable-feed-codex.sh" });
+  });
+
+  test("AGENTS.md presence reports at user and project scope", () => {
+    const inv = readInventory(home, proj);
+    const files = inv.items.filter((i) => i.name === "AGENTS.md");
+    expect(files.map((f) => f.scope).sort()).toEqual(["project", "user"]);
+    expect(files.every((f) => f.client === "codex" && f.kind === "snippet")).toBe(true);
+  });
+
+  test("a HOME with no ~/.codex yields zero codex items and zero unreadable", () => {
+    const inv = readInventory(HOME, PROJ);
+    expect(inv.items.filter((i) => i.client === "codex")).toEqual([]);
+    expect(inv.unreadable).toEqual([]);
+  });
+});
+
+// ct-42819 — cursor state, read from cursor's `agentFileTargets` slots, and
+// the shared skills dir counted once.
+describe("cursor", () => {
+  const home = path.join(ROOT, "cursor-home");
+  const proj = path.join(ROOT, "cursor-proj");
+  write(
+    path.join(home, ".cursor", "mcp.json"),
+    JSON.stringify({ mcpServers: { linear: { url: "https://mcp.linear.app/sse" } } }),
+  );
+  write(
+    path.join(proj, ".cursor", "mcp.json"),
+    JSON.stringify({ mcpServers: { repodb: { command: "npx", args: ["repodb-mcp"] } } }),
+  );
+  write(path.join(home, ".cursor", "rules", "style.mdc"), "---\ndescription: Style rules\n---\nBe terse.\n");
+  write(path.join(proj, ".cursor", "rules", "repo.mdc"), "---\ndescription: Repo rules\n---\nUse the store.\n");
+  write(path.join(home, ".cursor", "skills", "uskill", "SKILL.md"), "---\nname: uskill\ndescription: cursor user skill\n---\n");
+  write(path.join(proj, ".cursor", "skills", "pskill", "SKILL.md"), "---\nname: pskill\ndescription: cursor project skill\n---\n");
+
+  test("mcp.json reports with client cursor at both scopes", () => {
+    const inv = readInventory(home, proj);
+    expect(find(inv, "mcp", "linear")).toMatchObject({ client: "cursor", scope: "user" });
+    expect(find(inv, "mcp", "repodb")).toMatchObject({ client: "cursor", scope: "project" });
+    expect(find(inv, "snippet", "repo")).toMatchObject({ client: "cursor", scope: "project", description: "Repo rules" });
+    expect(inv.unreadable).toEqual([]);
+  });
+
+  // Cursor's descriptor deliberately has NO user instruction slot — user-level
+  // rules live in the app's settings, not a file the client reads — so a
+  // ~/.cursor/rules dir on disk must not be reported: that would claim a
+  // capability cursor never loads.
+  test("~/.cursor/rules is not reported: the client does not read it", () => {
+    expect(find(readInventory(home, proj), "snippet", "style")).toBeUndefined();
+  });
+
+  test("the descriptor's skills dirs report at both scopes", () => {
+    const inv = readInventory(home, proj);
+    expect(find(inv, "skill", "uskill")).toMatchObject({ client: "cursor", scope: "user" });
+    expect(find(inv, "skill", "pskill")).toMatchObject({ client: "cursor", scope: "project" });
+  });
+
+  test("a HOME with no ~/.cursor yields zero cursor items and zero unreadable", () => {
+    const inv = readInventory(HOME, PROJ);
+    expect(inv.items.filter((i) => i.client === "cursor")).toEqual([]);
+    expect(inv.unreadable).toEqual([]);
+  });
+});
+
+describe("shared ~/.agents/skills", () => {
+  const home = path.join(ROOT, "shared-home");
+  const proj = path.join(ROOT, "shared-proj");
+  const sharedDir = path.join(home, ".agents", "skills", "review");
+  write(path.join(sharedDir, "SKILL.md"), "---\nname: review\ndescription: shared review skill\n---\n");
+  fs.mkdirSync(path.join(home, ".claude", "skills"), { recursive: true });
+  fs.mkdirSync(path.join(proj, ".claude", "skills"), { recursive: true });
+  const userLink = path.join(home, ".claude", "skills", "review");
+  const projLink = path.join(proj, ".claude", "skills", "review");
+  fs.symlinkSync(sharedDir, userLink);
+  fs.symlinkSync(sharedDir, projLink);
+
+  test("a skill symlinked into two client dirs is one item with two links", () => {
+    const inv = readInventory(home, proj);
+    const rows = inv.items.filter((i) => i.kind === "skill" && i.name === "review");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].client).toBe("shared");
+    // The narrowest link scope wins: a project link is the most specific
+    // answer to "which scope switched this on", even when a user link exists.
+    expect(rows[0].scope).toBe("project");
+    const links = (rows[0].meta?.links ?? "").split("\n").sort();
+    expect(links).toEqual([userLink, projLink].sort());
+    expect(inv.unreadable).toEqual([]);
+  });
+
+  test("a skill linked only at project scope reports project, not user", () => {
+    const onlyHome = path.join(ROOT, "projlink-home");
+    const onlyProj = path.join(ROOT, "projlink-proj");
+    const target = path.join(onlyHome, ".agents", "skills", "solo");
+    write(path.join(target, "SKILL.md"), "---\nname: solo\ndescription: shared\n---\n");
+    fs.mkdirSync(path.join(onlyProj, ".claude", "skills"), { recursive: true });
+    fs.symlinkSync(target, path.join(onlyProj, ".claude", "skills", "solo"));
+    const row = find(readInventory(onlyHome, onlyProj), "skill", "solo");
+    expect(row).toMatchObject({ client: "shared", scope: "project" });
+  });
+
+  test("a real (non-link) client skill with the same name still reports separately", () => {
+    const twinHome = path.join(ROOT, "twin-home");
+    write(path.join(twinHome, ".agents", "skills", "dup", "SKILL.md"), "---\nname: dup\ndescription: shared\n---\n");
+    write(path.join(twinHome, ".claude", "skills", "dup", "SKILL.md"), "---\nname: dup\ndescription: local copy\n---\n");
+    const rows = readInventory(twinHome).items.filter((i) => i.kind === "skill" && i.name === "dup");
+    expect(rows.map((r) => r.client).sort()).toEqual(["claude", "shared"]);
+  });
+
+  // The / menu contract: Claude Code follows symlinks in its own skill dirs,
+  // so a linked shared skill was ALWAYS in the menu — attributing the link to
+  // one shared item must not silently remove it. An unlinked shared skill is
+  // another client's and stays out.
+  test("a linked shared skill stays in the / menu; an unlinked one stays out", () => {
+    write(path.join(home, ".agents", "skills", "codex-only", "SKILL.md"), "---\nname: codex-only\ndescription: n\n---\n");
+    const names = toInvocableList(readInventory(home, proj)).map((s) => s.name);
+    expect(names).toContain("review");
+    expect(names).not.toContain("codex-only");
+  });
+
+  // A link the daemon never sees must not put a skill in the menu: only links
+  // inside Claude's OWN skill dirs count, because the / menu is the daemon's
+  // surface and it scans nothing else.
+  test("a shared skill linked only from a cursor dir stays out of the / menu", () => {
+    const xHome = path.join(ROOT, "xlink-home");
+    const target = path.join(xHome, ".agents", "skills", "curside");
+    write(path.join(target, "SKILL.md"), "---\nname: curside\ndescription: n\n---\n");
+    fs.mkdirSync(path.join(xHome, ".cursor", "skills"), { recursive: true });
+    fs.symlinkSync(target, path.join(xHome, ".cursor", "skills", "curside"));
+    const inv = readInventory(xHome);
+    // The link still attaches to the one shared item…
+    const row = find(inv, "skill", "curside");
+    expect(row?.client).toBe("shared");
+    expect(row?.meta?.links).toBe(path.join(xHome, ".cursor", "skills", "curside"));
+    // …but does not make it claude-invocable.
+    expect(toInvocableList(inv).map((s) => s.name)).not.toContain("curside");
+  });
+
+  // ct-42820's precondition: the linked item is emitted at the symlink's own
+  // directory position, so the daemon's listing order survives the collapse.
+  // The membership half alone would let the position mechanics regress silently.
+  test("a linked shared skill keeps its symlink's position in the / menu", () => {
+    const ordHome = path.join(ROOT, "order-home");
+    write(path.join(ordHome, ".agents", "skills", "mid", "SKILL.md"), "---\nname: mid\ndescription: shared\n---\n");
+    const skillsDir = path.join(ordHome, ".claude", "skills");
+    write(path.join(skillsDir, "aaa", "SKILL.md"), "---\nname: aaa\ndescription: a\n---\n");
+    write(path.join(skillsDir, "zzz", "SKILL.md"), "---\nname: zzz\ndescription: z\n---\n");
+    fs.symlinkSync(path.join(ordHome, ".agents", "skills", "mid"), path.join(skillsDir, "mid"));
+    // The truth to match is the directory listing order the daemon itself
+    // iterates — not an assumed alphabetical order.
+    const listed = fs.readdirSync(skillsDir);
+    const names = toInvocableList(readInventory(ordHome)).map((s) => s.name);
+    expect(names).toEqual(listed);
+  });
+});
+
+// ct-43087 — every kind this reader can emit has to survive the fleet diff.
+//
+// The diff reads reports as `unknown` (they arrive from machines on older
+// binaries) and DROPS any kind it does not rank. A dropped row is invisible in
+// exactly the way an absent capability is, so the failure does not look like a
+// bug — it looks like a machine that does not have the thing. `hook` and
+// `snippet` are the two the CLI's kind list was missing, which is why they are
+// spelled out here, but the sweep is over every kind the scanner produces so the
+// next one added cannot slip through the same gap.
+describe("inventory rows survive the fleet diff", () => {
+  const home = path.join(ROOT, "seam-home");
+  const proj = path.join(ROOT, "seam-proj");
+  // A machine carrying one of every kind the reader can emit: a hook and an
+  // instructions snippet from codex, a cursor rule snippet, skills, a command,
+  // a subagent, an MCP server and a plugin.
+  write(path.join(home, ".claude", "skills", "s1", "SKILL.md"), "---\nname: s1\ndescription: a skill\n---\n");
+  write(path.join(home, ".claude", "commands", "c1.md"), "---\ndescription: a command\n---\n");
+  write(path.join(home, ".claude", "agents", "a1.md"), "---\ndescription: a subagent\n---\n");
+  write(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: { m1: { command: "node", args: ["s.js"] } } }));
+  write(
+    path.join(home, ".claude", "settings.json"),
+    JSON.stringify({ enabledPlugins: { "p1@claude-plugins-official": true } }),
+  );
+  write(
+    path.join(home, ".codex", "hooks.json"),
+    JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "/x/h.sh" }] }] } }),
+  );
+  write(path.join(home, ".codex", "AGENTS.md"), "# instructions\n");
+  write(path.join(home, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: {} }));
+  write(path.join(proj, ".cursor", "rules", "r1.mdc"), "---\ndescription: a rule\n---\n");
+
+  const inv = readInventory(home, proj);
+
+  test("the fixture really exercises hook and snippet", () => {
+    // Without this the sweep below would pass vacuously the day the scanner
+    // stops emitting one of the two kinds the task was about.
+    const kinds = new Set(inv.items.map((i) => i.kind));
+    expect(kinds).toContain("hook");
+    expect(kinds).toContain("snippet");
+  });
+
+  test("every kind the scanner emits reaches the diff as a row", () => {
+    const diff = buildFleetDiff([{ deviceId: "d1", inventory: { items: inv.items } }]);
+    const emitted = [...new Set(inv.items.map((i) => i.kind))].sort();
+    const ranked = [...new Set(diff.rows.map((r) => r.kind as string))].sort();
+    // Not `toContain` per kind: an equality names WHICH kind vanished when this
+    // breaks, and the diff adds only `marketplace`, which no item carries.
+    expect(ranked).toEqual(emitted);
+  });
+
+  test("no row is lost — one row per distinct capability, count for count", () => {
+    const diff = buildFleetDiff([{ deviceId: "d1", inventory: { items: inv.items } }]);
+    // The diff folds by identity, so the honest comparison is against distinct
+    // (kind, name) pairs rather than the raw item count: scopes stack, and one
+    // capability declared at two scopes is legitimately one row.
+    const distinct = new Set(inv.items.map((i) => `${i.kind} ${i.name}`));
+    expect(diff.rows).toHaveLength(distinct.size);
+    for (const row of diff.rows) expect(row.cells[0].present).toBe(true);
+  });
+
+  test("a kind the diff cannot rank is what a drop looks like — and none is", () => {
+    // The adversarial half: prove the assertion above can fail. An invented kind
+    // IS dropped, so the passing sweep is evidence the real kinds are ranked,
+    // not evidence that the diff keeps everything it is handed.
+    const withJunk = buildFleetDiff([
+      { deviceId: "d1", inventory: { items: [...inv.items, { kind: "not-a-kind", name: "x", scope: "user", enabled: true, source: "/x" }] } },
+    ]);
+    expect(withJunk.rows.map((r) => r.kind as string)).not.toContain("not-a-kind");
+    expect(withJunk.rows).toHaveLength(new Set(inv.items.map((i) => `${i.kind} ${i.name}`)).size);
+  });
+});
+
+// The contract is the daemon's `readAvailableSkills`, byte for byte, so the
+// ct-42820 repoint changes no conversation's serialized `available_skills`
+// payload. That contract is FIRST LISTING WINS in the daemon's read order —
+// commands before skills, user before project — not "narrowest scope wins".
 describe("toInvocableList", () => {
-  test("keeps the existing / menu contract and prefers the narrower scope", () => {
+  test("invocableSkills is the same function, not a second body", () => {
+    expect(invocableSkills).toBe(toInvocableList);
+  });
+
+  test("first listing wins a collision: the user copy, as the daemon answers", () => {
     const dup = path.join(ROOT, "dup");
     write(
       path.join(dup, "home", ".claude", "skills", "shared", "SKILL.md"),
@@ -277,7 +690,41 @@ describe("toInvocableList", () => {
     const list = toInvocableList(readInventory(path.join(dup, "home"), path.join(dup, "proj")));
     const shared = list.filter((s) => s.name === "shared");
     expect(shared).toHaveLength(1);
-    expect(shared[0].description).toBe("from project");
+    expect(shared[0].description).toBe("from user");
+  });
+
+  test("commands list before skills, and a command beats a same-named skill", () => {
+    const kinds = path.join(ROOT, "kinds");
+    write(path.join(kinds, "home", ".claude", "commands", "deploy.md"), "---\ndescription: the command\n---\n");
+    write(
+      path.join(kinds, "home", ".claude", "skills", "deploy", "SKILL.md"),
+      "---\nname: deploy\ndescription: the skill\n---\n",
+    );
+    write(
+      path.join(kinds, "home", ".claude", "skills", "other", "SKILL.md"),
+      "---\nname: other\ndescription: a skill\n---\n",
+    );
+    const list = toInvocableList(readInventory(path.join(kinds, "home")));
+    // The daemon reads all command dirs first, so the command's description
+    // wins the cross-kind collision (the real machine has two such names).
+    expect(list.filter((s) => s.name === "deploy")).toEqual([{ name: "deploy", description: "the command" }]);
+    expect(list.findIndex((s) => s.name === "deploy")).toBeLessThan(list.findIndex((s) => s.name === "other"));
+  });
+
+  test("a shared skill linked at project scope loses to a real user skill, as the daemon answers", () => {
+    const tie = path.join(ROOT, "tie");
+    const home = path.join(tie, "home");
+    const proj = path.join(tie, "proj");
+    write(path.join(home, ".agents", "skills", "foo", "SKILL.md"), "---\nname: foo\ndescription: shared linked\n---\n");
+    write(path.join(home, ".claude", "skills", "foo", "SKILL.md"), "---\nname: foo\ndescription: user real\n---\n");
+    fs.mkdirSync(path.join(proj, ".claude", "skills"), { recursive: true });
+    fs.symlinkSync(path.join(home, ".agents", "skills", "foo"), path.join(proj, ".claude", "skills", "foo"));
+    const list = toInvocableList(readInventory(home, proj));
+    // The daemon lists the user dir first and first-wins, so the real user
+    // skill's description is the payload — pinned here because the old
+    // narrowest-scope rule answered "shared linked" and the two silently
+    // diverged.
+    expect(list.filter((s) => s.name === "foo")).toEqual([{ name: "foo", description: "user real" }]);
   });
 
   test("lists skills and commands but not plugins or mcp servers", () => {
@@ -286,5 +733,13 @@ describe("toInvocableList", () => {
     expect(names).toContain("commit");
     expect(names).not.toContain("electron");
     expect(names.some((n) => n.includes("@"))).toBe(false);
+  });
+
+  test("every command precedes every skill — the daemon's kind order", () => {
+    const list = toInvocableList(readInventory(HOME, PROJ));
+    const lastCommand = list.findIndex((s) => s.name === "commit");
+    const firstSkill = list.findIndex((s) => s.name === "domain-search");
+    expect(lastCommand).toBeGreaterThanOrEqual(0);
+    expect(firstSkill).toBeGreaterThan(lastCommand);
   });
 });
