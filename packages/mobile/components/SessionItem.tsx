@@ -35,6 +35,7 @@ export type SessionData = {
   thread_state?: string | null;
   thread_state_at?: number | null;
   thread_state_msg_count?: number | null;
+  thread_state_status?: string | null;
   session_error?: string;
   author_name?: string | null;
   is_own?: boolean;
@@ -145,7 +146,7 @@ export function projectName(conv: { git_root?: string | null; project_path?: str
   return path.split('/').pop() || null;
 }
 
-function PulsingDot({ color }: { color: string }) {
+export function PulsingDot({ color }: { color: string }) {
   const opacity = useRef(new RNAnimated.Value(1)).current;
   useEffect(() => {
     const animation = RNAnimated.loop(
@@ -232,11 +233,19 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
           <FontAwesome
             name="thumb-tack"
             size={9}
-            color={stateView.freshness === 'fresh' ? Theme.cyan : Theme.orange}
+            // The declared status owns the pin color (blocked = orange, done =
+            // green, working = cyan — no yellow in the mobile theme); rows
+            // written before the status existed keep the freshness rule.
+            color={
+              stateView.status === 'blocked' ? Theme.orange
+                : stateView.status === 'done' ? Theme.green
+                : stateView.status === 'working' ? Theme.cyan
+                : stateView.freshness === 'fresh' ? Theme.cyan : Theme.orange
+            }
             style={styles.statePin}
           />
           <RNText style={styles.stateText} numberOfLines={2}>
-            {stateView.headline}
+            {stateView.cardLine}
           </RNText>
         </RNView>
       ) : (session.idle_summary || session.subtitle) ? (
