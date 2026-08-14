@@ -173,6 +173,10 @@ export const webList = query({
     status: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    // Accepted but unused: the projects list is the project switcher, so it
+    // must span the workspace. Clients that spread workspace args send
+    // project_path; rejecting it crashes them.
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
