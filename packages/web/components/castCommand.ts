@@ -222,12 +222,16 @@ export function extractSendBody(args: string): SendBody {
       }
       bodyLines.push(probe);
     }
+    const bodyText = bodyLines.join("\n");
+    // Unquoted heredocs undergo parameter, command, and arithmetic expansion,
+    // but only via `$`, backticks, and backslashes — a body with none of those
+    // is delivered byte-for-byte, so an unquoted delimiter alone is no reason
+    // to disclaim it. A missing closing delimiter never executed, so don't
+    // claim its recorded source was a delivered literal either.
+    const expandable = !quotedDelimiter && /[$`\\]/.test(bodyText);
     return {
-      body: bodyLines.join("\n"),
-      // Unquoted heredocs undergo parameter, command, and arithmetic expansion.
-      // A missing closing delimiter never executed, so don't claim its recorded
-      // source was a delivered literal either.
-      kind: quotedDelimiter && foundDelimiter ? "heredoc" : "dynamic",
+      body: bodyText,
+      kind: foundDelimiter && !expandable ? "heredoc" : "dynamic",
     };
   }
 

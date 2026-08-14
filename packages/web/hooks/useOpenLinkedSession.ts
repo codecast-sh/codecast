@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, sessionRowFromSummary } from "../store/inboxStore";
 import { slotPolicyFor, surfaceForPath } from "../store/workspace";
 import { isInboxSessionView, resolveSessionSelectKind, type SessionSelectKind } from "../lib/inboxRouting";
 
@@ -63,37 +63,21 @@ export function useOpenLinkedSession() {
     const sid = conv._id;
     const store = useInboxStore.getState();
     if (!store.sessions[sid]) {
-      store.syncRecord("sessions", sid, {
-        _id: conv._id,
-        session_id: conv.session_id || conv._id,
-        title: conv.title,
-        project_path: conv.project_path,
-        message_count: conv.message_count || 0,
-        updated_at: conv.updated_at,
-        started_at: conv.started_at,
-        agent_type: conv.agent_type || "claude",
+      // sessionRowFromSummary carries the triage stamps through (a stampless
+      // stub renders a stashed/dismissed session as an active needs-input card
+      // at boot, ct-42666) and keeps parent_conversation_id so a workflow-agent
+      // stub classifies as a subagent instead of surfacing top-level.
+      store.syncRecord("sessions", sid, sessionRowFromSummary({
+        ...conv,
         is_idle: !conv.is_active,
-        has_pending: false,
-        // Carried by workflow-agent sessions; keeps the seeded stub classified as a
-        // subagent by inbox filters instead of surfacing as a top-level row.
-        parent_conversation_id: conv.parent_conversation_id,
-        // Triage/visibility stamps (projected server-side via
-        // inboxVisibilityFields): the stub persists in the sessions cache, and
-        // one seeded without them renders a stashed/dismissed session as an
-        // active needs-input card at boot (ct-42666).
-        inbox_dismissed_at: conv.inbox_dismissed_at,
-        inbox_stashed_at: conv.inbox_stashed_at,
-        inbox_killed_at: conv.inbox_killed_at,
-        inbox_pinned_at: conv.inbox_pinned_at,
-        is_pinned: !!conv.inbox_pinned_at,
-      });
+      }));
     }
     const narrow = typeof window !== "undefined" && window.innerWidth < MOBILE_MAX_WIDTH;
     const kind = resolveSessionSelectKind({
       isOnSettingsPage: routerLocation.pathname.startsWith("/settings"),
       isOnInboxPage: isInboxSessionView(pathname, store.currentConversation?.source),
       isOnConversationPage: pathname?.includes("/conversation/") ?? false,
-      isOnWorkingPage: slotPolicyFor(surfaceForPath(pathname ?? "")).secondary,
+      isOnWorkingPage: slotPolicyFor(surfaceForPath(pathname ?? "")).secondary === "split",
     });
     const open = resolveLinkedSessionOpen(kind, narrow);
     if (open === "route") {

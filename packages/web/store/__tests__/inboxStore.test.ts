@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { awaitTrackedSessionCreateResult, categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { awaitTrackedSessionCreateResult, categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 import { DispatchNotWiredError } from "../mutativeMiddleware";
 import { declareViewNav } from "../viewNav";
@@ -3824,6 +3824,51 @@ describe("closeTab — promoted tab must not be a redirect-page route", () => {
     useInboxStore.setState({ tabs: [diffTab, tabB], activeTabId: "tab_b" });
     useInboxStore.getState().closeTab("tab_b");
     expect(useInboxStore.getState().tabs[0].path).toBe(`/conversation/${convId}/diff`);
+  });
+});
+
+// The workspace (rails, widths, dock) is global chrome: switching tabs reveals
+// another page under the exact same frame. Tabs used to snapshot and restore a
+// per-tab workspace, which made the right rail open/close and change width on
+// every switch — this pins the contract that a switch never touches it.
+describe("switchTab — panel layout is global chrome, tabs never carry it", () => {
+  const tabA = { id: "tab_a", title: "inbox", path: "/inbox", createdAt: 1 };
+  const tabB = { id: "tab_b", title: "chat", path: "/chat", createdAt: 2 };
+
+  beforeEach(() => {
+    useInboxStore.setState({ tabs: [tabA, tabB], activeTabId: "tab_a", sidePanelSessionId: null });
+  });
+
+  it("keeps the workspace and rail selection identical across a switch", () => {
+    const st = useInboxStore.getState();
+    if (!selectSessionRailOpen(st)) st.toggleSidePanel();
+    st.wsSetSize("context", 342);
+    useInboxStore.setState({ sidePanelSessionId: "conv-rail" });
+    const before = useInboxStore.getState().workspace;
+
+    useInboxStore.getState().switchTab("tab_b");
+
+    const s = useInboxStore.getState();
+    expect(s.activeTabId).toBe("tab_b");
+    // Same ref: the switch wrote nothing into the workspace at all.
+    expect(s.workspace).toBe(before);
+    expect(selectSessionRailOpen(s)).toBe(true);
+    expect(s.workspace.context.size).toBe(342);
+    expect(s.sidePanelSessionId).toBe("conv-rail");
+  });
+
+  it("ignores a legacy per-tab workspace snapshot persisted on the target tab", () => {
+    // Old clients stamped tab.workspace; persisted tabs still carry it. It
+    // must be inert — switching onto such a tab must not restore it.
+    const legacy = { ...tabB, workspace: { context: { presentation: "split" } } } as any;
+    useInboxStore.setState({ tabs: [tabA, legacy], activeTabId: "tab_a" });
+    const st = useInboxStore.getState();
+    if (!selectSessionRailOpen(st)) st.toggleSidePanel();
+    const before = useInboxStore.getState().workspace;
+
+    useInboxStore.getState().switchTab("tab_b");
+
+    expect(useInboxStore.getState().workspace).toBe(before);
   });
 });
 
