@@ -3,6 +3,7 @@ import type { InstalledEntry, ObservedScope } from "./capabilities";
 import {
   buildFleetDiff,
   capabilityIdentity,
+  fleetRowKey,
   type DeviceReport,
   type FleetDiff,
   type FleetDiffRow,
@@ -328,6 +329,21 @@ describe("identity is stable across machines", () => {
     expect(diff.rows[0].key).toBe("skill:domain-search");
     expect(diff.rows[0].identity).toBe("Domain-Search");
     expect(diff.rows[0].status).toBe("in_sync");
+  });
+
+  test("the exported key builder is the one the diff used", () => {
+    // The point of exporting it is that a consumer joining against `row.key`
+    // stops spelling the string itself. That only holds while the two agree, so
+    // the DISPLAYED identity — which keeps a machine's own casing — is what
+    // goes in, on rows chosen to differ in case, kind and marketplace.
+    const diff = buildFleetDiff([
+      device("a", [skill("Domain-Search"), plugin("frontend-design@official", "aaa1")]),
+      device("b", [{ kind: "command", name: "Ship-It", scope: "user", enabled: true }]),
+    ]);
+    expect(diff.rows.length).toBe(3);
+    for (const row of diff.rows) {
+      expect(fleetRowKey(row.kind, row.identity)).toBe(row.key);
+    }
   });
 
   test("a plugin is name@marketplace, composed when the report gives them apart", () => {

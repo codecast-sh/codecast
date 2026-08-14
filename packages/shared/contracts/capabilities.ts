@@ -209,6 +209,9 @@ function buildSlug(
  * broken identity.
  */
 export function formatCapabilitySlug(ref: Omit<CapabilityRef, "slug">): string | null {
+  // Parse rejects an unpinned git slug (a moving ref names no fixed bytes), so
+  // building one would mint an identity nothing can read back.
+  if (ref.source === "git" && ref.pin === undefined) return null;
   if (!isCapabilitySource(ref.source)) return null;
   return buildSlug(
     CAPABILITY_SOURCE_PREFIX[ref.source],
@@ -283,6 +286,10 @@ export function parseAnyCapabilitySlug(slug: unknown): ParsedCapabilitySlug | nu
   if (parts.length === 0 || !parts.every(isValidSegment)) return null;
 
   if (source !== "git" && (pin !== undefined || subpath !== undefined)) return null;
+  // A git slug without a pin is a moving ref: the bytes it names today are not
+  // the bytes it names tomorrow, and consent granted against it means nothing.
+  // The trust model pins every git source to a commit, so the grammar does too.
+  if (source === "git" && pin === undefined) return null;
   if (pin !== undefined && !isValidSegment(pin)) return null;
   if (subpath !== undefined && !subpath.split("/").every(isValidSegment)) return null;
 
@@ -502,8 +509,18 @@ export interface InstalledEntry {
   slug?: string;
   description?: string;
   scope: ObservedScope;
-  enabled: boolean;
-  installed: boolean;
+  /** Switched on for this machine. OPTIONAL because the wire does not always
+   *  carry it, and only an explicit `false` denies — a missing field means the
+   *  reader had nothing to say, not that the capability is off. Read it as
+   *  `enabled !== false`. */
+  enabled?: boolean;
+  /** Downloaded to disk, independent of whether it is switched on. OPTIONAL for
+   *  a sharper reason: the daemon's reader fills it ONLY for plugins, because
+   *  only plugins have a download step distinct from being declared. A skill or
+   *  an MCP server simply is or is not there. It was typed as required anyway,
+   *  and all three readers grew a workaround plus a comment admitting the
+   *  contract was wrong — the type is what changed, not the readers. */
+  installed?: boolean;
   /** Absolute path on that machine. A hint for the human and for diffing; never
    *  an identity, and never matched against across machines. */
   source?: string;
@@ -640,4 +657,127 @@ export interface DesiredState {
   /** Bindings that never entered the contest, each with why. Powers the other
    *  half of the question: "why is this NOT active?" */
   ignored: IgnoredBinding[];
+}
+
+// ---------------------------------------------------------------- the manifest
+
+/**
+ * What a scanner actually observed inside a capability.
+ *
+ * Every field is what is THERE, never what the publisher says is there. The
+ * distinction matters because consent is granted against this object: if a
+ * publisher could edit it, consent would be granted against their claim rather
+ * than against the code that will run.
+ */
+export interface CapabilityManifest {
+  /** Components the capability ships, by kind — the same inventory
+   *  `claude plugin details` prints. */
+  components?: Partial<Record<CapabilityKind, string[]>>;
+  /** Executables under `bin/`. A non-empty list is code, whatever the docs say. */
+  bin?: string[];
+  /** Scripts shipped alongside, e.g. under `scripts/`. */
+  scripts?: string[];
+  /** Lifecycle hooks the capability registers. */
+  hooks?: string[];
+  /** MCP servers it configures. A `command` is a local process; a `url` is a
+   *  remote endpoint. Both are surfaces, and they are different ones. */
+  mcp?: Array<{ name?: string; command?: string; url?: string }>;
+  /** Tool grants declared in frontmatter (`allowed-tools`). */
+  allowedTools?: string[];
+  /** NAMES ONLY of environment variables it wants. Never values — this object is
+   *  hashed, stored and rendered, and a secret in it would leak through all three. */
+  envKeys?: string[];
+}
+
+/**
+ * A stable fingerprint of everything consent is granted against.
+ *
+ * Stable under key reordering because it walks a sorted, canonical form: two
+ * scanners that observe the same capability must agree, and JSON key order is
+ * not something either controls. Any change to a surface, a command, a hook or
+ * an env key changes the hash, which is what makes "the manifest changed since
+ * you approved it" answerable at all.
+ *
+ * FNV-1a rather than `node:crypto` because this module runs in the Convex V8
+ * runtime, the Node daemon, the browser and Hermes at once, and only one of
+ * those has `crypto.createHash`. It is not a security hash and must never be
+ * used as one: it detects change, it does not resist an adversary choosing a
+ * collision. Integrity against a hostile publisher is the pin's job (a git sha),
+ * not this.
+ */
+export function manifestHash(manifest: CapabilityManifest | undefined): string {
+  const canonical = canonicalize(manifest ?? {});
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < canonical.length; i++) {
+    hash ^= canonical.charCodeAt(i);
+    // The FNV prime, as shifts: `hash * 16777619` overflows 32 bits in JS.
+    hash = (hash + ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24))) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+/** JSON with object keys sorted at every depth, so key order cannot change the
+ *  hash. Arrays keep their order: `["a","b"]` and `["b","a"]` are different
+ *  manifests — the order of a command's arguments is meaningful. */
+function canonicalize(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  // Array ELEMENTS are never dropped, only properties: an `mcp: [{}]` entry is a
+  // server we observed and learned nothing about, and removing it would shorten
+  // a list whose length is meaningful.
+  if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .map(([k, v]) => [k, canonicalize(v)] as const)
+    // A property that says nothing is dropped rather than hashed, so that
+    // `undefined`, `null`, `[]` and `{}` all mean what omitting the key means.
+    // Scanners disagree about which of those they emit, and every other reader
+    // here already treats them alike — `deriveExecutionSurfaces` asks `?.length`,
+    // so an empty `hooks` and an absent `hooks` derive identical surfaces. A hash
+    // that disagreed would report two values for one unchanged capability, and
+    // the consent gate would tell the human "the manifest changed since you
+    // approved it" and make them approve it again. A prompt that fires when
+    // nothing changed is worse than no prompt: it teaches people to click through
+    // the one that matters.
+    //
+    // Testing the CANONICAL form rather than the raw value is what makes this
+    // recursive: `components: { skill: [] }` collapses to `{}` here and then
+    // vanishes with its parent, so emptiness cannot survive one level down.
+    .filter(([, canonical]) => canonical !== "{}" && canonical !== "[]" && canonical !== "null")
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, canonical]) => `${JSON.stringify(k)}:${canonical}`).join(",")}}`;
+}
+
+/**
+ * The surfaces a capability really has, read off its structure.
+ *
+ * Derived, not accepted. A `declared` list from the publisher is folded in as an
+ * ADDITIVE hint: it can add a surface we failed to observe, and it can never
+ * remove one we did observe. That asymmetry is the whole point — a publisher who
+ * omits `ships_bin` does not get a quieter badge, while one who volunteers a
+ * surface we missed still helps.
+ *
+ * A manifest with nothing in it yields `[]`, which `requiresExplicitConsent`
+ * treats as dangerous rather than benign. Nothing observed means nothing looked,
+ * not nothing there.
+ */
+export function deriveExecutionSurfaces(
+  manifest: CapabilityManifest | undefined,
+  declared?: readonly ExecutionSurface[],
+): ExecutionSurface[] {
+  const found = new Set<ExecutionSurface>();
+  if (manifest) {
+    if (manifest.bin?.length) found.add("ships_bin");
+    if (manifest.scripts?.length) found.add("ships_scripts");
+    if (manifest.hooks?.length) found.add("declares_hooks");
+    if (manifest.allowedTools?.length) found.add("declares_allowed_tools");
+    for (const server of manifest.mcp ?? []) {
+      if (server.command) found.add("mcp_stdio_command");
+      if (server.url) found.add("mcp_remote_url");
+    }
+  }
+  for (const surface of declared ?? []) {
+    if (isExecutionSurface(surface)) found.add(surface);
+  }
+  // Emit in the canonical order so two equal sets are also equal arrays, which
+  // keeps `manifestHash` and any equality check stable.
+  return EXECUTION_SURFACES.filter((s) => found.has(s));
 }

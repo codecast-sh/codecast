@@ -17,6 +17,7 @@
 // later phases wire them up and fold the daemon's branch sites into registry
 // lookups.
 
+import type { CapabilityKind } from "./capabilities";
 import type { ModelOption } from "./modelOptions";
 import {
   CLAUDE_MODEL_OPTIONS,
@@ -198,6 +199,137 @@ export interface AgentClientCapabilities {
   bracketedPaste?: boolean;
 }
 
+/* ── Agent file targets ───────────────────────────────────────────────────────
+ * Where each client reads capabilities from disk, as data. Every slot below is
+ * a VERIFIED fact (scratchpad research 2026-08-12/13: real CLIs driven in a
+ * sandbox HOME, real files read off this machine) — a slot is present only when
+ * we know the client reads that location, and absent otherwise. Same honest-
+ * absence idiom as `AgentClientCapabilities.fork` above: an absent slot means
+ * "this client cannot express that", never "fall back to claude's layout".
+ *
+ * Path rules (the invariant the tests pin):
+ *  - User-level paths are home-relative TEMPLATES starting `~/` — this module
+ *    is isomorphic (Convex/browser/Hermes) and cannot call `os.homedir()`; the
+ *    CLI driver resolves `~` on the machine it runs on.
+ *  - Project-level paths are repo-root-relative, never absolute.
+ *  - No path is ever a resolved absolute path or uses a platform separator.
+ */
+
+/** A hooks config file's write schema. `unverified` records an OBSERVED path
+ *  whose shape nobody has confirmed — it names the file without granting
+ *  support, so `capabilitySupport` answers "unsupported" for it rather than
+ *  letting a driver guess at bytes. */
+export type AgentHooksShape = "claude_settings" | "json_hooks" | "unverified";
+
+export interface AgentInstructionFileTarget {
+  /** Home-relative path of the always-loaded user instruction file
+   *  (`~/.claude/CLAUDE.md`). Absent when the client keeps user-level prose
+   *  outside the filesystem (cursor: user rules live in app settings). */
+  user?: string;
+  /** Repo-root-relative instruction target in a checkout. For `markdown` this
+   *  is one file; for `mdc` it is a rules DIRECTORY. */
+  project?: string;
+  /** `markdown` = one instruction file snippets merge into (CLAUDE.md,
+   *  AGENTS.md). `mdc` = a rules directory taking one `<name>.mdc` file per
+   *  snippet, with `description`/`globs`/`alwaysApply` frontmatter (cursor). */
+  format: "markdown" | "mdc";
+}
+
+export interface AgentSkillsDirTarget {
+  /** Client-native user-level skills dir (`~/.claude/skills`). */
+  user: string;
+  /** Repo-root-relative project skills dir (`.claude/skills`). */
+  project?: string;
+  /** The cross-client `~/.agents/skills` dir, present only when the client
+   *  READS it directly (codex documents it, cursor reads it). Absent for
+   *  claude, which reaches it only through a user-made symlink — listing it
+   *  would tell a driver to write bytes claude never loads. */
+  shared?: string;
+  /** The cross-client PROJECT dir `.agents/skills`, present only when the
+   *  client reads it as a second project location beside `project` (cursor
+   *  reads both `.agents/skills` and `.cursor/skills`). Codex needs no slot
+   *  here: its `project` slot already IS `.agents/skills`, so a driver writing
+   *  codex project skills silently serves cursor too. Without this slot the
+   *  fleet mirror could not attribute a repo's `.agents/skills` dir to cursor
+   *  and would under-report a verified read path. */
+  sharedProject?: string;
+}
+
+export interface AgentAgentsDirTarget {
+  /** User-level subagent definitions dir (`~/.claude/agents`, `agents/*.md`). */
+  user: string;
+  /** Repo-root-relative project subagents dir. */
+  project?: string;
+}
+
+export interface AgentMcpConfigTarget {
+  /** User/global config file holding MCP server entries. */
+  user: string;
+  /** Repo-root-relative project config file. */
+  project?: string;
+  /** File schema: JSON with a top-level `mcpServers` object (claude `.mcp.json`,
+   *  cursor `mcp.json`) or TOML `[mcp_servers.<name>]` tables (codex
+   *  `config.toml` — a shared user-owned file with unrelated content, so a
+   *  driver must edit surgically, never rewrite). */
+  shape: "json_mcpservers" | "toml_mcp_servers";
+}
+
+/** Claude Code's declarative plugin manifest. `claude plugin install --scope
+ *  project` writes ONLY `enabledPlugins` + `extraKnownMarketplaces` into the
+ *  settings file — no plugin bytes land in the project; Claude Code fetches and
+ *  caches on its own. Rendering this file IS the install mechanism (verified in
+ *  a sandbox HOME); shelling out is only a convenience for immediate effect. */
+export interface AgentPluginSettingsTarget {
+  /** User settings file carrying `enabledPlugins`. */
+  user: string;
+  /** Project settings file carrying `enabledPlugins` + `extraKnownMarketplaces`
+   *  (committable, shared via the repo). */
+  project?: string;
+  /** Gitignored personal overlay (`settings.local.json`), `enabledPlugins` only. */
+  local?: string;
+}
+
+export interface AgentHooksConfigTarget {
+  /** The hooks config file (home-relative). */
+  path: string;
+  shape: AgentHooksShape;
+}
+
+/** The client's per-session capability overlay: a launch flag that mounts an
+ *  extra directory whose skills load for that session only (claude's
+ *  `--add-dir` loads the dir's `.claude/skills`, verified). This is the
+ *  session-scope materialization seam — no client file is touched. */
+export interface AgentSessionOverlayTarget {
+  kind: "add-dir";
+  launchFlag: string;
+}
+
+/** The client's own capability-management CLI, where one exists. A present
+ *  command means the client can install/enable that kind itself and the driver
+ *  invokes it instead of hand-writing the client-owned file. */
+export interface AgentNativeManagerCommands {
+  /** e.g. `claude plugin` (install/list against marketplaces). */
+  plugin?: string;
+  /** e.g. `claude mcp`, `codex mcp` — the safe writer for the client-owned
+   *  user config file (`~/.claude.json`, `~/.codex/config.toml`). */
+  mcp?: string;
+}
+
+/** Per-client capability file targets. Every slot optional: presence is the
+ *  verified claim "the client reads this", and `capabilitySupport` is DERIVED
+ *  from these same slots — the one encoding a driver reads and the UI renders,
+ *  so the two can never disagree. */
+export interface AgentFileTargets {
+  instructionFile?: AgentInstructionFileTarget;
+  skillsDir?: AgentSkillsDirTarget;
+  agentsDir?: AgentAgentsDirTarget;
+  mcpConfig?: AgentMcpConfigTarget;
+  pluginSettings?: AgentPluginSettingsTarget;
+  hooksConfig?: AgentHooksConfigTarget;
+  sessionOverlay?: AgentSessionOverlayTarget;
+  nativeManager?: AgentNativeManagerCommands;
+}
+
 /** Everything the daemon, convex, and web need to know about one client. */
 export interface AgentClientDescriptor {
   /** Stable internal id — the daemon's agent-type spelling and the registry key. */
@@ -238,6 +370,11 @@ export interface AgentClientDescriptor {
   modelConfig?: AgentModelConfig;
   /** Non-model capabilities that are opt-in per client. */
   capabilities: AgentClientCapabilities;
+  /** Where this client reads capabilities from disk. Absent for clients whose
+   *  layouts nobody has verified (gemini, opencode, pi) — honest absence, so
+   *  `capabilitySupport` reports every kind unsupported there instead of a
+   *  driver writing files the client never loads. */
+  agentFileTargets?: AgentFileTargets;
   /** Parse a raw transcript blob into the daemon's ParsedMessage[] shape. Wired up
    *  by the daemon (cli package); typed loosely and optional so shared stays free
    *  of daemon types and the descriptor is usable without it. */
@@ -298,6 +435,24 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     tmuxPrefix: "cc",
     modelConfig: CLAUDE_MODEL,
     capabilities: { panePromptMonitoring: true, fork: true, bracketedPaste: true },
+    // All verified by driving the real CLI in a sandbox HOME (2026-08-12/13).
+    // Plugins live in settings.json; MCP lives in ~/.claude.json (`enabledPlugins`
+    // read back null there) — the two files must not be conflated. `~/.agents/skills`
+    // is reachable only via a user-made symlink, so no `shared` slot here.
+    agentFileTargets: {
+      instructionFile: { user: "~/.claude/CLAUDE.md", project: "CLAUDE.md", format: "markdown" },
+      skillsDir: { user: "~/.claude/skills", project: ".claude/skills" },
+      agentsDir: { user: "~/.claude/agents", project: ".claude/agents" },
+      mcpConfig: { user: "~/.claude.json", project: ".mcp.json", shape: "json_mcpservers" },
+      pluginSettings: {
+        user: "~/.claude/settings.json",
+        project: ".claude/settings.json",
+        local: ".claude/settings.local.json",
+      },
+      hooksConfig: { path: "~/.claude/settings.json", shape: "claude_settings" },
+      sessionOverlay: { kind: "add-dir", launchFlag: "--add-dir" },
+      nativeManager: { plugin: "claude plugin", mcp: "claude mcp" },
+    },
   },
   codex: {
     id: "codex",
@@ -317,6 +472,24 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     tmuxPrefix: "cx",
     modelConfig: CODEX_MODEL,
     capabilities: { panePromptMonitoring: true, fork: true, bracketedPaste: true },
+    // Codex's documented user skills path IS the cross-client dir (`$HOME/.agents/
+    // skills` in its lookup order), so `user` and `shared` are the same string —
+    // `~/.codex/skills` exists on real machines but is undocumented legacy, treated
+    // read-only. Hooks: codecast already writes ~/.codex/hooks.json (schema mirrors
+    // claude's settings.json matcher groups — installStableHookCodex,
+    // stableContext.ts:350). No agentsDir (subagent format unverified) and no
+    // pluginSettings (marketplaces are OpenAI-operated; no third-party registration
+    // found), so both kinds stay honestly unsupported.
+    agentFileTargets: {
+      instructionFile: { user: "~/.codex/AGENTS.md", project: "AGENTS.md", format: "markdown" },
+      skillsDir: { user: "~/.agents/skills", project: ".agents/skills", shared: "~/.agents/skills" },
+      // The project file loads ONLY for projects the user has marked trusted —
+      // a driver writing it in an untrusted checkout writes bytes codex never
+      // loads, so surfaces should prefer the user file when trust is unknown.
+      mcpConfig: { user: "~/.codex/config.toml", project: ".codex/config.toml", shape: "toml_mcp_servers" },
+      hooksConfig: { path: "~/.codex/hooks.json", shape: "json_hooks" },
+      nativeManager: { mcp: "codex mcp" },
+    },
   },
   cursor: {
     id: "cursor",
@@ -346,6 +519,26 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // never collide with claude's `cc-`. Consumed by resumeTmuxPrefix.
     tmuxPrefix: "cu",
     capabilities: { panePromptMonitoring: false },
+    // Cursor's project prose target is the `.cursor/rules` DIRECTORY of `.mdc`
+    // files (`description`/`globs`/`alwaysApply` frontmatter); user-level rules
+    // live in app settings, not a file — hence no `user` slot. `~/.cursor/hooks.json`
+    // is an observed path whose write shape nobody has confirmed, recorded as
+    // `unverified` so hook support stays off without losing the fact. No agentsDir:
+    // cursor has subagents but their config format is unresearched.
+    agentFileTargets: {
+      instructionFile: { project: ".cursor/rules", format: "mdc" },
+      skillsDir: {
+        user: "~/.cursor/skills",
+        project: ".cursor/skills",
+        shared: "~/.agents/skills",
+        // Cursor also discovers project skills in the cross-client dir — both
+        // locations verified (ecosystem research). See sharedProject docs for
+        // why codex declares no such slot.
+        sharedProject: ".agents/skills",
+      },
+      mcpConfig: { user: "~/.cursor/mcp.json", project: ".cursor/mcp.json", shape: "json_mcpservers" },
+      hooksConfig: { path: "~/.cursor/hooks.json", shape: "unverified" },
+    },
   },
   gemini: {
     id: "gemini",
@@ -511,6 +704,76 @@ export function modelAgentKey(agentType: string | undefined): AgentClientId {
  *  or a registry id. */
 export function agentSupportsFork(agentType: string | undefined): boolean {
   return AGENT_CLIENTS[fromConvexAgentType(agentType)].capabilities.fork === true;
+}
+
+/**
+ * How codecast can express one capability kind for one client:
+ *
+ *   native       the client's own CLI manages the kind end to end; the driver
+ *                invokes it (`claude mcp add`, `codex mcp add`) instead of
+ *                hand-editing the client-owned config file.
+ *   write        codecast writes the bytes itself into a declared target
+ *                (skills dir, instruction file, agents dir, hooks file).
+ *   render       codecast renders a small declarative manifest and the client
+ *                fetches/installs the bytes on its own (claude plugins:
+ *                `enabledPlugins` + `extraKnownMarketplaces` in settings.json).
+ *   unsupported  no verified way in — the UI must hide the control, exactly
+ *                like the fork gate above.
+ */
+export type CapabilityKindSupport = "native" | "write" | "render" | "unsupported";
+
+/**
+ * Which `CapabilityKind`s a client can express, DERIVED from the same
+ * `agentFileTargets` slots a driver reads — never a second hand-kept table,
+ * because two encodings in two files eventually disagree and show the user
+ * "supported" while the driver writes nothing. A client with no verified
+ * targets (gemini, opencode, pi) is wholly unsupported: honest absence, same
+ * idiom as `agentSupportsFork`. Strictly typed on `AgentClientId` on purpose —
+ * the permissive `fromConvexAgentType` fallback would answer with claude's
+ * support for an unknown client, which is exactly the false "supported" this
+ * function exists to prevent.
+ */
+export function capabilitySupport(kind: CapabilityKind, clientId: AgentClientId): CapabilityKindSupport {
+  // The `?.` guards the RUNTIME hole the strict type can't close: wire values
+  // ("claude_code") reach here through unsafe casts, and an unknown client must
+  // answer "unsupported" — literally true, and safer than a TypeError. Callers
+  // holding a wire spelling should convert with fromConvexAgentType first.
+  const targets = AGENT_CLIENTS[clientId]?.agentFileTargets;
+  if (!targets) return "unsupported";
+  switch (kind) {
+    case "snippet":
+      return targets.instructionFile ? "write" : "unsupported";
+    case "skill":
+      return targets.skillsDir ? "write" : "unsupported";
+    case "command":
+      // Read-only legacy kind: commands merged into skills upstream and a skill
+      // wins a name clash, so no driver ever materializes one (see
+      // MATERIALIZABLE_KINDS, capabilities.ts).
+      return "unsupported";
+    case "subagent":
+      return targets.agentsDir ? "write" : "unsupported";
+    case "mcp":
+      // The user-level MCP config is a client-owned file with unrelated content
+      // (~/.claude.json, ~/.codex/config.toml): where the client ships its own
+      // `mcp` command that is the safe writer, so it outranks direct file edits.
+      return targets.nativeManager?.mcp ? "native" : targets.mcpConfig ? "write" : "unsupported";
+    case "plugin":
+      // The declarative settings render outranks the native manager: `claude
+      // plugin install` clones marketplaces over SSH per machine, while the
+      // rendered file defers fetching to the client itself and works fleet-wide
+      // (verified in a sandbox HOME — 00-plugin-scope-mechanics).
+      return targets.pluginSettings
+        ? "render"
+        : targets.nativeManager?.plugin
+          ? "native"
+          : "unsupported";
+    case "hook":
+      // An `unverified` shape names an observed file without granting support:
+      // writing guessed bytes into a hooks config is worse than absence.
+      return targets.hooksConfig && targets.hooksConfig.shape !== "unverified"
+        ? "write"
+        : "unsupported";
+  }
 }
 
 /** Strict fenced-runtime routing policy. There is no fallback transport. */
