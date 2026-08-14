@@ -12,6 +12,7 @@ import { shareOrigin, canonicalUrl } from "../../../lib/utils";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
+import { EntryTimeline, type TimelineEntry } from "../../../components/EntryTimeline";
 import { SharePopover } from "../../../components/SharePopover";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { FeedCard } from "../../../components/ActivityFeed";
@@ -228,8 +229,13 @@ function DocDetailContent() {
   const doc = data;
   const conversation = data.conversation;
   const relatedTasks = data.related_tasks || [];
+  // Unified comment/entry timeline agents append via the CLI. Rides on the
+  // detail query (webGetDocDetail spreads the whole row); the list query
+  // strips it, so it appears once the detail syncs.
+  const docEntries = (doc as any).entries as TimelineEntry[] | undefined;
 
   const hasRelatedContent =
+    (docEntries?.length ?? 0) > 0 ||
     (doc as any).active_plan ||
     childDocs.length > 0 ||
     backlinks.length > 0 ||
@@ -349,6 +355,8 @@ function DocDetailContent() {
         >
           {hasRelatedContent && (
             <>
+              <EntryTimeline entries={docEntries} className="mb-8" />
+
               {(doc as any).active_plan && (
                 <div className="mb-8">
                   <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">

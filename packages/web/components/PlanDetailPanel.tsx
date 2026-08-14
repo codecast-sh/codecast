@@ -11,6 +11,7 @@ import { AppLoader } from "./AppLoader";
 import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
 import { LivenessDot, ActiveSessionBadge } from "./LivenessDot";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
+import { EntryTimeline } from "./EntryTimeline";
 import { toast } from "sonner";
 import {
   Circle,
@@ -19,7 +20,6 @@ import {
   PauseCircle,
   XCircle,
   MessageSquare,
-  Clock,
   GitBranch,
   ExternalLink,
   FileText,
@@ -1164,53 +1164,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
 
           <PlanTaskSection planShortId={plan.short_id} tasks={liveTasks || []} sessions={plan.sessions || []} />
 
-          {plan.comments?.length > 0 && (
-            <div className="mb-6">
-              <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
-                <Clock className="w-4 h-4 text-sol-text-dim" />
-                Comments ({plan.comments.length})
-              </h2>
-              <div className="space-y-2">
-                {[...plan.comments].reverse().map((entry: any, i: number) => {
-                  const typeStyles: Record<string, string> = {
-                    progress: "text-sol-accent-blue",
-                    decision: "text-sol-accent-yellow",
-                    discovery: "text-sol-accent-green",
-                    reference: "text-sol-accent-cyan",
-                    blocker: "text-sol-accent-red",
-                    note: "text-sol-text-dim",
-                  };
-                  const typeIcons: Record<string, string> = {
-                    progress: "↳",
-                    decision: "◆",
-                    discovery: "★",
-                    reference: "→",
-                    blocker: "!",
-                    note: "·",
-                  };
-                  return (
-                    <div key={i} className="flex items-start gap-2 text-sm">
-                      <span className={`text-xs mt-0.5 ${typeStyles[entry.type] || typeStyles.note}`}>
-                        {typeIcons[entry.type] || "·"}
-                      </span>
-                      <span className="text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap mt-0.5">
-                        {formatTimestamp(entry.timestamp)}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <span className="text-sol-text-muted">{entry.content}</span>
-                        {entry.rationale && (
-                          <p className="text-xs text-sol-text-dim mt-0.5">{entry.rationale}</p>
-                        )}
-                        {entry.path_or_url && (
-                          <p className="text-xs text-sol-text-dim font-mono mt-0.5">→ {entry.path_or_url}</p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          <EntryTimeline entries={plan.comments} />
         </>
       ) : (
         <OrchestrationTab tasks={liveTasks || []} sessions={plan.sessions || []} />
