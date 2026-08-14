@@ -29,6 +29,9 @@ import { useTrackedStore } from "../store/inboxStore";
 
 export interface DiffFile {
   filename: string;
+  // Pre-strip path (stripCommonPrefix rewrites `filename` for display); anchors
+  // like line comments need the real path, so keep the original alongside.
+  originalFilename?: string;
   status: string;
   additions: number;
   deletions: number;
@@ -45,6 +48,12 @@ export interface FileDiffLayoutProps {
   onFileComment?: (filename: string, lineNumber?: number) => void;
   renderFileExtra?: (file: DiffFile) => React.ReactNode;
   onCloseDiffPanel?: () => void;
+  // Enables inline line comments (ephemeral review batch + durable file:line
+  // threads) on each file's DiffView. Called with the file's ORIGINAL path.
+  commentContextFor?: (filename: string) => { conversationId: string; anchorKey: string; filePath: string } | undefined;
+  // External "open this file" request (raw pre-strip path, e.g. from a comment
+  // rail jump). Honored whenever the value changes to a file in the list.
+  focusFile?: string | null;
 }
 
 type Layout = { [key: string]: number };
@@ -179,6 +188,7 @@ function stripCommonPrefix(files: DiffFile[]): DiffFile[] {
   const prefixWithSlash = prefix + "/";
   return files.map(f => ({
     ...f,
+    originalFilename: f.originalFilename ?? f.filename,
     filename: f.filename.startsWith(prefixWithSlash)
       ? f.filename.slice(prefixWithSlash.length)
       : f.filename
@@ -478,6 +488,7 @@ function FileDiffContent({
   totalFiles,
   onToggleSidebar,
   sidebarOpen,
+  commentContextFor,
 }: {
   file: DiffFile | null;
   onComment?: (filename: string, lineNumber?: number) => void;
@@ -486,6 +497,7 @@ function FileDiffContent({
   totalFiles?: number;
   onToggleSidebar?: () => void;
   sidebarOpen?: boolean;
+  commentContextFor?: FileDiffLayoutProps["commentContextFor"];
 }) {
   if (!file) {
     return (
@@ -607,6 +619,7 @@ function FileDiffContent({
         hunks={hunks}
         language={language}
         maxLines={100}
+        commentContext={commentContextFor?.(file.originalFilename ?? file.filename)}
       />
       {renderExtra && renderExtra(file)}
     </div>
@@ -617,10 +630,12 @@ function UnifiedDiffView({
   files,
   onComment,
   renderExtra,
+  commentContextFor,
 }: {
   files: DiffFile[];
   onComment?: (filename: string, lineNumber?: number) => void;
   renderExtra?: (file: DiffFile) => React.ReactNode;
+  commentContextFor?: FileDiffLayoutProps["commentContextFor"];
 }) {
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
@@ -652,6 +667,7 @@ function UnifiedDiffView({
                 hunks={patchData.hunks}
                 language={language}
                 maxLines={500}
+                commentContext={commentContextFor?.(file.originalFilename ?? file.filename)}
               />
             ) : (
               <div className="text-sol-text-muted text-sm py-4 text-center">
@@ -683,6 +699,8 @@ export function FileDiffLayout({
   onFileComment,
   renderFileExtra,
   onCloseDiffPanel,
+  commentContextFor,
+  focusFile,
 }: FileDiffLayoutProps) {
   // Strip common prefix once for consistent comparisons
   const commonPrefix = useMemo(() => findCommonPrefix(files.map(f => f.filename)), [files]);
@@ -723,6 +741,19 @@ export function FileDiffLayout({
       setCurrentFileIndex(0);
     }
   }, [strippedFiles, selectedFile]);
+
+  // External focus (e.g. a comment-rail jump): select the file in split view
+  // and scroll to its card in unified view.
+  useWatchEffect(() => {
+    if (!focusFile) return;
+    const index = strippedFiles.findIndex(
+      (f) => (f.originalFilename ?? f.filename) === focusFile,
+    );
+    if (index < 0) return;
+    setSelectedFile(strippedFiles[index].filename);
+    setCurrentFileIndex(index);
+    document.getElementById(`file-${index}`)?.scrollIntoView({ block: "start" });
+  }, [focusFile, strippedFiles]);
 
   useWatchEffect(() => {
     const index = strippedFiles.findIndex((f) => f.filename === selectedFile);
@@ -822,6 +853,7 @@ export function FileDiffLayout({
     totalFiles: files.length,
     onToggleSidebar: toggleSidebar,
     sidebarOpen,
+    commentContextFor,
   };
 
   const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0);
@@ -894,6 +926,7 @@ export function FileDiffLayout({
             files={strippedFiles}
             onComment={onFileComment}
             renderExtra={renderFileExtra}
+            commentContextFor={commentContextFor}
           />
         </div>
       </div>

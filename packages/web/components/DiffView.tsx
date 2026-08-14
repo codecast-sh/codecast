@@ -1,7 +1,9 @@
-import { useState, useMemo, useCallback, useEffect, useRef, memo } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef, memo, lazy, Suspense } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
+import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { genCommentId } from "../lib/reviewActions";
+import { useFileComments } from "../hooks/useConversationComments";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import Prism from "prismjs";
 import "prismjs/components/prism-typescript";
@@ -16,6 +18,17 @@ import "prismjs/components/prism-markdown";
 import "prismjs/components/prism-yaml";
 import type { PatchHunk } from "../lib/patchParser";
 import type { PendingComment } from "../lib/quoteFormat";
+
+// Lazy on purpose, not just for bundle size: FileLineThread pulls the comment
+// rail machinery (CommentComposer → ConversationView's MessageInput), and this
+// module sits under MarkdownRenderer, which ConversationView itself imports. A
+// static import here closes that cycle and TDZ-crashes whichever page evaluates
+// MarkdownRenderer first. The dynamic edge keeps diff rendering outside the
+// ConversationView module graph; the thread only loads when a diff actually has
+// durable comments.
+const FileLineThread = lazy(() =>
+  import("./comments/FileLineThread").then((m) => ({ default: m.FileLineThread })),
+);
 
 // Stable empty references so the comment selector/props don't churn renders when
 // a diff has no line comments (the common case).
@@ -178,6 +191,27 @@ interface HunkSeparator {
 }
 
 type DisplayItem = FlatDiffLine | HunkSeparator;
+
+// Assign each durably-commented FILE line to one visible diff row: the row
+// showing that line on the new side, falling back to the old side (a comment on
+// a since-deleted line). One row per line so a comment never renders twice when
+// old and new numbering overlap. Exported for tests.
+export function placeDurableThreads(
+  displayItems: DisplayItem[],
+  commentedLines: ReadonlySet<number>,
+): Map<number, number> {
+  const rows = new Map<number, number>(); // display index → file line number
+  const placed = new Set<number>();
+  const tryPlace = (num: number | undefined, index: number) => {
+    if (num !== undefined && commentedLines.has(num) && !placed.has(num) && !rows.has(index)) {
+      rows.set(index, num);
+      placed.add(num);
+    }
+  };
+  displayItems.forEach((item, i) => { if (item.type !== 'separator') tryPlace(item.newNum, i); });
+  displayItems.forEach((item, i) => { if (item.type !== 'separator') tryPlace(item.oldNum, i); });
+  return rows;
+}
 
 function hunksToDisplayItems(
   hunks: PatchHunk[],
@@ -439,6 +473,18 @@ export const DiffView = memo(function DiffView({
   }, [myComments]);
   const [editingLine, setEditingLine] = useState<number | null>(null);
 
+  // Durable code-anchored comments (real `comments` rows keyed file:line, shared
+  // with the team) rendered under their diff line. Anchored to FILE line numbers,
+  // not diff row indices, so they survive re-rendering the file in a different
+  // diff.
+  const durableByLine = useFileComments(commentContext?.conversationId, commentContext?.filePath);
+  const durableRowByIndex = useMemo(
+    () => durableByLine.size === 0
+      ? null
+      : placeDurableThreads(displayItems, new Set(durableByLine.keys())),
+    [displayItems, durableByLine],
+  );
+
   const closeEditor = useCallback(() => {
     setEditingLine(null);
     useInboxStore.getState().setReviewEditingId(null);
@@ -452,6 +498,7 @@ export const DiffView = memo(function DiffView({
       const quote = `${commentContext.filePath}:${lineNum ?? "?"}\n${code}`;
       s.addReviewComment(commentContext.conversationId, {
         id, messageId: commentContext.anchorKey, blockIndex: lineKey, quote, body: "", createdAt: Date.now(),
+        filePath: commentContext.filePath, fileLine: lineNum,
       });
       s.setReviewEditingId(id);
       setEditingLine(lineKey);
@@ -586,6 +633,8 @@ export const DiffView = memo(function DiffView({
 
           const lk = line.lineKey ?? i;
           const lineComments = commentContext ? commentsByLine[lk] : undefined;
+          const durableLine = durableRowByIndex?.get(i);
+          const durableComments = durableLine !== undefined ? durableByLine.get(durableLine) : undefined;
 
           const row = (
             <div data-diff-row={commentContext ? i : undefined} className={`${rowBg} whitespace-pre`}>
@@ -602,17 +651,29 @@ export const DiffView = memo(function DiffView({
             </div>
           );
 
-          if (!commentContext || (!lineComments?.length && editingLine !== lk)) {
+          if (!commentContext || (!lineComments?.length && editingLine !== lk && !durableComments?.length)) {
             return <div key={i}>{row}</div>;
           }
           return (
             <div key={i}>
               {row}
-              <DiffLineThread
-                conversationId={commentContext.conversationId}
-                comments={lineComments ?? EMPTY_COMMENT_LIST}
-                onCloseEditor={closeEditor}
-              />
+              {(lineComments?.length || editingLine === lk) ? (
+                <DiffLineThread
+                  conversationId={commentContext.conversationId}
+                  comments={lineComments ?? EMPTY_COMMENT_LIST}
+                  onCloseEditor={closeEditor}
+                />
+              ) : null}
+              {durableComments?.length ? (
+                <Suspense fallback={null}>
+                  <FileLineThread
+                    conversationId={commentContext.conversationId}
+                    filePath={commentContext.filePath}
+                    lineNumber={durableLine}
+                    comments={durableComments}
+                  />
+                </Suspense>
+              ) : null}
             </div>
           );
         })}
@@ -709,6 +770,23 @@ function LineCommentEditor({
     useInboxStore.getState().commitReviewComment(conversationId, comment.id, value.trim());
     onDone();
   }, [value, conversationId, comment.id, onDone]);
+  // Post as a DURABLE team comment anchored to this file:line (a real `comments`
+  // row teammates see, with its own thread + agent reply) instead of the
+  // ephemeral batch that rides the next reply. The pending row converts.
+  const canPost = !!comment.filePath && comment.fileLine !== undefined;
+  const post = useCallback(() => {
+    const body = value.trim();
+    if (!body || !comment.filePath) return;
+    const s = useInboxStore.getState();
+    void s.addComment(conversationId, body, {
+      filePath: comment.filePath,
+      lineNumber: comment.fileLine,
+    }).catch((error) => {
+      if (!isParkedDispatchError(error)) throw error;
+    });
+    s.removeReviewComment(conversationId, comment.id);
+    onDone();
+  }, [value, conversationId, comment.id, comment.filePath, comment.fileLine, onDone]);
   // Cancel an as-yet-unsaved (empty) comment by removing it, so a stray click on
   // the + button doesn't leave an empty flag behind; keep existing notes intact.
   const cancel = useCallback(() => {
@@ -737,7 +815,24 @@ function LineCommentEditor({
         <button type="button" className="text-[11px] text-sol-text-dim hover:text-sol-text" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>
           Cancel <KeyCap size="xs">Esc</KeyCap>
         </button>
-        <button type="button" className="text-[11px] text-sol-blue hover:text-sol-cyan font-medium" onMouseDown={(e) => e.preventDefault()} onClick={save}>
+        {canPost && (
+          <button
+            type="button"
+            className="text-[11px] text-sol-cyan hover:text-sol-blue font-medium"
+            title="Post as a team comment on this line — teammates see it, and the agent can reply in its thread"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={post}
+          >
+            Post
+          </button>
+        )}
+        <button
+          type="button"
+          className="text-[11px] text-sol-blue hover:text-sol-cyan font-medium"
+          title="Attach to your next reply to the agent"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={save}
+        >
           Save <KeyCap size="xs">⌘</KeyCap><KeyCap size="xs">↵</KeyCap>
         </button>
       </div>

@@ -111,6 +111,13 @@ describe("sessionStructuralSig — plan identity drives the 'By plan' lens", () 
     status: "active",
   });
 
+  it("flips when a comment is posted or a thread resolved (open_comment_threads)", () => {
+    const withThread = session("a", { open_comment_threads: 1 });
+    expect(sessionStructuralSig(withThread)).not.toBe(sessionStructuralSig(base));
+    const resolvedAll = session("a", { open_comment_threads: 0 });
+    expect(sessionStructuralSig(resolvedAll)).toBe(sessionStructuralSig(base));
+  });
+
   it("flips when a plan is stamped (active_plan undefined -> set)", () => {
     expect(
       sessionStructuralSig(session("a", { active_plan: plan("pl-1", "Rollout") })),

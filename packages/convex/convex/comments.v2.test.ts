@@ -3,10 +3,12 @@ import { makeFakeDb } from "./testDb";
 import {
   addCommentV2,
   askAgentInThreadV2,
+  countOpenCommentThreads,
   deleteComment,
   deleteCommentV2,
   getCommentsV2,
   mirrorAgentReply,
+  resolveThread,
   updateComment,
   updateCommentV2,
   updateGitHubCommentId,
@@ -756,6 +758,157 @@ describe("comments write-choke coverage", () => {
     expect(forkCalls).toBe(1);
     expect(commentsFor(ctx)).toHaveLength(1);
     expect(ctx.db._tables.pending_messages).toHaveLength(1);
+  });
+
+  test("a file:line anchor scopes the agent thread and shows up in the prompt", async () => {
+    const forkId = "conversation-comment-fork" as any;
+    const ctx = context(OWNER, {
+      conversations: [conversation(), conversation(forkId)],
+    }, {
+      async runMutation() {
+        return { conversation_id: forkId };
+      },
+    });
+
+    // One comment in each thread kind: global, and two different code lines.
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-global",
+      conversation_id: CONVERSATION,
+      content: "global note",
+      client_id: "client-global",
+    });
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-line",
+      conversation_id: CONVERSATION,
+      content: "this null check is wrong",
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 42,
+      client_id: "client-line",
+    });
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-other-line",
+      conversation_id: CONVERSATION,
+      content: "unrelated other-line note",
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 7,
+      client_id: "client-other-line",
+    });
+    expect(commentsFor(ctx)[1]).toMatchObject({
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 42,
+    });
+
+    const receipt = await (askAgentInThreadV2 as any)._handler(ctx, {
+      command_id: "ask-agent-line",
+      conversation_id: CONVERSATION,
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 42,
+      client_id: "optimistic-line-agent",
+    });
+    expect(receipt).toMatchObject({ status: "acknowledged" });
+
+    // The placeholder inherits the anchor so it renders inside the same thread.
+    const placeholder = commentsFor(ctx).find((c: any) => c.author_kind === "agent");
+    expect(placeholder).toMatchObject({
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 42,
+      agent_status: "thinking",
+    });
+
+    // The delivered prompt names the anchor and carries ONLY this line's thread.
+    const prompt = ctx.db._tables.pending_messages[0].content as string;
+    expect(prompt).toContain("codecast/packages/web/foo.ts:42");
+    expect(prompt).toContain("this null check is wrong");
+    expect(prompt).not.toContain("global note");
+    expect(prompt).not.toContain("unrelated other-line note");
+  });
+
+  test("the global agent thread excludes code-anchored comments", async () => {
+    const forkId = "conversation-comment-fork" as any;
+    const ctx = context(OWNER, {
+      conversations: [conversation(), conversation(forkId)],
+    }, {
+      async runMutation() {
+        return { conversation_id: forkId };
+      },
+    });
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-global",
+      conversation_id: CONVERSATION,
+      content: "global note",
+      client_id: "client-global",
+    });
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-line",
+      conversation_id: CONVERSATION,
+      content: "line-anchored note",
+      file_path: "codecast/packages/web/foo.ts",
+      line_number: 42,
+      client_id: "client-line",
+    });
+
+    await (askAgentInThreadV2 as any)._handler(ctx, {
+      command_id: "ask-agent-global",
+      conversation_id: CONVERSATION,
+      client_id: "optimistic-global-agent",
+    });
+    const prompt = ctx.db._tables.pending_messages[0].content as string;
+    expect(prompt).toContain("global note");
+    expect(prompt).not.toContain("line-anchored note");
+  });
+
+  test("resolveThread stamps one thread, reopening clears it, and a late reply reopens", async () => {
+    const ctx = context(OWNER, { conversations: [conversation()] });
+    const anchor = { file_path: "codecast/foo.ts", line_number: 42 };
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-line",
+      conversation_id: CONVERSATION,
+      content: "flagged",
+      ...anchor,
+      client_id: "client-line",
+    });
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-global",
+      conversation_id: CONVERSATION,
+      content: "global chatter",
+      client_id: "client-global",
+    });
+
+    expect(countOpenCommentThreads(commentsFor(ctx))).toBe(2);
+
+    const stamped = await (resolveThread as any)._handler(ctx, {
+      conversation_id: CONVERSATION,
+      ...anchor,
+      resolved: true,
+    });
+    expect(stamped).toBe(1);
+    const line = commentsFor(ctx).find((c: any) => c.file_path === "codecast/foo.ts");
+    expect(line.resolved_at).toBeGreaterThan(0);
+    expect(String(line.resolved_by)).toBe(String(OWNER));
+    // The global thread is untouched; only the code thread left the count.
+    const global = commentsFor(ctx).find((c: any) => !c.file_path);
+    expect(global.resolved_at).toBeUndefined();
+    expect(countOpenCommentThreads(commentsFor(ctx))).toBe(1);
+
+    // A reply posted after resolution arrives unstamped — the thread reopens.
+    await (addCommentV2 as any)._handler(ctx, {
+      command_id: "create-late-reply",
+      conversation_id: CONVERSATION,
+      content: "actually, still broken",
+      ...anchor,
+      client_id: "client-late-reply",
+    });
+    expect(countOpenCommentThreads(commentsFor(ctx))).toBe(2);
+
+    // Reopen clears the stamps on the whole thread.
+    await (resolveThread as any)._handler(ctx, {
+      conversation_id: CONVERSATION,
+      ...anchor,
+      resolved: false,
+    });
+    for (const c of commentsFor(ctx)) {
+      if (c.file_path) expect(c.resolved_at).toBeUndefined();
+    }
   });
 
   test("v2 ask-agent requires a non-blank optimistic identity", async () => {

@@ -188,13 +188,27 @@ export function applySyncTable<T extends { _id: string }>(
           // overlay between its ticks. A REAL incoming value still applies (the
           // reconcile crawl runs liveness-on), so this only fills nulls. Then reuse
           // prev's identity if only overlay fields would have differed.
+          //
+          // A preserved field CAN be non-scalar (tasks preserve `comments`), which
+          // scalarFieldsEqual skips — so a row whose only change is a carried
+          // fresh array must not reuse prev, or the update is silently dropped.
+          // Content-compare carried preserved values to decide; when equal, the
+          // fresh-but-identical array also must not break identity reuse.
+          let preservedEqual = true;
           for (const f of preserveFields) {
-            if ((merged as any)[f] == null && (prevRecord as any)[f] != null) {
+            const mv = (merged as any)[f];
+            const pv = (prevRecord as any)[f];
+            if (mv == null && pv != null) {
               if (merged === incomingRecord) merged = { ...incomingRecord };
-              (merged as any)[f] = (prevRecord as any)[f];
+              (merged as any)[f] = pv;
+            } else if (mv !== pv && JSON.stringify(mv) !== JSON.stringify(pv)) {
+              preservedEqual = false;
             }
           }
-          table[id] = scalarFieldsEqual(prevRecord, merged, ignoreFields) ? prevRecord : merged;
+          table[id] =
+            preservedEqual && scalarFieldsEqual(prevRecord, merged, ignoreFields)
+              ? prevRecord
+              : merged;
         } else {
           // Preserve the previous object identity when nothing the UI renders has
           // changed. Convex live queries resend the ENTIRE result set as fresh

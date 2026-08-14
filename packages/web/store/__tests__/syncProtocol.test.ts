@@ -59,6 +59,42 @@ describe("applySyncTable — delta mode", () => {
   });
 });
 
+describe("applySyncTable — preserveFields", () => {
+  type ARow = Row & { comments?: Array<{ _id: string; text: string }> };
+  const c = (id: string, text: string) => ({ _id: id, text });
+
+  it("carries a preserved field forward when the delta omits it", () => {
+    const prev: Record<string, ARow> = { a: { ...r("a", 1), comments: [c("c1", "hi")] } };
+    const incoming: ARow[] = [r("a", 5)];
+    const { table } = applySyncTable("tasks", incoming, {}, prev, {
+      isDelta: true, preserveFields: ["comments"],
+    });
+    expect(table.a.updated_at).toBe(5);
+    expect(table.a.comments).toEqual([c("c1", "hi")]);
+  });
+
+  it("applies a carried preserved array even when every scalar is unchanged", () => {
+    // Real sequence: the list delta ships the updated_at bump first (no
+    // comments), then the change feed re-fetches the row WITH comments — same
+    // scalars. Identity reuse must not swallow the fresh array.
+    const prev: Record<string, ARow> = { a: { ...r("a", 5), comments: [c("c1", "hi")] } };
+    const incoming: ARow[] = [{ ...r("a", 5), comments: [c("c1", "hi"), c("c2", "new")] }];
+    const { table } = applySyncTable("tasks", incoming, {}, prev, {
+      isDelta: true, preserveFields: ["comments"],
+    });
+    expect(table.a.comments).toEqual([c("c1", "hi"), c("c2", "new")]);
+  });
+
+  it("keeps prev identity when the carried preserved array is content-identical", () => {
+    const prev: Record<string, ARow> = { a: { ...r("a", 5), comments: [c("c1", "hi")] } };
+    const incoming: ARow[] = [{ ...r("a", 5), comments: [c("c1", "hi")] }];
+    const { table } = applySyncTable("tasks", incoming, {}, prev, {
+      isDelta: true, preserveFields: ["comments"],
+    });
+    expect(table.a).toBe(prev.a);
+  });
+});
+
 describe("optional inbox timestamp echoes", () => {
   it("treats omitted timestamps as null acknowledgements without relaxing other fields", () => {
     const pending = {

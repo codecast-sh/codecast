@@ -11,7 +11,8 @@ import { MarkdownBlocks } from "./tools/MarkdownRenderer";
 import { DocReviewBar } from "./DocReviewBar";
 import { PeekLayoutControls } from "./DetailSplitLayout";
 import { SlotActions } from "./workspace/Slot";
-import { ArrowLeft, Edit3, Eye, MessageSquareQuote, MoreHorizontal, Copy, Check, X } from "lucide-react";
+import { useInboxStore } from "../store/inboxStore";
+import { ArrowLeft, Edit3, MoreHorizontal, Copy, Check, X } from "lucide-react";
 import Link from "next/link";
 import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
@@ -67,9 +68,16 @@ export function DocumentDetailLayout({
   ownerConversationId,
 }: DocumentDetailLayoutProps) {
   const router = useRouter();
-  const [isEditing, setIsEditing] = useState(initialEditable);
-  const [reviewing, setReviewing] = useState(false);
+  // Read mode is the default: the body renders as quotable review blocks
+  // (hover any block to annotate). Editing is an explicit pencil toggle.
+  const [isEditing, setIsEditing] = useState(false);
   const reviewKey = `doc:${docId}`;
+  // The review submit bar replaces the context chat only while a batch of
+  // pending notes exists — quoting a first block summons it, sending/clearing
+  // the batch dismisses it.
+  const hasReviewNotes = useInboxStore(
+    (s) => (s.reviewComments[reviewKey] ?? []).length > 0
+  );
   const [showMeta, setShowMeta] = useState(false);
   const [copied, setCopied] = useState(false);
   const handleMentionQuery = useMentionQuery(useActiveMentionScope());
@@ -115,26 +123,19 @@ export function DocumentDetailLayout({
           >
             {copied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
-          <button
-            onClick={() => { setReviewing((r) => !r); setIsEditing(false); }}
-            className={`p-1.5 rounded-md text-xs flex items-center gap-1 transition-colors ${
-              reviewing ? "text-sol-yellow" : "text-sol-text-dim hover:text-sol-text"
-            }`}
-            title={reviewing ? "Exit review" : "Review: quote sections and send feedback to an agent"}
-          >
-            <MessageSquareQuote className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => { setIsEditing(!isEditing); setReviewing(false); }}
-            className={`p-1.5 rounded-md text-xs flex items-center gap-1 transition-colors ${
-              isEditing
-                ? "text-sol-cyan"
-                : "text-sol-text-dim hover:text-sol-text"
-            }`}
-            title={isEditing ? "Switch to view mode" : "Switch to edit mode"}
-          >
-            {isEditing ? <Edit3 className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-          </button>
+          {initialEditable && (
+            <button
+              onClick={() => setIsEditing(!isEditing)}
+              className={`p-1.5 rounded-md text-xs flex items-center gap-1 transition-colors ${
+                isEditing
+                  ? "text-sol-cyan"
+                  : "text-sol-text-dim hover:text-sol-text"
+              }`}
+              title={isEditing ? "Done editing" : "Edit"}
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+            </button>
+          )}
           {topBarRight}
           {/* Layout (pin/full) controls from the surrounding list surface —
               they live IN this header so the detail has exactly one chrome
@@ -181,7 +182,22 @@ export function DocumentDetailLayout({
           {leadContent && <div className="mt-2">{leadContent}</div>}
 
           <div className="mt-4">
-            {reviewing ? (
+            {isEditing ? (
+              <ErrorBoundary name="DocEditor" level="panel">
+                <CollabDocEditor
+                  key={docId}
+                  docId={docId}
+                  markdownContent={markdownContent}
+                  onMentionQuery={handleMentionQuery}
+                  onImageUpload={handleImageUpload}
+                  editable
+                  placeholder={placeholder}
+                  getMarkdownRef={getMarkdownRef}
+                  cliEditedAt={cliEditedAt}
+                  contentReady={contentReady}
+                />
+              </ErrorBoundary>
+            ) : (
               <div className="prose prose-invert prose-sm max-w-none text-sol-text">
                 <MessageReview
                   conversationId={reviewKey}
@@ -190,21 +206,6 @@ export function DocumentDetailLayout({
                   renderBlock={renderDocBlocks}
                 />
               </div>
-            ) : (
-              <ErrorBoundary name="DocEditor" level="panel">
-                <CollabDocEditor
-                  key={docId}
-                  docId={docId}
-                  markdownContent={markdownContent}
-                  onMentionQuery={handleMentionQuery}
-                  onImageUpload={handleImageUpload}
-                  editable={isEditing}
-                  placeholder={placeholder}
-                  getMarkdownRef={getMarkdownRef}
-                  cliEditedAt={cliEditedAt}
-                  contentReady={contentReady}
-                />
-              </ErrorBoundary>
             )}
           </div>
 
@@ -219,13 +220,12 @@ export function DocumentDetailLayout({
             {footerContent}
           </div>
         )}
-        {reviewing ? (
+        {hasReviewNotes && !isEditing ? (
           <DocReviewBar
             reviewKey={reviewKey}
             docId={docId}
             title={title || "Untitled"}
             ownerConversationId={ownerConversationId}
-            onSent={() => setReviewing(false)}
           />
         ) : (
           <ContextChatInput

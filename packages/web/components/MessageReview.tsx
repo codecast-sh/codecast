@@ -220,7 +220,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     [myComments],
   );
 
-  useLayoutEffect(() => {
+  const restack = useCallback(() => {
     if (!engaged) return;
     const GAP = 8;
     let prevBottom = -Infinity;
@@ -237,7 +237,20 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       return same ? prev : tops;
     });
     if (Number.isFinite(prevBottom)) setRailBottom(prevBottom + GAP * 2);
-  }, [sortedComments, rects, engaged, editingId]);
+  }, [sortedComments, rects, engaged]);
+
+  useLayoutEffect(() => { restack(); }, [restack, editingId]);
+
+  // The open editor autosizes its textarea on every keystroke — a height change
+  // local to that card, invisible to this component's render cycle — so watch
+  // the cards themselves; otherwise the stack (and the footer hanging under it)
+  // freezes while the editor grows over it.
+  useEffect(() => {
+    if (!engaged) return;
+    const ro = new ResizeObserver(() => restack());
+    cardRefs.current.forEach((el) => ro.observe(el));
+    return () => ro.disconnect();
+  }, [engaged, restack]);
 
   const setActiveBlock = useCallback((i: number) => useInboxStore.getState().setReviewActiveBlock(i), []);
 
@@ -481,6 +494,10 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
               type="button"
               className="cc-rail-foot"
               style={{ top: railBottom }}
+              // Without this, mousedown blurs an open note editor, the stack
+              // collapses, and this button jumps away before mouseup — the click
+              // never lands.
+              onMouseDown={(e) => e.preventDefault()}
               onClick={focusComposer}
             >
               <MenuKeyCaps action="compose.focus" />
@@ -595,19 +612,23 @@ function CommentEditor({
   // Only close if this card still owns the editor. Stepping to the next note
   // hands ownership over while this textarea is still mounted; a late blur must
   // not then shut the editor that just opened.
-  const close = useCallback(() => {
+  // `refocus`: hand focus back to the region only on an explicit close (Esc,
+  // ⌘↵, the footer buttons). A blur-driven close means focus already went where
+  // the user pointed it — the composer via ⌃M, another card — and yanking it
+  // back would undo that gesture.
+  const close = useCallback((refocus: boolean) => {
     const s = useInboxStore.getState();
     if (s.reviewEditingId !== comment.id) return;
     s.setReviewEditingId(null);
-    onDone();
+    if (refocus) onDone();
   }, [comment.id, onDone]);
 
   // The quote is committed on first click, so the note editor only edits the
   // optional note: Save stores it (empty keeps it a bare quote), Cancel just
   // closes and leaves the quote untouched. Removing is the chip's explicit Remove.
-  const save = useCallback(() => {
+  const save = useCallback((refocus: boolean) => {
     useInboxStore.getState().commitReviewComment(conversationId, comment.id, value.trim());
-    close();
+    close(refocus);
   }, [value, conversationId, comment.id, close]);
 
   const cancel = close;
@@ -650,7 +671,7 @@ function CommentEditor({
             e.stopPropagation();
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
-              save();
+              save(true);
             } else if (onStep && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
               const up = e.key === "ArrowUp";
               // ⌘ jumps out of the note from anywhere; a bare arrow only once the
@@ -661,17 +682,17 @@ function CommentEditor({
               }
             } else if (e.key === "Escape") {
               e.preventDefault();
-              cancel();
+              cancel(true);
             }
           }}
-          onBlur={save}
+          onBlur={() => save(false)}
         />
         <div className="cc-comment-editor-footer">
-          <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>
+          <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => cancel(true)}>
             Cancel
             <KeyCap size="xs">Esc</KeyCap>
           </button>
-          <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={save}>
+          <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => save(true)}>
             Save
             <span className="cc-bar-keys"><KeyCap size="xs">⌘</KeyCap><KeyCap size="xs">↵</KeyCap></span>
           </button>
