@@ -23,6 +23,7 @@ const FORKS_VERSION = "4"; // bumped: fan-out is a handoff — one cast fork cal
 const PUBLISH_VERSION = "4"; // bumped: cast image cross-reference for single-image sharing; never link local paths
 const BROWSER_VERSION = "4"; // bumped: batched steps, viewport emulation, dialogs cannot block
 const CHAT_VERSION = "1"; // first release: channels, threads, search, anchor replies
+const DECIDE_VERSION = "1"; // first release: cast decide + the web decision queue
 const STATE_VERSION = "3"; // bumped: first line = what you're working on; --status working|blocked|done
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
@@ -153,6 +154,10 @@ export function getBrowserVersion(): string {
 
 export function getChatVersion(): string {
   return CHAT_VERSION;
+}
+
+export function getDecideVersion(): string {
+  return DECIDE_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {

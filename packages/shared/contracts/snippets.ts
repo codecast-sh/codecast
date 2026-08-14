@@ -658,6 +658,45 @@ export const CHAT_SECTION: SectionSpec = {
   endMarker: CHAT_SNIPPET_END,
 };
 
+export const DECIDE_SNIPPET_END = "<!-- /codecast-decide -->";
+export const DECIDE_SNIPPET = `
+## Asking for a decision
+
+When you hit a fork only your human can resolve — a tradeoff with real consequences, an
+irreversible step, a judgment call about their product — hand them ONE well-formed decision
+with \`cast decide\` instead of burying a question in prose. It lands in their decision queue,
+where they clear the whole stack in one sitting; the answer arrives back here as a message.
+
+\`\`\`bash
+cast decide "<one question>" \\
+  -o "First option :: what happens if chosen" \\
+  -o "Second option :: what happens instead" \\
+  --context -  <<'EOF'
+The reasoning: what you found, the tradeoff, and why you cannot pick alone.
+Write it so they can decide WITHOUT opening the session.
+EOF
+\`\`\`
+
+The bar: a bare question is useless. The context carries your reasoning, the tradeoff, and the
+consequence of each option — the queue shows nothing else unless they open the session. For a
+decision that deserves evidence (a migration, an audit, a design), write an HTML report and
+attach it with \`--report report.html\`; it publishes like any artifact and renders with the
+question.
+
+Blocking is the default: post it, then END YOUR TURN — the answer arrives as a user message.
+When you can safely proceed and only want oversight, pass \`--advisory --default <n>\`: keep
+working with option n, and treat a later answer as an override.
+
+Ask sparingly. Every decision spends your human's attention; a question you could have resolved
+by reading more code is noise in their queue.
+${DECIDE_SNIPPET_END}
+`;
+
+export const DECIDE_SECTION: SectionSpec = {
+  headings: ["## Asking for a decision"],
+  endMarker: DECIDE_SNIPPET_END,
+};
+
 export const MESSAGING_SECTION: SectionSpec = {
   headings: ["## Messaging"],
   endMarker: MESSAGING_SNIPPET_END,
@@ -872,6 +911,22 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     enabledKey: "browser_enabled",
     versionKey: "browser_version",
     section: { spec: BROWSER_SECTION, body: BROWSER_SNIPPET },
+  },
+  {
+    slug: "decide",
+    aliases: ["decisions-queue", "queue"],
+    name: "Decision queue",
+    desc: "Hand your human one well-formed decision (cast decide)",
+    detail:
+      "Adds `cast decide` so an agent that hits a real fork — a tradeoff, an irreversible " +
+      "step, a judgment call — posts ONE explicit question with options and enough context " +
+      "to answer without opening the session. Decisions land in the web decision queue, " +
+      "where you clear the stack one at a time with the keyboard; the chosen option arrives " +
+      "back in the asking session as a normal message.",
+    writesTo: "CLAUDE.md — a ## Asking for a decision section with the command",
+    enabledKey: "decide_enabled",
+    versionKey: "decide_version",
+    section: { spec: DECIDE_SECTION, body: DECIDE_SNIPPET },
   },
   {
     slug: "orchestration",
