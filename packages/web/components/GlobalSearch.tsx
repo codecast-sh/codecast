@@ -8,7 +8,9 @@ import { AppLoader } from "./AppLoader";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, type InboxSession } from "../store/inboxStore";
+import { ContextMenu, useContextMenu } from "./ui/context-menu";
+import { SessionMenuItems } from "./menus/ObjectContextMenus";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -182,6 +184,9 @@ export function GlobalSearch() {
 
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Escape") {
+      // With a context menu open, Escape belongs to the menu (Radix closes it
+      // itself) — don't tear down the whole search panel on the same press.
+      if (sessionCtxMenu.menu) return;
       setIsOpen(false);
       setQuery("");
       inputRef.current?.blur();
@@ -234,10 +239,28 @@ export function GlobalSearch() {
     setQuery("");
   };
 
+  // One cursor menu for all result rows. The full triage menu (pin, label,
+  // stash…) mutates the inbox-store row, so it needs both proof of ownership
+  // (server-computed isOwn) AND the session present in the store; anything
+  // else gets the read-only foreign menu.
+  const sessionCtxMenu = useContextMenu<{ session: InboxSession; isForeign: boolean; conversationId: string }>();
+  const openSessionMenu = (e: React.MouseEvent, row: any) => {
+    const stored = useInboxStore.getState().sessions[row.conversationId];
+    const isForeign = !(row.isOwn === true && stored);
+    sessionCtxMenu.open(e, {
+      session: stored ?? ({ _id: row.conversationId, title: row.title } as InboxSession),
+      isForeign,
+      conversationId: row.conversationId,
+    });
+  };
+
   const isExpanded = isFocused || query.length > 0;
 
   return (
-    <div className="relative w-full min-w-0 z-[9999] flex justify-center">
+    // z-[240]: above every page surface and z-[200] overlay, but BELOW the
+    // dropdown-menu portal layer (z-[250]) so the right-click context menu on
+    // result rows paints over this panel. CommandPalette (9999) still wins.
+    <div className="relative w-full min-w-0 z-[240] flex justify-center">
       <div
         className={`relative w-full min-w-0 transition-[max-width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] ${
           isExpanded ? "max-w-[680px]" : "max-w-[230px]"
@@ -291,7 +314,7 @@ export function GlobalSearch() {
       {isOpen && query.length >= 2 && (
         <div
           style={{ top: panelTop }}
-          className="fixed left-1/2 -translate-x-1/2 w-[min(1200px,calc(100vw-2rem))] bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-[9999]"
+          className="fixed left-1/2 -translate-x-1/2 w-[min(1200px,calc(100vw-2rem))] bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-[240]"
         >
             {groupedResults.length === 0 && !searchData ? (
               searchIsSlow || searchError ? (
@@ -331,6 +354,7 @@ export function GlobalSearch() {
                   <button
                     key={session.conversationId}
                     onClick={() => handleResultClick(session.conversationId)}
+                    onContextMenu={(e) => openSessionMenu(e, session)}
                     className={`w-full text-left mx-1 rounded-lg transition-colors ${
                       sessionIndex === selectedIndex
                         ? "bg-amber-200/60 dark:bg-amber-900/40"
@@ -440,6 +464,16 @@ export function GlobalSearch() {
             </div>
         </div>
       )}
+
+      <ContextMenu state={sessionCtxMenu}>
+        {({ session, isForeign, conversationId }) => (
+          <SessionMenuItems
+            session={session}
+            isForeign={isForeign}
+            onOpen={() => handleResultClick(conversationId)}
+          />
+        )}
+      </ContextMenu>
     </div>
   );
 }

@@ -8,6 +8,9 @@ import { useState, useCallback, useMemo } from "react";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../../store/inboxStore";
 import { useConvexSync } from "../../hooks/useConvexSync";
+import { notificationHref } from "../../components/NotificationBell";
+import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
+import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../components/ui/context-menu";
 import {
   notificationRoute,
   sessionTypes,
@@ -132,6 +135,7 @@ export default function NotificationsPage() {
   const markAsRead = useInboxStore((s) => s.markNotificationRead);
   const markAllAsRead = useInboxStore((s) => s.markAllNotificationsRead);
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
+  const ctxMenu = useContextMenu<any>();
 
   const handleNotificationClick = async (
     notificationId: Id<"notifications">,
@@ -255,6 +259,7 @@ export default function NotificationsPage() {
                   <button
                     key={notification._id}
                     onClick={() => handleNotificationClick(notification._id, notification.conversation_id, (notification as any).entity_type, (notification as any).entity_id, (notification as any).link, (notification as any).chat_message_id)}
+                    onContextMenu={(e) => ctxMenu.open(e, notification)}
                     className={`w-full px-5 py-4 text-left border-b border-sol-border/40 last:border-b-0 hover:bg-sol-bg-alt transition-colors ${
                       !notification.read ? "bg-sol-bg-alt/40" : "bg-sol-bg"
                     }`}
@@ -305,6 +310,37 @@ export default function NotificationsPage() {
               })}
             </div>
           )}
+
+          <ContextMenu state={ctxMenu}>
+            {(n) => (
+              <>
+                <CtxItem
+                  icon={ArrowUpRight}
+                  onSelect={() => handleNotificationClick(n._id, n.conversation_id, n.entity_type, n.entity_id, n.link, n.chat_message_id)}
+                >
+                  Open
+                </CtxItem>
+                <CtxItem
+                  icon={ExternalLink}
+                  onSelect={() => {
+                    markAsRead(n._id);
+                    window.open(notificationHref(n), "_blank", "noopener");
+                  }}
+                >
+                  Open in new tab
+                </CtxItem>
+                <CtxSeparator />
+                {!n.read && (
+                  <CtxItem icon={Check} onSelect={() => markAsRead(n._id)}>
+                    Mark as read
+                  </CtxItem>
+                )}
+                <CtxItem icon={CheckCheck} onSelect={() => markAllAsRead()}>
+                  Mark all as read
+                </CtxItem>
+              </>
+            )}
+          </ContextMenu>
         </div>
       </DashboardLayout>
     </AuthGuard>

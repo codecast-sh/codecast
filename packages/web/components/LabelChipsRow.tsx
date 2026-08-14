@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { Plus, X, Tag } from "lucide-react";
+import { Plus, X, Tag, Filter, FilterX, Trash2 } from "lucide-react";
 import {
   useInboxStore,
   useTrackedStore,
@@ -13,6 +13,11 @@ import {
   type BucketItem,
 } from "../store/inboxStore";
 import { getLabelColor } from "../lib/labelColors";
+import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
+
+type ChipCtxPayload =
+  | { kind: "label"; bucket: BucketItem }
+  | { kind: "project"; name: string };
 
 // The session-panel header's filter chips: manual labels (draggable to
 // reorder, hover ✕ to delete, drop target for session cards), an inline
@@ -92,8 +97,7 @@ export function LabelChipsRow({
   }, [newLabelName]);
 
   // ── Delete (archive) ─────────────────────────────────────────────────────
-  const deleteLabel = useCallback((bucket: BucketItem) => (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const performDeleteLabel = useCallback((bucket: BucketItem) => {
     const store = useInboxStore.getState();
     if (store.activeBucketFilter === bucket._id) store.setActiveBucketFilter(null);
     store.updateBucket(bucket._id, { archived_at: Date.now() });
@@ -101,6 +105,13 @@ export function LabelChipsRow({
       action: { label: "Undo", onClick: () => useInboxStore.getState().updateBucket(bucket._id, { archived_at: null }) },
     });
   }, []);
+  const deleteLabel = useCallback((bucket: BucketItem) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    performDeleteLabel(bucket);
+  }, [performDeleteLabel]);
+
+  // ── Right-click menu (one instance serves every chip in the row) ─────────
+  const ctxMenu = useContextMenu<ChipCtxPayload>();
 
   // ── Label drag-reorder ───────────────────────────────────────────────────
   // The row (not individual chips) owns reorder dragover: insertion index is
@@ -355,6 +366,7 @@ export function LabelChipsRow({
         }}
         onDragEnd={clearDragState}
         onClick={() => useInboxStore.getState().setActiveBucketFilter(active ? null : bucket._id)}
+        onContextMenu={(e) => ctxMenu.open(e, { kind: "label", bucket })}
         onDragOver={(e) => {
           // Session-card drops target the chip itself; label reorders are
           // handled by the row (gap math) and just pass through here.
@@ -472,6 +484,7 @@ export function LabelChipsRow({
                 const next = active ? null : name;
                 useInboxStore.getState().setActiveProjectFilter(next, next ? (projectPathByName[name] || null) : null);
               }}
+              onContextMenu={(e) => ctxMenu.open(e, { kind: "project", name })}
               style={rowHint ? { transform: `translateX(${REORDER_GAP}px)`, transition: "transform 150ms ease" } : { transition: "transform 150ms ease" }}
               className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 ${
                 hiddenKeys.has(key) && key !== peekKey ? "invisible pointer-events-none" : ""
@@ -708,6 +721,45 @@ export function LabelChipsRow({
         </div>,
         document.body
       )}
+
+      <ContextMenu state={ctxMenu}>
+        {(p) =>
+          p.kind === "label" ? (
+            <>
+              <CtxHeader title={p.bucket.name} />
+              {s.activeBucketFilter === p.bucket._id ? (
+                <CtxItem icon={FilterX} onSelect={() => useInboxStore.getState().setActiveBucketFilter(null)}>
+                  Clear filter
+                </CtxItem>
+              ) : (
+                <CtxItem icon={Filter} onSelect={() => useInboxStore.getState().setActiveBucketFilter(p.bucket._id)}>
+                  Filter by this label
+                </CtxItem>
+              )}
+              <CtxSeparator />
+              <CtxItem danger icon={Trash2} onSelect={() => performDeleteLabel(p.bucket)}>
+                Delete label
+              </CtxItem>
+            </>
+          ) : (
+            <>
+              <CtxHeader title={p.name} />
+              {s.activeProjectFilter === p.name ? (
+                <CtxItem icon={FilterX} onSelect={() => useInboxStore.getState().setActiveProjectFilter(null, null)}>
+                  Clear filter
+                </CtxItem>
+              ) : (
+                <CtxItem
+                  icon={Filter}
+                  onSelect={() => useInboxStore.getState().setActiveProjectFilter(p.name, projectPathByName[p.name] || null)}
+                >
+                  Filter by project
+                </CtxItem>
+              )}
+            </>
+          )
+        }
+      </ContextMenu>
     </div>
   );
 }

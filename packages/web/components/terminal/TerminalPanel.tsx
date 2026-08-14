@@ -33,6 +33,7 @@ import {
   subscribeTerminals,
   type TermTabState,
 } from "../../lib/terminal/termSessions";
+import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../ui/context-menu";
 import "@xterm/xterm/css/xterm.css";
 
 const MIN_HEIGHT = 110;
@@ -58,6 +59,7 @@ export function TerminalPanel() {
   const everOpened = useRef(false);
   const restoredOnce = useRef(false);
 
+  const tabCtxMenu = useContextMenu<TermTabState>();
   const tabsVersion = useSyncExternalStore(subscribeTerminals, getTerminalsVersion, getTerminalsVersion);
   const tabs = listTabs();
   const activeId = getActiveTabId();
@@ -235,6 +237,7 @@ export function TerminalPanel() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
+                onContextMenu={(e) => tabCtxMenu.open(e, tab)}
                 className={`group flex items-center gap-1.5 px-2.5 h-[22px] rounded text-[11px] leading-none max-w-[180px] flex-shrink-0 transition-all duration-100 ${
                   isActive
                     ? "bg-sol-bg text-sol-text shadow-sm border border-sol-border/30"
@@ -376,6 +379,32 @@ export function TerminalPanel() {
           </div>
         )}
       </div>
+
+      {/* One menu instance serves the whole tab strip; tabs call open(e, tab).
+          The xterm body has no onContextMenu — native selection/copy stays intact. */}
+      <ContextMenu state={tabCtxMenu}>
+        {(tab) => (
+          <>
+            <CtxItem icon={Plus} onSelect={handleNewTab}>
+              New terminal
+            </CtxItem>
+            {(tab.status === "exited" || tab.status === "error" || tab.status === "offline") && (
+              <CtxItem icon={RotateCw} onSelect={() => handleRestart(tab)}>
+                Restart terminal
+              </CtxItem>
+            )}
+            <CtxSeparator />
+            {tab.kind === "shell" && (
+              <CtxItem icon={Trash2} danger onSelect={() => handleKill(tab)}>
+                Kill terminal session
+              </CtxItem>
+            )}
+            <CtxItem icon={X} onSelect={() => closeTab(tab.id)}>
+              Close tab
+            </CtxItem>
+          </>
+        )}
+      </ContextMenu>
     </div>
   );
 }

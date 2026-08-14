@@ -46,13 +46,7 @@ import {
   type FlatRow,
   type TreeNode,
 } from "../../lib/vault/explorerModel";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
+import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "../ui/context-menu";
 import { isBookmarked, type BookmarkInput } from "../../lib/vault/bookmarks";
 import { useVaultBookmarks } from "../../lib/vault/bookmarksHost";
 import { useVaultStore } from "../../store/vaultStore";
@@ -163,8 +157,8 @@ export const VaultExplorer = memo(function VaultExplorer({
   const rows = useMemo(() => flattenTree(tree, expandedDirs), [tree, expandedDirs]);
 
   const [focusIndex, setFocusIndex] = useState(-1);
-  // `node: null` is the vault root — the menu you get right-clicking empty space.
-  const [menu, setMenu] = useState<{ x: number; y: number; node: TreeNode | null } | null>(null);
+  // Payload `null` is the vault root — the menu you get right-clicking empty space.
+  const { menu, open: openMenu, close: closeMenuState } = useContextMenu<TreeNode | null>();
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   // Reveal only makes sense for files physically on this machine; a mirrored
   // vault has nothing local to point Finder at.
@@ -220,12 +214,19 @@ export const VaultExplorer = memo(function VaultExplorer({
     if (idx >= 0) virtualizer.scrollToIndex(idx, { align: "auto" });
   }, [renameTarget, rows, virtualizer]);
 
+  // Every close path (item select, Esc, click-away) also disarms the delete
+  // confirm and hands focus back to the tree's scroll container.
   const closeMenu = useCallback(() => {
-    setMenu(null);
+    closeMenuState();
     setConfirmDelete(null);
     if (confirmTimer.current) clearTimeout(confirmTimer.current);
     scrollRef.current?.focus();
-  }, []);
+  }, [closeMenuState]);
+
+  const menuState = useMemo(
+    () => ({ menu, open: openMenu, close: closeMenu }),
+    [menu, openMenu, closeMenu],
+  );
 
   const activate = useCallback(
     (row: FlatRow) => {
@@ -322,7 +323,7 @@ export const VaultExplorer = memo(function VaultExplorer({
     [rows, focusIndex, activate, expandedDirs, toggleDir, virtualizer, setRenameTarget],
   );
 
-  const menuNode = menu?.node ?? null;
+  const menuNode = menu?.payload ?? null;
   // Creates land inside the folder that was right-clicked, or in the vault root
   // when the click was on empty space. Files offer no creates.
   const menuDir = menuNode?.dir ? menuNode.path : "";
@@ -346,10 +347,7 @@ export const VaultExplorer = memo(function VaultExplorer({
       role="tree"
       aria-label="Files"
       onKeyDown={onKeyDown}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        setMenu({ x: e.clientX, y: e.clientY, node: null });
-      }}
+      onContextMenu={(e) => openMenu(e, null)}
       className="h-full overflow-y-auto overflow-x-hidden outline-none text-[13px] select-none"
     >
       {rows.length === 0 ? (
@@ -388,10 +386,8 @@ export const VaultExplorer = memo(function VaultExplorer({
                 ref={virtualizer.measureElement}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
                 onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
                   setFocusIndex(vi.index);
-                  setMenu({ x: e.clientX, y: e.clientY, node });
+                  openMenu(e, node);
                 }}
               >
                 {isRenaming ? (
@@ -431,41 +427,38 @@ export const VaultExplorer = memo(function VaultExplorer({
         </div>
       )}
 
-      {menu && (
-        <DropdownMenu open onOpenChange={(open) => !open && closeMenu()}>
-          {/* Anchored to the cursor: a zero-size trigger parked where the
-              right-click landed, so Radix owns placement, click-away and Esc. */}
-          <DropdownMenuTrigger asChild>
-            <span style={{ position: "fixed", left: menu.x, top: menu.y, width: 1, height: 1 }} />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" sideOffset={2} className="min-w-[170px]">
+      <ContextMenu state={menuState}>
+        {() => (
+          <>
             {menuNode && !menuNode.dir && (
               <>
-                <DropdownMenuItem
+                <CtxItem
+                  icon={SquareArrowOutUpRight}
                   onSelect={() => {
                     closeMenu();
                     onOpen(menuNode.path);
                   }}
                 >
-                  <SquareArrowOutUpRight className="w-3.5 h-3.5 mr-2" /> Open
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
+                  Open
+                </CtxItem>
+                <CtxSeparator />
               </>
             )}
             {(!menuNode || menuNode.dir) && (
               <>
-                <DropdownMenuItem onSelect={() => void create(menuDir, "note")}>
-                  <FilePlus2 className="w-3.5 h-3.5 mr-2" /> New note
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => void create(menuDir, "folder")}>
-                  <FolderPlus className="w-3.5 h-3.5 mr-2" /> New folder
-                </DropdownMenuItem>
+                <CtxItem icon={FilePlus2} onSelect={() => void create(menuDir, "note")}>
+                  New note
+                </CtxItem>
+                <CtxItem icon={FolderPlus} onSelect={() => void create(menuDir, "folder")}>
+                  New folder
+                </CtxItem>
               </>
             )}
             {menuNode && localFiles && (
               <>
-                {menuNode.dir && <DropdownMenuSeparator />}
-                <DropdownMenuItem
+                {menuNode.dir && <CtxSeparator />}
+                <CtxItem
+                  icon={FolderOpen}
                   onSelect={() => {
                     closeMenu();
                     void revealVaultPath(menuNode.path, "reveal").then((err) => {
@@ -473,10 +466,11 @@ export const VaultExplorer = memo(function VaultExplorer({
                     });
                   }}
                 >
-                  <FolderOpen className="w-3.5 h-3.5 mr-2" /> Show in {fileManager}
-                </DropdownMenuItem>
+                  Show in {fileManager}
+                </CtxItem>
                 {!menuNode.dir && (
-                  <DropdownMenuItem
+                  <CtxItem
+                    icon={ExternalLink}
                     onSelect={() => {
                       closeMenu();
                       void revealVaultPath(menuNode.path, "open").then((err) => {
@@ -484,57 +478,53 @@ export const VaultExplorer = memo(function VaultExplorer({
                       });
                     }}
                   >
-                    <ExternalLink className="w-3.5 h-3.5 mr-2" /> Open in default app
-                  </DropdownMenuItem>
+                    Open in default app
+                  </CtxItem>
                 )}
-                <DropdownMenuItem
+                <CtxItem
+                  icon={ClipboardCopy}
                   onSelect={() => {
                     closeMenu();
                     void navigator.clipboard?.writeText(menuNode.path).catch(() => {});
                   }}
                 >
-                  <ClipboardCopy className="w-3.5 h-3.5 mr-2" /> Copy path
-                </DropdownMenuItem>
+                  Copy path
+                </CtxItem>
               </>
             )}
             {menuNode && (
               <>
-                {menuNode.dir && !localFiles && <DropdownMenuSeparator />}
-                {localFiles && <DropdownMenuSeparator />}
-                <DropdownMenuItem
+                {menuNode.dir && !localFiles && <CtxSeparator />}
+                {localFiles && <CtxSeparator />}
+                <CtxItem
+                  icon={menuBookmarked ? BookmarkX : Bookmark}
                   onSelect={() => {
                     closeMenu();
                     if (menuBookmark) toggleBookmark(menuBookmark);
                   }}
                 >
-                  {menuBookmarked ? (
-                    <>
-                      <BookmarkX className="w-3.5 h-3.5 mr-2" /> Remove bookmark
-                    </>
-                  ) : (
-                    <>
-                      <Bookmark className="w-3.5 h-3.5 mr-2" /> Bookmark
-                    </>
-                  )}
-                </DropdownMenuItem>
+                  {menuBookmarked ? "Remove bookmark" : "Bookmark"}
+                </CtxItem>
                 {/* Code files are read-only: a rename or a trash is a write,
                     and the daemon refuses both (vaultServer.handleOp). Not
                     offering them beats offering them and failing. Folders keep
                     theirs — a folder is not a code file. */}
                 {menuEditable && (
                   <>
-                    <DropdownMenuItem
+                    <CtxItem
+                      icon={Pencil}
                       onSelect={() => {
                         closeMenu();
                         setRenameTarget(menuNode.path);
                       }}
                     >
-                      <Pencil className="w-3.5 h-3.5 mr-2" /> Rename
-                    </DropdownMenuItem>
+                      Rename
+                    </CtxItem>
                     {/* Two-step in place of a browser confirm(): the item itself
                         becomes the confirmation, and disarms after a moment. */}
-                    <DropdownMenuItem
-                      className="text-sol-red focus:text-sol-red"
+                    <CtxItem
+                      icon={Trash2}
+                      danger
                       onSelect={(e) => {
                         if (confirmDelete !== menuNode.path) {
                           e.preventDefault();
@@ -546,16 +536,15 @@ export const VaultExplorer = memo(function VaultExplorer({
                         void remove(menuNode);
                       }}
                     >
-                      <Trash2 className="w-3.5 h-3.5 mr-2" />
                       {confirmDelete === menuNode.path ? "Really delete?" : "Delete"}
-                    </DropdownMenuItem>
+                    </CtxItem>
                   </>
                 )}
               </>
             )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+          </>
+        )}
+      </ContextMenu>
     </div>
   );
 });

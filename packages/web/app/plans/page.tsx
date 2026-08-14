@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef, type MouseEvent } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -15,6 +15,8 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { DetailSplitLayout } from "../../components/DetailSplitLayout";
 import { PlanDetailPanel } from "../../components/PlanDetailPanel";
 import { CreateDocModal } from "../../components/CreateDocModal";
+import { ContextMenu, useContextMenu } from "../../components/ui/context-menu";
+import { PlanMenuItems } from "../../components/menus/ObjectContextMenus";
 import {
   Circle,
   CircleDot,
@@ -77,7 +79,17 @@ function timeAgo(ts: number): string {
   return `${days}d`;
 }
 
-function SidebarPlanItem({ plan, isSelected, onSelect }: { plan: any; isSelected: boolean; onSelect: () => void }) {
+function SidebarPlanItem({
+  plan,
+  isSelected,
+  onSelect,
+  onContextMenu,
+}: {
+  plan: any;
+  isSelected: boolean;
+  onSelect: () => void;
+  onContextMenu: (e: MouseEvent) => void;
+}) {
   const status = STATUS_CONFIG[plan.status as PlanStatus] || STATUS_CONFIG.draft;
   const StatusIcon = status.icon;
   const sessionCount = plan.session_ids?.length || 0;
@@ -88,6 +100,7 @@ function SidebarPlanItem({ plan, isSelected, onSelect }: { plan: any; isSelected
   return (
     <button
       onClick={onSelect}
+      onContextMenu={onContextMenu}
       className={`w-full text-left px-3 py-2.5 transition-colors border-l-2 ${
         isSelected
           ? "bg-sol-cyan/8 border-l-sol-cyan"
@@ -137,12 +150,14 @@ function StatusGroup({
   plans,
   selectedPlanId,
   onSelectPlan,
+  onPlanContextMenu,
   defaultCollapsed,
 }: {
   status: PlanStatus;
   plans: any[];
   selectedPlanId: string | null;
   onSelectPlan: (id: string) => void;
+  onPlanContextMenu: (e: MouseEvent, plan: any) => void;
   defaultCollapsed?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed ?? false);
@@ -172,6 +187,7 @@ function StatusGroup({
               plan={p}
               isSelected={selectedPlanId === p._id || selectedPlanId === p.short_id}
               onSelect={() => onSelectPlan(p.short_id || p._id)}
+              onContextMenu={(e) => onPlanContextMenu(e, p)}
             />
           ))}
         </div>
@@ -253,6 +269,11 @@ export default function PlansPage() {
   const handleSelectPlan = useCallback((planId: string) => {
     router.push(`/plans?plan=${planId}`);
   }, [router]);
+
+  const ctxMenu = useContextMenu<any>();
+  const handlePlanContextMenu = useCallback((e: MouseEvent, plan: any) => {
+    ctxMenu.open(e, plan);
+  }, [ctxMenu]);
 
   const [isMobile, setIsMobile] = useState(false);
   useMountEffect(() => {
@@ -358,6 +379,7 @@ export default function PlansPage() {
                       plans={grouped[status]}
                       selectedPlanId={selectedPlan}
                       onSelectPlan={handleSelectPlan}
+                      onPlanContextMenu={handlePlanContextMenu}
                     />
                   ))}
                   {(grouped.done.length > 0 || !showDone) && (
@@ -368,6 +390,7 @@ export default function PlansPage() {
                           plans={grouped.done}
                           selectedPlanId={selectedPlan}
                           onSelectPlan={handleSelectPlan}
+                          onPlanContextMenu={handlePlanContextMenu}
                           defaultCollapsed
                         />
                       ) : (
@@ -387,6 +410,7 @@ export default function PlansPage() {
                       plans={grouped.abandoned}
                       selectedPlanId={selectedPlan}
                       onSelectPlan={handleSelectPlan}
+                      onPlanContextMenu={handlePlanContextMenu}
                       defaultCollapsed
                     />
                   )}
@@ -408,6 +432,11 @@ export default function PlansPage() {
         >
           {selectedPlan ? <PlanDetailPanel planId={selectedPlan} /> : null}
         </DetailSplitLayout>
+        <ContextMenu state={ctxMenu}>
+          {(plan) => (
+            <PlanMenuItems plan={plan} onOpen={() => handleSelectPlan(plan.short_id || plan._id)} />
+          )}
+        </ContextMenu>
       </DashboardLayout>
     </AuthGuard>
   );

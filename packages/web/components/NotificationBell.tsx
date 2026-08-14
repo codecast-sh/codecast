@@ -10,6 +10,18 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { notificationRoute, sessionTypes, typeColors, typeLabels } from "../lib/notificationTypes";
+import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
+import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
+
+// The URL a notification lands on — for opening in a new tab, where the
+// in-app store navigation of handleNotificationClick can't reach.
+export function notificationHref(n: any): string {
+  if (n.link) return n.link;
+  return (
+    notificationRoute(n.entity_type, n.entity_id, n.chat_message_id) ??
+    (n.conversation_id ? `/conversation/${n.conversation_id}` : "/inbox")
+  );
+}
 
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -72,6 +84,7 @@ export function NotificationBell() {
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const ctxMenu = useContextMenu<any>();
 
   // Local-first: sync the server list into the store, then read + mutate the
   // store so mark-read flips the bold state and badge instantly (the optimistic
@@ -183,6 +196,7 @@ export function NotificationBell() {
                   <button
                     key={notification._id}
                     onClick={() => handleNotificationClick(notification._id, notification.conversation_id, (notification as any).entity_type, (notification as any).entity_id, (notification as any).link, (notification as any).chat_message_id)}
+                    onContextMenu={(e) => ctxMenu.open(e, notification)}
                     className={`w-full px-5 py-4 text-left border-b border-sol-border/50 hover:bg-sol-bg-alt transition-colors ${
                       !notification.read ? 'bg-sol-bg-alt/40' : ''
                     }`}
@@ -249,6 +263,38 @@ export function NotificationBell() {
           )}
         </div>
       )}
+
+      <ContextMenu state={ctxMenu}>
+        {(n) => (
+          <>
+            <CtxItem
+              icon={ArrowUpRight}
+              onSelect={() => handleNotificationClick(n._id, n.conversation_id, n.entity_type, n.entity_id, n.link, n.chat_message_id)}
+            >
+              Open
+            </CtxItem>
+            <CtxItem
+              icon={ExternalLink}
+              onSelect={() => {
+                markAsRead(n._id);
+                window.open(notificationHref(n), "_blank", "noopener");
+                setIsOpen(false);
+              }}
+            >
+              Open in new tab
+            </CtxItem>
+            <CtxSeparator />
+            {!n.read && (
+              <CtxItem icon={Check} onSelect={() => markAsRead(n._id)}>
+                Mark as read
+              </CtxItem>
+            )}
+            <CtxItem icon={CheckCheck} onSelect={() => markAllAsRead()}>
+              Mark all as read
+            </CtxItem>
+          </>
+        )}
+      </ContextMenu>
     </div>
   );
 }

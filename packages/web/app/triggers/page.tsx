@@ -22,6 +22,14 @@ import { isTriggerFailing, patchTaskInWebList, taskDisplayTitle } from "../../co
 import { TriggerRunList, useTriggerRuns, openRunInStore } from "../../components/TriggerRunHistory";
 import { TriggerPromptView } from "../../components/TriggerPromptView";
 import { SelectBox } from "../../components/ui/select-box";
+import {
+  ContextMenu,
+  useContextMenu,
+  CtxItem,
+  CtxHeader,
+  CtxSeparator,
+  type ContextMenuState,
+} from "../../components/ui/context-menu";
 import { useInboxStore } from "../../store/inboxStore";
 import {
   Clock,
@@ -301,6 +309,58 @@ function TriggerChip({ task }: { task: any }) {
   );
 }
 
+// ── Last result card ──
+
+// The last run summary is an agent-written paragraph — a wall of text at a
+// glance. Split it at the first clause boundary (";", sentence end, or an
+// em-dash) into a bright headline and dim detail, so the verdict reads first
+// and the evidence reads second.
+function splitResultSummary(text: string): { headline: string; detail: string | null } {
+  const m = text.match(/^([\s\S]{12,180}?[^;.\s])(?:;\s+|\.\s+|\s+—\s+)([\s\S]+)$/);
+  return m ? { headline: m[1], detail: m[2] } : { headline: text, detail: null };
+}
+
+// Outcome-first: a status band (icon + label + time + open-run link) over the
+// summary body. Pass/fail reads by color before any words do — the same
+// emerald/red the row indicator and rail use.
+function LastResultCard({ task, failed, runSession }: { task: any; failed: boolean; runSession?: string }) {
+  const text = failed ? task.last_run_summary.replace(/^Failed:?\s*/, "") : task.last_run_summary;
+  const { headline, detail } = splitResultSummary(text);
+  const Icon = failed ? XCircle : CheckCircle2;
+  return (
+    <div className={`mt-3 rounded-lg border overflow-hidden ${failed ? "border-sol-red/30" : "border-sol-border"}`}>
+      <div className={`flex items-center gap-2 px-3 py-1.5 border-b ${
+        failed ? "bg-sol-red/10 border-sol-red/20" : "bg-sol-bg-alt border-sol-border/60"
+      }`}>
+        <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${failed ? "text-sol-red" : "text-emerald-400"}`} />
+        <span className={`text-[10px] uppercase tracking-widest ${failed ? "text-sol-red" : "text-sol-text-dim"}`}>
+          {failed ? "Last run failed" : "Last result"}
+        </span>
+        {task.last_run_at && (
+          <span className="text-[10px] text-sol-text-dim">{fmtClock(task.last_run_at)} · {timeAgo(task.last_run_at)}</span>
+        )}
+        <span className="flex-1" />
+        {runSession && (
+          <Link
+            href={`/conversation/${runSession}`}
+            className="inline-flex items-center gap-0.5 text-[11px] text-sol-cyan hover:underline underline-offset-2 flex-shrink-0"
+          >
+            open run <ArrowUpRight className="w-3 h-3" />
+          </Link>
+        )}
+      </div>
+      <div className="px-3 py-2.5">
+        <div className={`text-xs leading-relaxed font-medium ${failed ? "text-sol-red" : "text-sol-text"}`}>
+          {headline}
+        </div>
+        {detail && (
+          <div className="text-xs leading-relaxed text-sol-text-dim whitespace-pre-wrap mt-1">{detail}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Task row ──
 
 // A glanceable per-row indicator: running pulse, history ✓/✗, or a status-colored
@@ -327,7 +387,26 @@ function RowIndicator({ task }: { task: any }) {
   );
 }
 
-function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boolean }) {
+// One page-level context menu serves every row. A right-click hands the menu
+// the task plus closures over the row's own verbs, so the menu calls the exact
+// handlers (and optimistic updates) the inline buttons call — including the
+// edit form, which is row-local state.
+interface TriggerMenuPayload {
+  task: any;
+  edit: () => void;
+  duplicate: () => void;
+  copyPrompt: () => void;
+  runNow: () => void;
+  runAgain: () => void;
+  pause: () => void;
+  resume: () => void;
+  cancel: () => void;
+  del: () => void;
+}
+
+type TriggerCtxMenu = ContextMenuState<TriggerMenuPayload>;
+
+function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNext?: boolean; ctxMenu: TriggerCtxMenu }) {
   // ?task=<id> deep-links here from an inbox trigger row, a schedule row's
   // gear verb, and an inline trigger pill: that row arrives expanded and
   // scrolled into view. Either handle addresses the row — the pill links by
@@ -392,13 +471,13 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
       : task.created_by_conversation_title;
   const sessionVerb = runSession ? "Open run session" : "Open source session";
 
-  const openForm = (which: "edit" | "duplicate") => (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const openForm = (which: "edit" | "duplicate") => (e?: React.MouseEvent) => {
+    e?.stopPropagation();
     setFormMode(which);
     setExpanded(true);
   };
-  const copyPrompt = async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const copyPrompt = async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
     try {
       await navigator.clipboard.writeText(task.prompt ?? "");
       toast.success("Prompt copied");
@@ -407,8 +486,8 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
     }
   };
 
-  const act = (fn: () => Promise<any>, msg: string) => async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const act = (fn: () => Promise<any>, msg: string) => async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
     try {
       const ok = await fn();
       if (ok === false) toast.error("Couldn't update — refresh and retry");
@@ -432,6 +511,20 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
         isNext ? "ring-1 ring-inset ring-sol-cyan/30" : ""
       }`}
       onClick={() => setExpanded((v) => !v)}
+      onContextMenu={(e) =>
+        ctxMenu.open(e, {
+          task,
+          edit: () => openForm("edit")(),
+          duplicate: () => openForm("duplicate")(),
+          copyPrompt: () => copyPrompt(),
+          runNow: () => act(() => runNow({ task_id: task._id }), "Queued — runs within ~30s")(),
+          runAgain: () => act(() => runNow({ task_id: task._id }), "Re-armed — runs within ~30s")(),
+          pause: () => act(() => pause({ task_id: task._id }), "Paused")(),
+          resume: () => act(() => resume({ task_id: task._id }), "Resumed")(),
+          cancel: () => act(() => cancel({ task_id: task._id }), "Cancelled")(),
+          del: () => act(() => del({ task_id: task._id }), "Deleted")(),
+        })
+      }
     >
       <div className="relative flex items-start gap-3 px-4 py-3">
         {/* fixed 20px-tall slot so dot and icon indicators both center on the title's first line */}
@@ -452,8 +545,10 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
               </span>
             )}
           </div>
+          {/* The expanded detail has no "What it does" section — this line IS
+              the summary, un-clamped while the detail is open. */}
           {task.display_summary && (
-            <div className="text-xs text-sol-text-muted leading-relaxed line-clamp-2 mt-0.5">
+            <div className={`text-xs text-sol-text-muted leading-relaxed mt-0.5 ${expanded && !formMode ? "" : "line-clamp-2"}`}>
               {task.display_summary}
             </div>
           )}
@@ -505,8 +600,9 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
           {/* The last run gets its own full-width line — it's the row's main
               jump target and the old inline placement truncated it to nothing.
               Links to the run's own conversation when the daemon recorded it,
-              else the originating session. */}
-          {sessionId ? (
+              else the originating session. Hidden while the detail is open:
+              the "Last result" section shows the same summary in full there. */}
+          {expanded && !formMode && task.last_run_summary ? null : sessionId ? (
             <div className="mt-1.5">
               <ShortcutTooltip label={sessionVerb} hint={sessionTitle || undefined}>
                 <Link
@@ -617,11 +713,13 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
       )}
 
       {expanded && !formMode && (
-        <div className="px-4 pb-3 pt-1 border-t border-sol-border cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
+        <div className="px-4 pb-3 pt-1 border-t border-sol-border bg-sol-bg/30 rounded-b-lg cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
           {/* The run list below is the richer path (every run, trigger-linked);
               this button only covers a schedule whose runs can't be enumerated
-              (e.g. an encrypted home conversation) but whose last run is known. */}
-          {task.last_run_conversation_id && (runs?.length ?? 0) === 0 && (
+              (e.g. an encrypted home conversation) but whose last run is known.
+              With a last-run summary, the "Last result" header's open-run link
+              already points there. */}
+          {task.last_run_conversation_id && (runs?.length ?? 0) === 0 && !task.last_run_summary && (
             <Link
               href={`/conversation/${task.last_run_conversation_id}`}
               onClick={(e) => e.stopPropagation()}
@@ -635,56 +733,41 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
               <ArrowUpRight className="w-3.5 h-3.5" />
             </Link>
           )}
-          {task.display_summary && (
-            <>
-              <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-3 mb-1">What it does</div>
-              <div className="text-xs text-sol-text leading-relaxed">
-                {task.display_summary}
-              </div>
-            </>
-          )}
-          <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-3 mb-1">Prompt</div>
-          <TriggerPromptView prompt={task.prompt} className="-mx-4" />
-
-          {task.context_summary && (
-            <>
-              <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-3 mb-1">Context</div>
-              <div className="text-xs text-sol-text-muted whitespace-pre-wrap bg-sol-bg-alt rounded-md p-3">
-                {task.context_summary}
-              </div>
-            </>
-          )}
-
+          {/* Results first — the reason someone opens a trigger is "what did it
+              do", so the last result and run history sit above the (large,
+              collapsible) prompt definition. The header summary stays visible
+              above, so no "What it does" repeat down here. */}
           {task.last_run_summary && (
-            <>
-              <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-3 mb-1">
-                Last result{task.last_run_at ? ` · ${fmtClock(task.last_run_at)}` : ""}
-              </div>
-              <div
-                className={`text-xs whitespace-pre-wrap rounded-md p-3 ${
-                  failedSummary
-                    ? "bg-sol-red/5 text-sol-red border border-sol-red/20"
-                    : "bg-sol-bg-alt text-sol-text-muted"
-                }`}
-              >
-                {task.last_run_summary}
-              </div>
-            </>
+            <LastResultCard task={task} failed={failedSummary} runSession={runSession} />
           )}
 
           {/* Every past run, newest first — each links to the message that
               triggered it (the injected turn or the spawned run's prompt). */}
           {runs && runs.length > 0 && (
             <>
-              <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-3 mb-1.5">
+              <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-4 mb-1.5">
                 Past runs <span className="font-mono normal-case text-sol-text-dim">{runs.length}</span>
               </div>
               <TriggerRunList runs={runs} now={now} ensureInboxRoute />
             </>
           )}
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-[11px] text-sol-text-dim">
-            {task.run_at && task.status === "scheduled" && <span>next run {fmtClock(task.run_at)}</span>}
+          <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-4 mb-1">Prompt</div>
+          <TriggerPromptView prompt={task.prompt} className="-mx-4" />
+
+          {task.context_summary && (
+            <>
+              <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-4 mb-1">Context</div>
+              <div className="text-xs text-sol-text-muted whitespace-pre-wrap bg-sol-bg-alt rounded-md p-3">
+                {task.context_summary}
+              </div>
+            </>
+          )}
+
+          {/* Config footer: labeled pairs, and only what the header doesn't
+              already say (next run, run count and retries live on the meta
+              line above). Label dim, value brighter — scannable as key/value. */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-4 text-[11px] text-sol-text-dim">
             <ShortcutTooltip
               label={
                 task.mode === "apply"
@@ -692,31 +775,39 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
                   : "Read-only run — investigates and reports, changes nothing"
               }
             >
-              <span>{task.mode === "apply" ? "makes changes" : "read-only"}</span>
+              <span className={task.mode === "apply" ? "text-sol-orange" : "text-sol-text-muted"}>
+                {task.mode === "apply" ? "makes changes" : "read-only"}
+              </span>
             </ShortcutTooltip>
-            <span>agent {task.agent_type || "claude"}</span>
-            {task.run_count > 0 && <span>{task.run_count} total run{task.run_count === 1 ? "" : "s"}</span>}
-            {task.retry_count > 0 && (
-              <span className="text-sol-orange">
-                {task.retry_count} {task.retry_count === 1 ? "retry" : "retries"}
+            <span>
+              agent <span className="text-sol-text-muted">{task.agent_type || "claude"}</span>
+            </span>
+            {task.max_runtime_ms && (
+              <span>
+                max runtime <span className="text-sol-text-muted">{fmtDuration(task.max_runtime_ms)}</span>
               </span>
             )}
-            {task.max_runtime_ms && <span>max runtime {fmtDuration(task.max_runtime_ms)}</span>}
-            <span>created {timeAgo(task.created_at)}</span>
-            {task.project_path && <span className="font-mono">{task.project_path}</span>}
+            <span>
+              created <span className="text-sol-text-muted">{timeAgo(task.created_at)}</span>
+            </span>
+            {task.project_path && (
+              <span className="font-mono text-sol-text-muted basis-full sm:basis-auto truncate">{task.project_path}</span>
+            )}
             {(task.originating_conversation_id || task.created_by_conversation_id) && (
               <Link
                 href={`/conversation/${task.originating_conversation_id ?? task.created_by_conversation_id}`}
-                className="inline-flex items-center gap-0.5 text-sol-cyan hover:underline underline-offset-2"
+                className="inline-flex items-center gap-0.5 max-w-full text-sol-cyan hover:underline underline-offset-2"
               >
-                from session
-                {(() => {
-                  const t = task.originating_conversation_id
-                    ? task.originating_conversation_title
-                    : task.created_by_conversation_title;
-                  return t ? `: ${t}` : "";
-                })()}
-                <ExternalLink className="w-3 h-3" />
+                <span className="truncate">
+                  from session
+                  {(() => {
+                    const t = task.originating_conversation_id
+                      ? task.originating_conversation_title
+                      : task.created_by_conversation_title;
+                    return t ? `: ${t}` : "";
+                  })()}
+                </span>
+                <ExternalLink className="w-3 h-3 flex-shrink-0" />
               </Link>
             )}
           </div>
@@ -1336,8 +1427,8 @@ function groupByProjectPath(tasks: any[]): [string, any[]][] {
   return [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
 }
 
-function RowList({ tasks, now, grouped, nextId }: { tasks: any[]; now: number; grouped: boolean; nextId?: string }) {
-  if (!grouped) return <>{tasks.map((t) => <TaskRow key={t._id} task={t} now={now} isNext={t._id === nextId} />)}</>;
+function RowList({ tasks, now, grouped, nextId, ctxMenu }: { tasks: any[]; now: number; grouped: boolean; nextId?: string; ctxMenu: TriggerCtxMenu }) {
+  if (!grouped) return <>{tasks.map((t) => <TaskRow key={t._id} task={t} now={now} isNext={t._id === nextId} ctxMenu={ctxMenu} />)}</>;
   return (
     <>
       {groupByProjectPath(tasks).map(([proj, rows]) => (
@@ -1347,7 +1438,7 @@ function RowList({ tasks, now, grouped, nextId }: { tasks: any[]; now: number; g
             {proj.startsWith("—") ? proj : projectName(proj)}
             <span className="font-mono text-sol-text-dim/60">{rows.length}</span>
           </div>
-          {rows.map((t) => <TaskRow key={t._id} task={t} now={now} isNext={t._id === nextId} />)}
+          {rows.map((t) => <TaskRow key={t._id} task={t} now={now} isNext={t._id === nextId} ctxMenu={ctxMenu} />)}
         </div>
       ))}
     </>
@@ -1383,7 +1474,7 @@ function groupByDay(tasks: any[], now: number): [string, any[]][] {
 
 const HISTORY_PAGE = 25;
 
-function HistoryBody({ tasks, now, grouped }: { tasks: any[]; now: number; grouped: boolean }) {
+function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: number; grouped: boolean; ctxMenu: TriggerCtxMenu }) {
   const [failuresOnly, setFailuresOnly] = useState(false);
   const [limit, setLimit] = useState(HISTORY_PAGE);
 
@@ -1437,14 +1528,14 @@ function HistoryBody({ tasks, now, grouped }: { tasks: any[]; now: number; group
               {proj.startsWith("—") ? proj : projectName(proj)}
               <span className="font-mono text-sol-text-dim/60">{rows.length}</span>
             </div>
-            {rows.map((t) => <TaskRow key={t._id} task={t} now={now} />)}
+            {rows.map((t) => <TaskRow key={t._id} task={t} now={now} ctxMenu={ctxMenu} />)}
           </div>
         ))
       ) : (
         groupByDay(visible, now).map(([label, rows]) => (
           <div key={label} className="flex flex-col gap-2">
             <div className={subheaderCls}>{label}<span className="font-mono text-sol-text-dim/60">{rows.length}</span></div>
-            {rows.map((t) => <TaskRow key={t._id} task={t} now={now} />)}
+            {rows.map((t) => <TaskRow key={t._id} task={t} now={now} ctxMenu={ctxMenu} />)}
           </div>
         ))
       )}
@@ -1494,6 +1585,7 @@ function TriggersContent() {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const update = (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch }));
   const [grouped, setGrouped] = useState(false);
+  const ctxMenu = useContextMenu<TriggerMenuPayload>();
 
   // Filters drive the list AND the rail so what's shown stays consistent. Stats
   // and the failure banner stay global — they're a health overview of everything.
@@ -1617,10 +1709,10 @@ function TriggersContent() {
             ) : (
               <div className="reveal reveal-2">
                 <Section title="Active" count={active.length} subtitle={activeSubtitle}>
-                  <RowList tasks={active} now={now} grouped={grouped} nextId={nextId} />
+                  <RowList tasks={active} now={now} grouped={grouped} nextId={nextId} ctxMenu={ctxMenu} />
                 </Section>
                 <Section title="Paused" count={paused.length}>
-                  <RowList tasks={paused} now={now} grouped={grouped} />
+                  <RowList tasks={paused} now={now} grouped={grouped} ctxMenu={ctxMenu} />
                 </Section>
                 <Section
                   title="History"
@@ -1628,13 +1720,52 @@ function TriggersContent() {
                   subtitle={historyFailed > 0 ? `${historyFailed} failed` : "all succeeded"}
                   defaultOpen={active.length === 0}
                 >
-                  <HistoryBody tasks={history} now={now} grouped={grouped} />
+                  <HistoryBody tasks={history} now={now} grouped={grouped} ctxMenu={ctxMenu} />
                 </Section>
               </div>
             )}
           </>
         )}
       </div>
+
+      {/* Right-click menu — same verbs and status gates as the inline buttons,
+          calling the row's own handlers via the payload closures. */}
+      <ContextMenu state={ctxMenu}>
+        {({ task, ...verbs }) => {
+          const isActive = task.status === "scheduled" || task.status === "running";
+          const isHistory = task.status === "completed" || task.status === "failed";
+          const isEditable = task.status === "scheduled" || task.status === "paused";
+          return (
+            <>
+              <CtxHeader title={taskDisplayTitle(task)} id={task.short_id} />
+              {task.status === "scheduled" && (
+                <CtxItem icon={Play} onSelect={verbs.runNow}>Run now</CtxItem>
+              )}
+              {isHistory && (
+                <CtxItem icon={RotateCcw} onSelect={verbs.runAgain}>Run again</CtxItem>
+              )}
+              {isActive && (
+                <CtxItem icon={Pause} onSelect={verbs.pause}>Pause</CtxItem>
+              )}
+              {task.status === "paused" && (
+                <CtxItem icon={Play} onSelect={verbs.resume}>Resume</CtxItem>
+              )}
+              {isEditable && (
+                <CtxItem icon={Pencil} onSelect={verbs.edit}>Edit</CtxItem>
+              )}
+              <CtxItem icon={Copy} onSelect={verbs.duplicate}>Duplicate</CtxItem>
+              <CtxItem icon={Copy} onSelect={verbs.copyPrompt}>Copy prompt</CtxItem>
+              <CtxSeparator />
+              {(isActive || task.status === "paused") && (
+                <CtxItem danger icon={X} onSelect={verbs.cancel}>Cancel</CtxItem>
+              )}
+              {isHistory && (
+                <CtxItem danger icon={Trash2} onSelect={verbs.del}>Delete</CtxItem>
+              )}
+            </>
+          );
+        }}
+      </ContextMenu>
     </div>
   );
 }

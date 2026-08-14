@@ -8,13 +8,7 @@
 
 import { memo, useState } from "react";
 import { Bookmark, BookmarkCheck, Folder, Hash, Search, Trash2, FileText, Pencil } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
+import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "../ui/context-menu";
 import {
   bookmarkLabel,
   bookmarkSubtitle,
@@ -113,7 +107,7 @@ export const VaultBookmarksPane = memo(function VaultBookmarksPane({
   const removeBookmark = useVaultStore((s) => s.removeBookmark);
   const setBookmarkTitle = useVaultStore((s) => s.setBookmarkTitle);
   const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number; item: BookmarkItem } | null>(null);
+  const menu = useContextMenu<BookmarkItem>();
 
   if (!bookmarks.length) return <EmptyState />;
 
@@ -147,11 +141,7 @@ export const VaultBookmarksPane = memo(function VaultBookmarksPane({
             className={`group flex items-center gap-1.5 px-3 py-1 text-[12px] ${
               isActive ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
             }`}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setMenu({ x: e.clientX, y: e.clientY, item });
-            }}
+            onContextMenu={(e) => menu.open(e, item)}
           >
             <span className="flex-shrink-0 opacity-60">{kindIcon(item)}</span>
             {renamingId === item.id ? (
@@ -190,33 +180,32 @@ export const VaultBookmarksPane = memo(function VaultBookmarksPane({
         );
       })}
 
-      {menu && (
-        <DropdownMenu open onOpenChange={(o) => !o && setMenu(null)}>
-          <DropdownMenuTrigger asChild>
-            <span style={{ position: "fixed", left: menu.x, top: menu.y, width: 1, height: 1 }} />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" sideOffset={2} className="min-w-[150px]">
-            <DropdownMenuItem
+      <ContextMenu state={menu}>
+        {(item) => (
+          <>
+            <CtxItem
+              icon={Pencil}
               onSelect={() => {
-                setRenamingId(menu.item.id);
-                setMenu(null);
+                setRenamingId(item.id);
+                menu.close();
               }}
             >
-              <Pencil className="w-3.5 h-3.5 mr-2" /> Rename
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="text-sol-red focus:text-sol-red"
+              Rename
+            </CtxItem>
+            <CtxSeparator />
+            <CtxItem
+              icon={Trash2}
+              danger
               onSelect={() => {
-                removeBookmark(menu.item.id);
-                setMenu(null);
+                removeBookmark(item.id);
+                menu.close();
               }}
             >
-              <Trash2 className="w-3.5 h-3.5 mr-2" /> Remove
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+              Remove
+            </CtxItem>
+          </>
+        )}
+      </ContextMenu>
     </div>
   );
 });
