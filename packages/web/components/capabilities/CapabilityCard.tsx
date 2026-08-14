@@ -21,6 +21,7 @@ import {
   type Device,
 } from "../DeviceBadge";
 import {
+  isExecutionSurface,
   requiresExplicitConsent,
   type ExecutionSurface,
 } from "@codecast/shared/contracts";
@@ -166,7 +167,7 @@ export function confidenceFromSurfaces(
   surfaces: readonly ExecutionSurface[] | undefined,
 ): ExecutionConfidence {
   if (surfaces === undefined) return "unknown";
-  return surfaces.includes("runs_commands") ? "code" : "prose"; // MUTANT
+  return requiresExplicitConsent(surfaces) ? "code" : "prose";
 }
 
 /**
@@ -188,6 +189,26 @@ export function confidenceFromKind(kind: CapabilityKind | string): ExecutionConf
 }
 
 /**
+ * A `surfaces` value this build can actually read, or undefined for "no scan".
+ *
+ * The type says `ExecutionSurface[]`, but the bytes do not have to agree:
+ * `webCatalogList` (`packages/convex/convex/capabilities.ts`) copies every
+ * non-reserved key of a catalog row's `entry_json` onto the card verbatim, and
+ * that blob is publisher-supplied and unvalidated by its own comment. So the
+ * field is re-checked here rather than trusted.
+ *
+ * A member this build does not model collapses the whole list to empty, which
+ * the gate calls dangerous. Filtering the stranger out instead would LOWER the
+ * risk of a row we understand less well — the one direction the contract forbids
+ * (`deriveExecutionSurfaces` accepts declared surfaces additively for the same
+ * reason).
+ */
+function observedSurfaces(value: unknown): readonly ExecutionSurface[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.every(isExecutionSurface) ? (value as ExecutionSurface[]) : [];
+}
+
+/**
  * The one way to get a badge for an entry: observed surfaces when a scan has
  * run, the kind floor when none has.
  *
@@ -197,9 +218,8 @@ export function confidenceFromKind(kind: CapabilityKind | string): ExecutionConf
 export function entryConfidence(
   entry: Pick<CatalogEntry, "kind" | "surfaces">,
 ): ExecutionConfidence {
-  return entry.surfaces
-    ? confidenceFromSurfaces(entry.surfaces)
-    : confidenceFromKind(entry.kind);
+  const surfaces = observedSurfaces(entry.surfaces);
+  return surfaces ? confidenceFromSurfaces(surfaces) : confidenceFromKind(entry.kind);
 }
 
 // ----------------------------------------------------------------- devices
