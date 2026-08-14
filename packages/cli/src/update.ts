@@ -5,6 +5,13 @@ import { execSync } from "./proc.js";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
+// Per-snippet version labels. These are NOT the rewrite key: the installer
+// decides reinstalls by a content hash of the body it ships (snippetStale /
+// stampSnippet, ./snippets.ts), so editing a body needs no bump here. They are
+// written alongside the hash as a display value and as a compat shadow — an
+// older CLI compares its own constant against the config key, so a downgrade
+// still finds the value it expects instead of rewriting on every run. Bump one
+// when you want the recorded version to say something meaningful to a human.
 const MEMORY_VERSION = "12"; // bumped: shared "Referencing objects" section
 const TASK_VERSION = "5"; // bumped: triggers have short ids (tr-42) + shared "Referencing objects" section
 const WORK_VERSION = "7"; // bumped: per-type "Referencing sessions" replaced by the shared "Referencing objects" section
@@ -14,8 +21,9 @@ const MESSAGING_VERSION = "7"; // bumped: target on evidence (cast diff/read bef
 const VISUAL_VERSION = "6"; // bumped: image captions from alt text + side-by-side rows for adjacent images
 const FORKS_VERSION = "4"; // bumped: fan-out is a handoff — one cast fork call, no orchestration; default anchor excludes the fork request so branches never know they are forks
 const PUBLISH_VERSION = "4"; // bumped: cast image cross-reference for single-image sharing; never link local paths
-const BROWSER_VERSION = "3"; // bumped: screenshots render inline in the thread; per-session tab ownership
-const STATE_VERSION = "2"; // bumped: update at event boundaries, not on an abstract condition
+const BROWSER_VERSION = "4"; // bumped: batched steps, viewport emulation, dialogs cannot block
+const CHAT_VERSION = "1"; // first release: channels, threads, search, anchor replies
+const STATE_VERSION = "3"; // bumped: first line = what you're working on; --status working|blocked|done
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_RETRY_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
@@ -141,6 +149,10 @@ export function getPublishVersion(): string {
 
 export function getBrowserVersion(): string {
   return BROWSER_VERSION;
+}
+
+export function getChatVersion(): string {
+  return CHAT_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {

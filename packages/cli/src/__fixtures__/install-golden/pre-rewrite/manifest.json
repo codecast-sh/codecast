@@ -74,7 +74,7 @@
   "state": {
     "config": {
       "state_enabled": true,
-      "state_version": "3"
+      "state_version": "2"
     },
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -82,24 +82,6 @@
       ".claude/hooks/thread-state.sh": "c035d5e02cc77aab",
       ".claude/settings.json": "e6bbe8b54259b3bf"
     }
-  },
-  "chat": {
-    "config": {
-      "chat_enabled": true,
-      "chat_version": "1"
-    },
-    "stdout": "* Team chat — installed in ~/.claude/CLAUDE.md\n",
-    "wroteClaudeMd": true,
-    "otherFiles": {}
-  },
-  "browser": {
-    "config": {
-      "browser_enabled": true,
-      "browser_version": "4"
-    },
-    "stdout": "* Browser — installed in ~/.claude/CLAUDE.md\n",
-    "wroteClaudeMd": true,
-    "otherFiles": {}
   },
   "orchestration": {
     "config": {

@@ -1,3 +1,23 @@
+# My project
+
+User prose that lives ABOVE every codecast block. An install must leave this
+byte-identical.
+
+## Messaging
+
+STALE MESSAGING BODY — a short stand-in for whatever an older CLI wrote here.
+Installing the `messaging` snippet must replace this block rather than stack a
+second copy under it.
+<!-- /codecast-messaging -->
+
+## House rules
+
+A user's own section sitting BETWEEN two codecast blocks. Nothing may move it.
+
+## Deploy notes
+
+The last user section. It follows the codecast blocks, so anything that cuts a
+block by "everything to end of file" destroys this paragraph.
 
 ## Memory
 
@@ -16,8 +36,7 @@ cast feed --state needs-input     # filter feed by work state
 cast feed --label api             # sessions I filed under a label (search/sessions take --label too)
 cast read <id> 15:25              # read messages 15-25
 cast read '<share-url>#msg-<id>'  # read a window around a linked message (-c N for context size)
-cast link [id] [line]             # mint a deep link to any object (session+line→message, ct-/pl- task/plan, --type doc)
-cast link                         # …the link to THIS session, to hand a human something clickable
+cast link <id> [line]             # mint a deep link to any object (session+line→message, ct-/pl- task/plan, --type doc)
 
 # Explore sessions — 3 axes: QUERY (which) × CONTENT (state | --messages) × LIVENESS (snapshot | -w)
 cast sessions                     # state snapshot, grouped most-actionable-first

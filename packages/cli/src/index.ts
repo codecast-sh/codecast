@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
 import { registerRemoteCommand } from "./remote/cli.js";
 import { registerPublishCommand } from "./publish.js";
+import { registerDecideCommand } from "./decideCommand.js";
 import { registerImageCommand } from "./imageCommand.js";
 import { registerStateCommand, warnIfThreadStateStale } from "./stateCommand.js";
 import { registerBrowserCommand } from "./browser/cli.js";
@@ -27,6 +28,8 @@ import {
 import {
   SNIPPET_CATALOG,
   snippetBySlug,
+  snippetSection,
+  type SnippetSection,
   allSnippetSlugs,
   fromConvexAgentType,
   toConvexAgentType,
@@ -43,8 +46,8 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
-import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION } from "./snippets.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
+import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -135,6 +138,13 @@ const isStableContextFastPath =
 // to preserve the original directory when running via bun run
 function getRealCwd(): string {
   return process.env.CODECAST_CWD || process.cwd();
+}
+
+/** First line of a prompt, capped — roster confirmations identify what was
+ * sent without mirroring a whole heredoc brief back at the caller. */
+function promptGist(text: string, maxLen: number = 80): string {
+  const line = text.split("\n")[0].trim();
+  return line.length > maxLen ? line.slice(0, maxLen) + "…" : line;
 }
 
 function truncatePath(p: string | null, maxLen: number = 38): string {
@@ -2071,366 +2081,6 @@ async function promptTeamSelection(config: Config): Promise<void> {
   }
 }
 
-const MEMORY_SNIPPET_END = "<!-- /codecast-memory -->";
-const MEMORY_SNIPPET = `
-## Memory
-
-You are one session among many. Past conversations contain valuable context about decisions, patterns, and prior work. Search proactively and liberally - when starting tasks, debugging issues, or when the user references previous work. Parallelize searches when exploring multiple topics.
-
-\`\`\`bash
-# Search & Browse (default: team scope from current directory)
-cast search "auth"                # team-wide search
-cast search "auth" --mine         # only my sessions
-cast search "auth" -m samvit      # specific member
-cast search "auth" -g -s 7d       # all teams, last 7 days
-cast feed                         # team feed
-cast feed --mine                  # only my sessions
-cast feed -m samvit               # specific member
-cast feed --state needs-input     # filter feed by work state
-cast feed --label api             # sessions I filed under a label (search/sessions take --label too)
-cast read <id> 15:25              # read messages 15-25
-cast read '<share-url>#msg-<id>'  # read a window around a linked message (-c N for context size)
-cast link [id] [line]             # mint a deep link to any object (session+line→message, ct-/pl- task/plan, --type doc)
-cast link                         # …the link to THIS session, to hand a human something clickable
-
-# Explore sessions — 3 axes: QUERY (which) × CONTENT (state | --messages) × LIVENESS (snapshot | -w)
-cast sessions                     # state snapshot, grouped most-actionable-first
-cast sessions -w                  # live change stream: one line per work-state change, silent otherwise
-cast sessions -w --json           # …as NDJSON: {"event":"new"|"transition"|"gone","id","from","to",…}
-cast sessions <id> [<id>…] -w     # watch an explicit set of sessions (ids also narrow the snapshot)
-cast sessions --label fleet -w    # watch every session filed under a label
-cast sessions --state needs-input # narrow to one state (also --team, -m <name>; with -w, new/gone events fire on enter/leave)
-cast sessions --labels            # my labels + counts, current project (--by-label groups, --label <name> filters, -g all projects)
-cast sessions --messages -w       # follow MESSAGES across my live sessions (multi-session)
-cast sessions <id> --messages -w  # …focused on one session
-# ORCHESTRATE a fleet: spawn workers under a label, run the watch in the background, act on events.
-#   cast spawn --label fleet "task A" "task B"
-#   cast sessions --label fleet -w --json     ← emits {"event":"transition","to":"needs_input",…}
-#   worker flips to needs_input = finished or blocked → cast read <id>, then cast send <id> "next step"
-# The -w stream prints nothing until something changes, so wake-on-output is a reliable signal.
-# Event states use underscores ("needs_input"); the --state flag accepts either form.
-# --state: working | needs-input | idle | pinned | live (also works on cast feed)
-# needs-input = ball in your court (finished turn, open question, permission prompt, dead with
-# output) — same as the web inbox's NEEDS INPUT. idle = blank sessions with nothing to act on.
-# A finished turn with a live background task/Monitor stays WORKING (status "waiting") —
-# the harness re-invokes the agent when the task ends, so don't wait on needs-input for it.
-
-# Labels — personal filing. File a session under a name, then filter by it
-# (cast sessions/feed/search --label <name>). A session carries at most one label.
-cast label set api <id>           # file a session under "api" (creates the label if new)
-cast label set api                # …file the CURRENT session
-cast label ls                     # my labels with session counts
-cast label clear <id>             # unfile a session (drop its label)
-cast label rename api backend     # rename a label (its sessions follow)
-cast label rm api                 # remove a label (its sessions become unlabeled)
-
-# Analysis
-cast diff <id>                    # files changed, commits, tools used
-cast diff --today                 # aggregate today's work
-cast summary <id>                 # goal, approach, outcome, files
-cast context "implement auth"     # find relevant prior sessions
-cast ask "how does X work"        # query across sessions
-
-# Handoff & Tracking
-cast handoff                      # generate context transfer doc
-cast bookmark <id> <msg> --name x # save shareable link
-cast decisions list               # view architectural decisions
-cast decisions add "title" --reason "why"
-\`\`\`
-
-Common options: --mine (just me), -m <name> (member), --label <name> (my label), -g (all teams), -s/-e (time range), -p (page), -n (limit)
-${MEMORY_SNIPPET_END}
-`;
-
-const TASK_SNIPPET_END = "<!-- /codecast-tasks -->";
-// Headings the installer recognizes: the current one plus the pre-rename one
-// ("Async Tasks", when triggers were `cast schedule`) so updating an old
-// install replaces the old block instead of appending a duplicate.
-const TRIGGER_SNIPPET_HEADING = "## Triggers";
-const LEGACY_TASK_SNIPPET_HEADING = "## Async Tasks";
-const TASK_SNIPPET = `
-${TRIGGER_SNIPPET_HEADING}
-
-You can set triggers — follow-up work that runs autonomously after this session ends. Use them for anything that should happen later: checking CI, reviewing PRs, continuing long-running refactors, or responding to events.
-
-The prompt is the agent's entire briefing, and humans read it in the dashboard (rendered as markdown). A one-line prompt is fine for a one-line job; for anything bigger, write it as structured markdown — goal, numbered steps, constraints — never as one long run-on line. Pass \`-\` as the prompt to read it from stdin.
-
-**Where a run happens.** A trigger created inside a session binds to that session by default: each run injects the prompt into it as a new turn, with the session's full history. Pass \`--spawn\` to start a FRESH session per run instead — no history, briefed only by your prompt, but still associated: the run's conversation links back to the trigger at the top in the UI. Use \`--spawn\` when the follow-up stands alone (a periodic audit, an independent check); write everything the agent needs into the prompt, since it arrives with none of your context. \`--for <session>\` binds a specific session from any shell.
-
-\`\`\`bash
-# Set triggers (created in a session, these inject into it when they fire)
-cast trigger add "Check if CI is green on main" --in 30m
-cast trigger add "Respond to new PR review comments" --on pr_comment
-
-# Fresh session per run — no history, linked back to the trigger
-cast trigger add "Review open PRs and summarize findings" --every 4h --spawn
-cast trigger add "Watch the funnel and report anything off" --every 4h --spawn --safe
-
-# Multi-line prompts: heredoc via stdin
-cast trigger add - --every 4h --title "Growth audit" <<'EOF'
-Audit budget allocation across markets.
-
-1. Verify the plan matches achievable yield.
-2. Measure growth per dollar for markets funded in the last 14 days.
-
-Escalate only strategic decisions to the founder.
-EOF
-
-# Report completion (when running inside a triggered run)
-cast trigger complete tr-42 --summary "what was done"
-
-# Manage triggers
-cast trigger ls                       # list active triggers
-cast trigger ls --all                 # include completed/failed
-cast trigger pause tr-42              # pause a trigger
-cast trigger run tr-42                # fire immediately
-cast trigger cancel tr-42             # cancel a trigger
-cast trigger log tr-42                # show last run conversation
-\`\`\`
-
-Options:
-- \`--in <duration>\`: delay before run (30m, 2h, 1d)
-- \`--every <duration>\`: recurring interval
-- \`--on <event>\`: fire on webhook (pr_comment, pr_opened, pr_merged, push)
-- \`--spawn\`: fresh session per run, no history — linked back to the trigger in the UI
-- \`--for <session>\`: bind runs to a specific session (defaults to the one you're in)
-- \`--safe\`: read-only spawned run — write tools removed, state-changing commands blocked. Default is permissive: the run can act. A run injecting into an existing session inherits that session's rules.
-- \`--project <path>\`: set working directory (defaults to current)
-- \`--max-runtime <duration>\`: override max runtime (default: 10m)
-
-Every trigger has a short ID (\`tr-42\`) — printed when you create one and listed by \`cast trigger ls\`. Use it for every command, and write it when you mention a trigger in prose; see "Referencing objects". When a trigger fires, its run receives your prompt and its short ID, and should call \`cast trigger complete tr-42 --summary "..."\` when done to report results back.
-${TASK_SNIPPET_END}
-`;
-
-const WORK_SNIPPET_END = "<!-- /codecast-work -->";
-const WORK_SNIPPET = `
-## Tasks & Plans
-
-You operate within a structured work tracking system. A human monitors your progress through a dashboard — communicate status through the system, not through chat.
-
-### When to create structure
-
-**Create a task** when your work will change code, fix a bug, or produce a deliverable. Run \`cast task create "Title" -p <priority>\` before you start implementing. This is the default — skip it only for simple questions, explanations, or quick lookups that don't produce changes.
-
-**Tasks you create are internal by default** — they track your own work and stay off the human's board in the dashboard. Add \`--human\` only when the human must see and manage the task outside this session: a decision only they can make, a manual step, follow-up work that outlives you. Use it rarely; when in doubt, leave it off.
-
-**Nest execution work under the goal it serves.** When you split a task into steps you will actually file, create them with \`--parent <task_id>\` so they sit under the larger piece of work instead of competing with it in a flat list. Decompose in one command — \`cast task create --parent <task_id> -\` with one title per line on stdin. Keep trees shallow (the system caps depth at two below the top) and small — a handful of real steps, not a transcript of your thinking. Subtasks vs plans: a plan orchestrates work across sessions; subtasks decompose ONE task's scope inside your session. Never mirror a plan as a subtask tree.
-
-**The decomposition loop: claim the parent once.** \`cast task start\` the parent, decompose under it, then advance subtasks with \`cast task update/done <sub_id>\` — never \`task start\` your own subtasks (that would unbind you from the parent). Open subtasks of a parent being actively worked are excluded from \`cast task ready\`, so no other session will grab them mid-flight. Closing a parent with open subtasks is refused: finish them, or pass \`--cascade\` (close them too) / \`--only-parent\` (leave them open) to \`cast task done\`.
-
-**\`--from-meeting\` is for tasks people decided, not tasks you decided.** Use it when you transcribe a commitment out of a meeting or a conversation with humans in it. Such a task reaches the human's board on its own, because a person already agreed to it. Never use it for your own work.
-
-**Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run \`cast plan create "Title" -g "goal"\` and add tasks with \`cast task create "Title" --plan <plan_id>\`. Don't create plans for single-task work.
-
-**Bind before you build.** For any larger piece of work, default to working under a task or plan with your session bound to it — \`cast task start <id>\` claims a task, \`cast plan bind <plan_id>\` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; sizable work done unbound is invisible to the human tracking it.
-
-**Check existing work first.** Your context includes an overview of active tasks and plans. Before creating new ones, check if your work already has a task or fits under an existing plan. When the user names a topic, search by it directly — \`cast task ls -q "<topic>"\` and \`cast plan ls -q "<topic>"\` filter by title/description so you don't have to scan a wall of IDs. Use \`cast task ready\` (optionally \`-q\`) for unclaimed work. Claim existing tasks with \`cast task start <id>\` rather than creating duplicates.
-
-**File work under a project when one fits.** A project groups tasks, plans, and docs that belong to the same effort — it is how the human triages a board that spans many sessions. Run \`cast project ls\` to see what exists, then pass \`--project "<name>"\` on create, or \`cast task update <id> --project "<name>"\` for a task already filed. Name it in plain words: every \`--project\` flag takes an ID, a short ID, or a title substring, so \`--project "Agent Quality"\` is the normal form and you never need to look up an ID. Don't invent a project for one task — file under an existing one, or leave it unfiled.
-
-### Working on tasks
-
-Once you have a task:
-1. \`cast task start <id>\` — claim it and bind your session
-2. Work on the implementation
-3. \`cast task comment <id> "progress" -t progress\` — log milestones as you go
-4. \`cast task done <id> -m "summary"\` — mark complete with what you verified
-
-If bound to a plan, keep the bigger picture coherent:
-- Task larger than expected? Suggest splitting it.
-- Your work creates a dependency? Flag it.
-- Making a directional decision? Record it with \`cast plan comment <plan_id> "decision" -d -r "rationale"\`.
-- Acceptance criteria ambiguous? Ask before assuming.
-
-If blocked, say so explicitly:
-- **BLOCKED: <reason>** — flags for human intervention
-- **NEEDS_CONTEXT: <what>** — escalates to the user
-- **DONE_WITH_CONCERNS: <concern>** — completed but flagged for review
-
-### After compaction
-
-When your context gets compacted, re-read your task or plan context (\`cast task context --current\` / \`cast plan context --current\`) to reground yourself. Don't rely on memory of earlier conversation alone.
-
-### Commands
-
-\`\`\`bash
-cast task ready                             # Find available work
-cast task ready -q "<topic>"                # Filter ready tasks by title/description
-cast task ls -q "<topic>"                   # Search all active tasks by title/description
-cast plan ls -q "<topic>"                   # Search active plans by title/goal
-cast project ls                             # Projects in your workspace (the triage unit)
-cast project show <id>                      # A project and every task under it
-cast task ls -p "<project>"                 # Tasks in one project (ID, short ID, or title text)
-cast task create "Title" --project "<name>" # File a new task under a project
-cast task update <id> --project "<name>"    # File an existing task (--project '' unfiles it)
-cast task start/done/comment <id>           # Task lifecycle
-cast task create "Title" -t task -p high    # Create task (internal to agent work by default)
-cast task create "Title" --plan <plan_id>   # Create task bound to plan
-cast task create "Title" --human            # Put it on the human's board (rare — see above)
-cast task create "Title" --parent <task_id> # File it as a subtask of larger work
-cast task create --parent <task_id> - <<'EOF'  # Bulk decomposition: one subtask per line
-First step
-Second step
-EOF
-cast task done <id> --cascade               # Close a parent and its open subtasks together
-cast task create "Title" --from-meeting     # People decided this in a meeting; you only wrote it down
-cast task update <id> --plan <plan_id>      # Bind existing task to plan
-cast task update <id> --human               # Move an existing task onto the human's board
-cast task update <id> --parent <task_id>    # Re-nest a task (--parent '' moves it back to the top level)
-cast task context <id>                      # Full context for a task
-cast task context --current                 # Context for session's current task
-cast plan create "Title" -g "goal" -b "body"  # Create plan with inline body
-cast plan create "Title" --body-file plan.md  # Create plan from file ('-' reads stdin)
-cast task comment ct-123 - <<'EOF'           # any text arg takes '-' for a heredoc body
-…multi-line progress note, exact newlines…
-EOF
-cast plan bind/unbind <plan_id>             # Bind/unbind session to plan
-cast plan show/status <plan_id>            # Plan details
-cast plan context <plan_id>                # Full context for a plan (for agents)
-cast plan context --current                # Context for session's current plan
-cast plan comment <plan_id> "note"         # Add comment (progress by default)
-cast plan comment <plan_id> "x" -d -r "y" # Decision with rationale
-cast plan done/drop <plan_id>             # Close or abandon a plan
-cast doc create "Title" [-c content] [-t type]
-cast doc ls/edit/comment
-cast doc show <id>                          # paginates long docs (200 lines) + prints "next:" hint
-cast doc show <id> -p 2 | 800:1000 | --full # page · line range · whole doc (-n = line gutter)
-cast doc grep <id> '<text>'                 # search inside one doc (grep '^#' = outline)
-cast doc search "<title>"                    # search doc TITLES across the corpus
-cast doc delete <id> --yes                  # permanently delete a doc you created
-\`\`\`
-${WORK_SNIPPET_END}
-`;
-
-const PLAN_SNIPPET_END = "<!-- /codecast-plans -->";
-
-const WORKFLOW_SNIPPET_END = "<!-- /codecast-workflows -->";
-const WORKFLOW_SNIPPET = `
-## Workflows
-
-Workflows are execution graphs (DOT syntax) that define multi-step processes with loops, conditions, and human approval gates. They bind to tasks or plans.
-
-\`\`\`bash
-cast workflow run flow.cast --task ct-xxxx  # Execute workflow for a task
-cast workflow run flow.cast --plan pl-xxxx  # Execute workflow for a plan
-cast workflow list                          # Available templates
-cast workflow push                          # Push workflow to web UI
-\`\`\`
-
-Workflow nodes can be: agent sessions (\`backend=claude\`), shell commands, human approval gates, or conditionals. The web dashboard shows workflow progress and gate buttons.
-
-When collaborating on workflow creation, use DOT syntax:
-\`\`\`dot
-digraph my_flow {
-  graph [goal="$task_title"]
-  start [shape=Mdiamond]
-  implement [label="Implement", backend=claude, prompt="..."]
-  verify [label="Verify", shape=parallelogram, script="npx tsc --noEmit"]
-  review [label="Review", shape=hexagon]
-  exit [shape=Msquare]
-  start -> implement -> verify
-  verify -> review [condition="outcome = success"]
-  verify -> implement [condition="outcome = failure"]
-  review -> exit [label="[A] Approve"]
-  review -> implement [label="[R] Revise"]
-}
-\`\`\`
-${WORKFLOW_SNIPPET_END}
-`;
-
-const VISUAL_SNIPPET_END = "<!-- /codecast-visual -->";
-const VISUAL_SNIPPET = `
-## Visual Canvas
-
-When structure or magnitude carries the meaning — comparisons, flows, timelines, metrics, dashboards — emit a \`cast-canvas\` block of self-contained HTML/CSS/SVG. Codecast renders it inline, themed, expandable to fullscreen. Let the canvas be the centerpiece of such a reply, and keep markdown for ordinary prose.
-
-\`\`\`cast-canvas
-<div data-canvas-title="Shown in the header"> … </div>
-\`\`\`
-
-**Theme with \`--sol-*\` tokens; never hardcode colors.** Text \`--sol-text/-text-muted/-text-dim\` · surfaces \`--sol-card/-bg-alt/-border\` · accents \`--sol-blue/green/yellow/red/magenta/cyan/orange/violet\` · soft fill \`color-mix(in srgb, var(--sol-blue) 14%, transparent)\`. Full CSS and SVG: grid/flex panels, gradients, \`<defs>\`+\`<use>\`, CSS animations/transitions, hover states, \`<details>\`. Compose like a considered report: title, one-line takeaway, then panels. \`data-canvas-size="wide"\` on the root lets a dashboard use the full screen width.
-
-**Sandboxed: no scripts, no network.** Third-party remote images and fonts are stripped. To show an image — a screenshot you took, a local file, a remote image — upload it first:
-
-\`\`\`bash
-cast image shot.png            # or a URL: cast image https://…/diagram.png
-# → prints a stable https URL + ready markdown ![shot](url)
-\`\`\`
-
-That URL renders inline for the human everywhere: \`![alt](url)\` in any reply or message, \`<img src="url">\` inside a canvas. The alt text renders as a caption — write a real one (\`--alt "30-day overview"\`). Several images in one paragraph render side by side, so \`![before](u1) ![after](u2)\` reads as a comparison row. Never link local file paths (\`/tmp/…\`, \`/var/folders/…\`) — the human's browser cannot read files on this machine, so those links are dead. \`data:\` URIs also work in a canvas but bloat the message; prefer \`cast image\`.
-
-Interactivity is declarative; codecast supplies the behavior:
-
-- Tabs: \`<div class="cast-tabs"><section data-tab="Label">…</section>…</div>\`
-- Sortable table: \`<table class="cast-table">\` — headers become click-to-sort
-- Tooltip: \`data-tip="text"\` on any element
-- Chart: \`<div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>\`
-
-**Charts get every Observable Plot mark and transform by name** — fit the form to the data: \`dot\`, \`boxY\`, \`density\`, \`cell\` heatmaps, stacked \`areaY\`, \`arrow\`, \`vector\`, and on. Multi-series: \`fill\`/\`stroke\` as a field plus \`"color":{"legend":true}\`; facet with \`fx\`/\`fy\`; aggregate declaratively — \`"transform":{"kind":"binX","out":{"y":"count"}}\`, likewise \`groupX\`, \`hexbin\`, \`dodgeX\`, \`windowY\` — rather than pre-summing.
-${VISUAL_SNIPPET_END}
-`;
-
-const FORKS_SNIPPET_END = "<!-- /codecast-forks -->";
-const FORKS_SNIPPET = `
-## Forks & Sessions
-
-You can spin work off into your human's inbox as independent sessions — not hidden subagents. The difference is ownership: a subagent (Task tool) reports back to you and you keep its result; a fork or a spawned session lands in the human's inbox for them to review, steer, and continue on their own. Reach for these when the work is theirs to own, or when several directions are worth running at once and seeing side by side. Launch them when the human asks; if spinning them up is your idea, propose it first.
-
-\`\`\`bash
-cast fork "<direction>" ["<direction>" ...]   # branch THIS conversation N ways from here
-cast spawn "<task>" ["<task>" ...]            # start N fresh sessions, no shared history
-cast spawn - <<'EOF'                          # multi-line briefing via stdin (same as cast send)
-…goal, numbered steps, constraints — exact newlines preserved…
-EOF
-\`\`\`
-
-For multi-line prompts, pass \`-\` and feed the body via heredoc — never \`"$(cat file)"\`, which mangles formatting. Several \`-\` args split one heredoc into one prompt per \`-\`, separated by lines containing only \`---\` — so a whole fan-out of multi-line briefs fits in one invocation:
-
-\`\`\`bash
-cast fork - - <<'EOF'
-…first branch's brief…
----
-…second branch's brief…
-EOF
-\`\`\`
-
-\`cast fork\` branches the current conversation — each branch keeps the full history up to the fork point (just before the latest user message by default, so the fork request itself never enters a branch; \`--at <line>\` picks another spot, \`-s <id>\` forks a different session), then pursues its own direction. Use it when the thread splits into distinct paths worth exploring in parallel. When forking is your own idea rather than the human's request, pass \`--tip\` — there is no fork request to strip, and the default would drop the human's real latest message.
-
-A fork fan-out is a handoff, not an orchestration. When the human asks to run work in N forks, issue ONE \`cast fork\` with all N directions, report the roster, and return to your own thread. A branch doesn't know it is a fork — its history ends before the fork request, and its seed arrives as its next instruction — so write each direction as a complete, self-contained instruction for that thread. The branches run independently and the human steers them from the inbox; do not stage launches, monitor branches, or build coordination between them.
-
-\`cast spawn\` starts fresh sessions with no shared history, in the current project (\`-C <dir>\` for elsewhere). Use it to hand off self-contained work — a parallel audit, a port, a spike — rather than research you'd fold back into your own answer.
-
-Both start working immediately and appear in the inbox. A branch or session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human what you sent where.
-
-Labels carry across a fork by default: a branch inherits whatever label you'd filed the parent session under (labels are your personal filing, so this follows your own filing even when you fork a teammate's session), keeping a fork grouped with its source without any flag. Pass \`--label <name>\` to file the new sessions under a label you choose instead — an override for forks, and the only way to file a \`spawn\` (which starts fresh, with nothing to inherit). The label is created if it doesn't exist: \`cast spawn --label rollout "<task>" "<task>"\`, then \`cast sessions --label rollout\` to see the whole fan-out as a group.
-${FORKS_SNIPPET_END}
-`;
-
-const STATE_SNIPPET_END = "<!-- /codecast-state -->";
-const STATE_SNIPPET = `
-## Thread state
-
-Keep one short pinned line on this session saying where the work stands. The human sees it above the composer and on the inbox card the moment they open the thread, so they learn the situation without reading back through it. That matters most in the threads that are hardest to re-enter: long ones, parked ones, and ones where several sessions are talking past each other.
-
-\`\`\`bash
-cast state "Waiting on CI for the auth fix — nothing to decide yet"
-cast state - <<'EOF'                 # multi-line, exact newlines preserved
-Status: sync layer rewritten, tests green
-Blocked: needs a prod key before the last check
-Next: deploy once the key lands
-EOF
-cast state                           # print the current state
-cast state clear                     # remove it
-cast state show <session_id>         # read another session's state
-\`\`\`
-
-Write it for someone who has been away: what is happening now, what it is waiting on, what happens next, and whether anything is theirs to decide. Lead with the situation — the transcript already holds the history. Keep it to a few lines. \`Goal:\`, \`Status:\`, \`Next:\`, \`Blocked:\` render as labels when you use them.
-
-Update it at the moments that change the answer: you finish a phase, you get blocked, you hand work to another session, you are about to go quiet. Clear it when the work is done. A state claiming you are waiting on something that already arrived is worse than none — the dashboard shows how far the thread has run since you wrote it, so a line you stopped maintaining reads as abandoned rather than current.
-
-Pin one on any thread that will run long, park on something outside your control, or share work with other sessions. Skip it for a question you answer in a single turn.
-${STATE_SNIPPET_END}
-`;
 
 // CLI shim over the shared '-'-to-stdin convention (sendBody.ts): expand '-'
 // arguments to the stdin body, exiting with the usage error instead of throwing.
@@ -2443,75 +2093,23 @@ function expandStdinPromptArgs(args: string[]): string[] {
   }
 }
 
-// Generic marked-snippet installer: idempotent header check + end-marker replace,
-// otherwise append. Used for snippets that don't need the bespoke per-section
-// fallback heuristics the older installers carry.
-// Every codecast-owned section in an agent instruction file is described here
-// and installed by ONE algorithm (`installSectionToTargets`, ./snippets.ts).
+// Every codecast-owned section in an agent instruction file is described by
+// the shared catalog (@codecast/shared/contracts/snippets.ts — one table with
+// the slugs, config keys, specs and bodies) and installed by ONE algorithm
+// (`installSectionToTargets`, ./snippets.ts).
 //
-// This table replaced five near-identical `install*ToFile` copies that had
-// drifted into three different answers for "where does this block end when the
-// end marker is missing" — and one of those answers deleted the rest of the
-// user's CLAUDE.md. See snippets.sections.test.ts for the regressions.
-//
-// `headings[0]` is what we write today; the rest are headings older CLI versions
-// wrote, so an update replaces the old section instead of stacking a copy under
-// it. `contentProbes` is how a snippet opts into removing its own bodies from
-// before end markers existed — without one, a block we cannot prove we own is
-// left untouched.
+// This table is the CLI's view of it, under the historical keys the command
+// handlers use (`work` is the tasks snippet; `triggers` writes task_enabled —
+// the catalog records that mapping so no layer re-derives it).
 const SNIPPET_SECTIONS = {
-  memory: {
-    spec: {
-      headings: ["## Memory"],
-      endMarker: MEMORY_SNIPPET_END,
-      contentProbes: ["codecast search", "cast search"],
-    },
-    body: () => MEMORY_SNIPPET,
-    references: true,
-  },
-  triggers: {
-    spec: {
-      headings: [TRIGGER_SNIPPET_HEADING, LEGACY_TASK_SNIPPET_HEADING],
-      endMarker: TASK_SNIPPET_END,
-      contentProbes: ["cast trigger", "cast schedule", "codecast task", "cast task"],
-    },
-    body: () => TASK_SNIPPET,
-    references: true,
-  },
-  work: {
-    spec: {
-      headings: [
-        "## Tasks & Plans",
-        "## Tasks, Plans & Workflows",
-        "## Issue Tracking with codecast task",
-        "## Issue Tracking with cast task",
-      ],
-      endMarker: WORK_SNIPPET_END,
-    },
-    body: () => WORK_SNIPPET,
-    references: true,
-  },
-  workflow: {
-    spec: { headings: ["## Workflows"], endMarker: WORKFLOW_SNIPPET_END },
-    body: () => WORKFLOW_SNIPPET,
-    references: true,
-  },
-  visual: {
-    spec: { headings: ["## Visual Canvas"], endMarker: VISUAL_SNIPPET_END },
-    body: () => VISUAL_SNIPPET,
-    references: false,
-  },
-  forks: {
-    spec: { headings: ["## Forks & Sessions"], endMarker: FORKS_SNIPPET_END },
-    body: () => FORKS_SNIPPET,
-    references: true,
-  },
-  state: {
-    spec: { headings: ["## Thread state"], endMarker: STATE_SNIPPET_END },
-    body: () => STATE_SNIPPET,
-    references: true,
-  },
-} satisfies Record<string, { spec: SectionSpec; body: () => string; references: boolean }>;
+  memory: snippetSection("memory"),
+  triggers: snippetSection("triggers"),
+  work: snippetSection("tasks"),
+  workflow: snippetSection("workflows"),
+  visual: snippetSection("visual"),
+  forks: snippetSection("forks"),
+  state: snippetSection("state"),
+} satisfies Record<string, SnippetSection>;
 
 // Every feature that introduces an object the agent names in prose (a session, a
 // task, a plan, a trigger, a doc) also ensures the one shared "Referencing
@@ -2522,7 +2120,7 @@ function installSnippetSection(
   update: boolean,
 ): { installed: boolean; updated: boolean } {
   const entry = SNIPPET_SECTIONS[key];
-  const result = installSectionToTargets(entry.spec, entry.body(), update);
+  const result = installSectionToTargets(entry.spec, entry.body, update);
   if (entry.references) installReferencesSnippet(update);
   return result;
 }
@@ -2540,6 +2138,7 @@ const SECTION_BY_ENABLED_KEY: Record<string, SectionSpec> = {
   messaging_enabled: MESSAGING_SECTION,
   publish_enabled: PUBLISH_SECTION,
   browser_enabled: BROWSER_SECTION,
+  chat_enabled: CHAT_SECTION,
 };
 
 /**
@@ -2691,6 +2290,7 @@ function refreshEnabledSnippets(config: Record<string, any>): void {
   if (config.visual_enabled) installVisualSnippet(true);
   if (config.publish_enabled) installPublishSnippet(true);
   if (config.browser_enabled) installBrowserSnippet(true);
+  if (config.chat_enabled) installChatSnippet(true);
   // Messaging is on by default for memory installs — backfill/refresh + persist.
   const msgPatch = ensureMessagingForMemory(config);
   if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
@@ -2740,22 +2340,32 @@ function uninstallOrchestration(): void {
 async function promptMemoryEnablement(interactive = true): Promise<void> {
   const config = readConfig() || {};
 
-  // Auto-update already-enabled snippets
+  // Auto-update already-enabled snippets. Staleness is decided by a CONTENT
+  // HASH of the body this binary ships (snippetStale, ./snippets.ts) — a body
+  // edit reinstalls with no version bump, and a version bump with identical
+  // bytes touches nothing. The version constants are stamped alongside as a
+  // display value and downgrade shadow (stampSnippet).
   // Work snippet is auto-installed with memory; schedule, workflow, plan are opt-in via their install commands
-  if (config.work_enabled && config.work_version !== getWorkVersion()) {
+  if (config.work_enabled && snippetStale(config, "tasks")) {
     const workResult = installWorkSnippet(true);
-    config.work_version = getWorkVersion();
+    stampSnippet(config, "tasks", getWorkVersion());
     writeConfig(config);
     if (workResult.updated) {
       const targets = getSnippetTargets();
       console.log(`Work snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
+  } else if (config.work_enabled && config.work_version !== getWorkVersion()) {
+    // The version constant moved but the bytes did not: refresh the shadow
+    // without touching any instruction file.
+    stampSnippet(config, "tasks", getWorkVersion());
+    writeConfig(config);
+    installWorkSnippet(false);
   } else if (config.work_enabled) {
     installWorkSnippet(false);
   } else if (config.memory_enabled && !config.work_enabled) {
     installWorkSnippet(false);
     config.work_enabled = true;
-    config.work_version = getWorkVersion();
+    stampSnippet(config, "tasks", getWorkVersion());
     writeConfig(config);
     const targets = getSnippetTargets();
     console.log(`Work snippet installed in ${targets.map(t => t.label).join(", ")}.`);
@@ -2773,72 +2383,112 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
   } else if (config.messaging_enabled) {
     installMessagingSnippet(false);
   }
-  if (config.task_enabled && config.task_version !== getTaskVersion()) {
+  if (config.task_enabled && snippetStale(config, "triggers")) {
     const result = installTaskSnippet(true);
-    config.task_version = getTaskVersion();
+    stampSnippet(config, "triggers", getTaskVersion());
     writeConfig(config);
     if (result.updated) {
       const targets = getSnippetTargets();
       console.log(`Trigger snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
+  } else if (config.task_enabled && config.task_version !== getTaskVersion()) {
+    stampSnippet(config, "triggers", getTaskVersion()); // shadow only, no file write
+    writeConfig(config);
   }
-  if (config.workflow_enabled && config.workflow_version !== getWorkflowVersion()) {
+  if (config.workflow_enabled && snippetStale(config, "workflows")) {
     const result = installWorkflowSnippet(true);
-    config.workflow_version = getWorkflowVersion();
+    stampSnippet(config, "workflows", getWorkflowVersion());
     writeConfig(config);
     if (result.updated) {
       const targets = getSnippetTargets();
       console.log(`Workflow snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
+  } else if (config.workflow_enabled && config.workflow_version !== getWorkflowVersion()) {
+    stampSnippet(config, "workflows", getWorkflowVersion()); // shadow only, no file write
+    writeConfig(config);
   }
-  if (config.visual_enabled && config.visual_version !== getVisualVersion()) {
+  if (config.visual_enabled && snippetStale(config, "visual")) {
     const result = installVisualSnippet(true);
-    config.visual_version = getVisualVersion();
+    stampSnippet(config, "visual", getVisualVersion());
     writeConfig(config);
     if (result.updated) {
       const targets = getSnippetTargets();
       console.log(`Visual snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
+  } else if (config.visual_enabled && config.visual_version !== getVisualVersion()) {
+    stampSnippet(config, "visual", getVisualVersion()); // shadow only, no file write
+    writeConfig(config);
   }
-  if (config.publish_enabled && config.publish_version !== getPublishVersion()) {
+  if (config.publish_enabled && snippetStale(config, "publish")) {
     const result = installPublishSnippet(true);
-    config.publish_version = getPublishVersion();
+    stampSnippet(config, "publish", getPublishVersion());
     writeConfig(config);
     if (result.updated) {
       const targets = getSnippetTargets();
       console.log(`Publish snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
+  } else if (config.publish_enabled && config.publish_version !== getPublishVersion()) {
+    stampSnippet(config, "publish", getPublishVersion()); // shadow only, no file write
+    writeConfig(config);
   }
 
-  if (config.browser_enabled && config.browser_version !== getBrowserVersion()) {
+  if (config.browser_enabled && snippetStale(config, "browser")) {
     const result = installBrowserSnippet(true);
-    config.browser_version = getBrowserVersion();
+    stampSnippet(config, "browser", getBrowserVersion());
     writeConfig(config);
     if (result.updated) {
       const targets = getSnippetTargets();
       console.log(`Browser snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
+  } else if (config.browser_enabled && config.browser_version !== getBrowserVersion()) {
+    stampSnippet(config, "browser", getBrowserVersion()); // shadow only, no file write
+    writeConfig(config);
   }
-  if (config.state_enabled && config.state_version !== getStateVersion()) {
+  if (config.chat_enabled && snippetStale(config, "chat")) {
+    const result = installChatSnippet(true);
+    stampSnippet(config, "chat", getChatVersion());
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Team chat snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  } else if (config.chat_enabled && config.chat_version !== getChatVersion()) {
+    stampSnippet(config, "chat", getChatVersion()); // shadow only, no file write
+    writeConfig(config);
+  }
+  if (config.state_enabled && snippetStale(config, "state")) {
     const result = installStateSnippet(true);
-    config.state_version = getStateVersion();
+    stampSnippet(config, "state", getStateVersion());
     writeConfig(config);
     if (result.updated) {
       const targets = getSnippetTargets();
       console.log(`Thread state snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
+  } else if (config.state_enabled && config.state_version !== getStateVersion()) {
+    stampSnippet(config, "state", getStateVersion()); // shadow only, no file write
+    writeConfig(config);
   }
 
-  if (config.memory_enabled !== undefined && config.memory_version === getMemoryVersion()) {
+  // Enabled: stale means the CONTENT differs from what this binary ships.
+  // Disabled: the version comparison is kept — its mismatch is what re-offers
+  // the prompt on a new release, and no hash was ever stamped to read.
+  const memoryStale = config.memory_enabled
+    ? snippetStale(config, "memory")
+    : config.memory_version !== getMemoryVersion();
+  if (config.memory_enabled !== undefined && !memoryStale) {
     if (config.memory_enabled) {
+      if (config.memory_version !== getMemoryVersion()) {
+        stampSnippet(config, "memory", getMemoryVersion()); // shadow only, no file write
+        writeConfig(config);
+      }
       installMemorySnippet(false);
     }
     return;
   }
 
-  if (config.memory_enabled && config.memory_version !== getMemoryVersion()) {
+  if (config.memory_enabled && memoryStale) {
     const result = installMemorySnippet(true);
-    config.memory_version = getMemoryVersion();
+    stampSnippet(config, "memory", getMemoryVersion());
     writeConfig(config);
     if (result.updated) {
       const targets = getSnippetTargets();
@@ -2852,9 +2502,9 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     const content = fs.readFileSync(claudeMdPath, "utf-8");
     if ((content.includes("codecast search") || content.includes("cast search")) && config.memory_enabled === undefined) {
       config.memory_enabled = true;
-      config.memory_version = getMemoryVersion();
+      stampSnippet(config, "memory", getMemoryVersion());
       config.work_enabled = true;
-      config.work_version = getWorkVersion();
+      stampSnippet(config, "tasks", getWorkVersion());
       writeConfig(config);
       installMemorySnippet(false);
       installWorkSnippet(false);
@@ -2883,9 +2533,9 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
       for (const t of targets) { console.log(`  ${t.label}`); }
     }
     config.memory_enabled = true;
-    config.memory_version = getMemoryVersion();
+    stampSnippet(config, "memory", getMemoryVersion());
     config.work_enabled = true;
-    config.work_version = getWorkVersion();
+    stampSnippet(config, "tasks", getWorkVersion());
     writeConfig(config);
     console.log();
   } else {
@@ -3168,6 +2818,7 @@ program
 registerWorkspaceCommand(program);
 registerRemoteCommand(program);
 registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerDecideCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
@@ -8977,14 +8628,18 @@ program
       // copies that fell back to end-of-file when a block's end marker was
       // missing, so an uninstall could take the rest of the user's CLAUDE.md
       // with it — at the one moment they have stopped watching.
+      //
+      // Swept from the shared catalog, not a hand list: the hand list here
+      // missed browser and chat, so `cast uninstall` left their sections in
+      // CLAUDE.md telling agents to run commands that no longer existed. The
+      // shared references section rides along — it is not a catalog entry, but
+      // it only exists because catalog snippets install it.
       const original = fs.readFileSync(filePath, "utf-8");
       let content = original;
-      for (const key of Object.keys(SNIPPET_SECTIONS) as Array<keyof typeof SNIPPET_SECTIONS>) {
-        content = cutOwnedSections(content, SNIPPET_SECTIONS[key].spec);
+      for (const snippet of SNIPPET_CATALOG) {
+        if (snippet.section) content = cutOwnedSections(content, snippet.section.spec);
       }
-      for (const spec of [MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION]) {
-        content = cutOwnedSections(content, spec);
-      }
+      content = cutOwnedSections(content, REFERENCES_SECTION);
 
       if (content !== original) {
         fs.writeFileSync(filePath, content.trimEnd() + "\n");
@@ -9558,6 +9213,7 @@ program
       publish: { getVersion: getPublishVersion, install: installPublishSnippet, reEnable: "cast install" },
       state: { getVersion: getStateVersion, install: installStateSnippet, reEnable: "cast install" },
       browser: { getVersion: getBrowserVersion, install: installBrowserSnippet, reEnable: "cast install" },
+      chat: { getVersion: getChatVersion, install: installChatSnippet, reEnable: "cast install" },
       orchestration: { getVersion: getWorkVersion, install: installOrchestration, reEnable: "cast install" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
@@ -10611,7 +10267,7 @@ program
       );
       for (const b of roster) {
         const warn = b.seeded ? "" : ` ${c.yellow}(seed not delivered — resend with cast send)${c.reset}`;
-        console.log(`  ${c.cyan}${b.short_id}${c.reset}  ${b.direction}${warn}`);
+        console.log(`  ${c.cyan}${b.short_id}${c.reset}  ${promptGist(b.direction)}${warn}`);
       }
       if (labelResult?.failures) {
         console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} branch${labelResult.failures === 1 ? "" : "es"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
@@ -10822,7 +10478,7 @@ program
       `${c.dim}${dirNote}${c.reset} — all in your inbox:${labelNote}`
     );
     for (const s of roster) {
-      console.log(`  ${c.cyan}${s.short_id}${c.reset}  ${s.prompt}`);
+      console.log(`  ${c.cyan}${s.short_id}${c.reset}  ${promptGist(s.prompt)}`);
     }
     if (labelResult?.failures) {
       console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} session${labelResult.failures === 1 ? "" : "s"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
@@ -11927,9 +11583,12 @@ chat
     const result = await cliPost("/cli/chat/create-channel", {
       team_id: options.team, name, topic: options.topic,
     });
+    // The team is PRINTED because it may have been guessed: with no --team the
+    // server resolves your active team, and a write must say where it landed.
     console.log(
       `${c.green}✓${c.reset} ${result.created ? "created" : "already there"} ` +
-      `${c.cyan}${result.channel_id}${c.reset}`,
+      `${c.cyan}${result.channel_id}${c.reset}` +
+      (result.team_name ? ` ${c.dim}in team${c.reset} ${c.bold}${result.team_name}${c.reset}` : ""),
     );
   });
 
