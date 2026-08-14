@@ -20,6 +20,10 @@ import {
   DeviceDot,
   type Device,
 } from "../DeviceBadge";
+import {
+  requiresExplicitConsent,
+  type ExecutionSurface,
+} from "@codecast/shared/contracts";
 import { TokenCostBadge, type TokenCost } from "./TokenCostBadge";
 
 /**
@@ -136,14 +140,34 @@ export function kindMeta(kind: string): KindMeta | undefined {
  * What a capability can do to the machine, which is the axis that matters for
  * trust — not its kind. Prose is read into context; code runs.
  *
- * This is the RENDERED verdict. The classification itself belongs to the shared
- * contract: `EXECUTION_SURFACES` enumerates the eight surfaces a scanner
- * observes and `requiresExplicitConsent(surfaces)` decides which of them mean
- * "code", including the deliberate rule that an unclassified capability counts
- * as dangerous. Whatever adapts a catalog row for this surface sets
- * `executionSurface` from that call — never by re-deciding it here.
+ * This is the RENDERED verdict, and it is deliberately NOT called
+ * `ExecutionSurface`: the shared contract already exports that name for the
+ * eight surfaces a scanner observes. Two different concepts under one exported
+ * name is how a badge and the consent gate that protects the user end up
+ * disagreeing, so this one is named for what it is — a confidence bucket. No
+ * identifier below spells `surface` for a bucket: as a NAME that word is the
+ * contract's alone.
+ *
+ * `confidenceFromSurfaces` derives it from real findings; `confidenceFromKind`
+ * is the floor used when nothing has looked. Nothing else may produce one — see
+ * `CatalogEntry.surfaces`.
  */
-export type ExecutionSurface = "prose" | "code" | "unknown";
+export type ExecutionConfidence = "prose" | "code" | "unknown";
+
+/**
+ * The badge for a capability whose surfaces have actually been observed.
+ *
+ * Delegates the verdict to `requiresExplicitConsent` rather than re-deciding it,
+ * so the chip and the gate can never disagree — including on the contract's rule
+ * that an empty classification counts as dangerous. Undefined surfaces mean
+ * nothing has looked yet, which is `unknown`, not `prose`.
+ */
+export function confidenceFromSurfaces(
+  surfaces: readonly ExecutionSurface[] | undefined,
+): ExecutionConfidence {
+  if (surfaces === undefined) return "unknown";
+  return surfaces.includes("runs_commands") ? "code" : "prose"; // MUTANT
+}
 
 /**
  * The floor used when nothing has looked inside — a guess about a kind, not a
@@ -158,9 +182,24 @@ export type ExecutionSurface = "prose" | "code" | "unknown";
  * like markdown from the outside. Calling those prose would be the one thing the
  * contract forbids, an unclassified capability rendered as harmless.
  */
-export function defaultExecutionSurface(kind: CapabilityKind | string): ExecutionSurface {
+export function confidenceFromKind(kind: CapabilityKind | string): ExecutionConfidence {
   if (kind === "mcp" || kind === "hook" || kind === "plugin") return "code";
   return kind === "snippet" ? "prose" : "unknown";
+}
+
+/**
+ * The one way to get a badge for an entry: observed surfaces when a scan has
+ * run, the kind floor when none has.
+ *
+ * It exists so the choice between the two is written once. A second copy of
+ * this conditional is how one surface starts trusting a field the other derives.
+ */
+export function entryConfidence(
+  entry: Pick<CatalogEntry, "kind" | "surfaces">,
+): ExecutionConfidence {
+  return entry.surfaces
+    ? confidenceFromSurfaces(entry.surfaces)
+    : confidenceFromKind(entry.kind);
 }
 
 // ----------------------------------------------------------------- devices
@@ -260,7 +299,14 @@ export interface CatalogEntry {
   /** What a bundle contains, by kind. Only plugins normally carry this. */
   contents?: Partial<Record<CapabilityKind, number>>;
   cost?: TokenCost;
-  executionSurface?: ExecutionSurface;
+  /**
+   * What a scan actually observed this capability can do, in the contract's own
+   * vocabulary. The rendered badge is NOT stored beside it: an adapter that
+   * could hand-set the badge could hand-set a reassuring one, which is the whole
+   * bug. Undefined means no scan has run, which `entryConfidence` renders as the
+   * kind floor — never as prose.
+   */
+  surfaces?: readonly ExecutionSurface[];
   /** Every machine of yours that has it. Empty = installed nowhere. */
   installs: InstallSite[];
   updatedAt?: number;
@@ -302,7 +348,7 @@ export function ScopeChip({ scope }: { scope: CapabilityScope }) {
 }
 
 /**
- * The trust marker. Three surfaces, two marks: prose renders nothing, because
+ * The trust marker. Three buckets, two marks: prose renders nothing, because
  * there is nothing to warn about.
  *
  * "Unknown" gets its own quiet mark rather than silence. Silence is what a
@@ -311,9 +357,9 @@ export function ScopeChip({ scope }: { scope: CapabilityScope }) {
  * for a capability that certainly runs code, and if the two looked alike neither
  * would mean anything.
  */
-export function ExecutionChip({ surface }: { surface: ExecutionSurface }) {
-  if (surface === "prose") return null;
-  if (surface === "unknown") {
+export function ExecutionChip({ confidence }: { confidence: ExecutionConfidence }) {
+  if (confidence === "prose") return null;
+  if (confidence === "unknown") {
     return (
       <ShortcutTooltip
         label="Nothing has looked inside this yet. A skill can ship a script and a command can declare tools, so it is not known to be text only."
@@ -499,7 +545,7 @@ export function CapabilityCard({
   /** Trailing controls — an install button lands here when writes ship. */
   actions?: ReactNode;
 }) {
-  const surface = entry.executionSurface ?? defaultExecutionSurface(entry.kind);
+  const confidence = entryConfidence(entry);
   const rail = kindMeta(entry.kind)?.rail ?? "bg-sol-magenta/60";
 
   return (
@@ -534,7 +580,7 @@ export function CapabilityCard({
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="font-mono text-[13px] text-sol-text truncate">{entry.name}</span>
             <KindChip kind={entry.kind} compact />
-            <ExecutionChip surface={surface} />
+            <ExecutionChip confidence={confidence} />
           </div>
           <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-sol-text-dim font-mono truncate">
             {entry.publisher && <span className="truncate">{entry.publisher}</span>}

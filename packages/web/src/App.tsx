@@ -57,6 +57,7 @@ const ReviewView = lazy(() => import("@/app/review/[id]/page"));
 const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
 
 const Docs = lazy(() => import("@/app/docs/page"));
+const Capabilities = lazy(() => import("@/app/capabilities/page"));
 const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
@@ -173,6 +174,7 @@ export function App() {
               <Route path="conversation/:id" element={<E name="Conversation"><Conversation /></E>} />
               <Route path="conversation/:id/diff" element={<E name="ConversationDiff"><ConversationDiff /></E>} />
               <Route path="docs" element={<E name="Docs"><Docs /></E>} />
+              <Route path="capabilities" element={<E name="Capabilities"><Capabilities /></E>} />
               <Route path="files" element={<E name="Files"><Vault /></E>} />
               {/* /vault = pre-rename alias for /files. Permanent: `cast vault open`
                   has printed /vault?f=… deep links into sessions, notes and users'

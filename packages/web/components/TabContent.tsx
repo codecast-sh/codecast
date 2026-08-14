@@ -22,6 +22,7 @@ export function useTabContext() {
 
 const Tasks = lazy(() => import("@/app/tasks/page"));
 const Docs = lazy(() => import("@/app/docs/page"));
+const Capabilities = lazy(() => import("@/app/capabilities/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
 const Plans = lazy(() => import("@/app/plans/page"));
 const PlanDetail = lazy(() => import("@/app/plans/[id]/page"));
@@ -78,6 +79,7 @@ const ROUTES: RouteEntry[] = [
   // Static routes
   { pattern: /^\/tasks$/, paramNames: [], component: Tasks },
   { pattern: /^\/docs$/, paramNames: [], component: Docs },
+  { pattern: /^\/capabilities$/, paramNames: [], component: Capabilities },
   { pattern: /^\/plans$/, paramNames: [], component: Plans },
   { pattern: /^\/projects$/, paramNames: [], component: Projects },
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },

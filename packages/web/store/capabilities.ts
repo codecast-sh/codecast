@@ -820,23 +820,16 @@ function metaOf(entry: { meta?: unknown }): Record<string, unknown> | undefined 
  * bare name from different marketplaces are two different things and must not
  * collide into one row.
  */
-export function capabilityIdentity(
-  kind: string,
-  name: string,
-  meta?: Record<string, unknown>,
-): string | undefined {
-  const base = text(name);
-  if (!base) return undefined;
-  if (kind !== "plugin" || base.includes("@")) return base;
-  const marketplace = text(meta?.marketplace);
-  return marketplace ? `${base}@${marketplace}` : base;
-}
-
-/** The row key for an identity. Exported so a consumer joining against
- *  `CapabilityDriftRow.key` derives it the same way instead of guessing. */
-export function capabilityRowKey(kind: string, identity: string): string {
-  return `${kind}:${identity.toLowerCase()}`;
-}
+// Both of these are the shared contract's, re-exported so the store's existing
+// importers keep their import path. They were duplicated here — byte-identical
+// logic in two files — and the FleetMatrix join silently missed for months
+// because a third spelling of the same idea drifted from both. One definition
+// is the only thing that keeps the grid and the store naming the same
+// capability the same way.
+// A bare `export … from` would satisfy this file's importers but NOT its own
+// callers below, which need the names in local scope — so import, then re-export.
+import { capabilityIdentity, fleetRowKey as capabilityRowKey } from "@codecast/shared/contracts";
+export { capabilityIdentity, capabilityRowKey };
 
 /**
  * The value that must match for two machines to be on the same thing — only
