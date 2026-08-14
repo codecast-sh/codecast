@@ -23,6 +23,7 @@ import {
 } from "../../../components/PlanDetailPanel";
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { PlanBoardView } from "../../../components/PlanBoardView";
+import { EntryTimeline } from "../../../components/EntryTimeline";
 import { PlanGraphView } from "../../../components/PlanGraphView";
 import { LivenessDot } from "../../../components/LivenessDot";
 import { mergeLiveTasks, computePlanProgress } from "../../../lib/liveEntities";
@@ -342,53 +343,7 @@ export default function PlanDetailPage() {
               <OrchestrationHeader tasks={liveTasks || []} sessions={plan.sessions || []} />
               <PlanTaskSection planShortId={plan.short_id} tasks={liveTasks || []} sessions={plan.sessions || []} />
 
-              {plan.comments?.length > 0 && (
-                <div className="mb-6">
-                  <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
-                    <Clock className="w-4 h-4 text-sol-text-dim" />
-                    Comments ({plan.comments.length})
-                  </h2>
-                  <div className="space-y-2">
-                    {[...plan.comments].reverse().map((entry: any, i: number) => {
-                      const typeStyles: Record<string, string> = {
-                        progress: "text-blue-500",
-                        decision: "text-yellow-500",
-                        discovery: "text-green-500",
-                        reference: "text-cyan-500",
-                        blocker: "text-red-500",
-                        note: "text-sol-text-dim",
-                      };
-                      const typeIcons: Record<string, string> = {
-                        progress: "↳",
-                        decision: "◆",
-                        discovery: "★",
-                        reference: "→",
-                        blocker: "!",
-                        note: "·",
-                      };
-                      return (
-                        <div key={i} className="flex items-start gap-2 text-sm">
-                          <span className={`text-xs mt-0.5 ${typeStyles[entry.type] || typeStyles.note}`}>
-                            {typeIcons[entry.type] || "·"}
-                          </span>
-                          <span className="text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap mt-0.5">
-                            {formatDate(entry.timestamp)}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <span className="text-sol-text-muted">{entry.content}</span>
-                            {entry.rationale && (
-                              <p className="text-xs text-sol-text-dim mt-0.5">{entry.rationale}</p>
-                            )}
-                            {entry.path_or_url && (
-                              <p className="text-xs text-sol-text-dim font-mono mt-0.5">→ {entry.path_or_url}</p>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+              <EntryTimeline entries={plan.comments} />
             </>
           ) : (
             <OrchestrationTab tasks={liveTasks || []} sessions={plan.sessions || []} />
