@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./functions";
+import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
@@ -170,6 +170,15 @@ export const renameToken = mutation({
 // never from the message hot path. See updateLastUsed below.
 const TOKEN_LAST_USED_THROTTLE_MS = 10 * 60 * 1000;
 
+/** The one hash-and-index lookup every token path shares. */
+async function findTokenDoc(ctx: { db: any }, token: string): Promise<any | null> {
+  const tokenHash = await hashToken(token);
+  return await ctx.db
+    .query("api_tokens")
+    .withIndex("by_token_hash", (q: any) => q.eq("token_hash", tokenHash))
+    .first();
+}
+
 export async function verifyApiToken(
   ctx: { db: any },
   token: string,
@@ -181,11 +190,7 @@ export async function verifyApiToken(
   // pure read; only daemonHeartbeat (one call / 30s) refreshes last_used_at.
   updateLastUsed: boolean = false
 ): Promise<{ userId: Id<"users">; tokenId: Id<"api_tokens"> } | null> {
-  const tokenHash = await hashToken(token);
-  const tokenDoc = await ctx.db
-    .query("api_tokens")
-    .withIndex("by_token_hash", (q: any) => q.eq("token_hash", tokenHash))
-    .first();
+  const tokenDoc = await findTokenDoc(ctx, token);
 
   if (!tokenDoc) {
     return null;
@@ -194,6 +199,14 @@ export async function verifyApiToken(
   if (tokenDoc.expires_at && tokenDoc.expires_at < Date.now()) {
     return null;
   }
+
+  // The device binding is deliberately NOT checked here. No caller of this
+  // function has a device to give it: `cliRoute` (http.ts) asks
+  // `deviceBindingAllows` and then DELETES device_id from the body, because the
+  // mutations behind those routes validate a closed v.object and reject an
+  // unrecognised field. A binding check here would therefore see "no device
+  // presented" on every real call and reject every bound token — locking the
+  // owner out of their own CLI the first time `cast auth` mints one.
 
   if (updateLastUsed && Date.now() - (tokenDoc.last_used_at || 0) > TOKEN_LAST_USED_THROTTLE_MS) {
     try {
@@ -216,11 +229,7 @@ export const exchangeSetupToken = internalMutation({
     setupToken: v.string(),
   },
   handler: async (ctx, args) => {
-    const tokenHash = await hashToken(args.setupToken);
-    const tokenDoc = await (ctx.db
-      .query("api_tokens") as any)
-      .withIndex("by_token_hash", (q: any) => q.eq("token_hash", tokenHash))
-      .first();
+    const tokenDoc = await findTokenDoc(ctx, args.setupToken);
 
     if (!tokenDoc) {
       return null;
@@ -265,5 +274,42 @@ export const exchangeSetupToken = internalMutation({
       team_id: userDoc?.team_id,
       convex_url: CONVEX_URL,
     };
+  },
+});
+
+/**
+ * Is this token allowed to act from the device presenting it?
+ *
+ * This is the ONLY place the binding is enforced. `cliRoute` calls it once for
+ * every route it declares, so those routes cannot forget it — and the route that
+ * gets forgotten is always the newest one.
+ *
+ * Coverage today is 122 of the 172 `/cli/*` routes: the other 50 are declared
+ * with a bare `http.route` and never reach this gate, `/cli/heartbeat` and
+ * `/cli/fork` among them. A bound token still works from any machine on those,
+ * so the binding is a partial control until they route through `cliRoute` too.
+ *
+ * Returns true for an unknown token as well: this answers only the device
+ * question, and the handler's own `verifyApiToken` is what rejects a bad token.
+ * Returning false here would report a bad token as a device mismatch and send
+ * whoever reads the error to the wrong machine.
+ *
+ * Internal on purpose. Wire-callable, this would answer "is this token real, and
+ * which machine is it tied to?" for anyone who reaches the deployment — the same
+ * credential oracle the removed `verifyToken` mutation was.
+ */
+export const deviceBindingAllows = internalQuery({
+  args: {
+    api_token: v.string(),
+    device_id: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<boolean> => {
+    const tokenDoc = await findTokenDoc(ctx, args.api_token);
+    if (!tokenDoc) return true;
+    if (!tokenDoc.device_id) return true; // unbound: every token minted before this existed
+    // A bound token presented with no device_id fails here too. Treating a
+    // missing field as "not applicable" would make the check opt-out by
+    // omission, and a thief would simply stop sending it.
+    return tokenDoc.device_id === args.device_id;
   },
 });
