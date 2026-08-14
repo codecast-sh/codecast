@@ -14,34 +14,6 @@ second copy under it.
 
 A user's own section sitting BETWEEN two codecast blocks. Nothing may move it.
 
-## Deploy notes
-
-The last user section. It follows the codecast blocks, so anything that cuts a
-block by "everything to end of file" destroys this paragraph.
-
-## Thread state
-
-Keep one short pinned line on this session saying where the work stands. The human sees it above the composer and on the inbox card the moment they open the thread, so they learn the situation without reading back through it. That matters most in the threads that are hardest to re-enter: long ones, parked ones, and ones where several sessions are talking past each other.
-
-```bash
-cast state "Waiting on CI for the auth fix — nothing to decide yet"
-cast state - <<'EOF'                 # multi-line, exact newlines preserved
-Status: sync layer rewritten, tests green
-Blocked: needs a prod key before the last check
-Next: deploy once the key lands
-EOF
-cast state                           # print the current state
-cast state clear                     # remove it
-cast state show <session_id>         # read another session's state
-```
-
-Write it for someone who has been away: what is happening now, what it is waiting on, what happens next, and whether anything is theirs to decide. Lead with the situation — the transcript already holds the history. Keep it to a few lines. `Goal:`, `Status:`, `Next:`, `Blocked:` render as labels when you use them.
-
-Update it at the moments that change the answer: you finish a phase, you get blocked, you hand work to another session, you are about to go quiet. Clear it when the work is done. A state claiming you are waiting on something that already arrived is worse than none — the dashboard shows how far the thread has run since you wrote it, so a line you stopped maintaining reads as abandoned rather than current.
-
-Pin one on any thread that will run long, park on something outside your control, or share work with other sessions. Skip it for a question you answer in a single turn.
-<!-- /codecast-state -->
-
 ## Referencing objects
 
 Every codecast object has a short ID. Write one into your prose and it renders as a live reference: the object's title, its current state, and a link that opens it. This works anywhere you write — messages, summaries, task comments, doc bodies, trigger prompts.
@@ -58,3 +30,36 @@ There are two forms. Write the bare ID by default — `Filed under ct-4102.` —
 
 Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
 <!-- /codecast-references -->
+
+## Deploy notes
+
+The last user section. It follows the codecast blocks, so anything that cuts a
+block by "everything to end of file" destroys this paragraph.
+
+## Thread state
+
+Keep a short pinned state on this session saying where the work stands. The human sees it above the composer and on the inbox card the moment they open the thread, so they learn the situation without reading back through it. That matters most in the threads that are hardest to re-enter: long ones, parked ones, and ones where several sessions are talking past each other.
+
+A state has three parts: the **first line** says what this session is working on, plain and unlabeled; `--status` declares whether the work is `working` (in progress, the default), `blocked` (needs the human), or `done`; the lines after the first carry the detail — `Status:`, `Next:`, `Blocked:` render as labels when you use them. The status colors the session's row in the inbox — amber for blocked, green for done — so declare it honestly: `blocked` the moment the ball is in the human's court, `done` when the work is finished and verified.
+
+Two demands pull on the first line. It names what the session is working on **now** — the latest work, not the thread's opening goal — so rewrite it when the work moves on. And it stands alone: a reader with none of the thread's context should understand it, so name the work in plain words, not task IDs, dates, or shorthand the thread invented along the way. When standing alone fights staying short, keep the line short by cutting references and detail, never the meaning.
+
+```bash
+cast state "Waiting on CI for the auth fix — nothing to decide yet"
+cast state --status blocked - <<'EOF'   # multi-line, exact newlines preserved
+Migrating the sync layer to wake signatures
+Status: rewrite done, tests green
+Blocked: needs a prod key before the last check
+EOF
+cast state --status done "Shipped — all four fixes verified in the browser"
+cast state                           # print the current state
+cast state clear                     # remove it
+cast state show <session_id>         # read another session's state
+```
+
+Write it for someone who has been away: what is happening now, what it is waiting on, what happens next, and whether anything is theirs to decide. Lead with the situation — the transcript already holds the history. Keep it to a few lines, and only the lines that carry information: a `Next:` with no real next step, or a `Blocked:` saying "nothing", is padding — the status already says it.
+
+Update it at the moments that change the answer: you finish a phase, you get blocked, you hand work to another session, you are about to go quiet. When you finish, set `--status done` with a line saying what shipped; clear the state only when it stops being true or useful. A state claiming you are waiting on something that already arrived is worse than none — the dashboard shows how far the thread has run since you wrote it, so a line you stopped maintaining reads as abandoned rather than current.
+
+Pin one on any thread that will run long, park on something outside your control, or share work with other sessions. Skip it for a question you answer in a single turn.
+<!-- /codecast-state -->

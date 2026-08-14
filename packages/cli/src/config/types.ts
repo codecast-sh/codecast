@@ -114,8 +114,15 @@ export interface Config {
   publish_version?: string;
   state_enabled?: boolean;
   state_version?: string;
+  // Forks was the one snippet whose flags never made it into this type, so
+  // every write to them went through `(config as any)` and a typo would have
+  // silently minted a new key instead of failing to compile.
+  forks_enabled?: boolean;
+  forks_version?: string;
   browser_enabled?: boolean;
   browser_version?: string;
+  chat_enabled?: boolean;
+  chat_version?: string;
 
   // --- Cross-machine project-path resolution (daemon.ts) ---
   // Explicit project-path overrides for resuming sessions/forks recorded on another

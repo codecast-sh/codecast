@@ -16,8 +16,7 @@ cast feed --state needs-input     # filter feed by work state
 cast feed --label api             # sessions I filed under a label (search/sessions take --label too)
 cast read <id> 15:25              # read messages 15-25
 cast read '<share-url>#msg-<id>'  # read a window around a linked message (-c N for context size)
-cast link [id] [line]             # mint a deep link to any object (session+line→message, ct-/pl- task/plan, --type doc)
-cast link                         # …the link to THIS session, to hand a human something clickable
+cast link <id> [line]             # mint a deep link to any object (session+line→message, ct-/pl- task/plan, --type doc)
 
 # Explore sessions — 3 axes: QUERY (which) × CONTENT (state | --messages) × LIVENESS (snapshot | -w)
 cast sessions                     # state snapshot, grouped most-actionable-first
