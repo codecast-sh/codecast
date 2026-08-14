@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { atomicWriteFile } from "./atomicWrite.js";
 
 /**
  * In-memory-cached, keyed JSON store with debounced async persistence.
@@ -198,11 +199,9 @@ export class CachedJsonStore<V> {
     this.pendingWrites.clear();
     this.pendingDeletes.clear();
     const data = this.buildMerged(writes, deletes);
-    const tmp = `${this.filePath}.tmp`;
     try {
       this.ensureDir();
-      fs.writeFileSync(tmp, data);
-      fs.renameSync(tmp, this.filePath);
+      atomicWriteFile(this.filePath, data);
     } catch {
       for (const [k, v] of writes) if (!this.pendingWrites.has(k)) this.pendingWrites.set(k, v);
       for (const k of deletes) if (!this.pendingWrites.has(k)) this.pendingDeletes.add(k);

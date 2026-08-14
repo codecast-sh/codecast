@@ -1,4 +1,5 @@
 import fs from "fs";
+import { atomicWriteFile } from "./atomicWrite.js";
 
 export interface RetryOperation {
   id: string;
@@ -287,10 +288,8 @@ export class RetryQueue {
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
     }
-    const tmp = `${this.persistPath}.tmp`;
     try {
-      fs.writeFileSync(tmp, this.serializeQueue());
-      fs.renameSync(tmp, this.persistPath);
+      atomicWriteFile(this.persistPath, this.serializeQueue());
     } catch {
       this.log("Failed to persist retry queue to disk");
     }

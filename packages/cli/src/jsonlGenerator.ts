@@ -804,14 +804,14 @@ export function generateCodexJsonl(
   return { jsonl: lines.join("\n") + "\n", sessionId };
 }
 
-export function writeCodexSession(jsonl: string, sessionId: string, name?: string): string {
+export function writeCodexSession(jsonl: string, sessionId: string, name?: string, codexHome?: string): { sessionId: string; filePath: string } {
   const now = new Date();
   const dateDir = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")}`;
   const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const fileName = `${name || "remote"}-${ts}-${sessionId}.jsonl`;
-  const sessionsDir = path.join(process.env.HOME!, ".codex", "sessions", dateDir);
+  const sessionsDir = path.join(codexHome || process.env.CODEX_HOME || path.join(process.env.HOME!, ".codex"), "sessions", dateDir);
   fs.mkdirSync(sessionsDir, { recursive: true });
   const filePath = path.join(sessionsDir, fileName);
   fs.writeFileSync(filePath, jsonl);
-  return sessionId;
+  return { sessionId, filePath };
 }

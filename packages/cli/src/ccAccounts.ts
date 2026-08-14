@@ -24,6 +24,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { readLocalCredential } from "./remote/session-move.js";
+import { atomicWriteFile } from "./atomicWrite.js";
 
 const ACTIVE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const PROFILE_KEYCHAIN_PREFIX = "codecast-cc-account-";
@@ -76,13 +77,6 @@ function profileFileDir(): string {
 
 function indexPath(): string {
   return path.join(codecastDir(), "cc-accounts.json");
-}
-
-function atomicWriteFile(filePath: string, content: string, mode = 0o600): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.tmp`);
-  fs.writeFileSync(tmp, content, { mode });
-  fs.renameSync(tmp, filePath);
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +209,12 @@ function keychainAcct(): string {
 
 export function writeActiveCredential(credentialJson: string): void {
   if (useFileStore()) {
-    atomicWriteFile(path.join(homeDir(), ".claude", ".credentials.json"), credentialJson);
+    // 0600 is stated, not defaulted: the shared helper keeps whatever mode the
+    // file already has, so an existing world-readable credential file would
+    // stay world-readable. This is an OAuth token — narrow it on every write.
+    atomicWriteFile(path.join(homeDir(), ".claude", ".credentials.json"), credentialJson, {
+      mode: 0o600,
+    });
     return;
   }
   // -U updates in place, preserving the item (and its ACL) so claude keeps
@@ -245,16 +244,64 @@ export function readOauthAccount(): Record<string, any> | null {
   }
 }
 
-/** Patch ONLY the oauthAccount key in ~/.claude.json (atomic; the file also
- * holds per-project history that concurrent claude processes rewrite). */
+/**
+ * Patch ONLY the oauthAccount key in ~/.claude.json.
+ *
+ * This is a read-modify-write over someone else's file: CC keeps per-project
+ * history, MCP servers and settings in it (megabytes on an established machine)
+ * and rewrites it non-atomically from every running claude process. So a read
+ * that fails is NOT the same as an empty config — it is a config we cannot see.
+ * Writing then would publish `{oauthAccount}` alone and destroy every other key,
+ * turning a transient torn read into permanent loss. Fail instead: the account
+ * switch that calls this is repeatable, the history is not.
+ */
 export function patchOauthAccount(oauthAccount: Record<string, any>): void {
   const p = claudeJsonPath();
-  let cfg: any = {};
+
+  let raw: string | undefined;
   try {
-    cfg = JSON.parse(fs.readFileSync(p, "utf-8"));
-  } catch {}
+    raw = fs.readFileSync(p, "utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // Absent is the ordinary first-run case: nothing to preserve, so create it.
+    if (code !== "ENOENT") {
+      throw new CcAccountError(
+        `Cannot read ${p} (${code}) — refusing to rewrite it, because writing a ` +
+          `config we could not read would drop the history and settings in it. ` +
+          `Fix the file's permissions, then re-run the switch.`,
+      );
+    }
+  }
+
+  let cfg: Record<string, any> = {};
+  // A zero-byte file holds nothing to lose — something else already truncated
+  // it — so it starts fresh rather than blocking the switch forever.
+  if (raw !== undefined && raw.trim() !== "") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new CcAccountError(
+        `${p} is not valid JSON — refusing to rewrite it, because writing over ` +
+          `it would drop the history and settings in it. A claude process may ` +
+          `have been mid-write: re-run the switch, and if it fails again repair ` +
+          `or move the file.`,
+      );
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new CcAccountError(
+        `${p} parsed as ${Array.isArray(parsed) ? "an array" : typeof parsed}, ` +
+          `not a config object — refusing to rewrite it. Repair or move the file, ` +
+          `then re-run the switch.`,
+      );
+    }
+    cfg = parsed as Record<string, any>;
+  }
+
   cfg.oauthAccount = oauthAccount;
-  atomicWriteFile(p, JSON.stringify(cfg, null, 2), 0o644);
+  // No `mode`: we own one key in CC's file, not its permissions. The helper
+  // keeps whatever the file has and only falls back to 0600 when creating it.
+  atomicWriteFile(p, JSON.stringify(cfg, null, 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -296,7 +343,9 @@ function deleteProfileSecret(name: string): void {
 
 function writeProfileSecret(name: string, content: string): void {
   if (useFileStore()) {
-    atomicWriteFile(path.join(profileFileDir(), `${name}.json`), content);
+    // Same reason as writeActiveCredential: a saved profile holds the same
+    // token, so the mode is stated rather than inherited from the old file.
+    atomicWriteFile(path.join(profileFileDir(), `${name}.json`), content, { mode: 0o600 });
     return;
   }
   execFileSync("security", [
@@ -328,7 +377,7 @@ export function readProfileIndex(): ProfileIndex {
 }
 
 function writeProfileIndex(index: ProfileIndex): void {
-  atomicWriteFile(indexPath(), JSON.stringify(index, null, 2), 0o644);
+  atomicWriteFile(indexPath(), JSON.stringify(index, null, 2), { mode: 0o644 });
 }
 
 // ---------------------------------------------------------------------------
@@ -799,7 +848,7 @@ export async function refreshUsageSnapshots(
     for (const key of Object.keys(cache.accounts)) {
       if (!knownKeys.has(key)) delete cache.accounts[key];
     }
-    atomicWriteFile(usageCachePath(), JSON.stringify(cache, null, 2), 0o644);
+    atomicWriteFile(usageCachePath(), JSON.stringify(cache, null, 2), { mode: 0o644 });
   }
   return summary;
 }
