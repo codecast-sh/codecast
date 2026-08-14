@@ -7,9 +7,11 @@ export type WorkspaceArgs =
   | "skip";
 
 /**
- * The {workspace, team_id} pair to stamp onto a created record so it lands in
- * the workspace being viewed (team views are an exact team match — an
- * unstamped record would only show in the personal view).
+ * The bare {workspace, team_id} pair, without the active project_path.
+ * Stamp it onto a created record so it lands in the workspace being viewed
+ * (team views are an exact team match — an unstamped record would only show
+ * in the personal view), or pass it to workspace-wide queries that must not
+ * be scoped to the active project.
  */
 export function workspaceStamp(
   args: WorkspaceArgs

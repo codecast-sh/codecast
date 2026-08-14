@@ -5,13 +5,18 @@
 // tabRouting → TabBar) that made vite full-reload every window instead of hot
 // updating whenever anything in that loop changed.
 export function pathLabel(path: string): string {
-  if (path.startsWith("/conversation/")) return "Conversation";
+  // Label by the ROUTE, never the query string. A stamped inbox deep link
+  // (/inbox?s=<id>) must label as "Inbox" — before this, the raw
+  // "inbox?s=jx7…" leaked into tab titles. The /files branch below still reads
+  // the original path because its label lives IN the query (?f=<file>).
+  const clean = path.split("?")[0].split("#")[0];
+  if (clean.startsWith("/conversation/")) return "Conversation";
   // A chat tab is titled by the surface, not the channel id — the id is opaque,
   // and the channel's own name is only knowable from the store.
-  if (path.startsWith("/chat/")) return "Chat";
-  if (path.startsWith("/tasks/")) return "Task";
-  if (path.startsWith("/docs/")) return "Doc";
-  if (path.startsWith("/plans/")) return "Plan";
+  if (clean.startsWith("/chat/")) return "Chat";
+  if (clean.startsWith("/tasks/")) return "Task";
+  if (clean.startsWith("/docs/")) return "Doc";
+  if (clean.startsWith("/plans/")) return "Plan";
   // A Files tab is titled by the open file, not the encoded query string.
   // /vault is the permanent pre-rename alias, so both prefixes title the same.
   if (/^\/(files|vault)[?/]/.test(path)) {
@@ -40,5 +45,15 @@ export function pathLabel(path: string): string {
     "/settings": "Settings",
     "/team/activity": "Activity",
   };
-  return segments[path] || path.split("/").pop() || "Tab";
+  return segments[clean] || clean.split("/").pop() || "Tab";
+}
+
+/** The session an /inbox?s=<id> tab is pinned to, if any. */
+export function inboxTabSessionId(path: string): string | null {
+  if (!path.split("?")[0].startsWith("/inbox")) return null;
+  try {
+    return new URLSearchParams(path.split("?")[1] ?? "").get("s");
+  } catch {
+    return null;
+  }
 }

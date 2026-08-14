@@ -3,6 +3,7 @@ import {
   useInboxStore,
   categorizeSessions,
   isSessionHidden,
+  sessionRowFromSummary,
   type ForkChild,
 } from "../inboxStore";
 
@@ -29,6 +30,55 @@ const child = (extra: Partial<ForkChild> = {}): ForkChild => ({
 
 const preload = (forks: ForkChild[], from?: string) =>
   (useInboxStore.getState() as any).preloadForkSessions(forks, from);
+
+// The one constructor every cache-seeding surface goes through (fork preload,
+// deep-link inject, palette inject, linked-session open). Its soundness rule:
+// a key the payload doesn't carry stays ABSENT — the categorizer can't tell
+// missing from false, so fabricated "not stashed" nulls would un-hide triaged
+// sessions; keys the payload carries are copied even when null.
+describe("sessionRowFromSummary", () => {
+  it("keeps absent triage keys absent, copies present ones (null included)", () => {
+    const bare = sessionRowFromSummary({ _id: FORK_ID, title: "t" });
+    expect("inbox_stashed_at" in bare).toBe(false);
+    expect("inbox_dismissed_at" in bare).toBe(false);
+    expect("is_pinned" in bare).toBe(false);
+
+    const stamped = sessionRowFromSummary({ _id: FORK_ID, inbox_stashed_at: 123, inbox_dismissed_at: null });
+    expect(stamped.inbox_stashed_at).toBe(123);
+    expect(stamped.inbox_dismissed_at).toBe(null);
+    expect("inbox_killed_at" in stamped).toBe(false);
+  });
+
+  it("derives is_pinned only when the pin stamp was delivered", () => {
+    expect(sessionRowFromSummary({ _id: FORK_ID, inbox_pinned_at: 5 }).is_pinned).toBe(true);
+    expect(sessionRowFromSummary({ _id: FORK_ID, inbox_pinned_at: null }).is_pinned).toBe(false);
+    expect("is_pinned" in sessionRowFromSummary({ _id: FORK_ID })).toBe(false);
+  });
+
+  it("fills identity/liveness defaults and drops unknown keys (whitelist)", () => {
+    const row = sessionRowFromSummary({
+      _id: FORK_ID,
+      started_at: 1000,
+      // Unknown extras a fat server object might carry must not leak onto the row.
+      username: "alice", fork_copied: 7, share_token: "tok",
+    } as any);
+    expect(row.session_id).toBe(FORK_ID);
+    expect(row.updated_at).toBe(1000); // falls back to started_at
+    expect(row.agent_type).toBe("claude_code");
+    expect(row.message_count).toBe(0);
+    expect(row.is_idle).toBe(true);
+    expect(row.has_pending).toBe(false);
+    expect("username" in row).toBe(false);
+    expect("fork_copied" in row).toBe(false);
+    expect("share_token" in row).toBe(false);
+  });
+
+  it("passes through parent linkage so a workflow-agent stub nests as a subagent", () => {
+    const row = sessionRowFromSummary({ _id: FORK_ID, parent_conversation_id: PARENT_ID, is_idle: false });
+    expect(row.parent_conversation_id).toBe(PARENT_ID);
+    expect(row.is_idle).toBe(false);
+  });
+});
 
 describe("preloadForkSessions triage state", () => {
   beforeEach(() => {

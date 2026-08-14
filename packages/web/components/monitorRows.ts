@@ -1,28 +1,28 @@
-// Monitors (the harness `Monitor` tool), background commands (`Bash` with
-// run_in_background) and multi-agent workflow runs (the `Workflow` tool)
-// projected onto the UI — the model:
+// Monitors (the harness `Monitor` tool) and background commands (`Bash` with
+// run_in_background) projected onto the UI — the model:
 //
-//   All are background work the agent arms inside one conversation: a
-//   command/run executes detached, reports back as <task-notification>
-//   messages, and ends on completion, a TaskStop, or session end (monitors
-//   also stream interim events and can time out). Unlike schedules
-//   (agent_tasks), none has a server-side row — their whole lifecycle is
-//   legible from the conversation's own messages, so every surface
-//   (conversation block, inbox bars) derives rows from the loaded message
-//   window here. A conversation whose messages aren't in the store simply
-//   shows no state — we never guess.
+//   Both are background watches the agent arms inside one conversation: a
+//   command runs detached, reports back as <task-notification> messages, and
+//   ends on completion, a TaskStop, or session end (monitors also stream
+//   interim events and can time out). Unlike schedules (agent_tasks), neither
+//   has a server-side row — their whole lifecycle is legible from the
+//   conversation's own messages, so every surface (conversation block, inbox
+//   bars) derives rows from the loaded message window here. A conversation
+//   whose messages aren't in the store simply shows no state — we never guess.
+//   (Workflow runs are NOT projected here: they have a real server row —
+//   workflow_runs, ingested from the runtime's snapshot — and their own
+//   surfaces: WorkflowToolBlock, the run cards, and the inbox chip fed by
+//   conversations.workflow_run_id.)
 //
 // Lifecycle stitched from three message shapes:
 //   1. assistant tool_use `Monitor` {command, description, timeout_ms,
-//      persistent}, `Bash` {command, description, run_in_background: true}
-//      or `Workflow` {script|scriptPath|name} — the row is born "watching";
+//      persistent} or `Bash` {command, description, run_in_background: true}
+//      — the row is born "watching";
 //   2. its tool_result — "Monitor started (task <id> …)" / "Command running
-//      in background with ID: <id>" / "Workflow launched in background.
-//      Task ID: <id>" — yields the task id that later notifications are
-//      keyed by (an error result kills the row: the watch never armed; so
-//      does a background Bash whose result shows it ran synchronously —
-//      nothing standing). A workflow's result also carries its one-line
-//      Summary and script filename, the row's human identity;
+//      in background with ID: <id>" — yields the task id that later
+//      notifications are keyed by (an error result kills the row: the watch
+//      never armed; so does a background Bash whose result shows it ran
+//      synchronously — nothing standing);
 //   3. user <task-notification> messages — an <event> keyed by task-id
 //      (including the "[Monitor timed out …]" marker), and the final
 //      completed/failed notification keyed by the original tool-use-id.
@@ -33,7 +33,7 @@ export type MonitorStatus = "watching" | "ended" | "timed_out" | "stopped";
 export type MonitorRow = {
   // Which tool armed the watch — presentation varies (eyebrow, badge labels)
   // but the lifecycle machinery is shared.
-  kind: "monitor" | "background" | "workflow";
+  kind: "monitor" | "background";
   toolUseId: string;
   // The message that armed the watch (the tool_use turn) — lets surfaces jump
   // the conversation to where this row was born. Present whenever the scanned
@@ -53,9 +53,6 @@ export type MonitorRow = {
   // only. Nonzero means the command failed; surfaces must not render it as a
   // calm "ended".
   exitCode?: number;
-  // Terminal notification carried status "failed" — workflow rows (background
-  // failures speak through exitCode instead). Same "not a calm done" rule.
-  failed?: boolean;
   // Latest real event text (entity-decoded). The timed-out marker flips the
   // status but doesn't overwrite the last thing the monitor actually saw.
   lastEvent?: string;
@@ -190,7 +187,6 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
       }
       const kind: MonitorRow["kind"] | undefined =
         tc.name === "Monitor" ? "monitor"
-        : tc.name === "Workflow" ? "workflow"
         : isBackgroundBashToolCall({ name: tc.name, input }) ? "background"
         : undefined;
       if (kind && tc.id) {
@@ -198,10 +194,7 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
           kind,
           toolUseId: tc.id,
           startMessageId: msg._id,
-          // A workflow's real identity (its meta Summary + name) arrives in
-          // the launch result below; the input's `name` covers saved-workflow
-          // invocations until then.
-          description: (input?.description && String(input.description)) || (kind === "monitor" ? "background watch" : kind === "workflow" ? (input?.name && String(input.name)) || "workflow run" : "background command"),
+          description: (input?.description && String(input.description)) || (kind === "monitor" ? "background watch" : "background command"),
           command: (input?.command && String(input.command)) || "",
           persistent: !!input?.persistent,
           // Background tasks carry no timeout, and a persistent monitor's
@@ -230,23 +223,13 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
       const content = typeof tr.content === "string" ? tr.content : "";
       const started =
         content.match(/Monitor started \(task ([\w-]+)/) ??
-        content.match(/Command running in background with ID: ([\w-]+)/) ??
-        content.match(/Workflow launched in background\. Task ID: ([\w-]+)/);
+        content.match(/Command running in background with ID: ([\w-]+)/);
       if (started) {
         row.taskId = started[1];
         byTaskId.set(started[1], row);
-        if (row.kind === "workflow") {
-          // The launch result carries the run's one-line Summary (from the
-          // script's meta) and the script filename — the row's human identity.
-          const summary = content.match(/^Summary: (.+)$/m)?.[1]?.trim();
-          if (summary) row.description = summary;
-          const wfName = content.match(/Script file: [^\n]*\/([^/\n]+?)-wf_[\w-]+\.js/)?.[1];
-          if (wfName) row.command = wfName;
-        }
-      } else if (tr.is_error || ((row.kind === "background" || row.kind === "workflow") && content)) {
+      } else if (tr.is_error || (row.kind === "background" && content)) {
         // Error → never armed. A background Bash whose result is ordinary
         // output means the harness ran it synchronously — nothing standing.
-        // Same for a Workflow result without the launch line (script error).
         dead.add(row);
       }
     }
@@ -280,7 +263,6 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
               target.status = n.status === "killed" || n.status === "stopped" ? "stopped" : "ended";
             }
             target.endedAt ??= msg.timestamp;
-            if (n.status === "failed") target.failed = true;
             const exit = n.summary.match(/exit code (\d+)/);
             if (exit) target.exitCode = Number(exit[1]);
           }

@@ -137,8 +137,12 @@ function ContextSessionCard({
 }
 
 function CardRow({ children }: { children: React.ReactNode }) {
+  // overflow-x-auto also clips vertical overflow, so the exclude button that
+  // overhangs each card's top-right corner (-top-1.5 -right-1.5) needs
+  // headroom INSIDE the scroll container: pad the top/right by the overhang
+  // and cancel the top externally so the cards don't shift down.
   return (
-    <div className="flex gap-2 overflow-x-auto pb-1.5 [scrollbar-width:thin]">
+    <div className="flex gap-2 overflow-x-auto pt-1.5 -mt-1.5 pr-1.5 pb-1.5 [scrollbar-width:thin]">
       {children}
     </div>
   );

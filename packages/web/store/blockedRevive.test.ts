@@ -95,7 +95,7 @@ describe("freshReviveRequestIds", () => {
 });
 
 // Regression: the amber chip on the session row read ONLY the server's
-// pending_api_error, so pressing "Continue N on current account" moved the
+// pending_api_error, so pressing "Restart & continue all N" moved the
 // count and the banner but left every row still wearing "login" until the
 // daemon had killed, restarted and resynced each session.
 describe("showsBlockedBadge", () => {

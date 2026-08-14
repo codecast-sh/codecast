@@ -148,9 +148,9 @@ describe("extractSendBody", () => {
     expect(extractSendBody(args)).toEqual({ body: "# Briefing\n\n- item one\n- item two", kind: "heredoc" });
   });
 
-  test("heredoc with unquoted tag is dynamic because the shell expands it", () => {
+  test("unquoted tag with nothing the shell would expand is still a literal delivery", () => {
     const args = "- --from jx7abcd <<EOF\nhello\nthere\nEOF";
-    expect(extractSendBody(args)).toEqual({ body: "hello\nthere", kind: "dynamic" });
+    expect(extractSendBody(args)).toEqual({ body: "hello\nthere", kind: "heredoc" });
   });
 
   test("<<- heredoc strips leading tabs", () => {
@@ -184,6 +184,21 @@ describe("extractSendBody", () => {
   test("unquoted heredocs with variables or substitutions never claim literal delivery", () => {
     expect(extractSendBody("- <<EOF\n$HOME\nEOF").kind).toBe("dynamic");
     expect(extractSendBody("- <<EOF\n$(cat reply.md)\nEOF").kind).toBe("dynamic");
+    expect(extractSendBody("- <<EOF\nran `date`\nEOF").kind).toBe("dynamic");
+    // Backslashes are also rewritten by unquoted-heredoc expansion (\$ → $,
+    // \<newline> joins lines), so their presence forfeits the literal claim.
+    expect(extractSendBody("- <<EOF\ncost is \\$5\nEOF").kind).toBe("dynamic");
+  });
+
+  test("a quoted delimiter keeps literal delivery even when the body has expansion characters", () => {
+    expect(extractSendBody("- <<'EOF'\necho $HOME and `date`\nEOF")).toEqual({
+      body: "echo $HOME and `date`",
+      kind: "heredoc",
+    });
+  });
+
+  test("an unterminated unquoted heredoc is dynamic even with a plain body", () => {
+    expect(extractSendBody("- <<EOF\nplain body").kind).toBe("dynamic");
   });
 
   test("a quoted message that merely mentions <<EOF is not a heredoc", () => {

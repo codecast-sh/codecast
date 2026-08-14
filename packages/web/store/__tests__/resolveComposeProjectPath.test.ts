@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { resolveComposeProjectPath } from "../inboxStore";
+import { resolveComposeProjectPath, findProjectPathByName } from "../inboxStore";
+import type { InboxSession } from "../inboxStore";
 
 const recentProjects = [{ path: "/Users/j/code/recent" }];
 
@@ -65,6 +66,32 @@ describe("resolveComposeProjectPath", () => {
       resolveComposeProjectPath({ conversation: {}, activeProjectFilter: null, activeProjectPath: null, recentProjects }),
     ).toBe("/Users/j/code/recent");
     expect(resolveComposeProjectPath({ conversation: {} })).toBeUndefined();
+  });
+
+  it("finds a named project among recents, sessions, then machine roots", () => {
+    const sessions = {
+      s1: { _id: "s1", git_root: "/Users/j/code/codecast", project_path: "/Users/j/code/codecast" },
+    } as unknown as Record<string, InboxSession>;
+    // Recent project wins.
+    expect(
+      findProjectPathByName("codecast", {
+        recentProjects: [{ path: "/Users/j/code/other" }, { path: "/Users/j/src/codecast" }],
+        sessions,
+      }),
+    ).toBe("/Users/j/src/codecast");
+    // Then a session's checkout.
+    expect(findProjectPathByName("codecast", { recentProjects, sessions })).toBe("/Users/j/code/codecast");
+    // A teammate's checkout no machine of mine has is skipped; the roster's own root still resolves.
+    expect(
+      findProjectPathByName("codecast", {
+        sessions: {
+          s1: { _id: "s1", git_root: "/Users/samvit/dev/codecast" },
+        } as unknown as Record<string, InboxSession>,
+        machineRoster: [{ local_project_roots: ["/Users/j/code/recent", "/Users/j/code/codecast"] }],
+      }),
+    ).toBe("/Users/j/code/codecast");
+    // Nothing known → undefined.
+    expect(findProjectPathByName("codecast", { recentProjects })).toBeUndefined();
   });
 
   it("never seeds from a teammate's conversation whose checkout no machine of mine has", () => {
