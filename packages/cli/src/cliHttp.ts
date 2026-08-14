@@ -6,6 +6,8 @@
 // hang indefinitely with no feedback. The daemon already bounds its own calls
 // with AbortSignal.timeout; this brings the same discipline to the CLI.
 
+import { deviceId } from "./remote/device.js";
+
 export interface CliFetchOptions {
   /**
    * Abort a single attempt after this many ms. Default 45s — deliberately
@@ -39,6 +41,48 @@ function isTimeoutError(err: unknown): boolean {
  * optionally retries transient failures. Returns the final `Response`; the
  * caller keeps its existing `.json()` / `.ok` handling unchanged.
  */
+
+/**
+ * Stamp this machine's device id onto an outgoing CLI request.
+ *
+ * Done here rather than at the ~100 call sites that build these bodies, for the
+ * same reason the server enforces the binding inside `cliRoute` rather than in
+ * each handler: a step every caller has to remember is a step some caller will
+ * forget, and it will be the newest one.
+ *
+ * Only bodies that already carry an `api_token` are touched — the field is
+ * meaningless without one — and an existing `device_id` is never overwritten,
+ * because a caller acting on behalf of another machine (the remote handoff
+ * paths) has already said which one it means.
+ *
+ * Failure is silent by design: a body that is not JSON, or a machine whose
+ * device id cannot be derived, must not stop the request. An unbound token
+ * still authenticates, which is exactly the migration story.
+ */
+function withDeviceId(init: RequestInit): RequestInit {
+  // OFF until the server that strips this field is deployed.
+  //
+  // `cliRoute` consumes `device_id` before handing the body to a mutation, whose
+  // validator is a closed `v.object` that rejects any field it does not name. So
+  // a CLI that sends it to a backend without that strip breaks EVERY authenticated
+  // command at once — which is what happened the first time this shipped, on a
+  // machine running `cast` from source.
+  //
+  // This is the deploy-order rule in CLAUDE.md pointing the other way: a client
+  // change that needs a server change must not go out first. Delete this guard in
+  // the commit AFTER the http.ts strip is live in prod.
+  if (process.env.CAST_DEVICE_BINDING !== "1") return init;
+  if (typeof init.body !== "string" || !init.body.includes('"api_token"')) return init;
+  try {
+    const parsed = JSON.parse(init.body);
+    if (!parsed || typeof parsed !== "object" || typeof parsed.api_token !== "string") return init;
+    if (typeof parsed.device_id === "string") return init;
+    return { ...init, body: JSON.stringify({ ...parsed, device_id: deviceId() }) };
+  } catch {
+    return init;
+  }
+}
+
 export async function cliFetch(
   url: string,
   init: RequestInit,
@@ -52,10 +96,11 @@ export async function cliFetch(
     if (process.env.CAST_DEBUG) console.error(`[cast] ${url} ${reason}; retrying (${attempt + 1}/${retries})`);
   };
 
+  const stamped = withDeviceId(init);
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      const response = await fetch(url, { ...stamped, signal: AbortSignal.timeout(timeoutMs) });
       // Retry server-side faults (overloaded/contended backend), not 4xx.
       if (response.status >= 500 && attempt < retries) {
         await response.body?.cancel().catch(() => {});
