@@ -28,21 +28,28 @@
 // mutation parses, normalises, bounds and re-serialises it. A malformed report
 // costs that one machine a column, never the page.
 //
-// FOUR THINGS BELOW ARE COPIES, and there is one edit that removes all four.
-// `packages/shared/contracts/capabilities.ts` already exports
-// `CAPABILITY_SOURCE_PREFIX`, `OBSERVED_SCOPES` / `isObservedScope`,
-// `MAX_CAPABILITY_SLUG_LENGTH` and `InstalledEntry` — the shape `NormalizedItem`
-// copies. The Convex runtime cannot reach them today only because the contracts
-// barrel does not re-export that module, and `moduleResolution: "Bundler"`
-// honours the package's exports map, so the deep path does not resolve. Add
-// `export * from "./capabilities";` to `packages/shared/contracts/index.ts` and
-// delete `SOURCE_PREFIX`, `observedScope`, `MAX_SLUG_CHARS` and the local item
-// shape here. Verified against every other contracts module: none of those names
-// collides.
+// The vocabulary — kinds, sources, scopes, surfaces, the manifest and its hash
+// — is imported from `@codecast/shared/contracts`, never copied. Four runtimes
+// have to agree byte for byte on those, and the shared module is the agreement.
+// The one remaining duplicate is the fleet fold below, and it carries its own
+// consolidation note.
 
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import {
+  CAPABILITY_SOURCE_PREFIX,
+  MAX_CAPABILITY_SLUG_LENGTH,
+  deriveExecutionSurfaces,
+  isCapabilityKind,
+  isExecutionSurface,
+  isObservedScope,
+  manifestHash,
+  type CapabilityManifest,
+  type ExecutionSurface,
+  type InstalledEntry,
+  type ObservedScope,
+} from "@codecast/shared/contracts";
 import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import {
@@ -51,9 +58,13 @@ import {
   MAX_DESCRIPTION_CHARS,
   MAX_ENTRIES_CHARS,
   MAX_ENTRY_COUNT,
+  MAX_ITEM_CHARS,
+  MAX_MANIFEST_LIST,
   MAX_META_KEYS,
   MAX_META_VALUE_CHARS,
   MAX_NAME_CHARS,
+  MAX_OBSERVATION_DEVICES,
+  MAX_OBSERVATION_ROWS_PER_CLIENT,
   MAX_PATH_CHARS,
   MAX_REPORT_CHARS,
   MAX_SCOPE_ROWS_PER_DEVICE,
@@ -66,72 +77,125 @@ import {
  * ========================================================================== */
 
 /**
- * A change detector over a string. Two 32-bit FNV-1a style accumulators with
- * different mixing, concatenated — 64 bits, deterministic, synchronous.
+ * The change detector over anything we store: the shared `manifestHash`, whose
+ * canonical form sorts object keys at every depth, so two writers that built
+ * the same value in a different order agree.
  *
- * Deliberately not sha256: `crypto.subtle` is async, and this hash never gates a
- * trust decision. It answers one question — "are these the same bytes I already
- * stored?" — where a collision costs a mirror row that stays stale until the
- * machine's inventory changes again, not a security failure. The daemon may hash
- * its own payload too, to decide whether to send; the two hashes are independent
- * on purpose, so neither side has to keep an algorithm in step with the other.
+ * ONE hasher project-wide, on purpose. Consent is granted against a manifest
+ * hash, and the daemon, the browser and this module must all compute the same
+ * one from the same value — a second algorithm here is a disagreement waiting
+ * for its first byte. `manifestHash`'s parameter is typed for its primary
+ * caller; its canonical walk handles any JSON value, which is what the cast
+ * states. It never gates a trust decision — a collision costs a stale mirror
+ * row, and integrity against an adversary is the pin's job, not this.
  */
-export function stableHash(input: string): string {
-  let h1 = 0x811c9dc5;
-  let h2 = 0x01000193 ^ input.length;
-  for (let i = 0; i < input.length; i++) {
-    const c = input.charCodeAt(i);
-    h1 = Math.imul(h1 ^ c, 0x01000193);
-    h2 = Math.imul(h2 ^ c, 0x85ebca6b);
-    h2 = (h2 << 13) | (h2 >>> 19);
-  }
-  return (h1 >>> 0).toString(16).padStart(8, "0") + (h2 >>> 0).toString(16).padStart(8, "0");
+export function canonicalHash(value: unknown): string {
+  return manifestHash(value as CapabilityManifest);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** A trimmed, length-capped string, or undefined. Reports arrive as parsed
- *  JSON, so "a string with something in it" cannot be assumed from the type. */
-function text(value: unknown, max: number): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return undefined;
-  return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
-}
+/**
+ * How a reported string is used, which decides what it may contain:
+ *
+ *   "text"       display prose (a description). Truncated over its cap.
+ *   "identity"   addresses a row (a device id, a scope key, a slug, a
+ *                capability's kind and name). REFUSED over its cap, never
+ *                clipped — a clipped identity stores the row under a key its
+ *                writer will never look for again, and two different over-long
+ *                identities clip to the SAME key and silently merge.
+ *   "source"     a machine-local hint (an item's path, an MCP command line).
+ *                Single line; an absolute path is legitimate content.
+ *   "diagnostic" a scan's own error text. Prose rules — newlines kept, and a
+ *                long stack trace is truncated rather than refused, because a
+ *                dropped error reads as "nothing installed" when the truth is
+ *                "could not look" — AND a path is legitimate content, because
+ *                the failure it names is machine-local ("~/.claude unreadable").
+ */
+export type ReportedField = "text" | "identity" | "source" | "diagnostic";
+
+/** Whole string is a filesystem location: `/…`, `~/…`, or `C:\…`. */
+const ABSOLUTE_PATH = /^(?:\/|~[\\/]|[A-Za-z]:[\\/])/;
+/** An environment ASSIGNMENT — `NAME=value`. The name alone is fine. */
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** C0 controls (newline and tab excepted for prose) and DEL. */
+const FORBIDDEN_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+const ANY_CONTROL = /[\u0000-\u001f\u007f]/;
 
 /**
- * The same, for a field that IDENTIFIES something — a device id, a slug, the
- * scope key a row is stored under.
+ * THE sanitizer for reported strings. Every ingest in this module — the
+ * inventory report, the observation, the catalog upsert — funnels each foreign
+ * string through here; nothing else in this file inspects one.
  *
- * Over the cap it returns nothing rather than a prefix. Truncating display text
- * costs a few characters; truncating an identity stores the row under a key its
- * writer will never look for again, and the next report creates a second row
- * beside the first. A refusal is loud and recoverable; a silent rename is not.
+ * `null` means REJECTED, and rejected is deliberately distinguishable from
+ * cleared at every call site — `sanitizeSshHost`'s convention (`devices.ts:938`).
+ * Three rejections are absolute, whatever the field:
+ *
+ *   Control characters. Prose keeps newline and tab; everything else is a
+ *   payload aimed at a terminal or a log line, and it is rejected whole rather
+ *   than silently cleaned — a cleaned payload looks like data we verified.
+ *
+ *   Environment ASSIGNMENTS (`AWS_SECRET=sk-…`). A manifest may name the env
+ *   vars a capability wants; a report that carries a VALUE is one scanner bug
+ *   away from storing and rendering a secret. Names pass, values never do.
+ *
+ *   Absolute paths outside `"source"` fields. A path is a property of one
+ *   disk; in an identity it can never match across machines, and in prose it
+ *   leaks the machine's layout into team-visible text.
  */
-function identityText(value: unknown, max: number): string | undefined {
-  if (typeof value !== "string") return undefined;
+export function sanitizeReported(value: unknown, max: number, field: ReportedField = "text"): string | null {
+  if (typeof value !== "string") return null;
   const trimmed = value.trim();
-  if (trimmed.length === 0 || trimmed.length > max) return undefined;
+  if (trimmed.length === 0) return null;
+  const prose = field === "text" || field === "diagnostic";
+  const pathIsContent = field === "source" || field === "diagnostic";
+  if (prose ? FORBIDDEN_CONTROLS.test(trimmed) : ANY_CONTROL.test(trimmed)) return null;
+  if (ENV_ASSIGNMENT.test(trimmed)) return null;
+  if (!pathIsContent && ABSOLUTE_PATH.test(trimmed)) return null;
+  if (trimmed.length > max) {
+    return prose ? trimmed.slice(0, max) : null;
+  }
   return trimmed;
+}
+
+/** An environment variable NAME, or nothing. There is no truncation case: a
+ *  clipped name is a different variable, and a value must never be stored at
+ *  all — this is the manifest contract's "names only" rule made mechanical. */
+export function sanitizeEnvKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return /^[A-Za-z_][A-Za-z0-9_]{0,99}$/.test(trimmed) ? trimmed : null;
+}
+
+/** `sanitizeReported`, with absence spelled the way this module's optional
+ *  fields spell it. */
+function text(value: unknown, max: number, field: ReportedField = "text"): string | undefined {
+  return sanitizeReported(value, max, field) ?? undefined;
+}
+
+/** See `ReportedField` — refusal over the cap is the point. */
+function identityText(value: unknown, max: number): string | undefined {
+  return sanitizeReported(value, max, "identity") ?? undefined;
 }
 
 /* ==========================================================================
  * Normalising a report
  * ========================================================================== */
 
-/** One capability as one machine observed it, reduced to the fields we keep.
- *  A copy of `InstalledEntry` — see the barrel note at the top of the file. */
-interface NormalizedItem {
+/**
+ * One capability as one machine observed it, reduced to the fields we keep.
+ * `InstalledEntry` with two narrowings the wire forces:
+ *
+ *   `kind` is an open string, not `CapabilityKind` — a kind we do not model yet
+ *   is still something the user has (see the allow-list note in `normalizeItem`).
+ *   `enabled` is required — the wire's "absent means on" was resolved on the
+ *   way in, so a stored row never re-litigates it.
+ */
+interface NormalizedItem extends Omit<InstalledEntry, "kind"> {
   kind: string;
-  name: string;
-  description?: string;
-  scope: string;
   enabled: boolean;
-  installed?: boolean;
-  source?: string;
-  meta?: Record<string, string>;
 }
 
 interface NormalizedMarketplace {
@@ -145,11 +209,11 @@ export interface NormalizedInventory {
   marketplaces: NormalizedMarketplace[];
 }
 
-/** Claude Code's own observed scopes. They STACK rather than override, so this
- *  is not the binding scope ladder and must never be widened into it. A copy of
- *  `isObservedScope` — see the barrel note at the top of the file. */
-function observedScope(value: unknown): string {
-  return value === "local" || value === "project" ? value : "user";
+/** Claude Code's own observed scopes STACK rather than override, so this is
+ *  not the binding scope ladder and must never be widened into it. The check is
+ *  the shared contract's; only the "anything else means user" fold is ours. */
+function observedScope(value: unknown): ObservedScope {
+  return isObservedScope(value) ? value : "user";
 }
 
 function normalizeMeta(value: unknown): Record<string, string> | undefined {
@@ -160,7 +224,12 @@ function normalizeMeta(value: unknown): Record<string, string> | undefined {
   // key insertion order, which a JSON parser preserves but a scanner may vary.
   for (const key of Object.keys(value).sort()) {
     if (kept >= MAX_META_KEYS) break;
-    const val = text(value[key], MAX_META_VALUE_CHARS);
+    // Keys address the value, so they take the identity rules; values are
+    // machine-local extras (an MCP command line is the canonical case), so a
+    // bare absolute path is legitimate there — but an env ASSIGNMENT never is,
+    // and `sanitizeReported` rejects one in every class.
+    if (sanitizeReported(key, 64, "identity") !== key) continue;
+    const val = text(value[key], MAX_META_VALUE_CHARS, "source");
     if (val === undefined) continue;
     out[key] = val;
     kept += 1;
@@ -170,8 +239,12 @@ function normalizeMeta(value: unknown): Record<string, string> | undefined {
 
 function normalizeItem(raw: unknown): NormalizedItem | undefined {
   if (!isRecord(raw)) return undefined;
-  const kind = text(raw.kind, 40);
-  const name = text(raw.name, MAX_NAME_CHARS);
+  // Kind and name form the fleet row's key (`foldFleet` keys on
+  // `${kind}:${identity}`), so both take the identity class: refused over
+  // their caps, never clipped. Clipping would merge two different over-long
+  // names into one row and hide real drift between them.
+  const kind = identityText(raw.kind, 40);
+  const name = identityText(raw.name, MAX_NAME_CHARS);
   // No allow-list on `kind`. A kind we do not model yet is still something the
   // user has, and the renderers show it verbatim rather than dropping the row
   // (`packages/web/components/capabilities/CapabilityCard.tsx` KindChip). An
@@ -187,14 +260,16 @@ function normalizeItem(raw: unknown): NormalizedItem | undefined {
     // describes something merely present.
     enabled: raw.enabled !== false,
     installed: typeof raw.installed === "boolean" ? raw.installed : undefined,
-    source: text(raw.source, MAX_PATH_CHARS),
+    // The one field whose JOB is an absolute path on that machine.
+    source: text(raw.source, MAX_PATH_CHARS, "source"),
     meta: normalizeMeta(raw.meta),
   };
 }
 
 function normalizeMarketplace(raw: unknown): NormalizedMarketplace | undefined {
   if (!isRecord(raw)) return undefined;
-  const name = text(raw.name, MAX_NAME_CHARS);
+  // A marketplace's name becomes its fleet row key too — same identity rules.
+  const name = identityText(raw.name, MAX_NAME_CHARS);
   if (!name) return undefined;
   return { name, repo: text(raw.repo, MAX_NAME_CHARS), scope: observedScope(raw.scope) };
 }
@@ -231,6 +306,15 @@ export interface NormalizedReport {
  * precisely the churn this whole design exists to avoid.
  */
 export function parseInventory(entriesJson: string): NormalizedInventory | undefined {
+  return parseInventoryCounted(entriesJson)?.inventory;
+}
+
+/** `parseInventory`, plus how many entries the count cap refused to even parse.
+ *  Zero on everything this module ever stored — only a raw report can exceed
+ *  the cap — so the public parser need not carry the number. */
+function parseInventoryCounted(
+  entriesJson: string,
+): { inventory: NormalizedInventory; overCountCap: number } | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(entriesJson);
@@ -266,7 +350,15 @@ export function parseInventory(entriesJson: string): NormalizedInventory | undef
         : a.scope < b.scope ? -1 : a.scope > b.scope ? 1 : 0,
   );
   marketplaces.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  return { items, marketplaces };
+  // Entries past the count cap were never parsed — deliberately, so a
+  // pathological report cannot make us build a huge array to throw away. They
+  // are still COUNTED: `normalizeReport` folds them into `dropped`, because a
+  // cap that trims silently tells the machine's owner they have less than they
+  // do.
+  return {
+    inventory: { items, marketplaces },
+    overCountCap: Math.max(0, rawItems.length - MAX_ENTRY_COUNT),
+  };
 }
 
 /**
@@ -280,9 +372,9 @@ export function normalizeReport(entriesJson: string): NormalizedReport | { error
   if (entriesJson.length > MAX_REPORT_CHARS) {
     return { error: "payload_too_large" };
   }
-  const parsed = parseInventory(entriesJson);
+  const parsed = parseInventoryCounted(entriesJson);
   if (!parsed) return { error: "unparseable_json" };
-  const { items, marketplaces } = parsed;
+  const { items, marketplaces } = parsed.inventory;
 
   // Byte budget. Marketplaces are reserved first; capabilities fill what is
   // left, in sorted order, so which entries survive a truncation is the same on
@@ -292,6 +384,11 @@ export function normalizeReport(entriesJson: string): NormalizedReport | { error
   const kept: NormalizedItem[] = [];
   for (const item of items) {
     const cost = JSON.stringify(item).length + 1;
+    // An item over its OWN cap is skipped rather than breaking the loop: the
+    // field caps keep a well-formed item under this, so one that reaches it is
+    // pathological, and letting it end the fill would starve every ordinary
+    // item sorted after it. It is counted into `dropped` like any other loss.
+    if (cost > MAX_ITEM_CHARS) continue;
     if (cost > budget) break;
     budget -= cost;
     kept.push(item);
@@ -302,7 +399,11 @@ export function normalizeReport(entriesJson: string): NormalizedReport | { error
     inventory,
     json: JSON.stringify(inventory),
     count: kept.length,
-    dropped: items.length - kept.length,
+    // Everything reported that we did not store, whichever cap took it: the
+    // count cap (never parsed), the per-item cap, or the byte budget. This is
+    // the number the truncation badge renders, so a loss missing from it is a
+    // silent drop by definition.
+    dropped: items.length - kept.length + parsed.overCountCap,
   };
 }
 
@@ -344,14 +445,17 @@ export const reportInventory = mutation({
     // capabilities as another's, and every other machine would read as drift.
     const client = args.client === undefined ? "claude" : identityText(args.client, 40);
     if (!client) return { status: "rejected" as const, reason: "invalid_client" };
-    // A scope key is an identity string, never a path — but this mutation cannot
-    // prove that, so it only bounds it. The refusal that matters (a team binding
-    // carrying a machine-local key) lives on the binding write, which is phase 2.
-    // An over-long key is refused rather than clipped: it addresses the row.
-    if (args.scope_key !== undefined && args.scope_key.trim().length > 400) {
+    // A scope key is an identity string, never a path. The sanitizer enforces
+    // the mechanical half (no controls, no bare path, refused over the cap
+    // rather than clipped — it addresses the row); the semantic refusal that
+    // matters (a team binding carrying a machine-local key) lives on the
+    // binding write, which is phase 2. "" — the machine-wide scope — is not a
+    // rejection, so it bypasses the sanitizer's empty-means-null rule.
+    const rawScopeKey = args.scope_key?.trim() ?? "";
+    const scopeKey = rawScopeKey === "" ? "" : sanitizeReported(rawScopeKey, 400, "identity");
+    if (scopeKey === null) {
       return { status: "rejected" as const, reason: "invalid_scope_key" };
     }
-    const scopeKey = args.scope_key?.trim() ?? "";
 
     const normalized = normalizeReport(args.entries_json);
     if ("error" in normalized) {
@@ -360,8 +464,14 @@ export const reportInventory = mutation({
 
     const db = capDb(ctx.db);
     const now = Date.now();
-    const hash = stableHash(normalized.json);
-    const scanError = text(args.scan_error, MAX_DESCRIPTION_CHARS);
+    const hash = canonicalHash(normalized.inventory);
+    // A scan error is diagnostic prose: it may span lines ("EACCES\n  at
+    // readdir"), it may name the machine-local path that failed ("~/.claude
+    // unreadable"), and over its cap it must be clipped rather than refused.
+    // The source class would refuse the first, the text class the second, and
+    // either refusal silently merges "could not look" into "nothing installed"
+    // — the exact distinction `last_error` exists to keep.
+    const scanError = text(args.scan_error, MAX_DESCRIPTION_CHARS, "diagnostic");
     const clientVersion = text(args.client_version, 100);
 
     const existing = await db
@@ -472,6 +582,362 @@ export const reportInventory = mutation({
 });
 
 /* ==========================================================================
+ * ingestObservation — raw manifest in, derived surfaces and hash out
+ * ========================================================================== */
+
+/** A non-blank string: something the machine genuinely reported, whether or
+ *  not the sanitizer will accept its bytes. The line between "a value we
+ *  refused" (which must still raise surfaces and the truncated flag) and
+ *  type junk that was never a value at all. */
+function reportedString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/** One string list off a raw manifest: sanitized per field class, capped, and
+ *  SORTED — two scanners walking one directory in different orders must hash
+ *  alike, or cross-device confirmation could never fire. `truncated` is true
+ *  when the stored list describes less than the machine reported: the length
+ *  cap cut it, or the sanitizer refused a value that was really there. */
+function stringList(
+  value: unknown,
+  max: number,
+  field: ReportedField,
+): { list?: string[]; truncated: boolean } {
+  if (!Array.isArray(value)) return { truncated: false };
+  const list: string[] = [];
+  let rejected = false;
+  for (const raw of value.slice(0, MAX_MANIFEST_LIST)) {
+    const item = text(raw, max, field);
+    if (item !== undefined) list.push(item);
+    else if (reportedString(raw)) rejected = true;
+  }
+  list.sort();
+  return {
+    list: list.length > 0 ? list : undefined,
+    truncated: rejected || value.length > MAX_MANIFEST_LIST,
+  };
+}
+
+/**
+ * Reduce a raw observation's manifest to the canonical `CapabilityManifest`.
+ *
+ * Every field is what was OBSERVED to be there, sanitized by its use: `bin`,
+ * `scripts`, `hooks` and an MCP `command` are machine-local locations (source
+ * class — an absolute path is their content), component and tool names are
+ * prose, and `envKeys` takes only environment variable NAMES — a VALUE is
+ * rejected outright, because this object is hashed, stored and rendered, and a
+ * secret in it would leak through all three.
+ *
+ * `truncated` is true whenever the stored manifest describes LESS than the
+ * machine reported — a list hit its length cap, or the sanitizer refused a
+ * value that was really there. The row must say so rather than let a partial
+ * manifest read as the whole — a hash over a silently cut manifest would also
+ * "confirm" against another machine's identically cut one.
+ *
+ * Sanitizer refusal deliberately does NOT lower the derived surfaces: those
+ * are read off the RAW structure by `structuralSurfaces` before this runs.
+ */
+export function normalizeManifest(value: unknown): { manifest: CapabilityManifest; truncated: boolean } {
+  const m = isRecord(value) ? value : {};
+  let truncated = false;
+  const take = (raw: unknown, max: number, field: ReportedField): string[] | undefined => {
+    const result = stringList(raw, max, field);
+    truncated = truncated || result.truncated;
+    return result.list;
+  };
+
+  const components: NonNullable<CapabilityManifest["components"]> = {};
+  let hasComponents = false;
+  if (isRecord(m.components)) {
+    for (const key of Object.keys(m.components).sort()) {
+      // A component kind we do not model cannot be stored under a typed record;
+      // unlike an inventory item it has nowhere honest to render, so it is left
+      // to the raw report rather than misfiled under a kind it is not.
+      if (!isCapabilityKind(key)) continue;
+      const list = take(m.components[key], MAX_NAME_CHARS, "text");
+      if (list) {
+        components[key] = list;
+        hasComponents = true;
+      }
+    }
+  }
+
+  const mcp: NonNullable<CapabilityManifest["mcp"]> = [];
+  if (Array.isArray(m.mcp)) {
+    for (const raw of m.mcp.slice(0, MAX_MANIFEST_LIST)) {
+      if (!isRecord(raw)) continue;
+      const name = text(raw.name, MAX_NAME_CHARS);
+      const command = text(raw.command, MAX_PATH_CHARS, "source");
+      const url = text(raw.url, MAX_PATH_CHARS);
+      // A field the sanitizer refused was still reported — the stored entry
+      // (or its absence) describes less than the machine saw.
+      if (
+        (name === undefined && reportedString(raw.name)) ||
+        (command === undefined && reportedString(raw.command)) ||
+        (url === undefined && reportedString(raw.url))
+      ) {
+        truncated = true;
+      }
+      if (!name && !command && !url) continue;
+      mcp.push({
+        ...(name !== undefined ? { name } : {}),
+        ...(command !== undefined ? { command } : {}),
+        ...(url !== undefined ? { url } : {}),
+      });
+    }
+    truncated = truncated || m.mcp.length > MAX_MANIFEST_LIST;
+    // Same determinism rule as the flat lists, keyed on the whole entry.
+    mcp.sort((a, b) => {
+      const ka = JSON.stringify([a.name, a.command, a.url]);
+      const kb = JSON.stringify([b.name, b.command, b.url]);
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+  }
+
+  const envRaw = Array.isArray(m.envKeys) ? m.envKeys : [];
+  const envKeys: string[] = [];
+  for (const raw of envRaw.slice(0, MAX_MANIFEST_LIST)) {
+    const key = sanitizeEnvKey(raw);
+    if (key) envKeys.push(key);
+    // A refused entry (an env VALUE, a malformed name) is still something the
+    // machine reported; the row must not present the cut list as the whole.
+    else if (reportedString(raw)) truncated = true;
+  }
+  envKeys.sort();
+  truncated = truncated || envRaw.length > MAX_MANIFEST_LIST;
+
+  const bin = take(m.bin, MAX_PATH_CHARS, "source");
+  const scripts = take(m.scripts, MAX_PATH_CHARS, "source");
+  const hooks = take(m.hooks, MAX_PATH_CHARS, "source");
+  // Claude Code spells it `allowed-tools` in frontmatter; the contract spells
+  // it `allowedTools`. Both arrive, depending on which layer parsed the file.
+  const allowedTools = take(m.allowedTools ?? m["allowed-tools"], MAX_NAME_CHARS, "text");
+
+  // Empty lists are OMITTED, not stored as `[]`, so "nothing observed" and
+  // "field absent" canonicalize — and therefore hash — identically.
+  return {
+    manifest: {
+      ...(hasComponents ? { components } : {}),
+      ...(bin ? { bin } : {}),
+      ...(scripts ? { scripts } : {}),
+      ...(hooks ? { hooks } : {}),
+      ...(mcp.length > 0 ? { mcp } : {}),
+      ...(allowedTools ? { allowedTools } : {}),
+      ...(envKeys.length > 0 ? { envKeys } : {}),
+    },
+    truncated,
+  };
+}
+
+/**
+ * The surfaces a raw manifest's STRUCTURE implies, read before any sanitizing.
+ *
+ * The stored manifest is the sanitized one, and the sanitizer REFUSES values —
+ * a control character, an env-assignment prefix (`NODE_ENV=production node
+ * server.js` is an everyday MCP command), an over-cap path. If surfaces were
+ * derived only from what survived, one refused byte would strip
+ * `mcp_stdio_command` from the row: the consent sheet would then under-state
+ * risk, and two machines refusing identically would even "confirm" the
+ * degraded row. That is the exact lowering `deriveExecutionSurfaces`' additive
+ * rule exists to prevent, so structure is read here, raw, and folded into the
+ * declared list — sanitizing decides only which bytes we store.
+ *
+ * The checks mirror `deriveExecutionSurfaces` field for field; only the
+ * "counts as present" test differs, because these bytes are unvalidated:
+ * a non-blank string was reported, whatever the sanitizer thinks of it.
+ * Over-raising is safe — a surface added wrongly costs a consent prompt,
+ * one removed wrongly removes the prompt.
+ */
+export function structuralSurfaces(raw: unknown): ExecutionSurface[] {
+  if (!isRecord(raw)) return [];
+  const listed = (value: unknown): boolean =>
+    Array.isArray(value) && value.some(reportedString);
+  const found: ExecutionSurface[] = [];
+  if (listed(raw.bin)) found.push("ships_bin");
+  if (listed(raw.scripts)) found.push("ships_scripts");
+  if (listed(raw.hooks)) found.push("declares_hooks");
+  if (listed(raw.allowedTools) || listed(raw["allowed-tools"])) found.push("declares_allowed_tools");
+  if (Array.isArray(raw.mcp)) {
+    // The whole array, not the stored slice: an entry past the length cap is
+    // still an MCP server this machine runs.
+    for (const entry of raw.mcp) {
+      if (!isRecord(entry)) continue;
+      if (reportedString(entry.command)) found.push("mcp_stdio_command");
+      if (reportedString(entry.url)) found.push("mcp_remote_url");
+    }
+  }
+  return found;
+}
+
+/**
+ * Store one machine's raw observation of one capability, deriving everything a
+ * trust decision will later read.
+ *
+ * The daemon submits RAW material only — the parsed manifest, `claude plugin
+ * details` output, the marketplace entry. This mutation computes
+ * `manifest_hash` with the shared `manifestHash` from what it STORED, and
+ * derives the surfaces with the shared `deriveExecutionSurfaces` from the
+ * stored manifest PLUS the raw structure (`structuralSurfaces` — so a value
+ * the sanitizer refused still raises the surface it implied). A hash or
+ * surface list in the payload is ignored, with one asymmetry: a declared
+ * surface list may only RAISE risk (the shared derive folds it in additively).
+ * Otherwise a publisher declares `surfaces: ["prose"]` on an entry whose
+ * config runs `npx -y @evil/thing` and the consent sheet says "markdown only"
+ * — or a compromised machine lowers the surfaces on a row and recomputes the
+ * hash to match.
+ *
+ * Provenance is "device", and one device's word is not team shareable:
+ * `confirmed` turns true only when a second, different machine reports the
+ * same manifest hash. A changed hash resets the agreement to the machine that
+ * reported it — agreement is per manifest, not per name.
+ *
+ * Internal on purpose: the caller (the daemon's authenticated report path)
+ * resolved the user; this mutation never reads auth.
+ */
+export const ingestObservation = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    device_id: v.string(),
+    client: v.string(),
+    /** `{ kind, name, description?, manifest?, surfaces? }` as JSON — permissive
+     *  for the same reason `entries_json` is: daemons run at mixed versions. */
+    raw_json: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const deviceId = identityText(args.device_id, 200);
+    if (!deviceId) return { status: "rejected" as const, reason: "invalid_device_id" };
+    const client = identityText(args.client, 40);
+    if (!client) return { status: "rejected" as const, reason: "invalid_client" };
+    if (args.raw_json.length > MAX_REPORT_CHARS) {
+      return { status: "rejected" as const, reason: "payload_too_large" };
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(args.raw_json);
+    } catch {
+      return { status: "rejected" as const, reason: "unparseable_json" };
+    }
+    if (!isRecord(raw)) return { status: "rejected" as const, reason: "unparseable_json" };
+
+    // Kind and name are the row's index key, so they take the identity class:
+    // refused over their caps. Clipped, two different over-long names would
+    // address ONE row and thrash it — each re-observation reads as a manifest
+    // change and resets the other's device agreement.
+    const kind = identityText(raw.kind, 40);
+    const name = identityText(raw.name, MAX_NAME_CHARS);
+    // No identity, no row — same rule as the inventory. The kind stays an open
+    // string (see `normalizeItem`); only the identity is non-negotiable.
+    if (!kind || !name) return { status: "rejected" as const, reason: "missing_identity" };
+    const description = text(raw.description, MAX_DESCRIPTION_CHARS);
+
+    // Accept the manifest nested (the usual shape) or flattened onto the
+    // observation (a bare `claude plugin details` parse).
+    const rawManifest = isRecord(raw.manifest) ? raw.manifest : raw;
+    const { manifest, truncated } = normalizeManifest(rawManifest);
+    const declared = Array.isArray(raw.surfaces)
+      ? (raw.surfaces.filter(isExecutionSurface) as ExecutionSurface[])
+      : [];
+    // Two additive-only signals on top of the stored manifest: what the
+    // publisher declared, and what the RAW structure implies. The second is
+    // what stops a sanitizer refusal — one bell character in a command —
+    // from lowering the surfaces consent is granted against.
+    const surfaces: string[] = deriveExecutionSurfaces(manifest, [
+      ...declared,
+      ...structuralSurfaces(rawManifest),
+    ]);
+    const hash = manifestHash(manifest);
+    const manifestJson = JSON.stringify(manifest);
+
+    const db = capDb(ctx.db);
+    const now = Date.now();
+    const existing = await db
+      .query("capability_observation")
+      .withIndex("by_user_client_kind_name", (q: any) =>
+        q.eq("user_id", args.user_id).eq("client", client).eq("kind", kind).eq("name", name),
+      )
+      .first();
+
+    if (existing) {
+      if (existing.manifest_hash === hash) {
+        const knownDevice = existing.device_ids.includes(deviceId);
+        const sameSide =
+          (existing.description ?? undefined) === description &&
+          (existing.truncated ?? false) === truncated;
+        if (knownDevice && sameSide) {
+          // The gate: a byte-identical re-observation writes nothing until the
+          // row is an hour stale — same contract as `reportInventory`.
+          if (now - existing.observed_at < LIVENESS_WRITE_INTERVAL_MS) {
+            return { status: "unchanged" as const, manifest_hash: hash, confirmed: existing.confirmed };
+          }
+          await db.patch(existing._id, { observed_at: now });
+          return { status: "refreshed" as const, manifest_hash: hash, confirmed: existing.confirmed };
+        }
+        // A NEW device agreeing is the event `confirmed` exists for. The list
+        // stops growing at its cap — by then agreement is long proven.
+        const deviceIds =
+          knownDevice || existing.device_ids.length >= MAX_OBSERVATION_DEVICES
+            ? existing.device_ids
+            : [...existing.device_ids, deviceId];
+        const confirmed = existing.confirmed || deviceIds.length >= 2;
+        await db.patch(existing._id, {
+          device_ids: deviceIds,
+          confirmed,
+          description,
+          truncated: truncated || undefined,
+          observed_at: now,
+        });
+        return { status: "updated" as const, manifest_hash: hash, confirmed };
+      }
+      // The manifest CHANGED. Surfaces and hash are re-derived from the new
+      // bytes, and the agreement resets to the one machine that saw them —
+      // otherwise a capability could keep its "confirmed" badge across an
+      // update nobody else has verified.
+      await db.patch(existing._id, {
+        description,
+        manifest_json: manifestJson,
+        manifest_hash: hash,
+        surfaces,
+        device_ids: [deviceId],
+        confirmed: false,
+        truncated: truncated || undefined,
+        observed_at: now,
+      });
+      return { status: "updated" as const, manifest_hash: hash, confirmed: false };
+    }
+
+    // First sighting. Bound how many observation rows one (user, client) may
+    // hold — checked only here, so re-observation never pays for the count.
+    const clientRows = await db
+      .query("capability_observation")
+      .withIndex("by_user_client_kind_name", (q: any) =>
+        q.eq("user_id", args.user_id).eq("client", client),
+      )
+      .take(MAX_OBSERVATION_ROWS_PER_CLIENT);
+    if (clientRows.length >= MAX_OBSERVATION_ROWS_PER_CLIENT) {
+      return { status: "rejected" as const, reason: "observation_cap_reached" };
+    }
+
+    await db.insert("capability_observation", {
+      // Same type-level bridge as `capability_state` — see the note there.
+      user_id: args.user_id as unknown as string,
+      client,
+      kind,
+      name,
+      description,
+      manifest_json: manifestJson,
+      manifest_hash: hash,
+      surfaces,
+      provenance: "device",
+      device_ids: [deviceId],
+      confirmed: false,
+      truncated: truncated || undefined,
+      observed_at: now,
+    });
+    return { status: "created" as const, manifest_hash: hash, confirmed: false };
+  },
+});
+
+/* ==========================================================================
  * webList — what each of my machines last reported
  * ========================================================================== */
 
@@ -507,7 +973,14 @@ export const webList = query({
     if (!userId) return { items: [] as any[], truncated: false };
 
     const db = capDb(ctx.db);
-    const deviceId = text(args.device_id, 200);
+    // Identity class, like every device id in this module. A filter the
+    // sanitizer refuses names a machine that cannot exist (the write path
+    // refused the same bytes), so the honest answer is an empty fleet — the
+    // truncating class would instead drop the filter and list every machine.
+    const deviceId = identityText(args.device_id, 200);
+    if (args.device_id !== undefined && args.device_id.trim() !== "" && !deviceId) {
+      return { items: [] as any[], truncated: false };
+    }
     const rows = await db
       .query("capability_state")
       .withIndex("by_user_device_client_scope", (q: any) => {
@@ -651,10 +1124,14 @@ function capabilityIdentity(
   name: unknown,
   meta?: Record<string, unknown>,
 ): string | undefined {
-  const base = text(name, MAX_NAME_CHARS);
+  // Identity class, never the truncating text class: two over-long names that
+  // share a 200-char prefix would clip to the SAME key and fold into one row,
+  // masking whatever drift the second one carried. Refusal drops each into
+  // "no identity, no row" instead — the honest loss.
+  const base = identityText(name, MAX_NAME_CHARS);
   if (!base) return undefined;
   if (kind !== "plugin" || base.includes("@")) return base;
-  const marketplace = text(meta?.marketplace, MAX_NAME_CHARS);
+  const marketplace = identityText(meta?.marketplace, MAX_NAME_CHARS);
   return marketplace ? `${base}@${marketplace}` : base;
 }
 
@@ -771,7 +1248,8 @@ export function foldFleet(
       meta?: unknown;
     },
   ) => {
-    const kind = text(rawKind, 40);
+    // Same identity rules as `normalizeItem`: the kind is half the row key.
+    const kind = identityText(rawKind, 40);
     const meta = isRecord(opts.meta) ? opts.meta : undefined;
     const identity = kind ? capabilityIdentity(kind, rawName, meta) : undefined;
     if (!kind || !identity) return;
@@ -1105,23 +1583,13 @@ export const webFleetDiff = query({
  * ========================================================================== */
 
 /**
- * Which slug prefix each source owns.
+ * Which slug prefix each source owns — the shared contract's own table.
  *
  * Checked rather than trusted for one reason: slugs render as identities, so a
  * marketplace registered as `builtin` would otherwise publish rows that look
- * like ours. A copy of `CAPABILITY_SOURCE_PREFIX` — see the barrel note at the
- * top of the file.
+ * like ours.
  */
-const SOURCE_PREFIX: Record<string, string> = {
-  builtin: "builtin",
-  marketplace: "mkt",
-  git: "git",
-  mcp_registry: "mcp",
-  authored: "authored",
-};
-
-/** A copy of `MAX_CAPABILITY_SLUG_LENGTH` — see the barrel note at the top. */
-const MAX_SLUG_CHARS = 200;
+const SOURCE_PREFIX: Record<string, string> = CAPABILITY_SOURCE_PREFIX;
 
 /** Entries one ingest call may carry. The caller pages; the mutation stays a
  *  bounded transaction. */
@@ -1175,7 +1643,7 @@ export const upsertCatalogEntries = internalMutation({
     let skipped = 0;
 
     for (const entry of args.entries) {
-      const slug = identityText(entry.slug, MAX_SLUG_CHARS);
+      const slug = identityText(entry.slug, MAX_CAPABILITY_SLUG_LENGTH);
       const name = text(entry.name, MAX_NAME_CHARS);
       const kind = identityText(entry.kind, 40);
       if (!slug || !name || !kind || !slug.startsWith(`${prefix}/`)) {
@@ -1200,12 +1668,10 @@ export const upsertCatalogEntries = internalMutation({
       // The hash covers everything a reader sees, so an ingest that produced the
       // same card writes nothing. Without it a refresh cron rewrites the whole
       // catalog on every run and invalidates every browse subscription with it.
-      row.entry_hash = stableHash(
-        JSON.stringify([
-          row.slug, row.source, row.origin, row.kind, row.name,
-          row.description, row.publisher, row.repo, row.homepage, row.entry_json,
-        ]),
-      );
+      row.entry_hash = canonicalHash([
+        row.slug, row.source, row.origin, row.kind, row.name,
+        row.description, row.publisher, row.repo, row.homepage, row.entry_json,
+      ]);
 
       const existing = await db
         .query("capability_catalog_cache")
@@ -1398,5 +1864,66 @@ export const deleteDeviceState = internalMutation({
       if (rows.length < SWEEP_BATCH) break;
     }
     return { deleted };
+  },
+});
+
+// ------------------------------------------------------------ owner queries
+//
+// The CLI's flat read shape (ct-42827). entries_json stays OPAQUE on this
+// wire: parsing belongs to the shared contract, so the CLI, the web and mobile
+// decode one format by construction instead of three drifting ones. The
+// store's incremental delta shape is a different contract and lives with the
+// web queries, not here.
+
+export const listCapabilityState = query({
+  args: { api_token: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const rows = await ctx.db
+      .query("capability_state")
+      .withIndex("by_user_device_client_scope", (q) => q.eq("user_id", auth.userId))
+      .collect();
+    // Owner-only by construction: the index leads with user_id and the caller
+    // IS the user. No cross-user row can be reached from here.
+    return rows.map((row) => ({
+      device_id: row.device_id,
+      client: row.client,
+      scope_key: row.scope_key,
+      entries_json: row.entries_json,
+      hash: row.entries_hash,
+      reported_at: row.reported_at,
+      client_version: row.client_version ?? null,
+      scan_error: row.last_error ?? null,
+      // dropped_count > 0 is this schema's spelling of "the report was capped".
+      truncated: (row.dropped_count ?? 0) > 0,
+    }));
+  },
+});
+
+export const getDeviceCapabilityState = query({
+  args: {
+    api_token: v.string(),
+    device_id: v.string(),
+    scope_key: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const rows = await ctx.db
+      .query("capability_state")
+      .withIndex("by_user_device_client_scope", (q) =>
+        q.eq("user_id", auth.userId).eq("device_id", args.device_id),
+      )
+      .collect();
+    const scoped =
+      args.scope_key === undefined ? rows : rows.filter((r) => r.scope_key === args.scope_key);
+    return scoped.map((row) => ({
+      client: row.client,
+      scope_key: row.scope_key,
+      entries_json: row.entries_json,
+      hash: row.entries_hash,
+      reported_at: row.reported_at,
+    }));
   },
 });

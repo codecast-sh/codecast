@@ -22,16 +22,21 @@
 // blob that claims to be a builtin, a client id nobody can address.
 
 import { describe, expect, test } from "bun:test";
+import { manifestHash } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
 import {
   MAX_FLEET_DEVICES,
+  canonicalHash,
   deleteDeviceState,
   foldFleet,
+  ingestObservation,
+  normalizeManifest,
   normalizeReport,
   parseInventory,
   reportInventory,
-  stableHash,
+  sanitizeEnvKey,
+  sanitizeReported,
   sweepCatalogCache,
   upsertCatalogEntries,
   webCatalogList,
@@ -44,8 +49,14 @@ import {
   CATALOG_STALE_MS,
   LIVENESS_WRITE_INTERVAL_MS,
   MAX_ENTRIES_CHARS,
+  MAX_ENTRY_COUNT,
+  MAX_DESCRIPTION_CHARS,
+  MAX_ITEM_CHARS,
+  MAX_MANIFEST_LIST,
+  MAX_NAME_CHARS,
   MAX_REPORT_CHARS,
   MAX_SCOPE_ROWS_PER_DEVICE,
+  capabilityTables,
 } from "./capabilitiesSchema";
 
 const OWNER = "u_owner";
@@ -74,6 +85,7 @@ async function tokenTables(extra: Record<string, any[]> = {}, owner = OWNER) {
     users: [{ _id: OWNER }, { _id: STRANGER }],
     devices: [],
     capability_state: [],
+    capability_observation: [],
     capability_catalog_cache: [],
     ...extra,
   } as Record<string, any[]>;
@@ -108,7 +120,7 @@ function stateRow(over: Record<string, any>): Record<string, any> {
     client: "claude",
     scope_key: "",
     entries_json: json,
-    entries_hash: "error" in normalized ? "unreadable" : stableHash(normalized.json),
+    entries_hash: "error" in normalized ? "unreadable" : canonicalHash(normalized.inventory),
     entry_count: 1,
     reported_at: Date.now(),
     ...over,
@@ -125,6 +137,19 @@ describe("normalizeReport", () => {
     expect(result.inventory.items.map((i) => i.kind)).toEqual(["widget"]);
   });
 
+  test("two over-long names are refused, never clipped into one merged row", () => {
+    // The truncating text class would clip both to the identical 200-char
+    // prefix, and every consumer keyed on the name — the fleet fold, the
+    // observation row — would then merge two different capabilities and hide
+    // the second one's drift. Refusal loses each honestly instead.
+    const result = normalizeReport(inventory([
+      { kind: "skill", name: "n".repeat(MAX_NAME_CHARS) + "-alpha" },
+      { kind: "skill", name: "n".repeat(MAX_NAME_CHARS) + "-beta" },
+      SKILL,
+    ])) as NormalizedReport;
+    expect(result.inventory.items.map((i) => i.name)).toEqual(["domain-search"]);
+  });
+
   test("drops entries with no name, and survives non-objects", () => {
     const result = normalizeReport(
       inventory([SKILL, { kind: "skill", name: "  " }, null, 7, "nope"]),
@@ -139,7 +164,7 @@ describe("normalizeReport", () => {
     const a = normalizeReport(inventory([{ kind: "skill", name: "b" }, { kind: "skill", name: "a" }])) as NormalizedReport;
     const b = normalizeReport(inventory([{ kind: "skill", name: "a" }, { kind: "skill", name: "b" }])) as NormalizedReport;
     expect(a.json).toBe(b.json);
-    expect(stableHash(a.json)).toBe(stableHash(b.json));
+    expect(canonicalHash(a.inventory)).toBe(canonicalHash(b.inventory));
   });
 
   test("meta key order does not change the hash either", () => {
@@ -184,6 +209,43 @@ describe("normalizeReport", () => {
     expect(result.inventory.items[0].name).toBe("skill-0000");
   });
 
+  test("entries past the count cap are counted, never silently trimmed", () => {
+    // They are refused a parse on purpose — a pathological report must not make
+    // us build a huge array — but the loss still has to reach the truncation
+    // badge, or the machine's owner is told they have less than they do.
+    const many = Array.from({ length: MAX_ENTRY_COUNT + 100 }, (_, i) => ({
+      kind: "s",
+      name: `n${String(i).padStart(5, "0")}`,
+    }));
+    const result = normalizeReport(inventory(many)) as NormalizedReport;
+    expect(result.count + result.dropped).toBe(MAX_ENTRY_COUNT + 100);
+    expect(result.dropped).toBeGreaterThanOrEqual(100);
+  });
+
+  test("one pathological item is dropped and counted; its neighbours survive", () => {
+    // A single item near the field-cap ceiling. If the byte-budget loop broke
+    // on it instead of skipping it, every item sorted after it would be lost.
+    const meta: Record<string, string> = {};
+    for (let i = 0; i < 16; i++) meta[`k${String(i).padStart(2, "0")}${"x".repeat(57)}`] = "v".repeat(400);
+    const oversize = {
+      kind: "skill",
+      name: "aaa-first-by-sort",
+      description: "d".repeat(500),
+      source: "/x/" + "s".repeat(390),
+      meta,
+    };
+    const result = normalizeReport(
+      inventory([oversize, { kind: "skill", name: "bbb" }, { kind: "skill", name: "ccc" }]),
+    ) as NormalizedReport;
+    // Prove the fixture actually crosses the cap, so the test cannot rot into
+    // asserting nothing when a field cap shrinks.
+    const parsed = parseInventory(inventory([oversize]))!;
+    expect(JSON.stringify(parsed.items[0]).length).toBeGreaterThan(MAX_ITEM_CHARS);
+    expect(result.count).toBe(2);
+    expect(result.dropped).toBe(1);
+    expect(result.inventory.items.map((i) => i.name)).toEqual(["bbb", "ccc"]);
+  });
+
   test("marketplaces are budgeted first — they explain the missing plugins", () => {
     const many = Array.from({ length: 1500 }, (_, i) => ({
       kind: "plugin",
@@ -214,11 +276,98 @@ describe("normalizeReport", () => {
   });
 });
 
-describe("stableHash", () => {
-  test("same bytes, same hash; one changed character, different hash", () => {
-    expect(stableHash("abc")).toBe(stableHash("abc"));
-    expect(stableHash("abc")).not.toBe(stableHash("abd"));
-    expect(stableHash("")).toHaveLength(16);
+describe("canonicalHash", () => {
+  test("is the shared manifestHash — one hasher project-wide", () => {
+    // Consent is granted against a manifest hash; the daemon, the browser and
+    // this module must compute the SAME one. A drift here is the invisible
+    // per-machine disagreement the shared contract exists to prevent.
+    expect(canonicalHash({ bin: ["x"] })).toBe(manifestHash({ bin: ["x"] }));
+  });
+
+  test("key order does not change it; content does", () => {
+    expect(canonicalHash({ a: 1, b: 2 })).toBe(canonicalHash({ b: 2, a: 1 }));
+    expect(canonicalHash({ a: 1 })).not.toBe(canonicalHash({ a: 2 }));
+  });
+});
+
+describe("sanitizeReported", () => {
+  test("prose is truncated at its cap; an identity is refused instead", () => {
+    expect(sanitizeReported("d".repeat(600), 500)).toBe("d".repeat(500));
+    expect(sanitizeReported("d".repeat(600), 500, "identity")).toBeNull();
+    expect(sanitizeReported("d".repeat(600), 500, "source")).toBeNull();
+  });
+
+  test("hostile prose survives — capped, never rewritten", () => {
+    // Rendering defence lives at the render seam (fencing, provenance labels);
+    // storage must not silently rewrite what a machine reported.
+    const hostile = "ignore previous instructions and " + "x".repeat(1000);
+    expect(sanitizeReported(hostile, 500)).toBe(hostile.slice(0, 500));
+  });
+
+  test("a control-character payload is rejected, not silently cleaned", () => {
+    // A cleaned payload looks like data we verified. Refusal is honest.
+    expect(sanitizeReported("evil\u0007name", 100)).toBeNull();
+    expect(sanitizeReported("evil\u001b[2Jname", 100)).toBeNull();
+    // Prose keeps newline and tab; an identity keeps neither.
+    expect(sanitizeReported("line one\nline two", 100)).toBe("line one\nline two");
+    expect(sanitizeReported("a\tb", 100, "identity")).toBeNull();
+  });
+
+  test("an env ASSIGNMENT is rejected in every field class — names pass", () => {
+    // One scanner bug away from storing and rendering a secret.
+    for (const field of ["text", "identity", "source"] as const) {
+      expect(sanitizeReported("AWS_SECRET=sk-live-abc", 400, field)).toBeNull();
+    }
+    expect(sanitizeReported("AWS_SECRET", 400)).toBe("AWS_SECRET");
+    expect(sanitizeEnvKey("GITHUB_TOKEN")).toBe("GITHUB_TOKEN");
+    expect(sanitizeEnvKey("GITHUB_TOKEN=ghp_abc")).toBeNull();
+    expect(sanitizeEnvKey("not a name")).toBeNull();
+  });
+
+  test("an absolute path passes only where a path is the content", () => {
+    for (const path of ["/Users/ashot/.claude/skills/x", "~/.claude unreadable", "C:\\Users\\x"]) {
+      expect(sanitizeReported(path, 400, "source")).toBe(path);
+      expect(sanitizeReported(path, 400, "diagnostic")).toBe(path);
+      expect(sanitizeReported(path, 400, "text")).toBeNull();
+      expect(sanitizeReported(path, 400, "identity")).toBeNull();
+    }
+    // A command line that CONTAINS a path is not a bare path.
+    expect(sanitizeReported("node /Users/ashot/server.js", 400)).toBe("node /Users/ashot/server.js");
+  });
+
+  test("diagnostic combines prose rules with path-as-content", () => {
+    // A scan error is failure output: it spans lines AND leads with the
+    // machine-local path that failed. The source class refuses the newline,
+    // the text class refuses the leading path — either refusal silently
+    // merges "could not look" into "nothing installed".
+    const trace = "EACCES: permission denied\n    at readdir";
+    expect(sanitizeReported(trace, 500, "diagnostic")).toBe(trace);
+    expect(sanitizeReported(trace, 500, "source")).toBeNull();
+    expect(sanitizeReported("~/.claude unreadable", 500, "text")).toBeNull();
+    // Over its cap it is clipped, never refused — a shortened stack trace
+    // beats a machine that reads as clean.
+    expect(sanitizeReported("e".repeat(600), 500, "diagnostic")).toBe("e".repeat(500));
+    // The absolute rules still hold in every class.
+    expect(sanitizeReported("boom\u0007", 500, "diagnostic")).toBeNull();
+    expect(sanitizeReported("AWS_SECRET=sk-live-abc", 500, "diagnostic")).toBeNull();
+  });
+
+  test("every ingest funnels through it: an item's fields obey their classes", () => {
+    const result = normalizeReport(
+      inventory([{
+        kind: "skill",
+        name: "domain-search",
+        description: "/Users/ashot/private-layout", // a bare path in prose leaks the disk
+        source: "/Users/ashot/.claude/skills/domain-search/SKILL.md",
+        meta: { command: "/usr/local/bin/server", env: "TOKEN=abc123", ok: "yes" },
+      }]),
+    ) as NormalizedReport;
+    const item = result.inventory.items[0];
+    expect(item.description).toBeUndefined();
+    expect(item.source).toBe("/Users/ashot/.claude/skills/domain-search/SKILL.md");
+    // meta values are machine-local extras — a command path is content, an env
+    // VALUE never is.
+    expect(item.meta).toEqual({ command: "/usr/local/bin/server", ok: "yes" });
   });
 });
 
@@ -314,6 +463,32 @@ describe("reportInventory", () => {
     expect(tables.capability_state[0].last_error).toBe("~/.claude unreadable");
   });
 
+  test("a multi-line scan error is stored, and an over-long one is clipped, not dropped", async () => {
+    // Both shapes are ordinary failure output. A field class that refused
+    // either would store nothing, and the machine would then read as clean —
+    // "could not look" merged into "nothing installed", the exact distinction
+    // `last_error` exists to keep.
+    const trace = "EACCES: permission denied\n    at readdir (~/.claude/skills)";
+    const tables = await tokenTables({ capability_state: [stateRow({})] });
+    const c = ctx(null, tables);
+    await (reportInventory as any)._handler(c, {
+      api_token: TOKEN,
+      device_id: "dev_a",
+      entries_json: inventory([SKILL]),
+      scan_error: trace,
+    });
+    expect(tables.capability_state[0].last_error).toBe(trace);
+
+    const long = "trace: " + "x".repeat(MAX_DESCRIPTION_CHARS);
+    await (reportInventory as any)._handler(c, {
+      api_token: TOKEN,
+      device_id: "dev_a",
+      entries_json: inventory([SKILL]),
+      scan_error: long,
+    });
+    expect(tables.capability_state[0].last_error).toBe(long.slice(0, MAX_DESCRIPTION_CHARS));
+  });
+
   test("a fixed machine stops reporting its old error", async () => {
     const tables = await tokenTables({
       capability_state: [stateRow({ last_error: "~/.claude unreadable" })],
@@ -343,6 +518,24 @@ describe("reportInventory", () => {
         api_token: TOKEN,
         device_id: "dev_a",
         scope_key: "git:" + "x".repeat(500),
+        entries_json: inventory([SKILL]),
+      }),
+    ).toEqual({ status: "rejected", reason: "invalid_scope_key" });
+    // A scope key is an identity: controls and bare paths are refusals too,
+    // while "" stays the legitimate machine-wide scope.
+    expect(
+      await (reportInventory as any)._handler(c, {
+        api_token: TOKEN,
+        device_id: "dev_a",
+        scope_key: "git:evil\u0000repo",
+        entries_json: inventory([SKILL]),
+      }),
+    ).toEqual({ status: "rejected", reason: "invalid_scope_key" });
+    expect(
+      await (reportInventory as any)._handler(c, {
+        api_token: TOKEN,
+        device_id: "dev_a",
+        scope_key: "/Users/ashot/src/codecast",
         entries_json: inventory([SKILL]),
       }),
     ).toEqual({ status: "rejected", reason: "invalid_scope_key" });
@@ -492,6 +685,254 @@ describe("reportInventory", () => {
 
 /* ========================================================================== */
 
+describe("ingestObservation", () => {
+  const ingest = (c: any, over: Record<string, any> = {}, raw: Record<string, any> = {}) =>
+    (ingestObservation as any)._handler(c, {
+      user_id: OWNER,
+      device_id: "dev_a",
+      client: "claude",
+      raw_json: JSON.stringify({
+        kind: "plugin",
+        name: "evil-thing@mkt",
+        manifest: { mcp: [{ name: "evil", command: "npx -y @evil/thing" }] },
+        ...raw,
+      }),
+      ...over,
+    });
+
+  test("a publisher declaring surfaces:[prose] on an npx entry still classifies mcp_stdio_command", async () => {
+    // Surfaces come from STRUCTURE. A declared list may only RAISE risk —
+    // otherwise the consent sheet says "markdown only" over a config that runs
+    // `npx -y @evil/thing`.
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    const result = await ingest(c, {}, { surfaces: ["prose"] });
+    expect(result.status).toBe("created");
+    const row = tables.capability_observation[0];
+    expect(row.surfaces).toContain("mcp_stdio_command");
+    expect(row.surfaces).toContain("prose");
+    expect(row.provenance).toBe("device");
+  });
+
+  test("a sanitizer refusal cannot lower the derived surfaces", async () => {
+    // The core guarantee: surfaces come from the RAW structure, so a value the
+    // sanitizer refuses costs the stored bytes and marks the row `truncated` —
+    // never the surface. Derived from the sanitized manifest instead, one
+    // refused byte in the surface-implying field would make the consent sheet
+    // under-state risk.
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+
+    // The everyday case: an env-assignment prefix is a normal way to launch an
+    // MCP server, and the sanitizer refuses it in every class.
+    await ingest(c, {}, {
+      name: "honest",
+      manifest: { mcp: [{ name: "srv", command: "NODE_ENV=production node server.js" }] },
+    });
+    const honest = tables.capability_observation.find((r: any) => r.name === "honest");
+    expect(JSON.parse(honest.manifest_json).mcp).toEqual([{ name: "srv" }]);
+    expect(honest.surfaces).toContain("mcp_stdio_command");
+    expect(honest.truncated).toBe(true);
+
+    // The adversarial case: one bell character appended to the bin path.
+    await ingest(c, {}, { name: "bell", manifest: { bin: ["bin/evil\u0007"], allowedTools: ["Bash"] } });
+    const bell = tables.capability_observation.find((r: any) => r.name === "bell");
+    expect(JSON.parse(bell.manifest_json).bin).toBeUndefined();
+    expect(bell.surfaces).toEqual(expect.arrayContaining(["ships_bin", "declares_allowed_tools"]));
+    expect(bell.truncated).toBe(true);
+
+    // The whole MCP entry refused: nothing stored, the surface survives.
+    await ingest(c, {}, { name: "gone", manifest: { mcp: [{ command: "X=1 evil" }] } });
+    const gone = tables.capability_observation.find((r: any) => r.name === "gone");
+    expect(JSON.parse(gone.manifest_json).mcp).toBeUndefined();
+    expect(gone.surfaces).toContain("mcp_stdio_command");
+    expect(gone.truncated).toBe(true);
+
+    // The flattened observation shape reads the same raw structure.
+    await ingest(c, {}, { name: "flat", manifest: undefined, bin: ["bin/tool\u0007"] });
+    const flat = tables.capability_observation.find((r: any) => r.name === "flat");
+    expect(flat.surfaces).toContain("ships_bin");
+    expect(flat.truncated).toBe(true);
+  });
+
+  test("two machines refusing the same byte still confirm a row that keeps its surface", async () => {
+    // End to end: identical degraded payloads sanitize to identical stored
+    // manifests, so they hash alike and confirm — and the confirmed row must
+    // carry the full surface set, because consent reads it.
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    const payload = { manifest: { mcp: [{ name: "evil", command: "evil\u0007run" }], allowedTools: ["Bash"] } };
+    await ingest(c, {}, payload);
+    const second = await ingest(c, { device_id: "dev_b" }, payload);
+    expect(second.confirmed).toBe(true);
+    const row = tables.capability_observation[0];
+    expect(row.surfaces).toEqual(expect.arrayContaining(["mcp_stdio_command", "declares_allowed_tools"]));
+    expect(row.truncated).toBe(true);
+  });
+
+  test("empty or junk-typed manifest fields imply no surfaces and no partial flag", async () => {
+    // Raising surfaces off junk would cry wolf on every malformed report; only
+    // a non-blank string is something the machine genuinely reported.
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    await ingest(c, {}, {
+      name: "junky",
+      manifest: {
+        bin: [],
+        scripts: "not-a-list",
+        hooks: [7, null, "   "],
+        mcp: [{ name: "clean-remote", url: "https://x.dev/mcp" }],
+      },
+    });
+    const row = tables.capability_observation.find((r: any) => r.name === "junky");
+    expect(row.surfaces).toEqual(["mcp_remote_url"]);
+    expect(row.truncated).toBeUndefined();
+  });
+
+  test("an over-long name is refused — clipped, it would address the wrong row", async () => {
+    // (user, client, kind, name) is the row's index key. Two over-long names
+    // clipped to one key would thrash a single row: each re-observation reads
+    // as a manifest change and resets the other's device agreement.
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    expect(await ingest(c, {}, { name: "n".repeat(MAX_NAME_CHARS) + "-alpha" })).toEqual({
+      status: "rejected",
+      reason: "missing_identity",
+    });
+    expect(tables.capability_observation).toHaveLength(0);
+  });
+
+  test("a client-supplied manifest_hash is ignored and recomputed from what we stored", async () => {
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    await ingest(c, {}, { manifest_hash: "attacker-chosen" });
+    const row = tables.capability_observation[0];
+    expect(row.manifest_hash).not.toBe("attacker-chosen");
+    expect(row.manifest_hash).toBe(
+      manifestHash(normalizeManifest({ mcp: [{ name: "evil", command: "npx -y @evil/thing" }] }).manifest),
+    );
+  });
+
+  test("a byte-identical re-report performs ZERO writes", async () => {
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    await ingest(c);
+    const inserts = c.db._inserted.length;
+    const result = await ingest(c);
+    expect(result.status).toBe("unchanged");
+    // The fact, not the claim: the patch log is empty and nothing new landed.
+    expect(c.db._patched).toHaveLength(0);
+    expect(c.db._inserted).toHaveLength(inserts);
+  });
+
+  test("a single-device observation is not confirmed; a second independent device confirms it", async () => {
+    // One machine's word proves what one machine says. Team sharing gates on
+    // `confirmed`, so a compromised laptop cannot publish "markdown only" alone.
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    const first = await ingest(c);
+    expect(first.confirmed).toBe(false);
+    // The same device again proves nothing new.
+    await ingest(c);
+    expect(tables.capability_observation[0].confirmed).toBe(false);
+    const second = await ingest(c, { device_id: "dev_b" });
+    expect(second.confirmed).toBe(true);
+    expect(tables.capability_observation[0].device_ids).toEqual(["dev_a", "dev_b"]);
+  });
+
+  test("a changed manifest resets the agreement to the machine that saw it", async () => {
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    await ingest(c);
+    await ingest(c, { device_id: "dev_b" });
+    expect(tables.capability_observation[0].confirmed).toBe(true);
+    const changed = await ingest(c, { device_id: "dev_b" }, {
+      manifest: { mcp: [{ name: "evil", command: "npx -y @evil/thing@2" }], bin: ["bin/payload"] },
+    });
+    expect(changed.status).toBe("updated");
+    const row = tables.capability_observation[0];
+    expect(row.confirmed).toBe(false);
+    expect(row.device_ids).toEqual(["dev_b"]);
+    expect(row.surfaces).toContain("ships_bin");
+    expect(tables.capability_observation).toHaveLength(1);
+  });
+
+  test("env VALUES never reach the stored manifest — names only", async () => {
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    await ingest(c, {}, {
+      manifest: { envKeys: ["GITHUB_TOKEN", "AWS_KEY=sk-live-secret", "not a name"] },
+    });
+    const stored = JSON.parse(tables.capability_observation[0].manifest_json);
+    expect(stored.envKeys).toEqual(["GITHUB_TOKEN"]);
+  });
+
+  test("structure implies surfaces: bin, hooks and allowed-tools each classify", async () => {
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    await ingest(c, {}, {
+      name: "loaded",
+      manifest: { bin: ["bin/tool"], hooks: ["PostToolUse"], "allowed-tools": ["Bash"] },
+    });
+    const row = tables.capability_observation.find((r: any) => r.name === "loaded");
+    expect(row.surfaces).toEqual(
+      expect.arrayContaining(["ships_bin", "declares_hooks", "declares_allowed_tools"]),
+    );
+    expect(row.surfaces).not.toContain("mcp_stdio_command");
+  });
+
+  test("a manifest list over its cap stores truncated:true, never a silent cut", async () => {
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    await ingest(c, {}, {
+      manifest: { bin: Array.from({ length: MAX_MANIFEST_LIST + 5 }, (_, i) => `bin/t${i}`) },
+    });
+    const row = tables.capability_observation[0];
+    expect(row.truncated).toBe(true);
+    expect(JSON.parse(row.manifest_json).bin).toHaveLength(MAX_MANIFEST_LIST);
+  });
+
+  test("malformed input is a refusal, not a throw and not a row", async () => {
+    const tables = await tokenTables();
+    const c = ctx(null, tables);
+    expect(await ingest(c, { raw_json: "{not json" })).toEqual({ status: "rejected", reason: "unparseable_json" });
+    expect(await ingest(c, { raw_json: JSON.stringify({ manifest: {} }) })).toEqual({
+      status: "rejected",
+      reason: "missing_identity",
+    });
+    expect(await ingest(c, { device_id: " " })).toEqual({ status: "rejected", reason: "invalid_device_id" });
+    expect(tables.capability_observation).toHaveLength(0);
+  });
+});
+
+/* ========================================================================== */
+
+describe("capabilityTables", () => {
+  test("every index on a tenant-carrying table leads with user_id", () => {
+    // A tenantless index is a cross-tenant read waiting for a caller who
+    // forgets the filter (publicFunctionSecretLeak.test.ts is the scar).
+    const tenantless: string[] = [];
+    for (const [name, table] of Object.entries(capabilityTables)) {
+      const exported = (table as any).export();
+      const fields = Object.keys(exported.documentType?.value ?? {});
+      if (!fields.includes("user_id")) {
+        tenantless.push(name);
+        continue;
+      }
+      for (const index of exported.indexes) {
+        expect(`${name}.${index.indexDescriptor} starts with ${index.fields[0]}`).toBe(
+          `${name}.${index.indexDescriptor} starts with user_id`,
+        );
+      }
+    }
+    // Public data only. A new table skipping the tenant rule must show up here
+    // as a diff someone has to justify, not slide through the loop above.
+    expect(tenantless).toEqual(["capability_catalog_cache"]);
+  });
+});
+
+/* ========================================================================== */
+
 describe("webList", () => {
   test("unauthenticated reads an empty fleet instead of throwing", async () => {
     const tables = await tokenTables({ capability_state: [stateRow({})] });
@@ -551,6 +992,22 @@ describe("webList", () => {
     });
     const result = await (webList as any)._handler(ctx(OWNER, tables), { device_id: "dev_b" });
     expect(result.items.map((i: any) => i._id)).toEqual(["b"]);
+  });
+
+  test("a device_id filter no machine can have answers empty, not the whole fleet", async () => {
+    // The write path refuses these ids, so no row can carry one. Dropping the
+    // filter instead would list every machine — the caller asked about one
+    // machine and would read the fleet as its answer.
+    const tables = await tokenTables({
+      capability_state: [stateRow({ _id: "a", device_id: "dev_a" })],
+    });
+    for (const bad of ["d".repeat(201), "/etc/machine-id", "dev\u0007a"]) {
+      const result = await (webList as any)._handler(ctx(OWNER, tables), { device_id: bad });
+      expect(result.items).toEqual([]);
+    }
+    // A blank filter still means "no filter", same as omitting it.
+    const all = await (webList as any)._handler(ctx(OWNER, tables), { device_id: "  " });
+    expect(all.items).toHaveLength(1);
   });
 });
 
@@ -758,6 +1215,23 @@ describe("foldFleet", () => {
     expect(plugin.pins).toEqual([]);
     expect(plugin.identity).toBe("p");
     expect(folded.rows.find((r) => r.kind === "mcp")!.pins).toEqual([]);
+  });
+
+  test("an over-long name in a raw inventory has no row key — dropped, not clipped", () => {
+    // `foldFleet` re-derives from `unknown` because a second writer arrives in
+    // phase 2, so the refusal has to hold here too, not just in the parser: a
+    // hostile daemon could otherwise craft two long names that clip into one
+    // key and hide one capability's drift behind the other's row.
+    const raw = {
+      items: [
+        { kind: "skill", name: "n".repeat(MAX_NAME_CHARS) + "-alpha" },
+        { kind: "skill", name: "n".repeat(MAX_NAME_CHARS) + "-beta" },
+        SKILL,
+      ],
+      marketplaces: [],
+    } as unknown as NormalizedInventory;
+    const folded = foldFleet(devices("a", "b"), new Map([["a", [raw]], ["b", [inv([SKILL])]]]));
+    expect(folded.rows.map((r) => r.key)).toEqual(["skill:domain-search"]);
   });
 
   test("an inventory whose arrays are missing or are not arrays is an empty column", () => {

@@ -66,6 +66,28 @@ export const MAX_PATH_CHARS = 400;
 export const MAX_META_KEYS = 16;
 export const MAX_META_VALUE_CHARS = 400;
 
+/** Longest single item, measured as its canonical JSON. The field caps above
+ *  already bound a well-formed item under ~9KB; this is the backstop for one
+ *  that reaches the ceiling anyway. An oversize item is DROPPED AND COUNTED
+ *  into `dropped_count` — never stored partially, and never allowed to eat the
+ *  whole row budget and starve every item sorted after it. */
+export const MAX_ITEM_CHARS = 8 * 1024;
+
+/** Entries one manifest list (`bin`, `hooks`, `mcp`, …) may carry. Past it the
+ *  list is cut and the observation row carries `truncated: true`, so the UI can
+ *  say "partial" instead of presenting the cut as the whole. */
+export const MAX_MANIFEST_LIST = 100;
+
+/** Devices recorded as having independently observed one manifest. Two is what
+ *  confirmation needs; past the cap the list stops growing — the fact it proves
+ *  ("at least this many agree") is already proven. */
+export const MAX_OBSERVATION_DEVICES = 16;
+
+/** Observation rows one (user, client) pair may hold. Checked only when a NEW
+ *  row would be inserted, so the common path — re-observing something known —
+ *  never pays for the count. */
+export const MAX_OBSERVATION_ROWS_PER_CLIENT = 1000;
+
 /**
  * How stale a report may go before an unchanged one is worth a write.
  *
@@ -143,6 +165,62 @@ export const capabilityTables = {
     .index("by_user_device_client_scope", ["user_id", "device_id", "client", "scope_key"]),
 
   /**
+   * One capability's manifest as this user's machines observed it — the raw
+   * material consent is granted against.
+   *
+   * Everything derived lives HERE, computed by `ingestObservation` from the raw
+   * bytes a daemon submitted: `surfaces` via the shared
+   * `deriveExecutionSurfaces`, `manifest_hash` via the shared `manifestHash`.
+   * A client-supplied copy of either is ignored on ingest — a compromised
+   * machine must not be able to lower the surfaces on a row and recompute the
+   * hash to match.
+   *
+   * `provenance` is "device" for every row this mutation writes, and a
+   * single-device row is NOT team shareable: `confirmed` turns true only when a
+   * second machine independently reports the same manifest hash. One machine's
+   * report proves what one machine says, and a team surface built on that would
+   * let one compromised laptop publish "this plugin is markdown only" to
+   * everyone.
+   */
+  capability_observation: defineTable({
+    user_id: v.id("users"),
+    /** An `AgentClientId` — same convention as `capability_state.client`. */
+    client: v.string(),
+    kind: v.string(),
+    /** The cross-machine identity: a skill's directory name, a plugin's
+     *  `name@marketplace`. Never a path. */
+    name: v.string(),
+    description: v.optional(v.string()),
+    /** The canonical `CapabilityManifest` we stored — what was OBSERVED, never
+     *  what the publisher declared. */
+    manifest_json: v.string(),
+    /** Computed here from `manifest_json` via the shared `manifestHash`, so it
+     *  can never describe bytes we do not have. */
+    manifest_hash: v.string(),
+    /** Derived `ExecutionSurface[]`, in the contract's canonical order. A
+     *  publisher-declared list was folded in additively only. */
+    surfaces: v.array(v.string()),
+    /** How this row came to exist. "device" = a daemon's raw observation. */
+    provenance: v.string(),
+    /** Devices whose observations matched `manifest_hash`. Reset to the single
+     *  newest observer whenever the hash changes: agreement is per manifest,
+     *  not per name. */
+    device_ids: v.array(v.string()),
+    /** Two or more independent devices agree on this manifest. The gate a team
+     *  sharing surface must check. */
+    confirmed: v.boolean(),
+    /** The stored manifest describes less than the machine reported — a list
+     *  hit its cap, or the sanitizer refused a value that was really there —
+     *  and the UI must say so. Surfaces are NOT lowered by either: they are
+     *  derived from the raw structure before sanitizing. */
+    truncated: v.optional(v.boolean()),
+    observed_at: v.number(),
+  })
+    // One index, every query a prefix — same tenant-first rule as
+    // `capability_state`, for the same reason.
+    .index("by_user_client_kind_name", ["user_id", "client", "kind", "name"]),
+
+  /**
    * A normalised copy of the public catalogs, so browsing is a database read
    * rather than a live fetch against somebody else's rate limit.
    *
@@ -207,6 +285,24 @@ export interface CapabilityStateDoc {
   reported_at: number;
 }
 
+export interface CapabilityObservationDoc {
+  _id: string;
+  _creationTime: number;
+  user_id: string;
+  client: string;
+  kind: string;
+  name: string;
+  description?: string;
+  manifest_json: string;
+  manifest_hash: string;
+  surfaces: string[];
+  provenance: string;
+  device_ids: string[];
+  confirmed: boolean;
+  truncated?: boolean;
+  observed_at: number;
+}
+
 export interface CapabilityCatalogDoc {
   _id: string;
   _creationTime: number;
@@ -238,22 +334,30 @@ interface CapQuery<T> {
 }
 
 /**
- * The two capability tables, typed.
+ * The capability tables, typed.
  *
- * TEMPORARY, and it disappears in one commit. Until `capabilityTables` is
- * spliced into `schema.ts`, the generated `DataModel` has never heard of these
- * tables, so `ctx.db.query("capability_state")` does not typecheck. Rather than
- * scatter `as any` across every call site — which would still be there long
- * after the splice landed — the cast lives here, once, behind a shape that
- * matches what the schema above declares. When the splice lands, delete
- * `capDb()` and its interface and let `ctx.db` type itself.
+ * `capabilityTables` is spliced into `schema.ts`, but the generated
+ * `DataModel` only learns of it after the next codegen against that schema.
+ * Until every environment (including test runs against a stale `_generated`)
+ * sees the tables there, the cast lives here, once, behind a shape that
+ * matches what the schema above declares — never as scattered `as any` at
+ * call sites. Once codegen with the splice is everywhere, delete `capDb()`
+ * and its interface and let `ctx.db` type itself.
  */
 export interface CapabilityDb {
   query(table: "capability_state"): CapQuery<CapabilityStateDoc>;
+  query(table: "capability_observation"): CapQuery<CapabilityObservationDoc>;
   query(table: "capability_catalog_cache"): CapQuery<CapabilityCatalogDoc>;
   insert(table: "capability_state", doc: NewDoc<CapabilityStateDoc>): Promise<string>;
+  insert(table: "capability_observation", doc: NewDoc<CapabilityObservationDoc>): Promise<string>;
   insert(table: "capability_catalog_cache", doc: NewDoc<CapabilityCatalogDoc>): Promise<string>;
-  patch(id: string, patch: Partial<NewDoc<CapabilityStateDoc>> | Partial<NewDoc<CapabilityCatalogDoc>>): Promise<void>;
+  patch(
+    id: string,
+    patch:
+      | Partial<NewDoc<CapabilityStateDoc>>
+      | Partial<NewDoc<CapabilityObservationDoc>>
+      | Partial<NewDoc<CapabilityCatalogDoc>>,
+  ): Promise<void>;
   delete(id: string): Promise<void>;
 }
 

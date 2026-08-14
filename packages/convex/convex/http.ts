@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { auth } from "./auth";
 import { internal, api } from "./_generated/api";
+import { callback as googleOAuthCallback, GOOGLE_CALLBACK_PATH } from "./googleOAuth";
 
 const http = httpRouter();
 
@@ -44,6 +45,14 @@ async function ipRateLimited(
   return null;
 }
 
+
+// Google OAuth callback (Gmail connector). GET because Google redirects the
+// browser here; the handler validates state and closes the popup.
+http.route({
+  path: GOOGLE_CALLBACK_PATH,
+  method: "GET",
+  handler: googleOAuthCallback,
+});
 
 http.route({
   path: "/cli/exchange-token",
@@ -1426,6 +1435,77 @@ http.route({
   }),
 });
 
+// `cast decide` — an agent hands its human one explicit decision (question +
+// options + context, optionally a published HTML report). Distinct from
+// /cli/decisions (the architectural decision LOG): this is a pending question.
+http.route({
+  path: "/cli/decide",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    try {
+      const body = await request.json();
+      const { api_token, session_id, question, options, context_md, report_slug, blocking, default_option } = body;
+
+      if (!api_token || !session_id || !question || !Array.isArray(options)) {
+        return new Response(
+          JSON.stringify({ error: "Missing required fields: api_token, session_id, question, options" }),
+          { status: 400, headers: { "Content-Type": "application/json", ...corsHeaders } }
+        );
+      }
+
+      const result = await ctx.runMutation(api.sessionDecisions.ask, {
+        api_token,
+        session_id,
+        question,
+        options,
+        context_md,
+        report_slug,
+        blocking,
+        default_option,
+      });
+
+      if (result.error) {
+        return new Response(JSON.stringify({ error: result.error }), {
+          status: result.error === "Unauthorized" ? 401 : 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      console.error("Decide error:", error);
+      return new Response(
+        JSON.stringify({ error: "Internal error", details: error instanceof Error ? error.message : String(error) }),
+        { status: 500, headers: { "Content-Type": "application/json", ...corsHeaders } }
+      );
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/decide",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
 http.route({
   path: "/cli/patterns",
   method: "POST",
@@ -2579,6 +2659,28 @@ http.route({
         });
       }
 
+      // Capability inventory, when the daemon attached one. Deviation from
+      // ct-42826's literal wording (an arg on daemonHeartbeat): forwarding to
+      // reportInventory reuses its whole pipeline — sanitizer, scope cap, hash
+      // gate, per-scope docs — instead of duplicating it inside users.ts. The
+      // daemon only attaches the payload on change or the hourly floor, so this
+      // is not a per-beat write; and a failure here must not fail presence,
+      // which is why it sits after the heartbeat result, fire-and-log.
+      if (body.capability_state && typeof body.capability_state === "object") {
+        try {
+          await ctx.runMutation(api.capabilities.reportInventory, {
+            api_token,
+            device_id: body.device_id,
+            entries_json: JSON.stringify({
+              items: body.capability_state.items ?? [],
+              marketplaces: body.capability_state.marketplaces ?? [],
+            }),
+          });
+        } catch (err) {
+          console.error("capability_state ingest failed:", err);
+        }
+      }
+
       return new Response(JSON.stringify(result), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
@@ -3390,6 +3492,31 @@ function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) 
     handler: httpAction(async (ctx, request) => {
       try {
         const body = await request.json();
+        // Device binding, enforced once for every CLI endpoint rather than in
+        // each of the ~100 handlers. A token that names a device may only act
+        // from that device; a token that names none is unbound and behaves
+        // exactly as it always has, which is what makes this migration-free.
+        if (typeof body?.api_token === "string") {
+          const allowed = await ctx.runQuery(internal.apiTokens.deviceBindingAllows, {
+            api_token: body.api_token,
+            device_id: typeof body.device_id === "string" ? body.device_id : undefined,
+          });
+          if (!allowed) {
+            return new Response(
+              JSON.stringify({
+                error:
+                  "This token is bound to a different machine. Run `cast auth` on this machine to mint its own.",
+                code: "FORBIDDEN",
+              }),
+              { status: 403, headers: { "Content-Type": "application/json", ...corsHeaders } },
+            );
+          }
+        }
+        // device_id is consumed HERE and never forwarded. Most cliRoute handlers
+        // pass the body straight into a mutation whose validator is a closed
+        // `v.object`, so an unrecognised field is a hard rejection — forwarding
+        // it would break every one of them at once.
+        if (body && typeof body === "object" && "device_id" in body) delete body.device_id;
         const result = await handler(ctx, body);
         return new Response(JSON.stringify(result), {
           status: 200,
