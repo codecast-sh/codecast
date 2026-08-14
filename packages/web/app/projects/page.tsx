@@ -1,11 +1,23 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore, ProjectItem } from "../../store/inboxStore";
 import { useSyncProjects } from "../../hooks/useSyncProjects";
+import { filterToWorkspace } from "../../lib/workspaceScope";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
+import {
+  ContextMenu,
+  useContextMenu,
+  CtxItem,
+  CtxHeader,
+  CtxSeparator,
+  CtxSub,
+  CtxSubTrigger,
+  CtxSubContent,
+} from "../../components/ui/context-menu";
+import { copyToClipboard, shareOrigin } from "../../lib/utils";
 import { toast } from "sonner";
 import {
   Plus,
@@ -14,7 +26,10 @@ import {
   CircleDot,
   PauseCircle,
   CheckCircle2,
+  Check,
+  ExternalLink,
   FileText,
+  Link as LinkIcon,
   ListChecks,
   Target,
 } from "lucide-react";
@@ -68,7 +83,15 @@ function ProjectProgress({ project }: { project: ProjectItem }) {
   );
 }
 
-function ProjectCard({ project, onClick }: { project: ProjectItem; onClick: () => void }) {
+function ProjectCard({
+  project,
+  onClick,
+  onContextMenu,
+}: {
+  project: ProjectItem;
+  onClick: () => void;
+  onContextMenu: (e: MouseEvent) => void;
+}) {
   const status = STATUS_CONFIG[project.status as ProjectStatus] || STATUS_CONFIG.active;
   const StatusIcon = status.icon;
   const totalItems = project.task_counts.total + project.plan_count + project.doc_count;
@@ -76,6 +99,7 @@ function ProjectCard({ project, onClick }: { project: ProjectItem; onClick: () =
   return (
     <button
       onClick={onClick}
+      onContextMenu={onContextMenu}
       className="group w-full text-left bg-sol-bg rounded-lg border border-sol-border/30 hover:border-sol-border/60 transition-all duration-200 overflow-hidden"
     >
       {/* Color accent bar */}
@@ -218,14 +242,20 @@ function ProjectListContent() {
   useSyncProjects();
 
   const projects = useInboxStore((s) => s.projects);
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const [showCreate, setShowCreate] = useState(false);
   const [showDone, setShowDone] = useState(false);
+  const ctxMenu = useContextMenu<ProjectItem>();
 
+  // Strict workspace boundary at read time: `store.projects` caches rows from
+  // every workspace (the sync overlay never prunes on team switch, IDB persists
+  // them across reloads), so the view must re-assert the active workspace — a
+  // team view shows only that team's projects, personal shows only teamless.
   const allProjects = useMemo(() => {
-    const list = Object.values(projects);
+    const list = filterToWorkspace(Object.values(projects), activeTeamId);
     list.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
     return list;
-  }, [projects]);
+  }, [projects, activeTeamId]);
 
   const grouped = useMemo(() => {
     const result: Record<string, ProjectItem[]> = {};
@@ -302,6 +332,7 @@ function ProjectListContent() {
                       key={project._id}
                       project={project}
                       onClick={() => router.push(`/projects/${project._id}`)}
+                      onContextMenu={(e) => ctxMenu.open(e, project)}
                     />
                   ))}
                 </div>
@@ -320,6 +351,52 @@ function ProjectListContent() {
           )}
         </div>
       </div>
+
+      <ContextMenu state={ctxMenu}>
+        {(project) => (
+          <>
+            <CtxHeader title={project.title} id={project.short_id} />
+            <CtxItem icon={ExternalLink} onSelect={() => router.push(`/projects/${project._id}`)}>
+              Open
+            </CtxItem>
+            <CtxItem icon={ExternalLink} onSelect={() => window.open(`/projects/${project._id}`, "_blank")}>
+              Open in new tab
+            </CtxItem>
+            <CtxSeparator />
+            <CtxSub>
+              <CtxSubTrigger icon={CircleDot}>Status</CtxSubTrigger>
+              <CtxSubContent className="min-w-[180px]">
+                {STATUS_ORDER.map((key) => {
+                  const cfg = STATUS_CONFIG[key];
+                  return (
+                    <CtxItem
+                      key={key}
+                      icon={cfg.icon}
+                      iconClassName={cfg.color}
+                      trailing={project.status === key ? <Check className="size-3.5 text-sol-cyan" /> : undefined}
+                      onSelect={() => {
+                        useInboxStore.getState().updateProject(project._id, { status: key });
+                        toast.success(`${project.title} → ${cfg.label}`);
+                      }}
+                    >
+                      {cfg.label}
+                    </CtxItem>
+                  );
+                })}
+              </CtxSubContent>
+            </CtxSub>
+            <CtxSeparator />
+            <CtxItem
+              icon={LinkIcon}
+              onSelect={() =>
+                copyToClipboard(`${shareOrigin()}/projects/${project._id}`).then(() => toast.success("Link copied"))
+              }
+            >
+              Copy link
+            </CtxItem>
+          </>
+        )}
+      </ContextMenu>
     </div>
   );
 }

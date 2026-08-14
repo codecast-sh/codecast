@@ -1,9 +1,13 @@
 import { useCallback, useRef, useEffect } from "react";
-import { X, Plus } from "lucide-react";
+import { X, Plus, XCircle, ArrowRightToLine, Copy as CopyIcon, ExternalLink, AppWindow, PanelsTopLeft } from "lucide-react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { useShortcutAction, formatShortcutLabel } from "../shortcuts";
-import { pathLabel } from "../lib/pathLabel";
+import { pathLabel, inboxTabSessionId } from "../lib/pathLabel";
 import { vaultNoteTitle } from "../lib/vault/noteTitle";
+import { bridge, isDesktop, isDetachedTabWindow } from "../lib/desktop";
+import { PageIcon } from "./RecentlyViewedMenu";
+import { LivenessDot, sessionLivenessState } from "./LivenessDot";
+import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 
 /** "#design" for /chat/<id>, once the store knows the channel. pathLabel can
  *  only say "Chat", which turns three open channels into three identical tabs;
@@ -14,9 +18,17 @@ export function chatTabTitle(path: string, channels: Record<string, any> | undef
   return name ? `#${name}` : null;
 }
 
-function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: Record<string, any>): string {
-  if (tab.sessionId && sessions[tab.sessionId]) {
-    const s = sessions[tab.sessionId];
+/** The session a tab is pinned to: an explicit sessionId, or the ?s= deep link
+ *  the tab's path was stamped to (stampedTabPath normalizes /conversation/<id>
+ *  into /inbox?s=<id>, so most conversation tabs carry the session here). */
+export function tabSessionId(tab: Pick<AppTab, "sessionId" | "path">): string | null {
+  return tab.sessionId ?? inboxTabSessionId(tab.path);
+}
+
+export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: Record<string, any>): string {
+  const sid = tabSessionId(tab);
+  if (sid && sessions[sid]) {
+    const s = sessions[sid];
     return s.title || s.session_id?.slice(0, 12) || "Session";
   }
   const chat = chatTabTitle(tab.path, channels);
@@ -25,17 +37,27 @@ function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: Record<s
   // knows one — the filename is the fallback, not the identity (Obsidian's
   // rule). Read lazily so no vault code loads for anyone who never opens one.
   const vaultTitle = vaultNoteTitle(tab.path);
-  return vaultTitle ?? tab.title ?? pathLabel(tab.path);
+  if (vaultTitle) return vaultTitle;
+  // A stored title with a query string in it is a raw path that leaked in
+  // before pathLabel stripped queries — never show it, re-derive instead.
+  const stored = tab.title && !tab.title.includes("?") ? tab.title : null;
+  return stored ?? pathLabel(tab.path);
 }
 
 export function TabBar() {
+  // A detached tab window (desktop breakout) renders its one surface with no
+  // tab strip; the shared tabs it hydrates belong to the main window. Keep the
+  // flag above every hook so handlers can stand aside without reordering hooks.
+  const detached = isDetachedTabWindow();
   const s = useTrackedStore([
     (s) => s.tabs,
     (s) => s.activeTabId,
-    // Only tab TITLES are read off sessions — depending on the whole collection
-    // re-rendered the bar on every ~1s liveness heartbeat of any session. A
-    // joined-title signature only changes when a referenced title changes.
-    (s) => s.tabs.map((t) => (t.sessionId ? s.sessions[t.sessionId]?.title ?? "" : "")).join("\x1f"),
+    // Only tab TITLES and liveness STATES are read off sessions — depending on
+    // the whole collection re-rendered the bar on every ~1s liveness heartbeat
+    // of any session. A joined signature only changes when a referenced
+    // session's title or computed dot state changes.
+    (s) => s.tabs.map((t) => { const id = tabSessionId(t); return id ? s.sessions[id]?.title ?? "" : ""; }).join("\x1f"),
+    (s) => s.tabs.map((t) => { const id = tabSessionId(t); const row = id ? s.sessions[id] : null; return row ? sessionLivenessState(row) : ""; }).join("\x1f"),
     // Same rule for a channel tab's name: a signature over the referenced
     // channels only, never the whole collection.
     (s) => s.tabs.map((t) => chatTabTitle(t.path, s.chatChannels) ?? "").join("\x1f"),
@@ -47,42 +69,58 @@ export function TabBar() {
 
   // Bootstrap: create initial tab if none exist
   useEffect(() => {
+    if (detached) return;
     if (tabs.length === 0) {
       const path = window.location.pathname;
       s.openTab({ path, title: pathLabel(path) });
     }
   }, [tabs.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Adopt a tab handed back by a detached window ("move into main window").
+  // Registered here because the bar is always mounted in the shell.
+  useEffect(() => {
+    if (detached) return;
+    bridge("onAdoptTab")?.((path: string) => {
+      const state = useInboxStore.getState();
+      state.saveCurrentTabState();
+      state.openTab({ path, title: pathLabel(path), makeActive: true });
+    });
+  }, [detached]);
+
   // Key bindings live in shortcuts/registry.ts (tab.*) — handlers return false
   // when there's a single tab so Cmd+W falls through to close the window.
   useShortcutAction('tab.new', useCallback(() => {
+    if (detached) return false;
     const state = useInboxStore.getState();
     state.saveCurrentTabState();
     const path = window.location.pathname;
     state.openTab({ path, title: pathLabel(path), makeActive: true });
-  }, []));
+  }, [detached]));
 
   useShortcutAction('tab.close', useCallback(() => {
+    if (detached) return false;
     const state = useInboxStore.getState();
     if (state.tabs.length <= 1) return false;
     if (state.activeTabId) state.closeTab(state.activeTabId);
-  }, []));
+  }, [detached]));
 
   useShortcutAction('tab.prev', useCallback(() => {
+    if (detached) return false;
     const state = useInboxStore.getState();
     if (state.tabs.length <= 1) return false;
     const idx = state.tabs.findIndex((t: AppTab) => t.id === state.activeTabId);
     const prev = state.tabs[(idx - 1 + state.tabs.length) % state.tabs.length];
     if (prev) { state.saveCurrentTabState(); state.switchTab(prev.id); }
-  }, []));
+  }, [detached]));
 
   useShortcutAction('tab.next', useCallback(() => {
+    if (detached) return false;
     const state = useInboxStore.getState();
     if (state.tabs.length <= 1) return false;
     const idx = state.tabs.findIndex((t: AppTab) => t.id === state.activeTabId);
     const next = state.tabs[(idx + 1) % state.tabs.length];
     if (next) { state.saveCurrentTabState(); state.switchTab(next.id); }
-  }, []));
+  }, [detached]));
 
   const handleSwitch = useCallback(
     (tab: AppTab) => {
@@ -117,38 +155,84 @@ export function TabBar() {
     [handleClose],
   );
 
+  // Browser-convention right-click menu; one instance serves the whole strip.
+  const ctxMenu = useContextMenu<AppTab>();
+  const closeOthers = useCallback((keep: AppTab) => {
+    const state = useInboxStore.getState();
+    for (const t of state.tabs.filter((t: AppTab) => t.id !== keep.id)) state.closeTab(t.id);
+  }, []);
+  const closeToRight = useCallback((from: AppTab) => {
+    const state = useInboxStore.getState();
+    const idx = state.tabs.findIndex((t: AppTab) => t.id === from.id);
+    if (idx < 0) return;
+    for (const t of state.tabs.slice(idx + 1)) state.closeTab(t.id);
+  }, []);
+  const duplicateTab = useCallback((tab: AppTab) => {
+    const state = useInboxStore.getState();
+    state.saveCurrentTabState();
+    state.openTab({ path: tab.path, title: tab.title, makeActive: true });
+  }, []);
+  // Desktop: break the tab out into its own OS window. The new window loads
+  // this path directly (no tab shell), and the tab leaves this strip — a move,
+  // not a copy. Available only when the desktop bridge knows the verb.
+  const canDetach = isDesktop() && !!bridge("detachTab");
+  const detachTab = useCallback((tab: AppTab) => {
+    const fn = bridge("detachTab");
+    if (!fn) return;
+    void fn(tab.path);
+    const state = useInboxStore.getState();
+    if (state.tabs.length > 1) state.closeTab(tab.id);
+  }, []);
+
+  if (detached) return null;
   // Only show tab bar when there are 2+ tabs
   if (tabs.length <= 1) return null;
 
   return (
-    <div className="flex-shrink-0 bg-sol-bg-alt/30 border-b border-sol-border/20 flex items-center h-[30px] pl-2 pr-1 gap-0.5 overflow-hidden">
+    <div className="flex-shrink-0 bg-sol-bg-alt/50 border-b border-sol-border/20 flex items-center h-[32px] pl-2 pr-1 gap-1 overflow-hidden">
       <div
         ref={scrollRef}
-        className="flex items-center gap-0.5 overflow-x-auto scrollbar-none flex-1 min-w-0"
+        className="flex items-center gap-1 overflow-x-auto scrollbar-none flex-1 min-w-0"
       >
-        {tabs.map((tab: AppTab) => {
+        {tabs.map((tab: AppTab, i: number) => {
           const isActive = tab.id === activeTabId;
           const title = tabTitle(tab, s.sessions, s.chatChannels);
+          const sid = tabSessionId(tab);
+          const sessionRow = sid ? s.sessions[sid] : null;
+          const prevActive = i > 0 && tabs[i - 1].id === activeTabId;
           return (
             <button
               key={tab.id}
               onClick={() => handleSwitch(tab)}
               onMouseDown={(e) => handleMiddleClick(e, tab.id)}
+              onContextMenu={(e) => ctxMenu.open(e, tab)}
+              title={title}
               className={`
-                group flex items-center gap-1 px-2.5 h-[24px] rounded text-[11px] leading-none
-                max-w-[200px] min-w-[60px] flex-shrink-0 transition-all duration-100
+                group relative flex items-center gap-1.5 pl-2.5 pr-1.5 h-[25px] rounded-md text-[11px] leading-none
+                max-w-[220px] min-w-[76px] flex-shrink-0 transition-colors duration-100
                 ${
                   isActive
                     ? "bg-sol-bg text-sol-text shadow-sm border border-sol-border/30"
-                    : "text-sol-text-dim/70 hover:text-sol-text-muted hover:bg-sol-bg/50"
+                    : "text-sol-text-dim/70 hover:text-sol-text-muted hover:bg-sol-bg/50 border border-transparent"
                 }
               `}
             >
+              {/* Hairline between adjacent inactive tabs, Chrome-style; hidden
+                  around the active tab and while hovering. */}
+              {i > 0 && !isActive && !prevActive && (
+                <span aria-hidden className="absolute -left-[3px] top-1/2 -translate-y-1/2 h-3 w-px bg-sol-border/30 group-hover:opacity-0" />
+              )}
+              {sessionRow ? (
+                <LivenessDot state={sessionLivenessState(sessionRow)} size="xs" className="flex-shrink-0" />
+              ) : (
+                <PageIcon path={tab.path} className={`w-3 h-3 flex-shrink-0 ${isActive ? "text-sol-text-dim" : "text-sol-text-dim/50"}`} />
+              )}
               <span className="truncate flex-1 text-left">{title}</span>
+              {/* Fixed-size close slot so the label doesn't shift on hover. */}
               <span
                 onClick={(e) => handleClose(e, tab.id)}
                 className={`
-                  flex-shrink-0 rounded-sm p-0.5 -mr-1 transition-colors
+                  flex-shrink-0 rounded-sm p-0.5 transition-colors
                   ${
                     isActive
                       ? "text-sol-text-dim/50 hover:text-sol-text hover:bg-sol-text-dim/15"
@@ -169,6 +253,73 @@ export function TabBar() {
       >
         <Plus className="w-3 h-3" />
       </button>
+      <ContextMenu state={ctxMenu}>
+        {(tab) => (
+          <>
+            <CtxItem icon={Plus} shortcut="tab.new" onSelect={handleNewTab}>New tab</CtxItem>
+            <CtxItem icon={CopyIcon} onSelect={() => duplicateTab(tab)}>Duplicate tab</CtxItem>
+            {canDetach && (
+              <CtxItem icon={AppWindow} onSelect={() => detachTab(tab)}>
+                Move to new window
+              </CtxItem>
+            )}
+            <CtxItem
+              icon={ExternalLink}
+              onSelect={() => window.open(tab.path, "_blank")}
+            >
+              Open in browser tab
+            </CtxItem>
+            <CtxSeparator />
+            <CtxItem
+              icon={X}
+              shortcut="tab.close"
+              disabled={tabs.length <= 1}
+              onSelect={() => {
+                const state = useInboxStore.getState();
+                if (state.tabs.length > 1) state.closeTab(tab.id);
+              }}
+            >
+              Close tab
+            </CtxItem>
+            <CtxItem
+              icon={XCircle}
+              disabled={tabs.length <= 1}
+              onSelect={() => {
+                // Chrome convention: the clicked tab survives and takes focus.
+                if (tab.id !== activeTabId) handleSwitch(tab);
+                closeOthers(tab);
+              }}
+            >
+              Close other tabs
+            </CtxItem>
+            <CtxItem
+              icon={ArrowRightToLine}
+              disabled={tabs.findIndex((t: AppTab) => t.id === tab.id) >= tabs.length - 1}
+              onSelect={() => closeToRight(tab)}
+            >
+              Close tabs to the right
+            </CtxItem>
+          </>
+        )}
+      </ContextMenu>
     </div>
+  );
+}
+
+/** Header affordance shown ONLY inside a detached tab window: merge this
+ *  window's surface back into the main window as a tab. Lives beside the other
+ *  header actions (DashboardLayout renders it). */
+export function AttachTabButton() {
+  if (!isDetachedTabWindow()) return null;
+  const attach = bridge("attachTab");
+  if (!attach) return null;
+  return (
+    <button
+      onClick={() => void attach(window.location.pathname + window.location.search)}
+      className="flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+      title="Move into main window"
+    >
+      <PanelsTopLeft className="w-[18px] h-[18px]" />
+    </button>
   );
 }

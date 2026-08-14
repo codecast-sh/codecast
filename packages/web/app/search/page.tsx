@@ -16,7 +16,19 @@ import {
   MessageSquare,
   FolderGit2,
   Sparkles,
+  ExternalLink,
+  Link as LinkIcon,
 } from "lucide-react";
+import { toast } from "sonner";
+import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "../../components/ui/context-menu";
+import { SessionMenuItems } from "../../components/menus/ObjectContextMenus";
+import { useInboxStore, type InboxSession } from "../../store/inboxStore";
+import { copyToClipboard, shareOrigin } from "../../lib/utils";
+
+// Right-click payloads: a session header row or one message match inside it.
+type SearchCtxPayload =
+  | { kind: "session"; result: any; session: InboxSession; isForeign: boolean }
+  | { kind: "message"; result: any; messageId: string };
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -268,6 +280,25 @@ export default function SearchPage() {
     else router.push(href);
   };
 
+  // One menu instance for the whole result list; rows call open(e, payload).
+  const ctxMenu = useContextMenu<SearchCtxPayload>();
+
+  // The full triage menu (pin, label, stash…) mutates the inbox-store row, so
+  // it needs both proof of ownership (server-computed isOwn: row user vs auth
+  // user) AND the session present in the store. An own session outside the
+  // inbox window falls back to the read-only foreign menu — honest, never
+  // broken verbs.
+  const openSessionMenu = (e: React.MouseEvent, result: any) => {
+    const stored = useInboxStore.getState().sessions[result.conversationId];
+    const isForeign = !(result.isOwn === true && stored);
+    ctxMenu.open(e, {
+      kind: "session",
+      result,
+      session: stored ?? ({ _id: result.conversationId, title: result.title } as InboxSession),
+      isForeign,
+    });
+  };
+
   // Arrow keys drive selection while focus stays in the input — single-letter
   // keys never leave the field, so no global-shortcut leaks.
   const handleInputKeyDown = (e: React.KeyboardEvent) => {
@@ -444,6 +475,7 @@ export default function SearchPage() {
                       href={hrefFor(result)}
                       className="block px-4 py-3 hover:bg-sol-base02/30 transition-colors border-b border-sol-border"
                       onMouseEnter={() => setSelectedIdx(idx)}
+                      onContextMenu={(e) => openSessionMenu(e, result)}
                     >
                       <div className="flex items-center gap-3">
                         {!result.isOwn && result.authorAvatar ? (
@@ -492,6 +524,9 @@ export default function SearchPage() {
                             key={`${result.conversationId}-${mIdx}`}
                             href={hrefFor(result, match.messageId)}
                             className="block px-4 py-2.5 hover:bg-amber-100/20 dark:hover:bg-amber-900/10 transition-colors"
+                            onContextMenu={(e) =>
+                              ctxMenu.open(e, { kind: "message", result, messageId: match.messageId })
+                            }
                           >
                             <div className="flex items-center gap-2 mb-1">
                               <span
@@ -562,6 +597,42 @@ export default function SearchPage() {
             </div>
           )}
         </div>
+
+        <ContextMenu state={ctxMenu}>
+          {(p) =>
+            p.kind === "session" ? (
+              <SessionMenuItems
+                session={p.session}
+                isForeign={p.isForeign}
+                onOpen={() => openResult(p.result)}
+              />
+            ) : (
+              <>
+                <CtxHeader title={p.result.title || "Message"} />
+                <CtxItem icon={ExternalLink} onSelect={() => router.push(hrefFor(p.result, p.messageId))}>
+                  Open
+                </CtxItem>
+                <CtxItem
+                  icon={ExternalLink}
+                  onSelect={() => window.open(hrefFor(p.result, p.messageId), "_blank")}
+                >
+                  Open in new tab
+                </CtxItem>
+                <CtxSeparator />
+                <CtxItem
+                  icon={LinkIcon}
+                  onSelect={() =>
+                    copyToClipboard(
+                      `${shareOrigin()}/conversation/${p.result.conversationId}#msg-${p.messageId}`
+                    ).then(() => toast.success("Link copied"))
+                  }
+                >
+                  Copy link
+                </CtxItem>
+              </>
+            )
+          }
+        </ContextMenu>
       </DashboardLayout>
     </AuthGuard>
   );

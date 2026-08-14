@@ -1,10 +1,14 @@
 import { useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback } from "react";
+import { toast } from "sonner";
+import { UserRound, Filter, Link2 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import { copyToClipboard, shareOrigin } from "../lib/utils";
+import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 interface TeamAvatarBarProps {
@@ -52,6 +56,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const { user: currentUser } = useCurrentUser();
   const effectiveTeamId = propTeamId ?? activeTeamId ?? ((currentUser as any)?.team_id as Id<"teams"> | undefined);
   const teamMembers = useInboxStore((s) => (s.teamMembers.length > 0 ? s.teamMembers : null));
+  const ctxMenu = useContextMenu<{ id: string; username?: string | null; displayName: string }>();
 
   if (!effectiveTeamId || !teamMembers || teamMembers.length === 0) {
     return <TeamMembersPump teamId={effectiveTeamId} />;
@@ -105,6 +110,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           <button
             key={member._id}
             onClick={() => router.push(`/team/${member.github_username || member._id}`)}
+            onContextMenu={(e) => ctxMenu.open(e, { id: member._id, username: member.github_username, displayName })}
             className="relative group"
             title={`${displayName} - ${lastSeenText}`}
           >
@@ -174,6 +180,28 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           </svg>
         </button>
       )}
+      <ContextMenu state={ctxMenu}>
+        {(m) => (
+          <>
+            <CtxHeader title={m.displayName} />
+            <CtxItem icon={UserRound} onSelect={() => router.push(`/team/${m.username || m.id}`)}>
+              Open profile
+            </CtxItem>
+            <CtxItem icon={Filter} onSelect={() => handleMemberClick(m.id)}>
+              Filter activity by member
+            </CtxItem>
+            <CtxItem
+              icon={Link2}
+              onSelect={() => {
+                copyToClipboard(`${shareOrigin()}/team/${m.username || m.id}`);
+                toast.success("Profile link copied");
+              }}
+            >
+              Copy profile link
+            </CtxItem>
+          </>
+        )}
+      </ContextMenu>
     </div>
   );
 }
