@@ -96,6 +96,19 @@ jobs:
         # files with unrelated failures that are not this job's concern.
         run: bun test tasks/
 
+      - name: Unit tests (shared/contracts — capability layer)
+        working-directory: packages/shared
+        # The capability contracts, the resolver and the fleet diff are read by
+        # the CLI, the daemon, Convex and the browser, so a regression here is a
+        # regression everywhere — and until this step existed nothing in CI ran
+        # them at all.
+        #
+        # Named files rather than `bun test contracts/` for the same reason the
+        # step above is scoped: contracts/modelOptions.test.ts currently fails
+        # for unrelated reasons, and a step that is red on arrival teaches people
+        # to ignore it. Widen this to the whole directory once that is green.
+        run: bun test contracts/capabilities.test.ts contracts/capabilityResolver.test.ts contracts/fleetDiff.test.ts
+
   test-cli:
     runs-on: ubuntu-latest
     steps:
