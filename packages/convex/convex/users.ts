@@ -10,7 +10,8 @@ import { fromConvexAgentType, AGENT_CLIENTS, findModelOption } from "@codecast/s
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand, enqueueResumeSession } from "./daemonCommandUtils";
-import { resolveTeamForPath, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
+import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
+import { canAccessTask, canAccessDoc } from "./lib/access";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
@@ -178,6 +179,33 @@ export const updateDaemonLastSeen = internalMutation({
   },
 });
 
+// A device row not refreshed for this long is treated as offline for the
+// purpose of handing the per-machine user fields to another daemon (beats are
+// ~30s; allow a few misses).
+export const DAEMON_FIELDS_OWNER_STALE_MS = 3 * 60 * 1000;
+
+/**
+ * Who may write the per-machine sticky fields on the user doc this beat.
+ * `owns` = write them; `claim` = also stamp this device as the owner.
+ * A beat with no device id (pre-routing CLI, or an older daemon's command
+ * poll) never claims: it writes only while no identified owner is alive, so
+ * it can't flap the fields against a modern daemon on another machine.
+ */
+export function resolveMachineFieldsOwner(input: {
+  deviceId: string | undefined;
+  owner: string | undefined;
+  ownerLastSeen: number | undefined;
+  now: number;
+}): { owns: boolean; claim: boolean } {
+  const { deviceId, owner, ownerLastSeen, now } = input;
+  if (!owner) return { owns: true, claim: deviceId !== undefined };
+  if (owner === deviceId) return { owns: true, claim: false };
+  const ownerAlive =
+    ownerLastSeen !== undefined && now - ownerLastSeen < DAEMON_FIELDS_OWNER_STALE_MS;
+  if (ownerAlive) return { owns: false, claim: false };
+  return { owns: true, claim: deviceId !== undefined };
+}
+
 export const daemonHeartbeat = mutation({
   args: {
     api_token: v.string(),
@@ -272,12 +300,38 @@ export const daemonHeartbeat = mutation({
         properties: { cli_version: args.version, cli_platform: args.platform },
       });
     }
+    // Per-machine sticky fields live on the per-user doc, so with two machines
+    // online they would flip between machines on every beat (each daemon sees
+    // the other's values as "changed"). One daemon owns them at a time: the
+    // current owner, or — when the owner's device row has gone quiet — whoever
+    // beats next. Daemons that don't identify a device (pre-routing CLI) keep
+    // the legacy last-writer behavior.
+    const owner = existingUser?.daemon_fields_device_id;
+    let ownerLastSeen: number | undefined;
+    if (owner && owner !== args.device_id) {
+      const ownerDevice = await ctx.db
+        .query("devices")
+        .withIndex("by_user_device", (q) =>
+          q.eq("user_id", auth.userId).eq("device_id", owner),
+        )
+        .first();
+      ownerLastSeen = ownerDevice?.last_seen;
+    }
+    const { owns: ownsMachineFields, claim } = resolveMachineFieldsOwner({
+      deviceId: args.device_id,
+      owner,
+      ownerLastSeen,
+      now,
+    });
+    if (claim) patch.daemon_fields_device_id = args.device_id;
     // Sticky fields: write only on actual change.
-    if (existingUser?.cli_version !== args.version) patch.cli_version = args.version;
-    if (existingUser?.cli_platform !== args.platform) patch.cli_platform = args.platform;
-    if (existingUser?.daemon_pid !== args.pid) patch.daemon_pid = args.pid;
-    if (existingUser?.autostart_enabled !== args.autostart_enabled) patch.autostart_enabled = args.autostart_enabled;
-    if (existingUser?.has_tmux !== args.has_tmux) patch.has_tmux = args.has_tmux;
+    if (ownsMachineFields) {
+      if (existingUser?.cli_version !== args.version) patch.cli_version = args.version;
+      if (existingUser?.cli_platform !== args.platform) patch.cli_platform = args.platform;
+      if (existingUser?.daemon_pid !== args.pid) patch.daemon_pid = args.pid;
+      if (existingUser?.autostart_enabled !== args.autostart_enabled) patch.autostart_enabled = args.autostart_enabled;
+      if (existingUser?.has_tmux !== args.has_tmux) patch.has_tmux = args.has_tmux;
+    }
 
     // Volatile liveness/queue fields: refresh on a throttle, when queue zeroness
     // flips (so a newly-stuck queue still surfaces promptly), or when we're already
@@ -299,13 +353,13 @@ export const daemonHeartbeat = mutation({
       Object.assign(patch, backlogFieldsPatch(args));
     }
 
-    if (args.local_project_roots !== undefined) {
-      // NOTE: every daemon overwrites this per-user field, so for multi-machine
-      // users it flip-flops between machines on each heartbeat. Read paths now use
-      // the per-device union (getOnlineLocalRoots) instead; this write is retained
-      // only for rollback safety and can be dropped once nothing depends on it.
-      // Write only when the set actually changed — an unconditional rewrite is a
-      // needless invalidation of every user-doc reader.
+    if (args.local_project_roots !== undefined && ownsMachineFields) {
+      // NOTE: a per-user field written by daemons; the owner rule above keeps
+      // multi-machine users from flip-flopping it on each heartbeat. Read paths
+      // use the per-device union (getOnlineLocalRoots) instead; this write is
+      // retained only for rollback safety and can be dropped once nothing depends
+      // on it. Write only when the set actually changed — an unconditional
+      // rewrite is a needless invalidation of every user-doc reader.
       const prev = existingUser?.local_project_roots;
       const next = args.local_project_roots;
       const rootsChanged =
@@ -862,6 +916,7 @@ export const updateNotificationPreferences = mutation({
       // reaches a user row by any other route, the settings page echoes the
       // stored object back and every toggle on web and mobile fails validation.
       chat_activity: v.optional(v.boolean()),
+      email_notifications: v.optional(v.boolean()),
     })),
     muted_members: v.optional(v.array(v.id("users"))),
     machine_wide_presence: v.optional(v.boolean()),
@@ -1010,28 +1065,34 @@ export const getUserActivity = query({
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.user_id);
     // Public, unauthed query. is_private=false means TEAM-visible, not world-
-    // visible, so it must stay gated behind the explicit public-profile opt-in.
+    // visible. The world tier is the pinned-and-shared set only — the same
+    // canonical rule getPublicPinnedSessions uses (profilePublicSessionVisible).
     if (!user || user.hide_activity || !user.public_profile_enabled) {
       return [];
     }
     const limit = Math.min(args.limit ?? 3, 5);
-    const conversations = await ctx.db
+    const pinned = await ctx.db
       .query("conversations")
-      .withIndex("by_user_private", (q) =>
-        q.eq("user_id", args.user_id).eq("is_private", false)
+      .withIndex("by_user_profile_pinned", (q) =>
+        q.eq("user_id", args.user_id).gt("profile_pinned_at", 0)
       )
       .order("desc")
-      .take(limit);
-    return conversations.map(c => ({
-      _id: c._id,
-      title: c.title,
-      subtitle: c.subtitle,
-      status: c.status,
-      message_count: c.message_count,
-      updated_at: c.updated_at,
-      started_at: c.started_at,
-      project_path: c.project_path,
-    }));
+      .collect();
+    return pinned
+      .filter((c) => profilePublicSessionVisible(c))
+      .slice(0, limit)
+      .map((c) => ({
+        _id: c._id,
+        title: c.title,
+        subtitle: c.subtitle,
+        status: c.status,
+        message_count: c.message_count,
+        updated_at: c.updated_at,
+        started_at: c.started_at,
+        // Never leak the full local path — only the repo/folder basename, matching
+        // getPublicPinnedSessions.
+        repo: basenameOf(c.git_root || c.project_path),
+      }));
   },
 });
 
@@ -1737,12 +1798,20 @@ export const getUserTasks = query({
     const user = await ctx.db.get(args.user_id);
     if (!user || user.hide_activity) return [];
     const limit = Math.min(args.limit ?? 20, 50);
+    // Fetch a wider slab, then keep only the rows the VIEWER may actually see.
+    // hide_activity is the target's opt-out; it is not an access grant — a task
+    // is visible to its owner or a member of its effective team (canAccessTask).
     const tasks = await ctx.db
       .query("tasks")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
       .order("desc")
-      .take(limit);
-    return tasks.map((t: any) => ({
+      .take(limit * 4);
+    const visible: any[] = [];
+    for (const t of tasks) {
+      if (visible.length >= limit) break;
+      if (await canAccessTask(ctx, userId, t)) visible.push(t);
+    }
+    return visible.map((t: any) => ({
       _id: t._id,
       short_id: t.short_id,
       title: t.title,
@@ -1767,21 +1836,28 @@ export const getUserDocs = query({
     const user = await ctx.db.get(args.user_id);
     if (!user || user.hide_activity) return [];
     const limit = Math.min(args.limit ?? 20, 50);
+    // Same rule as getUserTasks: a doc is visible to its owner or a member of
+    // its EFFECTIVE team. A doc mined from a private session is team-tagged but
+    // effectively personal (canAccessDoc via effectiveTeamForResource).
     const docs = await ctx.db
       .query("docs")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
       .order("desc")
-      .take(limit);
-    return docs
-      .filter((d: any) => !d.archived_at)
-      .map((d: any) => ({
-        _id: d._id,
-        title: d.title,
-        doc_type: d.doc_type,
-        labels: d.labels,
-        created_at: d.created_at || d._creationTime,
-        updated_at: d.updated_at,
-      }));
+      .take(limit * 4);
+    const visible: any[] = [];
+    for (const d of docs) {
+      if (visible.length >= limit) break;
+      if (d.archived_at) continue;
+      if (await canAccessDoc(ctx, userId, d)) visible.push(d);
+    }
+    return visible.map((d: any) => ({
+      _id: d._id,
+      title: d.title,
+      doc_type: d.doc_type,
+      labels: d.labels,
+      created_at: d.created_at || d._creationTime,
+      updated_at: d.updated_at,
+    }));
   },
 });
 
@@ -3283,6 +3359,11 @@ export const startSession = mutation({
     const now = Date.now();
     const sessionId = `remote-${crypto.randomUUID()}`;
 
+    // Derive team/privacy from the owner's directory mappings, exactly like
+    // every other conversation insert. Writing a literal is_private:true ignored
+    // an auto_share mapping and permanently under-shared the session.
+    const privacy = await resolveCreationPrivacy(ctx, userId, args.project_path);
+
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
       agent_type: args.agent_type === "claude" ? "claude_code" : args.agent_type,
@@ -3291,7 +3372,9 @@ export const startSession = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: true,
+      team_id: privacy.team_id,
+      is_private: privacy.is_private,
+      auto_shared: privacy.auto_shared,
       status: "active" as const,
     });
 
@@ -3343,7 +3426,16 @@ export const getTeamsForCLI = query({
         };
       })
     );
-    return { teams: teams.filter(Boolean) };
+    // The CANONICAL active-workspace pointer travels with the roster, so the
+    // CLI resolves the workspace from the same field web and mobile read
+    // instead of guessing (its old default was teams[0]). Absent = the
+    // personal workspace, which is a real answer, not a missing one.
+    const user = await ctx.db.get(result.userId);
+    return {
+      teams: teams.filter(Boolean),
+      active_team_id: user?.active_team_id ?? null,
+      user_id: result.userId,
+    };
   },
 });
 
