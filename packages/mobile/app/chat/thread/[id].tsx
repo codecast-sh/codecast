@@ -190,6 +190,7 @@ export default function ChatThreadScreen() {
       mentionsMe: (m.mentions ?? []).some((x: any) => String(x) === viewerId),
       agentStatus: m.agent_status,
       agentDeadlineAt: m.agent_deadline_at,
+      attachments: m.attachments?.length ? m.attachments : undefined,
       reactions: reactionsByMessage.get(String(m._id)),
     };
   }, [memberById, authorById, viewerId, reactionsByMessage, thread?.anchor?.name]);

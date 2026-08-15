@@ -29,6 +29,8 @@ export type ChatToastData = {
   collapsedCount?: number;
   /** Present when the message is a reply, so the card can say so. */
   inThread?: boolean;
+  /** A direct message: the card says who, not where — "#dm-room" is noise. */
+  isDm?: boolean;
 };
 
 export function ChatToast({
@@ -45,7 +47,9 @@ export function ChatToast({
   onMuteChannel?: (channelId: string) => void;
   onSnooze?: (minutes: number) => void;
 }) {
-  const where = data.inThread ? `thread in #${data.channelName}` : `#${data.channelName}`;
+  const where = data.isDm
+    ? data.inThread ? "thread · direct message" : "direct message"
+    : data.inThread ? `thread in #${data.channelName}` : `#${data.channelName}`;
   const loud = data.tier === "loud";
   return (
     <div
@@ -71,7 +75,9 @@ export function ChatToast({
         <div className="ch-toast-head">
           <span className="ch-toast-author">{data.authorName}</span>
           <span className="ch-toast-where">
-            <Hash className="w-2.5 h-2.5 inline-block -mt-px mr-0.5 opacity-70" aria-hidden="true" />
+            {!data.isDm && (
+              <Hash className="w-2.5 h-2.5 inline-block -mt-px mr-0.5 opacity-70" aria-hidden="true" />
+            )}
             {where}
           </span>
         </div>
