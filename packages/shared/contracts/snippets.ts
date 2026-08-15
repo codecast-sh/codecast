@@ -677,10 +677,23 @@ export const DECIDE_SNIPPET_END = "<!-- /codecast-decide -->";
 export const DECIDE_SNIPPET = `
 ## Asking for a decision
 
-When you hit a fork only your human can resolve — a tradeoff with real consequences, an
-irreversible step, a judgment call about their product — hand them ONE well-formed decision
-with \`cast decide\` instead of burying a question in prose. It lands in their decision queue,
-where they clear the whole stack in one sitting; the answer arrives back here as a message.
+A queued decision is not an interruption. Asking inline stops your human mid-thought and is
+expensive, which is why the standing rule is to decide for yourself. \`cast decide\` is a
+different channel: it lands in a queue they clear in one sitting, in their own time, so the
+cost of asking is close to zero. The bar is therefore LOWER here than for interrupting — if
+you would have picked a direction and mentioned it in passing, queue it instead.
+
+Queue one when you are about to:
+
+- pick between approaches that are hard to reverse later (a schema, a data model, a protocol),
+- spend real money or their quota, or touch billing, auth, or anything user-facing in prod,
+- delete or migrate data, or drop something that would need a backup to recover,
+- resolve a tradeoff by taste rather than evidence — speed vs correctness, breadth vs depth,
+- proceed on a guess about what they actually want the product to do.
+
+Do NOT queue what you can answer by reading more code, and never queue a status update.
+
+The answer arrives back here as a message.
 
 \`\`\`bash
 cast decide "<one question>" \\

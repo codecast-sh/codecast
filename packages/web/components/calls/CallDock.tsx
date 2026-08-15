@@ -25,7 +25,7 @@ import {
   type ParticipantTile,
 } from "../../lib/calls/callManager";
 import { parseRoomKey } from "@codecast/shared/contracts";
-import type { DesktopDisplaySource } from "../../lib/desktop";
+import { CallStage } from "./CallStage";
 
 // The in-call surface: a floating pill above the composer, on every tab, only
 // while a call exists (call.phase !== idle). Expanded, it grows the roster,
@@ -41,20 +41,24 @@ export function CallDock() {
   const roster: any[] = (call.roomKey && s.callOccupancy[call.roomKey]) || [];
   const [expanded, setExpanded] = useState(false);
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => []);
-  // A media notice while connected (camera blocked, share refused) opens the
-  // panel so its message is read — the pill has no room for a sentence.
+  // New video or a share arriving is the moment the stage earns the room;
+  // a media notice opens it too, so its sentence is read.
   const notice = call.phase === "connected" ? call.error : null;
+  const remoteVideo = tiles.some((t) => !t.isLocal);
+  const prevRemoteVideo = useRef(false);
   useEffect(() => {
     if (notice) setExpanded(true);
-  }, [notice]);
+    if (remoteVideo && !prevRemoteVideo.current) setExpanded(true);
+    prevRemoteVideo.current = remoteVideo;
+  }, [notice, remoteVideo]);
 
   if (call.phase === "idle") return null;
+  if (expanded) {
+    return <CallStage onCollapse={() => setExpanded(false)} />;
+  }
   return (
     <div className="fixed bottom-20 right-4 z-[70] w-auto max-w-[420px] select-none">
       <div className="rounded-xl border border-sol-border bg-sol-bg-alt/95 shadow-xl backdrop-blur">
-        {expanded && (
-          <ExpandedPanel call={call} roster={roster} tiles={tiles} />
-        )}
         <DockPill
           call={call}
           roster={roster}
@@ -168,170 +172,6 @@ function DockPill({
   );
 }
 
-function ExpandedPanel({
-  call,
-  roster,
-  tiles,
-}: {
-  call: any;
-  roster: any[];
-  tiles: ParticipantTile[];
-}) {
-  const speaking = new Set<string>(call.speaking);
-  const parsed = call.roomKey ? parseRoomKey(call.roomKey) : null;
-  const videoTiles = tiles;
-  // The "jump to session" affordance is noise while you're already looking
-  // at that session — which is exactly where you usually start the huddle.
-  const currentConv = useInboxStore((st) =>
-    st.currentSessionId ? st.getConvexId(st.currentSessionId) ?? st.currentSessionId : null,
-  );
-  const viewingAnchor =
-    parsed?.kind === "session" && !!currentConv && String(currentConv) === parsed.conversationId;
-
-  const openAnchor = () => {
-    if (parsed?.kind === "session") {
-      // In-app tab navigation, never router.push (TabContent is the router).
-      useInboxStore.getState().navigateToSession(parsed.conversationId);
-    }
-  };
-
-  return (
-    <div className="border-b border-sol-border px-3 py-2.5">
-      {videoTiles.length > 0 && <TileGrid tiles={videoTiles} speaking={speaking} />}
-      {call.error && (
-        <div className="mb-2 flex items-start gap-2 rounded-md border border-sol-orange/40 bg-sol-orange/10 px-2 py-1.5 text-[11px] leading-snug text-sol-orange">
-          <span className="min-w-0 flex-1">{call.error}</span>
-          <button
-            onClick={() => useInboxStore.getState().setCallState({ error: null })}
-            className="shrink-0 rounded px-1 text-sol-orange/70 hover:text-sol-orange"
-            title="Dismiss"
-          >
-            ×
-          </button>
-        </div>
-      )}
-      <div className="mb-2 space-y-1">
-        {roster.map((m) => (
-          <div key={m.user_id} className="flex items-center gap-2 text-xs">
-            <span
-              className={`inline-block h-1.5 w-1.5 rounded-full ${
-                speaking.has(String(m.user_id)) ? "bg-sol-cyan" : m.muted ? "bg-sol-base01" : "bg-sol-green"
-              }`}
-            />
-            <span className="truncate text-sol-text">{m.user_name}</span>
-            {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-dim" />}
-            {m.sharing && <MonitorUp className="h-3 w-3 shrink-0 text-sol-violet" />}
-          </div>
-        ))}
-      </div>
-      <div className="flex items-center gap-1.5">
-        <button
-          onClick={() => void setCamera(!call.camera)}
-          className={`rounded-md p-1.5 transition-colors ${
-            call.camera ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-muted hover:bg-sol-base02"
-          }`}
-          title={call.camera ? "Turn camera off" : "Turn camera on"}
-        >
-          {call.camera ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
-        </button>
-        <ShareButton sharing={call.sharing} />
-        {parsed?.kind === "session" && !viewingAnchor && (
-          <button
-            onClick={openAnchor}
-            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-sol-text-muted transition-colors hover:bg-sol-base02 hover:text-sol-text"
-            title="Jump to the session this huddle is about"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            <span>session</span>
-          </button>
-        )}
-        <div className="flex-1" />
-        <DevicePicker kind="audioinput" label="Mic" />
-        <DevicePicker kind="audiooutput" label="Speaker" />
-      </div>
-    </div>
-  );
-}
-
-function TileGrid({
-  tiles,
-  speaking,
-}: {
-  tiles: ParticipantTile[];
-  speaking: Set<string>;
-}) {
-  const [focused, setFocused] = useState<string | null>(null);
-  // A focused tile that has since gone away (share stopped) falls back to
-  // the grid instead of rendering nothing.
-  const focusedTile = focused ? tiles.find((t) => t.key === focused) : null;
-  const shown = focusedTile ? [focusedTile] : tiles;
-  return (
-    <div
-      className={`mb-2 grid gap-1.5 ${shown.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}
-    >
-      {shown.map((t) => (
-        <VideoTile
-          key={t.key}
-          tile={t}
-          speaking={speaking.has(t.identity)}
-          onClick={() => setFocused((f) => (f === t.key ? null : t.key))}
-        />
-      ))}
-    </div>
-  );
-}
-
-function VideoTile({
-  tile,
-  speaking,
-  onClick,
-}: {
-  tile: ParticipantTile;
-  speaking: boolean;
-  onClick: () => void;
-}) {
-  const ref = useRef<HTMLVideoElement>(null);
-  const { track } = tile;
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    // livekit's attach() sets srcObject and calls play(); the local camera
-    // track's underlying MediaStreamTrack can be swapped by device changes,
-    // and attach() follows it — so attach once per (element, track) pair and
-    // let the tile key (track sid) drive remounts.
-    track.attach(el);
-    return () => {
-      track.detach(el);
-    };
-  }, [track]);
-  return (
-    <button
-      onClick={onClick}
-      className={`relative aspect-video w-full overflow-hidden rounded-md bg-sol-base03 transition-shadow ${
-        speaking ? "ring-2 ring-sol-cyan" : ""
-      }`}
-      title={`${tile.name}${tile.kind === "screen" ? " (screen)" : ""} — click to focus`}
-    >
-      <video
-        ref={ref}
-        autoPlay
-        playsInline
-        // Own tiles are always silent (audio goes through the SFU path, and a
-        // local <video> with sound would echo the room back at you) and, for
-        // the camera, mirrored — the selfie convention every calling app uses.
-        muted={tile.isLocal}
-        className={`h-full w-full object-cover ${
-          tile.isLocal && tile.kind === "camera" ? "-scale-x-100" : ""
-        }`}
-      />
-      <span className="absolute bottom-1 left-1 rounded bg-sol-base03/80 px-1 text-[10px] text-sol-text">
-        {tile.isLocal ? "You" : firstName(tile.name)}
-        {tile.kind === "screen" ? " · screen" : ""}
-      </span>
-    </button>
-  );
-}
-
 // Own-mic level, rendered as a short vertical bar beside the mute button.
 // Reads the analyser signal through useSyncExternalStore so this ~20fps
 // value re-renders ONLY this tiny component, never the dock.
@@ -350,128 +190,5 @@ function MicLevel({ muted }: { muted: boolean }) {
         style={{ height: `${Math.round((muted ? 0 : level) * 100)}%` }}
       />
     </span>
-  );
-}
-
-// Share screen. In a browser this is one click — Chrome shows its own
-// picker. On desktop the shell exposes the capturable screens/windows and
-// lets the web pre-select one, so the picker lives HERE (web), not in the
-// Electron shell: changing what it looks like or how it chooses never needs
-// a desktop release. Older shells without the primitives fall back to the
-// shell's default (primary screen).
-function ShareButton({ sharing }: { sharing: boolean }) {
-  const [open, setOpen] = useState(false);
-  const [sources, setSources] = useState<DesktopDisplaySource[] | null>(null);
-  const bridge = typeof window !== "undefined" ? window.__CODECAST_ELECTRON__ : undefined;
-  const canPick = !!bridge?.getDisplaySources && !!bridge?.selectDisplaySource;
-
-  const onClick = async () => {
-    if (sharing) return void setScreenShare(false);
-    if (!canPick) return void setScreenShare(true);
-    setOpen(true);
-    setSources(null);
-    try {
-      setSources(await bridge!.getDisplaySources!({ types: ["screen", "window"] }));
-    } catch {
-      setSources([]);
-    }
-  };
-  const pick = (id: string) => {
-    setOpen(false);
-    void setScreenShare(true, id);
-  };
-
-  return (
-    <span className="relative">
-      <button
-        onClick={() => void onClick()}
-        className={`rounded-md p-1.5 transition-colors ${
-          sharing ? "bg-sol-violet/15 text-sol-violet" : "text-sol-text-muted hover:bg-sol-base02"
-        }`}
-        title={sharing ? "Stop sharing" : "Share screen"}
-      >
-        <MonitorUp className="h-4 w-4" />
-      </button>
-      {open && (
-        <div
-          className="absolute bottom-full left-0 z-10 mb-2 w-[360px] rounded-lg border border-sol-border bg-sol-bg-alt p-2 shadow-xl"
-          onMouseLeave={() => setOpen(false)}
-        >
-          <div className="mb-1.5 flex items-center justify-between px-1">
-            <span className="text-[11px] font-medium text-sol-text-muted">Share a screen or window</span>
-            <button
-              onClick={() => setOpen(false)}
-              className="rounded px-1 text-sol-text-dim hover:text-sol-text"
-              title="Cancel"
-            >
-              ×
-            </button>
-          </div>
-          {sources === null ? (
-            <div className="px-1 py-3 text-center text-[11px] text-sol-text-dim">Looking…</div>
-          ) : sources.length === 0 ? (
-            <div className="px-1 py-3 text-center text-[11px] text-sol-text-dim">
-              Nothing to share — check Screen Recording permission in System Settings
-            </div>
-          ) : (
-            <div className="grid max-h-[260px] grid-cols-2 gap-1.5 overflow-y-auto">
-              {sources.map((src) => (
-                <button
-                  key={src.id}
-                  onClick={() => pick(src.id)}
-                  className="group flex flex-col gap-1 rounded-md border border-transparent p-1 text-left transition-colors hover:border-sol-violet/50 hover:bg-sol-violet/10"
-                  title={src.name}
-                >
-                  <img
-                    src={src.thumbnail}
-                    alt=""
-                    className="aspect-video w-full rounded object-cover ring-1 ring-sol-border"
-                  />
-                  <span className="truncate text-[10px] text-sol-text-muted group-hover:text-sol-text">
-                    {src.kind === "screen" ? "🖥 " : ""}
-                    {src.name}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </span>
-  );
-}
-
-function DevicePicker({
-  kind,
-  label,
-}: {
-  kind: "audioinput" | "audiooutput";
-  label: string;
-}) {
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  useEffect(() => {
-    let alive = true;
-    void listDevices(kind).then((d) => alive && setDevices(d));
-    return () => {
-      alive = false;
-    };
-  }, [kind]);
-  if (devices.length < 2) return null;
-  return (
-    <select
-      onChange={(e) => void switchDevice(kind, e.target.value)}
-      className="max-w-[110px] truncate rounded border border-sol-border bg-sol-bg px-1 py-0.5 text-[10px] text-sol-text-muted"
-      title={`${label} device`}
-      defaultValue=""
-    >
-      <option value="" disabled>
-        {label}
-      </option>
-      {devices.map((d) => (
-        <option key={d.deviceId} value={d.deviceId}>
-          {d.label || `${label} ${d.deviceId.slice(0, 4)}`}
-        </option>
-      ))}
-    </select>
   );
 }

@@ -3263,6 +3263,55 @@ export default defineSchema({
     .index("by_from_status", ["from_user", "status"])
     .index("by_room", ["room_key"]),
 
+  // A huddle transcription session ("scribe"). One row per recording run,
+  // owned by whoever toggled Transcribe on — that client holds every audio
+  // track (its own mic + each subscribed remote track), transcribes each
+  // track separately, and writes attributed segments below. Attribution is
+  // therefore STRUCTURAL: one LiveKit track = one participant, no diarization.
+  // Routes say where the words go: an agent session (delivered like `cast
+  // send`, so the agent replies in its own thread), a doc (appended), or a
+  // linked Slack channel. mode "live" ships accumulated segments every time
+  // the room goes quiet (server VAD gap) — which is exactly the beat where an
+  // agent should speak up; "after" ships one transcript at stop.
+  transcripts: defineTable({
+    room_key: v.string(),
+    team_id: v.id("teams"),
+    started_by: v.id("users"),
+    status: v.union(v.literal("live"), v.literal("ended")),
+    started_at: v.number(),
+    ended_at: v.optional(v.number()),
+    title: v.optional(v.string()),
+    routes: v.array(
+      v.object({
+        kind: v.union(v.literal("session"), v.literal("doc"), v.literal("slack")),
+        // session: conversation short id or id (sendSessionMessage resolves);
+        // doc: docs._id; slack: channel id of a linked channel.
+        target: v.string(),
+        mode: v.union(v.literal("live"), v.literal("after")),
+        // Watermark: segments with seq <= this have been delivered.
+        sent_seq: v.number(),
+      }),
+    ),
+    // Monotonic per-transcript segment counter (writer-owned; the scribe is
+    // the only appender, so no contention).
+    last_seq: v.number(),
+  })
+    .index("by_room", ["room_key"])
+    .index("by_status", ["status"]),
+
+  transcript_segments: defineTable({
+    transcript_id: v.id("transcripts"),
+    seq: v.number(),
+    speaker_id: v.string(),
+    speaker_name: v.string(),
+    text: v.string(),
+    // Milliseconds since transcript start (scribe's clock, one clock for all
+    // tracks, so cross-speaker ordering is honest).
+    t0: v.number(),
+    t1: v.number(),
+  })
+    .index("by_transcript_seq", ["transcript_id", "seq"]),
+
   workflows: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
