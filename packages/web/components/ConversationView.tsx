@@ -4038,7 +4038,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
             href={`https://clau.de/chrome/tab/${executedTabId}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sol-cyan/70 hover:text-sol-cyan transition-colors flex-shrink-0 font-mono flex items-center gap-0.5"
+            className={BROWSER_ROW_PILL}
             onClick={(e) => e.stopPropagation()}
             title={`View tab ${executedTabId}`}
           >
@@ -5143,7 +5143,7 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
           <a
             href={browserUrl}
             target={CAST_BROWSER_TAB_NAME}
-            className="text-sol-cyan/70 hover:text-sol-cyan transition-colors flex-shrink-0 font-mono flex items-center gap-0.5"
+            className={BROWSER_ROW_PILL}
             // Warm the endpoint cache on hover so the focus attempt on click
             // resolves inside the popup-blocker's activation window.
             onMouseEnter={browserTabId ? () => prefetchBrowserFocusEndpoint(convex) : undefined}
@@ -5234,6 +5234,15 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
 }
 
 /**
+ * The two affordances on a `cast browser` row — "open tab" and "watch live" —
+ * as small pills, so they read as controls beside the command rather than as
+ * more of its text.
+ */
+const BROWSER_ROW_PILL =
+  "flex-shrink-0 inline-flex items-center gap-1 rounded-full border border-sol-border/60 bg-sol-bg-highlight/40 " +
+  "px-1.5 py-px text-[10px] leading-4 font-mono text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors";
+
+/**
  * "watch live" on a `cast browser` row: opens the read-only stream of the tab
  * this agent is driving (BrowserWatchSplit), docked above the conversation.
  * Rendered on every browser row — whether a stream actually exists is the
@@ -5248,9 +5257,7 @@ function BrowserWatchButton({ conversationId }: { conversationId: Id<"conversati
         e.stopPropagation();
         toggleBrowserWatch(convKey);
       }}
-      className={`transition-colors flex-shrink-0 font-mono flex items-center gap-0.5 ${
-        open ? "text-sol-red hover:text-sol-red/80" : "text-sol-cyan/70 hover:text-sol-cyan"
-      }`}
+      className={`${BROWSER_ROW_PILL} ${open ? "text-sol-red border-sol-red/40 hover:text-sol-red/80" : ""}`}
       title={open ? "Close the live browser view" : "Watch what this agent's browser shows, live (read-only)"}
     >
       <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
