@@ -6,6 +6,7 @@ import { createTeamFeedFilter } from "./privacy";
 import { normalizeTeamTaskStatuses } from "@codecast/shared/tasks";
 import { purgeChatMembership } from "./chat";
 import { readLocalViewRevision } from "./localFirstCommands";
+import { bumpWindow } from "./ipRateLimit";
 import {
   TEAM_MEMBERS_VIEW_CONTRACT_ID,
   TEAMS_GRANT_KEY,
@@ -529,6 +530,54 @@ export const inviteToTeam = mutation({
       invite_code_expires_at: Date.now() + sevenDaysInMs,
     });
     return newCode;
+  },
+});
+
+export const sendInviteEmail = mutation({
+  args: {
+    team_id: v.id("teams"),
+    email: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Not authenticated");
+    }
+    // Any member may email the invite — the same audience that can already
+    // copy the invite link out of the modal.
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", args.team_id))
+      .first();
+    if (!membership) {
+      throw new Error("Not a member of this team");
+    }
+    const team = await ctx.db.get(args.team_id);
+    if (!team?.invite_code) {
+      throw new Error("This team has no invite link yet");
+    }
+    if (team.invite_code_expires_at && Date.now() > team.invite_code_expires_at) {
+      throw new Error("The invite link has expired — regenerate it first");
+    }
+    const email = args.email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new Error("Invalid email address");
+    }
+    // Outbound email to arbitrary addresses is a spam vector — cap per sender.
+    const limit = await bumpWindow(ctx.db, `invite-email:${authUserId}`, 30, 60 * 60 * 1000);
+    if (!limit.ok) {
+      throw new Error("Too many invites sent this hour — try again later");
+    }
+    const inviter = await ctx.db.get(authUserId);
+    await ctx.scheduler.runAfter(0, internal.emails.send.sendTeamInvite, {
+      to: email,
+      inviter_name: inviter?.name ?? inviter?.email ?? "A teammate",
+      inviter_email: inviter?.email,
+      team_name: team.name,
+      invite_url: `https://codecast.sh/join/${team.invite_code}`,
+      expires_at: team.invite_code_expires_at,
+    });
+    return { sent: true };
   },
 });
 

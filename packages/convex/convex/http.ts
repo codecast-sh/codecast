@@ -1,4 +1,5 @@
 import { httpRouter } from "convex/server";
+import { ConvexError } from "convex/values";
 import { httpAction } from "./_generated/server";
 import { auth } from "./auth";
 import { internal, api } from "./_generated/api";
@@ -3559,6 +3560,31 @@ function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) 
 }
 
 // Projects
+// ── Capability library (cast cap …) ──
+//
+// /cli/cap/status is live. The phase 2 verbs are REGISTERED but answer with a
+// structured NOT_IMPLEMENTED, because the mutations behind them do not exist
+// yet: reserving the paths now means a newer CLI against an older deploy gets
+// a clean, coded error instead of a bare 404 it cannot tell from a typo'd URL.
+//
+// RULE for whoever lands /cli/cap/bind (from the design draft, easy to lose):
+// an agent-minted capability token can NEVER create a binding above session
+// scope. The bind mutation must inspect the credential class and reject user,
+// device, project and team scopes for anything but a real api_token held by
+// the user — otherwise the consent gate is enforced only inside a CLI process
+// the agent controls.
+cliRoute("/cli/cap/status", async (ctx, body) => {
+  return await ctx.runQuery(api.capabilities.listCapabilityState, body);
+});
+for (const verb of ["bind", "unbind", "toggle", "resolve", "why"]) {
+  cliRoute(`/cli/cap/${verb}`, async () => {
+    throw new ConvexError({
+      code: "NOT_IMPLEMENTED",
+      message: `cast cap ${verb} needs a newer backend deploy — this endpoint is reserved but not live yet`,
+    });
+  });
+}
+
 cliRoute("/cli/projects/create", async (ctx, body) => {
   return await ctx.runMutation(api.projects.create, body);
 });
