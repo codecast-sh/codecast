@@ -32,7 +32,8 @@ export function parseReviewItemKind(value: unknown): ReviewItemKind | null {
 // Jump target: exactly one of these is set, per kind.
 //   comment_thread → conversation_id (+ anchor to focus the thread)
 //   workflow_gate  → conversation_id (the run's primary session)
-//   page_comment   → artifact_slug (the published page)
+//   page_comment   → artifact_url (server-built, honors SITE_URL; artifact_slug
+//                    stays for identity, never for building URLs client-side)
 export interface ReviewItemAnchor {
   message_id?: string;
   file_path?: string;
@@ -62,6 +63,7 @@ export interface ReviewItem {
   conversation_id?: string;
   conversation_title?: string;
   artifact_slug?: string;
+  artifact_url?: string;
   anchor?: ReviewItemAnchor;
 }
 
