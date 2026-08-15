@@ -219,6 +219,12 @@ function FleetDrillIn() {
 }
 
 export function FleetBoard() {
+  // Dev probe: render count, inspectable as __fleetBoardRenders in the console.
+  // The perf contract above predicts ~1 render per coarse tick (15s) while
+  // idle; ~1 per heartbeat (1s × N live sessions) means the wake gating broke.
+  if (import.meta.env.DEV) {
+    (window as any).__fleetBoardRenders = ((window as any).__fleetBoardRenders ?? 0) + 1;
+  }
   const s = useTrackedStore([
     (st) => sessionsWakeSig(st.sessions),
     (st) => st.sessionsWithQueuedMessages,

@@ -146,4 +146,14 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // "While you were away" email digest: batches unseen mentions, comments,
+  // chat and pending decisions for people who are away. Grace/cooldown live in
+  // emails/digest.ts; the 10-minute tick only bounds detection latency.
+  "email notification digest sweep",
+  { minutes: 10 },
+  internal.emails.digest.sweep,
+  {}
+);
+
 export default crons;

@@ -10,7 +10,8 @@ import { fromConvexAgentType, AGENT_CLIENTS, findModelOption } from "@codecast/s
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand, enqueueResumeSession } from "./daemonCommandUtils";
-import { resolveTeamForPath, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
+import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
+import { canAccessTask, canAccessDoc } from "./lib/access";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
@@ -862,6 +863,7 @@ export const updateNotificationPreferences = mutation({
       // reaches a user row by any other route, the settings page echoes the
       // stored object back and every toggle on web and mobile fails validation.
       chat_activity: v.optional(v.boolean()),
+      email_notifications: v.optional(v.boolean()),
     })),
     muted_members: v.optional(v.array(v.id("users"))),
     machine_wide_presence: v.optional(v.boolean()),
@@ -1010,28 +1012,34 @@ export const getUserActivity = query({
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.user_id);
     // Public, unauthed query. is_private=false means TEAM-visible, not world-
-    // visible, so it must stay gated behind the explicit public-profile opt-in.
+    // visible. The world tier is the pinned-and-shared set only — the same
+    // canonical rule getPublicPinnedSessions uses (profilePublicSessionVisible).
     if (!user || user.hide_activity || !user.public_profile_enabled) {
       return [];
     }
     const limit = Math.min(args.limit ?? 3, 5);
-    const conversations = await ctx.db
+    const pinned = await ctx.db
       .query("conversations")
-      .withIndex("by_user_private", (q) =>
-        q.eq("user_id", args.user_id).eq("is_private", false)
+      .withIndex("by_user_profile_pinned", (q) =>
+        q.eq("user_id", args.user_id).gt("profile_pinned_at", 0)
       )
       .order("desc")
-      .take(limit);
-    return conversations.map(c => ({
-      _id: c._id,
-      title: c.title,
-      subtitle: c.subtitle,
-      status: c.status,
-      message_count: c.message_count,
-      updated_at: c.updated_at,
-      started_at: c.started_at,
-      project_path: c.project_path,
-    }));
+      .collect();
+    return pinned
+      .filter((c) => profilePublicSessionVisible(c))
+      .slice(0, limit)
+      .map((c) => ({
+        _id: c._id,
+        title: c.title,
+        subtitle: c.subtitle,
+        status: c.status,
+        message_count: c.message_count,
+        updated_at: c.updated_at,
+        started_at: c.started_at,
+        // Never leak the full local path — only the repo/folder basename, matching
+        // getPublicPinnedSessions.
+        repo: basenameOf(c.git_root || c.project_path),
+      }));
   },
 });
 
@@ -1737,12 +1745,20 @@ export const getUserTasks = query({
     const user = await ctx.db.get(args.user_id);
     if (!user || user.hide_activity) return [];
     const limit = Math.min(args.limit ?? 20, 50);
+    // Fetch a wider slab, then keep only the rows the VIEWER may actually see.
+    // hide_activity is the target's opt-out; it is not an access grant — a task
+    // is visible to its owner or a member of its effective team (canAccessTask).
     const tasks = await ctx.db
       .query("tasks")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
       .order("desc")
-      .take(limit);
-    return tasks.map((t: any) => ({
+      .take(limit * 4);
+    const visible: any[] = [];
+    for (const t of tasks) {
+      if (visible.length >= limit) break;
+      if (await canAccessTask(ctx, userId, t)) visible.push(t);
+    }
+    return visible.map((t: any) => ({
       _id: t._id,
       short_id: t.short_id,
       title: t.title,
@@ -1767,21 +1783,28 @@ export const getUserDocs = query({
     const user = await ctx.db.get(args.user_id);
     if (!user || user.hide_activity) return [];
     const limit = Math.min(args.limit ?? 20, 50);
+    // Same rule as getUserTasks: a doc is visible to its owner or a member of
+    // its EFFECTIVE team. A doc mined from a private session is team-tagged but
+    // effectively personal (canAccessDoc via effectiveTeamForResource).
     const docs = await ctx.db
       .query("docs")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
       .order("desc")
-      .take(limit);
-    return docs
-      .filter((d: any) => !d.archived_at)
-      .map((d: any) => ({
-        _id: d._id,
-        title: d.title,
-        doc_type: d.doc_type,
-        labels: d.labels,
-        created_at: d.created_at || d._creationTime,
-        updated_at: d.updated_at,
-      }));
+      .take(limit * 4);
+    const visible: any[] = [];
+    for (const d of docs) {
+      if (visible.length >= limit) break;
+      if (d.archived_at) continue;
+      if (await canAccessDoc(ctx, userId, d)) visible.push(d);
+    }
+    return visible.map((d: any) => ({
+      _id: d._id,
+      title: d.title,
+      doc_type: d.doc_type,
+      labels: d.labels,
+      created_at: d.created_at || d._creationTime,
+      updated_at: d.updated_at,
+    }));
   },
 });
 
@@ -3283,6 +3306,11 @@ export const startSession = mutation({
     const now = Date.now();
     const sessionId = `remote-${crypto.randomUUID()}`;
 
+    // Derive team/privacy from the owner's directory mappings, exactly like
+    // every other conversation insert. Writing a literal is_private:true ignored
+    // an auto_share mapping and permanently under-shared the session.
+    const privacy = await resolveCreationPrivacy(ctx, userId, args.project_path);
+
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
       agent_type: args.agent_type === "claude" ? "claude_code" : args.agent_type,
@@ -3291,7 +3319,9 @@ export const startSession = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: true,
+      team_id: privacy.team_id,
+      is_private: privacy.is_private,
+      auto_shared: privacy.auto_shared,
       status: "active" as const,
     });
 

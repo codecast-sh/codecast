@@ -6,6 +6,7 @@ import { memberHandle } from "@codecast/shared/chat";
 import { useInboxStore, convBucketMap } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { useDebounce } from "./useDebounce";
+import { inActiveWorkspace } from "../lib/workspaceScope";
 
 export type MentionScope =
   | { kind: "team"; teamId: string }
@@ -17,9 +18,8 @@ const SEARCH_LIMIT_PER_TYPE = 12;
 
 function inScope(item: { team_id?: string | null; user_id?: string | null }, scope: MentionScope): boolean {
   if (scope.kind === "any") return true;
-  const itemTeam = item.team_id ? String(item.team_id) : null;
-  if (scope.kind === "team") return itemTeam === scope.teamId;
-  return !itemTeam && (item.user_id ? String(item.user_id) === scope.userId : true);
+  if (scope.kind === "team") return inActiveWorkspace(item, scope.teamId);
+  return inActiveWorkspace(item, null) && (item.user_id ? String(item.user_id) === scope.userId : true);
 }
 
 const EMPTY_SERVER_ITEMS: MentionItem[] = [];
@@ -245,14 +245,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
 
     const sessionItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
     for (const sess of Object.values(s.sessions)) {
-      const sessTeam = sess.team_id ? String(sess.team_id) : null;
-      const inScopeForSession =
-        scope.kind === "any"
-          ? true
-          : scope.kind === "team"
-            ? sessTeam === scope.teamId
-            : !sessTeam;
-      if (!inScopeForSession) continue;
+      if (!inScope(sess, scope)) continue;
       const titleHit = q ? matchScore(sess.title || "", q) : 0;
       const summaryHit = q && sess.idle_summary ? matchScore(sess.idle_summary, q) : Infinity;
       const r = Math.min(titleHit, summaryHit);

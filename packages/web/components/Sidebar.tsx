@@ -12,6 +12,7 @@ import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
+import { useDecisionQueue } from "../hooks/useDecisionQueue";
 import { useChatUnread, useChatRail } from "../hooks/useChatSync";
 import { ChannelContextMenu, useChannelMenu } from "./chat/ChannelMenu";
 import { readPins, isPinned, togglePin, type SidebarPin } from "../lib/sidebarPins";
@@ -20,7 +21,6 @@ import { useSyncProjects } from "../hooks/useSyncProjects";
 import { useSyncSavedViews } from "../hooks/useSyncSavedViews";
 import { activeViewId, currentViewId, VIEW_ID_KEY } from "../lib/savedViews";
 import { projectDotClass } from "../lib/projectColors";
-import { useWorkspaceArgs, workspaceStamp } from "../hooks/useWorkspaceArgs";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
@@ -30,7 +30,7 @@ import { CreateDocModal } from "./CreateDocModal";
 import { CreateChannelModal } from "./CreateChannelModal";
 import { Globe, Workflow, Zap, MessageSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks } from "lucide-react";
 import { WorkbenchSection } from "./WorkbenchSection";
-import { filterToWorkspace } from "../lib/workspaceScope";
+import { filterToWorkspace, inActiveWorkspace } from "../lib/workspaceScope";
 
 const api = _api as any;
 
@@ -61,6 +61,71 @@ function getShortPath(projectPath: string): string {
   return parts[parts.length - 1];
 }
 
+/** One nested row shape for every rail list: what it's called, what opening it
+ *  does, and its hover actions. NavSection's children and the pinned rail render
+ *  through the same component so selection, hover, and action affordances can
+ *  never drift apart. */
+type SectionRowSpec = {
+  id: string;
+  name: string;
+  icon?: React.ReactNode;
+  /** Highlighted as the row you are currently looking at. */
+  active?: boolean;
+  /** Rendered at the row's end — a shared marker, an owner avatar. */
+  trailing?: React.ReactNode;
+  /** Hover actions, in order. Each is its own small button. */
+  actions?: Array<{ key: string; title: string; icon: React.ReactNode; onClick: (e?: React.MouseEvent) => void }>;
+  onSelect: () => void;
+  /** Right-click, for rows that have a context menu. */
+  onContextMenu?: (e: React.MouseEvent) => void;
+};
+
+function SectionRow({ row, className }: { row: SectionRowSpec; className?: string }) {
+  return (
+    <div
+      onContextMenu={row.onContextMenu}
+      className={`flex items-center group/v transition-colors ${
+        row.active
+          ? "bg-sol-bg-highlight text-sol-text"
+          : "text-sol-text-muted hover:bg-sol-bg-highlight/40"
+      } ${className ?? ""}`}
+    >
+      <button
+        onClick={row.onSelect}
+        className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 hover:text-sol-text transition-colors flex-1 min-w-0 text-left"
+        title={row.name}
+        aria-current={row.active ? "page" : undefined}
+      >
+        {row.icon}
+        <span className={`truncate text-[13px] min-w-0 ${row.active ? "text-sol-text" : ""}`}>{row.name}</span>
+      </button>
+      {/* Marker and actions trade places on hover rather than competing for the
+          row's width — otherwise the name of the row you are pointing at is the
+          first thing to truncate. */}
+      {row.trailing && (
+        <span className={row.actions?.length ? "flex group-hover/v:hidden" : "flex"}>
+          {row.trailing}
+        </span>
+      )}
+      {!!row.actions?.length && (
+        <span className="hidden group-hover/v:flex items-center flex-shrink-0">
+          {row.actions.map((action) => (
+            <button
+              key={action.key}
+              onClick={(e) => { e.stopPropagation(); action.onClick(e); }}
+              className="p-1 rounded text-sol-text-dim hover:text-sol-text flex-shrink-0"
+              title={action.title}
+            >
+              {action.icon}
+            </button>
+          ))}
+        </span>
+      )}
+      <span className="w-1.5 flex-shrink-0" />
+    </div>
+  );
+}
+
 function NavSection({
   label,
   href,
@@ -70,8 +135,6 @@ function NavSection({
   title,
   simpleHide,
   onMobileClose,
-  onAdd,
-  addTitle,
   badge,
   unread,
   items,
@@ -92,25 +155,9 @@ function NavSection({
    *  legible. */
   unread?: boolean;
   onMobileClose?: () => void;
-  onAdd?: () => void;
-  addTitle?: string;
   /** Rows nested under this one — the projects under Projects, the saved views
-   *  under Tasks and Docs. One list shape for both: what it's called, what
-   *  opening it does, and (for a saved view) how to forget it. */
-  items?: Array<{
-    id: string;
-    name: string;
-    icon?: React.ReactNode;
-    /** Highlighted as the row you are currently looking at. */
-    active?: boolean;
-    /** Rendered at the row's end — a shared marker, an owner avatar. */
-    trailing?: React.ReactNode;
-    /** Hover actions, in order. Each is its own small button. */
-    actions?: Array<{ key: string; title: string; icon: React.ReactNode; onClick: (e?: React.MouseEvent) => void }>;
-    onSelect: () => void;
-    /** Right-click, for rows that have a context menu. */
-    onContextMenu?: (e: React.MouseEvent) => void;
-  }>;
+   *  under Tasks and Docs. */
+  items?: SectionRowSpec[];
   expanded?: boolean;
   onToggle?: () => void;
 }) {
@@ -146,65 +193,13 @@ function NavSection({
             </svg>
           </button>
         )}
-        {!isNarrow && onAdd && (
-          <button
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onAdd(); }}
-            className="p-1 mr-2 opacity-60 hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-all"
-            title={addTitle ?? `New ${label.toLowerCase().replace(/s$/, '')}`}
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-              <path strokeLinecap="round" d="M12 5v14m-7-7h14" />
-            </svg>
-          </button>
-        )}
       </div>
       {/* Nested rows — a slide-open list aligned under this row's icon. */}
       {hasChildren && (
         <div className={`overflow-hidden transition-all duration-200 ease-out ${expanded ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
           <div className="ml-[17px] my-0.5 border-l border-sol-border/50 overflow-y-auto max-h-96">
             {items!.map((child) => (
-              <div
-                key={child.id}
-                onContextMenu={child.onContextMenu}
-                className={`flex items-center group/v transition-colors ${
-                  child.active
-                    ? "bg-sol-bg-highlight text-sol-text"
-                    : "text-sol-text-muted hover:bg-sol-bg-highlight/40"
-                }`}
-              >
-                <button
-                  onClick={child.onSelect}
-                  className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 hover:text-sol-text transition-colors flex-1 min-w-0 text-left"
-                  title={child.name}
-                  aria-current={child.active ? "page" : undefined}
-                >
-                  {child.icon}
-                  <span className={`truncate text-[13px] min-w-0 ${child.active ? "text-sol-text" : ""}`}>{child.name}</span>
-                </button>
-                {/* Marker and actions trade places on hover rather than
-                    competing for the row's width — otherwise the name of the
-                    row you are pointing at is the first thing to truncate. */}
-                {child.trailing && (
-                  <span className={child.actions?.length ? "flex group-hover/v:hidden" : "flex"}>
-                    {child.trailing}
-                  </span>
-                )}
-                {!!child.actions?.length && (
-                  <span className="hidden group-hover/v:flex items-center flex-shrink-0">
-                    {child.actions.map((action) => (
-                      <button
-                        key={action.key}
-                        onClick={(e) => { e.stopPropagation(); action.onClick(e); }}
-                        className="p-1 rounded text-sol-text-dim hover:text-sol-text flex-shrink-0"
-                        title={action.title}
-                      >
-                        {action.icon}
-                      </button>
-                    ))}
-                  </span>
-                )}
-                <span className="w-1.5 flex-shrink-0" />
-              </div>
+              <SectionRow key={child.id} row={child} />
             ))}
           </div>
         </div>
@@ -225,6 +220,51 @@ const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
     <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-teal-600 text-white rounded-full">
       {needsInputCount}
     </span>
+  );
+});
+
+// The decision queue's row. Same isolation rule as the badge above: the count
+// changes whenever any agent asks or gets answered, and that must re-render one
+// row, not the rail. Hidden entirely at zero — an empty queue should take up no
+// attention, which is the whole premise of the feature.
+const QuestionsNavRow = memo(function QuestionsNavRow({
+  isActive,
+  isNarrow,
+  onMobileClose,
+}: {
+  isActive: boolean;
+  isNarrow: boolean;
+  onMobileClose?: () => void;
+}) {
+  // Count what the QUEUE holds, not just the authored `cast decide` rows: the
+  // queue also carries sessions parked on an AskUserQuestion or permission
+  // prompt. Counting only decisions hid this row at zero while the queue still
+  // had work — removing the only way in. One hook defines "pending" for both.
+  const pending = useDecisionQueue().length;
+  if (pending === 0) return null;
+  return (
+    <Link
+      href="/questions"
+      onClick={onMobileClose}
+      className={`w-full flex items-center ${isNarrow ? "justify-center" : "gap-3"} px-4 py-2.5 border-l-2 transition-colors motion-reduce:transition-none text-left ${
+        isActive
+          ? "bg-sol-bg-highlight text-sol-text border-sol-violet"
+          : "text-sol-text-muted border-transparent hover:text-sol-text hover:bg-sol-bg-highlight/60"
+      }`}
+      title="Decisions waiting on you"
+    >
+      <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      {!isNarrow && (
+        <>
+          <span>Questions</span>
+          <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-sol-violet text-white rounded-full">
+            {pending}
+          </span>
+        </>
+      )}
+    </Link>
   );
 });
 
@@ -253,11 +293,13 @@ const ChatNavRow = memo(function ChatNavRow({
   const { channels, mentions } = useChatUnread();
   const rail = useChatRail();
   const router = useRouter();
-  const openCreateModal = useInboxStore((s) => s.openCreateModal);
-  const activeWorkspaceTeam = useInboxStore((s) => s.clientState.ui?.active_team_id);
   // The app's one context-menu system: one instance for the whole list, rows
   // open it from the ⋯ button and from right-click alike.
   const channelMenu = useChannelMenu();
+  // Same rule the saved-view rows follow: the pin action names the state it
+  // would change, so a pinned channel offers "Unpin" right where it was pinned.
+  const pinnedKeys = useInboxStore((s) => readPins(s).map((x) => `${x.kind}:${x.id}`).join(","));
+  const isChannelPinned = (id: string) => pinnedKeys.split(",").includes(`channel:${id}`);
 
   const items = rail.map((c) => ({
     id: c.id,
@@ -279,8 +321,8 @@ const ChatNavRow = memo(function ChatNavRow({
     actions: [
       {
         key: "pin",
-        title: "Pin to top of sidebar",
-        icon: <Pin className="w-3 h-3" />,
+        title: isChannelPinned(c.id) ? "Unpin from top" : "Pin to top of sidebar",
+        icon: isChannelPinned(c.id) ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />,
         onClick: () => togglePin("channel", c.id, c.name),
       },
       {
@@ -322,8 +364,6 @@ const ChatNavRow = memo(function ChatNavRow({
         items={items}
         expanded={expanded}
         onToggle={onToggle}
-        onAdd={activeWorkspaceTeam ? () => openCreateModal("chat") : undefined}
-        addTitle="New channel"
       />
       <ChannelContextMenu state={channelMenu} />
     </>
@@ -336,45 +376,63 @@ const ChatNavRow = memo(function ChatNavRow({
 function PinnedRail({
   onNavigate,
   applyView,
+  activeViewIds,
 }: {
   onNavigate: (href: string) => void;
   applyView: (view: any) => void;
+  /** Ids of the currently applied saved views (tasks page, docs page) — a
+   *  pinned view lights up exactly when its section row would. */
+  activeViewIds: Array<string | undefined>;
 }) {
+  const pathname = usePathname();
   const pins = useInboxStore((s) => readPins(s));
   const projects = useInboxStore((s) => s.projects);
-  // "kind:id" keys of current pins — one subscription serves every section's
-  // pin/unpin affordance and keeps the memos honest about pin state.
-  const pinnedKeys = useInboxStore((s) => readPins(s).map((x) => `${x.kind}:${x.id}`).join(","));
-  const pinned = useCallback((key: string) => pinnedKeys.split(",").includes(key), [pinnedKeys]);
   const savedViews = useInboxStore((s) => (s as any).savedViews);
   const chatChannels = useInboxStore((s) => s.chatChannels);
   if (pins.length === 0) return null;
 
-  const resolve = (pin: SidebarPin): { label: string; icon: React.ReactNode; go: () => void } => {
+  // The icon already names the kind (a hash IS the channel marker), so the
+  // label is just the name — never "# #team".
+  const resolve = (pin: SidebarPin): SectionRowSpec => {
+    const base = {
+      id: `${pin.kind}:${pin.id}`,
+      actions: [{
+        key: "unpin",
+        title: "Unpin",
+        icon: <PinOff className="w-3 h-3" />,
+        onClick: () => togglePin(pin.kind, pin.id, pin.label),
+      }],
+    };
     if (pin.kind === "project") {
       const p = (projects as any)?.[pin.id];
       return {
-        label: p?.title ?? pin.label,
+        ...base,
+        name: p?.title ?? pin.label,
         icon: <FolderKanban className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
-        go: () => onNavigate(`/projects/${pin.id}`),
+        active: pathname === `/projects/${pin.id}` || !!pathname?.startsWith(`/projects/${pin.id}/`),
+        onSelect: () => onNavigate(`/projects/${pin.id}`),
       };
     }
     if (pin.kind === "channel") {
       const c = (chatChannels as any)?.[pin.id];
       return {
-        label: `#${c?.name ?? pin.label}`,
+        ...base,
+        name: c?.name ?? pin.label.replace(/^#/, ""),
         icon: <Hash className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
-        go: () => onNavigate(`/chat/${pin.id}`),
+        active: pathname === `/chat/${pin.id}`,
+        onSelect: () => onNavigate(`/chat/${pin.id}`),
       };
     }
     const rows: any[] = Array.isArray(savedViews) ? savedViews : Object.values(savedViews ?? {});
     const v = rows.find((r: any) => String(r?._id) === pin.id);
     return {
-      label: v?.name ?? pin.label,
+      ...base,
+      name: v?.name ?? pin.label,
       icon: <Layers className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
+      active: activeViewIds.includes(pin.id),
       // A view pin replays the SAME apply the section row runs — one codepath,
       // so a pinned view can never drift from its source row's behavior.
-      go: () => (v ? applyView(v) : undefined),
+      onSelect: () => (v ? applyView(v) : undefined),
     };
   };
 
@@ -382,30 +440,8 @@ function PinnedRail({
     <div className="mb-1">
       <RailHeading label="Pinned" isNarrow={false} />
       {pins.map((pin) => {
-        const r = resolve(pin);
-        return (
-          <div
-            key={`${pin.kind}:${pin.id}`}
-            className="flex items-center group/v transition-colors text-sol-text-muted hover:bg-sol-bg-highlight/40 mx-2 rounded"
-          >
-            <button
-              onClick={r.go}
-              className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 hover:text-sol-text transition-colors flex-1 min-w-0 text-left"
-              title={r.label}
-            >
-              {r.icon}
-              <span className="truncate text-[13px] min-w-0">{r.label}</span>
-            </button>
-            <button
-              onClick={() => togglePin(pin.kind, pin.id, pin.label)}
-              className="p-1 rounded text-sol-text-dim hover:text-sol-text opacity-0 group-hover/v:opacity-100 transition-opacity flex-shrink-0"
-              title="Unpin"
-            >
-              <PinOff className="w-3 h-3" />
-            </button>
-            <span className="w-1.5 flex-shrink-0" />
-          </div>
-        );
+        const row = resolve(pin);
+        return <SectionRow key={row.id} row={row} className="mx-2 rounded" />;
       })}
     </div>
   );
@@ -443,12 +479,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     activeTeamId ? { teamId: activeTeamId } : "skip"
   );
   const teamUnreadCount = teamUnreadCountQuery ?? useInboxStore.getState().teamUnreadCount;
-  const createDoc = useInboxStore((s) => s.createDoc);
-  const wsStamp = workspaceStamp(useWorkspaceArgs());
   const createModal = useInboxStore((s) => s.createModal);
   const createModalDefaults = useInboxStore((s) => s.createModalDefaults);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
-  const openCreateModal = useInboxStore((s) => s.openCreateModal);
   const openCompose = useInboxStore((s) => s.openCompose);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
 
@@ -491,7 +524,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const savedViewRows = useInboxStore((s) => s.savedViews);
   const savedViews = useMemo(
     () => Object.values(savedViewRows ?? {})
-      .filter((v: any) => !v.team_id || v.team_id === activeTeamId)
+      .filter((v: any) => inActiveWorkspace(v, activeTeamId))
       // Yours first, then teammates' shared ones; alphabetical within each, so
       // the rail is stable rather than reordering as people edit their views.
       .sort((a: any, b: any) =>
@@ -730,13 +763,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const sidebarContent = (
     <>
       <div className="flex-1 flex flex-col min-h-0">
-        {/* Workbenches first: switching the whole arrangement is the rail's
-            fastest gesture, so it sits at the top (see store/workbench.ts). */}
-        <WorkbenchSection isNarrow={isNarrow} onMobileClose={onMobileClose} />
         {!isNarrow && (
           <PinnedRail
             onNavigate={(href) => { router.push(href); onMobileClose?.(); }}
             applyView={applyView}
+            activeViewIds={[activeTaskViewId, activeDocViewId]}
           />
         )}
         <RailHeading label="Conversations" isNarrow={isNarrow} />
@@ -790,6 +821,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               )}
             </Link>
           )}
+          <QuestionsNavRow
+            isActive={pathname === "/questions"}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+          />
           <ChatNavRow
             isActive={!!isChat}
             isNarrow={isNarrow}
@@ -822,7 +858,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             isActive={isTasks}
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
-            onAdd={() => openCreateModal("task")}
             items={taskViewItems}
             expanded={viewSectionOverride.tasks ?? isTasks}
             onToggle={() => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? isTasks) }))}
@@ -838,14 +873,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             isActive={isDocs || isPlans}
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
-            addTitle="New page"
-            onAdd={async () => {
-              // Stamp the active workspace so the doc lives where it was created.
-              await createDoc(
-                { title: "", doc_type: "note", ...wsStamp },
-                { version: 1, kind: "navigate" },
-              );
-            }}
             items={docViewItems}
             expanded={viewSectionOverride.docs ?? (isDocs || isPlans)}
             onToggle={() => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) }))}
@@ -1054,6 +1081,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             </div>
           </div>
         )}
+
+        {/* Saved layouts (store/workbench.ts): name the current arrangement,
+            switch to it, update it in place. Lives down here with the other
+            environment-level sections — it configures the frame, not the work. */}
+        <WorkbenchSection isNarrow={isNarrow} onMobileClose={onMobileClose} />
 
         {!isNarrow && computedDirectories.length > 0 && (
           <div className="mt-4">
