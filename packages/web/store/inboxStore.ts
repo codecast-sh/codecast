@@ -3400,6 +3400,27 @@ interface InboxStoreState extends ChatSliceState {
   currentUser: any | null;
   teams: any[];
   teamMembers: any[];
+  // Huddles (calls.ts). myCalls syncs the ring pipeline's whole world in one
+  // singleton: invites ringing at me, my outbound ring, my room membership.
+  // callOccupancy maps room_key → live roster for chips. Neither persists —
+  // a reload re-derives both from the subscription (a stale ring replayed
+  // from IDB would be a phantom ring).
+  myCalls: { incoming: any[]; outgoing: any[]; membership: any | null };
+  callOccupancy: Record<string, any[]>;
+  callConfig: { enabled: boolean; url?: string } | null;
+  // Ephemeral media-plane state, written only by lib/calls/callManager. The
+  // dock renders from THIS synchronously (local-first: joining paints
+  // "connecting" before any server or SFU round-trip).
+  call: {
+    phase: "idle" | "ringing_out" | "connecting" | "connected" | "error";
+    roomKey: string | null;
+    muted: boolean;
+    camera: boolean;
+    sharing: boolean;
+    speaking: string[];
+    error: string | null;
+  };
+  setCallState: (patch: Partial<InboxStoreState["call"]>) => void;
   teamUnreadCount: number | null;
   favorites: any[];
   bookmarks: any[];
@@ -3712,7 +3733,7 @@ function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boole
 // into value-identical no-ops, so the roster/user refs stay stable and their
 // subscribers stop re-rendering at idle.
 const PRESENCE_QUANTUM_MS = 60_000;
-const PRESENCE_FIELDS = ["daemon_last_seen", "last_heartbeat", "last_seen", "recent_session_updated"];
+const PRESENCE_FIELDS = ["daemon_last_seen", "last_heartbeat", "last_seen", "recent_session_updated", "presence_input_at"];
 // Streaming counters shown only in hover tooltips (a teammate's message count
 // ticks up on every agent turn); step them so the roster ref doesn't churn on
 // each increment.
@@ -3918,6 +3939,13 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     },
   },
   currentUser: { kind: "singleton", normalize: quantizePresence },
+  // Server-authoritative call state: wholesale replace (no local edits to
+  // protect — the optimistic layer for calls is the ephemeral `call` slice,
+  // not these rows). Timestamps are bucketed server-side (calls.ts), so
+  // no-change pushes bail on the JSON compare.
+  myCalls: { kind: "singleton" },
+  callOccupancy: { kind: "singleton" },
+  callConfig: { kind: "singleton" },
   teams: { kind: "list" },
   teamMembers: {
     kind: "list",
@@ -8152,6 +8180,23 @@ const inboxStoreConfig = (set: any, get: any) => ({
   favorites: [],
   bookmarks: [],
   bookmarkPending: {},
+
+  myCalls: { incoming: [], outgoing: [], membership: null },
+  callOccupancy: {},
+  callConfig: null,
+  call: {
+    phase: "idle" as const,
+    roomKey: null,
+    muted: true,
+    camera: false,
+    sharing: false,
+    speaking: [],
+    error: null,
+  },
+  // Raw set() by convention: ephemeral UI/media state, never shared or
+  // persisted (same class as modal toggles).
+  setCallState: (patch: Partial<InboxStoreState["call"]>) =>
+    set((s: any) => ({ call: { ...s.call, ...patch } })),
 
   // =====================
   // SELECTORS

@@ -114,19 +114,23 @@ import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./browser/BrowserWatchSplit";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
+import { inActiveWorkspace } from "../lib/workspaceScope";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
+import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../lib/pollPayload";
+import { dropScrapedProseTwins } from "../lib/proseTwins";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
+import { SessionHuddleButton } from "./calls/OccupancyChip";
 import { FormattedSummary } from "./FormattedSummary";
 import { ThreadStatePanel } from "./ThreadStatePanel";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, normalizeCastCategory, extractCastBodyParts, extractBrowserPageUrl, buildBrowserPageUrlMap, type BrowserRowInput, type CastBodyPart, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, normalizeCastCategory, extractCastBodyParts, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -15219,6 +15223,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 )}
 
                 {headerExtra}
+
+                {/* Huddle about this session: a live chip when occupied, a
+                    quiet start affordance otherwise (hidden when calling is
+                    unconfigured — SessionHuddleButton gates itself). */}
+                {conversation._id && !guest && (
+                  <SessionHuddleButton conversationId={String(conversation._id)} />
+                )}
 
                 {(highlightQuery || isLocalSearchOpen) && (
                   <div className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-amber-200/50 dark:bg-amber-800/30 text-amber-800 dark:text-amber-200">
