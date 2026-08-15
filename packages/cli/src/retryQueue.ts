@@ -72,6 +72,10 @@ const RETRY_BATCH_MAX_BYTES = 900_000;
 // Generous on purpose: it only exists to shed an op that keeps timing out on a
 // HEALTHY backend, and no real brownout has approached this length.
 const OVERLOAD_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+// How long a dropped operation stays in dropped-operations.json before it is
+// pruned on the next write. Long enough to debug an incident, short enough that
+// the file drains on its own instead of accreting forever.
+const DROPPED_OPS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 function chunkRetryMessages<T>(
   messages: T[],
@@ -834,7 +838,13 @@ export class RetryQueue {
 
       existing.push(dropped);
 
-      // Keep only last 1000 dropped operations
+      // Bound the file in both dimensions. The count cap alone let a burst from
+      // months ago (666 addMessages drops, 4.4MB) sit on disk forever — nothing
+      // ever cleared it, and each health tick re-parsed the whole thing. Age-prune
+      // so the file reflects the recent past (forensics window) and drains on its
+      // own once an incident is over.
+      const cutoff = Date.now() - DROPPED_OPS_RETENTION_MS;
+      existing = existing.filter((d) => (d.droppedAt ?? 0) >= cutoff);
       if (existing.length > 1000) {
         existing = existing.slice(-1000);
       }
@@ -843,6 +853,27 @@ export class RetryQueue {
       this.log(`Recorded dropped operation to ${this.droppedPath}`);
     } catch (err) {
       this.log(`Failed to record dropped operation: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Cheap count for health reporting: the health tick only needs a number, and
+  // parsing a multi-MB drop log synchronously on the main thread every hour is
+  // exactly the class of blocking work the daemon's event loop can't afford.
+  // Counts top-level entries by scanning for the array's object openings, which
+  // avoids materializing the JSON; falls back to a full parse only if the file
+  // isn't the pretty-printed shape recordDroppedOperation writes.
+  getDroppedOperationCount(): number {
+    if (!this.droppedPath || !fs.existsSync(this.droppedPath)) return 0;
+    try {
+      const raw = fs.readFileSync(this.droppedPath, "utf-8");
+      // recordDroppedOperation writes JSON.stringify(arr, null, 2): each entry
+      // starts on its own line as exactly two spaces + "{".
+      const m = raw.match(/^  \{/gm);
+      if (m) return m.length;
+      if (raw.trim() === "[]") return 0;
+      return (JSON.parse(raw) as unknown[]).length;
+    } catch {
+      return 0;
     }
   }
 

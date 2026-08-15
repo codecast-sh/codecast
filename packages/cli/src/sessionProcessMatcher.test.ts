@@ -13,6 +13,10 @@ import {
   resolveSpawnerSessionId,
   classifyProcessOwnership,
   shortId,
+  argvSessionId,
+  parsePsEtimeSeconds,
+  processDeclaredSessionId,
+  judgeProcessIdentity,
 } from "./sessionProcessMatcher.js";
 
 describe("isRecognizedAgentComm", () => {
@@ -425,5 +429,79 @@ describe("spawn-parent resolution", () => {
   test("parseLsofPidPaths ignores n-lines with no open process block and unparseable pids", () => {
     const out = ["n/orphan/path", "pnotapid", "n/also/orphan", "p77junk", "n/still-orphan", "p77", "n/kept"].join("\n");
     expect(parseLsofPidPaths(out)).toEqual(new Map([[77, ["/kept"]]]));
+  });
+});
+
+describe("argvSessionId", () => {
+  test("reads claude --resume / -r / --session-id", () => {
+    expect(argvSessionId("claude --resume 3d2a9117-83fc-47ef-9993-5180b2cf7017 --model fable --dangerously-skip-permissions"))
+      .toBe("3d2a9117-83fc-47ef-9993-5180b2cf7017");
+    expect(argvSessionId("claude -r 3d2a9117-83fc-47ef-9993-5180b2cf7017")).toBe("3d2a9117-83fc-47ef-9993-5180b2cf7017");
+    expect(argvSessionId("claude --session-id=c291b8e9-5dc0-4b96-a5c6-a1f60bf9ef00 --chrome")).toBe("c291b8e9-5dc0-4b96-a5c6-a1f60bf9ef00");
+  });
+  test("reads codex resume <id> only right after the codex binary", () => {
+    expect(argvSessionId("node /opt/homebrew/bin/codex resume 019fb73a-a740-7000-8000-000000000000")).toBe("019fb73a-a740-7000-8000-000000000000");
+    // "resume" inside a prompt argument is just a word.
+    expect(argvSessionId('claude "please resume abcdefghijk where we left off"')).toBeNull();
+  });
+  test("returns null for a bare launch", () => {
+    expect(argvSessionId("claude --dangerously-skip-permissions")).toBeNull();
+    expect(argvSessionId("-bash")).toBeNull();
+  });
+});
+
+describe("parsePsEtimeSeconds", () => {
+  test("parses mm:ss, hh:mm:ss and dd-hh:mm:ss", () => {
+    expect(parsePsEtimeSeconds("05:07")).toBe(307);
+    expect(parsePsEtimeSeconds("01:02:03")).toBe(3723);
+    expect(parsePsEtimeSeconds("2-01:02:03")).toBe(2 * 86400 + 3723);
+    expect(parsePsEtimeSeconds("")).toBeNull();
+    expect(parsePsEtimeSeconds("garbage")).toBeNull();
+  });
+});
+
+describe("processDeclaredSessionId / judgeProcessIdentity", () => {
+  // Fixture from the 2026-08-15 incident: tmux cc-resume-c291b8e9 hosted
+  // `claude --resume 3d2a9117…` (pid 97629, started 02:34:35Z). Every lookup
+  // keyed by the tmux name or the stale c291b8e9 registry handed that pid to the
+  // Screenplay conversation.
+  const S = "c291b8e9-5dc0-4b96-a5c6-a1f60bf9ef00";
+  const F = "3d2a9117-83fc-47ef-9993-5180b2cf7017";
+  const start = 1786761275; // 02:34:35Z
+
+  test("argv names another session and no hook claim contradicts it: foreign", () => {
+    const r = judgeProcessIdentity({ sessionId: S, argvId: F, claims: [], processStartSec: start });
+    expect(r).toEqual({ verdict: "foreign", declared: F });
+  });
+
+  test("argv names the session itself: owned", () => {
+    expect(judgeProcessIdentity({ sessionId: F, argvId: F, claims: [], processStartSec: start }).verdict).toBe("owned");
+  });
+
+  test("a newer hook claim beats argv (in-process /clear or /resume switch)", () => {
+    // Launched for S, then the TUI switched to F: the hook wrote F's claim after start.
+    const claims = [{ sessionId: S, ts: start + 2 }, { sessionId: F, ts: start + 900 }];
+    expect(judgeProcessIdentity({ sessionId: S, argvId: S, claims, processStartSec: start }).verdict).toBe("foreign");
+    expect(judgeProcessIdentity({ sessionId: F, argvId: S, claims, processStartSec: start }).verdict).toBe("owned");
+  });
+
+  test("a claim older than the process is a reused pid, not evidence", () => {
+    // F's registry still names this pid from a process that died an hour before
+    // S launched on the same pid.
+    const claims = [{ sessionId: F, ts: start - 3600 }];
+    expect(judgeProcessIdentity({ sessionId: S, argvId: S, claims, processStartSec: start }).verdict).toBe("owned");
+    // With no argv either, a stale claim must not manufacture an identity.
+    expect(judgeProcessIdentity({ sessionId: S, argvId: null, claims, processStartSec: start }).verdict).toBe("unknown");
+  });
+
+  test("unknown start time ignores claims and falls back to argv", () => {
+    const claims = [{ sessionId: F, ts: start + 10 }];
+    expect(processDeclaredSessionId({ argvId: S, claims, processStartSec: null })).toBe(S);
+    expect(processDeclaredSessionId({ argvId: null, claims, processStartSec: null })).toBeNull();
+  });
+
+  test("no signal at all: unknown, so callers keep their current answer", () => {
+    expect(judgeProcessIdentity({ sessionId: S, argvId: null, claims: [], processStartSec: start }))
+      .toEqual({ verdict: "unknown", declared: null });
   });
 });

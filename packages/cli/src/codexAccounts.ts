@@ -25,6 +25,7 @@ import * as os from "os";
 import * as path from "path";
 import { deriveProfileName, isLegacyDerivedName } from "./ccAccounts.js";
 import { atomicWriteFile } from "./atomicWrite.js";
+import { readProfileIndexFile } from "./readForUpdate.js";
 import {
   codexHome,
   collectCodexUsageSnapshot,
@@ -145,11 +146,10 @@ interface ProfileIndex {
 }
 
 export function readProfileIndex(): ProfileIndex {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(indexPath(), "utf-8"));
-    if (parsed && typeof parsed.profiles === "object") return parsed;
-  } catch {}
-  return { profiles: {} };
+  return readProfileIndexFile<CodexProfileMeta>(
+    indexPath(),
+    (message) => new CodexAccountError(message),
+  );
 }
 
 function writeProfileIndex(index: ProfileIndex): void {

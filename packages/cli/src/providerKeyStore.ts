@@ -12,6 +12,7 @@ import * as fs from "fs";
 import * as path from "path";
 import type { ProviderKeyStore } from "@codecast/shared/contracts";
 import { atomicWriteFile } from "./atomicWrite.js";
+import { readJsonForUpdate } from "./readForUpdate.js";
 
 export const PROVIDER_KEY_STORE_FILE = "provider-keys.json";
 
@@ -33,6 +34,31 @@ export function readProviderKeyStore(configDir: string): ProviderKeyStore {
   } catch {
     return {};
   }
+}
+
+/**
+ * The managed keys, for a caller that is about to write them back.
+ *
+ * `readProviderKeyStore` above degrades an unreadable file to `{}` on purpose,
+ * which is right for a launch: no managed keys means system auth, and no session
+ * should die over this file. It is wrong for `cast keys set`, which adds one key
+ * to what it read and writes the whole map back — there, a `{}` from a corrupt
+ * read silently deletes every other provider's key, and the user only finds out
+ * the next time a launch quietly falls back to system auth.
+ *
+ * So an update path reads through here instead: absent stays `{}`, and anything
+ * else throws with the file named.
+ */
+export function readProviderKeyStoreForUpdate(configDir: string): ProviderKeyStore {
+  const parsed = readJsonForUpdate<Record<string, unknown>>(
+    providerKeyStorePath(configDir),
+    (message) => new Error(message),
+    (v) => typeof v === "object" && v !== null && !Array.isArray(v),
+    "a provider key map",
+  );
+  const out: ProviderKeyStore = {};
+  for (const [k, v] of Object.entries(parsed ?? {})) if (typeof v === "string" && v) out[k] = v;
+  return out;
 }
 
 /** Write the store atomically at 0600, or remove the file when the store is empty
