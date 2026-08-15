@@ -26,7 +26,7 @@ import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { LabelChips } from "../../components/LabelChips";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
-import { filterToWorkspace } from "../../lib/workspaceScope";
+import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../lib/savedViews";
 import { buildTaskTree, isActiveTask, isHumanOrigin, taskFamilyIndex, taskOrigin } from "@codecast/shared/tasks";
 import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
@@ -122,7 +122,7 @@ export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenD
   // Resolve through the task's own team so a row shows that team's vocabulary
   // ("Working on") even if it ever renders outside its workspace view.
   const teamStatuses = useTeamTaskStatusList((task as any).team_id);
-  const status = statusVisual(taskStatusOf(task as any, teamStatuses));
+  const status = statusVisual(taskStatusOf(task as any, teamStatuses), teamStatuses);
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.medium;
   const StatusIcon = status.icon;
   const PriorityIcon = priority.icon;
@@ -363,7 +363,7 @@ function fmtDate(ms: number): string {
  *  reader sees exactly which two rows the drop involved. */
 function TaskMiniCard({ task }: { task: TaskItem }) {
   const teamStatuses = useTeamTaskStatusList((task as any).team_id);
-  const status = statusVisual(taskStatusOf(task as any, teamStatuses));
+  const status = statusVisual(taskStatusOf(task as any, teamStatuses), teamStatuses);
   const StatusIcon = status.icon;
   return (
     <div className="flex items-center gap-2 rounded-md border border-sol-border/40 bg-sol-bg-alt/40 px-2.5 py-1.5 min-w-0">
@@ -626,7 +626,7 @@ function KanbanView({
       <div className="flex-1 flex gap-3 overflow-x-auto px-4 py-4 pb-6">
         {visibleStatuses.map((col) => {
           const status = col.id;
-          const cfg = statusVisual(col);
+          const cfg = statusVisual(col, statuses);
           const Icon = cfg.icon;
           const tasks = grouped[status] || [];
           return (
@@ -686,7 +686,7 @@ function KanbanView({
         <div className="w-44 border-l border-sol-border/20 px-3 py-4 flex-shrink-0 flex flex-col gap-1">
           <p className="text-[10px] text-sol-text-dim uppercase tracking-widest mb-2 font-medium">Hidden columns</p>
           {hiddenWithTasks.map((col) => {
-            const cfg = statusVisual(col);
+            const cfg = statusVisual(col, statuses);
             const Icon = cfg.icon;
             return (
               <button
@@ -879,7 +879,15 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   const params = useParams();
   const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
-  const tasks = useInboxStore((s) => s.tasks);
+  // The one sanctioned reader for a scoped collection — re-asserts the active
+  // workspace over the cross-workspace store cache.
+  const wsTasks = useWorkspaceCollection<TaskItem>("tasks");
+  // Keyed lookup over the SAME scoped set, so a parent chip can never point at
+  // a row outside the active workspace (the server refuses such a parent too).
+  const tasksById = useMemo(
+    () => Object.fromEntries(wsTasks.map((t) => [String(t._id), t])) as Record<string, TaskItem>,
+    [wsTasks],
+  );
   const projects = useInboxStore((s) => s.projects);
   const taskActiveSessions = useInboxStore((s) => s.taskActiveSessions);
   const taskOriginBadges = useInboxStore((s) => s.taskOriginBadges);
@@ -949,7 +957,11 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   const { hasMore, loadMore } = useSyncTasks();
   const currentUser = useQuery(api.users.getCurrentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as any;
+  // One workspace pointer for the whole page: rows are scoped by activeTeamId
+  // (filterToWorkspace below), so the roster must use the same source — a
+  // currentUser.team_id fallback here made the two disagree in the personal
+  // space (personal rows, default team's roster).
+  const effectiveTeamId = activeTeamId as any;
   // The workspace's status vocabulary: the active team's custom statuses, or
   // the defaults in the personal space. Everything visible is one workspace
   // (filterToWorkspace below), so one list serves columns, groups and drops.
@@ -984,8 +996,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   // (lib/workspaceScope, the one shared predicate): a team view shows ONLY that
   // team's tasks — personal (teamless) tasks live in the personal view alone.
   const tasksList = useMemo(() => {
-    const all = Object.values(tasks);
-    const inWorkspace = filterToWorkspace(all, activeTeamId);
+    const inWorkspace = wsTasks;
     // A project surface is the same pipeline narrowed at its source, so every
     // count, filter and group below reports on the project alone.
     const scoped = projectId
@@ -1011,7 +1022,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
         source_agent_type: sourceAgent,
       };
     });
-  }, [tasks, activeTeamId, taskOriginBadges, projectId]);
+  }, [wsTasks, taskOriginBadges, projectId]);
 
   const allLabels = useMemo(() => {
     const set = new Set<string>(DEFAULT_LABELS);
@@ -1340,7 +1351,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
     // top level — the parent is filtered out (or off this group), so the row
     // carries an orientation chip back to it.
     const parentRow = task.parent_id && (nest?.depth ?? 0) === 0
-      ? (tasks[String(task.parent_id)] as TaskItem | undefined)
+      ? (tasksById[String(task.parent_id)] as TaskItem | undefined)
       : undefined;
     return (
       <TaskRow
@@ -1356,7 +1367,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
         parentChip={parentRow ? { id: parentRow._id, short_id: parentRow.short_id, title: parentRow.title } : null}
       />
     );
-  }, [isBotView, handleTriage, viewNesting, familyIndex, tasks, collapsedIds, toggleCollapsed]);
+  }, [isBotView, handleTriage, viewNesting, familyIndex, tasksById, collapsedIds, toggleCollapsed]);
 
   return (
     <>
@@ -1546,7 +1557,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
                 toast.success(`${task.short_id} \u2192 ${target.name}`);
               }}
               parentChipFor={(t) => {
-                const p = t.parent_id ? (tasks[String(t.parent_id)] as TaskItem | undefined) : undefined;
+                const p = t.parent_id ? (tasksById[String(t.parent_id)] as TaskItem | undefined) : undefined;
                 return p ? { short_id: p.short_id, title: p.title } : null;
               }}
             />

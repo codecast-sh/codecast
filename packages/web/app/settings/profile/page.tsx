@@ -83,6 +83,13 @@ export default function ProfilePage() {
           </div>
           <div className="flex items-center justify-between gap-4">
             <div>
+              <span className="text-sol-base1">Chat sounds</span>
+              <p className="text-xs text-sol-base01 mt-0.5">Play a sound when a team chat message notifies you</p>
+            </div>
+            <ChatSoundsToggle />
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div>
               <span className="text-sol-base1">Simple view</span>
               <p className="text-xs text-sol-base01 mt-0.5">Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away</p>
             </div>
@@ -305,6 +312,17 @@ function SoundsToggle() {
     <Switch
       checked={soundsEnabled}
       onCheckedChange={(v) => updateUI({ sounds_enabled: v })}
+    />
+  );
+}
+
+function ChatSoundsToggle() {
+  const enabled = useInboxStore((s) => s.clientState?.ui?.chat_sounds_enabled !== false);
+  const updateUI = useInboxStore((s) => s.updateClientUI);
+  return (
+    <Switch
+      checked={enabled}
+      onCheckedChange={(v) => updateUI({ chat_sounds_enabled: v })}
     />
   );
 }

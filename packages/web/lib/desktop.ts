@@ -7,7 +7,7 @@ declare global {
       onUpdateStatus: (cb: (status: { status: string; version?: string; percent?: number }) => void) => void;
       restartForUpdate: () => Promise<void>;
       checkForUpdate: (opts?: { manual?: boolean }) => Promise<void>;
-      showNotification: (title: string, body: string, data?: { conversationId?: string }) => Promise<void>;
+      showNotification: (title: string, body: string, data?: { conversationId?: string; route?: string }) => Promise<void>;
       getShortcuts: () => Promise<Record<string, string>>;
       getShortcutConfig: () => Promise<DesktopShortcutConfig>;
       setShortcut: (key: string, accelerator: string) => Promise<Record<string, string>>;
@@ -225,19 +225,26 @@ export async function requestNotificationPermission(): Promise<boolean> {
   return result === "granted";
 }
 
-export async function notifyNative(title: string, body: string, data?: { conversationId?: string }) {
+export async function notifyNative(
+  title: string,
+  body: string,
+  data?: { conversationId?: string; route?: string },
+) {
   // OS notifications are for the unfocused app: when the window has focus the
   // user already sees the bell/inbox update (and hears the idle sound), so a
   // native banner on top is noise. Applies to desktop and browser alike.
   if (typeof document !== "undefined" && document.hasFocus()) return;
+  // One click target per banner: an explicit route (chat, tasks, docs) wins,
+  // else the conversation. Electron receives both and applies the same rule.
+  const route = data?.route ?? (data?.conversationId ? `/conversation/${data.conversationId}` : undefined);
   if (isElectron()) {
-    bridge("showNotification")?.(title, body, data);
+    bridge("showNotification")?.(title, body, { ...data, route });
   } else if (hasBrowserNotificationPermission()) {
-    const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId });
-    if (data?.conversationId) {
+    const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId ?? route });
+    if (route) {
       n.onclick = () => {
         window.focus();
-        window.location.href = `/conversation/${data.conversationId}`;
+        window.location.href = route;
       };
     }
   }

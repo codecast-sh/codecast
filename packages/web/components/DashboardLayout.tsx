@@ -26,6 +26,7 @@ import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
 import { Plus, PanelLeft, PanelRight, MessageSquare, SquareTerminal } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
+import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { ConnectionBanner } from "./ConnectionBanner";
@@ -244,6 +245,28 @@ function useChatTitleBadge() {
   return null;
 }
 
+// Detached tab window OS title: lead with the surface, then the specific thing
+// — "Codecast Chat | design", "Codecast Inbox | Fix the auth race" — so
+// alt-tab and the window list name each window by what it shows. Only detached
+// windows: the main window keeps its own title writers (ConversationView, the
+// mention badge above).
+function useDetachedWindowTitle(path: string) {
+  const detached = isDetachedTabWindow();
+  const title = useInboxStore((s) => {
+    if (!detached) return null;
+    const label = pathLabel(path);
+    // An inbox window titles by the session it is SHOWING (the store pointer);
+    // the URL's ?s= deep link is the fallback inside tabTitle.
+    const inboxish = path.startsWith("/inbox") || path.startsWith("/conversation");
+    const sessionId = inboxish ? s.currentSessionId ?? undefined : undefined;
+    const rest = tabTitle({ id: "detached", path, sessionId, title: "", createdAt: 0 }, s.sessions, s.chatChannels);
+    return rest && rest !== label ? `Codecast ${label} | ${rest}` : `Codecast ${label}`;
+  });
+  useWatchEffect(() => {
+    if (title) document.title = title;
+  }, [title]);
+}
+
 function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
   const isGuest = !isAuthenticated && !isAuthLoading;
@@ -314,6 +337,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // actually mounted, not the tab the user last worked in.
   const routerLocation = useLocation();
   const router = useRouter();
+  useDetachedWindowTitle(routerLocation.pathname + routerLocation.search);
 
   const [desktopClass, setDesktopClass] = useState("");
   const [isDesktopApp, setIsDesktopApp] = useState(false);
@@ -414,7 +438,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const showMobileSessionList = railOpen && isMobile;
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
-  const rightPeekEnabled = !railOpen && !isMobile;
+  // Never in zen mode (same rule as the left peek): zen means nothing slides in.
+  const rightPeekEnabled = !railOpen && !isMobile && !isZenMode;
 
   // The conversation you're attending to stays visible wherever it CAN be: it
   // owns the stage on the inbox, and rides along as the companion on a working
@@ -445,16 +470,20 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         store.wsShow("secondary", pane, { presentation: "split" });
       }
     } else if (companion) {
-      // The fleet board's drill-in lives in this same slot as an OVERLAY on
-      // the inbox surface, owned by the board, not by this mirror — leave it.
-      const isBoardDrillIn = slotPolicy.secondary === "overlay" && s.workspace.secondary.presentation === "overlay";
+      // The fleet board's drill-in lives in this same slot as an OVERLAY. It
+      // is owned by the board, not by this mirror — and the URL cannot be
+      // trusted to say the board is up (a stamped tab path can read
+      // /conversation/<id> while the stage shows the inbox pane), so the gate
+      // is the presentation itself: the companion is always a split, an
+      // overlay here is always the board's visit. Never clear overlays.
+      const isBoardDrillIn = s.workspace.secondary.presentation === "overlay";
       if (!isBoardDrillIn) {
         // The surface that can hold it is gone — pure bookkeeping, not a
         // dismissal, so returning to a working surface brings it back.
         store.wsHide("secondary", { remember: false });
       }
     }
-  }, [isOnWorkingPage, slotPolicy.secondary, s.workspace.secondary.presentation, isMobile, companionId(s.workspace), s.currentSessionId, s.viewingDismissedId]);
+  }, [isOnWorkingPage, s.workspace.secondary.presentation, isMobile, companionId(s.workspace), s.currentSessionId, s.viewingDismissedId]);
 
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
@@ -982,6 +1011,16 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
         <DashboardSyncEffects />
       </ErrorBoundary>
+      {/* Zen hides the header, but a desktop window still needs the macOS
+          traffic lights cleared and a surface to drag the window by. This slim
+          strip stands in for both; the centered pill makes the grabber
+          discoverable. */}
+      {isZenMode && isDesktopApp && (
+        <div className="flex-shrink-0 h-9 electron-drag-region flex items-center justify-center">
+          {/* Tailwind /opacity is a no-op on bare --sol-* tokens; mix explicitly. */}
+          <div className="w-14 h-1 rounded-full" style={{ background: "color-mix(in srgb, var(--sol-text-dim) 22%, transparent)" }} />
+        </div>
+      )}
       {/* Header spans full width */}
       <header ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""} relative`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
@@ -1130,6 +1169,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <StorageHealthBanner />
         <DesktopAppBanner />
         <SetupPromptBanner />
+        <NewSnippetsBanner />
         <CliOfflineBanner />
         <TmuxMissingBanner />
       </ErrorBoundary>

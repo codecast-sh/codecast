@@ -5,6 +5,8 @@
 // philosophy). Shared by the header RecentlyViewedMenu and the command
 // palette's "Recently Visited" group.
 import { pathLabel } from "./pathLabel";
+import { channelDisplayName } from "./chatViews";
+import { dmOtherIds } from "@codecast/shared/chat";
 import { cleanTitle } from "./conversationProcessor";
 import type { RecentVisit } from "../store/inboxStore";
 
@@ -27,10 +29,18 @@ function resolvePageTitle(state: any, path: string): string | null {
   const [, kind, id] = m;
   // Without this every open channel is a tab called "Chat" — pathLabel can only
   // say what the PATH means, and a channel's name lives in the store. That is
-  // exactly what this resolver is for.
+  // exactly what this resolver is for. The name alone: every surface that shows
+  // it (tab bar, recent menu, sidebar) already draws the hash as the row's icon.
   if (kind === "chat") {
-    const name = state.chatChannels?.[id]?.name;
-    return name ? `#${name}` : null;
+    const channel = state.chatChannels?.[id];
+    if (!channel) return null;
+    if (channel.kind === "dm") {
+      return channelDisplayName(
+        { name: "", kind: "dm", dmMemberIds: dmOtherIds(channel.dm_key, String(state.currentUser?._id ?? "")) },
+        state.teamMembers,
+      );
+    }
+    return channel.name || null;
   }
   if (kind === "tasks") {
     const t = state.tasks?.[id] ?? Object.values(state.tasks ?? {}).find((t: any) => t._id === id || t.short_id === id);

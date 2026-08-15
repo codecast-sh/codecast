@@ -25,6 +25,7 @@ const Download = lazy(() => import("@/app/(marketing)/download/page"));
 const BlogIndex = lazy(() => import("@/app/(marketing)/blog/page"));
 const BlogGitBlame = lazy(() => import("@/app/(marketing)/blog/git-blame-for-ai-agents/page"));
 const BlogAgentInbox = lazy(() => import("@/app/(marketing)/blog/an-inbox-for-your-agents/page"));
+const BlogTeamMemory = lazy(() => import("@/app/(marketing)/blog/your-agents-forget-your-team-does-not/page"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -44,6 +45,7 @@ const Search = lazy(() => import("@/app/search/page"));
 const Explore = lazy(() => import("@/app/explore/page"));
 const Timeline = lazy(() => import("@/app/timeline/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
+const Questions = lazy(() => import("@/app/questions/page"));
 
 const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
@@ -142,6 +144,7 @@ export function App() {
               <Route path="blog" element={<E name="BlogIndex"><BlogIndex /></E>} />
               <Route path="blog/git-blame-for-ai-agents" element={<E name="BlogGitBlame"><BlogGitBlame /></E>} />
               <Route path="blog/an-inbox-for-your-agents" element={<E name="BlogAgentInbox"><BlogAgentInbox /></E>} />
+              <Route path="blog/your-agents-forget-your-team-does-not" element={<E name="BlogTeamMemory"><BlogTeamMemory /></E>} />
               <Route path="compare" element={<E name="CompareIndex"><CompareIndex /></E>} />
               <Route path="compare/:slug" element={<E name="Compare"><Compare /></E>} />
             </Route>
@@ -171,6 +174,7 @@ export function App() {
               <Route path="chat/:channelId" element={<E name="Chat"><Chat /></E>} />
               <Route path="search" element={<E name="Search"><Search /></E>} />
               <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
+              <Route path="questions" element={<E name="Questions"><Questions /></E>} />
               <Route path="conversation/:id" element={<E name="Conversation"><Conversation /></E>} />
               <Route path="conversation/:id/diff" element={<E name="ConversationDiff"><ConversationDiff /></E>} />
               <Route path="docs" element={<E name="Docs"><Docs /></E>} />

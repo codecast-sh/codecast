@@ -958,8 +958,10 @@ ipcMain.handle("show-notification", (_e, { title, body, data }) => {
     if (mainWindow) {
       mainWindow.show();
       mainWindow.focus();
-      if (data?.conversationId) {
-        const path = `/conversation/${data.conversationId}`;
+      // `route` is the one click target (chat message, task, doc...); the bare
+      // conversationId form predates it and stays as the fallback.
+      const path = data?.route || (data?.conversationId ? `/conversation/${data.conversationId}` : null);
+      if (path) {
         mainWindow.webContents.executeJavaScript(
           `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify(path)} }))`
         );

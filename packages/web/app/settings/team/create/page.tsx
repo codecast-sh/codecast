@@ -9,13 +9,13 @@ import { Label } from "../../../../components/ui/label";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { TeamIcon, TEAM_ICONS, type TeamIconName } from "../../../../components/TeamIcon";
-import { useInboxStore } from "../../../../store/inboxStore";
+import { useSwitchWorkspace } from "../../../../hooks/useSwitchWorkspace";
 
 export default function CreateTeamPage() {
   const router = useRouter();
   const user = useQuery(api.users.getCurrentUser);
   const createTeam = useMutation(api.teams.createTeam);
-  const updateClientUI = useInboxStore((s) => s.updateClientUI);
+  const switchWorkspace = useSwitchWorkspace();
 
   const [teamName, setTeamName] = useState("");
   const [selectedIcon, setSelectedIcon] = useState<TeamIconName>(
@@ -41,7 +41,10 @@ export default function CreateTeamPage() {
         user_id: user._id,
         icon: selectedIcon,
       });
-      updateClientUI({ active_team_id: teamId });
+      // Creating a team switches you into it — through the shared hook, so the
+      // CANONICAL pointer moves too. A mirror-only write here left the CLI
+      // operating in the team you just left.
+      await switchWorkspace(teamId);
       router.push(`/settings/sync?teamSetup=1&teamId=${teamId}`);
     } catch (err) {
       if (err instanceof Error) {
