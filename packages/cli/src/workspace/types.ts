@@ -69,6 +69,12 @@ export interface BrowserSpec {
   headless: boolean;
   /** Named port spec for CDP. Defaults to {base:9222, range:100}. */
   cdpPort: PortSpec;
+  /**
+   * Allowlist of origins `cast browser` may navigate to from this project
+   * (see browser/policy.ts for the matching rules). Undefined = no policy;
+   * an empty list refuses every site.
+   */
+  allow?: string[];
 }
 
 /**

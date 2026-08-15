@@ -20,7 +20,22 @@ export interface CdpEvent {
   sessionId?: string;
 }
 
-type EventHandler = (ev: CdpEvent) => void;
+export type EventHandler = (ev: CdpEvent) => void;
+
+/**
+ * What every driver layer above the transport actually needs. Two transports
+ * implement it: CdpConnection (a WebSocket straight into a Chrome we launched)
+ * and BridgeConnection (a relay through the cast extension in the user's real
+ * Chrome, where `sessionId` is "tab:<id>"). actions.ts, snapshot.ts and
+ * observe.ts are written against this interface, which is why the same verbs
+ * work on both browsers.
+ */
+export interface CdpClient {
+  send<T = any>(method: string, params?: Record<string, unknown>, sessionId?: string, timeoutMs?: number): Promise<T>;
+  on(handler: EventHandler): () => void;
+  waitFor(predicate: (ev: CdpEvent) => boolean, timeoutMs: number): Promise<CdpEvent>;
+  close(): void;
+}
 
 /** A call that never came back. Distinct from CdpError, which is a real reply. */
 export class CdpTimeout extends Error {
@@ -49,7 +64,7 @@ interface Pending {
   method: string;
 }
 
-export class CdpConnection {
+export class CdpConnection implements CdpClient {
   private ws: WebSocket | null = null;
   private nextId = 1;
   private pending = new Map<number, Pending>();
@@ -65,14 +80,8 @@ export class CdpConnection {
   }
 
   /** Discover the browser-level socket from the CDP HTTP endpoint. */
-  static async fromPort(port: number, timeoutMs = 10_000): Promise<CdpConnection> {
-    const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok) throw new Error(`CDP endpoint on port ${port} returned ${res.status}`);
-    const body = (await res.json()) as { webSocketDebuggerUrl?: string };
-    if (!body.webSocketDebuggerUrl) throw new Error(`CDP endpoint on port ${port} exposed no browser socket`);
-    return CdpConnection.connect(body.webSocketDebuggerUrl, timeoutMs);
+  static async fromPort(ep: CdpEndpoint, timeoutMs = 10_000): Promise<CdpConnection> {
+    return CdpConnection.connect(await browserSocketUrl(ep, timeoutMs), timeoutMs);
   }
 
   private open(timeoutMs: number): Promise<void> {
@@ -168,6 +177,11 @@ export class CdpConnection {
     });
   }
 
+  /** Still usable? False once the socket closed for any reason. */
+  isOpen(): boolean {
+    return !this.closed && !!this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
   /** Subscribe to protocol events. Returns an unsubscribe function. */
   on(handler: EventHandler): () => void {
     this.handlers.add(handler);
@@ -208,9 +222,54 @@ export interface CdpTarget {
   attached?: boolean;
 }
 
+/**
+
+ * Where a CDP HTTP face lives. A bare port is Chrome's own endpoint; the
+ * object form carries the token the extension bridge host requires on its
+ * `/json/*` routes (Chrome's has none — its safety comes from refusing to be
+ * driven at all on the default profile).
+ */
+export type CdpEndpoint = number | { port: number; token?: string };
+
+const portOf = (ep: CdpEndpoint): number => (typeof ep === "number" ? ep : ep.port);
+
+export function cdpHttpUrl(ep: CdpEndpoint, path: string): string {
+  const url = new URL(`http://127.0.0.1:${portOf(ep)}${path}`);
+  if (typeof ep !== "number" && ep.token) url.searchParams.set("token", ep.token);
+  return url.toString();
+}
+
+/**
+ * Discover the browser-level socket URL for an endpoint. Stable for the life
+ * of that browser, so callers may cache it and skip this HTTP hop next time
+ * (the built-in driver records it in instance.json at launch). Goes through
+ * `cdpHttpUrl`, so a token-carrying bridge endpoint is discovered the same way
+ * as Chrome's own.
+ */
+export async function browserSocketUrl(ep: CdpEndpoint, timeoutMs = 10_000): Promise<string> {
+  const res = await fetch(cdpHttpUrl(ep, "/json/version"), {
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`CDP endpoint on port ${portOf(ep)} returned ${res.status}`);
+  const body = (await res.json()) as { webSocketDebuggerUrl?: string };
+  if (!body.webSocketDebuggerUrl) throw new Error(`CDP endpoint on port ${portOf(ep)} exposed no browser socket`);
+  return body.webSocketDebuggerUrl;
+}
+
+/**
+ * List page targets over an open connection — one message on a socket we
+ * already hold, instead of a fresh HTTP request.
+ */
+export async function listTargetsVia(conn: CdpClient, timeoutMs = 5000): Promise<CdpTarget[]> {
+  const res = await conn.send<{ targetInfos: Array<Record<string, any>> }>("Target.getTargets", {}, undefined, timeoutMs);
+  return res.targetInfos
+    .filter((t) => t.type === "page")
+    .map((t) => ({ targetId: t.targetId, type: t.type, title: t.title ?? "", url: t.url ?? "", attached: t.attached }));
+}
+
 /** List page targets via the HTTP endpoint (cheaper than attaching). */
-export async function listTargets(port: number): Promise<CdpTarget[]> {
-  const res = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(5000) });
+export async function listTargets(ep: CdpEndpoint): Promise<CdpTarget[]> {
+  const res = await fetch(cdpHttpUrl(ep, "/json/list"), { signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error(`CDP /json/list returned ${res.status}`);
   const raw = (await res.json()) as Array<Record<string, any>>;
   return raw
@@ -219,9 +278,9 @@ export async function listTargets(port: number): Promise<CdpTarget[]> {
 }
 
 /** True if a CDP endpoint is answering on this port. */
-export async function isCdpAlive(port: number, timeoutMs = 1500): Promise<boolean> {
+export async function isCdpAlive(ep: CdpEndpoint, timeoutMs = 1500): Promise<boolean> {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
+    const res = await fetch(cdpHttpUrl(ep, "/json/version"), {
       signal: AbortSignal.timeout(timeoutMs),
     });
     return res.ok;

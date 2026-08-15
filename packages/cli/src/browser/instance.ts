@@ -16,13 +16,20 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
-import { CdpConnection, CdpTimeout, isCdpAlive, listTargets, type CdpTarget } from "./cdp.js";
+import { isCdpAlive, listTargets, type CdpClient, type CdpTarget } from "./cdp.js";
+import { enablePageDomains, TabUnresponsive, type EnablePatience } from "./recovery.js";
 import { browserHome, clonePath, chromeUserDataRoot, type ChromeChannel } from "./profile.js";
 import { findChromeBinary, chromeBinaryProbes, isPidAlive, ChromeNotFoundError } from "../workspace/chrome.js";
 
 export interface InstanceState {
   pid: number;
   port: number;
+  /**
+   * The browser-level CDP socket, learned once at launch. Fixed for the life
+   * of that Chrome, so every later command connects straight to it instead of
+   * asking /json/version first — one HTTP round trip fewer per verb.
+   */
+  wsUrl?: string;
   userDataDir: string;
   headless: boolean;
   /** Which real Chrome profile this clone came from, for `status` output. */
@@ -49,6 +56,17 @@ export interface InstanceState {
    */
   tabsBySession?: Record<string, string>;
   /**
+   * When each session in `tabsBySession` last ran a command.
+   *
+   * The sessions holding tabs are also the sessions holding the browser open:
+   * `cast browser stop` only tears Chrome down when the caller is the last one
+   * of them (see `planStop`). That needs a way to tell a session that is
+   * merely quiet from one that died with its tab still open, or a single dead
+   * agent could pin the browser forever. This stamp is that: a holder that has
+   * not run anything in `HOLDER_STALE_MS` no longer counts.
+   */
+  sessionSeenAt?: Record<string, number>;
+  /**
    * Viewport emulation per tab, so it survives between commands.
    *
    * `Emulation.setDeviceMetricsOverride` belongs to the CDP session that set
@@ -59,6 +77,20 @@ export interface InstanceState {
    * command, which is what anyone checking a breakpoint expects.
    */
   viewportByTab?: Record<string, { width: number; height: number; scale: number; mobile: boolean; userAgent?: string }>;
+  /**
+   * The last URL each tab was ASKED for, and where that request actually
+   * landed.
+   *
+   * Comparing the request against `location.href` alone is not enough, because
+   * apps move you: ask codecast for `/inbox` and it settles on `/`. The
+   * requested URL then never matches where you are, so every repeat of the same
+   * request reloads the whole application — measured at 12s a time — and lands
+   * in exactly the same place it already was. Remembering the pair makes the
+   * rule honest: repeating a request that already ran, from the page it landed
+   * on, is a no-op. Ask for something else, or let the page move elsewhere, and
+   * it navigates normally.
+   */
+  navByTab?: Record<string, { requested: string; landed: string }>;
   /** Fallback for callers with no session (a human at a terminal). */
   activeTargetId: string | null;
 }
@@ -168,7 +200,19 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
     "about:blank",
   ];
 
-  const child = spawn(bin, args, { stdio: ["ignore", "ignore", "ignore"], detached: true });
+  // On macOS, spawning an app bundle's binary makes the OS activate it, so a
+  // launch yanks the screen away from whatever the human is doing. `open -g`
+  // starts it without activating; `-n` allows our own instance alongside any
+  // Chrome they already have open, and `--args` passes the flags through.
+  // Everywhere else, spawning the binary directly is already unobtrusive.
+  const useOpen = process.platform === "darwin" && !opts.headless && bin.includes(".app/");
+  const appPath = useOpen ? bin.slice(0, bin.indexOf(".app/") + 4) : "";
+  const child = useOpen
+    ? spawn("open", ["-g", "-n", "-a", appPath, "--args", ...args], {
+        stdio: ["ignore", "ignore", "ignore"],
+        detached: true,
+      })
+    : spawn(bin, args, { stdio: ["ignore", "ignore", "ignore"], detached: true });
   let spawnError: Error | null = null;
   child.on("error", (err) => {
     spawnError = err;
@@ -176,14 +220,40 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
   child.unref();
   if (!child.pid) throw new Error("Chrome spawn returned no pid");
 
+  // `open` is a launcher: it hands the request to the OS and exits, so its pid
+  // is not Chrome's and dies within moments of a perfectly good launch. The
+  // real browser has to be found by the profile directory it holds, which is
+  // unique to this instance. Getting this wrong would make every launch look
+  // like an immediate crash, and would record a pid that liveness checks read
+  // as "the browser is gone" forever after.
+  const ownPid = (): number | null => {
+    if (!useOpen) return child.pid!;
+    // The browser process is the one with no --type=; the rest are renderers
+    // and helpers that inherit the flag but exit independently.
+    for (const pid of strayPids(opts.userDataDir)) {
+      try {
+        const { execSync } = require("node:child_process") as typeof import("node:child_process");
+        const cmd = execSync(`ps -o command= -p ${pid}`, { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+        if (!/--type=/.test(cmd)) return pid;
+      } catch {
+        /* the process went away between listing and inspecting it */
+      }
+    }
+    return null;
+  };
+
   // Generous, because a cold start on a large cloned profile is slow and the
   // failure mode of giving up early is nasty: Chrome keeps running and holds
   // the profile's singleton lock, so every later launch silently hands off to
   // the instance we already abandoned and appears to do nothing at all.
-  const deadline = Date.now() + 45_000;
+  const launchedAt = Date.now();
+  const deadline = launchedAt + 45_000;
   while (Date.now() < deadline) {
     if (spawnError) throw new Error(`failed to spawn Chrome at '${bin}': ${(spawnError as Error).message}`);
-    if (!isPidAlive(child.pid)) {
+    // Under `open` the launcher exiting is normal and says nothing about
+    // Chrome, so the "did it die?" check has to look at the browser itself.
+    const alive = useOpen ? strayPids(opts.userDataDir).length > 0 || Date.now() < launchedAt + 5000 : isPidAlive(child.pid);
+    if (!alive) {
       // Diagnose honestly: the dominant cause is Chrome's profile singleton —
       // another Chrome still holds this user-data-dir, so our launch forwarded
       // its command line to that instance and exited. Reporting this as a
@@ -202,7 +272,13 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
           `since Chrome 136 the default profile cannot be driven over CDP; clone it instead.`,
       );
     }
-    if (await isCdpAlive(opts.port)) return child.pid;
+    if (await isCdpAlive(opts.port)) {
+      const pid = ownPid();
+      if (pid) return pid;
+      // CDP answers but the process cannot be identified — vanishingly rare,
+      // and returning a pid that is not Chrome's is worse than saying so.
+      throw new Error("Chrome started and answered CDP, but its process could not be identified");
+    }
     await sleep(200);
   }
   try {
@@ -301,22 +377,58 @@ export async function waitForStraysGone(userDataDir: string, timeoutMs = 5000): 
  * The lock is a pid-stamped file created with O_EXCL. It is stolen when its
  * holder is dead or has held it longer than a full launch could take.
  */
-export async function acquireStartLock(waitMs = 75_000): Promise<() => void> {
+export async function acquireStartLock(
+  waitMs = 75_000,
+  onWait?: (holderPid: number) => void,
+): Promise<() => void> {
   const lockFile = path.join(browserHome(), "start.lock");
   fs.mkdirSync(browserHome(), { recursive: true, mode: 0o700 });
   const staleMs = 90_000;
   const deadline = Date.now() + waitMs;
+  let announced = false;
   for (;;) {
     try {
       const fd = fs.openSync(lockFile, "wx");
       fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
       fs.closeSync(fd);
-      return () => {
+      const release = () => {
         try {
           fs.unlinkSync(lockFile);
         } catch {
           /* already released */
         }
+      };
+      // Release on the way out, not just on the normal path. The CLI reports
+      // errors through a helper that calls process.exit, which does NOT run
+      // `finally` — so a failed launch left the file behind. Reclaiming it
+      // relies on the holder pid being dead, which is true immediately but
+      // stops being true if that pid is reused, and then every start waits out
+      // the staleness timeout for no reason. Observed after a remote start
+      // failed on an unreachable host.
+      process.once("exit", release);
+      // Signals need their own handlers: Node's default disposition for
+      // SIGINT/SIGTERM terminates WITHOUT running `exit` listeners, and agents
+      // routinely wrap these commands in `timeout`, which sends SIGTERM. Re-
+      // raise afterwards so the exit status stays conventional. SIGKILL cannot
+      // be caught at all, which is what the staleness reclaim above is for.
+      const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+      const onSignal = (sig: NodeJS.Signals) => {
+        release();
+        cleanup();
+        process.kill(process.pid, sig);
+      };
+      const handlers = signals.map((sig) => {
+        const h = () => onSignal(sig);
+        process.once(sig, h);
+        return [sig, h] as const;
+      });
+      const cleanup = () => {
+        process.removeListener("exit", release);
+        for (const [sig, h] of handlers) process.removeListener(sig, h);
+      };
+      return () => {
+        cleanup();
+        release();
       };
     } catch {
       let holder: { pid?: number; at?: number } = {};
@@ -339,6 +451,13 @@ export async function acquireStartLock(waitMs = 75_000): Promise<() => void> {
           `another \`cast browser start\` (pid ${holder.pid}) has held the launch lock for over ${Math.round(waitMs / 1000)}s — ` +
             `if it is stuck, remove ${lockFile}`,
         );
+      }
+      // Say that we are queued behind another launch. A command that blocks in
+      // silence is read as hung, and an agent's response to hung is to kill and
+      // retry — the exact reflex this lock exists to prevent.
+      if (!announced && holder.pid) {
+        announced = true;
+        onWait?.(holder.pid);
       }
       await sleep(300);
     }
@@ -369,23 +488,15 @@ export async function stopInstance(state: InstanceState): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export interface PageSession {
-  conn: CdpConnection;
+  conn: CdpClient;
   sessionId: string;
   targetId: string;
 }
 
-/** Raised when a tab's renderer will not answer, with the way out. */
-export class TabUnresponsive extends Error {
-  constructor(targetId: string, detail: string) {
-    super(
-      `tab ${targetId.slice(0, 8)} did not respond (${detail}).\n` +
-        `  Usually its renderer is blocked — a modal JavaScript dialog waiting on a click, or a script in a tight loop.\n` +
-        `  It can also just be busy: this browser is shared with every other agent on the machine.\n` +
-        `  Try the command again first. If it keeps failing: cast browser close --tab ${targetId.slice(0, 8)}`,
-    );
-    this.name = "TabUnresponsive";
-  }
-}
+// The wedge classification lives in recovery.ts so the daemon-resident driver
+// and this direct path share one implementation; re-exported for callers that
+// import it from here.
+export { TabUnresponsive };
 
 /**
  * Attach to a target and turn on the domains every command needs.
@@ -395,33 +506,12 @@ export class TabUnresponsive extends Error {
  * ten seconds is long enough for any healthy page. A blocked tab must fail fast
  * and say how to recover, because the agent cannot see the window.
  */
-export async function attachToTarget(conn: CdpConnection, targetId: string): Promise<PageSession> {
+export async function attachToTarget(conn: CdpClient, targetId: string, patience?: EnablePatience): Promise<PageSession> {
   const { sessionId } = await conn.send<{ sessionId: string }>("Target.attachToTarget", {
     targetId,
     flatten: true,
   });
-  // Retried once, because a single slow answer is not proof of a wedge. One
-  // Chrome serves every agent on the machine, so a burst of parallel work makes
-  // a perfectly healthy tab miss a ten-second deadline — and condemning it then
-  // tells the agent to close a page that was only busy. A truly blocked
-  // renderer stays blocked, so a second attempt separates the two cheaply.
-  const enableAll = async (timeoutMs: number) => {
-    for (const domain of ["Page", "DOM", "Runtime", "Accessibility", "Network"]) {
-      await conn.send(`${domain}.enable`, {}, sessionId, timeoutMs);
-    }
-  };
-  try {
-    await enableAll(10_000);
-  } catch (err) {
-    if (!(err instanceof CdpTimeout)) throw err;
-    await sleep(500);
-    try {
-      await enableAll(15_000);
-    } catch (retryErr) {
-      if (retryErr instanceof CdpTimeout) throw new TabUnresponsive(targetId, retryErr.message);
-      throw retryErr;
-    }
-  }
+  await enablePageDomains(conn, sessionId, targetId, patience);
   return { conn, sessionId, targetId };
 }
 
@@ -435,7 +525,20 @@ export async function resolveTarget(
   explicit?: string,
   sessionId?: string | null,
 ): Promise<CdpTarget> {
-  const targets = await listTargets(port);
+  return pickTarget(await listTargets(port), state, explicit, sessionId);
+}
+
+/**
+ * The tab-choice policy itself, over an already-fetched tab list. Pure, so the
+ * daemon-resident driver (which lists tabs over its own socket) applies exactly
+ * the same rules as the direct path.
+ */
+export function pickTarget(
+  targets: CdpTarget[],
+  state: InstanceState,
+  explicit?: string,
+  sessionId?: string | null,
+): CdpTarget {
   if (!targets.length) throw new Error("the browser has no open tabs — run `cast browser open <url>`");
   if (explicit) {
     const match =
@@ -485,22 +588,49 @@ export async function resolveTarget(
  * agents write this concurrently, and merging into a stale in-memory snapshot
  * would drop whichever claim landed in between.
  */
-export function setActiveTarget(state: InstanceState, targetId: string, sessionId?: string | null): void {
+export function setActiveTarget(state: InstanceState, targetId: string, sessionId?: string | null, now = Date.now()): void {
   const current = readState() ?? state;
   const tabs = { ...(current.tabsBySession ?? {}) };
+  const seen = { ...(current.sessionSeenAt ?? {}) };
   if (sessionId) tabs[sessionId] = targetId;
-  if (current.activeTargetId === targetId && (!sessionId || tabs[sessionId] === current.tabsBySession?.[sessionId])) {
-    return;
-  }
-  writeState({ ...current, activeTargetId: targetId, tabsBySession: tabs });
+  // The liveness stamp is what keeps this session counted as a holder, but a
+  // write on every command is needless churn on a file every agent reads —
+  // refresh it once a minute, which is far finer than the staleness window.
+  const stampDue = !!sessionId && now - (seen[sessionId] ?? 0) > 60_000;
+  if (sessionId && stampDue) seen[sessionId] = now;
+  const unchanged =
+    current.activeTargetId === targetId &&
+    (!sessionId || tabs[sessionId] === current.tabsBySession?.[sessionId]) &&
+    !stampDue;
+  if (unchanged) return;
+  writeState({ ...current, activeTargetId: targetId, tabsBySession: tabs, sessionSeenAt: seen });
+}
+
+/** Record where a navigation was aimed and where it ended up. */
+export function recordNavigation(targetId: string, requested: string, landed: string): void {
+  const cur = readState();
+  if (!cur) return;
+  writeState({ ...cur, navByTab: { ...(cur.navByTab ?? {}), [targetId]: { requested, landed } } });
 }
 
 /** Drop tabs that no longer exist, so the map cannot grow without bound. */
 export function pruneTabOwnership(state: InstanceState, liveTargetIds: Set<string>): void {
   const tabs = state.tabsBySession ?? {};
   const kept = Object.fromEntries(Object.entries(tabs).filter(([, id]) => liveTargetIds.has(id)));
-  if (Object.keys(kept).length !== Object.keys(tabs).length) {
-    writeState({ ...state, tabsBySession: kept });
+  // The per-tab maps are keyed by target id, so a closed tab leaves an entry
+  // that can never be reached again. Prune them alongside ownership, or the
+  // state file grows for the life of the browser.
+  const byTab = <T,>(m: Record<string, T> | undefined) =>
+    Object.fromEntries(Object.entries(m ?? {}).filter(([id]) => liveTargetIds.has(id)));
+  const nav = byTab(state.navByTab);
+  const vp = byTab(state.viewportByTab);
+  const shrank =
+    Object.keys(kept).length !== Object.keys(tabs).length ||
+    Object.keys(nav).length !== Object.keys(state.navByTab ?? {}).length ||
+    Object.keys(vp).length !== Object.keys(state.viewportByTab ?? {}).length;
+  if (shrank) {
+    const seen = Object.fromEntries(Object.entries(state.sessionSeenAt ?? {}).filter(([sid]) => sid in kept));
+    writeState({ ...state, tabsBySession: kept, navByTab: nav, viewportByTab: vp, sessionSeenAt: seen });
   }
 }
 

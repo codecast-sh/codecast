@@ -1,0 +1,314 @@
+/**
+ * Host tests: a fake extension on one side, real CDP clients (our own
+ * CdpConnection, plus raw sockets) on the other. No Chrome involved — the
+ * contract under test is authentication, the CDP emulation, event routing,
+ * and honest failure when a side disappears.
+ */
+
+import { afterEach, describe, expect, test } from "bun:test";
+import { WebSocket } from "ws";
+import { CdpConnection, CdpError, listTargets } from "../cdp.js";
+import { startBridgeHost, type RunningHost } from "./host.js";
+import { CLOSE_BAD_TOKEN, targetIdOfTab, type BridgeTab } from "./protocol.js";
+
+const TOKEN = "t".repeat(64);
+let host: RunningHost | null = null;
+
+async function freePort(): Promise<number> {
+  const net = await import("node:net");
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      const p = typeof addr === "object" && addr ? addr.port : 0;
+      srv.close(() => resolve(p));
+    });
+  });
+}
+
+async function freshHost(): Promise<RunningHost> {
+  host = await startBridgeHost({ port: await freePort(), token: TOKEN });
+  return host;
+}
+
+afterEach(async () => {
+  await host?.close();
+  host = null;
+});
+
+function dial(port: number, path: string, headers: Record<string, string> = {}): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers });
+    ws.once("open", () => resolve(ws));
+    ws.once("error", reject);
+  });
+}
+
+function closeCode(ws: WebSocket, timeoutMs = 3000): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("did not close within timeout")), timeoutMs);
+    ws.once("close", (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
+}
+
+/**
+ * A scripted stand-in for the extension. Answers tabs.list from `tabs`,
+ * records attach/detach, and echoes cdp calls as `{echo: {tabId, method, params}}`.
+ */
+class FakeExtension {
+  ws!: WebSocket;
+  tabs: BridgeTab[];
+  attached = new Set<number>();
+  seen: any[] = [];
+  private nextTab = 100;
+
+  constructor(tabs: BridgeTab[]) {
+    this.tabs = tabs;
+  }
+
+  static tab(tabId: number, url = `https://example.com/${tabId}`, title = `Tab ${tabId}`): BridgeTab {
+    return { tabId, url, title, active: false, windowId: 1, attached: false };
+  }
+
+  async connect(port: number): Promise<this> {
+    this.ws = await dial(port, `/ext?token=${TOKEN}`, { origin: "chrome-extension://fakeextensionid" });
+    this.ws.send(JSON.stringify({ op: "hello", version: "9.9.9", protocol: 2, userAgent: "FakeChrome/1" }));
+    this.ws.on("message", (raw) => {
+      const m = JSON.parse(String(raw));
+      if (m.op === "ping") return;
+      this.seen.push(m);
+      const reply = (extra: any) => this.ws.send(JSON.stringify({ id: m.id, ok: true, ...extra }));
+      switch (m.op) {
+        case "tabs.list":
+          return reply({ tabs: this.tabs.map((t) => ({ ...t, attached: this.attached.has(t.tabId) })) });
+        case "tabs.create": {
+          const t = FakeExtension.tab(this.nextTab++, m.url, "new");
+          this.tabs.push(t);
+          return reply({ tabId: t.tabId });
+        }
+        case "tabs.close":
+          this.tabs = this.tabs.filter((t) => t.tabId !== m.tabId);
+          return reply({});
+        case "attach":
+          this.attached.add(m.tabId);
+          return reply({});
+        case "detach":
+          this.attached.delete(m.tabId);
+          return reply({});
+        case "cdp":
+          if (m.method === "Boom.now") {
+            return this.ws.send(JSON.stringify({ id: m.id, ok: false, error: "kaboom from chrome.debugger" }));
+          }
+          return reply({ result: { echo: { tabId: m.tabId, method: m.method, params: m.params } } });
+        default:
+          return this.ws.send(JSON.stringify({ id: m.id, ok: false, error: "unknown op " + m.op }));
+      }
+    });
+    return this;
+  }
+
+  event(tabId: number, method: string, params: any = {}): void {
+    this.ws.send(JSON.stringify({ op: "event", tabId, method, params }));
+  }
+
+  tabEvent(kind: "created" | "removed" | "updated", tab: BridgeTab): void {
+    this.ws.send(JSON.stringify({ op: "tab", kind, tab }));
+  }
+
+  /** Wait until the host has asked for `op` at least `n` times. */
+  async waitFor(op: string, n = 1, timeoutMs = 3000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.seen.filter((m) => m.op === op).length < n) {
+      if (Date.now() > deadline) throw new Error(`extension never saw ${op} x${n}`);
+      await new Promise((r) => setTimeout(r, 15));
+    }
+  }
+}
+
+const cdpEndpoint = (port: number) => ({ port, token: TOKEN });
+
+describe("bridge host auth", () => {
+  test("rejects a missing or wrong token on every socket path", async () => {
+    const h = await freshHost();
+    for (const path of ["/ext", "/devtools/browser", `/devtools/browser/${"x".repeat(64)}`, `/ext?token=${"x".repeat(64)}`]) {
+      const ws = new WebSocket(`ws://127.0.0.1:${h.port}${path}`);
+      expect(await closeCode(ws)).toBe(CLOSE_BAD_TOKEN);
+    }
+  });
+
+  test("rejects a correct token when the upgrade carries a web-page Origin", async () => {
+    const h = await freshHost();
+    const ws = new WebSocket(`ws://127.0.0.1:${h.port}/devtools/browser/${TOKEN}`, {
+      headers: { origin: "https://evil.example" },
+    });
+    expect(await closeCode(ws)).toBe(CLOSE_BAD_TOKEN);
+  });
+
+  test("HTTP faces need the token AND a loopback Host (DNS rebinding)", async () => {
+    const h = await freshHost();
+    const noToken = await fetch(`http://127.0.0.1:${h.port}/json/version`);
+    expect(noToken.status).toBe(403);
+    const rebound = await fetch(`http://127.0.0.1:${h.port}/json/version?token=${TOKEN}`, {
+      headers: { host: `evil.example:${h.port}` },
+    });
+    expect(rebound.status).toBe(403);
+    const ok = await fetch(`http://127.0.0.1:${h.port}/json/version?token=${TOKEN}`);
+    expect(ok.status).toBe(200);
+    const body = (await ok.json()) as any;
+    expect(body.webSocketDebuggerUrl).toBe(`ws://127.0.0.1:${h.port}/devtools/browser/${TOKEN}`);
+    // healthz stays open and says only our name.
+    const hz = await fetch(`http://127.0.0.1:${h.port}/healthz`);
+    expect(await hz.text()).toMatch(/^cast-bridge/);
+  });
+});
+
+describe("bridge host as a CDP endpoint", () => {
+  test("/json/list and Target.getTargets expose tabs as page targets with minted ids", async () => {
+    const h = await freshHost();
+    await new FakeExtension([FakeExtension.tab(7), FakeExtension.tab(8)]).connect(h.port);
+    const listed = await listTargets(cdpEndpoint(h.port));
+    expect(listed.map((t) => t.targetId)).toEqual([targetIdOfTab(7), targetIdOfTab(8)]);
+    expect(listed[0].url).toBe("https://example.com/7");
+
+    const conn = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const { targetInfos } = await conn.send("Target.getTargets");
+    expect(targetInfos.map((t: any) => t.targetId)).toEqual([targetIdOfTab(7), targetIdOfTab(8)]);
+    const ver = await conn.send("Browser.getVersion");
+    expect(ver.userAgent).toBe("FakeChrome/1");
+    conn.close();
+  });
+
+  test("attach → session-scoped commands reach chrome.debugger for that tab; replies route back", async () => {
+    const h = await freshHost();
+    const ext = await new FakeExtension([FakeExtension.tab(7)]).connect(h.port);
+    const conn = await CdpConnection.fromPort(cdpEndpoint(h.port));
+
+    const attachedEv = conn.waitFor((ev) => ev.method === "Target.attachedToTarget", 3000);
+    const { sessionId } = await conn.send<{ sessionId: string }>("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true });
+    expect(sessionId).toMatch(/^[0-9A-F]{32}$/);
+    expect((await attachedEv).params.sessionId).toBe(sessionId);
+    expect(ext.attached.has(7)).toBe(true);
+
+    const r = await conn.send("DOM.getDocument", { depth: 1 }, sessionId);
+    expect(r.echo).toEqual({ tabId: 7, method: "DOM.getDocument", params: { depth: 1 } });
+
+    // Local no-ops the engines send during setup.
+    expect(await conn.send<object>("Target.setAutoAttach", { autoAttach: true, flatten: true }, sessionId)).toEqual({});
+    expect(await conn.send<object>("Runtime.runIfWaitingForDebugger", {}, sessionId)).toEqual({});
+
+    // Extension-side failures come back as CDP errors, not hangs.
+    await expect(conn.send("Boom.now", {}, sessionId)).rejects.toBeInstanceOf(CdpError);
+    // Unknown browser-scope methods get Chrome's not-found code.
+    await expect(conn.send("Nope.nothing")).rejects.toThrow(/wasn't found/);
+    // A made-up session is refused.
+    await expect(conn.send("Runtime.evaluate", { expression: "1" }, "F".repeat(32))).rejects.toThrow(/Session with given id/);
+    conn.close();
+  });
+
+  test("events reach only sessions bound to that tab, stamped with each client's own sessionId", async () => {
+    const h = await freshHost();
+    const ext = await new FakeExtension([FakeExtension.tab(7), FakeExtension.tab(8)]).connect(h.port);
+    const a = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const b = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const sa = (await a.send("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true })).sessionId;
+    const sb = (await b.send("Target.attachToTarget", { targetId: targetIdOfTab(8), flatten: true })).sessionId;
+
+    const gotA = a.waitFor((ev) => ev.method === "Network.loadingFinished", 2000);
+    let bGotIt = false;
+    const offB = b.on((ev) => {
+      if (ev.method === "Network.loadingFinished") bGotIt = true;
+    });
+    ext.event(7, "Network.loadingFinished", { requestId: "r1" });
+    const ev = await gotA;
+    expect(ev.sessionId).toBe(sa);
+    expect(sb).not.toBe(sa);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(bGotIt).toBe(false);
+    offB();
+    a.close();
+    b.close();
+  });
+
+  test("a tab is released to the human only when its last session lets go", async () => {
+    const h = await freshHost();
+    const ext = await new FakeExtension([FakeExtension.tab(7)]).connect(h.port);
+    const a = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const b = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    await a.send("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true });
+    await b.send("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true });
+    expect(ext.seen.filter((m) => m.op === "attach").length).toBe(2);
+
+    a.close();
+    await new Promise((r) => setTimeout(r, 150));
+    expect(ext.seen.some((m) => m.op === "detach")).toBe(false);
+    expect(ext.attached.has(7)).toBe(true);
+
+    b.close();
+    await ext.waitFor("detach");
+    expect(ext.attached.has(7)).toBe(false);
+  });
+
+  test("createTarget / closeTarget go through the extension and mint/retire ids", async () => {
+    const h = await freshHost();
+    const ext = await new FakeExtension([]).connect(h.port);
+    const conn = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const { targetId } = await conn.send("Target.createTarget", { url: "https://new.example/" });
+    expect(targetId).toBe(targetIdOfTab(100));
+    expect(ext.tabs[0].url).toBe("https://new.example/");
+    await conn.send("Target.closeTarget", { targetId });
+    expect(ext.tabs.length).toBe(0);
+    conn.close();
+  });
+
+  test("setDiscoverTargets replays existing targets and streams tab changes", async () => {
+    const h = await freshHost();
+    const ext = await new FakeExtension([FakeExtension.tab(7)]).connect(h.port);
+    const conn = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const created: string[] = [];
+    conn.on((ev) => {
+      if (ev.method === "Target.targetCreated") created.push((ev.params as any).targetInfo.targetId);
+    });
+    await conn.send("Target.setDiscoverTargets", { discover: true });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(created).toEqual([targetIdOfTab(7)]);
+
+    const destroyed = conn.waitFor((ev) => ev.method === "Target.targetDestroyed", 2000);
+    ext.tabEvent("created", FakeExtension.tab(9));
+    ext.tabEvent("removed", FakeExtension.tab(9));
+    expect(((await destroyed).params as any).targetId).toBe(targetIdOfTab(9));
+    expect(created).toEqual([targetIdOfTab(7), targetIdOfTab(9)]);
+    conn.close();
+  });
+
+  test("the extension vanishing fails in-flight calls and detaches every session", async () => {
+    const h = await freshHost();
+    const ext = await new FakeExtension([FakeExtension.tab(7)]).connect(h.port);
+    const conn = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const { sessionId } = await conn.send("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true });
+    const detached = conn.waitFor((ev) => ev.method === "Target.detachedFromTarget", 3000);
+    // Extension goes away before answering.
+    ext.ws.removeAllListeners("message");
+    const inflight = conn.send("Runtime.evaluate", { expression: "1" }, sessionId, 3000);
+    await new Promise((r) => setTimeout(r, 30));
+    ext.ws.close();
+    await expect(inflight).rejects.toThrow(/disconnected/);
+    expect((await detached).params.sessionId).toBe(sessionId);
+    // And with no extension, new calls fail fast with the setup hint.
+    await expect(conn.send("Target.getTargets")).rejects.toThrow(/extension is not connected/);
+    conn.close();
+  });
+
+  test("a newer extension connection replaces the old one", async () => {
+    const h = await freshHost();
+    const ext1 = await dial(h.port, `/ext?token=${TOKEN}`);
+    const replaced = closeCode(ext1);
+    const ext2 = await dial(h.port, `/ext?token=${TOKEN}`);
+    expect(await replaced).toBe(1000);
+    expect(h.extensionConnected()).toBe(true);
+    ext2.close();
+  });
+});

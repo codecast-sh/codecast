@@ -21,13 +21,17 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
-import { CdpConnection, listTargets, type CdpTarget } from "./cdp.js";
+import { browserSocketUrl, CdpConnection, listTargets, type CdpClient, type CdpTarget } from "./cdp.js";
+import { shortTabId, tabLine } from "./tabId.js";
 import {
-  acquireStartLock, attachToTarget, clearState, freePort, killStrayChrome, launchManagedChrome,
-  probeLiveness, pruneTabOwnership, readState, resolveTarget, setActiveTarget, settle, stopInstance,
-  TabUnresponsive, waitForStraysGone, writeState,
+  acquireStartLock, attachToTarget, clearState, freePort, killStrayChrome, launchManagedChrome, pickTarget,
+  probeLiveness, pruneTabOwnership, readState, recordNavigation, setActiveTarget, settle, stopInstance,
+  waitForStraysGone, writeState,
   type InstanceState, type PageSession,
 } from "./instance.js";
+import { describeHolders, planStop, releaseSession } from "./refcount.js";
+import { openDriver, type BrowserDriver } from "./driver.js";
+import { BrowserNotLive, explainConnectionLoss, isTabUnresponsive } from "./recovery.js";
 import {
   browserHome, clonePath, cloneProfile, formatBytes, listRealProfiles, type ChromeChannel,
 } from "./profile.js";
@@ -37,11 +41,29 @@ import {
   screenshot, scroll, selectOption, setViewport, type, uploadFiles,
 } from "./actions.js";
 import { armRecorder, clearRecording, readRecording } from "./observe.js";
+import { emitFailureContext } from "./capture.js";
+import { pageViewportCapture, parseViewport, runViewportRow, ViewportArgError, viewportChoices } from "./viewports.js";
+import { writeShotFile } from "./shotFile.js";
 import { ownerKey } from "./owner.js";
+import { registerEngineCommands } from "./cliEngine.js";
+import { ENGINE_MIN_VERSION, ENGINE_PACKAGE, engineFitness, findEngine } from "./engine.js";
+import { sameDocument } from "./url.js";
+import { loadSitePolicy } from "./policy.js";
+import { auditLanding, refuseNavigation } from "./siteGuard.js";
+import { registerAuditCommand } from "./auditCommand.js";
 import { runBatch, type BatchContext } from "./batch.js";
 import { provisionCredentials } from "./credentials.js";
+import {
+  bridgeEndpoint, bridgeStatus, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, isHostAlive,
+  readBridgeState, rotateBridgeToken, runBridgeHost, stopBridgeHost,
+} from "./bridge/host.js";
+import {
+  isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge,
+  resolveRealTarget, setStickyTarget, stickyTarget, withRealPage,
+} from "./bridge/real.js";
 import { startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
-import { loadRemoteHost } from "../remote/session-move.js";
+import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
+import { readHosts, ensureUp, toRemoteHost, stopHost, hostState, upsertHost, type CloudHost } from "./cloudHost.js";
 import { downscaleWithSips, uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
@@ -62,66 +84,76 @@ function die(msg: string, hint?: string): never {
 }
 
 /**
- * Read state and insist on a live browser. "gone" and "not answering" get
- * different messages on purpose: a dead browser should be restarted, while an
- * overloaded one must NOT be — the recovery agents reach for on "no browser is
- * running" is stop/start, which kills every other agent's tabs. Reporting a
- * busy browser as absent is what set off the 2026-08-14 restart stampede.
+ * Insist on a live browser and hand back a driver to it. "gone" and "not
+ * answering" get different messages on purpose: a dead browser should be
+ * restarted, while an overloaded one must NOT be — the recovery agents reach
+ * for on "no browser is running" is stop/start, which kills every other
+ * agent's tabs. Reporting a busy browser as absent is what set off the
+ * 2026-08-14 restart stampede. The words live in recovery.ts.
  */
-async function requireLive(): Promise<InstanceState> {
-  const state = readState();
-  const live = await probeLiveness(state);
-  if (live === "live") return state!;
-  if (live === "unresponsive") {
-    die(
-      `the managed browser (pid ${state!.pid}) is not answering CDP right now`,
-      "it is likely overloaded, not gone — retry in a few seconds. Do not stop/start it: other agents' tabs die with it.",
-    );
+async function requireDriver(): Promise<BrowserDriver> {
+  try {
+    return await openDriver();
+  } catch (err) {
+    if (err instanceof BrowserNotLive) die(err.problem.message, err.problem.hint);
+    die(explainConnectionLoss((err as Error).message));
   }
-  die(
-    "no managed browser is running",
-    "start one with `cast browser start` (it clones your Chrome profile, so you stay logged in)",
-  );
-}
-
-/** Name the likely killer when the socket dies under a command. */
-function explainConnectionLoss(msg: string): string {
-  return msg.includes("CDP connection closed") || msg.includes("CDP connection is not open")
-    ? `${msg} — the browser was stopped or restarted (usually by another agent) mid-command. Run the command again.`
-    : msg;
 }
 
 /** Every acting command needs a live browser and an attached tab. */
 async function withPage<T>(
-  opts: { tab?: string },
-  fn: (page: PageSession, state: InstanceState, conn: CdpConnection) => Promise<T>,
+  opts: { tab?: string; capture?: boolean },
+  fn: (page: PageSession, state: InstanceState, conn: CdpClient) => Promise<T>,
   sessionId?: string | null,
 ): Promise<T> {
-  const s = await requireLive();
-  const conn = await CdpConnection.fromPort(s.port);
+  const driver = await requireDriver();
+  // Held outside the try so the failure path below can read the page's console,
+  // network and pixels at the moment things went wrong.
+  let page: PageSession | null = null;
   try {
-    const target = await resolveTarget(s.port, s, opts.tab, sessionId);
-    const page = await attachToTarget(conn, target.targetId);
-    setActiveTarget(s, target.targetId, sessionId);
-    // Re-arm every time: the previous process's registration died with its
-    // session, so without this any navigation this command triggers would land
-    // on a page with no console capture at all.
-    await armRecorder(page);
-    // Same reason: an emulated viewport is session-scoped and would evaporate
-    // between commands, so re-apply whatever this tab was last set to.
-    const vp = s.viewportByTab?.[target.targetId];
-    if (vp) await setViewport(page, vp).catch(() => {});
-    return await fn(page, s, conn);
+    const target = pickTarget(await driver.targets(), driver.state, opts.tab, sessionId);
+    // Attached, domains on, recorder armed, viewport applied — done once and
+    // remembered by the resident driver, or done here on the direct path.
+    page = await driver.attach(target.targetId);
+    setActiveTarget(driver.state, target.targetId, sessionId);
+    return await fn(page, driver.state, driver.conn);
   } catch (err) {
+    const msg = explainConnectionLoss((err as Error).message);
+    // The debugging trio — console errors, failed requests, a screenshot —
+    // gathered at the moment of failure, so the thread shows why the step
+    // failed without a second round of commands. The error itself prints last,
+    // under the context, the way compilers end with the verdict.
+    await emitFailureContext(page, msg, { disabled: opts.capture === false });
     // A stack trace tells an agent nothing it can act on; the message does.
-    die(explainConnectionLoss((err as Error).message));
+    die(msg);
   } finally {
-    conn.close();
+    driver.close();
   }
 }
 
-function shortId(id: string): string {
-  return id.slice(0, 8);
+/**
+ * Arguments for every tab this driver opens.
+ *
+ * `background: true` is the whole point: without it Chrome brings its window
+ * forward when a tab appears, so a fleet of agents working in parallel keeps
+ * snatching the screen from whatever the human is doing. An agent's browsing
+ * should be visible when you go looking for it, never in your way.
+ */
+const NEW_TAB = { url: "about:blank", background: true } as const;
+
+/** The URL a tab is on, or null if it cannot say. */
+async function currentUrl(page: PageSession): Promise<string | null> {
+  try {
+    const r = await page.conn.send<any>(
+      "Runtime.evaluate",
+      { expression: "location.href", returnByValue: true },
+      page.sessionId,
+      3000,
+    );
+    return typeof r.result?.value === "string" ? r.result.value : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -131,7 +163,7 @@ function shortId(id: string): string {
  */
 function describeTab(t: CdpTarget, mine: boolean, otherOwner: boolean): string {
   const mark = mine ? fmt.success("*") : otherOwner ? fmt.warning("~") : " ";
-  return `${mark} ${fmt.muted(shortId(t.targetId))}  ${(t.title || "(untitled)").slice(0, 46).padEnd(46)} ${fmt.muted(t.url.slice(0, 66))}`;
+  return `${mark} ${fmt.muted(shortTabId(t.targetId))}  ${(t.title || "(untitled)").slice(0, 46).padEnd(46)} ${fmt.muted(t.url.slice(0, 66))}`;
 }
 
 /** Split live tabs into "mine" and "another agent's" for display. */
@@ -145,6 +177,13 @@ function ownership(state: InstanceState, sessionId: string | null) {
 /** Print the page header every action shares, so the agent always knows where it is. */
 function pageLine(url: string, title: string): string {
   return `${fmt.highlight(title || "(untitled)")}\n${fmt.muted(url)}`;
+}
+
+/** Told to the user when a start queues behind another agent's launch. */
+function waitingOnLaunch(holderPid: number): void {
+  console.log(
+    fmt.muted(`  another agent (pid ${holderPid}) is starting the browser — waiting for it, then reusing it`),
+  );
 }
 
 interface StartOptions {
@@ -165,7 +204,7 @@ interface StartOptions {
  * failure, and their retries restarted the browser under everyone else.
  */
 async function startLocalBrowser(o: StartOptions): Promise<void> {
-  const release = await acquireStartLock();
+  const release = await acquireStartLock(undefined, waitingOnLaunch);
   try {
     const existing = readState();
     // Patient on purpose: this is the one probe whose false "dead" leads to
@@ -239,6 +278,7 @@ async function startLocalBrowser(o: StartOptions): Promise<void> {
 
     const state: InstanceState = {
       pid, port, userDataDir,
+      wsUrl: await browserSocketUrl(port).catch(() => undefined),
       headless: !!o.headless,
       sourceProfile,
       channel: o.channel,
@@ -259,20 +299,172 @@ async function startLocalBrowser(o: StartOptions): Promise<void> {
   }
 }
 
+/**
+ * Should the engine drive, or our built-in CDP driver?
+ *
+ * The engine wins whenever it is present, and `cast browser start` installs it,
+ * so in practice it always is. `CAST_BROWSER_LEGACY=1` forces the built-in
+ * driver — kept as an escape hatch for diagnosing an engine problem without
+ * uninstalling anything, and as the honest answer for a machine that cannot
+ * install it at all.
+ */
+function useEngine(): boolean {
+  if (process.env.CAST_BROWSER_LEGACY === "1") return false;
+  const fit = engineFitness();
+  if (fit.ok) return true;
+  // Say why, once, on stderr — so a machine quietly running the older driver is
+  // diagnosable without anyone having to read this function. "missing" is the
+  // ordinary first-run state and needs no announcement; a version we refuse to
+  // drive does.
+  if (fit.reason === "too-old") {
+    process.stderr.write(
+      `  ${fmt.warning("!")} browser engine ${fit.version} is older than ${ENGINE_MIN_VERSION}; using the built-in driver.\n` +
+        `    Upgrade with: npm install -g ${ENGINE_PACKAGE}@latest\n`,
+    );
+  }
+  return false;
+}
+
+/**
+ * Turn `--remote [name]` into a reachable host, whichever cloud it lives in.
+ *
+ * Two backends, deliberately different in character:
+ *
+ *   linux  — an EC2 instance. Stops in seconds and costs only its disk when
+ *            idle, so it is the default and the right answer for browser work.
+ *   mac    — a Scaleway Apple silicon Mac. Cannot stop at all: Apple's licence
+ *            imposes a 24-hour minimum lease, so it bills until deleted. Worth
+ *            it only for work that genuinely needs macOS.
+ *
+ * `ensureUp` hides the difference at the call site — asking for a host is one
+ * act whether or not the machine happens to be awake.
+ */
+async function resolveRemote(name: string | boolean): Promise<{ host: RemoteHost; label: string; canSleep: boolean }> {
+  const wanted = typeof name === "string" ? name.toLowerCase() : "";
+  const hosts = readHosts();
+
+  // "mac" (or a Scaleway host id) goes to the Apple silicon registry.
+  const wantsMac = wanted === "mac" || wanted === "darwin" || wanted === "scaleway";
+  if (wantsMac || (wanted && hosts.every((h) => h.id !== wanted && h.provider !== wanted))) {
+    if (wantsMac || !hosts.length) {
+      const host = loadRemoteHost(wantsMac ? undefined : wanted || undefined);
+      return { host, label: `mac ${host.user}@${host.address}`, canSleep: false };
+    }
+  }
+
+  const picked =
+    hosts.find((h) => h.id === wanted) ??
+    hosts.find((h) => h.provider === (wanted === "linux" ? "aws" : wanted)) ??
+    hosts.find((h) => h.provider === "aws") ??
+    hosts[0];
+  if (!picked) {
+    die(
+      "no remote hosts are registered",
+      "add one with `cast browser hosts add` — a Linux box costs about a dollar a month idle",
+    );
+  }
+  const up = await ensureUp(picked, (m) => console.log(fmt.muted(`  ${m}`)));
+  return { host: toRemoteHost(up), label: `${up.provider} ${up.id}`, canSleep: true };
+}
+
 export function registerBrowserCommand(program: Command, deps: PublishDeps): void {
   // Which agent is calling. Tabs are owned per session so parallel agents on
   // one machine do not drive each other's pages; a human at a terminal has no
   // session and falls back to the last tab touched.
   const me = (): string | null => ownerKey(deps.detectCurrentSessionId);
+  /**
+   * Dispatch on target: the managed clone (default) or the user's real Chrome
+   * through the extension bridge. Both hand the callback a PageSession whose
+   * conn speaks CdpClient, which is why one command body serves both.
+   */
   const act = <T>(
-    opts: { tab?: string },
-    fn: (page: PageSession, state: InstanceState, conn: CdpConnection) => Promise<T>,
-  ) => withPage(opts, fn, me());
+    opts: { tab?: string; real?: boolean; clone?: boolean },
+    fn: (page: PageSession, state: InstanceState, conn: CdpClient) => Promise<T>,
+  ) =>
+    isRealMode(opts, me())
+      ? withRealPage(opts, fn, me()).catch((err) => die((err as Error).message))
+      : withPage(opts, fn, me());
+
+  /** The two flags every drivable command takes. --clone overrides a sticky real. */
+  const targetFlags = (cmd: Command): Command =>
+    cmd
+      .option("--real", "Act on your real Chrome through the cast bridge extension")
+      .option("--clone", "Act on the managed cloned browser (overrides `target real`)");
 
   const br = program
     .command("browser")
     .alias("br")
     .description("Drive a real Chrome: snapshot pages, click, type, screenshot, read console");
+
+  // The agent-browser engine drives everything it covers, which is nearly all
+  // of it. Our own CDP driver stays behind it as a fallback for a machine that
+  // cannot install the engine — no npm, no network — so `cast browser` keeps
+  // working rather than failing on a dependency the agent cannot fix.
+  //
+  // The choice is made once, at registration, because two implementations of
+  // the same verb cannot both be registered and a per-call decision would make
+  // the help text lie about what is going to run.
+  const hosts = br.command("hosts").description("Remote machines a browser can run on");
+
+  hosts
+    .command("ls", { isDefault: true })
+    .description("List remote hosts, what they cost, and whether they are awake")
+    .action(() => {
+      const rows = readHosts();
+      if (!rows.length) {
+        console.log(fmt.muted("no remote hosts registered — `cast browser hosts add --help`"));
+        return;
+      }
+      for (const h of rows) {
+        const s = hostState(h);
+        const mark = s.state === "running" ? fmt.success("awake") : s.state === "stopped" ? fmt.muted("asleep") : fmt.warning(s.state);
+        console.log(`  ${h.id.padEnd(22)} ${h.provider.padEnd(13)} ${mark.padEnd(18)} ${s.address ?? fmt.muted("(no address until it wakes)")}`);
+      }
+      console.log(
+        fmt.muted(
+          "\n  A Linux host sleeps when idle and then costs only its disk, about a dollar a month.\n" +
+            "  An Apple silicon Mac cannot sleep — Apple's licence sets a 24-hour minimum lease, so it\n" +
+            "  bills continuously (~EUR75/month) until deleted. Use one only for work that needs macOS.",
+        ),
+      );
+    });
+
+  hosts
+    .command("add <instanceId>")
+    .description("Register an existing EC2 instance as a browser host")
+    .requiredOption("--key <path>", "SSH private key for it")
+    .option("--region <name>", "AWS region", "us-west-2")
+    .option("--user <name>", "SSH user for the image", "ubuntu")
+    .action((instanceId: string, o: { key: string; region: string; user: string }) => {
+      const host: CloudHost = {
+        id: instanceId, provider: "aws", region: o.region, user: o.user,
+        keyPath: path.resolve(o.key),
+      };
+      const s = hostState(host);
+      if (s.state === "missing") die(`${instanceId} was not found in ${o.region}`);
+      upsertHost({ ...host, address: s.address });
+      console.log(`${OK} registered ${instanceId} (${s.state})`);
+    });
+
+  hosts
+    .command("sleep [id]")
+    .description("Stop a host so it stops costing money")
+    .action((id: string | undefined) => {
+      const rows = readHosts();
+      const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
+      if (!h) die(id ? `no host ${id}` : "no stoppable host registered");
+      try {
+        stopHost(h);
+        console.log(`${OK} ${h.id} is stopping — it will cost only its disk until something wakes it`);
+      } catch (err) {
+        die((err as Error).message);
+      }
+    });
+
+  if (useEngine()) {
+    registerEngineCommands(br, deps);
+    return;
+  }
 
   // ---------------------------------------------------------------- lifecycle
 
@@ -302,7 +494,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       // A browser on another Mac. Its profile starts empty and gains logins as
       // pages are visited (credentials.ts), so nothing of yours is copied there.
       if (o.remote) {
-        const release = await acquireStartLock();
+        const release = await acquireStartLock(undefined, waitingOnLaunch);
         try {
           const existingRemote = readState();
           const remoteLive = await probeLiveness(existingRemote, 8000);
@@ -315,7 +507,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
               "it is likely overloaded, not dead — retry shortly, or `cast browser stop` to replace it deliberately",
             );
           }
-          const host = loadRemoteHost(typeof o.remote === "string" ? o.remote : undefined);
+          const resolved = await resolveRemote(o.remote!);
+          const host = resolved.host;
           const [rw, rh] = o.size.split("x").map((n) => parseInt(n, 10));
           console.log(`  starting Chrome on ${fmt.highlight(`${host.user}@${host.address}`)}…`);
           let rb;
@@ -366,16 +559,26 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       const mins = Math.round((Date.now() - state.startedAt) / 60000);
       console.log(`${OK} running  pid ${state.pid}  port ${state.port}  up ${mins}m${state.headless ? "  headless" : ""}`);
       console.log(`  profile: ${state.sourceProfile ? `clone of ${state.sourceProfile}` : "fresh"}  ${fmt.muted(state.userDataDir)}`);
-      const targets = await listTargets(state.port);
-      const { mine, others } = ownership(state, me());
-      console.log(`  ${targets.length} tab(s):`);
-      for (const t of targets) console.log(`  ${describeTab(t, t.targetId === mine, others.has(t.targetId))}`);
+      const driver = await requireDriver();
+      try {
+        const targets = await driver.targets();
+        const { mine, others } = ownership(state, me());
+        console.log(`  ${targets.length} tab(s):`);
+        for (const t of targets) console.log(`  ${describeTab(t, t.targetId === mine, others.has(t.targetId))}`);
+        const holders = Object.keys(state.tabsBySession ?? {}).length;
+        console.log(
+          fmt.muted(`  driver: ${driver.kind === "resident" ? "resident in the daemon" : "direct (daemon not reachable)"}  ·  ${holders} session(s) holding tabs`),
+        );
+      } finally {
+        driver.close();
+      }
     });
 
   br.command("stop")
-    .description("Shut the managed browser down")
-    .option("--wipe", "Also delete the cloned profile and its cookies")
-    .action(async (o: { wipe?: boolean }) => {
+    .description("Release your tabs; shuts the browser down when you are the last session using it")
+    .option("--wipe", "Also delete the cloned profile and its cookies (implies --force)")
+    .option("--force", "Shut it down even if other sessions still have tabs in it")
+    .action(async (o: { wipe?: boolean; force?: boolean }) => {
       const state = readState();
       if (!state) return console.log("nothing to stop");
       if (state.remote) {
@@ -385,13 +588,44 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         console.log(`${OK} remote browser stopped and its profile wiped`);
         return;
       }
-      // One browser serves every agent on this machine, so stopping it is not
-      // a private action — say whose work goes down with it.
-      const otherOwners = new Set(Object.keys(state.tabsBySession ?? {}).filter((sid) => sid !== me()));
-      if (otherOwners.size) {
-        console.log(
-          `${WARN} ${otherOwners.size} other agent session(s) have tabs in this browser — stopping it kills their work too`,
-        );
+      // One browser serves every agent on this machine, so "stop" is not a
+      // private action. The caller gives up its own tabs; only the last session
+      // holding any takes Chrome down. Which tabs still exist decides who still
+      // counts as a holder, so ask the browser when it can answer.
+      const driver = await openDriver().catch(() => null);
+      let liveTargetIds: Set<string> | undefined;
+      try {
+        if (driver) liveTargetIds = new Set((await driver.targets().catch(() => [])).map((t) => t.targetId));
+        const plan = planStop(state, me(), { force: !!(o.force || o.wipe), liveTargetIds });
+        const who = describeHolders;
+
+        if (plan.action === "refuse") {
+          die(
+            `${plan.others.length} agent session(s) still have tabs in this browser: ${who(plan.others)}`,
+            "this shell has no session identity to release tabs for — `cast browser stop --force` shuts it down for everyone",
+          );
+        }
+        if (plan.action === "release") {
+          if (driver) {
+            for (const id of plan.myTabs) {
+              await driver.detach(id);
+              await driver.conn.send("Target.closeTarget", { targetId: id }, undefined, 5000).catch(() => {});
+            }
+          }
+          releaseSession(state, me()!);
+          console.log(
+            `${OK} released your ${plan.myTabs.length} tab(s); the browser stays up for ${plan.others.length} other session(s): ${who(plan.others)}`,
+          );
+          console.log(fmt.muted("  `cast browser stop --force` shuts it down for everyone"));
+          return;
+        }
+        if (plan.others.length) {
+          console.log(
+            `${WARN} ${plan.others.length} other agent session(s) have tabs in this browser — stopping it kills their work too: ${who(plan.others)}`,
+          );
+        }
+      } finally {
+        driver?.close();
       }
       await stopInstance(state);
       clearState();
@@ -402,44 +636,207 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       }
     });
 
+  // ------------------------------------------------------- real-Chrome bridge
+
+  br.command("target [mode]")
+    .description("Default browser for verbs: clone (managed copy) or real (your Chrome via the extension)")
+    .action(async (mode?: string) => {
+      if (!mode) {
+        const cur = stickyTarget(me());
+        console.log(`target: ${fmt.highlight(cur)}${cur === "clone" ? fmt.muted(" (default)") : ""}`);
+        console.log(fmt.muted("  change with `cast browser target real|clone`; any command takes --real/--clone to override"));
+        return;
+      }
+      if (mode !== "real" && mode !== "clone") die(`unknown target '${mode}'`, "use `real` or `clone`");
+      setStickyTarget(me(), mode);
+      console.log(`${OK} verbs now act on the ${mode === "real" ? "real Chrome (extension bridge)" : "managed clone"}${me() ? " for this session" : ""}`);
+      if (mode === "real" && !readBridgeState()?.token) {
+        console.log(`${WARN} the bridge is not set up yet — run \`cast browser extension setup\``);
+      }
+    });
+
+  const ext = br
+    .command("extension")
+    .description("The bridge into your real Chrome: setup, status, revoke");
+
+  ext
+    .command("setup")
+    .description("Start the bridge host and print the token to paste into the extension")
+    .option("--json", "Machine-readable output")
+    .action(async (o: { json?: boolean }) => {
+      ensureBridgeConfig();
+      let state;
+      try {
+        state = await ensureBridgeHost();
+      } catch (err) {
+        die((err as Error).message);
+      }
+      if (o.json) {
+        console.log(JSON.stringify({ port: state.port, token: state.token }));
+        return;
+      }
+      console.log(`${OK} bridge host listening on 127.0.0.1:${state.port}`);
+      console.log("");
+      console.log("  Install the extension (one time):");
+      console.log(`    1. Open ${fmt.highlight("chrome://extensions")} in your real Chrome, turn on Developer mode`);
+      console.log(`    2. ${fmt.highlight("Load unpacked")} → select the repo's ${fmt.highlight("packages/browser-extension")} directory`);
+      console.log(`    3. Open the extension's ${fmt.highlight("options")} and paste:`);
+      console.log(`         token  ${fmt.highlight(state.token)}`);
+      console.log(`         port   ${fmt.highlight(String(state.port))}`);
+      console.log(`    4. Check with ${fmt.highlight("cast browser extension status")}`);
+      console.log("");
+      console.log(fmt.muted("  The token grants full control of that Chrome to local processes that hold it."));
+      console.log(fmt.muted("  Revoke any time with `cast browser extension revoke`."));
+    });
+
+  ext
+    .command("status")
+    .description("Is the host up, and is the extension connected")
+    .action(async () => {
+      const state = readBridgeState();
+      if (!state?.token) {
+        console.log(`${fmt.muted(icons.dot)} not set up — \`cast browser extension setup\``);
+        return;
+      }
+      if (!(await isHostAlive(state.port))) {
+        console.log(`${WARN} bridge host is not running on 127.0.0.1:${state.port} (it auto-starts on first use)`);
+        return;
+      }
+      let s;
+      try {
+        s = await bridgeStatus(state);
+      } catch (err) {
+        die((err as Error).message);
+      }
+      console.log(`${OK} host up on 127.0.0.1:${state.port}`);
+      if (s.extensionConnected) {
+        console.log(`${OK} extension connected${s.extensionVersion ? ` (v${s.extensionVersion}, protocol ${s.extensionProtocol})` : ""}`);
+      } else {
+        console.log(`${WARN} extension not connected — open its options in Chrome and check token/port`);
+      }
+      console.log(fmt.muted(`  CDP endpoint for any engine: ${bridgeWsUrl(state)}`));
+    });
+
+  ext
+    .command("revoke")
+    .description("Rotate the token and disconnect the extension — nothing can drive the real Chrome until the new token is pasted")
+    .action(async () => {
+      const next = rotateBridgeToken();
+      const stopped = stopBridgeHost();
+      if (stopped) {
+        // Give the old host a beat to free the port before the next auto-start.
+        const deadline = Date.now() + 4000;
+        while (Date.now() < deadline && (await isHostAlive(next.port, 300))) {
+          await new Promise((r) => setTimeout(r, 150));
+        }
+      }
+      console.log(`${OK} token rotated${stopped ? " and the old host stopped" : ""} — the extension is cut off`);
+      console.log(fmt.muted("  to re-enable: `cast browser extension setup`, then paste the new token in the extension's options"));
+    });
+
+  br.command("bridge-host", { hidden: true })
+    .description("Run the bridge host in the foreground (internal; auto-started detached)")
+    .action(async () => {
+      await runBridgeHost();
+    });
+
   // ------------------------------------------------------------- navigation
 
-  br.command("open <url>")
+  /**
+   * Run a real-mode command body against the bridge's CDP endpoint. Every
+   * error is rendered the same way; the body only decides what to do.
+   */
+  async function inReal<T>(fn: (bridge: Awaited<ReturnType<typeof requireRealBridge>>, conn: CdpConnection) => Promise<T>): Promise<T> {
+    let bridge;
+    try {
+      bridge = await requireRealBridge();
+    } catch (err) {
+      die((err as Error).message);
+    }
+    const conn = await CdpConnection.fromPort(bridgeEndpoint(bridge)).catch((err) => die((err as Error).message));
+    try {
+      return await fn(bridge, conn);
+    } catch (err) {
+      die(explainConnectionLoss((err as Error).message));
+    } finally {
+      conn.close();
+    }
+  }
+
+  /** `open` in real mode: create or reuse this session's own tab and navigate it. */
+  async function openReal(url: string, o: { newTab?: boolean; wait: boolean }): Promise<void> {
+    const sessionKey = me();
+    await inReal(async (bridge, conn) => {
+      const targets = await listRealTargets(bridge);
+      const owned = ownedRealTab(sessionKey);
+      let targetId: string;
+      let created = false;
+      if (!o.newTab && owned && targets.some((t) => t.targetId === owned)) {
+        targetId = owned;
+      } else {
+        // Never navigate a tab this session does not own: the rest are the
+        // human's. A fresh tab costs nothing and is visibly the agent's.
+        targetId = (await conn.send<{ targetId: string }>("Target.createTarget", { url })).targetId;
+        created = true;
+      }
+      const page = await attachToTarget(conn, targetId);
+      rememberRealTab(sessionKey, targetId);
+      await armRecorder(page);
+      if (!created) await conn.send("Page.navigate", { url }, page.sessionId);
+      if (o.wait !== false) {
+        const r = await settle(page);
+        if (!r.settled) console.log(fmt.muted(`  (did not fully settle: ${r.reason})`));
+      }
+      const snap = await snapshotPage(page, { maxChars: 1 });
+      console.log(pageLine(snap.url, snap.title));
+      console.log(fmt.muted(`  real tab ${shortTabId(targetId)} — Chrome shows its debugging banner while cast drives it`));
+    });
+  }
+
+  targetFlags(br.command("open <url>"))
     .description("Open a URL (starts the browser if needed)")
     .option("--new-tab", "Open in a new tab instead of the current one")
     .option("--no-wait", "Return without waiting for the page to settle")
-    .action(async (url: string, o: { newTab?: boolean; wait: boolean }) => {
+    .option("--reload", "Load the page again even if the tab is already on it")
+    .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
+    .action(async (url: string, o: { newTab?: boolean; wait: boolean; reload?: boolean; capture: boolean; real?: boolean; clone?: boolean }) => {
       if (!/^[a-z]+:\/\//i.test(url)) url = `https://${url}`;
+      if (isRealMode(o, me())) return openReal(url, o);
 
-      let state = readState();
-      let live = await probeLiveness(state);
-      if (live === "unresponsive") {
-        die(
-          `the managed browser (pid ${state!.pid}) is not answering CDP right now`,
-          "it is likely overloaded, not gone — retry in a few seconds. Do not stop/start it: other agents' tabs die with it.",
-        );
-      }
-      if (live === "dead") {
+      // The site policy gate. Before any browser work at all — a refused
+      // navigation must not even auto-start Chrome. This binds only THIS
+      // session's commands; other agents' tabs are never touched.
+      const policy = loadSitePolicy();
+      const deny = refuseNavigation(url, me(), "open", policy);
+      if (deny) die(deny.message, deny.hint);
+
+      let driver: BrowserDriver;
+      try {
+        driver = await openDriver();
+      } catch (err) {
+        if (!(err instanceof BrowserNotLive)) die(explainConnectionLoss((err as Error).message));
+        if (err.liveness !== "dead") die(err.problem.message, err.problem.hint);
         // Keep the command's promise ("starts the browser if needed"). The
         // launch lock makes this safe under contention: concurrent auto-starts
         // collapse into one launch that everyone reuses.
         console.log(fmt.muted("  no managed browser is running — starting one"));
         await startLocalBrowser({ channel: "chrome", size: "1440x900" });
-        state = readState();
-        if ((await probeLiveness(state)) !== "live") {
+        driver = await openDriver().catch(() => {
           die("the browser did not come up after auto-start", "try `cast browser start` directly");
-        }
+        });
       }
-      const s = state!;
+      const s = driver.state;
       const sessionId = me();
-      const conn = await CdpConnection.fromPort(s.port);
+      const conn = driver.conn;
+      // Outside the try so the failure path can capture the page's context.
+      let page: PageSession | null = null;
       try {
         let targetId: string;
-        const targets = await listTargets(s.port);
+        const targets = await driver.targets();
         const blank = targets.find((t) => t.url === "about:blank");
         const mine = sessionId ? s.tabsBySession?.[sessionId] : null;
         if (o.newTab || !targets.length) {
-          const res = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+          const res = await conn.send<{ targetId: string }>("Target.createTarget", NEW_TAB);
           targetId = res.targetId;
         } else if (mine && targets.some((t) => t.targetId === mine)) {
           // Reuse the tab this session already owns rather than the last tab
@@ -451,7 +848,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         } else {
           // No tab of our own and none spare: take a new one instead of
           // commandeering a page another agent may be mid-flow on.
-          const res = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+          const res = await conn.send<{ targetId: string }>("Target.createTarget", NEW_TAB);
           targetId = res.targetId;
         }
 
@@ -459,19 +856,20 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         // to this URL", so if the tab we picked has stopped answering we say so
         // and go to a fresh one rather than failing the whole command — the
         // agent asked for a page, not for that particular tab.
-        let page: PageSession;
+        // The attach also arms the recorder BEFORE we navigate, so it sees the
+        // page's own boot logs — the errors an agent is usually looking for
+        // happen during startup.
         try {
-          page = await attachToTarget(conn, targetId);
+          page = await driver.attach(targetId);
         } catch (err) {
-          if (!(err instanceof TabUnresponsive)) throw err;
-          console.log(fmt.muted(`  tab ${shortId(targetId)} was not responding — opening a new one`));
-          const res = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+          // isTabUnresponsive, not instanceof: the verdict may have been
+          // raised across a process boundary and revived by name (recovery.ts).
+          if (!isTabUnresponsive(err)) throw err;
+          console.log(fmt.muted(`  ${tabLine(targetId, "was not responding, opening a new one")}`));
+          const res = await conn.send<{ targetId: string }>("Target.createTarget", NEW_TAB);
           targetId = res.targetId;
-          page = await attachToTarget(conn, targetId);
+          page = await driver.attach(targetId);
         }
-        // Arm BEFORE navigating so the recorder sees the page's own boot logs —
-        // the errors an agent is usually looking for happen during startup.
-        await armRecorder(page);
         // Carry this machine's login for the site we are about to open. Only
         // for a remote browser, and only when it has none of its own — see
         // credentials.ts for why navigation is what picks the sites.
@@ -484,20 +882,48 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           }
         }
 
-        await conn.send("Page.navigate", { url }, page.sessionId);
+        // Don't reload a page we are already on.
+        //
+        // `open` reads as "get me to this URL", and an agent re-running it to
+        // re-orient — or a batch that opens before acting — should not throw
+        // away a loaded page. Reloading costs seconds, discards scroll position
+        // and any state the agent just built up, and on a heavy app it is the
+        // difference between instant and unusable. `--reload` forces it.
+        const already = await currentUrl(page);
+        const lastNav = s.navByTab?.[targetId];
+        // Either we are already on the page asked for, or this exact request
+        // has already run in this tab and the page has not moved since — in
+        // which case running it again would land in the same place at the cost
+        // of a full load.
+        const requestAlreadyRan =
+          !!lastNav && already !== null && sameDocument(lastNav.requested, url) && sameDocument(lastNav.landed, already);
+        const sameUrl = !o.reload && already !== null && (sameDocument(already, url) || requestAlreadyRan);
+        if (sameUrl) {
+          const detail = sameDocument(already!, url) ? "" : ` (it redirected here last time)`;
+          console.log(fmt.muted(`  already on this page${detail} — reusing it (--reload to load it again)`));
+        } else {
+          await conn.send("Page.navigate", { url }, page.sessionId);
+        }
         setActiveTarget(s, targetId, sessionId);
 
-        if (o.wait !== false) {
+        if (o.wait !== false && !sameUrl) {
           const r = await settle(page);
           if (!r.settled) console.log(fmt.muted(`  (did not fully settle: ${r.reason})`));
         }
         const snap = await snapshotPage(page, { maxChars: 1 });
+        if (!sameUrl) recordNavigation(targetId, url, snap.url);
         console.log(pageLine(snap.url, snap.title));
-        console.log(fmt.muted(`  tab ${shortId(targetId)} — next: cast browser snapshot`));
+        // Audit where the tab actually LANDED — a redirect can differ from
+        // what was asked for, and if it left the allowlist, say so loudly.
+        const landed = auditLanding({ url: snap.url, tab: targetId, session: me(), via: "open", policy });
+        if (landed) console.log(`${WARN} ${landed}`);
+        console.log(fmt.muted(`  ${tabLine(targetId, "next: cast browser snapshot")}`));
       } catch (err) {
-        die(explainConnectionLoss((err as Error).message));
+        const msg = explainConnectionLoss((err as Error).message);
+        await emitFailureContext(page, msg, { disabled: o.capture === false });
+        die(msg);
       } finally {
-        conn.close();
+        driver.close();
       }
     });
 
@@ -508,6 +934,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     br.command(name)
       .description(desc)
       .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
       .action(async (o: { tab?: string }) => {
         await act(o, async (page) => {
           const hist = await page.conn.send<any>("Page.getNavigationHistory", {}, page.sessionId);
@@ -518,6 +946,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           await settle(page);
           const snap = await snapshotPage(page, { maxChars: 1 });
           console.log(pageLine(snap.url, snap.title));
+          const landed = auditLanding({ url: snap.url, tab: page.targetId, session: me(), via: "history", policy: loadSitePolicy() });
+          if (landed) console.log(`${WARN} ${landed}`);
         });
       });
   }
@@ -526,61 +956,107 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .description("Reload the page")
     .option("--hard", "Bypass the cache")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: { hard?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         await page.conn.send("Page.reload", { ignoreCache: !!o.hard }, page.sessionId);
         await settle(page);
         const snap = await snapshotPage(page, { maxChars: 1 });
         console.log(pageLine(snap.url, snap.title));
+        const landed = auditLanding({ url: snap.url, tab: page.targetId, session: me(), via: "reload", policy: loadSitePolicy() });
+        if (landed) console.log(`${WARN} ${landed}`);
       });
     });
 
   // ------------------------------------------------------------------- tabs
 
-  br.command("tabs")
+  targetFlags(br.command("tabs"))
     .description("List open tabs")
-    .action(async () => {
-      const state = await requireLive();
-      const targets = await listTargets(state!.port);
-      const { mine, others } = ownership(state!, me());
-      for (const t of targets) console.log(describeTab(t, t.targetId === mine, others.has(t.targetId)));
-      if (others.size) {
-        console.log(fmt.muted(`\n  ~ = another agent's tab. Yours is marked *; pass --tab to be explicit.`));
+    .action(async (o: { real?: boolean; clone?: boolean }) => {
+      if (isRealMode(o, me())) {
+        await inReal(async (bridge) => {
+          const targets = await listRealTargets(bridge);
+          const { mine, others } = realTabOwnership(me());
+          for (const t of targets) console.log(describeTab(t, t.targetId === mine, others.has(t.targetId)));
+          console.log(
+            fmt.muted("\n  your real Chrome, via the cast extension. Unmarked tabs are the human's — do not drive them uninvited."),
+          );
+        });
+        return;
       }
-      pruneTabOwnership(state!, new Set(targets.map((t) => t.targetId)));
-    });
-
-  br.command("tab <id>")
-    .description("Switch the active tab (id prefix or a substring of its URL)")
-    .action(async (id: string) => {
-      const state = await requireLive();
-      const target = await resolveTarget(state!.port, state!, id, me());
-      setActiveTarget(state!, target.targetId, me());
-      // Bring it to the front so a watching human sees what the agent sees.
-      const conn = await CdpConnection.fromPort(state!.port);
+      const driver = await requireDriver();
       try {
-        const page = await attachToTarget(conn, target.targetId);
-        await conn.send("Page.bringToFront", {}, page.sessionId).catch(() => {});
+        const state = driver.state;
+        const targets = await driver.targets();
+        const { mine, others } = ownership(state, me());
+        for (const t of targets) console.log(describeTab(t, t.targetId === mine, others.has(t.targetId)));
+        if (others.size) {
+          console.log(fmt.muted(`\n  ~ = another agent's tab. Yours is marked *; pass --tab to be explicit.`));
+        }
+        pruneTabOwnership(state, new Set(targets.map((t) => t.targetId)));
       } finally {
-        conn.close();
+        driver.close();
       }
-      console.log(`${OK} active tab: ${target.title || target.url}`);
     });
 
-  br.command("close")
+  targetFlags(br.command("tab <id>"))
+    .description("Switch the active tab (id prefix or a substring of its URL)")
+    .option("--show", "Also raise the browser window (steals focus)")
+    .action(async (id: string, o: { real?: boolean; clone?: boolean; show?: boolean }) => {
+      if (isRealMode(o, me())) {
+        await inReal(async (bridge, conn) => {
+          const target = resolveRealTarget(await listRealTargets(bridge), id, me());
+          rememberRealTab(me(), target.targetId);
+          await conn.send("Target.activateTarget", { targetId: target.targetId });
+          console.log(`${OK} active real tab: ${target.title || target.url}`);
+        });
+        return;
+      }
+      const driver = await requireDriver();
+      try {
+        const target = pickTarget(await driver.targets(), driver.state, id, me());
+        setActiveTarget(driver.state, target.targetId, me());
+        // Raising the window is opt-in. Doing it on every `tab` pulled Chrome in
+        // front of whatever the human was working in, and with a fleet of agents
+        // switching tabs that means the browser is constantly taking the screen.
+        if (o.show) {
+          const page = await driver.attach(target.targetId);
+          await driver.conn.send("Page.bringToFront", {}, page.sessionId).catch(() => {});
+        }
+        console.log(`${OK} active tab: ${target.title || target.url}`);
+      } catch (err) {
+        die(explainConnectionLoss((err as Error).message));
+      } finally {
+        driver.close();
+      }
+    });
+
+  targetFlags(br.command("close"))
     .description("Close a tab")
     .option("--tab <id>", "Which tab (default: the active one)")
-    .action(async (o: { tab?: string }) => {
-      const state = await requireLive();
-      const target = await resolveTarget(state!.port, state!, o.tab);
-      const conn = await CdpConnection.fromPort(state!.port);
-      try {
-        await conn.send("Target.closeTarget", { targetId: target.targetId });
-      } finally {
-        conn.close();
+    .action(async (o: { tab?: string; real?: boolean; clone?: boolean }) => {
+      if (isRealMode(o, me())) {
+        await inReal(async (bridge, conn) => {
+          const target = resolveRealTarget(await listRealTargets(bridge), o.tab, me());
+          await conn.send("Target.closeTarget", { targetId: target.targetId });
+          console.log(`${OK} closed real tab ${shortTabId(target.targetId)} (${target.title || target.url})`);
+        });
+        return;
       }
-      if (state!.activeTargetId === target.targetId) writeState({ ...state!, activeTargetId: null });
-      console.log(`${OK} closed ${target.title || target.url}`);
+      const driver = await requireDriver();
+      try {
+        const state = driver.state;
+        const target = pickTarget(await driver.targets(), state, o.tab);
+        await driver.detach(target.targetId);
+        await driver.conn.send("Target.closeTarget", { targetId: target.targetId });
+        if (state.activeTargetId === target.targetId) writeState({ ...state, activeTargetId: null });
+        console.log(`${OK} closed ${target.title || target.url}`);
+      } catch (err) {
+        die(explainConnectionLoss((err as Error).message));
+      } finally {
+        driver.close();
+      }
     });
 
   // -------------------------------------------------------------- perception
@@ -592,6 +1068,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--max-chars <n>", "Truncate beyond this many characters", "40000")
     .option("--no-frames", "Skip child frames")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: { interactive?: boolean; maxChars: string; frames: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const snap = await snapshotPage(page, {
@@ -612,6 +1090,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   br.command("find <text>")
     .description("Find refs whose accessible name matches")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (text: string, o: { tab?: string }) => {
       await act(o, async (page) => {
         const snap = await snapshotPage(page);
@@ -628,6 +1108,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   br.command("text")
     .description("Print the page's visible text (for reading, not acting)")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .option("--max-chars <n>", "Truncate beyond this", "20000")
     .action(async (o: { tab?: string; maxChars: string }) => {
       await act(o, async (page) => {
@@ -641,15 +1123,26 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   br.command("shot")
     .description("Screenshot the page")
     .option("--full", "Whole scroll height, not just the viewport")
-    .option("--ref <n>", "Just this element")
-    .option("--out <path>", "Where to write it")
+    .option("--ref <n>", "Just this element (does not combine with --viewports)")
+    .option("--out <path>", "Where to write it (--viewports adds the name before the extension)")
+    .option("--viewports <list>", "Capture at each viewport (desktop,mobile,1024x768,…) as one comparison row, then restore")
     .option("--share", "Upload and print a URL that renders inline in the thread")
     .option("--alt <text>", "Caption for the shared image — say what it shows")
     .option("--no-inline", "Do not show the image in the conversation")
     .option("--jpeg", "JPEG instead of PNG — much smaller for photos")
     .option("--tab <id>", "Act on a specific tab")
-    .action(async (o: { full?: boolean; ref?: string; out?: string; share?: boolean; alt?: string; jpeg?: boolean; inline?: boolean; tab?: string }) => {
-      await act(o, async (page) => {
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
+    .action(async (o: { full?: boolean; ref?: string; out?: string; viewports?: string; share?: boolean; alt?: string; jpeg?: boolean; inline?: boolean; tab?: string; real?: boolean; clone?: boolean }) => {
+      await act(o, async (page, state) => {
+        if (o.viewports) {
+          // One shot per named viewport, emitted together so the thread renders
+          // them as a single side-by-side comparison row. Restores what the tab
+          // had before: its pinned emulation, or the real window.
+          if (o.ref) die("--ref does not combine with --viewports", "an element ref is only meaningful at the viewport it was snapshotted in");
+          return runViewportRow(pageViewportCapture(page), o.viewports, state.viewportByTab?.[page.targetId], o, deps)
+            .catch((err) => die(err.message, err instanceof ViewportArgError ? err.hint : undefined));
+        }
         const buf = await screenshot(page, {
           fullPage: o.full,
           ref: o.ref ? parseInt(o.ref.replace(/^#?e/, ""), 10) : undefined,
@@ -658,30 +1151,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         const out =
           o.out ??
           path.join(os.tmpdir(), `cast-shot-${Date.now()}.${o.jpeg ? "jpg" : "png"}`);
-        fs.mkdirSync(path.dirname(out), { recursive: true });
-
-        // A retina full-page capture runs to several megabytes, and anything
-        // over the sync cap is dropped on its way to the thread — silently, so
-        // the screenshot would simply never appear. Shrink it here with the
-        // same ladder the upload path uses rather than let that happen.
-        let bytes = buf;
-        let shrunk = false;
-        if (bytes.length > MAX_IMAGE_SIZE) {
-          const smaller = downscaleWithSips(bytes, o.jpeg ? "image/jpeg" : "image/png");
-          if (smaller && smaller.length < bytes.length) {
-            bytes = smaller;
-            shrunk = true;
-          }
-        }
-        fs.writeFileSync(out, bytes);
-        console.log(
-          `${OK} ${out} (${formatBytes(bytes.length)}${shrunk ? `, downscaled from ${formatBytes(buf.length)}` : ""})`,
-        );
         // Puts the picture in the conversation under this command's output,
         // the way an extension screenshot appears. `--no-inline` opts out.
-        if (o.inline !== false && bytes.length <= MAX_IMAGE_SIZE) {
-          console.log(inlineImageMarker(path.resolve(out)));
-        }
+        const abs = writeShotFile(buf, out, o);
+        if (abs) console.log(inlineImageMarker(abs));
         if (o.share) {
           // Same upload path as `cast image`, so the URL renders inline for the
           // human instead of being a dead local path. The alt text becomes the
@@ -709,6 +1182,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     if (snap.url !== before.url) {
       console.log(`  → navigated to ${fmt.highlight(snap.title || snap.url)}`);
       console.log(`    ${fmt.muted(snap.url)}`);
+      // An in-page action carried the tab somewhere new. By now the page is
+      // already there, and yanking it back would break a shared browser's
+      // flows — so this path warns and records rather than blocking.
+      const landed = auditLanding({ url: snap.url, tab: page.targetId, session: me(), via: "action", policy: loadSitePolicy() });
+      if (landed) console.log(`${WARN} ${landed}`);
     } else if (!r.settled) {
       console.log(fmt.muted(`  (page still busy: ${r.reason})`));
     }
@@ -719,27 +1197,29 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--force", "Click even if something is on top of it")
     .option("--right", "Right click")
     .option("--double", "Double click")
+    .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, o: { force?: boolean; right?: boolean; double?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
-        try {
-          const pt = await click(page, refOf(ref), {
-            force: o.force,
-            button: o.right ? "right" : "left",
-            clickCount: o.double ? 2 : 1,
-          });
-          console.log(`${OK} clicked #e${refOf(ref)} at ${Math.round(pt.x)},${Math.round(pt.y)}`);
-        } catch (err) {
-          die((err as Error).message);
-        }
+        const pt = await click(page, refOf(ref), {
+          force: o.force,
+          button: o.right ? "right" : "left",
+          clickCount: o.double ? 2 : 1,
+        });
+        console.log(`${OK} clicked #e${refOf(ref)} at ${Math.round(pt.x)},${Math.round(pt.y)}`);
         await reportAfter(page, before);
       });
     });
 
   br.command("click-at <x> <y>")
     .description("Click raw viewport coordinates (escape hatch when no ref fits)")
+    .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (x: string, y: string, o: { tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
@@ -755,17 +1235,16 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--submit", "Press Enter afterwards")
     .option("--per-key", "One key event per character — needed for autocompletes")
     .option("--delay <ms>", "Delay between keys with --per-key", "20")
+    .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, text: string, o: any) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
-        try {
-          await type(page, refOf(ref), text, {
-            clear: o.clear, submit: o.submit, perKey: o.perKey, delayMs: parseInt(o.delay, 10),
-          });
-        } catch (err) {
-          die((err as Error).message);
-        }
+        await type(page, refOf(ref), text, {
+          clear: o.clear, submit: o.submit, perKey: o.perKey, delayMs: parseInt(o.delay, 10),
+        });
         console.log(`${OK} typed ${JSON.stringify(text.slice(0, 60))} into #e${refOf(ref)}${o.submit ? " and submitted" : ""}`);
         await reportAfter(page, before);
       });
@@ -773,7 +1252,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
 
   br.command("press <key>")
     .description('Press a key: Enter, Escape, Tab, ArrowDown, "cmd+a", "/"')
+    .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (key: string, o: { tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
@@ -786,6 +1268,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   br.command("hover <ref>")
     .description("Hover an element (reveals menus and tooltips)")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, o: { tab?: string }) => {
       await act(o, async (page) => {
         const pt = await hover(page, refOf(ref));
@@ -796,6 +1280,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   br.command("focus <ref>")
     .description("Focus an element without clicking it")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, o: { tab?: string }) => {
       await act(o, async (page) => {
         await focus(page, refOf(ref));
@@ -805,15 +1291,14 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
 
   br.command("select <ref> <value>")
     .description("Choose an option in a <select>")
+    .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, value: string, o: { tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
-        try {
-          await selectOption(page, refOf(ref), value);
-        } catch (err) {
-          die((err as Error).message);
-        }
+        await selectOption(page, refOf(ref), value);
         console.log(`${OK} selected ${JSON.stringify(value)}`);
         await reportAfter(page, before);
       });
@@ -828,6 +1313,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .description("Scroll the page (default one screen). Use --up, or a negative amount, to go up")
     .option("--up", "Scroll up instead of down")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .allowUnknownOption(true)
     .action(async (amount: string | undefined, o: { up?: boolean; tab?: string }) => {
       const negative = process.argv.find((a) => /^-\d+$/.test(a));
@@ -848,6 +1335,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .description("Resize the page, or emulate a device: desktop, laptop, wide, tablet, mobile, mobile-small")
     .option("--reset", "Back to the real window size")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (size: string | undefined, o: { reset?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         if (o.reset || size === "reset") {
@@ -870,17 +1359,9 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           console.log(fmt.muted(`  presets: ${Object.keys(DEVICES).join(", ")}  ·  or a size like 1024x768`));
           return;
         }
-        const preset = DEVICES[size];
-        const explicit = /^(\d+)x(\d+)$/.exec(size);
-        if (!preset && !explicit) {
-          die(`unknown size '${size}'`, `use a preset (${Object.keys(DEVICES).join(", ")}) or WxH like 1024x768`);
-        }
-        const device = preset ?? {
-          width: parseInt(explicit![1], 10),
-          height: parseInt(explicit![2], 10),
-          scale: 1,
-          mobile: false,
-        };
+        const parsed = parseViewport(size);
+        if (!parsed) die(`unknown size '${size}'`, `use ${viewportChoices()}`);
+        const device = parsed.device;
         await setViewport(page, device);
         // Remember it so every later command sees the same page size.
         const cur = readState();
@@ -901,6 +1382,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   br.command("upload <ref> <files...>")
     .description("Attach files to a file input, with no OS picker")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, files: string[], o: { tab?: string }) => {
       const abs = files.map((f) => path.resolve(f));
       for (const f of abs) if (!fs.existsSync(f)) die(`no such file: ${f}`);
@@ -912,15 +1395,14 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
 
   br.command("eval <expression>")
     .description("Run JavaScript in the page and print the result")
+    .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (expression: string, o: { tab?: string }) => {
       await act(o, async (page) => {
-        try {
-          const v = await evaluate(page, expression);
-          console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
-        } catch (err) {
-          die((err as Error).message);
-        }
+        const v = await evaluate(page, expression);
+        console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
       });
     });
 
@@ -930,8 +1412,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--ref <n>", "Wait until this element exists")
     .option("--ms <n>", "Just wait this long")
     .option("--timeout <ms>", "Give up after this", "15000")
+    .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--tab <id>", "Act on a specific tab")
-    .action(async (o: { text?: string; ref?: string; ms?: string; timeout: string; tab?: string }) => {
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
+    .action(async (o: { text?: string; ref?: string; ms?: string; timeout: string; tab?: string; capture: boolean; real?: boolean; clone?: boolean }) => {
       await act(o, async (page) => {
         const timeout = parseInt(o.timeout, 10);
         if (o.ms) {
@@ -945,7 +1430,9 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
             if (found) return console.log(`${OK} found ${JSON.stringify(o.text)}`);
             await new Promise((r) => setTimeout(r, 250));
           }
-          die(`${JSON.stringify(o.text)} never appeared within ${timeout}ms`);
+          // Throw rather than die: withPage's catch owns failure reporting and
+          // adds the console/network/screenshot context a timeout needs most.
+          throw new Error(`${JSON.stringify(o.text)} never appeared within ${timeout}ms`);
         }
         if (o.ref) {
           const deadline = Date.now() + timeout;
@@ -958,7 +1445,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
               await new Promise((r) => setTimeout(r, 250));
             }
           }
-          die(`#e${ref} never appeared within ${timeout}ms`);
+          throw new Error(`#e${ref} never appeared within ${timeout}ms`);
         }
         const r = await settle(page, { timeoutMs: timeout });
         console.log(r.settled ? `${OK} settled` : `${WARN} still busy: ${r.reason}`);
@@ -968,7 +1455,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   br.command("do [steps...]")
     .description("Run several steps in one go — much faster than separate commands")
     .option("--keep-going", "Carry on after a step fails")
+    .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .addHelpText(
       "after",
       `
@@ -987,7 +1477,7 @@ Or one per line from stdin, which keeps long flows readable:
 
 A step with no ref uses whatever the last \`find\` matched.`,
     )
-    .action(async (steps: string[], o: { keepGoing?: boolean; tab?: string }) => {
+    .action(async (steps: string[], o: { keepGoing?: boolean; tab?: string; capture: boolean }) => {
       // `-` reads the flow from stdin, the same convention as `cast send -`.
       let plan = steps;
       if (steps.length === 1 && steps[0] === "-") {
@@ -1003,9 +1493,16 @@ A step with no ref uses whatever the last \`find\` matched.`,
 
       await act(o, async (page, state, conn) => {
         const started = Date.now();
+        const policy = loadSitePolicy();
         const ctx: BatchContext = {
           page,
           shots: [],
+          // A click inside a batch can navigate just like a click command; this
+          // runs after each settling step so those landings are audited too.
+          afterSettle: async () => {
+            const snap = await snapshotPage(page, { maxChars: 1 });
+            return auditLanding({ url: snap.url, tab: page.targetId, session: me(), via: "batch", policy });
+          },
           // Reuse the same capture and navigate paths the single commands use,
           // so a batched shot behaves identically — downscale, inline marker.
           capture: async (args) => {
@@ -1021,10 +1518,24 @@ A step with no ref uses whatever the last \`find\` matched.`,
           },
           navigate: async (url) => {
             const target = /^[a-z]+:\/\//i.test(url) ? url : `https://${url}`;
+            // Same gate as `open` — a batched navigation is still explicit.
+            const deny = refuseNavigation(target, me(), "batch", policy);
+            if (deny) {
+              throw new Error(`${deny.message}\n    ${deny.hint.replace(/\n/g, "\n    ")}`);
+            }
+            // Same reuse rule as the `open` command: a batch that starts with
+            // `open` to be explicit about where it is working should not throw
+            // away the page it is already on.
+            const already = await currentUrl(page);
+            if (already !== null && sameDocument(already, target)) {
+              const snap = await snapshotPage(page, { maxChars: 1 });
+              return `already on ${snap.title || snap.url}`;
+            }
             await conn.send("Page.navigate", { url: target }, page.sessionId);
             await settle(page);
             const snap = await snapshotPage(page, { maxChars: 1 });
-            return `${snap.title || "(untitled)"} — ${snap.url}`;
+            const landed = auditLanding({ url: snap.url, tab: page.targetId, session: me(), via: "batch", policy });
+            return `${snap.title || "(untitled)"} — ${snap.url}${landed ? `\n! ${landed}` : ""}`;
           },
         };
 
@@ -1061,7 +1572,13 @@ A step with no ref uses whatever the last \`find\` matched.`,
               (skipped ? ` — ${skipped} not attempted after the failure` : ""),
           ),
         );
-        if (failed) process.exitCode = 1;
+        if (failed) {
+          process.exitCode = 1;
+          // The batch reports per-step results itself rather than dying, so the
+          // failure context is attached here, keyed to the first failing step.
+          const firstError = results.find((r) => !r.ok)?.error ?? "step failed";
+          await emitFailureContext(page, firstError, { disabled: o.capture === false });
+        }
       });
     });
 
@@ -1073,6 +1590,8 @@ A step with no ref uses whatever the last \`find\` matched.`,
     .option("--clear", "Empty the buffer instead of printing it")
     .option("-n <count>", "How many lines", "50")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: any) => {
       await act(o, async (page) => {
         if (o.clear) {
@@ -1111,6 +1630,8 @@ A step with no ref uses whatever the last \`find\` matched.`,
   br.command("dialogs")
     .description("Modal dialogs the page tried to open (answered without blocking)")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: { tab?: string }) => {
       await act(o, async (page) => {
         const rec = await readRecording(page);
@@ -1132,6 +1653,8 @@ A step with no ref uses whatever the last \`find\` matched.`,
     .option("--failed", "Only failures and 4xx/5xx")
     .option("-n <count>", "How many rows", "40")
     .option("--tab <id>", "Act on a specific tab")
+    .option("--real", "Act on your real Chrome through the cast bridge extension")
+    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: any) => {
       await act(o, async (page) => {
         const rec = await readRecording(page);
@@ -1155,4 +1678,6 @@ A step with no ref uses whatever the last \`find\` matched.`,
         if (!rows.length) console.log(fmt.muted(o.failed ? "(no failed requests)" : "(no requests recorded)"));
       });
     });
+
+  registerAuditCommand(br, me);
 }

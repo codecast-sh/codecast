@@ -333,11 +333,26 @@ export function extractCastBodyParts(
   return parts;
 }
 
+// `FOO=1 cast …` and `env -u NAME cast …` run cast with a modified environment —
+// the command the row describes is still cast (agents lean on this constantly,
+// e.g. `CAST_BROWSER_LEGACY=1 cast browser …`). Strip the environment words so
+// the start-anchored `^cast` match below still sees the real command.
+export function stripEnvPrefix(cmd: string): string {
+  const assignment = String.raw`[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S)*`;
+  const env = cmd.match(
+    new RegExp(String.raw`^env(?:\s+-u\s+[A-Za-z_][A-Za-z0-9_]*|\s+--?[A-Za-z-]+|\s+${assignment})*\s+`),
+  );
+  const rest = env ? cmd.slice(env[0].length) : cmd;
+  const bare = rest.match(new RegExp(String.raw`^(?:${assignment}\s+)+`));
+  return bare ? rest.slice(bare[0].length) : rest;
+}
+
 // Parse a raw shell command into its cast (category, subcommand, args), tolerating
-// a `bash -c` wrapper and a leading `cd <dir>;`/`&&` prefix. Returns null when the
-// command isn't a `cast ...` invocation.
+// a `bash -c` wrapper, a leading `cd <dir>;`/`&&` prefix, and leading environment
+// words (`FOO=1 …`, `env -u NAME …`). Returns null when the command isn't a
+// `cast ...` invocation.
 export function parseCastCommandString(rawCommand: string): ParsedCastCommand | null {
-  const cmd = stripCdPrefix(unwrapShellCommand(rawCommand.trim()));
+  const cmd = stripEnvPrefix(stripCdPrefix(unwrapShellCommand(rawCommand.trim())));
   const match = cmd.match(/^cast\s+(\w[\w-]*)(?:\s+(\w[\w-]*))?(?:\s+([\s\S]*))?$/);
   if (!match) return null;
   return {
@@ -346,4 +361,55 @@ export function parseCastCommandString(rawCommand: string): ParsedCastCommand | 
     args: (match[3] || "").trim(),
     fullCmd: cmd,
   };
+}
+
+// ── cast browser page URLs ──────────────────────────────────────────────────
+// `cast browser` drives one stateful page per agent, but only some verbs print
+// where it is: open/snapshot/reload/back/forward emit the page URL line, and a
+// click that navigates reports the destination. Everything else (find, type,
+// shot, press, scroll) prints no URL at all. The row's "open tab" link
+// therefore comes in two steps: extract a URL from the row itself when its
+// output has one, and otherwise CARRY the last known URL forward — the browser
+// is still on that page, the row just didn't restate it.
+
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+/** URL stated by this row itself, or null. Mirrors the CLI's output shapes. */
+export function extractBrowserPageUrl(subcommand: string, args: string, output: string): string | null {
+  const lines = [...output.replace(ANSI_RE, "").matchAll(/^\s*(https?:\/\/\S+)\s*$/gm)];
+  if (lines.length > 0) return lines[lines.length - 1][1];
+  if (subcommand === "open") {
+    const m = args.match(/^"([^"]*)"/) || args.match(/^'([^']*)'/) || args.match(/^(\S+)/);
+    const firstArg = m ? m[1] : "";
+    if (firstArg && firstArg !== "-" && firstArg !== "back" && firstArg !== "forward") {
+      if (/^https?:\/\//i.test(firstArg)) return firstArg;
+      if (/^[\w-]+(\.[\w-]+)+(\/|$)/.test(firstArg)) return `https://${firstArg}`;
+    }
+  }
+  return null;
+}
+
+export interface BrowserRowInput {
+  toolCallId: string;
+  subcommand: string;
+  args: string;
+  output: string;
+}
+
+/**
+ * Walk a conversation's browser rows in order and give every row a page URL:
+ * its own when the output states one, else the last URL any earlier row
+ * established. An `open` row's own URL wins over the carried one — it IS the
+ * navigation.
+ */
+export function buildBrowserPageUrlMap(rows: BrowserRowInput[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  let carried: string | null = null;
+  for (const row of rows) {
+    const own = extractBrowserPageUrl(row.subcommand, row.args, row.output);
+    const url = own ?? carried;
+    if (url) map[row.toolCallId] = url;
+    if (own) carried = own;
+  }
+  return map;
 }

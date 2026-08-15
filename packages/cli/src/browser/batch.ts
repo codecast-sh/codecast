@@ -91,6 +91,11 @@ export interface BatchContext {
   capture: (args: string[]) => Promise<string>;
   /** Navigates and reports the page it landed on. */
   navigate: (url: string) => Promise<string>;
+  /**
+   * Runs after each settling step; returns a note to append to that step's
+   * output, or null. The CLI uses it to audit where in-page actions landed.
+   */
+  afterSettle?: () => Promise<string | null>;
 }
 
 /**
@@ -268,6 +273,8 @@ export async function runBatch(
       // was, then again as a failure — and abort a batch whose step worked.
       if (SETTLES.has(args[0])) {
         await settle(ctx.page, { timeoutMs: 8000 }).catch(() => {});
+        const note = await ctx.afterSettle?.().catch(() => null);
+        if (note) results[results.length - 1].output += `\n! ${note}`;
       }
     } catch (err) {
       results.push({ step, ok: false, output: "", error: (err as Error).message });

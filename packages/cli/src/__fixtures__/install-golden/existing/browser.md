@@ -69,7 +69,16 @@ cast browser text                  # visible text, for reading rather than actin
 
 **Showing the human what you saw**: `cast browser shot` puts the picture straight into the conversation, under the command that took it — no flag needed. Add `--share` when you also want a link you can paste elsewhere, with `--alt` to caption it. Never link a local path — their browser cannot read files on this machine.
 
-**One browser, many agents.** Every agent on this machine drives the SAME Chrome, so tabs are owned per session: commands act on YOUR tab, and `cast browser tabs` marks it `*` and other agents' tabs `~`. Open your own with `cast browser open --new-tab <url>` and pass `--tab <id>` when you want to be certain. If a page suddenly looks wrong, run `cast browser tabs` before you debug the app — a tab someone else navigated looks exactly like a broken feature.
+**Running the browser on another machine.** `cast browser start --remote linux` drives a Chrome on a cloud host instead of this one, and `cast browser hosts` lists what is available. Your logins come with you: the cookies for a site are decrypted here and injected into the remote browser as you navigate to it, so there is no list to configure and nothing of yours is stored there — the remote profile starts empty and is wiped on stop.
+
+Two kinds of host, and the difference is mostly money:
+
+- `--remote linux` — an EC2 instance. It sleeps when idle and then costs only its disk, about a dollar a month, and wakes in about thirty seconds when a command needs it. **Use this for anything web.** Chrome on Linux is the same Chrome speaking the same protocol.
+- `--remote mac` — an Apple silicon Mac. It cannot sleep at all: Apple's licence imposes a 24-hour minimum lease, so it bills continuously (around EUR75/month) until deleted, and creating one per task is worse than leaving it up. **Only reach for it when the work genuinely needs macOS** — Xcode or an iOS build, the iOS simulator, or testing Safari specifically. A Mac is a shared pool, not a per-person machine.
+
+Put a host back to sleep with `cast browser hosts sleep` when you are done; nothing else stops the meter.
+
+**One browser, many agents.** Every agent on this machine drives the SAME Chrome, and each gets its own tab automatically — `cast browser open <url>` reuses the tab you already have, so just call it and keep working. `cast browser tabs` marks yours `*` and other agents' `~`; pass `--tab <id>` when you want to be certain. Reach for `--new-tab` only when you genuinely need a SECOND page open at once (comparing two, or keeping one loaded while you visit another) — opening one per step leaves a pile of tabs that slows the browser down for everyone. Re-opening the URL you are already on is free: it reuses the loaded page instead of reloading it (`--reload` forces a fresh load). If a page suddenly looks wrong, run `cast browser tabs` before you debug the app — a tab someone else navigated looks exactly like a broken feature.
 
 The browser keeps running between commands, so this is stateful: what you opened stays open until you close it or run `cast browser stop`. It starts from a COPY of the real Chrome profile, so it is signed in to what you are signed in to, and nothing it does touches the real browser. Treat that access the way the human would — it is their logged-in accounts. `cast browser start --fresh` gives a signed-out browser when that is what you want, and `cast browser stop --wipe` removes the copy.
 <!-- /codecast-browser -->
