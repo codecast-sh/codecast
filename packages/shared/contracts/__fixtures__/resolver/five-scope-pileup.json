@@ -1,0 +1,108 @@
+{
+  "input": {
+    "bindings": [
+      {
+        "id": "b1",
+        "userId": "u1",
+        "capabilitySlug": "builtin/memory",
+        "scopeKind": "team",
+        "scopeKey": "team1",
+        "enabled": true,
+        "updatedAt": 1000
+      },
+      {
+        "id": "b2",
+        "userId": "u1",
+        "capabilitySlug": "builtin/memory",
+        "scopeKind": "user",
+        "scopeKey": "",
+        "enabled": true,
+        "updatedAt": 1000
+      },
+      {
+        "id": "b3",
+        "userId": "u1",
+        "capabilitySlug": "builtin/memory",
+        "scopeKind": "device",
+        "scopeKey": "dev1",
+        "enabled": true,
+        "updatedAt": 1000
+      },
+      {
+        "id": "b4",
+        "userId": "u1",
+        "capabilitySlug": "builtin/memory",
+        "scopeKind": "project",
+        "scopeKey": "git:github.com/o/r",
+        "enabled": true,
+        "updatedAt": 1000
+      },
+      {
+        "id": "b5",
+        "userId": "u1",
+        "capabilitySlug": "builtin/memory",
+        "scopeKind": "session",
+        "scopeKey": "conv1",
+        "enabled": false,
+        "updatedAt": 1000
+      }
+    ],
+    "context": {
+      "userId": "u1",
+      "teamIds": [
+        "team1"
+      ],
+      "deviceId": "dev1",
+      "projectKeys": [
+        "git:github.com/o/r"
+      ],
+      "conversationId": "conv1"
+    }
+  },
+  "output": {
+    "entries": [
+      {
+        "slug": "builtin/memory",
+        "enabled": false,
+        "decidedBy": {
+          "bindingId": "b5",
+          "scopeKind": "session",
+          "scopeKey": "conv1",
+          "enabled": false,
+          "updatedAt": 1000
+        },
+        "overrode": [
+          {
+            "bindingId": "b4",
+            "scopeKind": "project",
+            "scopeKey": "git:github.com/o/r",
+            "enabled": true,
+            "updatedAt": 1000
+          },
+          {
+            "bindingId": "b3",
+            "scopeKind": "device",
+            "scopeKey": "dev1",
+            "enabled": true,
+            "updatedAt": 1000
+          },
+          {
+            "bindingId": "b2",
+            "scopeKind": "user",
+            "scopeKey": "u1",
+            "enabled": true,
+            "updatedAt": 1000
+          },
+          {
+            "bindingId": "b1",
+            "scopeKind": "team",
+            "scopeKey": "team1",
+            "enabled": true,
+            "updatedAt": 1000
+          }
+        ]
+      }
+    ],
+    "ignored": []
+  }
+}

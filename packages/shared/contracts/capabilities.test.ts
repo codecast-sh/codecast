@@ -409,6 +409,20 @@ describe("deriveExecutionSurfaces", () => {
     expect(surfaces).toEqual(["ships_bin"]);
   });
 
+  it("reads the dedicated fields only, and a components-only manifest fails safe", () => {
+    // `components` counts the files a capability SHIPS; `hooks`/`mcp`/`bin` name
+    // what it REGISTERS. Only the second group is derived from, because a
+    // component list cannot tell a local MCP command from a remote url — the two
+    // are different surfaces, and guessing between them would be a derivation
+    // that lies. A scanner that filled only `components` therefore derives
+    // nothing, which is the safe direction: `requiresExplicitConsent` reads an
+    // empty list as dangerous, so such a capability is gated rather than waved
+    // through. Pinned because the quiet failure would be the opposite.
+    const componentsOnly = { components: { hook: ["h.sh"], mcp: ["srv"] } };
+    expect(deriveExecutionSurfaces(componentsOnly)).toEqual([]);
+    expect(requiresExplicitConsent(deriveExecutionSurfaces(componentsOnly))).toBe(true);
+  });
+
   it("output order is canonical, so equal sets compare equal", () => {
     const a = deriveExecutionSurfaces({ mcp: [{ command: "c" }], bin: ["b"] });
     const b = deriveExecutionSurfaces({ bin: ["b"], mcp: [{ command: "c" }] });

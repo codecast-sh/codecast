@@ -557,6 +557,9 @@ export interface CapabilityBinding {
   config?: Record<string, string>;
   /** When present and non-empty, the binding applies only to these clients. */
   clientFilter?: string[];
+  /** Minimum client version this capability needs (a hook event added in a
+   *  later CLI, an MCP shape an old client cannot read). Dotted integers. */
+  minClientVersion?: string;
   updatedAt: number;
   /** Provenance: "user", "migration", "loadout:<short-id>". */
   createdBy?: string;
@@ -592,6 +595,23 @@ export interface BindingTrace {
 export const BINDING_IGNORE_REASONS = [
   "scope_not_in_context",
   "client_filtered",
+  // The client being resolved for cannot express this capability kind at all
+  // (capabilitySupport === "unsupported"). Named rather than silently degraded:
+  // a codex machine that cannot run plugins must SAY so, or the fleet view
+  // reads the hole as drift.
+  "client_cannot_express",
+  // The binding names a loadout, and loadout expansion has not shipped. Its own
+  // reason so the rows are findable the day expansion lands — and so they never
+  // read as malformed, which they are not.
+  "loadout_not_expanded",
+  // A git source with no pin. The grammar already refuses these; the resolver
+  // names them rather than lumping them into malformed, because the fix is
+  // specific ("pin it to a commit") and a person can act on it.
+  "unpinned_source",
+  // The binding demands a newer client than the one being resolved for. A real
+  // producer, not an ornamental union member: compared only when BOTH sides
+  // state a version, because guessing either way hides bindings or breaks them.
+  "client_too_old",
   "malformed_binding",
 ] as const;
 
@@ -646,6 +666,22 @@ export interface ResolvedCapability {
    *  common case; a non-empty list is exactly what "this team setting is
    *  overridden on your machine" renders from. */
   overrode: BindingTrace[];
+  /**
+   * Whether the capability's bytes are reachable right now. A THIRD state
+   * beside desired/not-desired, never folded into `enabled`: an entry that is
+   * desired but unavailable KEEPS its on-disk copy — it is never rewritten and
+   * never planned for removal, because "the registry was down" must not delete
+   * a working install. Absent means nothing probed availability (a pure
+   * resolve without a content store), which planners treat as available —
+   * refusing to act on an unprobed fleet would freeze every offline resolve.
+   */
+  availability?: "available" | "unavailable";
+  /** Set by the consent gate: the capability has a newer version waiting, and
+   *  materialization stays at THIS pin until a human approves the new hash. */
+  heldAtPin?: string;
+  /** With `availability: "unavailable"`: when the source last answered, so the
+   *  UI can say "unreachable since Tuesday" instead of a bare warning. */
+  lastOk?: number;
 }
 
 /** What a machine should end up with, and why. */
@@ -687,6 +723,13 @@ export interface CapabilityManifest {
   /** NAMES ONLY of environment variables it wants. Never values — this object is
    *  hashed, stored and rendered, and a secret in it would leak through all three. */
   envKeys?: string[];
+  /** The artifact identity: a plugin install's gitCommitSha, a skill tree's
+   *  folder hash. IN the manifest — and therefore in `manifestHash` — on
+   *  purpose: consent names bytes, so a moved ref or a new commit behind an
+   *  unchanged tag must move the hash and re-open the consent question. A
+   *  version STRING never goes here; it can be re-tagged without the bytes
+   *  changing, which is exactly the lie the hash exists to catch. */
+  artifactPin?: string;
 }
 
 /**
@@ -716,31 +759,29 @@ export function manifestHash(manifest: CapabilityManifest | undefined): string {
   return hash.toString(16).padStart(8, "0");
 }
 
-/** JSON with object keys sorted at every depth, so key order cannot change the
- *  hash. Arrays keep their order: `["a","b"]` and `["b","a"]` are different
- *  manifests — the order of a command's arguments is meaningful. */
+/**
+ * JSON with object keys sorted at every depth, so key order cannot change the
+ * hash. Arrays keep their order: `["a","b"]` and `["b","a"]` are different
+ * manifests — the order of a command's arguments is meaningful.
+ *
+ * A property that says nothing is dropped, so `undefined`, `null`, `[]` and `{}`
+ * all mean what omitting the key means. Scanners disagree about which of those
+ * they emit, and `deriveExecutionSurfaces` already reads them alike (it asks
+ * `?.length`). A hash that split them would report two values for one unchanged
+ * capability, and since consent is granted against the hash, the human would be
+ * asked to approve a capability that did not change.
+ */
 function canonicalize(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  // Array ELEMENTS are never dropped, only properties: an `mcp: [{}]` entry is a
-  // server we observed and learned nothing about, and removing it would shorten
-  // a list whose length is meaningful.
+  // Elements are never dropped, only properties: an `mcp: [{}]` entry is a server
+  // we observed and learned nothing about, and dropping it would shorten a list
+  // whose length is meaningful.
   if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
   const entries = Object.entries(value as Record<string, unknown>)
     .map(([k, v]) => [k, canonicalize(v)] as const)
-    // A property that says nothing is dropped rather than hashed, so that
-    // `undefined`, `null`, `[]` and `{}` all mean what omitting the key means.
-    // Scanners disagree about which of those they emit, and every other reader
-    // here already treats them alike — `deriveExecutionSurfaces` asks `?.length`,
-    // so an empty `hooks` and an absent `hooks` derive identical surfaces. A hash
-    // that disagreed would report two values for one unchanged capability, and
-    // the consent gate would tell the human "the manifest changed since you
-    // approved it" and make them approve it again. A prompt that fires when
-    // nothing changed is worse than no prompt: it teaches people to click through
-    // the one that matters.
-    //
-    // Testing the CANONICAL form rather than the raw value is what makes this
-    // recursive: `components: { skill: [] }` collapses to `{}` here and then
-    // vanishes with its parent, so emptiness cannot survive one level down.
+    // Filtering the CANONICAL form rather than the raw value is what makes the
+    // rule recursive: `components: { skill: [] }` collapses to `{}` here, then
+    // vanishes with its parent. Emptiness cannot survive one level down.
     .filter(([, canonical]) => canonical !== "{}" && canonical !== "[]" && canonical !== "null")
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return `{${entries.map(([k, canonical]) => `${JSON.stringify(k)}:${canonical}`).join(",")}}`;

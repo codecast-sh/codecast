@@ -1,0 +1,20 @@
+{
+  "input": {
+    "bindings": [],
+    "context": {
+      "userId": "u1",
+      "teamIds": [
+        "team1"
+      ],
+      "deviceId": "dev1",
+      "projectKeys": [
+        "git:github.com/o/r"
+      ],
+      "conversationId": "conv1"
+    }
+  },
+  "output": {
+    "entries": [],
+    "ignored": []
+  }
+}

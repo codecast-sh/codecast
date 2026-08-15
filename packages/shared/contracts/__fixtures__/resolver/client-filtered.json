@@ -1,0 +1,43 @@
+{
+  "input": {
+    "bindings": [
+      {
+        "id": "b1",
+        "userId": "u1",
+        "capabilitySlug": "builtin/memory",
+        "scopeKind": "user",
+        "scopeKey": "",
+        "enabled": true,
+        "updatedAt": 1000,
+        "clientFilter": [
+          "codex"
+        ]
+      }
+    ],
+    "context": {
+      "userId": "u1",
+      "teamIds": [
+        "team1"
+      ],
+      "deviceId": "dev1",
+      "projectKeys": [
+        "git:github.com/o/r"
+      ],
+      "conversationId": "conv1",
+      "client": "claude"
+    }
+  },
+  "output": {
+    "entries": [],
+    "ignored": [
+      {
+        "bindingId": "b1",
+        "capabilitySlug": "builtin/memory",
+        "scopeKind": "user",
+        "scopeKey": "u1",
+        "reason": "client_filtered",
+        "detail": "bound to codex"
+      }
+    ]
+  }
+}
