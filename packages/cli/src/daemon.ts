@@ -10,6 +10,7 @@ import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, recordConvergenceSignals } from "./capabilities/heartbeat.js";
+import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostname } from "./remote/device.js";
 import { readInputIdleMs } from "./inputIdle.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
@@ -80,7 +81,12 @@ import {
   resolveSpawnerSessionId,
   classifyProcessOwnership,
   shortId,
+  argvSessionId,
+  parsePsEtimeSeconds,
+  judgeProcessIdentity,
+  processDeclaredSessionId,
   type ProcessOwnership,
+  type ProcessSessionClaim,
 } from "./sessionProcessMatcher.js";
 import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractGeminiProjectHash, extractPiCwd, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
@@ -1538,11 +1544,44 @@ function enqueueRemoteLog(entry: RemoteLog): void {
 // witness for what blocked it (see startLoopFreezeProbe).
 let lastLogLine = "";
 
+// Debug-level lines (per-session resource dumps, per-pane "no prompt found"
+// probes) are the bulk of daemon.log by bytes — ~70% on 2026-08-15 — and only
+// useful when chasing one specific session. They are dropped unless enabled.
+const DEBUG_LOG_ENABLED = process.env.CODECAST_DAEMON_DEBUG === "1";
+
+// info/debug lines are buffered and flushed on a short timer; warn/error still
+// write synchronously. At ~4k lines/hour, one appendFileSync per line was a
+// steady stream of blocking disk writes on the main thread. The buffer is also
+// flushed synchronously on process "exit" (which process.exit() fires) so the
+// last lines before a crash or self-restart are never lost.
+const LOG_FILE_FLUSH_INTERVAL_MS = 250;
+let logBuffer: string[] = [];
+let logFlushTimer: NodeJS.Timeout | null = null;
+function flushLogBuffer(): void {
+  if (logBuffer.length === 0) return;
+  const chunk = logBuffer.join("");
+  logBuffer = [];
+  try { fs.appendFileSync(LOG_FILE, chunk); } catch {}
+}
+function scheduleLogFlush(): void {
+  if (logFlushTimer) return;
+  logFlushTimer = setTimeout(() => { logFlushTimer = null; flushLogBuffer(); }, LOG_FILE_FLUSH_INTERVAL_MS);
+  logFlushTimer.unref?.();
+}
+
 function log(message: string, level: LogLevel = "info", metadata?: RemoteLog["metadata"]): void {
+  if (level === "debug" && !DEBUG_LOG_ENABLED) return;
   const timestamp = new Date().toISOString();
   const levelTag = level === "info" ? "" : `[${level.toUpperCase()}] `;
   const line = `[${timestamp}] ${levelTag}${message}\n`;
-  fs.appendFileSync(LOG_FILE, line);
+  if (level === "warn" || level === "error") {
+    // Keep ordering: anything buffered goes out first, then this line.
+    flushLogBuffer();
+    fs.appendFileSync(LOG_FILE, line);
+  } else {
+    logBuffer.push(line);
+    scheduleLogFlush();
+  }
   lastLogLine = `${timestamp} ${message.slice(0, 160)}`;
 
   enqueueRemoteLog({
@@ -1596,7 +1635,26 @@ function logLifecycle(event: string, details?: string): void {
   });
 }
 
-function getSystemMetrics(): { rss_mb: number; heap_mb: number; heap_total_mb: number; uptime_min: number; fds: number; cpu_user_ms: number; cpu_system_ms: number } {
+// On macOS, RSS counts clean file-backed and already-freed-but-still-mapped
+// pages (bun's allocator returns memory as clean pages that stay in RSS), so it
+// overstates real use badly — 1.34GB RSS was 119MB phys_footprint on 2026-08-15.
+// The kernel's phys_footprint is the honest number but isn't reachable from JS;
+// `footprint` is (slow, ~seconds), so we only shell out to it when RSS crosses
+// the warn threshold — turning a would-be false alarm into a real measurement.
+function readPhysFootprintMb(): number | null {
+  if (process.platform !== "darwin") return null;
+  try {
+    const out = execSync(`footprint ${process.pid} 2>/dev/null`, { timeout: 15_000 }).toString();
+    const m = out.match(/phys_footprint:\s+([\d.]+)\s*([KMG])B/);
+    if (!m) return null;
+    const v = parseFloat(m[1]);
+    return Math.round(m[2] === "G" ? v * 1024 : m[2] === "K" ? v / 1024 : v);
+  } catch {
+    return null;
+  }
+}
+
+function getSystemMetrics(): { rss_mb: number; heap_mb: number; heap_total_mb: number; ext_mb: number; uptime_min: number; fds: number; cpu_user_ms: number; cpu_system_ms: number } {
   const mem = process.memoryUsage();
   const cpu = process.cpuUsage();
   let fds = 0;
@@ -1611,6 +1669,9 @@ function getSystemMetrics(): { rss_mb: number; heap_mb: number; heap_total_mb: n
     rss_mb: Math.round(mem.rss / 1024 / 1024),
     heap_mb: Math.round(mem.heapUsed / 1024 / 1024),
     heap_total_mb: Math.round(mem.heapTotal / 1024 / 1024),
+    // Buffers/ArrayBuffers/other off-heap allocations bun tracks — where a
+    // whole-file read shows up. Small heap + big ext = transient file churn.
+    ext_mb: Math.round((mem.external + mem.arrayBuffers) / 1024 / 1024),
     uptime_min: Math.round(process.uptime() / 60),
     fds,
     cpu_user_ms: Math.round(cpu.user / 1000),
@@ -1627,7 +1688,7 @@ function logHealthSummary(): void {
   const sessionsCount = syncStats.sessionsActive.size;
   const metrics = getSystemMetrics();
 
-  const metricStr = `rss=${metrics.rss_mb}MB heap=${metrics.heap_mb}/${metrics.heap_total_mb}MB fds=${metrics.fds} cpu=${metrics.cpu_user_ms}+${metrics.cpu_system_ms}ms uptime=${metrics.uptime_min}min`;
+  const metricStr = `rss=${metrics.rss_mb}MB heap=${metrics.heap_mb}/${metrics.heap_total_mb}MB ext=${metrics.ext_mb}MB fds=${metrics.fds} cpu=${metrics.cpu_user_ms}+${metrics.cpu_system_ms}ms uptime=${metrics.uptime_min}min`;
   const syncStr = `${syncStats.messagesSynced}msgs ${syncStats.conversationsCreated}convos ${sessionsCount}sessions ${syncStats.errors}errs`;
   const summary = `Health: ${syncStr} | ${metricStr} (${periodMinutes}min)`;
 
@@ -1649,9 +1710,21 @@ function logHealthSummary(): void {
   }
 
   if (metrics.rss_mb > RSS_WARN_THRESHOLD_MB) {
-    const msg = `HIGH MEMORY: ${metrics.rss_mb}MB RSS (threshold: ${RSS_WARN_THRESHOLD_MB}MB)`;
-    logWarn(msg);
-    sendLogImmediate("warn", msg, { error_code: "high_memory" });
+    // RSS over the line is a prompt to MEASURE, not a verdict (see
+    // readPhysFootprintMb). Only warn on the real footprint; if we can't
+    // read it, fall back to the RSS warning so the signal is never silently lost.
+    const footprintMb = readPhysFootprintMb();
+    if (footprintMb === null) {
+      const msg = `HIGH MEMORY: ${metrics.rss_mb}MB RSS (threshold: ${RSS_WARN_THRESHOLD_MB}MB; footprint unavailable)`;
+      logWarn(msg);
+      sendLogImmediate("warn", msg, { error_code: "high_memory" });
+    } else if (footprintMb > RSS_WARN_THRESHOLD_MB) {
+      const msg = `HIGH MEMORY: ${footprintMb}MB phys_footprint (rss=${metrics.rss_mb}MB, threshold: ${RSS_WARN_THRESHOLD_MB}MB)`;
+      logWarn(msg);
+      sendLogImmediate("warn", msg, { error_code: "high_memory" });
+    } else {
+      log(`Memory: rss=${metrics.rss_mb}MB over threshold but phys_footprint=${footprintMb}MB — clean/reclaimable pages, not real pressure`);
+    }
   }
 
   syncStats.messagesSynced = 0;
@@ -1692,6 +1765,10 @@ async function pollDaemonCommands(): Promise<void> {
         pid: process.pid,
         autostart_enabled: isAutostartEnabled(),
         has_tmux: hasTmux(),
+        // Identify the device on this path too: it hits the same heartbeat
+        // mutation as sendHeartbeat, and a device-less beat is a legacy writer
+        // there (per-machine user fields, command visibility).
+        device_id: deviceId(),
         ...syncHealthFields(),
       }),
     });
@@ -2271,10 +2348,22 @@ async function sendHeartbeat(): Promise<void> {
       }
     }
 
-    // Capability convergence: one field read + one integer store per beat.
-    // The reconciler (phase 3) polls reconcileNeeded(); the kill switch works
-    // the moment the server flips capabilities_mode, no CLI ship needed.
+    // Capability convergence: one field read + one integer store per beat,
+    // then the reconciler decides whether it has anything to do (mode off =
+    // one field read; revisions equal = one compare). Fire-and-forget off the
+    // beat: a slow disk must never delay presence, and a failure logs and
+    // waits for the next beat. The kill switch works the moment the server
+    // flips capabilities_mode, no CLI ship needed.
     recordConvergenceSignals(data);
+    if (config.user_id) {
+      void reconcileFromHeartbeat({
+        siteUrl,
+        apiToken: config.auth_token,
+        userId: config.user_id,
+        home: process.env.HOME || require("os").homedir(),
+        log,
+      }).catch((err) => log(`[capabilities] reconcile failed: ${String(err).slice(0, 160)}`));
+    }
 
     if (data.sync_mode !== undefined) {
       const currentConfig = readConfig();
@@ -8405,13 +8494,21 @@ function tryRegisterSessionProcess(sessionId: string, agentType: AgentClientId):
     if (fs.existsSync(registryFile)) {
       const stat = fs.statSync(registryFile);
       if (Date.now() - stat.mtimeMs < 300_000) return;
+      // A hook-written claim is the process's own word about which session it
+      // runs (see judgeProcessIdentity). While that pid lives, an opportunistic
+      // rewrite would replace the truth with a lookup heuristic — the very
+      // heuristic the identity check exists to second-guess — so leave it alone.
+      try {
+        const reg = JSON.parse(fs.readFileSync(registryFile, "utf-8"));
+        if (isHookRegistration(reg) && typeof reg.pid === "number" && isProcessRunning(reg.pid)) return;
+      } catch {}
     }
 
     findSessionProcess(sessionId, agentType).then((result) => {
       if (!result) return;
       try {
         fs.mkdirSync(registryDir, { recursive: true });
-        fs.writeFileSync(registryFile, JSON.stringify({ pid: result.pid, tty: result.tty, ts: Math.floor(Date.now() / 1000) }));
+        fs.writeFileSync(registryFile, JSON.stringify({ pid: result.pid, tty: result.tty, ts: Math.floor(Date.now() / 1000), src: "daemon" }));
         log(`Opportunistically registered session ${sessionId.slice(0, 8)}: pid=${result.pid}, tty=${result.tty}`);
       } catch {}
       if (syncServiceRef) {
@@ -8457,9 +8554,101 @@ async function findSessionProcess(sessionId: string, agentType: AgentClientId = 
   const inflight = findSessionProcessInflight.get(key);
   if (inflight) return inflight;
 
-  const promise = findSessionProcessImpl(sessionId, agentType);
+  // Every strategy below answers "where did this session run"; the identity
+  // check answers "what does that pid run now". Strategies 0 and B check inline
+  // so the search can continue past a foreign pid; this is the backstop for the
+  // rest (the process cache, the cwd heuristics).
+  const promise = findSessionProcessImpl(sessionId, agentType).then(async (result) => {
+    if (result && await rejectsForeignProcess(sessionId, result.pid, "lookup")) {
+      sessionProcessCache.delete(sessionId);
+      return null;
+    }
+    return result;
+  });
   findSessionProcessInflight.set(key, promise);
   return promise.finally(() => findSessionProcessInflight.delete(key));
+}
+
+// ── Process identity: which session does a pid actually run? ────────────────
+// The verdict logic is pure (sessionProcessMatcher.judgeProcessIdentity); this
+// is the plumbing: the pid's argv and start time from `ps`, and the hook claims
+// for that pid from the session registry.
+const HOOK_CLAIM_INDEX_TTL_MS = 60_000;
+const HOOK_CLAIM_MAX_AGE_MS = 2 * 24 * 60 * 60 * 1000;
+let hookClaimsByPid = new Map<number, ProcessSessionClaim[]>();
+let hookClaimsIndexedAt = 0;
+
+/** The SessionStart hook always records `term`; the daemon's opportunistic
+ *  writes never did (and now carry `src: "daemon"`). Only the hook speaks for
+ *  the process itself. */
+function isHookRegistration(reg: unknown): boolean {
+  return !!reg && typeof reg === "object" && typeof (reg as { term?: unknown }).term === "string"
+    && (reg as { src?: unknown }).src !== "daemon";
+}
+
+let hookClaimsIndexing: Promise<void> | null = null;
+
+// The registry dir holds thousands of files; only the recent ones (by mtime) are
+// parsed, and the scan is async and shared so concurrent lookups don't each pay
+// for it or block the loop.
+async function hookClaimsForPid(pid: number): Promise<ProcessSessionClaim[]> {
+  if (Date.now() - hookClaimsIndexedAt >= HOOK_CLAIM_INDEX_TTL_MS) {
+    hookClaimsIndexing ??= (async () => {
+      const dir = path.join(CONFIG_DIR, "session-registry");
+      const next = new Map<number, ProcessSessionClaim[]>();
+      const cutoffMs = Date.now() - HOOK_CLAIM_MAX_AGE_MS;
+      try {
+        for (const file of await fs.promises.readdir(dir)) {
+          if (!file.endsWith(".json")) continue;
+          const full = path.join(dir, file);
+          try {
+            if ((await fs.promises.stat(full)).mtimeMs < cutoffMs) continue;
+            const reg = JSON.parse(await fs.promises.readFile(full, "utf-8"));
+            if (!isHookRegistration(reg) || typeof reg.pid !== "number" || typeof reg.ts !== "number") continue;
+            const list = next.get(reg.pid) ?? [];
+            list.push({ sessionId: file.slice(0, -5), ts: reg.ts });
+            next.set(reg.pid, list);
+          } catch {}
+        }
+      } catch {}
+      hookClaimsByPid = next;
+      hookClaimsIndexedAt = Date.now();
+    })().finally(() => { hookClaimsIndexing = null; });
+    await hookClaimsIndexing;
+  }
+  return hookClaimsByPid.get(pid) ?? [];
+}
+
+/** argv, start time and hook claims of a live pid — the inputs to the identity verdict. */
+async function describeProcessIdentity(pid: number): Promise<{ argvId: string | null; claims: ProcessSessionClaim[]; processStartSec: number | null }> {
+  let etime = "";
+  let argv = "";
+  try {
+    const { stdout } = await execAsync(`ps -o etime=,command= -p ${pid} 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+    const line = stdout.trim();
+    const sp = line.indexOf(" ");
+    etime = sp === -1 ? line : line.slice(0, sp);
+    argv = sp === -1 ? "" : line.slice(sp + 1).trim();
+  } catch {}
+  const elapsed = parsePsEtimeSeconds(etime);
+  return {
+    argvId: argvSessionId(argv),
+    claims: await hookClaimsForPid(pid),
+    processStartSec: elapsed === null ? null : Math.floor(Date.now() / 1000) - elapsed,
+  };
+}
+
+/** The session a live pid runs by its own account (hook claim, else argv), or null. */
+async function processDeclaredSession(pid: number): Promise<string | null> {
+  return processDeclaredSessionId(await describeProcessIdentity(pid));
+}
+
+/** True (and logged) when `pid` demonstrably runs a session other than `sessionId`. */
+async function rejectsForeignProcess(sessionId: string, pid: number, via: string): Promise<boolean> {
+  const { verdict, declared } = judgeProcessIdentity({ sessionId, ...(await describeProcessIdentity(pid)) });
+  if (verdict !== "foreign") return false;
+  log(`[IDENTITY] pid=${pid} (${via}) runs session ${shortId(declared!)}, not ${shortId(sessionId)} — not using it`);
+  return true;
 }
 
 async function findSessionProcessImpl(sessionId: string, agentType: AgentClientId = "claude"): Promise<ClaudeSessionInfo | null> {
@@ -8487,6 +8676,10 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
         if (checkPs.trim()) {
           if (agentType === "codex") {
             log(`Ignoring registry candidate for codex session ${shortId(sessionId)} (pid=${pid})`);
+          } else if (await rejectsForeignProcess(sessionId, pid, "registry")) {
+            // The pid lives on but runs another session now (a reused pid, or an
+            // in-process switch): this registration is stale, not this session's.
+            try { fs.unlinkSync(registryFile); } catch {}
           } else {
           const result = { pid, tty, sessionId, termProgram };
           cacheSessionProcess(sessionId, result);
@@ -8631,6 +8824,11 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
               try {
                 const { stdout: childPs } = await execAsync(`pgrep -P ${panePid} -f ${binaryPattern} 2>/dev/null`);
                 const childPid = parseInt(childPs.trim().split("\n")[0]?.trim(), 10);
+                // A tmux named for this session can host another session's agent
+                // (observed: cc-resume-c291b8e9 running `claude --resume 3d2a9117`).
+                // The name is where the session was PUT; the process says what
+                // runs there now.
+                if (!isNaN(childPid) && await rejectsForeignProcess(sessionId, childPid, `tmux ${tmuxName}`)) continue;
                 if (!isNaN(childPid)) {
                   const result = { pid: childPid, tty: normalizeTty(paneTty), sessionId };
                   cacheSessionProcess(sessionId, result, `${tmuxName}:0.0`);
@@ -8638,7 +8836,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
                   return result;
                 }
                 // No agent child process found - check if pane shell itself is an agent
-                if (isAgentProcess(panePid)) {
+                if (isAgentProcess(panePid) && !(await rejectsForeignProcess(sessionId, panePid, `tmux ${tmuxName}`))) {
                   const result = { pid: panePid, tty: normalizeTty(paneTty), sessionId };
                   cacheSessionProcess(sessionId, result, `${tmuxName}:0.0`);
                   log(`Found session ${shortId(sessionId)} via tmux session ${tmuxName}: pid=${panePid} (direct)`);
@@ -9296,7 +9494,7 @@ async function checkForInteractivePrompt(
     const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxTarget, "-S", "-200"]);
     const prompt = parseInteractivePrompt(paneContent);
     if (!prompt) {
-      log(`No interactive prompt found in ${tmuxTarget} for session ${sessionId.slice(0, 8)}`);
+      log(`No interactive prompt found in ${tmuxTarget} for session ${sessionId.slice(0, 8)}`, "debug");
       // Backstop: with no blocking prompt on screen, the live pane is the ground
       // truth for whether this agent is idle or working. Correct a latched status
       // (a lost lifecycle hook, or one wiped by a daemon restart) before returning.
@@ -9757,7 +9955,15 @@ export function classifyTranscriptTail(tailContent: string): TranscriptTurnState
 // and those runs' tasks died with their process — counting them would latch a
 // phantom "waiting".
 export function scanOpenBackgroundTasks(content: string, currentSessionId?: string): Set<string> {
-  const open = new Set<string>();
+  return scanOpenBackgroundTasksInto(new Set<string>(), content, currentSessionId);
+}
+
+// The scanner core, threading an existing `open` set so a caller that already
+// scanned the first N bytes can feed it only the bytes after N. Open/close are
+// order-dependent but purely sequential (a task opens on its start line and
+// closes on a later notification/TaskStop line), so scanning the file in two
+// halves against the same set gives the same answer as scanning it whole.
+function scanOpenBackgroundTasksInto(open: Set<string>, content: string, currentSessionId?: string): Set<string> {
   const OPEN_PATTERNS = [
     /running in background with ID: ([A-Za-z0-9_-]+)/g,
     /moved to the background \(ID: ([A-Za-z0-9_-]+)\)/g,
@@ -9836,19 +10042,45 @@ function closeNotifiedTasks(text: string, open: Set<string>): void {
   for (const m of text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) open.delete(m[1]);
 }
 
-// Cached whole-file wrapper for scanOpenBackgroundTasks. Turn-end and reconcile
-// both consult it; the reconcile runs on every heartbeat, so re-parsing an
-// unchanged multi-MB transcript each tick is not acceptable — the file size is
-// the cache key (a JSONL transcript only ever appends).
-const openTaskScanCache = new Map<string, { size: number; open: string[] }>();
+// Incremental wrapper for scanOpenBackgroundTasks. Turn-end and reconcile both
+// consult it, and reconcile runs on every heartbeat. The old version cached by
+// file size and re-read the WHOLE transcript on any size change — but the very
+// sessions this is called for ("waiting" on background work) are the ones whose
+// transcript grows on every tick, so the cache never hit and each heartbeat
+// re-materialized a multi-MB file as a JS string (+ its split() array). Measured
+// 2026-08-15: one 31MB transcript = +140MB RSS per scan; several live sessions
+// pushed daemon phys_footprint to a 934MB peak. JSONL is append-only, so keep the
+// scanner's `open` set plus the byte offset consumed and scan only the new
+// bytes — same verdict, O(delta) memory. The offset only advances past complete
+// lines, so a half-written tail is re-read (not skipped) on the next call. A
+// shrink (rotation/rewrite) resets to a full scan.
+type OpenTaskScanState = { offset: number; open: Set<string>; sessionId?: string };
+const openTaskScanCache = new Map<string, OpenTaskScanState>();
 export function openBackgroundTaskIds(transcriptPath: string, sessionId?: string): string[] {
   try {
     const size = fs.statSync(transcriptPath).size;
-    const cached = openTaskScanCache.get(transcriptPath);
-    if (cached && cached.size === size) return cached.open;
-    const open = [...scanOpenBackgroundTasks(fs.readFileSync(transcriptPath, "utf8"), sessionId)];
-    openTaskScanCache.set(transcriptPath, { size, open });
-    return open;
+    let state = openTaskScanCache.get(transcriptPath);
+    if (state && (state.offset > size || state.sessionId !== sessionId)) state = undefined;
+    if (!state) state = { offset: 0, open: new Set<string>(), sessionId };
+    if (size > state.offset) {
+      const fd = fs.openSync(transcriptPath, "r");
+      let chunk: string;
+      try {
+        const buf = Buffer.alloc(size - state.offset);
+        const n = fs.readSync(fd, buf, 0, buf.length, state.offset);
+        chunk = buf.toString("utf8", 0, n);
+      } finally {
+        fs.closeSync(fd);
+      }
+      const lastNewline = chunk.lastIndexOf("\n");
+      if (lastNewline >= 0) {
+        const complete = chunk.slice(0, lastNewline + 1);
+        scanOpenBackgroundTasksInto(state.open, complete, sessionId);
+        state.offset += Buffer.byteLength(complete, "utf8");
+      }
+      openTaskScanCache.set(transcriptPath, state);
+    }
+    return [...state.open];
   } catch {
     return []; // unreadable transcript -> no claim of open work
   }
@@ -13819,7 +14051,9 @@ async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSession
   const cached = sessionProcessCache.get(sessionId);
   if (!cached) return null;
   if (Date.now() - cached.lastVerified > PROCESS_CACHE_TTL_MS) {
-    if (!isProcessRunning(cached.pid) || !isAgentProcess(cached.pid)) {
+    // Alive, an agent, and still THIS session's agent — a cached pid outlives an
+    // in-process /clear or /resume switch as easily as it outlives the process.
+    if (!isProcessRunning(cached.pid) || !isAgentProcess(cached.pid) || await rejectsForeignProcess(sessionId, cached.pid, "cache")) {
       sessionProcessCache.delete(sessionId);
       return null;
     }
@@ -13957,7 +14191,8 @@ async function collectResourceSnapshot(): Promise<void> {
     }
 
     if (resources.size > 0) {
-      log(`[RESOURCES] metrics reported=${metricsReported} skipped=${metricsSkipped} | ${formatResourcesLog(resources)}`);
+      log(`[RESOURCES] metrics reported=${metricsReported} skipped=${metricsSkipped} (${resources.size} sessions)`);
+      log(`[RESOURCES] ${formatResourcesLog(resources)}`, "debug");
     }
   } catch (err) {
     log(`[RESOURCES] Collection failed: ${err instanceof Error ? err.message : String(err)}`, "warn");
@@ -14147,7 +14382,7 @@ async function resolveLiveTmuxTarget(
     if (hasSessionOk) {
       cachedStillValid = true;
       let agentAlive = true;
-      try { agentAlive = await isTmuxAgentAlive(cachedTmux); } catch {}
+      try { agentAlive = await isTmuxAgentAlive(cachedTmux, sessionId); } catch {}
       if (agentAlive) {
         return { tmuxTarget: cachedTmux, source: "cache", proc: null, cachedStillValid: true };
       }
@@ -14163,7 +14398,7 @@ async function resolveLiveTmuxTarget(
   for (const candidate of resumeReuseCandidates(undefined, startedTmux, resumeTmuxName ?? "")) {
     try {
       await tmuxExec(["has-session", "-t", candidate], { timeout: 3000, killSignal: "SIGKILL" });
-      if (await isTmuxAgentAlive(candidate)) {
+      if (await isTmuxAgentAlive(candidate, sessionId)) {
         return {
           tmuxTarget: candidate,
           source: candidate === startedTmux ? "started" : "resume-name",
@@ -14267,6 +14502,53 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   } finally {
     resumeInFlight.delete(sessionId);
     resumeInFlightStarted.delete(sessionId);
+  }
+}
+
+/**
+ * The resume tmux for `sessionId` is about to be killed and recreated. If it is
+ * occupied by ANOTHER session's live agent (resolveLiveTmuxTarget refused it as
+ * foreign), that agent is a squatter in a name that will now be reused: move it
+ * to the tmux name its own session resolves to, so its own deliveries keep
+ * reaching it and its terminal shows the right session. If that name is already
+ * live, the squatter is a second instance of that session writing the same
+ * transcript — the kill below is the right end for it, so just say so.
+ */
+async function relocateForeignOccupant(tmuxSession: string, sessionId: string, agentType: AgentClientId): Promise<void> {
+  try {
+    const { stdout } = await tmuxExec(["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"], { timeout: 3000, killSignal: "SIGKILL" });
+    const panePid = parseInt(stdout.trim().split("\n")[0] ?? "", 10);
+    if (isNaN(panePid)) return;
+    const agentPid = await findAgentPidInTree(panePid);
+    if (agentPid === null) return;
+    const occupant = await processDeclaredSession(agentPid);
+    if (!occupant || occupant === sessionId) return;
+    const home = resumeTmuxName(agentType, occupant);
+    let homeLive = false;
+    try {
+      await tmuxExec(["has-session", "-t", home], { timeout: 3000, killSignal: "SIGKILL" });
+      homeLive = await isTmuxAgentAlive(home, occupant);
+    } catch {}
+    if (homeLive) {
+      log(`[IDENTITY] tmux ${tmuxSession} hosts a second instance of ${shortId(occupant)} (pid=${agentPid}); ${home} is already live — letting the recreate kill it`);
+      return;
+    }
+    try { await tmuxExec(["kill-session", "-t", home]); } catch {}
+    await tmuxExec(["rename-session", "-t", tmuxSession, home]);
+    await setTmuxSessionOption(home, "@codecast_session_id", occupant);
+    resumeSessionCache.set(occupant, home);
+    sessionProcessCache.delete(occupant);
+    const occupantConv = readConversationCache()[occupant];
+    if (syncServiceRef && occupantConv) {
+      syncServiceRef.registerManagedSession(occupant, agentPid, home, occupantConv).catch(logConvexFailure);
+    }
+    log(`[IDENTITY] tmux ${tmuxSession} hosted ${shortId(occupant)} (pid=${agentPid}), not ${shortId(sessionId)} — renamed it to ${home}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // No such tmux is the ordinary case (nothing to relocate); only a real failure is worth a line.
+    if (!/can't find|no such session|session not found/i.test(msg)) {
+      log(`[IDENTITY] relocate check for ${tmuxSession} failed: ${msg.slice(0, 160)}`);
+    }
   }
 }
 
@@ -14507,6 +14789,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   }
 
   try {
+    await relocateForeignOccupant(tmuxSession, sessionId, agentType);
     try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
 
     try {
@@ -15881,7 +16164,14 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
-async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
+/**
+ * Is a live agent running in this tmux session — and, when `sessionId` is given,
+ * is it THIS session's agent? A tmux named for a session can host a different
+ * session's process (see judgeProcessIdentity); for the caller that is not
+ * "alive", it is "occupied by someone else", and reusing it would inject this
+ * session's messages into that other agent.
+ */
+async function isTmuxAgentAlive(tmuxSession: string, sessionId?: string): Promise<boolean> {
   if (!hasTmux()) return false;
   try {
     const { stdout } = await tmuxExec(
@@ -15890,7 +16180,9 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
     const panePid = stdout.trim();
     if (!panePid) return false;
 
-    const hasProcess = await hasAgentProcessInTree(parseInt(panePid, 10));
+    const agentPid = await findAgentPidInTree(parseInt(panePid, 10));
+    if (agentPid !== null && sessionId && await rejectsForeignProcess(sessionId, agentPid, `tmux ${tmuxSession}`)) return false;
+    const hasProcess = agentPid !== null;
 
     try {
       const { stdout: paneContent } = await tmuxExec(
@@ -15945,10 +16237,6 @@ async function findAgentPidInTree(rootPid: number, maxDepth = 4): Promise<number
     return scan(childPids, 1);
   } catch {}
   return null;
-}
-
-async function hasAgentProcessInTree(rootPid: number, maxDepth = 4): Promise<boolean> {
-  return (await findAgentPidInTree(rootPid, maxDepth)) !== null;
 }
 
 function isAgentProcess(pid: number): boolean {
@@ -16989,12 +17277,12 @@ async function logHealthReport(retryQueue: RetryQueue, config: Config): Promise<
     undefined,
     (filePath) => isTranscriptFileInSyncScope(filePath, config),
   );
-  const droppedOps = retryQueue.getDroppedOperations();
+  const droppedCount = retryQueue.getDroppedOperationCount();
   const queueSize = retryQueue.getLogicalQueueSize();
 
-  if (unsyncedFiles.length > 0 || droppedOps.length > 0 || queueSize > 10) {
+  if (unsyncedFiles.length > 0 || droppedCount > 0 || queueSize > 10) {
     logWarn(
-      `Health: ${unsyncedFiles.length} pending files, ${droppedOps.length} dropped ops, ${queueSize} in retry queue`
+      `Health: ${unsyncedFiles.length} pending files, ${droppedCount} dropped ops, ${queueSize} in retry queue`
     );
   }
 }
@@ -17493,6 +17781,7 @@ async function main(): Promise<void> {
     // kill it either, so without this a dying daemon orphans a live unauthenticated
     // serve. stop() sends SIGTERM synchronously here and is idempotent.
     try { opencodeServerInstance?.stop(); } catch {}
+    flushLogBuffer();
     persistLogQueue();
     if (skipRespawn || underLaunchd) return;
     if (code !== 0) {

@@ -20,6 +20,8 @@ import {
   canAccessPlan,
   canAccessTask,
   isSameWorkspace,
+  parseWorkspaceKey,
+  resolveWorkspaceKey,
   requireAccessibleDoc,
   requireAccessibleProject,
   requireSameWorkspace,
@@ -567,15 +569,14 @@ export const list = query({
     }
 
     if (needsAccessFilter) {
-      const memberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
-        .collect();
-      const memberTeamIds = new Set(memberships.map((m: any) => String(m.team_id)));
-      docs = docs.filter((d: any) =>
-        String(d.user_id) === String(auth.userId) ||
-        (d.team_id && memberTeamIds.has(String(d.team_id)))
-      );
+      // Route through canAccessDoc (owner or effective-team member) rather than a
+      // hand-rolled raw-team_id membership set, so a doc linked to a private
+      // conversation stays owner-only here too.
+      const accessible: any[] = [];
+      for (const d of docs) {
+        if (await canAccessDoc(ctx, auth.userId, d)) accessible.push(d);
+      }
+      docs = accessible;
     }
 
     // Exclude archived
@@ -981,7 +982,12 @@ export const webGetByIds = query({
         }
       }
     }
-    const docs = rows.map(extractPlanTitleForWeb).map((d: any) => {
+    // Same shape as the list channel (webListPaginated): title derived from
+    // the body, then the body stripped. These rows merge into the client's
+    // thin `docs` cache; bodies are served by webGet / the doc detail query,
+    // and shipping them here let every doc that ever changed pin its full
+    // content in the persisted list cache.
+    const docs = rows.map(extractPlanTitleForWeb).map(stripDoc).map((d: any) => {
       const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
       const plan = d.plan_id ? planMap.get(String(d.plan_id)) : docToPlan.get(d._id as string);
       return {
@@ -1228,16 +1234,12 @@ export const webSearch = query({
       });
     }
 
-    const resolveTeam = (d: any) => {
-      const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
-      const conv = cid ? convMap.get(String(cid)) : undefined;
-      if (conv) {
-        if (!conv.is_private || conv.auto_shared) return conv.team_id;
-        if (conv.team_visibility && conv.team_visibility !== "private") return conv.team_id;
-        return undefined;
-      }
-      return d.team_id;
-    };
+    // The doc's ACCESS team: its stored workspace key when present, else the
+    // write-time rule recomputed against the conversation map. Shared with
+    // every other list path (data.ts), so this filter can't drift — the local
+    // copy this replaces also read only two of the four link fields, so a doc
+    // linked via created_from_conversation escaped the boundary entirely.
+    const resolveTeam = (d: any) => resolveEffectiveTeam(d, convMap);
 
     if (args.scope === "projects") {
       filtered = filtered.filter((d) => !resolveTeam(d));
@@ -2429,9 +2431,17 @@ export const webPromoteToPlan = mutation({
     const { nextShortId } = await import("./counters");
     const short_id = await nextShortId(ctx.db, "pl");
     const now = Date.now();
+    // The plan carries NO conversation link, so nothing can re-derive its access
+    // later — it must inherit the doc's workspace key at creation, or a doc
+    // mined from a private session becomes a team-readable plan. The plan's
+    // owner is the doc's owner, so the doc's key IS the plan's key; routing
+    // team_id comes from that same key so the two can never disagree.
+    const planWorkspace = await resolveWorkspaceKey(ctx, doc);
+    const planWs = parseWorkspaceKey(planWorkspace);
     const planId = await ctx.db.insert("plans", {
       user_id: doc.user_id,
-      team_id: doc.team_id,
+      team_id: planWs?.type === "team" ? planWs.teamId : undefined,
+      workspace: planWorkspace,
       project_id: doc.project_id,
       short_id,
       title: doc.title,
