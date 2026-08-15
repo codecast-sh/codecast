@@ -19,6 +19,7 @@ import {
   COLLECTION_STORE_KEYS,
   META_STORE_KEYS,
   collectionRowValidator,
+  collectionRowHydrator,
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection } from "./idbCollectionDiff";
@@ -140,6 +141,12 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       ...metaKeys.map((k) => META_PREFIX + k),
     ]);
     const byKey = new Map(pairs);
+    // The pending map gates hydrateRow (an unsynced local edit keeps its body).
+    let metaPending: Record<string, any> | undefined;
+    try {
+      const rawPending = byKey.get(META_PREFIX + "pending");
+      metaPending = rawPending == null ? undefined : JSON.parse(rawPending);
+    } catch { metaPending = undefined; }
 
     for (const key of collectionKeys) {
       const raw = byKey.get(COLLECTION_PREFIX + key);
@@ -149,6 +156,9 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       // hydrate diffs against reality (see idbCache.ts).
       const shadow = new Map<string, any>();
       const validRow = collectionRowValidator(key);
+      const hydrateRow = collectionRowHydrator(key);
+      const hydrateCtx = { pending: (metaPending as Record<string, any> | undefined) ?? {} };
+      let anyTrimmed = false;
       if (rows.length > 0) {
         const map: Record<string, any> = {};
         for (const row of rows) {
@@ -156,8 +166,14 @@ export async function loadCache(): Promise<Record<string, any> | null> {
           // in the registry) never enter the store or the shadow; the next blob
           // rewrite drops them from disk.
           if (validRow && !validRow(row)) continue;
-          map[row._id] = row; shadow.set(row._id, row);
+          // Trimmed on the way in (registry hydrateRow). The shadow holds the
+          // trimmed row (the original would pin the dropped bytes); the blob is
+          // rewritten below so disk shrinks too.
+          const kept = hydrateRow ? hydrateRow(row, hydrateCtx) : row;
+          if (kept !== row) anyTrimmed = true;
+          map[row._id] = kept; shadow.set(row._id, kept);
         }
+        if (anyTrimmed) Storage.setItem(COLLECTION_PREFIX + key, JSON.stringify(Object.values(map))).catch(() => {});
         if (Object.keys(map).length > 0) {
           result[key] = map;
           hasData = true;

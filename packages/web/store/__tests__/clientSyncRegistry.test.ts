@@ -7,6 +7,7 @@ import {
   HYDRATION_CRITICAL_KEYS,
   HYDRATION_DEFERRED_KEYS,
   META_STORE_KEYS,
+  collectionRowHydrator,
   collectionRowValidator,
   hydrationMergeStrategy,
   isPersistedClientStoreKey,
@@ -145,4 +146,26 @@ describe("client sync registry", () => {
   });
 
 
+});
+
+describe("docs hydrateRow", () => {
+  const hydrate = collectionRowHydrator("docs")!;
+
+  it("drops a cached body (content/entries/embedding) on load", () => {
+    const row = { _id: "d1", title: "T", content: "# big body", entries: [1], embedding: [0.1] };
+    const out = hydrate(row, { pending: {} });
+    expect(out).toEqual({ _id: "d1", title: "T" });
+    // The on-disk row is untouched (the shadow keeps it for the persist diff).
+    expect(row.content).toBe("# big body");
+  });
+
+  it("returns the same row when there is nothing to trim", () => {
+    const row = { _id: "d1", title: "T" };
+    expect(hydrate(row, { pending: {} })).toBe(row);
+  });
+
+  it("keeps the body of an unsynced local edit (pending field lock)", () => {
+    const row = { _id: "d1", title: "T", content: "local draft" };
+    expect(hydrate(row, { pending: { "docs:d1:content": { type: "field", value: "local draft" } } })).toBe(row);
+  });
 });

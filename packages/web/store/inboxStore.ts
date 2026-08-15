@@ -14,6 +14,7 @@ import { createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as w
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
+import { isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, PERSISTENCE_AVAILABLE } from "./idbCache";
 import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrategy } from "./clientSyncRegistry";
@@ -265,6 +266,9 @@ export type PlanItem = {
   source: string;
   // Workspace: set = that team's plan, unset = personal (lib/workspaceScope).
   team_id?: string;
+  // ACCESS key ("team:<id>" | "user:<id>"), server-stamped; independent of
+  // team_id (routing). Views filter on it via lib/workspaceScope.
+  workspace?: string;
   progress?: { total: number; done: number; in_progress: number; open: number };
   task_count?: number;
   session_count?: number;
@@ -290,6 +294,9 @@ export type ProjectItem = {
   status: string;
   /** Workspace truth (server row field): set = team project, absent = personal. */
   team_id?: string | null;
+  // ACCESS key ("team:<id>" | "user:<id>"), server-stamped; independent of
+  // team_id (routing). Views filter on it via lib/workspaceScope.
+  workspace?: string;
   color?: string;
   icon?: string;
   target_date?: number;
@@ -397,6 +404,13 @@ export type InboxSession = {
   // Teammate comment threads (message/code/global anchors) still unresolved —
   // the card's "someone flagged this" chip. Server-derived on the inbox row.
   open_comment_threads?: number;
+  // Who spoke last in those open threads and what they said (denormalized by
+  // comments.refreshCommentSignal). author_id is a users id string or "agent";
+  // the chip mutes itself when the viewer spoke last.
+  last_comment_author?: string | null;
+  last_comment_author_id?: string | null;
+  last_comment_excerpt?: string | null;
+  last_comment_at?: number | null;
   session_error?: string;
   // True when the session's latest turn is an unresolved Claude Code auth/API
   // error banner ("Please run /login · API Error: 401 …") — the CLI was signed
@@ -758,6 +772,9 @@ export type TaskItem = {
   actual_minutes?: number;
   started_at?: number;
   team_id?: string;
+  // ACCESS key ("team:<id>" | "user:<id>"), server-stamped; independent of
+  // team_id (routing). Views filter on it via lib/workspaceScope.
+  workspace?: string;
   workflow_run_id?: string;
   workflow_node_id?: string;
   project_path?: string;
@@ -789,6 +806,24 @@ export type BucketAssignmentItem = {
 // `cast decide` (session_decisions table). Answering is local-first — the
 // resolution fields flip on the draft and ride the generic patch rail; the
 // chosen option separately enters the session as a normal user message.
+/** One binding row as webListBindings returns it. Optimistic stubs carry a
+ *  client_key as _id until the server row supersedes them. */
+export interface CapabilityBindingRow {
+  _id: string;
+  user_id?: string;
+  team_id?: string;
+  capability_slug: string;
+  scope_kind: string;
+  scope_key: string;
+  enabled: boolean;
+  config?: Record<string, string>;
+  client_filter?: string[];
+  min_client_version?: string;
+  client_key?: string;
+  created_by?: string;
+  updated_at: number;
+}
+
 export type SessionDecisionItem = {
   _id: string;
   conversation_id: string;
@@ -872,6 +907,9 @@ export type DocItem = {
   // EFFECTIVE team here (conversation-derived — convex data.ts
   // stampEffectiveTeam), so views filter on it directly (lib/workspaceScope).
   team_id?: string;
+  // ACCESS key ("team:<id>" | "user:<id>"), server-stamped; independent of
+  // team_id (routing). Views filter on it via lib/workspaceScope.
+  workspace?: string;
   labels?: string[];
   pinned?: boolean;
   plan_id?: string;
@@ -976,6 +1014,7 @@ export type ClientUI = {
   active_team_id?: string;
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
+  // Session-event sounds (a session finishing, going idle, being killed).
   sounds_enabled?: boolean;
   // Chat toast sounds, split from the above: an agent fleet's chirps and a
   // teammate speaking are different interruptions, and people who mute one
@@ -1048,10 +1087,6 @@ export type ClientUI = {
   // than this count as "N new" on the collapsed header. Refreshed whenever the
   // user toggles the section (expanding IS reading the briefing).
   schedules_seen_at?: number;
-  // Read watermark for the REVIEW dock (open comment threads, page comments,
-  // workflow gates): items raised after this count as "new". Same close-marks-
-  // read contract as schedules_seen_at.
-  review_seen_at?: number;
   // Sidebar subsection rows pinned to the top of the rail (lib/sidebarPins).
   // Structural shape rather than the SidebarPin import: sidebarPins.ts imports
   // this store, and a type import back the other way invites a require cycle.
@@ -1096,6 +1131,9 @@ export type ClientDismissed = {
   blocked_sessions_banner?: number;
   // "Set up account switching" promo inside that banner — permanent opt-out.
   cc_accounts_promo?: boolean;
+  // "New agent features" upsell — one stamp per snippet slug the user enabled
+  // or dismissed from the intro (timestamp; cross-device via per-key LWW).
+  [k: `snippet_intro_${string}`]: number | undefined;
 };
 
 export type ClientTips = {
@@ -1300,6 +1338,26 @@ export function filterInboxScope(
     if (id === focusedId || !isForeignRow(s, meId)) out[id] = s;
   }
   return out;
+}
+
+// filterInboxScope with its canonical arguments read off a store snapshot — the
+// one call every session picker / MRU list makes before enumerating the shared
+// cache. The cache holds rows from other scopes and previously viewed teams, so
+// any raw Object.values(sessions) surface leaks them.
+export function filterInboxScopeFromState(st: {
+  sessions: Record<string, InboxSession>;
+  clientState: { ui?: { inbox_scope?: "mine" | "team" } };
+  currentUser?: { _id: unknown } | null;
+  teamInboxIds: ReadonlySet<string>;
+  currentSessionId: string | null;
+}): Record<string, InboxSession> {
+  return filterInboxScope(
+    st.sessions,
+    st.clientState.ui?.inbox_scope ?? "mine",
+    st.currentUser?._id?.toString?.() ?? null,
+    st.teamInboxIds,
+    st.currentSessionId,
+  );
 }
 
 // Window the cross-device dismiss reconcile is authoritative over. Mirrors the
@@ -1766,7 +1824,10 @@ export function sessionStructuralSig(s: InboxSession): string {
     // Open teammate-comment threads — the card's comment chip. Changes only
     // when a human posts/resolves a comment, never on heartbeats. Paints a
     // chip; never moves a row between buckets, so it stays out of sortRank.
+    // last_comment_at stands in for the author/excerpt text (every comment
+    // write stamps a new timestamp), the same trick thread_state_at uses.
     s.open_comment_threads || 0,
+    s.last_comment_at || 0,
   ].join("\x1f");
 }
 
@@ -3242,6 +3303,22 @@ interface InboxStoreState extends ChatSliceState {
   activeProjectFilter: string | null;
   setActiveProjectFilter: (name: string | null, path?: string | null) => void;
 
+  // -- Capability library --
+  // What every machine reports it has (fleet mirror, server truth).
+  capabilityState: Record<string, any>;
+  // What the user wants where (bindings). Optimistic: setCapabilityBinding
+  // writes the draft and rides dispatch to the named server side effect, which
+  // calls the same upsert the CLI does.
+  capabilityBindings: Record<string, CapabilityBindingRow>;
+  setCapabilityBinding: (opts: {
+    capability_slug: string;
+    scope_kind: string;
+    scope_key?: string;
+    enabled: boolean;
+    team_id?: string;
+    client_key?: string;
+  }) => void;
+
   // -- Decision queue (cast decide) --
   sessionDecisions: Record<string, SessionDecisionItem>;
   // Resolve a decision locally (status flips instantly; patch rides the
@@ -3361,10 +3438,18 @@ interface InboxStoreState extends ChatSliceState {
   wsToggle: (slot: SlotId, pane: Pane) => void;
   wsPromote: (slot: SlotId) => void;
   wsSetPresentation: (slot: SlotId, presentation: Presentation) => void;
-  /** Restore a saved arrangement wholesale — every slot, plus zen. */
-  applyWorkbench: (snap: WorkbenchSnapshot) => void;
+  /** Restore a saved arrangement wholesale — every slot, plus zen. `id` stamps
+   *  which saved workbench this is, so the rail can keep it highlighted (and
+   *  offer "update") while you adjust panels away from it. */
+  applyWorkbench: (snap: WorkbenchSnapshot, id?: string) => void;
+  /** The saved workbench the chrome was last switched to. Ephemeral bookkeeping
+   *  for the rail's highlight/update affordance — cleared on plain boots. */
+  activeWorkbenchId: string | null;
   /** Name the current arrangement and persist it as a saved view. */
   saveWorkbench: (name: string, path?: string) => any;
+  /** Overwrite a saved workbench with the CURRENT arrangement — the way an
+   *  existing workbench is adjusted: switch to it, move panels, update. */
+  updateWorkbench: (id: string, path?: string) => void;
   setNavCollapsed: (collapsed: boolean) => void;
   setDockOpen: (open: boolean) => void;
   wsSetSize: (slot: SlotId, size: number) => void;
@@ -3386,7 +3471,7 @@ interface InboxStoreState extends ChatSliceState {
   removeTaskStub: (clientKey: string) => void;
   createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[]; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
-  createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
+  createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   promoteDocToPlan: (docId: string) => Promise<any>;
   ensurePlanDoc: (planShortId: string) => Promise<any>;
   publishToDirectory: (opts: { conversation_id: string; title: string; description?: string; tags?: string[] }) => Promise<any>;
@@ -3886,6 +3971,12 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // report clobber the fleet. No pending filter: nothing optimistic ever
   // writes here (see store/capabilities.ts).
   capabilityState: {},
+  // The user's own bindings — the wishes behind the Installed tab and the
+  // equip control. localFirst: an optimistic toggle must render before the
+  // round trip; the setCapabilityBinding dispatch side effect confirms it.
+  // altKey: an optimistic stub keyed by client_key is superseded by the server
+  // row that comes back carrying the same client_key — the tasks convention.
+  capabilityBindings: { altKey: "client_key" },
   clientState: {
     kind: "singleton",
     merge: {
@@ -5106,6 +5197,46 @@ const inboxStoreConfig = (set: any, get: any) => ({
     pushInboxViewHistory(prev, snapshotInboxViewFromDraft(this));
   }),
 
+  // -- Capability library --
+  capabilityState: {},
+  capabilityBindings: {},
+  setCapabilityBinding: action(function (this: Draft, opts: {
+    capability_slug: string;
+    scope_kind: string;
+    scope_key?: string;
+    enabled: boolean;
+    team_id?: string;
+    client_key?: string;
+  }) {
+    const scopeKey = opts.scope_key ?? "";
+    // The upsert key mirrors the server's (user, slug, scope_kind, scope_key):
+    // an existing row flips in place, else a stub keyed by client_key lands
+    // and the server row supersedes it on sync (altKey convention).
+    const existing = Object.values(this.capabilityBindings).find(
+      (b) =>
+        b.capability_slug === opts.capability_slug &&
+        b.scope_kind === opts.scope_kind &&
+        (b.scope_key ?? "") === scopeKey,
+    );
+    if (existing) {
+      existing.enabled = opts.enabled;
+      existing.updated_at = Date.now();
+      return;
+    }
+    const clientKey = opts.client_key ?? `cb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    this.capabilityBindings[clientKey] = {
+      _id: clientKey,
+      capability_slug: opts.capability_slug,
+      scope_kind: opts.scope_kind,
+      scope_key: scopeKey,
+      enabled: opts.enabled,
+      team_id: opts.team_id,
+      client_key: clientKey,
+      created_by: "user",
+      updated_at: Date.now(),
+    };
+  }),
+
   // -- Decision queue (cast decide) --
   sessionDecisions: {},
   answerDecision: action(function (this: Draft, decisionId: string, answer: { index?: number; text?: string } | { dismiss: true }) {
@@ -6169,9 +6300,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
 
     // collection
-    const prevCollection = (this as any)[field] || {};
-    const { table, pending } = applySyncTable(
-      field, incoming, this.pending, prevCollection,
+    // Read the previous collection and pending map from the BASE state, not
+    // through the draft: applySyncTable walks every row of prev, and each read
+    // through the mutative proxy allocates a child draft (a 14k-row docs
+    // collection × every crawl page made this the top idle cost). The
+    // decision is made on plain objects; only the final assignment touches the
+    // draft.
+    const base: any = isDraft(this) ? original(this) : this;
+    const prevCollection = base[field] || {};
+    let { table, pending } = applySyncTable(
+      field, incoming, base.pending, prevCollection,
       (config.isDelta || config.ignoreFields || config.preserveFields || config.pruneAbsentScope)
         ? {
             isDelta: config.isDelta,
@@ -6183,6 +6321,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
     );
 
     if (config.altKey) {
+      // applySyncTable hands back the BASE table/pending objects when a push
+      // changed nothing. The rekey below mutates in place, so copy on first
+      // write — never touch base state, and keep the untouched identity (no
+      // subscriber wake) when no stub matched.
+      const mutTable = () => { if (table === prevCollection) table = { ...table }; return table; };
+      const mutPending = () => { if (pending === base.pending) pending = { ...pending }; return pending; };
       const incomingByAlt = new Map(
         (incoming as any[]).map((r: any) => [r[config.altKey!], r])
       );
@@ -6193,8 +6337,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
           const launchReconfigure =
             field === "sessions" ? pendingLaunchReconfigure(old) : null;
           rekeyId(this, oldId, match._id);
-          rekeyPending(pending, oldId, match._id);
+          rekeyPending(mutPending(), oldId, match._id);
           if (oldId !== match._id && table[oldId]) {
+            mutTable();
             if (!table[match._id]) {
               table[match._id] = { ...(table[oldId] as any), _id: match._id };
             } else if (config.preserveFields) {
@@ -6222,7 +6367,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
           for (const [key, entry] of Object.entries(pending)) {
             if (entry.type !== "field" || !key.startsWith(fp)) continue;
             if (table[match._id]) {
-              (table[match._id] as any)[key.slice(fp.length)] = entry.value;
+              mutTable()[match._id] = { ...(table[match._id] as any), [key.slice(fp.length)]: entry.value };
             }
           }
           if (field === "sessions" && isConvexId(match._id)) {
@@ -6235,7 +6380,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
             scheduleResolvedChatChannelSends(match._id);
           }
         } else if (!table[oldId]) {
-          table[oldId] = old as any;
+          mutTable()[oldId] = old as any;
         }
       }
     }
@@ -6243,6 +6388,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (config.keepSelected) {
       const selectedId = (this as any)[config.keepSelected];
       if (selectedId && !table[selectedId] && prevCollection[selectedId]) {
+        // table !== prevCollection here (prev has the row, table doesn't).
         table[selectedId] = prevCollection[selectedId];
       }
     }
@@ -6260,8 +6406,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // applySyncTable returns the PREVIOUS table/pending objects untouched when
     // a push changed nothing (whole-collection identity reuse) — skip the draft
     // writes so a no-op sync produces no commit at all.
-    if ((this as any)[field] !== table) (this as any)[field] = table;
-    if (this.pending !== (pending as any)) this.pending = pending as any;
+    if (base[field] !== table) (this as any)[field] = table;
+    if (base.pending !== (pending as any)) this.pending = pending as any;
     if (field === "bucketAssignments") {
       for (const row of Object.values(table) as BucketAssignmentItem[]) {
         if (!isConvexId(String(row._id))) continue;
@@ -8013,10 +8159,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // restores in one draft, so the frame changes in a single paint. Subjects are
   // re-derived from where you are (the comments pane gets the conversation on
   // screen); a device that cannot host a terminal never inherits one.
-  applyWorkbench: action(function (this: Draft, snap: WorkbenchSnapshot) {
+  activeWorkbenchId: null,
+
+  applyWorkbench: action(function (this: Draft, snap: WorkbenchSnapshot, id?: string) {
     const conversationId = this.currentSessionId ?? this.viewingDismissedId ?? null;
     const allowTerminal = typeof window === "undefined" || window.innerWidth >= 768;
     this.workspace = applyWorkbenchPure(this.workspace as WorkspaceState, snap, { conversationId, allowTerminal });
+    this.activeWorkbenchId = id ?? null;
     persistWorkspace(this);
     const zen = snap.zen ?? false;
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
@@ -8026,8 +8175,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
-  // Saving reuses the saved-view pipeline wholesale (optimistic stub, outbox,
-  // share/delete); a workbench is just a view whose page is the workspace.
+  // Save and update reuse the saved-view pipeline wholesale (optimistic stub,
+  // outbox, share/delete); a workbench is just a view whose page is the
+  // workspace. Update IS the adjust gesture: arrange the chrome, overwrite.
   saveWorkbench: (name: string, path?: string) => {
     const st = get();
     const snap = captureWorkbench(st.workspace as WorkspaceState, {
@@ -8035,6 +8185,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
       path,
     });
     return st.createSavedView({ name, page: "workspace", prefs: snap });
+  },
+
+  updateWorkbench: (id: string, path?: string) => {
+    const st = get();
+    const prev = (st.savedViews as Record<string, SavedViewRow>)[id]?.prefs as WorkbenchSnapshot | undefined;
+    const snap = captureWorkbench(st.workspace as WorkspaceState, {
+      zen: st.clientState.ui?.zen_mode ?? false,
+      // Keep the workbench's surface unless the caller states a new one — an
+      // update from a different page shouldn't silently retarget the switch.
+      path: path ?? prev?.path,
+    });
+    st.updateSavedView(id, { prefs: snap });
   },
 
 
