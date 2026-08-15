@@ -30,6 +30,13 @@ export interface InstanceState {
   channel: ChromeChannel;
   startedAt: number;
   /**
+   * Set when the browser runs on another machine, reached through an SSH port
+   * forward. Its presence is what turns on credential provisioning: a local
+   * clone already holds this machine's cookies, so injecting there is wasted
+   * work and an unnecessary Keychain prompt.
+   */
+  remote?: { host: string; user: string; sshPid?: number };
+  /**
    * The tab each SESSION is working in, keyed by session id.
    *
    * One browser serves every agent on the machine, so a single global "active
@@ -70,7 +77,12 @@ export function readState(): InstanceState | null {
 
 export function writeState(state: InstanceState): void {
   fs.mkdirSync(browserHome(), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(statePath(), JSON.stringify(state, null, 2), { mode: 0o600 });
+  // Atomic: several agents read and write this file concurrently, and a reader
+  // catching a half-written file concludes "no managed browser is running" —
+  // which sends it off to start a second browser over the live one.
+  const tmp = `${statePath()}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, statePath());
 }
 
 export function clearState(): void {
@@ -81,11 +93,36 @@ export function clearState(): void {
   }
 }
 
+export type Liveness = "live" | "unresponsive" | "dead";
+
+/**
+ * Three-state liveness, because "not answering" and "gone" demand opposite
+ * reactions and conflating them is what caused the shared-browser restart
+ * stampede of 2026-08-14: under machine load a single short CDP probe timed
+ * out, every agent read that as "dead", and each ran the only recovery the CLI
+ * offered — stop/start — killing the healthy browser under all the others.
+ *
+ * "dead" means the browser process is gone and relaunching is safe.
+ * "unresponsive" means the process EXISTS but CDP did not answer within
+ * `patienceMs`; the browser is probably just overloaded, and killing or
+ * replacing it would destroy every other agent's tabs. Callers must not treat
+ * "unresponsive" as permission to relaunch.
+ */
+export async function probeLiveness(state: InstanceState | null, patienceMs = 4000): Promise<Liveness> {
+  if (!state || !isPidAlive(state.pid)) return "dead";
+  const deadline = Date.now() + patienceMs;
+  for (;;) {
+    const left = deadline - Date.now();
+    if (left <= 0) return "unresponsive";
+    if (await isCdpAlive(state.port, Math.min(Math.max(left, 250), 2000))) return "live";
+    if (!isPidAlive(state.pid)) return "dead";
+    if (deadline - Date.now() > 0) await sleep(Math.min(400, deadline - Date.now()));
+  }
+}
+
 /** Is the recorded instance actually alive and answering CDP? */
-export async function isLive(state: InstanceState | null): Promise<boolean> {
-  if (!state) return false;
-  if (!isPidAlive(state.pid)) return false;
-  return isCdpAlive(state.port);
+export async function isLive(state: InstanceState | null, patienceMs?: number): Promise<boolean> {
+  return (await probeLiveness(state, patienceMs)) === "live";
 }
 
 function chromeBinaryFor(channel: ChromeChannel): string {
@@ -147,9 +184,22 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
   while (Date.now() < deadline) {
     if (spawnError) throw new Error(`failed to spawn Chrome at '${bin}': ${(spawnError as Error).message}`);
     if (!isPidAlive(child.pid)) {
+      // Diagnose honestly: the dominant cause is Chrome's profile singleton —
+      // another Chrome still holds this user-data-dir, so our launch forwarded
+      // its command line to that instance and exited. Reporting this as a
+      // debugging restriction sent agents into destructive recovery (--wipe).
+      const holders = strayPids(opts.userDataDir).filter((p) => p !== child.pid);
+      if (holders.length) {
+        throw new Error(
+          `Chrome exited immediately: another Chrome (pid ${holders[0]}) already holds this profile directory, ` +
+            `so the new launch handed its command line to that instance and quit. ` +
+            `If it is a managed browser another agent just started, re-check with \`cast browser status\`; ` +
+            `a leftover one can be cleared with \`cast browser stop\`.`,
+        );
+      }
       throw new Error(
-        `Chrome exited before CDP came up. The usual cause is a user-data-dir Chrome refuses to debug — ` +
-          `since Chrome 136 the DEFAULT profile directory cannot be driven over CDP.`,
+        `Chrome exited before CDP came up. If this profile directory is Chrome's own default, that is expected — ` +
+          `since Chrome 136 the default profile cannot be driven over CDP; clone it instead.`,
       );
     }
     if (await isCdpAlive(opts.port)) return child.pid;
@@ -177,6 +227,24 @@ export async function freePort(): Promise<number> {
   });
 }
 
+/** Pids of any Chrome process still holding this user-data-dir. */
+export function strayPids(userDataDir: string): number[] {
+  try {
+    const { execSync } = require("node:child_process") as typeof import("node:child_process");
+    const out = execSync(`pgrep -f ${JSON.stringify(`--user-data-dir=${userDataDir}`)}`, {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out
+      .split("\n")
+      .map((l) => parseInt(l.trim(), 10))
+      .filter((pid) => pid && pid !== process.pid);
+  } catch {
+    // pgrep exits non-zero when nothing matches — that is the common case.
+    return [];
+  }
+}
+
 /**
  * Kill any Chrome still holding this user-data-dir.
  *
@@ -186,29 +254,95 @@ export async function freePort(): Promise<number> {
  * quietly dropped and the CLI waits out its deadline against a browser that was
  * never going to listen. Any orphan therefore has to go before we launch, or
  * the profile is wedged until the user finds it in Activity Monitor.
+ *
+ * Callers must only reach this after `probeLiveness` said "dead": on a loaded
+ * machine a live shared browser answers CDP slowly, and killing it here is how
+ * one agent's "recovery" destroyed five other agents' sessions.
  */
 export function killStrayChrome(userDataDir: string, exceptPid?: number): number {
   let killed = 0;
-  try {
-    const { execSync } = require("node:child_process") as typeof import("node:child_process");
-    const out = execSync(`pgrep -f ${JSON.stringify(`--user-data-dir=${userDataDir}`)}`, {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    for (const line of out.split("\n")) {
-      const pid = parseInt(line.trim(), 10);
-      if (!pid || pid === exceptPid || pid === process.pid) continue;
-      try {
-        process.kill(pid, "SIGTERM");
-        killed++;
-      } catch {
-        /* already gone */
-      }
+  for (const pid of strayPids(userDataDir)) {
+    if (pid === exceptPid) continue;
+    try {
+      process.kill(pid, "SIGTERM");
+      killed++;
+    } catch {
+      /* already gone */
     }
-  } catch {
-    // pgrep exits non-zero when nothing matches — that is the common case.
   }
   return killed;
+}
+
+/**
+ * Wait for the strays we just SIGTERMed to actually release the profile.
+ * Launching while one is still exiting hands our command line to a dying
+ * Chrome — the launch "succeeds" and nothing listens.
+ */
+export async function waitForStraysGone(userDataDir: string, timeoutMs = 5000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (strayPids(userDataDir).length === 0) return true;
+    await sleep(200);
+  }
+  return strayPids(userDataDir).length === 0;
+}
+
+/**
+ * Serialize browser (re)launches across agent processes.
+ *
+ * Without this, N agents that each concluded "no browser running" race the
+ * check-kill-launch sequence: the first launch wins Chrome's profile singleton,
+ * every later launch silently forwards its args to the winner and exits, and
+ * each loser then reports a misleading failure and retries — restarting the
+ * browser under whoever just started using it. Waiters block here, then
+ * re-probe: almost always the winner's browser is up by then and they simply
+ * reuse it.
+ *
+ * The lock is a pid-stamped file created with O_EXCL. It is stolen when its
+ * holder is dead or has held it longer than a full launch could take.
+ */
+export async function acquireStartLock(waitMs = 75_000): Promise<() => void> {
+  const lockFile = path.join(browserHome(), "start.lock");
+  fs.mkdirSync(browserHome(), { recursive: true, mode: 0o700 });
+  const staleMs = 90_000;
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      const fd = fs.openSync(lockFile, "wx");
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
+      fs.closeSync(fd);
+      return () => {
+        try {
+          fs.unlinkSync(lockFile);
+        } catch {
+          /* already released */
+        }
+      };
+    } catch {
+      let holder: { pid?: number; at?: number } = {};
+      try {
+        holder = JSON.parse(fs.readFileSync(lockFile, "utf-8"));
+      } catch {
+        /* unreadable — treat as stale below */
+      }
+      const stale = !holder.pid || !isPidAlive(holder.pid) || !holder.at || Date.now() - holder.at > staleMs;
+      if (stale) {
+        try {
+          fs.unlinkSync(lockFile);
+        } catch {
+          /* someone else removed it first */
+        }
+        continue;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(
+          `another \`cast browser start\` (pid ${holder.pid}) has held the launch lock for over ${Math.round(waitMs / 1000)}s — ` +
+            `if it is stuck, remove ${lockFile}`,
+        );
+      }
+      await sleep(300);
+    }
+  }
 }
 
 export async function stopInstance(state: InstanceState): Promise<void> {

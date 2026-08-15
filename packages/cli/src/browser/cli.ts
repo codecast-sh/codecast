@@ -23,9 +23,9 @@ import * as path from "node:path";
 import type { Command } from "commander";
 import { CdpConnection, listTargets, type CdpTarget } from "./cdp.js";
 import {
-  attachToTarget, clearState, freePort, isLive, killStrayChrome, launchManagedChrome,
-  pruneTabOwnership, readState, resolveTarget, setActiveTarget, settle, stopInstance,
-  TabUnresponsive, writeState,
+  acquireStartLock, attachToTarget, clearState, freePort, killStrayChrome, launchManagedChrome,
+  probeLiveness, pruneTabOwnership, readState, resolveTarget, setActiveTarget, settle, stopInstance,
+  TabUnresponsive, waitForStraysGone, writeState,
   type InstanceState, type PageSession,
 } from "./instance.js";
 import {
@@ -39,6 +39,9 @@ import {
 import { armRecorder, clearRecording, readRecording } from "./observe.js";
 import { ownerKey } from "./owner.js";
 import { runBatch, type BatchContext } from "./batch.js";
+import { provisionCredentials } from "./credentials.js";
+import { startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
+import { loadRemoteHost } from "../remote/session-move.js";
 import { downscaleWithSips, uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
@@ -58,20 +61,43 @@ function die(msg: string, hint?: string): never {
   process.exit(1);
 }
 
+/**
+ * Read state and insist on a live browser. "gone" and "not answering" get
+ * different messages on purpose: a dead browser should be restarted, while an
+ * overloaded one must NOT be — the recovery agents reach for on "no browser is
+ * running" is stop/start, which kills every other agent's tabs. Reporting a
+ * busy browser as absent is what set off the 2026-08-14 restart stampede.
+ */
+async function requireLive(): Promise<InstanceState> {
+  const state = readState();
+  const live = await probeLiveness(state);
+  if (live === "live") return state!;
+  if (live === "unresponsive") {
+    die(
+      `the managed browser (pid ${state!.pid}) is not answering CDP right now`,
+      "it is likely overloaded, not gone — retry in a few seconds. Do not stop/start it: other agents' tabs die with it.",
+    );
+  }
+  die(
+    "no managed browser is running",
+    "start one with `cast browser start` (it clones your Chrome profile, so you stay logged in)",
+  );
+}
+
+/** Name the likely killer when the socket dies under a command. */
+function explainConnectionLoss(msg: string): string {
+  return msg.includes("CDP connection closed") || msg.includes("CDP connection is not open")
+    ? `${msg} — the browser was stopped or restarted (usually by another agent) mid-command. Run the command again.`
+    : msg;
+}
+
 /** Every acting command needs a live browser and an attached tab. */
 async function withPage<T>(
   opts: { tab?: string },
   fn: (page: PageSession, state: InstanceState, conn: CdpConnection) => Promise<T>,
   sessionId?: string | null,
 ): Promise<T> {
-  const state = readState();
-  if (!(await isLive(state))) {
-    die(
-      "no managed browser is running",
-      "start one with `cast browser start` (it clones your Chrome profile, so you stay logged in)",
-    );
-  }
-  const s = state!;
+  const s = await requireLive();
   const conn = await CdpConnection.fromPort(s.port);
   try {
     const target = await resolveTarget(s.port, s, opts.tab, sessionId);
@@ -88,7 +114,7 @@ async function withPage<T>(
     return await fn(page, s, conn);
   } catch (err) {
     // A stack trace tells an agent nothing it can act on; the message does.
-    die((err as Error).message);
+    die(explainConnectionLoss((err as Error).message));
   } finally {
     conn.close();
   }
@@ -119,6 +145,118 @@ function ownership(state: InstanceState, sessionId: string | null) {
 /** Print the page header every action shares, so the agent always knows where it is. */
 function pageLine(url: string, title: string): string {
   return `${fmt.highlight(title || "(untitled)")}\n${fmt.muted(url)}`;
+}
+
+interface StartOptions {
+  profile?: string;
+  channel: ChromeChannel;
+  headless?: boolean;
+  fresh?: boolean;
+  resync?: boolean;
+  size: string;
+}
+
+/**
+ * Start (or reuse) the local managed browser. Shared by `start` and by `open`'s
+ * auto-start, and serialized under the launch lock: when several agents race
+ * here, one launches and the rest wait, re-probe, and reuse the winner's
+ * browser. Before the lock existed the losers' Chromes handed their command
+ * lines to the winner's singleton and exited, each loser reported a cryptic
+ * failure, and their retries restarted the browser under everyone else.
+ */
+async function startLocalBrowser(o: StartOptions): Promise<void> {
+  const release = await acquireStartLock();
+  try {
+    const existing = readState();
+    // Patient on purpose: this is the one probe whose false "dead" leads to
+    // killing a live browser. 8s of waiting is cheap; the stampede was not.
+    const live = await probeLiveness(existing, 8000);
+    if (live === "live") {
+      console.log(`${OK} already running on port ${existing!.port} (pid ${existing!.pid})`);
+      console.log(fmt.muted("  `cast browser stop` first if you want a different profile"));
+      return;
+    }
+    if (live === "unresponsive") {
+      die(
+        `a managed browser (pid ${existing!.pid}) exists but CDP is not answering`,
+        "it is likely overloaded, not dead — retry shortly, or `cast browser stop` to replace it deliberately",
+      );
+    }
+
+    const userDataDir = clonePath(DEFAULT_CLONE);
+    let sourceProfile: string | null = null;
+
+    if (o.fresh) {
+      fs.rmSync(userDataDir, { recursive: true, force: true });
+      fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
+      console.log(`${OK} fresh profile (logged out of everything)`);
+    } else {
+      const profiles = listRealProfiles(o.channel);
+      const pick = o.profile ?? profiles.find((p) => p.lastUsed)?.dir ?? "Default";
+      const known = profiles.find((p) => p.dir === pick);
+      sourceProfile = pick;
+      const needsClone = o.resync || !fs.existsSync(path.join(userDataDir, "Default", "Cookies"));
+      if (needsClone) {
+        console.log(`  cloning ${fmt.highlight(known?.name ?? pick)}${known?.email ? fmt.muted(` <${known.email}>`) : ""}…`);
+        const res = cloneProfile({ sourceDir: pick, destRoot: userDataDir, channel: o.channel });
+        console.log(`${OK} cloned ${res.files} items, ${formatBytes(res.bytes)}`);
+        if (!res.cookiesFound) {
+          console.log(
+            `${WARN} no cookie store was copied — the browser will start logged out.\n` +
+              `  ${fmt.muted("Chrome may have been mid-write; try `cast browser start --resync` with Chrome closed.")}`,
+          );
+        }
+      } else {
+        console.log(`  reusing existing clone ${fmt.muted(userDataDir)} ${fmt.muted("(--resync to refresh logins)")}`);
+      }
+    }
+
+    // An abandoned Chrome still holding this profile would swallow the launch.
+    // Safe to kill here: the probe above said no live managed browser exists,
+    // and the lock keeps another agent's mid-launch Chrome out of this window.
+    const strays = killStrayChrome(userDataDir);
+    if (strays) {
+      console.log(fmt.muted(`  cleared ${strays} stray Chrome process(es) holding the profile`));
+      // SIGTERM is not instant; launching while one is still exiting hands our
+      // command line to a dying Chrome and nothing ever listens.
+      await waitForStraysGone(userDataDir);
+    }
+
+    const [w, h] = o.size.split("x").map((n) => parseInt(n, 10));
+    const port = await freePort();
+    let pid: number;
+    try {
+      pid = await launchManagedChrome({
+        userDataDir,
+        port,
+        headless: o.headless,
+        channel: o.channel,
+        windowSize: { width: w || 1440, height: h || 900 },
+      });
+    } catch (err) {
+      die((err as Error).message);
+    }
+
+    const state: InstanceState = {
+      pid, port, userDataDir,
+      headless: !!o.headless,
+      sourceProfile,
+      channel: o.channel,
+      startedAt: Date.now(),
+      activeTargetId: null,
+    };
+    writeState(state);
+    console.log(`${OK} browser up — pid ${pid}, CDP 127.0.0.1:${port}${o.headless ? ", headless" : ""}`);
+    if (!o.fresh) {
+      console.log(
+        fmt.muted("  This is a COPY of your profile. The agent's browsing never touches your real Chrome,\n") +
+          fmt.muted("  and the copy holds live session cookies — `cast browser stop --wipe` removes it."),
+      );
+    }
+    console.log(fmt.muted("  next: cast browser open <url>"));
+  } finally {
+    release();
+  }
 }
 
 export function registerBrowserCommand(program: Command, deps: PublishDeps): void {
@@ -159,81 +297,53 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--fresh", "Start from an empty profile — no cookies, no logins")
     .option("--resync", "Re-copy the profile even if a clone already exists")
     .option("--size <WxH>", "Window size", "1440x900")
-    .action(async (o: { profile?: string; channel: ChromeChannel; headless?: boolean; fresh?: boolean; resync?: boolean; size: string }) => {
-      const existing = readState();
-      if (await isLive(existing)) {
-        console.log(`${OK} already running on port ${existing!.port} (pid ${existing!.pid})`);
-        console.log(fmt.muted("  `cast browser stop` first if you want a different profile"));
-        return;
-      }
-
-      const userDataDir = clonePath(DEFAULT_CLONE);
-      let sourceProfile: string | null = null;
-
-      if (o.fresh) {
-        fs.rmSync(userDataDir, { recursive: true, force: true });
-        fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
-        console.log(`${OK} fresh profile (logged out of everything)`);
-      } else {
-        const profiles = listRealProfiles(o.channel);
-        const pick = o.profile ?? profiles.find((p) => p.lastUsed)?.dir ?? "Default";
-        const known = profiles.find((p) => p.dir === pick);
-        sourceProfile = pick;
-        const needsClone = o.resync || !fs.existsSync(path.join(userDataDir, "Default", "Cookies"));
-        if (needsClone) {
-          console.log(`  cloning ${fmt.highlight(known?.name ?? pick)}${known?.email ? fmt.muted(` <${known.email}>`) : ""}…`);
-          const res = cloneProfile({ sourceDir: pick, destRoot: userDataDir, channel: o.channel });
-          console.log(`${OK} cloned ${res.files} items, ${formatBytes(res.bytes)}`);
-          if (!res.cookiesFound) {
-            console.log(
-              `${WARN} no cookie store was copied — the browser will start logged out.\n` +
-                `  ${fmt.muted("Chrome may have been mid-write; try `cast browser start --resync` with Chrome closed.")}`,
+    .option("--remote [host]", "Run the browser on a remote Mac, reached over SSH")
+    .action(async (o: { profile?: string; channel: ChromeChannel; headless?: boolean; fresh?: boolean; resync?: boolean; size: string; remote?: string | boolean }) => {
+      // A browser on another Mac. Its profile starts empty and gains logins as
+      // pages are visited (credentials.ts), so nothing of yours is copied there.
+      if (o.remote) {
+        const release = await acquireStartLock();
+        try {
+          const existingRemote = readState();
+          const remoteLive = await probeLiveness(existingRemote, 8000);
+          if (remoteLive === "live") {
+            die("a browser is already running", "`cast browser stop` first");
+          }
+          if (remoteLive === "unresponsive") {
+            die(
+              `a managed browser (pid ${existingRemote!.pid}) exists but CDP is not answering`,
+              "it is likely overloaded, not dead — retry shortly, or `cast browser stop` to replace it deliberately",
             );
           }
-        } else {
-          console.log(`  reusing existing clone ${fmt.muted(userDataDir)} ${fmt.muted("(--resync to refresh logins)")}`);
+          const host = loadRemoteHost(typeof o.remote === "string" ? o.remote : undefined);
+          const [rw, rh] = o.size.split("x").map((n) => parseInt(n, 10));
+          console.log(`  starting Chrome on ${fmt.highlight(`${host.user}@${host.address}`)}…`);
+          let rb;
+          try {
+            rb = await startRemoteBrowser(host, {
+              localPort: await freePort(),
+              windowSize: { width: rw || 1440, height: rh || 900 },
+            });
+          } catch (err) {
+            die((err as Error).message);
+          }
+          writeState({
+            pid: rb.sshPid, port: rb.localPort,
+            userDataDir: clonePath(DEFAULT_CLONE),   // the LOCAL profile we read cookies from
+            headless: true, sourceProfile: null, channel: o.channel,
+            startedAt: Date.now(), activeTargetId: null,
+            remote: { host: host.address, user: host.user, sshPid: rb.sshPid },
+          });
+          console.log(`${OK} remote browser up — ${rb.chromeVersion.trim()}`);
+          console.log(fmt.muted(`  CDP tunnelled to 127.0.0.1:${rb.localPort}; its profile starts signed out.`));
+          console.log(fmt.muted(`  Logins are carried over per site as you navigate — no list to maintain.`));
+          return;
+        } finally {
+          release();
         }
       }
 
-      // An abandoned Chrome still holding this profile would swallow the launch.
-      const strays = killStrayChrome(userDataDir);
-      if (strays) {
-        console.log(fmt.muted(`  cleared ${strays} stray Chrome process(es) holding the profile`));
-        await new Promise((r) => setTimeout(r, 1500));
-      }
-
-      const [w, h] = o.size.split("x").map((n) => parseInt(n, 10));
-      const port = await freePort();
-      let pid: number;
-      try {
-        pid = await launchManagedChrome({
-          userDataDir,
-          port,
-          headless: o.headless,
-          channel: o.channel,
-          windowSize: { width: w || 1440, height: h || 900 },
-        });
-      } catch (err) {
-        die((err as Error).message);
-      }
-
-      const state: InstanceState = {
-        pid, port, userDataDir,
-        headless: !!o.headless,
-        sourceProfile,
-        channel: o.channel,
-        startedAt: Date.now(),
-        activeTargetId: null,
-      };
-      writeState(state);
-      console.log(`${OK} browser up — pid ${pid}, CDP 127.0.0.1:${port}${o.headless ? ", headless" : ""}`);
-      if (!o.fresh) {
-        console.log(
-          fmt.muted("  This is a COPY of your profile. The agent's browsing never touches your real Chrome,\n") +
-            fmt.muted("  and the copy holds live session cookies — `cast browser stop --wipe` removes it."),
-        );
-      }
-      console.log(fmt.muted("  next: cast browser open <url>"));
+      await startLocalBrowser(o);
     });
 
   br.command("status")
@@ -241,9 +351,16 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .action(async () => {
       const state = readState();
       if (!state) return console.log(`${fmt.muted(icons.dot)} not started — \`cast browser start\``);
-      const live = await isLive(state);
-      if (!live) {
+      const live = await probeLiveness(state);
+      if (live === "dead") {
         console.log(`${WARN} recorded instance (pid ${state.pid}) is gone — \`cast browser start\` to relaunch`);
+        return;
+      }
+      if (live === "unresponsive") {
+        console.log(
+          `${WARN} browser pid ${state.pid} is running but CDP is not answering — ` +
+            `likely overloaded; retry shortly rather than restarting it`,
+        );
         return;
       }
       const mins = Math.round((Date.now() - state.startedAt) / 60000);
@@ -261,6 +378,21 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .action(async (o: { wipe?: boolean }) => {
       const state = readState();
       if (!state) return console.log("nothing to stop");
+      if (state.remote) {
+        const host = loadRemoteHost();
+        await stopRemoteBrowser(host, state.remote.sshPid);
+        clearState();
+        console.log(`${OK} remote browser stopped and its profile wiped`);
+        return;
+      }
+      // One browser serves every agent on this machine, so stopping it is not
+      // a private action — say whose work goes down with it.
+      const otherOwners = new Set(Object.keys(state.tabsBySession ?? {}).filter((sid) => sid !== me()));
+      if (otherOwners.size) {
+        console.log(
+          `${WARN} ${otherOwners.size} other agent session(s) have tabs in this browser — stopping it kills their work too`,
+        );
+      }
       await stopInstance(state);
       clearState();
       console.log(`${OK} stopped`);
@@ -280,8 +412,23 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       if (!/^[a-z]+:\/\//i.test(url)) url = `https://${url}`;
 
       let state = readState();
-      if (!(await isLive(state))) {
-        die("no managed browser is running", "run `cast browser start` first");
+      let live = await probeLiveness(state);
+      if (live === "unresponsive") {
+        die(
+          `the managed browser (pid ${state!.pid}) is not answering CDP right now`,
+          "it is likely overloaded, not gone — retry in a few seconds. Do not stop/start it: other agents' tabs die with it.",
+        );
+      }
+      if (live === "dead") {
+        // Keep the command's promise ("starts the browser if needed"). The
+        // launch lock makes this safe under contention: concurrent auto-starts
+        // collapse into one launch that everyone reuses.
+        console.log(fmt.muted("  no managed browser is running — starting one"));
+        await startLocalBrowser({ channel: "chrome", size: "1440x900" });
+        state = readState();
+        if ((await probeLiveness(state)) !== "live") {
+          die("the browser did not come up after auto-start", "try `cast browser start` directly");
+        }
       }
       const s = state!;
       const sessionId = me();
@@ -325,6 +472,18 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         // Arm BEFORE navigating so the recorder sees the page's own boot logs —
         // the errors an agent is usually looking for happen during startup.
         await armRecorder(page);
+        // Carry this machine's login for the site we are about to open. Only
+        // for a remote browser, and only when it has none of its own — see
+        // credentials.ts for why navigation is what picks the sites.
+        if (s.remote) {
+          const cred = await provisionCredentials(page, url, s.userDataDir).catch(
+            (err) => ({ injected: 0, host: url, reason: (err as Error).message }),
+          );
+          if (cred.injected) {
+            console.log(fmt.muted(`  carried ${cred.injected} cookie(s) for ${cred.host} from this machine`));
+          }
+        }
+
         await conn.send("Page.navigate", { url }, page.sessionId);
         setActiveTarget(s, targetId, sessionId);
 
@@ -336,7 +495,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         console.log(pageLine(snap.url, snap.title));
         console.log(fmt.muted(`  tab ${shortId(targetId)} — next: cast browser snapshot`));
       } catch (err) {
-        die((err as Error).message);
+        die(explainConnectionLoss((err as Error).message));
       } finally {
         conn.close();
       }
@@ -381,8 +540,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   br.command("tabs")
     .description("List open tabs")
     .action(async () => {
-      const state = readState();
-      if (!(await isLive(state))) die("no managed browser is running");
+      const state = await requireLive();
       const targets = await listTargets(state!.port);
       const { mine, others } = ownership(state!, me());
       for (const t of targets) console.log(describeTab(t, t.targetId === mine, others.has(t.targetId)));
@@ -395,8 +553,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   br.command("tab <id>")
     .description("Switch the active tab (id prefix or a substring of its URL)")
     .action(async (id: string) => {
-      const state = readState();
-      if (!(await isLive(state))) die("no managed browser is running");
+      const state = await requireLive();
       const target = await resolveTarget(state!.port, state!, id, me());
       setActiveTarget(state!, target.targetId, me());
       // Bring it to the front so a watching human sees what the agent sees.
@@ -414,8 +571,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .description("Close a tab")
     .option("--tab <id>", "Which tab (default: the active one)")
     .action(async (o: { tab?: string }) => {
-      const state = readState();
-      if (!(await isLive(state))) die("no managed browser is running");
+      const state = await requireLive();
       const target = await resolveTarget(state!.port, state!, o.tab);
       const conn = await CdpConnection.fromPort(state!.port);
       try {
