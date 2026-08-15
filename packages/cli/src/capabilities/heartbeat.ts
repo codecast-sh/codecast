@@ -92,3 +92,53 @@ export function resetCapabilityHeartbeatState(): void {
   lastSentAt = 0;
   inFlight = false;
 }
+
+/* ==========================================================================
+ * Convergence signals from the heartbeat response (ct-42847/48)
+ * ========================================================================== */
+
+export type CapabilitiesMode = "off" | "dry" | "on";
+
+let lastMode: CapabilitiesMode = "dry";
+let desiredRevision = 0;
+let appliedRevision = 0;
+
+/** Called by the daemon with each heartbeat response. Cheap by design: the
+ *  common case (nothing changed, mode unchanged) is two field writes. */
+export function recordConvergenceSignals(payload: { capabilities_mode?: unknown; capability_desired_revision?: unknown }): void {
+  const mode = payload.capabilities_mode;
+  if (mode === "off" || mode === "dry" || mode === "on") lastMode = mode;
+  const rev = payload.capability_desired_revision;
+  if (typeof rev === "number" && Number.isFinite(rev) && rev >= desiredRevision) {
+    desiredRevision = rev;
+  }
+}
+
+/**
+ * Does the reconciler have anything to do?
+ *
+ * Mode is read BEFORE the revision compare so `off` costs one field read and
+ * nothing else — that is the kill switch's whole contract: a broken reconciler
+ * is stopped server-side without shipping a CLI. In steady state (`on`, equal
+ * revisions) this is one integer compare, zero syscalls.
+ */
+export function reconcileNeeded(): { mode: CapabilitiesMode; behind: boolean } {
+  if (lastMode === "off") return { mode: "off", behind: false };
+  return { mode: lastMode, behind: appliedRevision < desiredRevision };
+}
+
+/** The reconciler reports back after a successful plan+apply pass. */
+export function markRevisionApplied(revision: number): void {
+  if (revision > appliedRevision) appliedRevision = revision;
+}
+
+export function convergenceState(): { mode: CapabilitiesMode; desired: number; applied: number } {
+  return { mode: lastMode, desired: desiredRevision, applied: appliedRevision };
+}
+
+/** Test seam. */
+export function resetConvergenceState(): void {
+  lastMode = "dry";
+  desiredRevision = 0;
+  appliedRevision = 0;
+}
