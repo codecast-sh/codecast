@@ -48,12 +48,31 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const searchParams = useSearchParams();
   const memberFilter = searchParams.get("member");
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
-  const { user: currentUser } = useCurrentUser();
+  // Only the viewer's id is rendered (the "self" ring) — never the whole user
+  // doc, whose identity churns on daemon heartbeats.
+  const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : ""));
+  const currentUser = useMemo(() => (viewerId ? ({ _id: viewerId } as any) : null), [viewerId]);
   // Explicit prop, else the active workspace. No currentUser.team_id fallback:
   // an unset pointer IS the personal workspace, and falling back to the user's
   // default team would render that team's roster inside the personal space.
   const effectiveTeamId = propTeamId ?? activeTeamId;
-  const teamMembers = useInboxStore((s) => (s.teamMembers.length > 0 ? s.teamMembers : null));
+  // The always-visible bar renders identity + coarse presence, so it wakes on a
+  // signature of exactly those fields. The roster array itself re-pushes every
+  // few seconds on teammates' heartbeat counters; riding that churned this bar
+  // (and its avatar buttons) several times a minute forever.
+  const barSig = useInboxStore((s) => {
+    let sig = "";
+    for (const m of s.teamMembers) {
+      if (!m?._id) continue;
+      sig += `${m._id}|${memberPresenceState(m)}|${m.status === "busy" ? 1 : 0}|${m.image ?? ""}|${m.github_avatar_url ?? ""}|${m.name ?? ""}|${m.email ?? ""}|${m.github_username ?? ""}|${m.in_room_key ?? ""}\n`;
+    }
+    return sig;
+  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- barSig stands in for the churny array
+  const teamMembers = useMemo(() => {
+    const roster = useInboxStore.getState().teamMembers;
+    return roster.length > 0 ? roster : null;
+  }, [barSig]);
   const callsEnabled = useInboxStore((s) => !!s.callConfig?.enabled);
   const ctxMenu = useContextMenu<{ id: string; username?: string | null; displayName: string }>();
   // Which member's hover card is open. State-driven (not pure CSS hover) so

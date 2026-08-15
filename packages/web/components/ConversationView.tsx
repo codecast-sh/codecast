@@ -2064,8 +2064,16 @@ function renderAnsi(text: string): React.ReactNode {
   return parts.length > 0 ? parts : text;
 }
 
+// Cached: this runs seven regex passes over the full message body and is called
+// from renderItem/first-in-sequence logic for every visible row on every feed
+// render. Message content strings are identity-stable in the store, so a small
+// insertion-order LRU keyed by the string dedupes the work; a streaming row's
+// growing content just misses once per tick.
+const STRIP_SYSTEM_TAGS_CACHE = new Map<string, string>();
 function stripSystemTags(content: string): string {
-  return content
+  const hit = STRIP_SYSTEM_TAGS_CACHE.get(content);
+  if (hit !== undefined) return hit;
+  const out = content
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
     .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '')
     .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
@@ -2074,6 +2082,11 @@ function stripSystemTags(content: string): string {
     .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, '')
     .replace(/^\s*Caveat:.*$/gm, '')
     .replace(/\n{3,}/g, '\n\n');
+  if (STRIP_SYSTEM_TAGS_CACHE.size > 2000) {
+    STRIP_SYSTEM_TAGS_CACHE.delete(STRIP_SYSTEM_TAGS_CACHE.keys().next().value!);
+  }
+  STRIP_SYSTEM_TAGS_CACHE.set(content, out);
+  return out;
 }
 
 // Assistant stub the timeline renders as nothing (see renderTimelineItem).
@@ -2579,13 +2592,20 @@ function summarizeBashCommand(cmd: string): string {
   return c.length > 80 ? c.slice(0, 80) + '...' : c;
 }
 
+// Cached by tool-call object (identity-stable in the store): the JSON.parse of
+// a Bash tool's input showed up as a per-render scroll cost.
+const PARSE_CAST_COMMAND_CACHE = new WeakMap<ToolCall, ParsedCastCommand | null>();
 function parseCastCommand(tool: ToolCall): ParsedCastCommand | null {
   const isBash = tool.name === "Bash" || tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec" || tool.name === "commandExecution";
   if (!isBash) return null;
+  if (PARSE_CAST_COMMAND_CACHE.has(tool)) return PARSE_CAST_COMMAND_CACHE.get(tool)!;
+  let out: ParsedCastCommand | null = null;
   try {
     const input = JSON.parse(tool.input);
-    return parseCastCommandString(String(input.command || input.cmd || ""));
-  } catch { return null; }
+    out = parseCastCommandString(String(input.command || input.cmd || ""));
+  } catch { out = null; }
+  PARSE_CAST_COMMAND_CACHE.set(tool, out);
+  return out;
 }
 
 function hasRichMarkdown(text: string): boolean {

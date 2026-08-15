@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { cloneElement, isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { X, Keyboard } from "lucide-react";
 import { formatShortcutParts, formatAcceleratorParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
 import type { ShortcutAction, ShortcutDef } from "../shortcuts";
@@ -171,12 +171,42 @@ export function ShortcutTooltip({ label, action, hint, side = "bottom", children
   side?: "top" | "bottom" | "left" | "right";
   children: ReactNode;
 }) {
+  // Lazy: hundreds of these mount at once (every card action, every header
+  // button), and the Radix provider/portal tree is ~15 fibers per instance —
+  // most of the inbox's fiber count was tooltip plumbing for affordances the
+  // user never hovers. Until the first pointer/focus touches the trigger,
+  // render the child alone; then mount Radix for good and drive the FIRST
+  // show ourselves (Radix missed the pointerenter that armed us).
+  const [armed, setArmed] = useState(false);
+  const [open, setOpen] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  if (!isValidElement(children)) {
+    return <>{children}</>;
+  }
+
+  if (!armed) {
+    const arm = () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setOpen(true), 300);
+      setArmed(true);
+    };
+    const childProps = children.props as Record<string, any>;
+    return cloneElement(children as React.ReactElement<any>, {
+      onPointerEnter: (e: any) => { childProps.onPointerEnter?.(e); arm(); },
+      onFocus: (e: any) => { childProps.onFocus?.(e); arm(); },
+    });
+  }
+
+  const cancelFirstShow = () => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+  };
   const defs = action ? getShortcutsForAction(action) : [];
   const parts = defs.length > 0 ? formatShortcutParts(defs[0]) : null;
   return (
     <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <Tooltip open={open} onOpenChange={(v) => { cancelFirstShow(); setOpen(v); }}>
+        <TooltipTrigger asChild onPointerLeave={cancelFirstShow} onBlur={cancelFirstShow}>{children}</TooltipTrigger>
         <TooltipContent side={side} className="flex items-center gap-1.5 bg-sol-bg text-sol-text border border-sol-border shadow-md">
           <span>{label}</span>
           {parts && (
