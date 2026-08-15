@@ -55,13 +55,16 @@ import { useSyncBuckets } from "../hooks/useSyncBuckets";
 import { useSyncSessionDecisions } from "../hooks/useSyncSessionDecisions";
 import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
 import { useChatToasts } from "../hooks/useChatToasts";
+import { useCallSync } from "../hooks/useCallSync";
+import { useCallRing } from "../hooks/useCallRing";
+import { CallDock } from "./calls/CallDock";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
 import { isInboxSessionView, resolveSessionSelectKind } from "../lib/inboxRouting";
 import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
-import { TabBar, AttachTabButton } from "./TabBar";
+import { TabBar, AttachTabButton, tabTitle } from "./TabBar";
 import { pathLabel } from "../lib/pathLabel";
 import { TabContent } from "./TabContent";
 import { BreadcrumbBar } from "./BreadcrumbBar";
@@ -213,6 +216,11 @@ function DashboardSyncEffects() {
   useChatChannelsSync();
   useChatToasts();
   useChatTitleBadge();
+  // Huddles: config/ring/occupancy sync + the incoming-ring pipeline, both
+  // app-wide for the same reason as chat toasts — a ring must reach someone
+  // who is NOT looking at the team strip.
+  useCallSync();
+  useCallRing();
   return null;
 }
 
@@ -1253,6 +1261,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       )}
       <ErrorBoundary name="CommandPalette" level="inline">
         <CommandPalette />
+      </ErrorBoundary>
+      <ErrorBoundary name="CallDock" level="inline">
+        <CallDock />
       </ErrorBoundary>
       <GlobalCloseGuardDialog />
       {s.compose.open && (
