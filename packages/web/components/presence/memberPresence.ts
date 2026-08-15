@@ -15,14 +15,16 @@ export const PRESENCE_META: Record<
   { ring: string; dot: string; label: string; dim: boolean }
 > = {
   active: {
-    ring: "ring-2 ring-emerald-400/90",
-    dot: "bg-emerald-400",
+    // Solarized voices only — the neon Tailwind defaults read as lime against
+    // this palette and were called out for it.
+    ring: "ring-2 ring-sol-green/80",
+    dot: "bg-sol-green",
     label: "Active",
     dim: false,
   },
   idle: {
-    ring: "ring-2 ring-yellow-400/70",
-    dot: "bg-yellow-400",
+    ring: "ring-2 ring-sol-yellow/60",
+    dot: "bg-sol-yellow",
     label: "Idle",
     dim: false,
   },
