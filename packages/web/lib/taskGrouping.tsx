@@ -80,7 +80,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
     },
     header: (b, ctx) => {
       const status = statusByKey(ctxStatuses(ctx), b.key);
-      const cfg = status ? statusVisual(status) : undefined;
+      const cfg = status ? statusVisual(status, ctxStatuses(ctx)) : undefined;
       const Icon = cfg?.icon;
       return {
         label: cfg?.label || b.key,

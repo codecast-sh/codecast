@@ -22,6 +22,8 @@ export const socialTypes = new Set([
   "chat_mention",
   "chat_reply",
   "chat_here",
+  "chat_dm",
+  "chat_added",
 ]);
 
 export const taskTypes = new Set([
@@ -58,6 +60,8 @@ export const typeLabels: Record<string, string> = {
   chat_mention: "mentioned you in chat",
   chat_reply: "replied in a thread",
   chat_here: "posted to everyone here",
+  chat_dm: "sent you a direct message",
+  chat_added: "added you to a channel",
 };
 
 export const typeColors: Record<string, string> = {
@@ -82,6 +86,8 @@ export const typeColors: Record<string, string> = {
   chat_mention: "text-sol-blue",
   chat_reply: "text-sol-cyan",
   chat_here: "text-sol-orange",
+  chat_dm: "text-sol-orange",
+  chat_added: "text-sol-cyan",
 };
 
 export const agentNames: Record<string, string> = {

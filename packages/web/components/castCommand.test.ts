@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserPageUrlMap } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -460,34 +460,36 @@ describe("extractBrowserPageUrl", () => {
   });
 });
 
-describe("buildBrowserPageUrlMap", () => {
+describe("buildBrowserRowMap", () => {
   const row = (toolCallId: string, subcommand: string, args: string, output: string) => ({ toolCallId, subcommand, args, output });
 
-  test("carries the last known URL into rows that state none", () => {
-    const map = buildBrowserPageUrlMap([
-      row("t1", "open", "example.com", "Title\nhttps://example.com/"),
+  test("carries the last known URL and tab into rows that state none", () => {
+    const map = buildBrowserRowMap([
+      row("t1", "open", "example.com", "Title\nhttps://example.com/\n  tab 4A2CDC7E"),
       row("t2", "find", '"Sign in"', '  link "Sign in" #e12'),
-      row("t3", "click", "#e12", "  → navigated to Login\n    https://example.com/login"),
+      row("t3", "click", "#e12", "  → navigated to Login\n    https://example.com/login\n  tab 4A2CDC7E"),
       row("t4", "shot", "", "  /tmp/x.png (10K)"),
+      row("t5", "open", "b.dev", "B\nhttps://b.dev/\n  tab 9F00AB12"),
     ]);
     expect(map).toEqual({
-      t1: "https://example.com/",
-      t2: "https://example.com/",
-      t3: "https://example.com/login",
-      t4: "https://example.com/login",
+      t1: { url: "https://example.com/", tabId: "4A2CDC7E" },
+      t2: { url: "https://example.com/", tabId: "4A2CDC7E" },
+      t3: { url: "https://example.com/login", tabId: "4A2CDC7E" },
+      t4: { url: "https://example.com/login", tabId: "4A2CDC7E" },
+      t5: { url: "https://b.dev/", tabId: "9F00AB12" },
     });
   });
 
-  test("rows before any known URL get no link", () => {
-    const map = buildBrowserPageUrlMap([
+  test("rows before any known URL or tab get nothing", () => {
+    const map = buildBrowserRowMap([
       row("t1", "find", '"x"', "  nothing"),
       row("t2", "open", "a.dev", "A\nhttps://a.dev/"),
     ]);
-    expect(map).toEqual({ t2: "https://a.dev/" });
+    expect(map).toEqual({ t2: { url: "https://a.dev/" } });
   });
 
   test("an open row with no output yet links to its destination argument", () => {
-    const map = buildBrowserPageUrlMap([row("t1", "open", "b.dev/path", "")]);
-    expect(map).toEqual({ t1: "https://b.dev/path" });
+    const map = buildBrowserRowMap([row("t1", "open", "b.dev/path", "")]);
+    expect(map).toEqual({ t1: { url: "https://b.dev/path" } });
   });
 });

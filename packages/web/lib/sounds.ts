@@ -10,6 +10,11 @@ function isEnabled(): boolean {
   return useInboxStore.getState().clientState?.ui?.sounds_enabled !== false;
 }
 
+// Chat has its own switch (see clientState.ui.chat_sounds_enabled).
+function isChatEnabled(): boolean {
+  return useInboxStore.getState().clientState?.ui?.chat_sounds_enabled !== false;
+}
+
 function getCtx(): AudioContext {
   if (!ctx) ctx = new AudioContext();
   if (ctx.state === "suspended") ctx.resume();
@@ -127,14 +132,113 @@ export function soundKill() {
   } catch {}
 }
 
-// A chat message addressed to you. Two rising notes, quieter and shorter than
-// soundNewSession — it marks someone speaking to you, not a machine finishing
-// work, and it may fire while you are mid-sentence somewhere else.
-export function soundChatMention() {
+// A chat message that raised a toast. One sound for every chat toast, quiet
+// or loud — the way Slack's "Knock Brush" is one sound: the CARD says how much
+// the message matters, the sound only says "someone spoke". A separate louder
+// sound for mentions trains people to ignore the ordinary one.
+//
+// The character is a soft mallet on wood — two short marimba notes rising a
+// fourth (G5 → C6), each with the 4× partial that makes a marimba read as
+// marimba rather than as a sine, plus a 20 ms filtered-noise transient for
+// the wooden knock at the front. Over in ~300 ms, master gain kept low so it
+// can land mid-sentence in another window without startling.
+export function soundChatMessage() {
+  if (!isChatEnabled() || !isSupported()) return;
+  try {
+    const ac = getCtx();
+    const master = ac.createGain();
+    master.gain.value = 0.045;
+    master.connect(ac.destination);
+    const t0 = ac.currentTime;
+
+    const knock = (at: number, gain: number) => {
+      const len = Math.floor(ac.sampleRate * 0.03);
+      const buf = ac.createBuffer(1, len, ac.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const src = ac.createBufferSource();
+      src.buffer = buf;
+      const bp = ac.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = 1900;
+      bp.Q.value = 1.2;
+      const env = ac.createGain();
+      env.gain.setValueAtTime(gain, t0 + at);
+      env.gain.exponentialRampToValueAtTime(0.001, t0 + at + 0.03);
+      src.connect(bp);
+      bp.connect(env);
+      env.connect(master);
+      src.start(t0 + at);
+      src.stop(t0 + at + 0.035);
+    };
+
+    const mallet = (freq: number, at: number, dur: number, gain: number) => {
+      // Fundamental and the marimba's bright 4× partial, the partial dying
+      // faster — that is what makes it wood, not glass.
+      for (const [mult, g, d] of [[1, 1, dur], [4, 0.18, dur * 0.35]] as const) {
+        const osc = ac.createOscillator();
+        osc.type = "sine";
+        osc.frequency.value = freq * mult;
+        const env = ac.createGain();
+        env.gain.setValueAtTime(0, t0 + at);
+        env.gain.linearRampToValueAtTime(gain * g, t0 + at + 0.006);
+        env.gain.exponentialRampToValueAtTime(0.001, t0 + at + d);
+        osc.connect(env);
+        env.connect(master);
+        osc.start(t0 + at);
+        osc.stop(t0 + at + d + 0.01);
+      }
+    };
+
+    knock(0, 0.5);
+    mallet(783.99, 0, 0.26, 0.6);
+    // The second strike lands while the first still rings, so the two read as
+    // one gesture ("plink-plonk"), not two events.
+    knock(0.085, 0.35);
+    mallet(1046.5, 0.085, 0.32, 0.55);
+  } catch {}
+}
+
+// One ring cycle for an incoming huddle: two warm fifths, held slightly —
+// unmistakably a "someone wants you", distinct from every notification chirp
+// above. The ring HOOK (useCallRing) repeats this on an interval and owns the
+// 45s ceiling; this stays a single cycle so a dismissed ring stops instantly.
+export function soundCallRing() {
   if (!isEnabled()) return;
   play([
-    { freq: 587.33, start: 0, dur: 0.14, gain: 0.45, type: "sine" },
-    { freq: 880, start: 0.09, dur: 0.18, gain: 0.3, type: "sine" },
+    { freq: 440, start: 0, dur: 0.35, gain: 0.4, type: "sine" },
+    { freq: 659.25, start: 0.05, dur: 0.4, gain: 0.3, type: "sine" },
+    { freq: 440, start: 0.55, dur: 0.35, gain: 0.35, type: "sine" },
+    { freq: 659.25, start: 0.6, dur: 0.4, gain: 0.25, type: "sine" },
+  ], 0.06);
+}
+
+// Someone joined the room you're in (or you connected): a soft rising triad.
+export function soundCallJoin() {
+  if (!isEnabled()) return;
+  play([
+    { freq: 523.25, start: 0, dur: 0.15, gain: 0.4, type: "sine" },
+    { freq: 659.25, start: 0.08, dur: 0.18, gain: 0.35, type: "sine" },
+    { freq: 783.99, start: 0.16, dur: 0.25, gain: 0.3, type: "sine" },
+  ], 0.05);
+}
+
+// A participant left / the call ended: the join triad, descending.
+export function soundCallLeave() {
+  if (!isEnabled()) return;
+  play([
+    { freq: 783.99, start: 0, dur: 0.15, gain: 0.35, type: "sine" },
+    { freq: 659.25, start: 0.08, dur: 0.18, gain: 0.3, type: "sine" },
+    { freq: 523.25, start: 0.16, dur: 0.25, gain: 0.25, type: "sine" },
+  ], 0.045);
+}
+
+// Your ring was declined or timed out — one low, brief, apologetic note.
+export function soundCallDeclined() {
+  if (!isEnabled()) return;
+  play([
+    { freq: 329.63, start: 0, dur: 0.25, gain: 0.4, type: "sine" },
+    { freq: 261.63, start: 0.18, dur: 0.3, gain: 0.3, type: "sine" },
   ], 0.045);
 }
 

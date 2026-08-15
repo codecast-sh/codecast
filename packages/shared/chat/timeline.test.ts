@@ -231,6 +231,25 @@ describe("chatToastTier", () => {
     it("but not a reply on a thread you are not part of", () => {
       expect(chatToastTier({ ...base, threadRootId: "m1" })).toBe("quiet");
     });
+
+    it("every line of a direct message", () => {
+      expect(chatToastTier({ ...base, isDm: true })).toBe("loud");
+      // Even at the "mentions" default a DM line is addressed to you.
+      expect(chatToastTier({ ...base, isDm: true, notifyLevel: "mentions" })).toBe("loud");
+    });
+  });
+
+  describe("direct messages and the mute", () => {
+    it("a muted DM is actually silent — a mention cannot ride through", () => {
+      expect(chatToastTier({ ...base, isDm: true, notifyLevel: "none" })).toBe("silent");
+      expect(chatToastTier({ ...base, isDm: true, channelMuted: true, mentionsViewer: true })).toBe("silent");
+    });
+
+    it("a DM you are looking at stays quiet on screen", () => {
+      expect(
+        chatToastTier({ ...base, isDm: true, activeChannelId: "c1", windowFocused: true }),
+      ).toBe("silent");
+    });
   });
 
   describe("what is already on screen", () => {

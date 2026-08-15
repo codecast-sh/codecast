@@ -197,22 +197,18 @@ export function confidenceFromKind(kind: CapabilityKind | string): ExecutionConf
  * that blob is publisher-supplied and unvalidated by its own comment. So the
  * field is re-checked here rather than trusted.
  *
- * The two malformed shapes are deliberately NOT alike, which is worth stating
- * because the symmetry is tempting and wrong. A list carrying a member this
- * build does not model is a finished classification we cannot vouch for: it
- * collapses to empty, and the gate's own rule calls that dangerous. Filtering
- * the stranger out instead would LOWER the risk of the row we understand least
- * (`deriveExecutionSurfaces` accepts declared surfaces additively for the same
- * reason). A value that is not a list is not a classification at all — there is
- * nothing to put to the gate — so it means no scan and falls to the kind floor.
- * Escalating that to "runs code" would assert a finding nobody made.
+ * Every malformed shape lands on the same side. A string, a number, an object,
+ * or a list carrying a member this build does not model all collapse to empty,
+ * and the gate's own rule calls empty dangerous. The field was PRESENT, so a
+ * scan ran; we just could not read what it found, and a failed read may not
+ * render as reassuring. Filtering an unknown member out instead would LOWER the
+ * risk of the row we understand least — `deriveExecutionSurfaces` accepts
+ * declared surfaces additively for the same reason.
+ *
+ * Only a genuinely absent field means no scan, and only that reaches the kind
+ * floor.
  */
 function observedSurfaces(value: unknown): readonly ExecutionSurface[] | undefined {
-  // Absent means no scan ran — the kind floor answers. Present but MALFORMED
-  // (a string, a number, unknown members) is a failed read of a scan that DID
-  // run, and a failed read must land on the dangerous side: [] classifies as
-  // requiring consent. Only a genuinely absent field may fall through to the
-  // kind's reassuring default.
   if (value === undefined || value === null) return undefined;
   if (!Array.isArray(value)) return [];
   return value.every(isExecutionSurface) ? (value as ExecutionSurface[]) : [];

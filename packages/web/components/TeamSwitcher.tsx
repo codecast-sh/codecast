@@ -2,6 +2,7 @@ import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { useSwitchWorkspace } from "../hooks/useSwitchWorkspace";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import {
   DropdownMenu,
@@ -22,9 +23,8 @@ export function TeamSwitcher() {
   const router = useRouter();
   const { user } = useCurrentUser();
   const teams = useInboxStore((s) => s.teams);
-  const saveActiveTeam = useMutation(api.teams.setActiveTeam);
+  const switchWorkspace = useSwitchWorkspace();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
-  const updateClientUI = useInboxStore((s) => s.updateClientUI);
   const [inviteOpen, setInviteOpen] = useState(false);
   const isAdmin = user?.role === "admin";
 
@@ -35,8 +35,7 @@ export function TeamSwitcher() {
   const activeTeam = teams?.find(t => t?._id === activeTeamId);
 
   const handleTeamChange = async (teamId: Id<"teams"> | null) => {
-    updateClientUI({ active_team_id: teamId ?? undefined });
-    await saveActiveTeam({ team_id: teamId ?? undefined });
+    await switchWorkspace(teamId);
   };
 
   if (!teams || teams.length === 0) {

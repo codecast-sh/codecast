@@ -25,6 +25,7 @@ export type ShortcutAction =
   | 'inbox.toggleFlatView'
   | 'nav.inbox'
   | 'search.open'
+  | 'chat.search'
   | 'palette.toggle'
   | 'zoom.in'
   | 'zoom.out'
@@ -218,6 +219,8 @@ export const SHORTCUTS: ShortcutDef[] = [
 
   { key: 'meta+/', action: 'search.open', skipInputCheck: true, description: 'Open search' },
   { key: 'ctrl+/', action: 'search.open', skipInputCheck: true, description: 'Open search' },
+  { key: 'meta+shift+f', action: 'chat.search', skipInputCheck: true, description: 'Search chat messages' },
+  { key: 'ctrl+shift+f', action: 'chat.search', skipInputCheck: true, description: 'Search chat messages' },
   { key: 'meta+k', action: 'palette.toggle', skipInputCheck: true, description: 'Toggle command palette' },
 
   { key: 'meta+=', action: 'zoom.in', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom in' },
@@ -276,12 +279,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   // raw file, and back to live preview when you're done looking.
   { key: 'ctrl+shift+e', mac: 'meta+shift+e', action: 'vault.sourceMode', skipInputCheck: true, description: 'Toggle note source mode' },
   { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
-  // Workbenches: switch the whole chrome to a named arrangement (the preset
-  // order in store/workbench.ts). One key, wholesale — never a per-panel tweak.
-  { key: 'alt+1', action: 'workbench.1', skipInputCheck: true, description: 'Switch to the Triage workbench' },
-  { key: 'alt+2', action: 'workbench.2', skipInputCheck: true, description: 'Switch to the Build workbench' },
-  { key: 'alt+3', action: 'workbench.3', skipInputCheck: true, description: 'Switch to the Review workbench' },
-  { key: 'alt+4', action: 'workbench.4', skipInputCheck: true, description: 'Switch to the Plan workbench' },
+  // Workbenches: switch the whole chrome to a saved arrangement (rail order —
+  // see lib/workbenchSwitch). One key, wholesale — never a per-panel tweak.
+  { key: 'alt+1', action: 'workbench.1', skipInputCheck: true, description: 'Switch to saved layout 1' },
+  { key: 'alt+2', action: 'workbench.2', skipInputCheck: true, description: 'Switch to saved layout 2' },
+  { key: 'alt+3', action: 'workbench.3', skipInputCheck: true, description: 'Switch to saved layout 3' },
+  { key: 'alt+4', action: 'workbench.4', skipInputCheck: true, description: 'Switch to saved layout 4' },
 
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
   { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },
