@@ -121,8 +121,13 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
 
   // The title is what the notification is about — the session, else the person.
   // The event itself is a small colored word, never the headline.
-  const title = label || actorName || typeLabel(notification.type);
+  const typeLbl = typeLabel(notification.type);
+  const title = label || actorName || typeLbl;
   const who = actorName || (isSessionNotif ? (agentNames[agentType] || agentType) : null);
+  const showWho = !!who && who !== title;
+  // Don't echo the type when it already IS the title (a bare task/plan row with
+  // no session or actor to name).
+  const showType = title !== typeLbl;
 
   return (
     <TouchableOpacity
@@ -164,14 +169,18 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
           </RNText>
           {!notification.read && <RNView style={styles.unreadDot} />}
         </RNView>
-        <RNView style={styles.metaRow}>
-          {who && who !== title && (
-            <RNText style={styles.metaWho} numberOfLines={1}>{who}</RNText>
-          )}
-          <RNText style={[styles.metaType, { color: typeColorNative(notification.type) }]} numberOfLines={1}>
-            {typeLabel(notification.type)}
-          </RNText>
-        </RNView>
+        {(showWho || showType) && (
+          <RNView style={styles.metaRow}>
+            {showWho && (
+              <RNText style={styles.metaWho} numberOfLines={1}>{who}</RNText>
+            )}
+            {showType && (
+              <RNText style={[styles.metaType, { color: typeColorNative(notification.type) }]} numberOfLines={1}>
+                {typeLbl}
+              </RNText>
+            )}
+          </RNView>
+        )}
         <RNText style={styles.notificationMessage} numberOfLines={3}>
           {cleanNotificationBody(notification.message, 200)}
         </RNText>
@@ -285,7 +294,7 @@ export default function NotificationsScreen() {
   return (
     <RNView style={styles.container}>
       <RNView style={styles.filterBar}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabsRow}>
           {tabs.map((tab) => (
             <TouchableOpacity
               key={tab.key}
@@ -349,11 +358,15 @@ const styles = StyleSheet.create({
     borderBottomColor: Theme.borderLight,
     paddingHorizontal: Spacing.md,
   },
+  tabsScroll: {
+    flex: 1,
+  },
   tabsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.xs,
     paddingVertical: Spacing.sm,
+    paddingRight: Spacing.sm,
   },
   tab: {
     paddingHorizontal: Spacing.md,
@@ -372,8 +385,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   markAllButton: {
+    flexShrink: 0,
     paddingLeft: Spacing.md,
     paddingVertical: 6,
+    marginLeft: Spacing.xs,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: Theme.borderLight,
+    backgroundColor: Theme.bg,
   },
   markAllText: {
     fontSize: 13,

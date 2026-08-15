@@ -13,6 +13,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/commit\//,
   /^\/pr\//,
   /^\/inbox(\/|$)/,
+  // The decision queue deletes layout by construction: one card, full width.
+  /^\/questions(\/|$)/,
   // Chat owns its whole canvas: three columns, each with its own scroll region.
   /^\/chat(\/|$)/,
   /^\/tasks(\/|$)/,

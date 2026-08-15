@@ -16,7 +16,6 @@ import {
   type InboxSession,
   type CategorizedSessions,
   classifySession,
-  isSessionHardBlocked,
   isAgentActive,
 } from "../store/inboxStore";
 import { isLivenessStale } from "@codecast/shared/contracts";
@@ -42,12 +41,22 @@ export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
   // A message on its way to the agent reads as running, whatever the stale
   // status claims — same precedence isSessionWaitingForInput gives in-flight.
   if (inFlight(s, opts)) return "running";
-  if (isSessionHardBlocked(s, opts.queued) || !!s.session_error) return "needsYou";
+  // Concrete blockers only. Deliberately NOT isSessionHardBlocked: its "dead
+  // agent with output" arm counts every cleanly finished session ("stopped" +
+  // idle is the NORMAL end state of a run), which floods this band and makes
+  // it lie. A mid-task death (stopped while NOT idle) still lands here, via
+  // the liveness-stale check below.
+  const hasOutput = (s.message_count ?? 0) > 0;
+  if (s.session_error) return "needsYou";
+  if (s.awaiting_input) return "needsYou";
+  if (s.pending_api_error && hasOutput) return "needsYou";
+  if (s.agent_status === "permission_blocked" && hasOutput) return "needsYou";
   const { idle } = classifySession(s);
   if (!idle) {
-    // "Active" per status, but the liveness TTL says the agent went silent:
-    // a quietly dead worker is the user's to revive, not a running one.
-    return isLivenessStale(s, opts.now) ? "needsYou" : "running";
+    // "Active" per status, but the liveness TTL says the agent went silent
+    // (or the daemon marked it unresponsive): a quietly dead worker is the
+    // user's to revive, not a running one.
+    return isLivenessStale(s, opts.now) || s.is_unresponsive ? "needsYou" : "running";
   }
   // Idle, but the agent's own pinned state still declares it blocked — the
   // agent said "your move" in words; a stale declaration no longer counts.

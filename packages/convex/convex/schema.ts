@@ -368,6 +368,18 @@ export default defineSchema({
     comment_fork_message_id: v.optional(v.string()),
     comment_fork_comment_id: v.optional(v.id("comments")),
     comment_fork_prompt_at: v.optional(v.number()),
+    // Denormalized comment signal for the inbox card, recomputed by
+    // comments.refreshCommentSignal on every comment create/resolve/delete.
+    // Count of OPEN threads plus who spoke last in them and what they said —
+    // enough for the session row to show "Alice: typo in step 2" with no extra
+    // query on the list render path. author_id is a users id string, or
+    // "agent" for agent replies, so the client can mute the chip when the
+    // viewer themselves commented last.
+    unresolved_comment_count: v.optional(v.number()),
+    last_comment_at: v.optional(v.number()),
+    last_comment_author: v.optional(v.string()),
+    last_comment_author_id: v.optional(v.string()),
+    last_comment_excerpt: v.optional(v.string()),
     // Visible-child pointer: the session that spawned this one (agent-team
     // teammate → its lead, `cast spawn` → its caller). Unlike
     // parent_conversation_id — whose mere presence marks a row as a subagent

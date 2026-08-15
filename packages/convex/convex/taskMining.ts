@@ -7,6 +7,7 @@ import { teamVisibleConvTeam } from "./privacy";
 import { nextShortId } from "./counters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { inboxVisibilityFields } from "./inboxProjection";
+import { liveConversationIdSet } from "./lib/liveSessions";
 
 // Called after generateSessionInsight saves a new insight — mines tasks + docs for that conversation
 export const mineConversationAfterInsight = internalAction({
@@ -1207,16 +1208,7 @@ export const webGetTaskDetail = query({
 
     const now = Date.now();
     const fiveMinutesAgo = now - 5 * 60 * 1000;
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", task.user_id))
-      .collect();
-    const liveConvIds = new Set(
-      managedSessions
-        .filter((s: any) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
-        .map((s: any) => s.conversation_id!.toString())
-    );
+    const liveConvIds = await liveConversationIdSet(ctx, task.user_id, { now });
 
     const linkedConversations: any[] = [];
     const seenConvIds = new Set<string>();

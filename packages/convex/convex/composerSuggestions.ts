@@ -323,12 +323,15 @@ const GENERIC_NUDGES = new Set([
 ]);
 
 // Output guards: press-send-ready strings only. Refusal/meta prose from the
-// model must never render as a pill.
+// model must never render as a pill. Selectivity lives here too: candidates
+// carry a model-reported confidence, anything under 0.7 is dropped, and the
+// row shows at most TWO pills — a third only when the model is near-certain
+// (an explicit multi-choice moment). Legacy bare strings score 0.75.
 export function sanitizeSuggestions(parsed: unknown, lastUserText: string | null): string[] {
   const rawList: unknown[] = Array.isArray(parsed) ? parsed : [];
-  const out: string[] = [];
   const seen = new Set<string>();
   const lastKey = lastUserText?.trim().toLowerCase() ?? null;
+  const scored: Array<{ text: string; conf: number }> = [];
   for (const item of rawList) {
     const text = (typeof item === "string" ? item : (item as any)?.text)
       ?.toString()
@@ -340,10 +343,86 @@ export function sanitizeSuggestions(parsed: unknown, lastUserText: string | null
     if (GENERIC_NUDGES.has(key.replace(/[.!?]+$/, "").trim())) continue;
     if (seen.has(key) || key === lastKey) continue;
     seen.add(key);
-    out.push(text);
-    if (out.length >= MAX_SUGGESTIONS) break;
+    const rawConf = (item as any)?.confidence;
+    const conf = typeof rawConf === "number" && rawConf >= 0 && rawConf <= 1 ? rawConf : 0.75;
+    scored.push({ text, conf });
+  }
+  const kept = scored.filter((s) => s.conf >= 0.7).sort((a, b) => b.conf - a.conf);
+  const out = kept.slice(0, 2).map((s) => s.text);
+  if (kept.length > 2 && kept[2].conf >= 0.85 && out.length < MAX_SUGGESTIONS) {
+    out.push(kept[2].text);
   }
   return out;
+}
+
+// LLM pass over the mined corpus: pull out the things this user SAYS
+// repeatedly — in varied wording — and cluster them into canonical quotes.
+// The n-gram miner (minePhrases) only catches literal token repeats; this
+// catches "add a regression test" / "write a repro test first" as one habit.
+// Runs once per profile refresh (12h TTL), so its cost is a rounding error.
+// Returns null on any failure so the caller can fall back to n-grams.
+export async function mineQuotesWithLLM(
+  apiKey: string,
+  inputs: string[],
+): Promise<{ quotes: Array<{ text: string; count: number }>; usage?: unknown } | null> {
+  const corpus = inputs
+    .slice(0, 250)
+    .map((t) => t.replace(/\s+/g, " ").slice(0, 200))
+    .join("\n");
+  const prompt = `You are analyzing one developer's messages to their coding agents, collected across many sessions. Extract their recurring phrases — the things they say again and again.
+
+Return ONLY a JSON array: [{"text": string, "count": number}]
+
+What to extract:
+- Recurring directives, demands, verdicts, and stylistic asks that show up across MULTIPLE messages even when worded differently ("add a regression test", "verify with screenshots before you finish", "make it beautiful", "don't ask me, use your judgement").
+- Cluster paraphrases of the same intent into ONE entry. "text" must be a real quote lifted from their messages — the clearest, most reusable variant — never your own paraphrase. "count" is how many distinct messages express that intent.
+
+What to exclude:
+- One-off content: specific bugs, file paths, features, or topics tied to a single piece of work.
+- Bare nudges of one or two words ("continue", "go", "do it", "fix it").
+- Anything expressed in only one message.
+- Greetings, thanks, and filler.
+
+Sort by count descending. At most 20 entries. No markdown, no commentary.
+
+Messages (one per line):
+${corpus}`;
+
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1000,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const raw = data.content?.[0]?.text?.trim() ?? "";
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    const parsed = JSON.parse(cleaned);
+    if (!Array.isArray(parsed)) return null;
+    const out = parsed
+      .filter(
+        (p: any) =>
+          p && typeof p.text === "string" && typeof p.count === "number" && p.count >= 2,
+      )
+      .map((p: any) => ({
+        text: String(p.text).trim().slice(0, 160),
+        count: Math.round(p.count),
+      }))
+      .filter((p: { text: string }) => p.text.split(/\s+/).length >= 3)
+      .slice(0, 20);
+    return out.length ? { quotes: out, usage: data.usage } : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildPrompt(
@@ -403,7 +482,7 @@ function buildPrompt(
 
   return `You predict what a developer will type next into their coding-agent session. You see the session so far and evidence of how this developer actually writes. Suggest the exact next message they would send — or nothing.
 
-Return ONLY a JSON array of 0 to 3 strings. No wrapper object, no markdown, no commentary.
+Return ONLY a JSON array: [{"text": string, "confidence": number}] — 0 to 2 entries (a third only for an explicit multi-choice moment where each option is near-certain). "confidence" is your probability (0..1) that the developer would actually send this text or a trivial variant of it; omit anything below 0.7. No wrapper object, no markdown, no commentary. [] is the expected answer for most moments.
 
 Read the moment first — the agent's final message decides everything:
 - The agent asked a question or offered options → suggest the most likely answers, phrased the way this developer would phrase them.
@@ -414,7 +493,7 @@ Read the moment first — the agent's final message decides everything:
 Voice: copy the developer's register from their past messages below — casing, punctuation, brevity, bluntness. If they write terse lowercase commands, so do you. Weave in their own recurring phrases where they genuinely fit. Every suggestion must read like THEY typed it and be sendable exactly as written; each will be sent with one click.
 
 Hard rules:
-- Quality over count. One confident suggestion beats three guesses; [] is a good answer when the moment isn't predictable.
+- Quality over count. One suggestion the developer actually sends is the win; two mediocre ones teach them to ignore the feature. When you're not confident, return [].
 - Never suggest a bare continuation nudge — "continue", "go", "proceed", "do it", "yes", or anything the developer could type in one keystroke. A suggestion earns its place by carrying content: a concrete directive, answer, or decision specific to this moment.
 - Suggestions must differ in intent, not phrasing.
 - Keep each under 60 characters unless the moment clearly requires a longer reply.
@@ -425,7 +504,7 @@ Hard rules:
 Session:
 ${meta || "- (no metadata)"}
 
-Recurring phrases this developer uses (×N = seen in N separate messages):
+Recurring things this developer says, clustered across their history (×N = expressed in N separate messages; each "text" is their own words):
 ${phrasesText}
 
 Whole messages they've sent repeatedly:
@@ -440,13 +519,36 @@ ${excerpt}`;
 
 // TEMP: measurement harness for the cost comparison — remove after.
 export const debugGenerateWithUsage = internalAction({
-  args: { conversation_id: v.id("conversations"), user_id: v.id("users") },
+  args: {
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    refresh_profile: v.optional(v.boolean()),
+  },
   handler: async (ctx, args): Promise<any> => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return { error: "no key" };
     const context = await ctx.runQuery(internal.composerSuggestions.getSuggestionContext, {
       conversation_id: args.conversation_id,
     });
+    let minerUsage: unknown = null;
+    if (args.refresh_profile) {
+      const inputs = await ctx.runQuery(internal.composerSuggestions.getRecentUserInputs, {
+        user_id: args.user_id,
+      });
+      const ranked = rankInputs(inputs, Date.now());
+      const mined = await mineQuotesWithLLM(apiKey, inputs.map((r) => r.text));
+      if (mined) {
+        ranked.phrases = mined.quotes;
+        minerUsage = mined.usage;
+      }
+      await ctx.runMutation(internal.composerSuggestions.storeSuggestionProfile, {
+        user_id: args.user_id,
+        frequent: ranked.frequent,
+        phrases: ranked.phrases,
+        recent: ranked.recent,
+        generated_at: Date.now(),
+      });
+    }
     const profile = await ctx.runQuery(internal.composerSuggestions.getSuggestionProfile, {
       user_id: args.user_id,
     });
@@ -476,6 +578,7 @@ export const debugGenerateWithUsage = internalAction({
     return {
       ms,
       usage: data.usage,
+      miner_usage: minerUsage,
       prompt_chars: prompt.length,
       text: data.content?.[0]?.text?.trim(),
     };
@@ -525,6 +628,10 @@ export const generateComposerSuggestions = action({
         user_id: user._id,
       });
       const ranked = rankInputs(inputs, now);
+      // Semantic clustering beats token matching; n-grams are the fallback
+      // when the miner call fails, so a bad LLM day degrades, never blanks.
+      const mined = await mineQuotesWithLLM(apiKey, inputs.map((r) => r.text));
+      if (mined) ranked.phrases = mined.quotes;
       await ctx.runMutation(internal.composerSuggestions.storeSuggestionProfile, {
         user_id: user._id,
         frequent: ranked.frequent,

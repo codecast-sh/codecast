@@ -20,6 +20,7 @@ import {
   DeviceDot,
   type Device,
 } from "../../../components/DeviceBadge";
+import { isRecentlyShipped } from "../../../lib/newSnippets";
 
 /**
  * "Agent Features" — the web twin of `cast install`. Each machine keeps its own
@@ -116,6 +117,7 @@ export default function AgentFeaturesPage() {
                     desc={s.desc}
                     detail={s.detail}
                     writesTo={s.writesTo}
+                    isNew={isRecentlyShipped(s)}
                     on={(selected.settings?.snippets?.[s.slug] ?? (s.wireSlug ? selected.settings?.snippets?.[s.wireSlug] : undefined)) === true}
                     disabled={!selected.online}
                     busy={pending.has(s.slug)}
@@ -288,6 +290,7 @@ function FeatureCard({
   desc,
   detail,
   writesTo,
+  isNew,
   on,
   disabled,
   busy,
@@ -298,6 +301,7 @@ function FeatureCard({
   desc: string;
   detail: string;
   writesTo: string;
+  isNew: boolean;
   on: boolean;
   disabled: boolean;
   busy: boolean;
@@ -309,6 +313,11 @@ function FeatureCard({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-sol-text">{name}</span>
+            {isNew && (
+              <span className="text-[10px] px-1.5 py-px rounded-full border bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30">
+                New
+              </span>
+            )}
             <span
               className={`text-[10px] px-1.5 py-px rounded-full border ${
                 on

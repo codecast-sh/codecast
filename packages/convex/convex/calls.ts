@@ -13,18 +13,14 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { authorizeRoom } from "./callRooms";
+import {
+  CALL_INVITE_TTL_MS,
+  CALL_MEMBER_STALE_MS,
+  authorizeRoom,
+} from "./callRooms";
 import { bucketTs } from "./presenceState";
 
-// Room membership is a lease: the dock heartbeats every CALL_HEARTBEAT_MS
-// while connected, readers ignore rows older than CALL_MEMBER_STALE_MS, so a
-// crashed client leaves by silence. Stale rows are deleted opportunistically
-// by whatever mutation next touches the room — no cron.
-export const CALL_HEARTBEAT_MS = 15_000;
-export const CALL_MEMBER_STALE_MS = 45_000;
-// A ring that was neither answered nor cancelled inside this window reads as
-// expired everywhere (missed call), even while the row still exists.
-export const CALL_INVITE_TTL_MS = 45_000;
+export { CALL_HEARTBEAT_MS, CALL_INVITE_TTL_MS, CALL_MEMBER_STALE_MS } from "./callRooms";
 
 function liveMembers(rows: Doc<"call_members">[], now: number) {
   return rows.filter((m) => now - m.last_seen < CALL_MEMBER_STALE_MS);

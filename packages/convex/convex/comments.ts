@@ -83,6 +83,50 @@ export function countOpenCommentThreads(
   return open.size;
 }
 
+// Recompute the conversation row's denormalized comment signal (schema:
+// unresolved_comment_count + last_comment_*) from the comments table, so the
+// inbox card can show "who said what" with no per-row query. Called after
+// every mutation that changes what is open — create, edit, resolve/reopen,
+// delete, agent mirror. Full recompute, not incremental bookkeeping: a
+// conversation's comments are few, and one code path can't drift.
+export async function refreshCommentSignal(
+  ctx: MutationCtx,
+  conversationId: Id<"conversations">,
+): Promise<void> {
+  const all = await ctx.db
+    .query("comments")
+    .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
+    .collect();
+  const open = all.filter((c) => !c.resolved_at);
+  const count = countOpenCommentThreads(all);
+  if (count === 0) {
+    await ctx.db.patch(conversationId, {
+      unresolved_comment_count: undefined,
+      last_comment_at: undefined,
+      last_comment_author: undefined,
+      last_comment_author_id: undefined,
+      last_comment_excerpt: undefined,
+    });
+    return;
+  }
+  const newest = open.reduce((a, b) => (b.created_at > a.created_at ? b : a));
+  let author = "Agent";
+  let authorId = "agent";
+  if (newest.author_kind !== "agent") {
+    const user = await ctx.db.get(newest.user_id);
+    author = user?.name || user?.github_username || "Someone";
+    authorId = String(newest.user_id);
+  }
+  const text = (newest.content ?? "").replace(/\s+/g, " ").trim();
+  await ctx.db.patch(conversationId, {
+    unresolved_comment_count: count,
+    last_comment_at: newest.created_at,
+    last_comment_author: author,
+    last_comment_author_id: authorId,
+    last_comment_excerpt: text.length > 120 ? text.slice(0, 119) + "…" : text,
+  });
+}
+
 type CommentFailure = {
   status: "rejected";
   code: string;
@@ -490,6 +534,7 @@ async function executeCreateComment(
     });
   }
 
+  await refreshCommentSignal(ctx, args.conversation_id);
   return { ok: true, commentId, coverageTarget: transition.coverageTarget };
 }
 
@@ -759,6 +804,7 @@ export const deleteComment = mutation({
     }
 
     await deleteCommentWithRevision(ctx, comment, conversation);
+    await refreshCommentSignal(ctx, comment.conversation_id);
 
     return true;
   },
@@ -847,6 +893,7 @@ export const deleteCommentV2 = mutation({
         "receipt",
         async (writer) => await writer.delete(validated.value.comment._id),
       );
+      await refreshCommentSignal(ctx, args.conversation_id);
       return {
         status: "acknowledged" as const,
         result: {
@@ -894,6 +941,7 @@ export const resolveThread = mutation({
         });
       }
     });
+    await refreshCommentSignal(ctx, args.conversation_id);
     return thread.length;
   },
 });
@@ -1272,5 +1320,21 @@ export const mirrorAgentReply = internalMutation({
     const content = reply.content || "";
     if (comment.content === content && comment.agent_status === "done") return;
     await patchCommentWithRevision(ctx, comment, { content, agent_status: "done" });
+    await refreshCommentSignal(ctx, comment.conversation_id);
+  },
+});
+
+// One-time backfill: stamp the denormalized comment signal onto every
+// conversation that already has comments. Safe to re-run (full recompute).
+// Run with: npx convex run comments:backfillCommentSignals
+export const backfillCommentSignals = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("comments").collect();
+    const conversationIds = new Set(all.map((c) => String(c.conversation_id)));
+    for (const id of conversationIds) {
+      await refreshCommentSignal(ctx, id as Id<"conversations">);
+    }
+    return conversationIds.size;
   },
 });
