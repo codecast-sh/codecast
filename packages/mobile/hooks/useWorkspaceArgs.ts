@@ -10,7 +10,10 @@ type WorkspaceArgs =
 export function useWorkspaceArgs(): WorkspaceArgs {
   const user = useQuery(api.users.getCurrentUser);
   if (!user) return "skip";
-  const teamId = (user.active_team_id || user.team_id) as Id<"teams"> | undefined;
+  // Canonical pointer only: users.active_team_id. Unset MEANS the personal
+  // workspace — falling back to user.team_id made personal unreachable and
+  // disagreed with web (which reads the mirrored client pointer).
+  const teamId = user.active_team_id as Id<"teams"> | undefined;
   if (teamId) return { team_id: teamId, workspace: "team" };
   return { workspace: "personal" };
 }
@@ -18,7 +21,7 @@ export function useWorkspaceArgs(): WorkspaceArgs {
 export function useActiveTeam() {
   const user = useQuery(api.users.getCurrentUser);
   const teams = useQuery(api.teams.getUserTeams);
-  const teamId = (user?.active_team_id || user?.team_id) as Id<"teams"> | undefined;
+  const teamId = user?.active_team_id as Id<"teams"> | undefined;
   const activeTeam = teams?.find((t) => t?._id === teamId);
   const validTeams = (teams?.filter((t: any) => Boolean(t)) ?? []) as NonNullable<NonNullable<typeof teams>[number]>[];
   return { user, teamId, activeTeam, validTeams };

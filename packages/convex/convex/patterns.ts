@@ -1,6 +1,8 @@
 import { mutation } from "./functions";
 import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
+import { teamVisibleConvTeam } from "./privacy";
+import { computeWorkspaceKey } from "./lib/access";
 
 export const create = mutation({
   args: {
@@ -45,16 +47,25 @@ export const create = mutation({
       }
     }
 
+    const sourceConv = conversationId ? await ctx.db.get(conversationId) : null;
     let teamId = user.team_id;
-    if (conversationId) {
-      const conv = await ctx.db.get(conversationId);
-      if (conv?.team_id) teamId = conv.team_id;
+    if (sourceConv) {
+      // Only a team-VISIBLE source session donates its team; a private session's
+      // routing team_id must not become a team-readable pattern grant.
+      const visibleTeam = teamVisibleConvTeam(sourceConv);
+      if (visibleTeam) teamId = visibleTeam;
     }
 
     const now = Date.now();
     const id = await ctx.db.insert("patterns", {
       user_id: result.userId,
       team_id: teamId,
+      // Stored access key, computed from the same rule at write time: a private
+      // source session makes this pattern personal to its owner.
+      workspace: computeWorkspaceKey(
+        { user_id: result.userId, team_id: teamId },
+        sourceConv,
+      ),
       name: args.name,
       description: args.description,
       content: args.content,

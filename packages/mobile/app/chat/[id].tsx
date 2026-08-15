@@ -13,6 +13,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
 import { buildChatTimeline } from '@codecast/shared/chat';
 import { MessageRow, DayDivider, NewDivider, type MobileChatMessage } from '@/components/chat/MessageRow';
+import { dmOtherIds } from '@codecast/shared/chat';
 import { MentionStrip, type MentionCandidate } from '@/components/chat/MentionStrip';
 import { memberHandle } from '@codecast/shared/chat';
 
@@ -244,6 +245,7 @@ export default function ChatChannelScreen() {
       mentionsMe: (m.mentions ?? []).some((id: any) => String(id) === viewerId) || m.mention_scope === 'here',
       agentStatus: m.agent_status,
       agentDeadlineAt: m.agent_deadline_at,
+      attachments: m.attachments?.length ? m.attachments : undefined,
       reactions: reactionsByMessage.get(String(m._id)),
       thread: thread
         ? {
@@ -340,6 +342,18 @@ export default function ChatChannelScreen() {
     );
   }, [now, router, channelId, onLongPress, toggleReaction, stopAnchor, onRetrySend]);
 
+  const isDm = channel?.kind === 'dm';
+  const roomName = (() => {
+    if (!isDm) return channel?.name ?? 'channel';
+    const others = dmOtherIds(channel?.dm_key, viewerId);
+    if (others.length === 0) return 'Direct message';
+    const names = others.map((id) => {
+      const m = memberById.get(id);
+      return m?.name || m?.github_username || 'Teammate';
+    });
+    return others.length > 1 ? names.map((n) => n.split(/\s+/)[0]).join(', ') : names[0];
+  })();
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
@@ -348,11 +362,11 @@ export default function ChatChannelScreen() {
           <FontAwesome name="chevron-left" size={16} color={Theme.textMuted} />
         </TouchableOpacity>
         <FontAwesome
-          name={channel?.is_private ? 'lock' : 'hashtag'}
+          name={isDm ? 'user' : channel?.is_private || channel?.kind === 'private' ? 'lock' : 'hashtag'}
           size={13}
           color={Theme.textMuted0}
         />
-        <RNText style={styles.title} numberOfLines={1}>{channel?.name ?? 'channel'}</RNText>
+        <RNText style={styles.title} numberOfLines={1}>{roomName}</RNText>
         {!!channel?.topic && (
           <RNText style={styles.topic} numberOfLines={1}>{channel.topic}</RNText>
         )}
@@ -380,7 +394,7 @@ export default function ChatChannelScreen() {
               <RNView style={styles.emptyWrap}>
                 {/* The list is inverted, so un-invert the empty state. */}
                 <RNView style={{ transform: [{ scaleY: -1 }] }}>
-                  <RNText style={styles.emptyTitle}>#{channel?.name ?? 'channel'} is quiet</RNText>
+                  <RNText style={styles.emptyTitle}>{isDm ? roomName : `#${channel?.name ?? 'channel'}`} is quiet</RNText>
                   <RNText style={styles.emptySub}>Say something to start it off.</RNText>
                 </RNView>
               </RNView>
@@ -394,7 +408,7 @@ export default function ChatChannelScreen() {
         <RNView style={styles.composer}>
           <ThemedTextInput
             style={styles.input}
-            placeholder={`Message #${channel?.name ?? ''}`}
+            placeholder={isDm ? `Message ${roomName}` : `Message #${channel?.name ?? ''}`}
             placeholderTextColor={Theme.textMuted0}
             value={draft}
             onChangeText={setDraft}

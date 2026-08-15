@@ -4017,4 +4017,28 @@ cliRoute("/cli/artifacts/delete", async (ctx, body) => ctx.runMutation(api.artif
 // scripts run, but the page can never touch convex.codecast.sh state.
 http.route({ pathPrefix: "/cli/a/", method: "GET", handler: artifactServe });
 
+// One-click unsubscribe for the notification digest (emails/digest.ts). Lives
+// under /cli/ because Caddy forwards only that prefix to HTTP actions. GET
+// serves the human clicking the footer link; POST serves RFC 8058 one-click
+// (Gmail/Yahoo fire it without opening a page). Token-bearing and idempotent.
+const emailUnsubscribe = httpAction(async (ctx, request) => {
+  const token = new URL(request.url).searchParams.get("token") ?? "";
+  const result: { ok: boolean } = await ctx.runMutation(
+    internal.emails.digest.unsubscribeByToken,
+    { token },
+  );
+  if (request.method === "POST") {
+    return new Response(result.ok ? "ok" : "unknown token", { status: result.ok ? 200 : 404 });
+  }
+  const body = result.ok
+    ? `<h1>You're unsubscribed</h1><p>Codecast will no longer email you notification digests. Turn them back on any time in <a href="https://codecast.sh/settings/notifications">notification settings</a>.</p>`
+    : `<h1>Link expired</h1><p>This unsubscribe link is no longer valid. Manage email in <a href="https://codecast.sh/settings/notifications">notification settings</a>.</p>`;
+  return new Response(
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Codecast</title><style>body{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;background:#eee8d5;color:#002b36;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}main{background:#fdf6e3;border:1px solid #d9d2bc;border-top:3px solid #e86c5d;border-radius:14px;padding:40px;max-width:440px}h1{font-size:20px;margin:0 0 12px}p{font-size:14px;line-height:1.7;margin:0}a{color:#c2543f}</style></head><body><main>${body}</main></body></html>`,
+    { status: result.ok ? 200 : 404, headers: { "Content-Type": "text/html; charset=utf-8" } },
+  );
+});
+http.route({ path: "/cli/email/unsubscribe", method: "GET", handler: emailUnsubscribe });
+http.route({ path: "/cli/email/unsubscribe", method: "POST", handler: emailUnsubscribe });
+
 export default http;

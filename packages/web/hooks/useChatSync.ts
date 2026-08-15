@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConvex } from "convex/react";
+import { useRouter } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import {
   useInboxStore,
@@ -369,6 +370,22 @@ export function useChatMembers(): { members: ChatMember[]; byId: Map<string, Cha
     // The signature is the dep, not the array: teamMembers re-pushes on heartbeats.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig, viewerId, me]);
+}
+
+/** Open (or create) the DM with these teammates and go there. Local-first:
+ *  openDmChannel answers in the same tick — an existing room's real id or a
+ *  stub the server row supersedes — so the navigation never waits. One hook
+ *  for the modal, the rail's suggestions and the sidebar's, so "how a DM
+ *  opens" is decided in exactly one place. */
+export function useOpenDm(): (memberIds: string[]) => void {
+  const router = useRouter();
+  return useCallback(
+    (memberIds: string[]) => {
+      const channelId = useInboxStore.getState().openDmChannel(memberIds);
+      router.push(`/chat/${channelId}`);
+    },
+    [router],
+  );
 }
 
 /** The channel rail, already sorted and counted. */

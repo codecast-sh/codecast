@@ -7,7 +7,7 @@ declare global {
       onUpdateStatus: (cb: (status: { status: string; version?: string; percent?: number }) => void) => void;
       restartForUpdate: () => Promise<void>;
       checkForUpdate: (opts?: { manual?: boolean }) => Promise<void>;
-      showNotification: (title: string, body: string, data?: { conversationId?: string }) => Promise<void>;
+      showNotification: (title: string, body: string, data?: { conversationId?: string; route?: string }) => Promise<void>;
       getShortcuts: () => Promise<Record<string, string>>;
       getShortcutConfig: () => Promise<DesktopShortcutConfig>;
       setShortcut: (key: string, accelerator: string) => Promise<Record<string, string>>;
@@ -31,10 +31,34 @@ declare global {
       detachTab: (path: string) => Promise<void>;
       attachTab: (path: string) => Promise<void>;
       onAdoptTab: (cb: (path: string) => void) => void;
+      // Screen-share primitives (huddles). The shell lists capturable
+      // screens/windows and lets the web pre-select one for the NEXT
+      // getDisplayMedia; the picker UI itself is web-owned. Absent on older
+      // builds — gate on them (a missing selectDisplaySource means the shell
+      // captures the primary screen on its own).
+      getDisplaySources?: (opts?: { types?: Array<"screen" | "window"> }) => Promise<DesktopDisplaySource[]>;
+      selectDisplaySource?: (id: string | null) => Promise<boolean>;
+      // Read (no arg) or additively extend (patch) the shell's capability
+      // grant table. Persisted in the shell's settings; lets the web layer
+      // light up a new permission-gated feature without a desktop release.
+      // Absent on older builds — gate on it.
+      hostPolicy?: (patch?: { permissions?: string[]; hosts?: string[] }) => Promise<{
+        permissions: string[];
+        hosts: string[];
+        version: string;
+      } | null>;
       platform: string;
     };
   }
 }
+
+export type DesktopDisplaySource = {
+  id: string;
+  name: string;
+  kind: "screen" | "window";
+  /** data: URL thumbnail, ~320px wide. */
+  thumbnail: string;
+};
 
 export function isElectron(): boolean {
   return typeof window !== "undefined" && !!window.__CODECAST_ELECTRON__;
@@ -201,19 +225,26 @@ export async function requestNotificationPermission(): Promise<boolean> {
   return result === "granted";
 }
 
-export async function notifyNative(title: string, body: string, data?: { conversationId?: string }) {
+export async function notifyNative(
+  title: string,
+  body: string,
+  data?: { conversationId?: string; route?: string },
+) {
   // OS notifications are for the unfocused app: when the window has focus the
   // user already sees the bell/inbox update (and hears the idle sound), so a
   // native banner on top is noise. Applies to desktop and browser alike.
   if (typeof document !== "undefined" && document.hasFocus()) return;
+  // One click target per banner: an explicit route (chat, tasks, docs) wins,
+  // else the conversation. Electron receives both and applies the same rule.
+  const route = data?.route ?? (data?.conversationId ? `/conversation/${data.conversationId}` : undefined);
   if (isElectron()) {
-    bridge("showNotification")?.(title, body, data);
+    bridge("showNotification")?.(title, body, { ...data, route });
   } else if (hasBrowserNotificationPermission()) {
-    const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId });
-    if (data?.conversationId) {
+    const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId ?? route });
+    if (route) {
       n.onclick = () => {
         window.focus();
-        window.location.href = `/conversation/${data.conversationId}`;
+        window.location.href = route;
       };
     }
   }

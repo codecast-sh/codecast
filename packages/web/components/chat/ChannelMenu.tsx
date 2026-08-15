@@ -13,6 +13,8 @@ import {
 } from "../ui/context-menu";
 import { useInboxStore } from "../../store/inboxStore";
 import type { ChatNotifyLevel } from "../../store/chatSlice";
+import { channelDisplayName } from "../../lib/chatViews";
+import { dmOtherIds } from "@codecast/shared/chat";
 import "./chat.css";
 
 // The one channel-management surface, on the app's one menu system.
@@ -28,10 +30,13 @@ import "./chat.css";
 // Every write is an optimistic store action; the server's creator-or-admin
 // check reconciles afterward if it must.
 
+// Slack's three levels, in Slack's words, so nobody has to learn a second
+// vocabulary for the same idea. "Just mentions" is the join-time default and
+// covers everything addressed to you: @you, @here, your threads, DMs.
 const NOTIFY_LEVELS: { value: ChatNotifyLevel; label: string; hint: string }[] = [
-  { value: "all", label: "All messages", hint: "toasts" },
-  { value: "mentions", label: "Mentions only", hint: "when named" },
-  { value: "none", label: "Nothing", hint: "badge only" },
+  { value: "all", label: "All new posts", hint: "every message" },
+  { value: "mentions", label: "Just mentions", hint: "default" },
+  { value: "none", label: "Mute", hint: "badge only" },
 ];
 
 export type ChannelMenuPayload = {
@@ -61,11 +66,22 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
     <>
       <ContextMenu state={state}>
         {(p) => {
-          const channel = useInboxStore.getState().chatChannels[p.channelId];
+          const s = useInboxStore.getState();
+          const channel = s.chatChannels[p.channelId];
           if (!channel) return null;
+          // A DM has no name, no topic and no archive: its identity is who is
+          // in it, so the menu offers exactly what remains — how loudly it may
+          // interrupt. The header wears the same live-derived name as the rail.
+          const isDm = channel.kind === "dm";
+          const title = isDm
+            ? channelDisplayName(
+                { name: "", kind: "dm", dmMemberIds: dmOtherIds(channel.dm_key, (s as any).currentUser?._id ?? "") },
+                (s as any).teamMembers,
+              )
+            : `#${channel.name}`;
           return (
             <>
-              <CtxHeader title={`#${channel.name}`} />
+              <CtxHeader title={title} />
               <CtxLabel>Notifications</CtxLabel>
               {NOTIFY_LEVELS.map((level) => (
                 <CtxCheckItem
@@ -77,8 +93,8 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
                   <span className="ml-auto pl-4 text-[10.5px] text-sol-text-dim">{level.hint}</span>
                 </CtxCheckItem>
               ))}
-              <CtxSeparator />
-              <CtxItem
+              {!isDm && <CtxSeparator />}
+              {!isDm && <CtxItem
                 icon={Pencil}
                 onSelect={(e: Event) => {
                   // The menu closes; the editor opens at the same anchor.
@@ -88,8 +104,8 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
                 }}
               >
                 Rename channel
-              </CtxItem>
-              <CtxItem
+              </CtxItem>}
+              {!isDm && <CtxItem
                 icon={Text}
                 onSelect={(e: Event) => {
                   e.preventDefault();
@@ -98,9 +114,9 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
                 }}
               >
                 {channel.topic ? "Edit topic" : "Set topic"}
-              </CtxItem>
-              <CtxSeparator />
-              <CtxItem
+              </CtxItem>}
+              {!isDm && <CtxSeparator />}
+              {!isDm && <CtxItem
                 icon={Archive}
                 danger
                 onSelect={() => {
@@ -109,7 +125,7 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
                 }}
               >
                 Archive channel
-              </CtxItem>
+              </CtxItem>}
             </>
           );
         }}

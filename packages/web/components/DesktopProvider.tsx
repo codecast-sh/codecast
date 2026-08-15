@@ -23,6 +23,7 @@ import {
 } from "../lib/desktop";
 import { showBrowserHandoffToast } from "./BrowserHandoffToast";
 import { cleanNotificationBody } from "../lib/notificationText";
+import { notificationRoute } from "../lib/notificationTypes";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { usePresenceReporter } from "../hooks/usePresenceReporter";
@@ -116,7 +117,10 @@ export function DesktopProvider() {
         const actor = n.actor?.name || n.actor?.github_username;
         const title = actor ? `${actor}` : "Codecast";
         const body = cleanNotificationBody(n.message) || n.message;
-        notifyNative(title, body, { conversationId: n.conversation_id });
+        // The same click target the bell computes: a chat banner lands on the
+        // message, a task banner on the task — not just "the app, focused".
+        const route = notificationRoute(n.entity_type, n.entity_id, n.chat_message_id) ?? undefined;
+        notifyNative(title, body, { conversationId: n.conversation_id, route });
       }
     }
     seenIdsRef.current = new Set(notifications.map((n) => n._id));

@@ -20,7 +20,7 @@ import { InboxConversation } from "./GlobalSessionPanel";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { animatedHideSession } from "../store/undoActions";
 import { getSessionRenderKey } from "../store/inboxStore";
-import { splitFleetBands, fleetTileMeta, fleetProgress, type FleetBand, type FleetBands } from "./fleetBands";
+import { splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, fleetProgress, type FleetBand, type FleetBands } from "./fleetBands";
 
 // The fleet board: the inbox home surface when clientState.ui.inbox_home is
 // "board" (the default). Every visible session as a dense two-line tile,
@@ -37,17 +37,42 @@ import { splitFleetBands, fleetTileMeta, fleetProgress, type FleetBand, type Fle
 // useCoarseNow(15s), one shared timer. Do not add a dep on `s.sessions` or on
 // a whole row here.
 
-const TONE_CLASS: Record<string, string> = {
-  amber: "text-sol-yellow",
-  red: "text-sol-red",
-  green: "text-sol-text-dim",
-  dim: "text-sol-text-dim",
+// Four visual levels per tile, in reading order:
+//   1. TITLE   — the anchor: largest, heaviest, full-contrast.
+//   2. STATE   — the second beat: bold, COLORED by meaning (amber = your move,
+//                red = broken, green = alive, grey = done). This is what you
+//                scan a band by, so it must be the loudest thing after the title.
+//   3. BODY    — the summary: normal weight, muted, readable, clamped.
+//   4. FOOTER  — project · model · msgs: smallest, dimmest, uppercase tracking
+//                so it reads as metadata, not content.
+// A colored rail on the tile's left edge repeats the state color so a band
+// reads as a color field even before you read a word.
+const TONE: Record<string, { text: string; rail: string }> = {
+  amber: { text: "text-sol-yellow", rail: "bg-sol-yellow" },
+  red: { text: "text-sol-red", rail: "bg-sol-red" },
+  green: { text: "text-sol-green", rail: "bg-sol-green" },
+  dim: { text: "text-sol-text-dim", rail: "bg-sol-border" },
 };
 
-const BAND_META: Record<FleetBand, { label: string; accent: string; box: string }> = {
-  needsYou: { label: "NEEDS YOU", accent: "text-sol-yellow", box: "border-sol-yellow/30 bg-sol-yellow/[0.03]" },
-  running: { label: "RUNNING", accent: "text-sol-green", box: "border-sol-border/40" },
-  finished: { label: "FINISHED", accent: "text-sol-text-dim", box: "border-sol-border/30" },
+const BAND_META: Record<FleetBand, { label: string; accent: string; box: string; count: string }> = {
+  needsYou: {
+    label: "NEEDS YOU",
+    accent: "text-sol-yellow",
+    box: "border-sol-yellow/40 bg-sol-yellow/[0.05]",
+    count: "bg-sol-yellow text-sol-bg",
+  },
+  running: {
+    label: "RUNNING",
+    accent: "text-sol-green",
+    box: "border-sol-green/30 bg-sol-green/[0.045]",
+    count: "bg-sol-green text-sol-bg",
+  },
+  finished: {
+    label: "FINISHED",
+    accent: "text-sol-text-dim",
+    box: "border-transparent bg-sol-bg-alt/40",
+    count: "bg-sol-border/60 text-sol-text-dim",
+  },
 };
 
 /** The Board / Feed switch — writes the persisted per-user pref. */
@@ -77,22 +102,58 @@ const FleetTile = memo(function FleetTile({
   onOpen: (id: string) => void;
 }) {
   const meta = fleetTileMeta(session, band, now);
+  const tone = TONE[meta.tone];
+  const context = fleetTileContext(session);
+  // The blocker line already carries the substance on a needs-you tile; the
+  // summary only earns its rows where the state line is generic.
+  const summary = band === "needsYou" ? "" : fleetTileSummary(session, now);
   const title = cleanTitle(session.title ?? "") || "Untitled";
+  const finished = band === "finished";
   return (
     <button
       onClick={() => onOpen(session._id)}
-      title={`${title}\n${meta.text}`}
-      className="relative text-left min-w-0 rounded-md border border-sol-border/40 bg-sol-card hover:border-sol-blue/50 hover:bg-sol-bg-highlight/40 transition-colors px-2 pt-1.5 pb-2 overflow-hidden"
+      title={`${title}\n${context}\n${meta.text}${summary ? `\n${summary}` : ""}`}
+      className={`group relative flex min-w-0 flex-col items-stretch overflow-hidden rounded-md border text-left transition-colors ${
+        band === "needsYou"
+          ? "border-sol-yellow/50 bg-sol-card shadow-sm hover:border-sol-yellow hover:shadow"
+          : band === "running"
+          ? "border-sol-green/35 bg-[color-mix(in_srgb,var(--sol-green)_6%,var(--sol-card))] shadow-sm hover:border-sol-green/70 hover:shadow"
+          : "border-sol-border/30 bg-transparent hover:bg-sol-card hover:border-sol-border/60"
+      } pl-3 pr-2.5 pt-2 pb-2.5`}
     >
-      <span className="flex items-center gap-1.5 min-w-0">
-        <LivenessDot state={sessionLivenessState(session)} size="xs" className="flex-shrink-0" />
-        <span className="truncate text-xs font-medium text-sol-text leading-4">{title}</span>
+      {/* State rail: the band's color, at the edge, before any text. */}
+      <span className={`absolute inset-y-0 left-0 ${finished ? "w-[2px] opacity-30" : "w-[4px] opacity-100"} ${tone.rail}`} />
+
+      {/* 1. Title — the anchor. */}
+      <span className="flex items-start gap-1.5 min-w-0">
+        <LivenessDot state={sessionLivenessState(session)} size="xs" className="mt-[5px] flex-shrink-0" />
+        <span className={`line-clamp-2 text-[13px] leading-[1.2] tracking-tight ${finished ? "font-medium text-sol-text-muted" : "font-bold text-sol-text"}`}>
+          {title}
+        </span>
       </span>
-      <span className={`block truncate text-[10px] leading-4 ${TONE_CLASS[meta.tone]}`}>{meta.text}</span>
+
+      {/* 2. State — bold and colored; the scan target. line-clamp sets
+          display:-webkit-box, so no `block` here or the clamp stops working. */}
+      <span className={`mt-1.5 leading-4 ${tone.text} ${finished ? "text-[10.5px] font-medium" : "text-[11.5px] font-bold"} ${band === "needsYou" ? "line-clamp-2" : "truncate"}`}>
+        {meta.text}
+      </span>
+
+      {/* 3. Body — the summary, readable but clearly subordinate. */}
+      {summary && (
+        <span className={`mt-0.5 line-clamp-2 text-[11px] leading-[1.35] ${finished ? "text-sol-text-dim" : "text-sol-text-muted"}`}>{summary}</span>
+      )}
+
+      {/* 4. Footer — metadata, deliberately the quietest thing on the tile. */}
+      {context && (
+        <span className="mt-auto pt-1.5 block truncate text-[9.5px] uppercase tracking-[0.08em] text-sol-text-dim/70">
+          {context}
+        </span>
+      )}
+
       {band === "running" && (
-        <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-sol-border/30">
+        <span className="absolute bottom-0 left-[3px] right-0 h-[2px] bg-sol-border/25">
           <span
-            className="block h-full bg-sol-green/60"
+            className="block h-full bg-sol-green/70"
             style={{ width: `${Math.round(fleetProgress(session, now) * 100)}%` }}
           />
         </span>
@@ -115,14 +176,17 @@ function BandSection({
   const m = BAND_META[band];
   if (rows.length === 0 && band !== "needsYou") return null;
   return (
-    <section className={`rounded-lg border p-2 ${m.box}`}>
-      <h3 className={`px-1 pb-1.5 text-[10px] font-semibold tracking-[0.15em] ${m.accent}`}>
-        {m.label} ({rows.length})
+    <section className={`rounded-lg border px-2.5 pb-2.5 pt-2 ${m.box}`}>
+      <h3 className={`mb-2 flex items-center gap-2 px-0.5 text-[11px] font-bold tracking-[0.18em] ${m.accent}`}>
+        {m.label}
+        <span className={`rounded-full px-1.5 py-px text-[10px] font-bold tabular-nums tracking-normal ${m.count}`}>
+          {rows.length}
+        </span>
       </h3>
       {rows.length === 0 ? (
         <div className="px-1 pb-1 text-[11px] text-sol-text-dim">nothing needs you right now</div>
       ) : (
-        <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
+        <div className="grid items-stretch gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))" }}>
           {rows.map((s) => (
             <FleetTile key={s._id} session={s} band={band} now={now} onOpen={onOpen} />
           ))}
@@ -182,15 +246,19 @@ function FleetDrillIn() {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      const t = e.target as HTMLElement | null;
+      if (e.key !== "Escape") return;
+      const t = e.target;
       // Escape inside an input means "leave the field", not "leave the visit".
-      if (t?.closest("input, textarea, [contenteditable='true'], [contenteditable=true]")) return;
+      if (t instanceof HTMLElement && t.closest("input, textarea, [contenteditable='true'], [contenteditable=true]")) return;
+      // Capture phase + stopPropagation: while the drill-in is up it is modal,
+      // so its Escape outranks the global shortcut registry (which otherwise
+      // consumes the key before a bubble-phase listener ever sees it).
       e.preventDefault();
+      e.stopPropagation();
       handleClose();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [open, handleClose]);
 
   // A drilled-in row that vanished (killed, pruned) closes itself.

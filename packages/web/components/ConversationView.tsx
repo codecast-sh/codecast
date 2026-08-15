@@ -114,19 +114,23 @@ import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./browser/BrowserWatchSplit";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
+import { inActiveWorkspace } from "../lib/workspaceScope";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
+import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../lib/pollPayload";
+import { dropScrapedProseTwins } from "../lib/proseTwins";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
+import { SessionHuddleButton } from "./calls/OccupancyChip";
 import { FormattedSummary } from "./FormattedSummary";
 import { ThreadStatePanel } from "./ThreadStatePanel";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, normalizeCastCategory, extractCastBodyParts, extractBrowserPageUrl, buildBrowserPageUrlMap, type BrowserRowInput, type CastBodyPart, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, normalizeCastCategory, extractCastBodyParts, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -165,7 +169,7 @@ import { BranchSelector } from "./BranchSelector";
 import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
-import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
+import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2 } from "lucide-react";
@@ -174,7 +178,7 @@ import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentCla
 import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
-import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
+import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
@@ -186,8 +190,9 @@ import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type Res
 // more space-separated words, with an optional trailing space so the popup stays
 // open while you pause mid-phrase. Only an ASCII space extends it — a tab or
 // newline still terminates the mention. The 4-word cap stops it eating a whole
-// sentence, and the dropdown self-hides the instant nothing matches (the items
-// list goes empty), so a stray "@foo bar baz" quietly falls back to prose.
+// sentence, and once a phrase settles on zero matches the trigger latches shut
+// (mentionDeadEndRef below), so a stray "@foo bar baz" quietly falls back to
+// prose instead of re-searching on every keystroke.
 // MENTION_TRIGGER_RE matches at the cursor (text before the caret, $-anchored);
 // MENTION_QUERY_RE re-extracts the same body from the text after the "@".
 // Native textarea autosize (Chromium 123+ / the Electron desktop app): the
@@ -302,12 +307,13 @@ function parseSearchTerms(query: string): string[] {
 
 const HighlightContext = createContext<string | undefined>(undefined);
 
-// toolCallId → the page URL a `cast browser` row was on, carried forward from
-// earlier rows when the row's own output doesn't restate it (most action verbs
-// don't — see buildBrowserPageUrlMap). CastCommandBlock falls back to this for
-// its "open tab" link. Provided by the message feed with a content-stable
-// identity so an unrelated message sync doesn't re-render every cast row.
-const CastBrowserUrlContext = createContext<Record<string, string>>({});
+// toolCallId → the page URL and driven tab a `cast browser` row was on,
+// carried forward from earlier rows when the row's own output doesn't restate
+// them (most action verbs don't — see buildBrowserRowMap). CastCommandBlock
+// falls back to this for its "open tab" link. Provided by the message feed
+// with a content-stable identity so an unrelated message sync doesn't
+// re-render every cast row.
+const CastBrowserRowContext = createContext<Record<string, BrowserRowState>>({});
 
 type ReactMarkdownProps = ComponentProps<typeof ReactMarkdownBase>;
 
@@ -2165,7 +2171,7 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
     return { message: body || "The model could not complete this turn.", isClientError: true };
   }
 
-  // Banner detection (auth / limit / connection) shares the backend's
+  // Banner detection (auth / limit / connection / fatal) shares the backend's
   // classifier in @codecast/shared/contracts: anchored prefixes + a length cap
   // keep a long prose reply that merely opens like a banner from rendering as
   // a card. The generic "API Error:"-prefixed form keeps its original anchored
@@ -2176,7 +2182,7 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   const isConnection = bannerKind === "connection";
   const isFatal = bannerKind === "fatal";
   const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
-  if (!isAuth && !isLimit && !isConnection && !match) return null;
+  if (!isAuth && !isLimit && !isConnection && !isFatal && !match) return null;
 
   // The status code may be the leading "API Error: NNN" (generic form) or
   // embedded in an auth banner ("Please run /login · API Error: 401 …").
@@ -4863,35 +4869,6 @@ function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: st
   );
 }
 
-// The agent drives ONE stateful cast-browser page, so its mirror on the human
-// side is one tab: every "open tab" click lands in the same named tab and
-// focuses it, never a new one. The window name makes reuse survive reloads of
-// this app; the kept ref lets a same-URL re-click just focus without reloading
-// the page. Named reuse requires an opener relationship, so no noopener here.
-const CAST_BROWSER_TAB_NAME = "codecast-cast-browser";
-let castBrowserTab: Window | null = null;
-let castBrowserTabUrl: string | null = null;
-function openCastBrowserTab(url: string) {
-  const tab = castBrowserTab;
-  if (tab && !tab.closed) {
-    // Navigate through the kept ref, not window.open(url, name): Chrome resets
-    // a tab's window name once it navigates cross-origin, so a named reopen
-    // can miss the tab and mint a duplicate. Setting location and focus() are
-    // both allowed on a cross-origin WindowProxy.
-    try {
-      if (castBrowserTabUrl !== url) tab.location.href = url;
-      castBrowserTabUrl = url;
-      tab.focus();
-      return;
-    } catch {
-      // ref unusable — reopen below
-    }
-  }
-  castBrowserTab = window.open(url, CAST_BROWSER_TAB_NAME);
-  castBrowserTabUrl = url;
-  castBrowserTab?.focus();
-}
-
 function CastCommandBlock({ tool, result, images, globalImageMap, conversationId }: { tool: ToolCall; result?: ToolResult; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]>; conversationId?: Id<"conversations"> }) {
   const [expanded, setExpanded] = useState(false);
   const convex = useConvex();
@@ -5006,25 +4983,24 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
   }, [args]);
 
   // `cast browser …` drives a page in the cloned Chrome. The CLI prints the
-  // page URL on its own line (pageLine / "→ navigated to") only for some verbs,
-  // so the row's own output wins when it has one, and otherwise the
-  // conversation-level carry-forward map supplies the page the browser was
-  // already on (see CastBrowserUrlContext).
-  const carriedBrowserUrls = useContext(CastBrowserUrlContext);
+  // page URL and the tab id ("tab 4A2CDC7E") only after some verbs, so the
+  // row's own output wins when it has them, and otherwise the
+  // conversation-level carry-forward map supplies the page and tab the browser
+  // was already on (see CastBrowserRowContext).
+  const carriedBrowserRows = useContext(CastBrowserRowContext);
   const browserUrl = useMemo(() => {
     if (cat !== "browser") return null;
-    return extractBrowserPageUrl(subcommand, args, output) ?? carriedBrowserUrls[tool.id] ?? null;
-  }, [cat, subcommand, args, output, carriedBrowserUrls, tool.id]);
+    return extractBrowserPageUrl(subcommand, args, output) ?? carriedBrowserRows[tool.id]?.url ?? null;
+  }, [cat, subcommand, args, output, carriedBrowserRows, tool.id]);
 
-  // The tab this command acted on ("tab 4A2CDC7E — next: …"). When the viewer
-  // is on the session's machine, clicking "open tab" raises that real tab in
-  // the driven Chrome instead of opening a fresh copy of the page; anywhere
-  // else — other machine, daemon down, tab closed — the click quietly falls
-  // back to the URL. See lib/browserFocus.ts.
-  const browserTabId = useMemo(
-    () => (cat === "browser" ? extractBrowserTabId(output) : null),
-    [cat, output],
-  );
+  // "open tab" raises that real tab in the driven Chrome (lib/browserFocus.ts)
+  // and does nothing else: if the tab is gone, the browser stopped, or the
+  // viewer is on another machine, the click is a no-op — never a fresh copy
+  // of the page.
+  const browserTabId = useMemo(() => {
+    if (cat !== "browser") return null;
+    return extractBrowserTabId(output) ?? carriedBrowserRows[tool.id]?.tabId ?? null;
+  }, [cat, output, carriedBrowserRows, tool.id]);
   // Discovery of the daemon's loopback endpoint can outlast a click's
   // activation window, so start it as soon as a row that can focus a tab
   // renders — by the time the human clicks, the endpoint is cached.
@@ -5139,33 +5115,21 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
           <span className="group-hover:underline">{cat}{subLabel ? ` ${subLabel}` : ""}</span>
         </span>
         {renderSummary()}
-        {browserUrl && (
+        {browserTabId && (
           <a
-            href={browserUrl}
-            target={CAST_BROWSER_TAB_NAME}
+            href={browserUrl ?? undefined}
+            target="_blank"
+            rel="noopener noreferrer"
             className={BROWSER_ROW_PILL}
-            // Warm the endpoint cache on hover so the focus attempt on click
-            // resolves inside the popup-blocker's activation window.
-            onMouseEnter={browserTabId ? () => prefetchBrowserFocusEndpoint(convex) : undefined}
+            onMouseEnter={() => prefetchBrowserFocusEndpoint(convex)}
             onClick={(e) => {
               e.stopPropagation();
-              // Modified clicks keep their native new-tab/window behavior.
+              // Modified clicks keep their native open-the-URL behavior.
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
               e.preventDefault();
-              const url = browserUrl;
-              if (!browserTabId) {
-                // No driven tab to raise: reuse the one named mirror tab.
-                if (url) openCastBrowserTab(url);
-                return;
-              }
-              // Try to raise the REAL driven tab first; only a confirmed focus
-              // suppresses the navigation. Otherwise fall back to the named
-              // mirror tab so repeated clicks never pile up new tabs.
-              void focusBrowserTab(convex, browserTabId).then((focused) => {
-                if (!focused && url) openCastBrowserTab(url);
-              });
+              void focusBrowserTab(convex, browserTabId);
             }}
-            title={browserTabId ? `${browserUrl}\nfocuses the driven tab ${browserTabId} when it's on this machine` : browserUrl}
+            title={`focus tab ${browserTabId} in the agent's browser${browserUrl ? `\n${browserUrl}` : ""}`}
           >
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -5552,12 +5516,8 @@ function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage 
 
 const _askUserSentState = new Map<string, Record<number, Array<{ key: string; label: string; text?: string }>>>();
 
-// Claude Code appends two synthetic affordance rows to every AskUserQuestion menu —
-// "Type something" (free text) and "Chat about this" (escape hatch). On a prompt scraped
-// from the terminal (no JSONL sidecar) they arrive as bare options; the web has its own
-// "Other" free-text affordance, so rendering them too is redundant clutter. Mirrors the
-// daemon's SYNTHETIC_OPTION so scraped polls render as clean as sidecar-sourced ones.
-const SYNTHETIC_POLL_OPTION = /^(?:type something\.?|chat about this)$/i;
+// The poll wire format (option keys, free-text decline, submit chords) lives in
+// lib/pollPayload so the decision queue answers polls the exact same way.
 
 // The check glyph shown in a selected poll option's index slot / pill.
 function PollCheckIcon({ className }: { className?: string }) {
@@ -5602,49 +5562,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   const isInteractive = !result && !!onSendMessage && !sent;
   const allAnswered = needsSubmit && questions.every((_, i) => (selections[i]?.length ?? 0) > 0);
 
-  const buildPayload = (sels: typeof selections) => {
-    const sorted = Object.keys(sels).sort((a, b) => Number(a) - Number(b));
-    const hasText = sorted.some(k => sels[Number(k)].some(s => s.text !== undefined));
-    const display = sorted.map(k => sels[Number(k)].map(s => s.label).join(", ")).join(", ");
-    if (hasText) {
-      // Claude Code's AskUserQuestion menu only accepts the listed options — there's no
-      // inline free-text slot. So a custom ("Other") answer can't be entered through the
-      // menu, and answering even one question with free text means the menu can't be used
-      // for the others either: the only way to enter free text is to decline the whole
-      // set (Escape) and type at the prompt, which discards every menu pick. Convert all
-      // answers to prose and send it as the daemon's decline-then-type `text` so the agent
-      // still gets every answer. (Driving a digit per question and Escaping for the text
-      // declined the poll mid-loop and spilled the leftover option digits into the
-      // reopened prompt box — the "211" bug, 2026-06-27.)
-      const text = sorted.map(k => {
-        const qSels = sels[Number(k)];
-        const ans = qSels.map(s => s.text ?? s.label).join(", ");
-        if (sorted.length === 1) return ans;
-        const q = questions[Number(k)];
-        const id = (q?.header?.trim()) || q?.question?.replace(/\s+/g, " ").trim().slice(0, 60) || `Q${Number(k) + 1}`;
-        return `${id}: ${ans}`;
-      }).join("\n\n");
-      return JSON.stringify({ __cc_poll: true, text, display });
-    }
-    // Key protocol (verified in tmux against Claude Code 2.1.201): on a multiSelect
-    // question a digit TOGGLES that option's checkbox and the menu stays up; Right
-    // advances to the next tab. Any multi-question or multiSelect form then parks on a
-    // "Review your answers" pane whose cursor sits on "1. Submit answers" — the trailing
-    // Enter confirms it. `multi` tells the daemon these digits are toggles, so its
-    // digit-didn't-advance heuristic must not "confirm" them with Enter (which would
-    // re-toggle the highlighted row).
-    const keys: string[] = [];
-    for (const k of sorted) {
-      const qSels = sels[Number(k)];
-      if (questions[Number(k)]?.multiSelect) {
-        keys.push(...qSels.map(s => s.key).sort((a, b) => Number(a) - Number(b)), "Right");
-      } else {
-        keys.push(qSels[0].key);
-      }
-    }
-    if (needsSubmit) keys.push("Enter");
-    return JSON.stringify({ __cc_poll: true, keys, display, ...(anyMultiSelect ? { multi: true } : {}) });
-  };
+  const buildPayload = (sels: typeof selections) => buildPollPayload(questions, sels);
 
   const handleSubmitAll = () => {
     if (!onSendMessage || !allAnswered) return;
@@ -5714,7 +5632,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 const on = isSelected || isLocalSelected;
                 const choose = () => {
                   setOtherOpen(prev => ({ ...prev, [i]: false }));
-                  const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
+                  const pollKey = pollKeyForOption(j, isConfirmation);
                   const sel = { key: pollKey, label: cleanLabel };
                   if (q.multiSelect) {
                     // Checkbox semantics: clicking toggles; Submit sends.
@@ -9177,7 +9095,7 @@ function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolL
   );
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -9398,13 +9316,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           // tells about what the send will do.
           if (chatMentionMode && m.type === "label") continue;
           if (chatMentionMode && m.type === "person" && !m.handle) continue;
-          if (acQuery) {
-            const hit =
-              matchScore(m.label, acQuery) !== Infinity ||
-              (m.shortId && m.shortId.toLowerCase().includes(acQuery)) ||
-              (m.sublabel ? matchScore(m.sublabel, acQuery) !== Infinity : false);
-            if (!hit) continue;
-          }
+          if (!mentionItemMatches(m, acQuery)) continue;
           const c = perType[m.type] || 0;
           if (c >= perTypeCap) continue;
           perType[m.type] = c + 1;
@@ -9470,6 +9382,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   }, [acTrigger, acQuery, skills, acServerItems, localMentionTick, chatMentionMode]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
+
+  // A multi-word @ query that has settled on zero matches is prose, not a
+  // mention: every word must hit, so typing more can never bring matches back.
+  // Close the trigger and remember where it died; handleMessageChange keeps it
+  // closed while the query only grows, and lets it reopen once the user
+  // deletes back past that point. Without this every further keystroke would
+  // reopen the popup on a spinner and fire another server search.
+  const mentionDeadEndRef = useRef<{ startPos: number; len: number } | null>(null);
+  useEffect(() => {
+    if (!acTrigger || acTrigger.type !== "@" || acServerLoading) return;
+    if (acItems.length > 0 || !acQuery.includes(" ")) return;
+    mentionDeadEndRef.current = { startPos: acTrigger.startPos, len: acQuery.length };
+    setAcTrigger(null);
+  }, [acTrigger, acItems, acServerLoading, acQuery]);
 
   const applyAutocomplete = useCallback((item: AcItem) => {
     if (!acTrigger) return;
@@ -10012,8 +9938,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const cursorPos = textareaRef.current?.selectionStart ?? val.length;
       const textBefore = val.slice(0, cursorPos);
       const atMatch = textBefore.match(MENTION_TRIGGER_RE);
-      if (atMatch) {
-        setAcTrigger({ type: "@", startPos: cursorPos - atMatch[0].length });
+      const startPos = atMatch ? cursorPos - atMatch[0].length : -1;
+      const dead = mentionDeadEndRef.current;
+      if (atMatch && dead && dead.startPos === startPos && (atMatch[1] || "").trim().length > dead.len) {
+        // Still extending a mention that already settled on nothing.
+        setAcTrigger(null);
+      } else if (atMatch) {
+        mentionDeadEndRef.current = null;
+        setAcTrigger({ type: "@", startPos });
         setAcIndex(0);
         queryMentions(atMatch[1] || "");
       } else {
@@ -10179,6 +10111,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // user can refer to attachments in prose ("crop it like [Image 2]"). Numbers
   // follow attach order, which is the order the agent receives the images in.
   const addImagePlaceholder = useCallback((n: number) => {
+    // Gate mode (chat): attachments render as their own grid under the message,
+    // so the draft never carries an [Image N] token to point at them.
+    if (onGateSend) return;
     if (composeMode && composeRef.current) {
       composeRef.current.insertText(`${imagePlaceholderToken(n)} `);
       return;
@@ -10204,11 +10139,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         textareaRef.current.selectionStart = textareaRef.current.selectionEnd = next.caret;
       }
     }, 0);
-  }, [composeMode, setMessage]);
+  }, [composeMode, setMessage, onGateSend]);
 
   // The nth image is gone: drop its token and renumber the rest, so what's left
   // still points at the attachments the agent will actually receive.
   const removeImagePlaceholder = useCallback((n: number) => {
+    if (onGateSend) return;
     if (composeMode && composeRef.current) {
       const md = composeRef.current.getMarkdown();
       const next = dropImagePlaceholder(md, n);
@@ -10219,7 +10155,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (next === messageRef.current) return;
     setMessage(next);
     messageRef.current = next;
-  }, [composeMode, setMessage]);
+  }, [composeMode, setMessage, onGateSend]);
 
   const clearImage = useCallback((index: number) => {
     // Renumber first: persistDraftImages below snapshots messageRef, so the
@@ -10344,14 +10280,30 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       : messageRef.current;
     if (onGateSend) {
       const text = message.trim();
-      if (!text) return;
+      // Same reconcile as the main path: the durable draft is the record of
+      // pasted images, memory can lose rows across a remount (jx7byyk).
+      const gateDraftRows = restoreDraftImages(useInboxStore.getState().drafts[conversationId] ?? undefined);
+      const gateMemory = pastedImagesRef.current.filter(img => img.storageId || img.uploading);
+      const gateDraftOnly = gateDraftRows.filter(
+        row => row.storageId && !gateMemory.some(img => img.storageId === row.storageId)
+      ) as typeof gateMemory;
+      const gateImages = [...gateMemory, ...gateDraftOnly].map(img => ({
+        storageId: img.storageId as string | undefined,
+        previewUrl: img.previewUrl,
+        mime: img.file?.type ?? "image/png",
+        uploading: !!img.uploading,
+      }));
+      if (!text && gateImages.length === 0) return;
       sendingRef.current = true;
       if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
       setMessage("");
       messageRef.current = "";
+      // In-flight uploads keep their blobs alive in pendingImageUploads; the
+      // settled ones are done with theirs.
+      clearAllImages(true);
       useInboxStore.getState().clearDraftFinal(conversationId);
       sendingRef.current = false;
-      await onGateSend(text);
+      await onGateSend(text, gateImages);
       return;
     }
     if (onWorkflowLaunch) {
@@ -11095,7 +11047,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               </div>
             </div>
           )}
-          {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading)) && (() => {
+          {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading && !acQuery.includes(" "))) && (() => {
             const typeConfig: Record<string, { icon: typeof User; color: string; label: string }> = {
               person: { icon: User, color: "text-sol-green", label: "People" },
               task: { icon: CheckSquare, color: "text-sol-yellow", label: "Tasks" },
@@ -11992,15 +11944,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // /agents, …) are *only ever* synthetic and have no JSONL counterpart, so a
     // conversation-global "drop all synthetic polls" filter wrongly erases them.
     // Suppress a synthetic poll only when a real AUQ sits near it in time.
-    const realAskTimes = base
+    const withoutProseTwins = dropScrapedProseTwins(base);
+
+    const realAskTimes = withoutProseTwins
       .filter(m =>
         m.tool_calls?.some(tc => tc.name === "AskUserQuestion") &&
         !m.message_uuid?.startsWith("interactive-prompt-")
       )
       .map(m => m.timestamp);
-    if (realAskTimes.length === 0) return base;
+    if (realAskTimes.length === 0) return withoutProseTwins;
     const DUP_WINDOW_MS = 2 * 60_000;
-    return base.filter(m => {
+    return withoutProseTwins.filter(m => {
       if (!m.message_uuid?.startsWith("interactive-prompt-")) return true;
       return !realAskTimes.some(rt => Math.abs(rt - m.timestamp) <= DUP_WINDOW_MS);
     });
@@ -12793,11 +12747,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const buildMentionItems = useCallback(() => {
     const state = useInboxStore.getState();
     const byRecency = (a: { updatedAt?: number }, b: { updatedAt?: number }) => (b.updatedAt || 0) - (a.updatedAt || 0);
-    const inScope = (rec: any): boolean => {
-      const recTeam = rec.team_id ? String(rec.team_id) : null;
-      if (convTeamId) return recTeam === convTeamId;
-      return !recTeam;
-    };
+    const inScope = (rec: any): boolean => inActiveWorkspace(rec, convTeamId);
     const persons: MentionItem[] = (state.teamMembers || []).map((m: any) => ({ id: String(m._id || m.id), type: "person", label: m.name || m.github_username || "Unknown", sublabel: m.github_username ? `@${m.github_username}` : m.email, image: m.image || m.github_avatar_url }));
     const tasks: MentionItem[] = Object.values(state.mentionIndex?.tasks ?? {})
       .filter(inScope)
@@ -14468,6 +14418,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   });
 
   useWatchEffect(() => {
+    // A detached tab window's OS title is owned by DashboardLayout
+    // (useDetachedWindowTitle) — writing here would clobber its surface prefix.
+    if (isDetachedTabWindow()) return;
     if (conversation) {
       document.title = `codecast | ${truncatedTitle}`;
     }
@@ -14527,13 +14480,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [conversation?.messages]);
 
-  // toolCallId → page URL for every `cast browser` row, carrying the last
-  // known URL across rows whose output doesn't restate it. Identity is kept
-  // stable across recomputes with identical content (the common case: a
-  // message sync that added no browser rows), so the CastBrowserUrlContext
+  // toolCallId → page URL + tab id for every `cast browser` row, carrying the
+  // last known ones across rows whose output doesn't restate them. Identity is
+  // kept stable across recomputes with identical content (the common case: a
+  // message sync that added no browser rows), so the CastBrowserRowContext
   // consumers — every cast row — don't re-render on unrelated syncs.
-  const browserUrlMapRef = useRef<Record<string, string>>({});
-  const browserPageUrlMap = useMemo(() => {
+  const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
+  const browserRowMap = useMemo(() => {
     const rows: BrowserRowInput[] = [];
     for (const msg of conversation?.messages ?? []) {
       for (const tc of msg.tool_calls ?? []) {
@@ -14543,12 +14496,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         rows.push({ toolCallId: tc.id, subcommand: cast.subcommand, args: cast.args, output: result?.content || "" });
       }
     }
-    const next = buildBrowserPageUrlMap(rows);
-    const prev = browserUrlMapRef.current;
-    const prevKeys = Object.keys(prev);
-    const same = prevKeys.length === Object.keys(next).length && prevKeys.every((k) => prev[k] === next[k]);
-    if (!same) browserUrlMapRef.current = next;
-    return browserUrlMapRef.current;
+    const next = buildBrowserRowMap(rows);
+    if (!sameBrowserRowMap(browserRowMapRef.current, next)) browserRowMapRef.current = next;
+    return browserRowMapRef.current;
   }, [conversation?.messages, globalToolResultMap]);
 
   // Every image in the session, in transcript order — the header gallery's
@@ -14958,7 +14908,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   return (
     <HighlightContext.Provider value={highlightQuery}>
-    <CastBrowserUrlContext.Provider value={browserPageUrlMap}>
+    <CastBrowserRowContext.Provider value={browserRowMap}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
     <main className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
@@ -14970,7 +14920,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
+      <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         <div>
           <div className="cc-panel__head cc-panel__head--flow gap-2 min-w-0">
             <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
@@ -15219,6 +15169,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 )}
 
                 {headerExtra}
+
+                {/* Huddle about this session: a live chip when occupied, a
+                    quiet start affordance otherwise (hidden when calling is
+                    unconfigured — SessionHuddleButton gates itself). */}
+                {conversation._id && !guest && (
+                  <SessionHuddleButton conversationId={String(conversation._id)} />
+                )}
 
                 {(highlightQuery || isLocalSearchOpen) && (
                   <div className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-amber-200/50 dark:bg-amber-800/30 text-amber-800 dark:text-amber-200">
@@ -16220,7 +16177,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     </main>
     </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
-    </CastBrowserUrlContext.Provider>
+    </CastBrowserRowContext.Provider>
     </HighlightContext.Provider>
   );
 });
