@@ -17,12 +17,19 @@ setupErrorToasts();
 // Stop compositing infinite animations while the desktop window is backgrounded.
 installIdleAnimationPause();
 
+// StrictMode is a development aid: in dev it renders every component body
+// twice and double-runs effects, which measured at ~40% of all render time on
+// local. It stays on for browsers (where people debug), and off inside the
+// desktop shell, where local is a daily driver, not a debugger — the desktop
+// pointed at local should feel like the product. Prod builds strip the
+// double-invoke anyway, so this changes nothing there.
+const app = (
+  <BrowserRouter>
+    <App />
+  </BrowserRouter>
+);
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
-  </React.StrictMode>
+  isDesktop() ? app : <React.StrictMode>{app}</React.StrictMode>
 );
 
 // Defer non-critical work until after first paint. The timeout is load-bearing:

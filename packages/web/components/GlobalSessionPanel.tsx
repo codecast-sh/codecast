@@ -28,6 +28,8 @@ import { isLivenessStale, blockedContinueClientId, CONTINUE_BANNER_KINDS } from 
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
+import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
+import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
@@ -35,6 +37,7 @@ import { SlotActions } from "./workspace/Slot";
 import { partitionTriggerInbox, groupSessionsByTrigger, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
+import { sessionHasOpenQuestion } from "../lib/decisionQueue";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
@@ -48,7 +51,6 @@ import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock,
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
-import { ReviewDock } from "./review/ReviewDock";
 import { useTipActions, checkMilestone } from "../tips";
 import { RESTART_GIVE_UP_AFTER_MS } from "../hooks/useSessionRestart";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -1943,12 +1945,32 @@ export const SessionCard = memo(function SessionCard({
   // opened (deep-link / search / palette). The conversation meta (written on every
   // view: is_own + user) covers rows cached before injection carried author fields;
   // the roster keys display off user_id so a teammate rename/avatar shows instantly.
-  const currentUser = useInboxStore((s) => s.currentUser);
-  const teamMembers = useInboxStore((s) => s.teamMembers);
-  const convMeta = useInboxStore((s) => s.conversations[session._id]);
+  // Only the viewer's id is read here (author resolution + foreign check), so
+  // subscribe to that string, not the whole user doc — the doc's identity
+  // churns on daemon heartbeat fields and would re-render every card.
+  const meId = useInboxStore((s) => s.currentUser?._id?.toString?.() ?? null);
+  const currentUser = useMemo(() => (meId ? ({ _id: meId } as any) : null), [meId]);
+  const teamMembers = useTeamRosterIdentity();
+  // Same for the conversation row: only the authorship fields matter, and the
+  // whole row's identity flips on every liveness tick.
+  const convMetaSig = useInboxStore((s) => {
+    const c = s.conversations[session._id] as any;
+    if (!c) return null;
+    return `${c.user_id ?? ""}\u0000${c.is_own === undefined ? "" : c.is_own ? "1" : "0"}\u0000${c.acting_user_id ?? ""}\u0000${c.user?.name ?? ""}\u0000${c.user?.email ?? ""}\u0000${c.user?.avatar_url ?? ""}`;
+  });
+  const convMeta = useMemo(() => {
+    if (convMetaSig === null) return null;
+    const [user_id, is_own, acting_user_id, name, email, avatar_url] = convMetaSig.split("\u0000");
+    return {
+      user_id: user_id || undefined,
+      is_own: is_own === "" ? undefined : is_own === "1",
+      acting_user_id: acting_user_id || null,
+      user: name || email || avatar_url ? { name: name || null, email: email || null, avatar_url: avatar_url || null } : null,
+    };
+  }, [convMetaSig]);
   const author = useMemo(
     () => resolveSessionAuthor(session, convMeta, currentUser, teamMembers),
-    [session.user_id, session.author_name, session.author_avatar, convMeta, currentUser, teamMembers],
+    [session.user_id, session.author_name, session.author_avatar, session.acting_user_id, convMeta, currentUser, teamMembers],
   );
   // A teammate's session (surfaced by team mode) is READ-ONLY here: dismiss /
   // stash / pin / kill all mutate GLOBAL conversation fields, so acting on a
@@ -2440,25 +2462,42 @@ export const SessionCard = memo(function SessionCard({
             )}
             {/* A running workflow renders as its own ↳ WorkflowBar under the
                 card (same family as schedule/monitor bars) — no chip here. */}
-            {(session.open_comment_threads ?? 0) > 0 && (
-              <button
-                type="button"
-                className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
-                title={`${session.open_comment_threads} open comment thread${session.open_comment_threads === 1 ? "" : "s"} — open with the comment rail`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const st = useInboxStore.getState();
-                  st.requestNavigate(session._id, { source: "gesture" });
-                  st.setCommentRailOpen(true);
-                }}
-              >
-                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h8M8 8h8m-8 8h4m9-4a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M7.9 20A9 9 0 104 16.1L2 22z" />
-                </svg>
-                {session.open_comment_threads}
-              </button>
-            )}
+            {(session.open_comment_threads ?? 0) > 0 && (() => {
+              // Loud only when the ball is in the viewer's court: someone ELSE
+              // (teammate or agent) spoke last in an open thread. When the
+              // viewer commented last they're waiting, not being waited on —
+              // the chip stays but drops to the dim treatment.
+              const waitingOnViewer = !!session.last_comment_author_id
+                && session.last_comment_author_id !== meId;
+              const who = session.last_comment_author;
+              return (
+                <button
+                  type="button"
+                  className={`inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold border transition-colors max-w-[9rem] ${
+                    waitingOnViewer
+                      ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
+                      : "bg-sol-bg-alt/60 text-sol-text-dim border-sol-border/40 hover:bg-sol-bg-alt"
+                  }`}
+                  title={`${session.open_comment_threads} open comment thread${session.open_comment_threads === 1 ? "" : "s"}${
+                    who && session.last_comment_excerpt ? ` — ${who}: ${session.last_comment_excerpt}` : ""
+                  } — open with the comment rail`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const st = useInboxStore.getState();
+                    st.requestNavigate(session._id, { source: "gesture" });
+                    st.setCommentRailOpen(true);
+                  }}
+                >
+                  <svg className="w-2.5 h-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M7.9 20A9 9 0 104 16.1L2 22z" />
+                  </svg>
+                  {session.open_comment_threads}
+                  {waitingOnViewer && who && (
+                    <span className="truncate min-w-0">· {who.split(" ")[0]}</span>
+                  )}
+                </button>
+              );
+            })()}
             {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
             {session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
@@ -2687,31 +2726,51 @@ export const SessionCard = memo(function SessionCard({
 // locally costs the server nothing.)
 const needsAttention = (t: any) =>
   t.execution_status === "blocked" || t.execution_status === "needs_context";
-const needsAttentionSig = makeCollectionSig((t: any) =>
+const needsAttentionRowSig = (t: any) =>
   needsAttention(t)
     ? `${t.short_id}|${t.title}|${t.execution_status}|${t.status}|${t.triage_status ?? ""}|${String(t.user_id)}|${t.assignee ?? ""}|${t.plan?.title ?? ""}`
-    : "");
+    : "";
+
+// Structural signature for the decision rows the Questions section branches on.
+const decisionsSectionSig = makeCollectionSig((d: any) =>
+  d.status === "pending" ? `${d._id}|${d.conversation_id}` : "");
+
+// The Questions section's own affordance: the whole point of collecting these
+// is being able to clear them in one pass, so the header offers the queue.
+function QuestionsSectionHeader({ count }: { count: number }) {
+  const router = useRouter();
+  return (
+    <button
+      onClick={() => router.push("/questions")}
+      className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] text-sol-violet hover:bg-sol-violet/10 transition-colors border-l-2 border-sol-violet/40"
+      title="Answer them one at a time, full width"
+    >
+      <span>{count} {count === 1 ? "decision" : "decisions"} waiting on you</span>
+      <span className="text-sol-text-dim">clear the queue →</span>
+    </button>
+  );
+}
 
 function NeedsAttentionSection() {
-  const s = useTrackedStore([
-    (st) => needsAttentionSig(st.tasks),
-    (st) => st.currentUser?._id,
-  ]);
+  // Workspace-scoped rows, with a field signature so this always-mounted
+  // section wakes on the blocked/needs-context fields it renders — and on
+  // nothing else (heartbeat churn must not re-render it).
+  const wsTasks = useWorkspaceCollection<any>("tasks", needsAttentionRowSig);
+  const s = useTrackedStore([(st) => st.currentUser?._id]);
   const updateTask = s.updateTask;
   const [collapsed, setCollapsed] = useState(false);
 
   const me = s.currentUser?._id?.toString?.() ?? null;
   const tasks = useMemo(() => {
     if (!me) return [];
-    return Object.values(s.tasks)
+    return wsTasks
       .filter((t: any) =>
         needsAttention(t) &&
         (!t.triage_status || t.triage_status === "active") &&
         t.status !== "done" && t.status !== "dropped" &&
         (String(t.user_id) === me || t.assignee === me))
       .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsAttentionSig(s.tasks), me]);
+  }, [wsTasks, me]);
 
   if (tasks.length === 0) return null;
 
@@ -2865,6 +2924,9 @@ export function SessionListPanel({
     s => s.showFavorites,
     s => s.favorites,
     s => s.recentFreezeOrder,
+    // Explicit decisions (cast decide) split their sessions out of Needs Input
+    // into their own Questions section.
+    s => decisionsSectionSig(s.sessionDecisions),
   ]);
   const router = useRouter();
   const handleKillDismissed = useCallback((id: string) => {
@@ -3057,6 +3119,26 @@ export function SessionListPanel({
   const statusWorking = useMemo(
     () => filteredWorking.filter((sess) => !schedulePartition.absorbedIds.has(sess._id)),
     [filteredWorking, schedulePartition.absorbedIds],
+  );
+  // QUESTIONS is its own section, not a slice of the feed: a session that has
+  // ASKED something explicit is a different obligation from one that merely
+  // finished its turn. An authored `cast decide` row always qualifies; so does
+  // an open AskUserQuestion / permission prompt (sessionHasOpenQuestion).
+  const questionConvIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const d of Object.values(s.sessionDecisions) as any[]) {
+      if (d.status === "pending") ids.add(d.conversation_id);
+    }
+    return ids;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decisionsSectionSig(s.sessionDecisions)]);
+  const statusQuestions = useMemo(
+    () => statusNeedsInput.filter((sess) => questionConvIds.has(sess._id) || sessionHasOpenQuestion(sess)),
+    [statusNeedsInput, questionConvIds],
+  );
+  const statusNeedsInputRest = useMemo(
+    () => statusNeedsInput.filter((sess) => !questionConvIds.has(sess._id) && !sessionHasOpenQuestion(sess)),
+    [statusNeedsInput, questionConvIds],
   );
   // Schedule rows honor the project chip like session cards do.
   const scheduleRowsView = useMemo(
@@ -3541,11 +3623,14 @@ export function SessionListPanel({
   // panel; cards only report the click. Verbs reuse the exact handlers the
   // hover toolbar uses, so animations and trigger notices stay identical.
   const sessionCtxMenu = useContextMenu<{ session: InboxSession; isForeign: boolean }>();
+  // Depends on the stable `open`, not the menu object: every SessionCard takes
+  // this prop, so a new function here re-renders the whole list.
+  const openSessionCtxMenu = sessionCtxMenu.open;
   const handleCardContextMenu = useCallback(
     (e: React.MouseEvent, session: InboxSession, isForeign: boolean) => {
-      sessionCtxMenu.open(e, { session, isForeign });
+      openSessionCtxMenu(e, { session, isForeign });
     },
-    [sessionCtxMenu],
+    [openSessionCtxMenu],
   );
   // "Kill all" on the Stashed header — two-step confirm (arm, then fire within
   // 3s) since it tears down every stashed agent at once. Kills the top-level
@@ -4315,7 +4400,9 @@ export function SessionListPanel({
         {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}
-        {renderSection("Needs Input", statusNeedsInput, "text-sol-yellow")}
+        {statusQuestions.length > 0 && <QuestionsSectionHeader count={statusQuestions.length} />}
+        {renderSection("Questions", statusQuestions, "text-sol-violet")}
+        {renderSection("Needs Input", statusNeedsInputRest, "text-sol-yellow")}
         {renderSection("Working", statusWorking, "text-sol-green", "working")}
         </>
         )}
@@ -4368,10 +4455,6 @@ export function SessionListPanel({
         })}
         </>)}
       </div>
-      {/* The review dock: open comment threads, page comments, and workflow
-          gates across sessions — panel chrome under the list, sibling of the
-          trigger dock. Renders nothing when the queue is empty. */}
-      <ReviewDock />
       {/* The schedule dock is panel chrome, not list content: it renders under
           the scroll area in every view mode EXCEPT "by trigger" — there the
           whole list already IS the roster, so the dock would double it. */}

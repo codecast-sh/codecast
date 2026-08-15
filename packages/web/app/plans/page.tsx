@@ -273,7 +273,7 @@ export default function PlansPage() {
   const ctxMenu = useContextMenu<any>();
   const handlePlanContextMenu = useCallback((e: MouseEvent, plan: any) => {
     ctxMenu.open(e, plan);
-  }, [ctxMenu]);
+  }, [ctxMenu.open]);
 
   const [isMobile, setIsMobile] = useState(false);
   useMountEffect(() => {

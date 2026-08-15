@@ -57,7 +57,10 @@ export function useContextMenu<T = void>(): ContextMenuState<T> {
     setMenu({ x: e.clientX, y: e.clientY, payload });
   }, []);
   const close = React.useCallback(() => setMenu(null), []);
-  return { menu, open, close };
+  // Stable identity while the menu is closed. Callers pass this object (or a
+  // callback depending on it) down to every row of a list; a fresh object per
+  // render would defeat the rows' memo on every parent render.
+  return React.useMemo(() => ({ menu, open, close }), [menu, open, close]);
 }
 
 const SURFACE = cn(

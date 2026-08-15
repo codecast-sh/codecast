@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConvex } from "convex/react";
+import { useRouter } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import {
   useInboxStore,
@@ -35,6 +36,7 @@ import {
   type ChatRailChannel,
 } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
+import { memberListSig } from "./useTeamRoster";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { markChatRailLive } from "../lib/chatLive";
@@ -112,21 +114,7 @@ function railSig(rail: ChatRailRow[]): string {
 }
 
 // teamMembers is an ARRAY that re-pushes on teammates' presence heartbeats, so it
-// gets the same treatment: memoized by the array ref, projecting only the fields
-// chat draws an identity from.
-let _membersRef: unknown;
-let _membersSig = "";
-function memberListSig(members: any[] | undefined): string {
-  if (members === _membersRef) return _membersSig;
-  let out = "";
-  for (const m of members ?? []) {
-    if (!m?._id) continue;
-    out += `${m._id}|${m.name ?? ""}|${m.image ?? ""}|${m.github_avatar_url ?? ""}|${m.github_username ?? ""}|${m.is_bot ? 1 : 0}\n`;
-  }
-  _membersRef = members;
-  _membersSig = out;
-  return out;
-}
+// gets the same treatment: subscribe to the shared identity signature.
 
 // ── Channels, reads, rail ───────────────────────────────────────────────────
 
@@ -369,6 +357,22 @@ export function useChatMembers(): { members: ChatMember[]; byId: Map<string, Cha
     // The signature is the dep, not the array: teamMembers re-pushes on heartbeats.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig, viewerId, me]);
+}
+
+/** Open (or create) the DM with these teammates and go there. Local-first:
+ *  openDmChannel answers in the same tick — an existing room's real id or a
+ *  stub the server row supersedes — so the navigation never waits. One hook
+ *  for the modal, the rail's suggestions and the sidebar's, so "how a DM
+ *  opens" is decided in exactly one place. */
+export function useOpenDm(): (memberIds: string[]) => void {
+  const router = useRouter();
+  return useCallback(
+    (memberIds: string[]) => {
+      const channelId = useInboxStore.getState().openDmChannel(memberIds);
+      router.push(`/chat/${channelId}`);
+    },
+    [router],
+  );
 }
 
 /** The channel rail, already sorted and counted. */
