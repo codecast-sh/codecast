@@ -608,9 +608,9 @@ describe("shared ~/.agents/skills", () => {
 describe("inventory rows survive the fleet diff", () => {
   const home = path.join(ROOT, "seam-home");
   const proj = path.join(ROOT, "seam-proj");
-  // A machine carrying one of every kind the reader can emit: a hook and an
-  // instructions snippet from codex, a cursor rule snippet, skills, a command,
-  // a subagent, an MCP server and a plugin.
+  // One of every kind the reader can emit: skill, command, subagent, mcp and
+  // plugin from claude, plus the two the CLI's kind list used to be missing —
+  // `hook` from codex's hooks.json and `snippet` from its AGENTS.md.
   write(path.join(home, ".claude", "skills", "s1", "SKILL.md"), "---\nname: s1\ndescription: a skill\n---\n");
   write(path.join(home, ".claude", "commands", "c1.md"), "---\ndescription: a command\n---\n");
   write(path.join(home, ".claude", "agents", "a1.md"), "---\ndescription: a subagent\n---\n");
@@ -623,11 +623,14 @@ describe("inventory rows survive the fleet diff", () => {
     path.join(home, ".codex", "hooks.json"),
     JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "/x/h.sh" }] }] } }),
   );
+  // AGENTS.md at BOTH scopes on purpose: scopes stack, so this is two items that
+  // must fold to one row. Without it the row-count test below could pass while
+  // the diff merely echoed the item list back.
   write(path.join(home, ".codex", "AGENTS.md"), "# instructions\n");
-  write(path.join(home, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: {} }));
-  write(path.join(proj, ".cursor", "rules", "r1.mdc"), "---\ndescription: a rule\n---\n");
+  write(path.join(proj, "AGENTS.md"), "# project instructions\n");
 
   const inv = readInventory(home, proj);
+  const distinctCapabilities = new Set(inv.items.map((i) => `${i.kind} ${i.name}`));
 
   test("the fixture really exercises hook and snippet", () => {
     // Without this the sweep below would pass vacuously the day the scanner
@@ -648,23 +651,22 @@ describe("inventory rows survive the fleet diff", () => {
 
   test("no row is lost — one row per distinct capability, count for count", () => {
     const diff = buildFleetDiff([{ deviceId: "d1", inventory: { items: inv.items } }]);
-    // The diff folds by identity, so the honest comparison is against distinct
-    // (kind, name) pairs rather than the raw item count: scopes stack, and one
-    // capability declared at two scopes is legitimately one row.
-    const distinct = new Set(inv.items.map((i) => `${i.kind} ${i.name}`));
-    expect(diff.rows).toHaveLength(distinct.size);
+    // Distinct (kind, name) pairs rather than the raw item count, because the
+    // diff folds by identity and AGENTS.md is legitimately two items and one row.
+    expect(inv.items.length).toBeGreaterThan(distinctCapabilities.size);
+    expect(diff.rows).toHaveLength(distinctCapabilities.size);
     for (const row of diff.rows) expect(row.cells[0].present).toBe(true);
   });
 
-  test("a kind the diff cannot rank is what a drop looks like — and none is", () => {
-    // The adversarial half: prove the assertion above can fail. An invented kind
-    // IS dropped, so the passing sweep is evidence the real kinds are ranked,
-    // not evidence that the diff keeps everything it is handed.
-    const withJunk = buildFleetDiff([
-      { deviceId: "d1", inventory: { items: [...inv.items, { kind: "not-a-kind", name: "x", scope: "user", enabled: true, source: "/x" }] } },
-    ]);
-    expect(withJunk.rows.map((r) => r.kind as string)).not.toContain("not-a-kind");
-    expect(withJunk.rows).toHaveLength(new Set(inv.items.map((i) => `${i.kind} ${i.name}`)).size);
+  test("an unrankable kind IS dropped — so the sweep above is evidence, not luck", () => {
+    // The adversarial half. If the diff kept everything handed to it, the two
+    // tests above would pass no matter what the kind list said. It does not:
+    // an invented kind vanishes, and the real kinds survive only because they
+    // are ranked.
+    const junk = { kind: "not-a-kind", name: "x", scope: "user", enabled: true, source: "/x" };
+    const diff = buildFleetDiff([{ deviceId: "d1", inventory: { items: [...inv.items, junk] } }]);
+    expect(diff.rows.map((r) => r.kind as string)).not.toContain("not-a-kind");
+    expect(diff.rows).toHaveLength(distinctCapabilities.size);
   });
 });
 

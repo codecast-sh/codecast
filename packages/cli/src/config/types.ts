@@ -119,6 +119,8 @@ export interface Config {
   // silently minted a new key instead of failing to compile.
   forks_enabled?: boolean;
   forks_version?: string;
+  decide_enabled?: boolean;
+  decide_version?: string;
   browser_enabled?: boolean;
   browser_version?: string;
   chat_enabled?: boolean;

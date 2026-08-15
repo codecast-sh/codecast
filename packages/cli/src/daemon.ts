@@ -9,7 +9,7 @@ import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from ".
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
-import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent } from "./capabilities/heartbeat.js";
+import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, recordConvergenceSignals } from "./capabilities/heartbeat.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostname } from "./remote/device.js";
 import { readInputIdleMs } from "./inputIdle.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
@@ -159,7 +159,7 @@ import {
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, countModelSetEchoes, countEffortSetEchoes, isSwitchConfirmDialog, isStrandedSlashCommand } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -2224,6 +2224,11 @@ async function sendHeartbeat(): Promise<void> {
         await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
       }
     }
+
+    // Capability convergence: one field read + one integer store per beat.
+    // The reconciler (phase 3) polls reconcileNeeded(); the kill switch works
+    // the moment the server flips capabilities_mode, no CLI ship needed.
+    recordConvergenceSignals(data);
 
     if (data.sync_mode !== undefined) {
       const currentConfig = readConfig();
@@ -9169,6 +9174,33 @@ export function sessionHasPendingAskUserQuestion(sessionId: string): boolean {
   try { return jsonlHasPendingAskUserQuestion(readFileTail(jsonlPath, 65536)); } catch { return false; }
 }
 
+// When the spend limit interrupts a turn mid-flight, the CLI writes its own
+// one-line limit banner (isApiErrorMessage) to the JSONL before parking on the
+// interstitial — that entry syncs through the watcher and already stamps the
+// park server-side. The daemon must then ONLY suppress the scraped card, not
+// stack a synthetic banner under the real one. True when the newest
+// content-bearing JSONL entry is a limit-kind banner: an older banner followed
+// by real turns means the park it recorded is over and a fresh park deserves a
+// fresh banner.
+export function jsonlTailEndsWithLimitBanner(jsonlText: string): boolean {
+  let lastIsLimitBanner = false;
+  for (const line of jsonlText.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let entry: any;
+    try { entry = JSON.parse(trimmed); } catch { continue; }
+    const content = entry?.message?.content;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content) ? content.find((b: any) => b?.type === "text")?.text : null;
+    const hasContent = (typeof text === "string" && text.trim().length > 0)
+      || (Array.isArray(content) && content.some((b: any) => b?.type === "tool_use" || b?.type === "tool_result"));
+    if (!hasContent) continue;
+    lastIsLimitBanner = !!entry?.isApiErrorMessage && classifyApiErrorBanner(text) === "limit";
+  }
+  return lastIsLimitBanner;
+}
+
 async function checkForInteractivePrompt(
   tmuxTarget: string,
   sessionId: string,
@@ -9215,6 +9247,18 @@ async function checkForInteractivePrompt(
         const bannerUuid = `limit-dialog-${sessionId}-${digest}-${Math.floor(now / 3_600_000)}`;
         if (lastEmittedSyntheticPrompt.get(sessionId) === bannerUuid) return;
         pendingInteractivePrompts.set(sessionId, { timestamp: now, options: prompt.options, isConfirmation: true });
+        // If the CLI already wrote its own limit banner for this park (it does
+        // when the limit cuts a turn mid-flight), that banner syncs via the
+        // watcher and is the park signal — suppressing the card is the whole
+        // job. Emitting here too would stack a duplicate banner card.
+        const jsonlPath = findSessionJsonlPath(sessionId);
+        let cliBannerSynced = false;
+        try { cliBannerSynced = !!jsonlPath && jsonlTailEndsWithLimitBanner(readFileTail(jsonlPath, 65536)); } catch {}
+        if (cliBannerSynced) {
+          lastEmittedSyntheticPrompt.set(sessionId, bannerUuid);
+          log(`Spend-limit dialog parked ${sessionId.slice(0, 8)} — CLI banner already in JSONL, suppressed scraped card`);
+          return;
+        }
         await syncService.addMessages({
           conversationId,
           messages: [{ messageUuid: bannerUuid, role: "assistant" as const, content: limitBanner, timestamp: now }],

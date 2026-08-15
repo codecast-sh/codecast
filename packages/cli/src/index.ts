@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
 import { registerRemoteCommand } from "./remote/cli.js";
 import { registerPublishCommand } from "./publish.js";
+import { registerCapabilityCommand } from "./capabilities/cli.js";
 import { registerDecideCommand } from "./decideCommand.js";
 import { registerImageCommand } from "./imageCommand.js";
 import { registerStateCommand, warnIfThreadStateStale } from "./stateCommand.js";
@@ -46,7 +47,7 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
@@ -2109,6 +2110,7 @@ const SNIPPET_SECTIONS = {
   visual: snippetSection("visual"),
   forks: snippetSection("forks"),
   state: snippetSection("state"),
+  decide: snippetSection("decide"),
 } satisfies Record<string, SnippetSection>;
 
 // Every feature that introduces an object the agent names in prose (a session, a
@@ -2456,6 +2458,19 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     stampSnippet(config, "chat", getChatVersion()); // shadow only, no file write
     writeConfig(config);
   }
+  if (config.decide_enabled && snippetStale(config, "decide")) {
+    const result = installSnippetSection("decide", true);
+    stampSnippet(config, "decide", getDecideVersion());
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Decision queue snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  } else if (config.decide_enabled && config.decide_version !== getDecideVersion()) {
+    stampSnippet(config, "decide", getDecideVersion()); // shadow only, no file write
+    writeConfig(config);
+  }
+
   if (config.state_enabled && snippetStale(config, "state")) {
     const result = installStateSnippet(true);
     stampSnippet(config, "state", getStateVersion());
@@ -2818,6 +2833,7 @@ program
 registerWorkspaceCommand(program);
 registerRemoteCommand(program);
 registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerCapabilityCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerDecideCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
@@ -9215,6 +9231,10 @@ program
       browser: { getVersion: getBrowserVersion, install: installBrowserSnippet, reEnable: "cast install" },
       chat: { getVersion: getChatVersion, install: installChatSnippet, reEnable: "cast install" },
       orchestration: { getVersion: getWorkVersion, install: installOrchestration, reEnable: "cast install" },
+      // Wired late: the decide slug shipped in the catalog without a behavior
+      // entry, so cast install decide crashed on entry.install(). The golden
+      // suite is what caught it.
+      decide: { getVersion: getDecideVersion, install: (update = false) => installSnippetSection("decide", update), reEnable: "cast install decide" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
     // Single-snippet path: `cast install workflows` (+ --disable to turn off).

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseInteractivePrompt, jsonlHasPendingAskUserQuestion, spendLimitDialogBanner } from "./daemon.js";
+import { parseInteractivePrompt, jsonlHasPendingAskUserQuestion, spendLimitDialogBanner, jsonlTailEndsWithLimitBanner } from "./daemon.js";
 import { classifyApiErrorBanner } from "@codecast/shared/contracts";
 
 // Regression coverage for dropped Q&A descriptions: Claude Code's AskUserQuestion
@@ -655,5 +655,47 @@ describe("spendLimitDialogBanner", () => {
       "Press Enter to continue, Esc to cancel",
     ].join("\n");
     expect(spendLimitDialogBanner(pane)).toBeNull();
+  });
+});
+
+// Suppress-only mode: when the CLI already wrote its limit banner to the JSONL
+// (the mid-turn shape of the 2026-08-14 incident), the daemon must not stack a
+// synthetic banner — the JSONL banner is the park signal, and the fix is only
+// suppressing the scraped card that used to supersede it.
+describe("jsonlTailEndsWithLimitBanner", () => {
+  const banner = (text: string) => JSON.stringify({
+    isApiErrorMessage: true,
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  const realTurn = (text: string) => JSON.stringify({
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  const limitText = "You've hit your monthly spend limit · raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
+
+  test("banner as the newest content entry → true", () => {
+    const jsonl = [realTurn("Checking the build."), banner(limitText), ""].join("\n");
+    expect(jsonlTailEndsWithLimitBanner(jsonl)).toBe(true);
+  });
+
+  test("banner followed by a real turn (park over) → false", () => {
+    const jsonl = [banner(limitText), realTurn("Resumed after the reset.")].join("\n");
+    expect(jsonlTailEndsWithLimitBanner(jsonl)).toBe(false);
+  });
+
+  test("meta entries after the banner don't hide it", () => {
+    const jsonl = [
+      banner(limitText),
+      JSON.stringify({ type: "summary", summary: "…" }),
+      JSON.stringify({ message: { role: "assistant", content: [] } }),
+    ].join("\n");
+    expect(jsonlTailEndsWithLimitBanner(jsonl)).toBe(true);
+  });
+
+  test("auth banner is not a limit park → false", () => {
+    expect(jsonlTailEndsWithLimitBanner(banner("Please run /login"))).toBe(false);
+  });
+
+  test("empty tail → false", () => {
+    expect(jsonlTailEndsWithLimitBanner("")).toBe(false);
   });
 });

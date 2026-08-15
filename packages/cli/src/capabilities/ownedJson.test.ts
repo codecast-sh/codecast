@@ -5,11 +5,25 @@ import * as path from "path";
 import {
   applyOwnedJson,
   encodeKeyPath,
+  LEDGER_SCHEMA_VERSION,
   ledgerPathFor,
   planJsonMerge,
   readLedger,
+  readLedgerDetailed,
   type OwnedKey,
 } from "./ownedJson.js";
+
+const tmpDirs: string[] = [];
+function tmpTarget(seed: Record<string, unknown>): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-ledger-"));
+  tmpDirs.push(dir);
+  const target = path.join(dir, "settings.json");
+  fs.writeFileSync(target, JSON.stringify(seed, null, 2) + "\n");
+  return target;
+}
+afterEach(() => {
+  for (const d of tmpDirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+});
 
 const key = (...p: string[]) => p;
 const want = (keyPath: string[], value: unknown): OwnedKey => ({ keyPath, value });
@@ -230,5 +244,64 @@ describe("applyOwnedJson on disk", () => {
     expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({ mcpServers: { example: server } });
     applyOwnedJson(target, []);
     expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({});
+  });
+});
+
+// ------------------------------------------------- the versioned, MACed ledger
+
+describe("ledger envelope (schema_version + MAC)", () => {
+  test("a fresh write produces a versioned envelope, and reads back", () => {
+    const target = tmpTarget({});
+    applyOwnedJson(target, [{ keyPath: ["a"], value: 1 }]);
+    const raw = JSON.parse(fs.readFileSync(ledgerPathFor(target), "utf-8"));
+    expect(raw.schema_version).toBe(LEDGER_SCHEMA_VERSION);
+    expect(raw.entries).toBeDefined();
+    const detailed = readLedgerDetailed(target);
+    expect(detailed.needsUpgrade).toBe(false);
+    expect(detailed.tampered).toBe(false);
+    expect(Object.keys(detailed.entries)).toHaveLength(1);
+  });
+
+  test("a legacy bare-map ledger stays readable and upgrades on the next write", () => {
+    const target = tmpTarget({ a: 1 });
+    fs.writeFileSync(ledgerPathFor(target), JSON.stringify({ a: 1 }) + "\n");
+    expect(readLedger(target)).toEqual({ a: 1 });
+    // The upgrade happens on the next REAL write — an unchanged apply stays
+    // zero-write (that property has its own tests) and must not churn mtimes
+    // just to modernize an envelope.
+    applyOwnedJson(target, [{ keyPath: ["a"], value: 2 }]);
+    const raw = JSON.parse(fs.readFileSync(ledgerPathFor(target), "utf-8"));
+    expect(raw.schema_version).toBe(LEDGER_SCHEMA_VERSION);
+  });
+
+  test("a NEWER schema version means write nothing, remove nothing, say upgrade", () => {
+    const target = tmpTarget({ a: 1, keep: "user value" });
+    const before = fs.readFileSync(target, "utf-8");
+    fs.writeFileSync(
+      ledgerPathFor(target),
+      JSON.stringify({ schema_version: LEDGER_SCHEMA_VERSION + 1, entries: { a: 1 }, future_field: true }) + "\n",
+    );
+    const result = applyOwnedJson(target, [{ keyPath: ["b"], value: 2 }]);
+    expect(result.wrote).toBe(false);
+    expect(result.conflicts.some((c: any) => c.reason === "ledger_needs_upgrade")).toBe(true);
+    // The document AND the newer ledger are byte-untouched — unknown entries
+    // are preserved by not touching the file at all.
+    expect(fs.readFileSync(target, "utf-8")).toBe(before);
+    expect(JSON.parse(fs.readFileSync(ledgerPathFor(target), "utf-8")).future_field).toBe(true);
+  });
+
+  test("a tampered MAC is reported, and the entries stay readable", () => {
+    const target = tmpTarget({});
+    applyOwnedJson(target, [{ keyPath: ["a"], value: 1 }]);
+    const raw = JSON.parse(fs.readFileSync(ledgerPathFor(target), "utf-8"));
+    if (raw.mac === undefined) {
+      // No machine key on this runner: the MAC layer is honestly absent.
+      return;
+    }
+    raw.entries.a = 999; // hand-edit without re-MACing
+    fs.writeFileSync(ledgerPathFor(target), JSON.stringify(raw) + "\n");
+    const detailed = readLedgerDetailed(target);
+    expect(detailed.tampered).toBe(true);
+    expect(detailed.entries.a).toBe(999);
   });
 });
