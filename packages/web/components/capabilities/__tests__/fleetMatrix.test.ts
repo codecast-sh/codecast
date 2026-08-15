@@ -27,7 +27,14 @@ import {
   type FleetInventoryItem,
 } from "../FleetMatrix";
 import { buildFleetReports } from "../CapabilitiesPage";
-import { type CapabilityStateRow } from "../../../store/capabilities";
+// Through the STORE, deliberately: the drift keys the page hands the matrix are
+// built by this module, so importing the shared originals instead would prove
+// only that the shared module agrees with itself.
+import {
+  capabilityIdentity,
+  capabilityRowKey,
+  type CapabilityStateRow,
+} from "../../../store/capabilities";
 import { type CapabilityDevice, type CatalogEntry } from "../CapabilityCard";
 
 // ---------------------------------------------------------------- fixtures
@@ -595,14 +602,14 @@ describe("total, like the diff under it", () => {
 //
 //     status = row.status === "in_sync" && driftKeys.has(row.key) ? "drift" : row.status
 //
-// That union is only worth anything if both sides name a capability the same
-// way. They did not: the matrix used to key rows as `item.slug ?? <kind>:<name>`
-// — not case folded, no marketplace — while the store keys
-// `<kind>:<identity lowercased>`. So `driftKeys.has(row.key)` almost never
-// matched and the store's verdict was silently discarded.
+// That union is worth nothing unless both sides name a capability identically,
+// and it fails SILENTLY when they do not: a key that never matches reads exactly
+// like a fleet with no drift. Nothing renders differently, so no other test on
+// this page would notice.
 //
-// Both sides now go through the same two shared functions, and these tests hold
-// them to it. Each asserts on a key the OLD scheme could not have produced.
+// Both sides therefore go through the same two shared functions, and these tests
+// hold them to it — including one that calls the store's own builder rather than
+// asserting a key string this file could keep in step by accident.
 describe("the store's drift verdict reaches the grid", () => {
   const devices = [machine("a", "MacBook"), machine("b", "Studio")];
 
@@ -623,6 +630,30 @@ describe("the store's drift verdict reaches the grid", () => {
 
     const withStore = buildFleetRows(devices, same, new Set(["skill:deploy"]));
     expect(rowFor(withStore, "skill:deploy").status).toBe("drift");
+  });
+
+  test("the store builds the key, rather than this file spelling one that matches", () => {
+    // Every other test here asserts a key STRING, so they all stay green as long
+    // as this file is edited in step with the matrix — the one thing a
+    // regression will not do. This one calls the store's own two functions, the
+    // same pair `selectCapabilityIndex` keys its drift rows with
+    // (store/capabilities.ts:999-1001), and feeds the result back in as the
+    // drift key. It fails the moment either side re-spells the key.
+    const identity = capabilityIdentity("plugin", "Frontend-Design", { marketplace: "Official" });
+    expect(identity).toBeDefined();
+    const storeKey = capabilityRowKey("plugin", identity!);
+
+    const rows = buildFleetRows(
+      devices,
+      {
+        a: [plugin("Frontend-Design", { marketplace: "Official" })],
+        b: [plugin("Frontend-Design", { marketplace: "Official" })],
+      },
+      new Set([storeKey]),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].key).toBe(storeKey);
+    expect(rows[0].status).toBe("drift");
   });
 
   test("the join survives case and marketplace differences in the store's key", () => {
@@ -660,5 +691,29 @@ describe("the store's drift verdict reaches the grid", () => {
       new Set(["skill:does-not-exist"]));
     expect(rows).toHaveLength(1);
     expect(rowFor(rows, "skill:deploy").status).toBe("in_sync");
+  });
+
+  test("the escalated row reaches the HEADER, not just the grid", () => {
+    // The join being live is worth nothing if the stat above it still reads
+    // "0 drift" over a row the page has badged. Both sides run the same
+    // predicate, and this is what holds them to it.
+    const reports = { a: [skill("deploy")], b: [skill("deploy")] };
+    const rows = buildFleetRows(devices, reports, new Set(["skill:deploy"]));
+    expect(summarizeFleet(rows, devices, reports).drift).toBe(1);
+    expect(FLEET_FILTERS.drift(rowFor(rows, "skill:deploy"))).toBe(true);
+    expect(needsAttention(rowFor(rows, "skill:deploy"))).toBe(true);
+  });
+
+  test("a row that is ALREADY unique keeps that verdict, it is not flattened to drift", () => {
+    // `unique` outranks `drift` in the diff's own ordering — "nobody else has
+    // it" sorts above "somebody is a version behind". Escalating unconditionally
+    // would erase that distinction and quietly reorder the page, while every
+    // count above stayed identical because both statuses are drift to the stat.
+    const rows = buildFleetRows(
+      devices,
+      { a: [skill("only-here")], b: [] },
+      new Set(["skill:only-here"]),
+    );
+    expect(rowFor(rows, "skill:only-here").status).toBe("unique");
   });
 });

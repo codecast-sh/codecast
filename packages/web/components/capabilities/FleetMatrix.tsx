@@ -220,12 +220,19 @@ export function needsAttention(row: FleetGridRow): boolean {
  * `unknown`, or every capability the rest of the fleet has draws as `absent` on
  * that column and the page manufactures the drift it exists to detect.
  *
- * `reportedAt` cannot tell them apart: the store stamps it from `reported_at`
- * when the row lands, before anything tries to parse the payload
- * (`store/capabilities.ts` counts the outcome separately as `readableRows`
- * against `unreadableRows`/`withheldRows`). The parse's own answer is the
- * report map: an ENTRY, empty or not, is a payload we read; no entry at all is
- * a machine we have not heard from.
+ * The report map carries the answer, and `reportedAt` cannot: the store stamps
+ * that from `reported_at` when the row lands, before anything tries to parse the
+ * payload. So an ENTRY in the map — empty or not — is a payload we read, and no
+ * entry is a machine we have nothing usable from. `buildFleetReports`
+ * (CapabilitiesPage) is what upholds that, skipping the rows the store marked
+ * unreadable or withheld.
+ *
+ * The timestamp is still asked, second, and it is not redundant. It answers a
+ * question the map cannot: whether the ROSTER has ever heard from this machine
+ * at all. A leftover entry for a device the roster calls silent must not
+ * resurrect it as a reporter. The two clauses fail in the same direction —
+ * toward `unknown`, the state that invents no drift — which is why they are an
+ * `&&` rather than a judgement call.
  *
  * Every cell, every count and every empty state on this page turns on this one
  * question, so it is asked once here instead of spelled out at each of them.
@@ -734,10 +741,18 @@ const PIN_NOUN: Record<NonNullable<FleetDiffCell["pinKind"]>, string> = {
   repo: "repo",
 };
 
-/** "user scope", or "local and project scope" — scopes stack, so a cell can
- *  honestly be switched on in more than one place and the tooltip says both. */
+/**
+ * "user scope", or "local and project scope" — scopes stack, so a cell can
+ * honestly be switched on in more than one place and the tooltip says both.
+ *
+ * No fallback for an empty list, and that is deliberate. The diff resolves an
+ * unrecorded scope to `user` in `scopeOf`, at the one place that should decide
+ * it, so every cell that is present at all arrives with at least one. Defaulting
+ * a second time here would be a copy of that rule sitting where nobody would
+ * think to update it.
+ */
 function scopeLine(cell: FleetDiffCell): string {
-  return `${cell.scopes.length > 0 ? cell.scopes.join(" and ") : "user"} scope`;
+  return `${cell.scopes.join(" and ")} scope`;
 }
 
 function Cell({

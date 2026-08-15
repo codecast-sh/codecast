@@ -11,6 +11,7 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useDevices } from "../DeviceBadge";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useSyncCapabilityState } from "../../hooks/useSyncCapabilityState";
 import {
   capabilityStateWakeSig,
   isCapabilityReportStale,
@@ -188,12 +189,15 @@ function readCapabilityState(s: unknown): Record<string, CapabilityStateRow> {
  * is time-driven — no field changes when a report ages out — so the coarse clock
  * is what wakes that part.
  */
+// Mounted by the page (not the layout): the fleet mirror is only worth its
+// subscription while someone is looking at it.
 function useFleet(): {
   devices: CapabilityDevice[];
   reports: Record<string, FleetInventoryItem[] | undefined>;
   driftKeys: Set<string>;
   loading: boolean;
 } {
+  useSyncCapabilityState();
   const { devices } = useDevices();
   // `useDevices().loaded` is `devices.length > 0`, which cannot tell "the roster
   // has not answered" from "this account owns no machines" — and that is exactly

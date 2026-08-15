@@ -101,6 +101,34 @@ describe("entryConfidence", () => {
     expect(entryConfidence({ kind: "snippet" })).toBe("prose");
   });
 
+  test("a surface this build does not model is code, never prose", () => {
+    // `webCatalogList` copies unvalidated keys off a publisher's `entry_json`
+    // onto the card, so `surfaces` can carry anything. A stranger alongside
+    // benign surfaces must not be quietly dropped — that would turn a row we
+    // understand LESS well into a safer-looking badge.
+    const entry = { kind: "skill", surfaces: ["prose", "teleports" as never] };
+    expect(entryConfidence(entry)).toBe("code");
+    expect(entryConfidence({ kind: "snippet", surfaces: ["teleports" as never] })).toBe("code");
+  });
+
+  test("a surfaces field that is not a list is a failed read, so code", () => {
+    // Same untrusted-bytes path. A publisher writing `surfaces: "prose"` must
+    // not be read as a one-element scan, and must not fall to the kind floor
+    // either: a value we cannot read is a scan result we lost, and a snippet
+    // would land on prose on the strength of bytes nobody could parse.
+    expect(entryConfidence({ kind: "snippet", surfaces: "prose" as never })).toBe("code");
+    expect(entryConfidence({ kind: "skill", surfaces: 7 as never })).toBe("code");
+  });
+
+  test("only absent and null mean nobody looked", () => {
+    // JSON's two spellings of no value are the only ones that reach the kind
+    // floor. Every card today takes this path, so widening it would badge the
+    // whole catalog "runs code" and teach the reader to ignore the mark.
+    expect(entryConfidence({ kind: "skill" })).toBe("unknown");
+    expect(entryConfidence({ kind: "skill", surfaces: null as never })).toBe("unknown");
+    expect(entryConfidence({ kind: "snippet", surfaces: null as never })).toBe("prose");
+  });
+
   test("an entry scanned and found to have nothing is code, not the kind floor", () => {
     // An empty array is a completed scan that classified nothing — the gate
     // calls that dangerous, so the badge must too. Reading it as "no surfaces,

@@ -197,14 +197,24 @@ export function confidenceFromKind(kind: CapabilityKind | string): ExecutionConf
  * that blob is publisher-supplied and unvalidated by its own comment. So the
  * field is re-checked here rather than trusted.
  *
- * A member this build does not model collapses the whole list to empty, which
- * the gate calls dangerous. Filtering the stranger out instead would LOWER the
- * risk of a row we understand less well — the one direction the contract forbids
+ * The two malformed shapes are deliberately NOT alike, which is worth stating
+ * because the symmetry is tempting and wrong. A list carrying a member this
+ * build does not model is a finished classification we cannot vouch for: it
+ * collapses to empty, and the gate's own rule calls that dangerous. Filtering
+ * the stranger out instead would LOWER the risk of the row we understand least
  * (`deriveExecutionSurfaces` accepts declared surfaces additively for the same
- * reason).
+ * reason). A value that is not a list is not a classification at all — there is
+ * nothing to put to the gate — so it means no scan and falls to the kind floor.
+ * Escalating that to "runs code" would assert a finding nobody made.
  */
 function observedSurfaces(value: unknown): readonly ExecutionSurface[] | undefined {
-  if (!Array.isArray(value)) return undefined;
+  // Absent means no scan ran — the kind floor answers. Present but MALFORMED
+  // (a string, a number, unknown members) is a failed read of a scan that DID
+  // run, and a failed read must land on the dangerous side: [] classifies as
+  // requiring consent. Only a genuinely absent field may fall through to the
+  // kind's reassuring default.
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) return [];
   return value.every(isExecutionSurface) ? (value as ExecutionSurface[]) : [];
 }
 
@@ -213,7 +223,7 @@ function observedSurfaces(value: unknown): readonly ExecutionSurface[] | undefin
  * run, the kind floor when none has.
  *
  * It exists so the choice between the two is written once. A second copy of
- * this conditional is how one surface starts trusting a field the other derives.
+ * this conditional is how one caller starts trusting a field another derives.
  */
 export function entryConfidence(
   entry: Pick<CatalogEntry, "kind" | "surfaces">,
