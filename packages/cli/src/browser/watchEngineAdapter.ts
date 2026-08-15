@@ -18,6 +18,7 @@
 
 import { CdpConnection, listTargets, type CdpTarget } from "./cdp.js";
 import { openCdpScreencast, type WatchEngine, type WatchResolveError } from "./watchSource.js";
+import { engineSessionKey } from "./engine.js";
 
 export interface EngineTabInfo {
   targetId: string;
@@ -46,7 +47,7 @@ const TAB_CACHE_MS = 2000;
  * every viewer.
  */
 export function engineSessionFor(ownerKey: string): string {
-  return ownerKey.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 60);
+  return engineSessionKey(ownerKey);
 }
 
 export function engineWatchEngine(deps: EngineWatchDeps): WatchEngine {

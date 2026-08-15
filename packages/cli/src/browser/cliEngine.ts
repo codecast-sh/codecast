@@ -37,6 +37,7 @@ import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } 
 import { formatBytes, listRealProfiles } from "./profile.js";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
 import { readState, stopInstance } from "./instance.js";
+import { provisionLocalLogins } from "./credentials.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import { auditLanding, NAVIGATING_VERBS, refuseNavigation, viaFor } from "./siteGuard.js";
 import { emitFailureBlock, engineSource } from "./capture.js";
@@ -342,6 +343,9 @@ export async function runVerb(verb: string, args: string[], o: Ctx = ctx(), run:
     // never this session's own.
     const swept = describeReap(reapEngineOrphans({ keep: session }));
     if (swept) console.log(fmt.muted(`  ${swept}`));
+    // Your logins for this site, as your real Chrome holds them right now —
+    // the clone the browser started from may be hours old (credentials.ts).
+    if (url) await carryLogins(url);
   }
 
   // `tab <id>` takes what the footer printed — the 8-char target id — or a
@@ -392,6 +396,19 @@ export async function runVerb(verb: string, args: string[], o: Ctx = ctx(), run:
     printFooter(o, verb, owner);
   }
   return 0;
+}
+
+/** Bring this machine's current cookies for the site into the managed browser. */
+async function carryLogins(rawUrl: string): Promise<void> {
+  const state = readState();
+  if (!state || state.remote || !state.sourceProfile) return;
+  const url = /^[a-z]+:/i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+  try {
+    const r = await provisionLocalLogins(state.port, url, { profileDir: state.sourceProfile, channel: state.channel });
+    if (r.injected) console.log(fmt.muted(`  carried ${r.injected} cookie${r.injected === 1 ? "" : "s"} for ${r.host} from your Chrome`));
+  } catch {
+    /* a courtesy: never fail the open over it */
+  }
 }
 
 /** The URL and tab id lines the conversation reads, plus the audit stamp. */
