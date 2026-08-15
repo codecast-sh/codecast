@@ -29,7 +29,8 @@ import * as path from "node:path";
 
 /** Where managed clones live. Mode 0700 — these hold live session cookies. */
 export function browserHome(): string {
-  return path.join(os.homedir(), ".codecast", "browser");
+  const root = process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  return path.join(root, "browser");
 }
 
 export function clonePath(name: string): string {
