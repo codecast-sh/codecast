@@ -38,6 +38,12 @@ export type ClientSyncRegistryEntry = {
   // webGetTaskDetail lingers in the never-pruned cache forever as a phantom
   // task that 404s when opened.
   validRow?: (row: any) => boolean;
+  // Trim a persisted row as it is hydrated into memory. The list channels for a
+  // collection may have shipped fields an older client version cached forever
+  // (docs once carried full `content` — 115MB in memory / 125MB on disk for
+  // 14k docs), and this is the one place every cached row passes through. The
+  // trimmed row replaces the cached one on the next natural persist.
+  hydrateRow?: (row: any, ctx: { pending: Record<string, any> }) => any;
 };
 
 export const CLIENT_SYNC_REGISTRY = {
@@ -84,6 +90,13 @@ export const CLIENT_SYNC_REGISTRY = {
     // carry a session short id (jx…) or none.
     validRow: (row: any) => typeof row?.short_id === "string" && row.short_id.startsWith("ct-"),
   },
+  capabilityBindings: {
+    persistence: { kind: "collection", key: "capabilityBindings" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    validRow: (row: any) =>
+      typeof row?.capability_slug === "string" && typeof row?.scope_kind === "string",
+  },
   capabilityState: {
     persistence: { kind: "collection", key: "capabilityState" },
     hydration: { phase: "deferred" },
@@ -99,6 +112,15 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "docs" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    // `docs` is the THIN list: bodies live in docDetails (the doc page) and in
+    // live webGet queries (embeds, pills). Drop a body a past channel cached —
+    // unless it is an unsynced local edit still under a pending field lock.
+    hydrateRow: (row: any, { pending }: { pending: Record<string, any> }) => {
+      if (row?.content === undefined && row?.entries === undefined && row?.embedding === undefined) return row;
+      if (pending[`docs:${row._id}:content`]) return row;
+      const { content: _c, entries: _e, embedding: _m, ...rest } = row;
+      return rest;
+    },
   },
   // The decision queue (cast decide). Answering is local-first: the action
   // flips status on the draft and the resolution fields ride the generic
@@ -395,4 +417,9 @@ export function isProtectedSyncCollection(key: string): boolean {
 export function collectionRowValidator(key: string): ((row: any) => boolean) | undefined {
   const entry = CLIENT_SYNC_REGISTRY[key as ClientSyncStoreKey] as ClientSyncRegistryEntry | undefined;
   return entry?.validRow;
+}
+
+export function collectionRowHydrator(key: string): ClientSyncRegistryEntry["hydrateRow"] {
+  const entry = CLIENT_SYNC_REGISTRY[key as ClientSyncStoreKey] as ClientSyncRegistryEntry | undefined;
+  return entry?.hydrateRow;
 }

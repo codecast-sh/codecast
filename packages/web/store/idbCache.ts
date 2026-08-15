@@ -4,6 +4,7 @@ import {
   COLLECTION_STORE_KEYS,
   META_STORE_KEYS,
   collectionRowValidator,
+  collectionRowHydrator,
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection } from "./idbCollectionDiff";
@@ -31,6 +32,7 @@ class CacheDB extends Dexie {
   sessions!: Dexie.Table<any, string>;
   tasks!: Dexie.Table<any, string>;
   capabilityState!: Dexie.Table<any, string>;
+  capabilityBindings!: Dexie.Table<any, string>;
   sessionDecisions!: Dexie.Table<any, string>;
   docs!: Dexie.Table<any, string>;
   plans!: Dexie.Table<any, string>;
@@ -197,6 +199,27 @@ class CacheDB extends Dexie {
       capabilityState: "_id",
       // The decision queue: explicit questions agents hand to their human
       // (cast decide). One row per open or recently resolved decision.
+      sessionDecisions: "_id",
+      meta: "key",
+      conversationMessages: "convId, latestTimestamp",
+      dispatchOutbox: "id, ts",
+    });
+    this.version(12).stores({
+      sessions: "_id",
+      tasks: "_id",
+      docs: "_id",
+      plans: "_id",
+      projects: "_id",
+      buckets: "_id",
+      bucketAssignments: "_id",
+      comments: "_id",
+      chatChannels: "_id",
+      chatMessages: "_id, channel_id, thread_root_id",
+      chatReactions: "_id, message_id",
+      chatReads: "_id, channel_id",
+      capabilityState: "_id",
+      // The user's binding wishes: what to enable where (Installed tab, equip).
+      capabilityBindings: "_id",
       sessionDecisions: "_id",
       meta: "key",
       conversationMessages: "convId, latestTimestamp",
@@ -399,6 +422,13 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       // the server has since deleted.
       const shadow = new Map<string, any>();
       const validRow = collectionRowValidator(key);
+      // Trim rows on the way in (see hydrateRow in the registry). Trimmed rows
+      // are written straight back so disk shrinks with memory; the shadow then
+      // holds the trimmed row (holding the on-disk original would pin the very
+      // bytes we just dropped until the collection's next persist).
+      const hydrateRow = collectionRowHydrator(key);
+      const hydrateCtx = { pending: (metaByKey.pending as Record<string, any> | undefined) ?? {} };
+      const trimmed: any[] = [];
       // Foreign documents persisted under the wrong collection (see validRow in
       // the registry) are excluded from hydration AND removed from disk, so the
       // cache self-heals instead of resurrecting phantoms on every load.
@@ -417,7 +447,9 @@ export async function loadCache(): Promise<Record<string, any> | null> {
         const map: Record<string, any> = {};
         for (const row of rows) {
           if (validRow && !validRow(row)) { invalid.push(row._id); continue; }
-          map[row._id] = row; shadow.set(row._id, row);
+          const kept = hydrateRow ? hydrateRow(row, hydrateCtx) : row;
+          if (kept !== row) trimmed.push(kept);
+          map[row._id] = kept; shadow.set(row._id, kept);
         }
         if (Object.keys(map).length > 0) {
           result[key] = map;
@@ -425,6 +457,7 @@ export async function loadCache(): Promise<Record<string, any> | null> {
         }
       }
       if (invalid.length) table.bulkDelete(invalid).catch(() => {});
+      if (trimmed.length) table.bulkPut(trimmed).catch(() => {});
       lastPersisted.set(key, shadow);
     });
 
