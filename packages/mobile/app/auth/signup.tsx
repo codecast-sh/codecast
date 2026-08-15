@@ -21,7 +21,9 @@ export default function SignupScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
-  const { signInWithGitHub, signInWithApple, signUpWithEmail, isAppleAuthAvailable } = useAuth();
+  const [pendingVerification, setPendingVerification] = useState(false);
+  const [code, setCode] = useState('');
+  const { signInWithGitHub, signInWithApple, signUpWithEmail, verifyEmailCode, isAppleAuthAvailable } = useAuth();
 
   const handleAppleSignIn = async () => {
     setLoading(true);
@@ -64,7 +66,11 @@ export default function SignupScreen() {
 
     setLoading(true);
     try {
-      await signUpWithEmail(email, password);
+      const { needsVerification } = await signUpWithEmail(email, password);
+      if (needsVerification) {
+        // A 6-character code was emailed; collect it before the session exists.
+        setPendingVerification(true);
+      }
     } catch (error: any) {
       const message = error?.message || 'Sign up failed';
       if (message.includes('already exists')) {
@@ -72,6 +78,18 @@ export default function SignupScreen() {
       } else {
         Alert.alert('Error', 'Sign up failed. Please try again.');
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyCode = async () => {
+    if (code.trim().length < 6) return;
+    setLoading(true);
+    try {
+      await verifyEmailCode(email, code.trim());
+    } catch {
+      Alert.alert('Error', 'Invalid or expired code. Check the email and try again.');
     } finally {
       setLoading(false);
     }
@@ -97,6 +115,47 @@ export default function SignupScreen() {
         </View>
 
         <View style={styles.card}>
+          {pendingVerification ? (
+            <>
+              <Text style={styles.label}>
+                Enter the 6-character code we emailed to {email}
+              </Text>
+              <View style={styles.inputContainer}>
+                <TextInput
+                  style={[styles.input, styles.codeInput]}
+                  placeholder="XXXXXX"
+                  placeholderTextColor="#888"
+                  value={code}
+                  onChangeText={(v) => setCode(v.toUpperCase())}
+                  autoCapitalize="characters"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  editable={!loading}
+                />
+              </View>
+              <TouchableOpacity
+                style={[styles.signUpButton, (loading || code.trim().length < 6) && styles.buttonDisabled]}
+                onPress={handleVerifyCode}
+                disabled={loading || code.trim().length < 6}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.signUpButtonText}>Verify Email</Text>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.backButton}
+                onPress={() => {
+                  setPendingVerification(false);
+                  setCode('');
+                }}
+              >
+                <Text style={styles.backButtonText}>Start over</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+          <>
           {isAppleAuthAvailable && (
             <TouchableOpacity
               style={[styles.appleButton, loading && styles.buttonDisabled]}
@@ -196,6 +255,8 @@ export default function SignupScreen() {
               </TouchableOpacity>
             </Link>
           </View>
+          </>
+          )}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -308,6 +369,11 @@ const styles = StyleSheet.create({
     padding: 14,
     fontSize: 16,
     color: '#1a1a1a',
+  },
+  codeInput: {
+    textAlign: 'center',
+    letterSpacing: 8,
+    fontSize: 20,
   },
   signUpButton: {
     backgroundColor: '#d97706',

@@ -1,24 +1,40 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Image } from 'react-native';
+import { StyleSheet, SectionList, RefreshControl, TouchableOpacity, View as RNView, Image, Linking, ScrollView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import * as Haptics from 'expo-haptics';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Theme, Spacing } from '@/constants/Theme';
 import { NotificationListSkeleton } from '@/components/SkeletonLoader';
+import { AgentLogoSvg } from '@/components/AgentLogo';
 import { cleanNotificationBody } from '@codecast/web/lib/notificationText';
+import {
+  agentNames,
+  sessionLabel,
+  sessionTypes,
+  socialTypes,
+  taskTypes,
+  typeColors,
+  typeLabels,
+} from '@codecast/web/lib/notificationTypes';
 
 type Notification = {
   _id: Id<"notifications">;
-  type: "mention" | "comment_reply" | "conversation_comment" | "team_invite" | "session_idle" | "permission_request" | "session_error" | "team_session_start" | "task_completed" | "task_failed" | "task_assigned" | "task_status_changed" | "task_commented" | "doc_updated" | "doc_commented" | "plan_status_changed" | "plan_task_completed" | "artifact_commented" | "session_assigned" | "chat_mention" | "chat_reply" | "chat_here";
+  type: string;
   message: string;
   read: boolean;
   created_at: number;
   conversation_id?: Id<"conversations">;
   entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel";
   entity_id?: string;
+  chat_message_id?: string;
+  link?: string;
+  // Anonymous actors (artifact page commenters) carry identity on the row.
+  actor_name?: string;
+  actor_avatar?: string;
   actor: {
     _id: Id<"users">;
     name?: string;
@@ -34,18 +50,31 @@ type Notification = {
 
 function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
-  const diffMs = now - timestamp;
-  const diffMinutes = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
+  const diffMinutes = Math.floor((now - timestamp) / 60000);
+  const diffHours = Math.floor(diffMinutes / 60);
+  const diffDays = Math.floor(diffHours / 24);
 
   if (diffMinutes < 1) return "just now";
   if (diffMinutes < 60) return `${diffMinutes}m`;
   if (diffHours < 24) return `${diffHours}h`;
   if (diffDays < 7) return `${diffDays}d`;
+  return new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
-  const date = new Date(timestamp);
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+// The shared type→color map speaks Tailwind classes; translate to Theme tokens
+// so both platforms color a type from the same source of truth.
+const classToTheme: Record<string, string> = {
+  "text-sol-green": Theme.green,
+  "text-red-400": Theme.red,
+  "text-sol-orange": Theme.orange,
+  "text-sol-blue": Theme.blue,
+  "text-sol-cyan": Theme.cyan,
+  "text-sol-violet": Theme.violet,
+  "text-sol-yellow": Theme.accent,
+};
+
+function typeColorNative(type: string): string {
+  return classToTheme[typeColors[type] ?? ""] ?? Theme.textMuted;
 }
 
 function notificationIcon(type: string): { name: React.ComponentProps<typeof FontAwesome>['name']; color: string } {
@@ -54,27 +83,28 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "comment_reply": return { name: "reply", color: Theme.violet };
     case "conversation_comment": return { name: "comment", color: Theme.accent };
     case "team_invite": return { name: "users", color: Theme.greenBright };
-    case "session_idle": return { name: "pause", color: Theme.accent };
-    case "permission_request": return { name: "shield", color: "#f59e0b" };
+    case "session_idle": return { name: "check", color: Theme.green };
+    case "permission_request": return { name: "shield", color: Theme.orange };
     case "session_error": return { name: "exclamation-triangle", color: Theme.red };
     case "team_session_start": return { name: "play-circle", color: Theme.blue };
     case "task_completed": return { name: "check-circle", color: Theme.greenBright };
     case "task_failed": return { name: "exclamation-circle", color: Theme.red };
+    case "task_assigned": return { name: "user-plus", color: Theme.accent };
+    case "task_commented":
+    case "doc_commented": return { name: "comment-o", color: Theme.cyan };
+    case "doc_updated": return { name: "file-text-o", color: Theme.violet };
+    case "plan_status_changed":
+    case "plan_task_completed": return { name: "list-ol", color: Theme.green };
+    case "artifact_commented": return { name: "globe", color: Theme.cyan };
     case "chat_mention": return { name: "at", color: Theme.blue };
     case "chat_reply": return { name: "comments", color: Theme.accent };
-    case "chat_here": return { name: "bullhorn", color: "#f59e0b" };
+    case "chat_here": return { name: "bullhorn", color: Theme.orange };
     default: return { name: "bell", color: Theme.textMuted };
   }
 }
 
-function agentTypeLabel(type?: string) {
-  switch (type) {
-    case "claude_code": return "Claude Code";
-    case "codex": return "Codex";
-    case "cursor": return "Cursor";
-    case "gemini": return "Gemini";
-    default: return null;
-  }
+function typeLabel(type: string): string {
+  return typeLabels[type] || type.replace(/_/g, " ");
 }
 
 function NotificationItem({ notification, onPress, onMarkRead }: {
@@ -82,38 +112,40 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
   onPress: () => void;
   onMarkRead: () => void;
 }) {
-  const selfTypes = ["session_idle", "permission_request", "session_error", "task_completed", "task_failed"];
-  const isSelf = selfTypes.includes(notification.type);
-  const actorName = isSelf
-    ? (notification.type === "session_idle" ? "Claude done"
-      : notification.type === "permission_request" ? "Permission needed"
-      : notification.type === "task_completed" ? "Task completed"
-      : notification.type === "task_failed" ? "Task failed"
-      : "Session error")
-    : (notification.actor?.name || notification.actor?.github_username || "Someone");
   const icon = notificationIcon(notification.type);
-  const avatarUrl = notification.actor?.github_avatar_url;
-  const conv = notification.conversation;
-  const contextLine = conv?.title
-    || conv?.project_path?.split("/").pop()
-    || null;
-  const agentLabel = agentTypeLabel(conv?.agent_type);
+  const actorName = notification.actor?.name || notification.actor?.github_username || notification.actor_name;
+  const avatarUrl = notification.actor?.github_avatar_url || notification.actor_avatar;
+  const agentType = notification.conversation?.agent_type || "claude_code";
+  const isSessionNotif = sessionTypes.has(notification.type) || notification.type === "team_session_start";
+  const label = sessionLabel(notification.conversation);
+
+  // The title is what the notification is about — the session, else the person.
+  // The event itself is a small colored word, never the headline.
+  const title = label || actorName || typeLabel(notification.type);
+  const who = actorName || (isSessionNotif ? (agentNames[agentType] || agentType) : null);
 
   return (
     <TouchableOpacity
       onPress={onPress}
+      onLongPress={() => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+        onMarkRead();
+      }}
       style={[styles.notificationCard, !notification.read && styles.notificationUnread]}
       activeOpacity={0.7}
     >
+      {!notification.read && <RNView style={styles.unreadBar} />}
       <RNView style={styles.avatarContainer}>
         {avatarUrl ? (
           <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+        ) : isSessionNotif ? (
+          <AgentLogoSvg agentType={agentType} size={38} />
         ) : (
           <RNView style={styles.avatarFallback}>
-            <FontAwesome name={icon.name} size={18} color={icon.color} />
+            <FontAwesome name={icon.name} size={16} color={icon.color} />
           </RNView>
         )}
-        {avatarUrl && (
+        {(avatarUrl || isSessionNotif) && (
           <RNView style={[styles.iconBadge, { backgroundColor: icon.color }]}>
             <FontAwesome name={icon.name} size={8} color="#fff" />
           </RNView>
@@ -121,42 +153,82 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
       </RNView>
       <RNView style={styles.notificationContent}>
         <RNView style={styles.notificationHeader}>
-          <RNText style={styles.notificationActorName} numberOfLines={1}>{actorName}</RNText>
+          <RNText
+            style={[styles.notificationTitle, notification.read && styles.notificationTitleRead]}
+            numberOfLines={1}
+          >
+            {title}
+          </RNText>
           <RNText style={styles.notificationTime}>
             {formatRelativeTime(notification.created_at)}
           </RNText>
+          {!notification.read && <RNView style={styles.unreadDot} />}
         </RNView>
-        {contextLine && (
-          <RNView style={styles.contextRow}>
-            {agentLabel && (
-              <RNText style={styles.agentBadge}>{agentLabel}</RNText>
-            )}
-            <RNText style={styles.contextText} numberOfLines={1}>{contextLine}</RNText>
-          </RNView>
-        )}
-        <RNText style={styles.notificationMessage} numberOfLines={6}>
-          {cleanNotificationBody(notification.message, 300)}
+        <RNView style={styles.metaRow}>
+          {who && who !== title && (
+            <RNText style={styles.metaWho} numberOfLines={1}>{who}</RNText>
+          )}
+          <RNText style={[styles.metaType, { color: typeColorNative(notification.type) }]} numberOfLines={1}>
+            {typeLabel(notification.type)}
+          </RNText>
+        </RNView>
+        <RNText style={styles.notificationMessage} numberOfLines={3}>
+          {cleanNotificationBody(notification.message, 200)}
         </RNText>
       </RNView>
-      {!notification.read && (
-        <RNView style={styles.unreadDot} />
-      )}
     </TouchableOpacity>
   );
 }
 
+type FilterTab = "all" | "unread" | "sessions" | "tasks" | "social";
+
+function matchesTab(n: Notification, tab: FilterTab): boolean {
+  if (tab === "unread") return !n.read;
+  if (tab === "sessions") return sessionTypes.has(n.type) || n.type === "team_session_start";
+  if (tab === "tasks") return taskTypes.has(n.type);
+  if (tab === "social") return socialTypes.has(n.type);
+  return true;
+}
+
+function sectionTitle(ts: number, startOfToday: number): string {
+  if (ts >= startOfToday) return "Today";
+  if (ts >= startOfToday - 86400000) return "Yesterday";
+  if (ts >= startOfToday - 6 * 86400000) return "This week";
+  return "Earlier";
+}
+
 export default function NotificationsScreen() {
   const [refreshing, setRefreshing] = useState(false);
+  const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const router = useRouter();
 
   const notifications = useQuery(api.notifications.list) as Notification[] | undefined;
-  const unreadCount = useQuery(api.notifications.getUnreadCount);
   const markAsRead = useMutation(api.notifications.markAsRead);
   const markAllAsRead = useMutation(api.notifications.markAllAsRead);
 
+  const unreadCount = useMemo(
+    () => (notifications ?? []).filter((n) => !n.read).length,
+    [notifications]
+  );
+
+  const sections = useMemo(() => {
+    const filtered = (notifications ?? []).filter((n) => matchesTab(n, activeTab));
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const out: { title: string; data: Notification[] }[] = [];
+    for (const n of filtered) {
+      const title = sectionTitle(n.created_at, startOfToday);
+      const last = out[out.length - 1];
+      if (last && last.title === title) last.data.push(n);
+      else out.push({ title, data: [n] });
+    }
+    return out;
+  }, [notifications, activeTab]);
+
   const onRefresh = async () => {
+    // The list is a live Convex subscription; the gesture just acknowledges.
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 1000);
+    setTimeout(() => setRefreshing(false), 400);
   };
 
   const handlePress = (notification: Notification) => {
@@ -164,8 +236,13 @@ export default function NotificationsScreen() {
     if (!notification.read) {
       markAsRead({ notificationId: notification._id }).catch(() => {});
     }
+    // A deep link wins (artifact comments open the published page).
+    if (notification.link) {
+      Linking.openURL(notification.link).catch(() => {});
+      return;
+    }
     if (notification.entity_type && notification.entity_id && notification.entity_type !== "conversation") {
-      const routes: Record<string, string> = { task: "/task/", doc: "/doc/", plan: "/plan/" };
+      const routes: Record<string, string> = { task: "/task/", doc: "/doc/", plan: "/plan/", chat_channel: "/chat/" };
       const base = routes[notification.entity_type];
       if (base) {
         router.push(`${base}${notification.entity_id}` as any);
@@ -183,43 +260,67 @@ export default function NotificationsScreen() {
     }
   };
 
-  const renderItem = ({ item }: { item: Notification }) => (
-    <NotificationItem
-      notification={item}
-      onPress={() => handlePress(item)}
-      onMarkRead={() => handleMarkRead(item)}
-    />
-  );
+  const tabs: { key: FilterTab; label: string }[] = [
+    { key: "all", label: "All" },
+    { key: "unread", label: unreadCount > 0 ? `Unread (${unreadCount})` : "Unread" },
+    { key: "sessions", label: "Sessions" },
+    { key: "tasks", label: "Tasks" },
+    { key: "social", label: "Social" },
+  ];
 
   const renderEmpty = () => (
     <RNView style={styles.emptyContainer}>
       <RNView style={styles.emptyIcon}>
         <FontAwesome name="bell-o" size={28} color={Theme.textMuted0} />
       </RNView>
-      <RNText style={styles.emptyTitle}>No notifications</RNText>
+      <RNText style={styles.emptyTitle}>
+        {activeTab === "all" ? "No notifications" : `No ${activeTab === "unread" ? "unread" : activeTab} notifications`}
+      </RNText>
       <RNText style={styles.emptyText}>
-        Mentions, comments, and team invites{'\n'}will appear here.
+        Session updates, mentions, comments,{'\n'}and task activity will appear here.
       </RNText>
     </RNView>
   );
 
-  const hasUnread = (unreadCount ?? 0) > 0;
-
   return (
     <RNView style={styles.container}>
-      {hasUnread && (
-        <TouchableOpacity
-          style={styles.markAllButton}
-          onPress={() => markAllAsRead({})}
-          activeOpacity={0.7}
-        >
-          <RNText style={styles.markAllText}>Mark all as read</RNText>
-        </TouchableOpacity>
-      )}
-      <FlatList
-        data={notifications ?? []}
-        renderItem={renderItem}
+      <RNView style={styles.filterBar}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
+          {tabs.map((tab) => (
+            <TouchableOpacity
+              key={tab.key}
+              onPress={() => setActiveTab(tab.key)}
+              style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+              activeOpacity={0.7}
+            >
+              <RNText style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
+                {tab.label}
+              </RNText>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        {unreadCount > 0 && (
+          <TouchableOpacity onPress={() => markAllAsRead({})} activeOpacity={0.7} style={styles.markAllButton}>
+            <RNText style={styles.markAllText}>Read all</RNText>
+          </TouchableOpacity>
+        )}
+      </RNView>
+      <SectionList
+        sections={sections}
+        renderItem={({ item }) => (
+          <NotificationItem
+            notification={item}
+            onPress={() => handlePress(item)}
+            onMarkRead={() => handleMarkRead(item)}
+          />
+        )}
+        renderSectionHeader={({ section }) => (
+          <RNView style={styles.sectionHeader}>
+            <RNText style={styles.sectionHeaderText}>{section.title}</RNText>
+          </RNView>
+        )}
         keyExtractor={(item) => item._id}
+        stickySectionHeadersEnabled={false}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -227,8 +328,8 @@ export default function NotificationsScreen() {
             tintColor={Theme.textMuted}
           />
         }
-        ListEmptyComponent={notifications === undefined ? <NotificationListSkeleton /> : renderEmpty}
-        contentContainerStyle={(notifications?.length ?? 0) === 0 ? styles.emptyList : styles.listContent}
+        ListEmptyComponent={notifications === undefined ? <NotificationListSkeleton /> : renderEmpty()}
+        contentContainerStyle={sections.length === 0 ? styles.emptyList : styles.listContent}
         showsVerticalScrollIndicator={false}
       />
     </RNView>
@@ -240,18 +341,57 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Theme.bg,
   },
-  markAllButton: {
-    backgroundColor: Theme.bgAlt,
-    paddingVertical: 10,
-    paddingHorizontal: Spacing.lg,
+  filterBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Theme.bg,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
-    alignItems: 'flex-end',
+    paddingHorizontal: Spacing.md,
+  },
+  tabsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingVertical: Spacing.sm,
+  },
+  tab: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  tabActive: {
+    backgroundColor: Theme.bgHighlight,
+  },
+  tabText: {
+    fontSize: 13,
+    color: Theme.textMuted,
+  },
+  tabTextActive: {
+    color: Theme.text,
+    fontWeight: '600',
+  },
+  markAllButton: {
+    paddingLeft: Spacing.md,
+    paddingVertical: 6,
   },
   markAllText: {
     fontSize: 13,
     color: Theme.accent,
     fontWeight: '600',
+  },
+  sectionHeader: {
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xs,
+    backgroundColor: Theme.bg,
+  },
+  sectionHeaderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Theme.textMuted0,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   listContent: {
     paddingBottom: Spacing.xl,
@@ -260,29 +400,37 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     paddingHorizontal: Spacing.md,
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.bgHighlight,
     backgroundColor: Theme.bg,
   },
   notificationUnread: {
-    backgroundColor: `${Theme.accent}08`,
+    backgroundColor: `${Theme.accent}0d`,
+  },
+  unreadBar: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 3,
+    backgroundColor: Theme.accent,
   },
   avatarContainer: {
-    width: 42,
-    height: 42,
+    width: 38,
+    height: 38,
     marginRight: Spacing.md,
     marginTop: 2,
   },
   avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
   },
   avatarFallback: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: Theme.bgAlt,
     alignItems: 'center',
     justifyContent: 'center',
@@ -291,9 +439,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: -2,
     right: -2,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
@@ -304,49 +452,50 @@ const styles = StyleSheet.create({
   },
   notificationHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 2,
+    marginBottom: 1,
   },
-  notificationActorName: {
+  notificationTitle: {
     fontSize: 15,
     fontWeight: '600',
     color: Theme.text,
     flex: 1,
     marginRight: Spacing.sm,
   },
+  notificationTitleRead: {
+    fontWeight: '500',
+    color: Theme.textMuted,
+  },
   notificationTime: {
     fontSize: 12,
     color: Theme.textMuted0,
-  },
-  contextRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  agentBadge: {
-    fontSize: 11,
-    color: Theme.accent,
-    fontWeight: '600',
-    marginRight: 6,
-  },
-  contextText: {
-    fontSize: 12,
-    color: Theme.textMuted0,
-    flex: 1,
-  },
-  notificationMessage: {
-    fontSize: 14,
-    color: Theme.textMuted,
-    lineHeight: 20,
   },
   unreadDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: Theme.accent,
-    marginLeft: Spacing.sm,
-    marginTop: 6,
+    marginLeft: 6,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 3,
+  },
+  metaWho: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    fontWeight: '600',
+    marginRight: 6,
+  },
+  metaType: {
+    fontSize: 12,
+    flexShrink: 1,
+  },
+  notificationMessage: {
+    fontSize: 14,
+    color: Theme.textMuted,
+    lineHeight: 20,
   },
   emptyContainer: {
     flex: 1,
