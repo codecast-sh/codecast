@@ -37,6 +37,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { PageSession } from "./instance.js";
+import { CdpConnection } from "./cdp.js";
+import { chromeUserDataRoot, type ChromeChannel } from "./profile.js";
 
 /** A cookie in the shape `Network.setCookies` wants. */
 export interface Cookie {
@@ -135,8 +137,8 @@ export function cookieHostKeys(host: string): string[] {
 }
 
 /** Where the managed clone keeps its cookie database. */
-export function cookieDbPath(userDataDir: string): string | null {
-  for (const rel of [["Default", "Network", "Cookies"], ["Default", "Cookies"]]) {
+export function cookieDbPath(userDataDir: string, profileDir = "Default"): string | null {
+  for (const rel of [[profileDir, "Network", "Cookies"], [profileDir, "Cookies"]]) {
     const p = path.join(userDataDir, ...rel);
     if (fs.existsSync(p)) return p;
   }
@@ -155,8 +157,8 @@ export interface ReadCookiesResult {
  * The database is copied before reading: Chrome holds it open with WAL, and
  * querying the live file risks both a lock error and a torn read.
  */
-export function localCookiesForHost(userDataDir: string, host: string): ReadCookiesResult {
-  const db = cookieDbPath(userDataDir);
+export function localCookiesForHost(userDataDir: string, host: string, profileDir = "Default"): ReadCookiesResult {
+  const db = cookieDbPath(userDataDir, profileDir);
   if (!db) return { cookies: [], reason: `no cookie database under ${userDataDir}` };
   const key = chromeEncryptionKey();
   if (!key) return { cookies: [], reason: "could not read the Chrome key from the login Keychain" };
@@ -272,4 +274,52 @@ export async function provisionCredentials(
 
   await page.conn.send("Network.setCookies", { cookies: missing }, page.sessionId, 10_000);
   return { injected: missing.length, host };
+}
+
+/**
+ * The same carry-over for the LOCAL managed browser, at the browser level.
+ *
+ * The managed browser starts from a clone of the real profile, but a clone is a
+ * snapshot: sign in to something new in your real Chrome an hour later and the
+ * agent's browser does not know. So before an agent opens a site, the cookies
+ * your real Chrome holds for that host are read fresh (the same decrypt as the
+ * remote path — the key never leaves the machine) and any that differ are set
+ * through the browser-wide `Storage` domain, no page needed. Local-storage
+ * tokens are not carried; sites that keep their session only there still need
+ * a sign-in in the agent's tab.
+ */
+export async function provisionLocalLogins(
+  port: number,
+  url: string,
+  source: { profileDir: string; channel?: ChromeChannel },
+): Promise<ProvisionResult> {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return { injected: 0, host: url, reason: "not a url" };
+  }
+  if (!host || host === "localhost" || /^[\d.]+$/.test(host)) return { injected: 0, host, reason: "local address" };
+  const root = chromeUserDataRoot(source.channel ?? "chrome");
+  if (!root) return { injected: 0, host, reason: "no real Chrome profile on this machine" };
+
+  const { cookies, reason } = localCookiesForHost(root, host, source.profileDir);
+  if (!cookies.length) return { injected: 0, host, reason: reason ?? "no local cookies for this site" };
+
+  const conn = await CdpConnection.fromPort(port, 5_000);
+  try {
+    const already = new Map<string, string>();
+    try {
+      const r = await conn.send<any>("Storage.getCookies", {}, undefined, 8_000);
+      for (const c of r.cookies ?? []) already.set(`${c.name}\u0000${c.domain}`, c.value);
+    } catch {
+      /* treat as empty; injecting is the safe direction */
+    }
+    const missing = cookies.filter((c) => already.get(`${c.name}\u0000${c.domain}`) !== c.value);
+    if (!missing.length) return { injected: 0, host, reason: "already has the same cookies" };
+    await conn.send("Storage.setCookies", { cookies: missing }, undefined, 10_000);
+    return { injected: missing.length, host };
+  } finally {
+    conn.close();
+  }
 }
