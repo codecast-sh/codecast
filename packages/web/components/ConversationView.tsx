@@ -5025,6 +5025,12 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
     () => (cat === "browser" ? extractBrowserTabId(output) : null),
     [cat, output],
   );
+  // Discovery of the daemon's loopback endpoint can outlast a click's
+  // activation window, so start it as soon as a row that can focus a tab
+  // renders — by the time the human clicks, the endpoint is cached.
+  useEffect(() => {
+    if (browserTabId) prefetchBrowserFocusEndpoint(convex);
+  }, [browserTabId, convex]);
 
   const renderSummary = () => {
     const isShow = subcommand === "show" || subcommand === "status" || subcommand === "context";
