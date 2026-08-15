@@ -72,6 +72,10 @@ function AppCard({
   const connected = connection?.status === "connected" ? connection : null;
 
   const getSlackUrl = useAction(api.slack.getInstallUrl);
+  const getGoogleUrl = useAction(api.googleOAuth.getConnectUrl);
+  const disconnectGoogle = useAction(api.googleOAuth.disconnect);
+  const getConnectorUrl = useAction(api.oauthConnectors.getConnectUrl);
+  const disconnectConnector = useAction(api.oauthConnectors.disconnect);
   const deleteGithubInstallation = useMutation(api.githubApp.deleteInstallation);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,15 +83,28 @@ function AppCard({
   const connect = async () => {
     setError(null);
     if (descriptor.connectKind === "oauth-popup") {
-      // Slack: the existing "Add to Slack" flow (slack.ts getInstallUrl). The
-      // popup lands back on /anchor authenticated, which completes the install.
       setBusy(true);
       try {
-        const res = await getSlackUrl({ scope_type: "team" });
-        if (res?.ok && res.url) window.open(res.url, "_blank", "noopener");
-        else setError(res?.error ?? "Couldn't start the Slack connection");
+        if (descriptor.id === "gmail") {
+          // Google: the connector's own authorize flow. Readonly scope only on
+          // first connect; the send grant is a later, separate ask.
+          const res = await getGoogleUrl({});
+          if (res?.ok && res.url) window.open(res.url, "_blank", "noopener");
+          else setError(res?.error ?? "Couldn't start the Google connection");
+        } else if (descriptor.id === "linear" || descriptor.id === "notion") {
+          // The generic connector: one flow, provider in the signed state.
+          const res = await getConnectorUrl({ provider: descriptor.id });
+          if (res?.ok && res.url) window.open(res.url, "_blank", "noopener");
+          else setError(res?.error ?? `Couldn't start the ${descriptor.name} connection`);
+        } else {
+          // Slack: the existing "Add to Slack" flow (slack.ts getInstallUrl).
+          // The popup lands back on /anchor authenticated, completing the install.
+          const res = await getSlackUrl({ scope_type: "team" });
+          if (res?.ok && res.url) window.open(res.url, "_blank", "noopener");
+          else setError(res?.error ?? "Couldn't start the Slack connection");
+        }
       } catch (e: any) {
-        setError(e?.message ?? "Couldn't reach Slack");
+        setError(e?.message ?? `Couldn't reach ${descriptor.name}`);
       } finally {
         setBusy(false);
       }
@@ -108,6 +125,28 @@ function AppCard({
   const disconnect = async () => {
     if (!connected?.disconnect_id) return;
     if (!confirm(`Disconnect ${descriptor.name}? Agents lose access it granted.`)) return;
+    if (descriptor.id === "linear" || descriptor.id === "notion") {
+      setBusy(true);
+      try {
+        await disconnectConnector({ installation_id: connected.disconnect_id });
+      } catch (e: any) {
+        setError(e?.message ?? `Couldn't disconnect ${descriptor.name}`);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (descriptor.id === "gmail") {
+      setBusy(true);
+      try {
+        await disconnectGoogle({ installation_id: connected.disconnect_id });
+      } catch (e: any) {
+        setError(e?.message ?? "Couldn't disconnect Google");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     setError(null);
     setBusy(true);
     try {

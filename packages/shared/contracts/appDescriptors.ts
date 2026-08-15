@@ -79,7 +79,7 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
       "Draft replies for your review — never send on its own",
       "Label and file mail by rules you state",
     ],
-    connectKind: "coming-soon",
+    connectKind: "oauth-popup",
     scope: "personal",
   },
   linear: {
@@ -91,7 +91,7 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
       "Move the issue when the fixing PR merges",
       "Pull an issue's description into the session working on it",
     ],
-    connectKind: "coming-soon",
+    connectKind: "oauth-popup",
     scope: "team",
   },
   notion: {
@@ -103,7 +103,7 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
       "Answer questions from the docs you share with it",
       "Keep a runbook current as the system changes",
     ],
-    connectKind: "coming-soon",
+    connectKind: "oauth-popup",
     scope: "team",
   },
 };

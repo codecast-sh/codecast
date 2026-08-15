@@ -30,10 +30,11 @@ export * from "./capabilityResolver";
 // while it lived in the CLI the other two could only reimplement it.
 export * from "./fleetDiff";
 export * from "./capabilityScopes";
+export * from "./sanitizeText";
+export * from "./mcpRegistry";
 // The connectable-apps catalog (the /capabilities Apps tab): Convex answers
 // connection state in this vocabulary and the web renders it, so both need the
 // one definition. Deep paths do not resolve past the exports map — barrel only.
 export * from "./appDescriptors";
 // The cross-entity review queue row — one shape for "what is waiting on a
 // human", fed by comment threads, page comments, and workflow gates alike.
-export * from "./reviewQueue";

@@ -85,3 +85,58 @@ export function useSyncCapabilityStateWithArgs(wsArgs: WorkspaceArgs) {
 export function useSyncCapabilityState() {
   return useSyncCapabilityStateWithArgs(useWorkspaceArgs());
 }
+
+
+/* ==========================================================================
+ * Bindings — the user's wishes, synced beside the mirror
+ * ========================================================================== */
+
+/**
+ * The bindings sync rides the same shape as the mirror. Cursor discipline is
+ * identical and the reason is identical: a delta on cold start silently
+ * misses what the cache lacks.
+ */
+export function useSyncCapabilityBindingsWithArgs(wsArgs: WorkspaceArgs) {
+  const syncTable = useInboxStore((s) => s.syncTable);
+  const wsKey = wsArgs === "skip" ? "skip" : JSON.stringify(wsArgs);
+  const [cursor, setCursor] = useState<number | undefined>(undefined);
+  const lastSeen = useRef<number | undefined>(undefined);
+  const lastWsKey = useRef<string>(wsKey);
+  if (lastWsKey.current !== wsKey) {
+    lastWsKey.current = wsKey;
+    if (cursor !== undefined) setCursor(undefined);
+    lastSeen.current = undefined;
+  }
+
+  const result = useQuery(
+    api.capabilityBindings.webListBindings,
+    wsArgs === "skip" ? "skip" : { ...(cursor !== undefined ? { since: cursor } : {}) },
+  );
+  const data = useMemo(() => (result === undefined ? undefined : { items: result.items ?? [] }), [result]);
+
+  useConvexSync(
+    data,
+    useCallback(
+      (d: { items: any[] }) => {
+        syncTable("capabilityBindings", d.items, { isDelta: true });
+        for (const row of d.items) {
+          if (typeof row?.updated_at === "number") {
+            lastSeen.current = Math.max(lastSeen.current ?? 0, row.updated_at);
+          }
+        }
+      },
+      [syncTable],
+    ),
+  );
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (lastSeen.current !== undefined && lastSeen.current !== cursor) setCursor(lastSeen.current);
+    }, CURSOR_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [cursor]);
+}
+
+export function useSyncCapabilityBindings() {
+  return useSyncCapabilityBindingsWithArgs(useWorkspaceArgs());
+}

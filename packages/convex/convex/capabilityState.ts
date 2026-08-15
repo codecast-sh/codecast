@@ -49,6 +49,7 @@ import {
   type ExecutionSurface,
   type InstalledEntry,
   type ObservedScope,
+  isWellFormedCapabilitySlug,
 } from "@codecast/shared/contracts";
 import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
@@ -262,6 +263,14 @@ function normalizeItem(raw: unknown): NormalizedItem | undefined {
     installed: typeof raw.installed === "boolean" ? raw.installed : undefined,
     // The one field whose JOB is an absolute path on that machine.
     source: text(raw.source, MAX_PATH_CHARS, "source"),
+    // The library slug when the scanner could name it with certainty (a
+    // builtin section is builtin/<slug> by construction). Kept only when it
+    // parses as a well-formed slug — a scanner cannot mint an identity the
+    // grammar refuses, or a hostile report could claim builtin/ for anything.
+    slug: (() => {
+      const candidate = identityText(raw.slug, MAX_CAPABILITY_SLUG_LENGTH);
+      return candidate && isWellFormedCapabilitySlug(candidate) ? candidate : undefined;
+    })(),
     meta: normalizeMeta(raw.meta),
   };
 }
@@ -566,7 +575,12 @@ export const reportInventory = mutation({
       // that says "this machine is showing a truncated inventory" would freeze
       // at the first number it ever saw.
       const sameContent =
-        existing.entries_hash === hash &&
+        // Compare the BYTES we would store against the bytes we hold, not the
+        // hash we recorded when we last held them: the canonical form can gain
+        // a field (slug did) and every stored row's old hash would then agree
+        // with a report that renders differently. Same-hash-different-bytes is
+        // exactly the "mirror shows stale data forever" failure.
+        existing.entries_json === normalized.json &&
         (existing.last_error ?? undefined) === scanError &&
         (existing.client_version ?? undefined) === clientVersion &&
         (existing.dropped_count ?? 0) === normalized.dropped;

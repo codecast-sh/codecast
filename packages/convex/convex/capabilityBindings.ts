@@ -348,3 +348,132 @@ export const unbindCapability = mutation({
     return { removed: rows.length };
   },
 });
+
+/* ==========================================================================
+ * The web's read: my bindings, for the Installed tab and the equip control
+ * ========================================================================== */
+
+import { getAuthUserId } from "@convex-dev/auth/server";
+
+/**
+ * Every binding this user can see: their own at any scope, plus team bindings
+ * for the teams they belong to. Shaped for the store's syncTable — a plain
+ * list, `since` watermark for delta, opaque enough that the resolver in
+ * packages/shared stays the only interpreter.
+ */
+export const webListBindings = query({
+  args: { since: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { items: [] as any[] };
+    const db = capDb(ctx.db);
+    const mine = await db
+      .query("capability_bindings")
+      .withIndex("by_user_updated", (q: any) => q.eq("user_id", userId))
+      .collect();
+
+    // Team bindings ride in from every team the user is a member of. The
+    // membership rows are the tenant gate the by_team_updated exception in the
+    // schema was justified on.
+    const memberships = await (ctx.db as any)
+      .query("team_memberships")
+      .withIndex("by_user_team", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const teamRows: any[] = [];
+    for (const m of memberships) {
+      const rows = await db
+        .query("capability_bindings")
+        .withIndex("by_team_updated", (q: any) => q.eq("team_id", m.team_id))
+        .collect();
+      for (const r of rows) if (r.user_id !== (userId as unknown as string)) teamRows.push(r);
+    }
+
+    const all = [...mine, ...teamRows].filter(
+      (r) => args.since === undefined || r.updated_at > args.since,
+    );
+    return {
+      items: all.map((r) => ({
+        _id: r._id,
+        user_id: r.user_id,
+        team_id: r.team_id,
+        capability_slug: r.capability_slug,
+        scope_kind: r.scope_kind,
+        scope_key: r.scope_key,
+        enabled: r.enabled,
+        config: r.config,
+        client_filter: r.client_filter,
+        min_client_version: r.min_client_version,
+        client_key: r.client_key,
+        created_by: r.created_by,
+        updated_at: r.updated_at,
+      })),
+    };
+  },
+});
+
+/** The CLI's read of its own bindings (token auth). Same rows as
+ *  webListBindings, keyed for a terminal listing. */
+export const listBindingsForToken = query({
+  args: { api_token: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const db = capDb(ctx.db);
+    const rows = await db
+      .query("capability_bindings")
+      .withIndex("by_user_updated", (q: any) => q.eq("user_id", auth.userId))
+      .collect();
+    return rows.map((r) => ({
+      capability_slug: r.capability_slug,
+      scope_kind: r.scope_kind,
+      scope_key: r.scope_key,
+      enabled: r.enabled,
+      updated_at: r.updated_at,
+    }));
+  },
+});
+
+/** The token's own identity — what the CLI needs to key a local: project. */
+export const whoamiForToken = query({
+  args: { api_token: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    return { user_id: String(auth.userId) };
+  },
+});
+
+/** The execution surfaces the fleet has OBSERVED for a slug — the consent
+ *  prompt's input. Empty when nothing has scanned it, which the contract's
+ *  rule reads as "requires consent". */
+export const surfacesForSlug = query({
+  args: { api_token: v.string(), slug: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const db = capDb(ctx.db);
+    const rows = await db
+      .query("capability_observation")
+      .withIndex("by_user_client_kind_name", (q: any) => q.eq("user_id", auth.userId))
+      .collect();
+    // Observations are keyed (kind, name), slugs by source. Match by name
+    // suffix: mkt/official/x -> "x", builtin/memory -> "memory".
+    const leaf = args.slug.split("/").pop() ?? args.slug;
+    const hit = rows.find((r) => r.name === leaf || r.name.startsWith(`${leaf}@`));
+    return { surfaces: hit?.surfaces ?? [], observed: hit !== undefined };
+  },
+});
+
+/** Set the caller's own reconciler mode. The global system_config value
+ *  outranks this — an operator kill wins over any user preference. */
+export const setCapabilitiesMode = mutation({
+  args: { api_token: v.string(), mode: v.union(v.literal("off"), v.literal("dry"), v.literal("on")) },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    await ctx.db.patch(auth.userId, { capabilities_mode: args.mode } as any);
+    // Bump the revision so every machine re-plans under the new mode next beat.
+    await bumpCapabilityRevision(ctx, auth.userId as unknown as string);
+    return { mode: args.mode };
+  },
+});

@@ -53,7 +53,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { AGENT_CLIENTS, observedScopeRank } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, observedScopeRank, SNIPPET_CATALOG} from "@codecast/shared/contracts";
 import type { AgentClientId } from "@codecast/shared/contracts";
 
 // Both of these are the shared contract's, re-exported so this module's existing
@@ -70,6 +70,10 @@ export interface InventoryItem {
   kind: CapabilityKind;
   /** Unique within its kind: a skill's name, a plugin's `name@marketplace`. */
   name: string;
+  /** The library slug, when the scanner can name it with certainty — a builtin
+   *  section is `builtin/<slug>` by construction. Absent for anything the
+   *  scanner cannot match; the server's catalog matching fills the rest. */
+  slug?: string;
   description?: string;
   scope: CapabilityScope;
   /**
@@ -790,6 +794,35 @@ function readClientItems(
           client: clientId,
           meta: { role: "instructions" },
         });
+        // Plus one entry per BUILTIN section installed inside it. The file's
+        // presence says "instructions exist"; the sections say WHICH codecast
+        // capabilities are on — the granularity a builtin/<slug> binding needs
+        // to cross-reference against, and what the Installed tab shows as
+        // "on N machines". Detected by each spec's own end marker, the same
+        // signal cast install/uninstall key on.
+        let content = "";
+        try {
+          content = fs.readFileSync(target, "utf-8");
+        } catch (err) {
+          noteUnreadable(sink, target, err);
+        }
+        if (content) {
+          for (const entry of SNIPPET_CATALOG) {
+            const spec = entry.section?.spec;
+            if (!spec || !content.includes(spec.endMarker)) continue;
+            out.push({
+              kind: "snippet",
+              name: entry.slug,
+              description: entry.desc,
+              scope,
+              enabled: true,
+              source: target,
+              client: clientId,
+              slug: `builtin/${entry.slug}`,
+              meta: { role: "builtin_section" },
+            });
+          }
+        }
       }
     }
   }

@@ -458,14 +458,17 @@ export function withFleetInstalls(entries: CatalogEntry[], rows: FleetGridRow[])
     }
   }
   return entries.map((entry) => {
-    if (entry.installs.length > 0) return entry;
+    // Public catalog rows arrive with no `installs` at all — the wire shape
+    // from webCatalogList carries only what the registry knows. Absent means
+    // "not cross-referenced yet", which is exactly what this function fills.
+    if ((entry.installs?.length ?? 0) > 0) return entry;
     for (const key of nameKeys(String(entry.kind), entry.name, entry.slug)) {
       const row = byName
         .get(key)
         ?.find((r) => !r.marketplace || !entry.marketplace || r.marketplace === entry.marketplace);
       if (row) return { ...entry, installs: installsFromRow(row) };
     }
-    return entry;
+    return { ...entry, installs: entry.installs ?? [] };
   });
 }
 
