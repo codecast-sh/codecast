@@ -2,6 +2,7 @@
 // the mutations (accountSwitch.ts), and tests. No server/_generated imports.
 
 import { v } from "convex/values";
+import { BLOCKED_BANNER_KINDS } from "@codecast/shared/contracts";
 
 // Per-account usage snapshot the daemon probes from the OAuth usage API
 // (percentages + reset times only — non-secret). Mirrors CcUsageSnapshot in
@@ -284,15 +285,16 @@ export function isDeviceOnline(device: { last_seen: number }, now: number): bool
 }
 
 // Selection predicate for the revive actions: a conversation parked on a
-// LIMIT, AUTH, or CONNECTION banner — the states where the session won't heal
-// itself and a switch/continue is the cure. kind "connection" (the provider
-// never replied: "Connection closed mid-response", "Connection error.") means
-// the turn died at the prompt — a plain continue resumes it, same as limit.
-// kind "error" (statusful 529/500 provider failures) is deliberately OUT:
-// the CLI retries those itself and they must not paint a mid-retry session
-// as blocked (a mid-conversation 500 otherwise throws the active session
-// into the fleet banner). Dismissed is an explicit user "go away" — never
-// auto-revive.
+// LIMIT, AUTH, CONNECTION, or FATAL banner — the states where the session
+// won't heal itself and a switch/continue is the cure. kind "connection" (the
+// provider never replied: "Connection closed mid-response", "Connection
+// error.") and kind "fatal" (a statusful failure the CLI won't retry, e.g. a
+// 400) both mean the turn died at the prompt — a plain continue retries it,
+// same as limit. kind "error" (statusful 429/5xx provider failures) is
+// deliberately OUT: the CLI retries those itself and they must not paint a
+// mid-retry session as blocked (a mid-conversation 500 otherwise throws the
+// active session into the fleet banner). Dismissed is an explicit user "go
+// away" — never auto-revive.
 export function isBlockedConversation(conv: {
   pending_api_error?: boolean;
   pending_api_error_kind?: string | null;
@@ -301,9 +303,7 @@ export function isBlockedConversation(conv: {
 }): boolean {
   return (
     conv.pending_api_error === true &&
-    (conv.pending_api_error_kind === "limit" ||
-      conv.pending_api_error_kind === "auth" ||
-      conv.pending_api_error_kind === "connection") &&
+    BLOCKED_BANNER_KINDS.has(conv.pending_api_error_kind ?? "") &&
     conv.agent_type === "claude_code" &&
     !conv.inbox_dismissed_at
   );

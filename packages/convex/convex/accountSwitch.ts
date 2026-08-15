@@ -15,7 +15,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { getAuthenticatedUserId, enqueuePendingMessage } from "./pendingMessages";
-import { classifyApiErrorBanner, blockedContinueClientId } from "./inboxFilters";
+import { classifyApiErrorBanner, blockedContinueClientId, CONTINUE_BANNER_KINDS } from "./inboxFilters";
 import {
   ccAccountsValidator,
   decideAutoSwitch,
@@ -111,11 +111,11 @@ export const continueAllBlocked = mutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
 
-    // limit + connection by default: both un-park with a plain continue (the
-    // limit window rolled / the dropped turn resumes). auth-blocked sessions
+    // limit + connection + fatal by default: all un-park with a plain continue
+    // (the limit window rolled / the dead turn retries). auth-blocked sessions
     // need a switch (plain continue re-fails) and error-kind (statusful
-    // 529/500, self-retrying) never enters the selection at all.
-    const kinds = new Set(args.kinds ?? ["limit", "connection"]);
+    // 429/5xx, self-retrying) never enters the selection at all.
+    const kinds = new Set(args.kinds ?? CONTINUE_BANNER_KINDS);
     const { blocked: candidates, topLevelCount, subagentCount, totalBlocked } =
       await listBlockedConversations(ctx, userId, args.include_subagents === true);
     const blocked = candidates.filter((c) => kinds.has(c.pending_api_error_kind ?? "error"));
@@ -347,7 +347,7 @@ const BLOCKED_NOTIFY_DEBOUNCE_MS = 60 * 1000;
 const BLOCKED_NOTIFY_COOLDOWN_MS = 30 * 60 * 1000;
 
 /** The single hook the message paths call when a conversation freshly parks on
- * a blocked-kind banner (auth/limit/connection — never statusful "error").
+ * a blocked-kind banner (auth/limit/connection/fatal — never self-retrying "error").
  * Fans out to both reactions: the auto-switch check (limit only) and the
  * debounced incident notification (all blocked kinds). Both are idempotent
  * and self-gating, so over-scheduling is harmless. */
@@ -391,13 +391,16 @@ export const blockedNotifyCheck = internalMutation({
 
     const authCount = blocked.filter((c) => c.pending_api_error_kind === "auth").length;
     const connCount = blocked.filter((c) => c.pending_api_error_kind === "connection").length;
-    const limitCount = blocked.length - authCount - connCount;
+    const fatalCount = blocked.filter((c) => c.pending_api_error_kind === "fatal").length;
+    const limitCount = blocked.length - authCount - connCount - fatalCount;
     // Same headline the banner leads with.
-    const on = limitCount > 0 ? "usage limits" : connCount > 0 ? "dropped connections" : "login";
+    const on =
+      limitCount > 0 ? "usage limits" : connCount > 0 ? "dropped connections" : fatalCount > 0 ? "api errors" : "login";
     const title = `${totalBlocked} session${totalBlocked === 1 ? "" : "s"} blocked on ${on}`;
     const parts = [
       limitCount > 0 ? `${limitCount} hit a usage limit` : null,
       connCount > 0 ? `${connCount} dropped mid-response` : null,
+      fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
       authCount > 0 ? `${authCount} signed out` : null,
     ].filter(Boolean);
     const hint = authCount > 0 ? "sign in to revive them" : "revive them from the inbox";
