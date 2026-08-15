@@ -449,6 +449,10 @@ export interface ShotOptions {
   ref?: number;
   format?: "png" | "jpeg";
   quality?: number;
+  /** Downscale so the output is at most this many pixels wide. Done in the
+   *  browser via a clip scale, so it also neutralises retina DPR — no local
+   *  image tooling involved, and it works against a remote Chrome. */
+  maxWidth?: number;
 }
 
 /** Capture a screenshot, returned as raw bytes. */
@@ -471,6 +475,22 @@ export async function screenshot(page: PageSession, opts: ShotOptions = {}): Pro
     // captureBeyondViewport renders the whole scroll height without the
     // scroll-and-stitch dance, which double-fires lazy loaders.
     params.captureBeyondViewport = true;
+  } else if (opts.maxWidth) {
+    const [lm, dprRes] = await Promise.all([
+      conn.send<any>("Page.getLayoutMetrics", {}, sessionId),
+      conn.send<any>("Runtime.evaluate", { expression: "devicePixelRatio", returnByValue: true }, sessionId),
+    ]);
+    const v = lm.cssLayoutViewport;
+    const dpr = Number(dprRes?.result?.value) || 1;
+    // The output is clip.width × scale × DPR pixels wide — the clip scale
+    // multiplies on top of the device scale, so a retina page needs the DPR
+    // folded in or "800 wide" comes out at 1600.
+    const scale = opts.maxWidth / (v.clientWidth * dpr);
+    if (v && scale < 1) {
+      // Clip coordinates are page coordinates, so a scrolled page needs the
+      // scroll offset folded in or the capture shows the top of the document.
+      params.clip = { x: v.pageX ?? 0, y: v.pageY ?? 0, width: v.clientWidth, height: v.clientHeight, scale };
+    }
   }
 
   const res = await conn.send<{ data: string }>("Page.captureScreenshot", params, sessionId);

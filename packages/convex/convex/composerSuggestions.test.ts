@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { minePhrases, rankInputs, sanitizeSuggestions } from "./composerSuggestions";
+import { minePhrases, normalizeForMatch, rankInputs, sanitizeSuggestions } from "./composerSuggestions";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -85,10 +85,43 @@ describe("rankInputs", () => {
 });
 
 describe("sanitizeSuggestions", () => {
-  test("accepts strings and {text} objects, capped at 3", () => {
+  test("legacy strings and {text} objects pass, capped at 2 by default", () => {
     expect(
       sanitizeSuggestions(["alpha one", { text: "beta two" }, "gamma three", "delta four"], null),
-    ).toEqual(["alpha one", "beta two", "gamma three"]);
+    ).toEqual(["alpha one", "beta two"]);
+  });
+
+  test("confidence gates: <0.7 dropped, third pill needs >=0.85", () => {
+    expect(
+      sanitizeSuggestions(
+        [
+          { text: "low ball guess", confidence: 0.5 },
+          { text: "solid answer", confidence: 0.9 },
+          { text: "decent answer", confidence: 0.75 },
+        ],
+        null,
+      ),
+    ).toEqual(["solid answer", "decent answer"]);
+    expect(
+      sanitizeSuggestions(
+        [
+          { text: "option a", confidence: 0.95 },
+          { text: "option b", confidence: 0.9 },
+          { text: "option c", confidence: 0.88 },
+        ],
+        null,
+      ),
+    ).toEqual(["option a", "option b", "option c"]);
+    expect(
+      sanitizeSuggestions(
+        [
+          { text: "option a", confidence: 0.95 },
+          { text: "option b", confidence: 0.9 },
+          { text: "option c", confidence: 0.8 },
+        ],
+        null,
+      ),
+    ).toEqual(["option a", "option b"]);
   });
 
   test("drops refusal prose, dupes, quotes, and the last user message", () => {
@@ -104,6 +137,23 @@ describe("sanitizeSuggestions", () => {
     expect(
       sanitizeSuggestions(["continue", "go ahead", "Do it!", "lgtm", "deploy and verify the fix"], null),
     ).toEqual(["deploy and verify the fix"]);
+  });
+
+  test("replayed historical messages are dropped, applied habits survive", () => {
+    const banned = new Set(
+      ["think of 5 ways this feature can be better", "you need to test this more thoroughly"].map(normalizeForMatch),
+    );
+    expect(
+      sanitizeSuggestions(
+        [
+          { text: "Think of 5 ways this feature can be better.", confidence: 0.9 },
+          { text: "think of 5 ways the pill row could be better", confidence: 0.85 },
+          { text: "you need to test this more thoroughly", confidence: 0.9 },
+        ],
+        null,
+        banned,
+      ),
+    ).toEqual(["think of 5 ways the pill row could be better"]);
   });
 
   test("non-array input yields no suggestions", () => {

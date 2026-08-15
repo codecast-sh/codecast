@@ -1,6 +1,7 @@
 import { mutation } from "./functions";
 import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
+import { teamVisibleConvTeam } from "./privacy";
 
 export const create = mutation({
   args: {
@@ -38,7 +39,10 @@ export const create = mutation({
     let teamId = user.team_id;
     if (conversationId) {
       const conv = await ctx.db.get(conversationId);
-      if (conv?.team_id) teamId = conv.team_id;
+      // Only a team-VISIBLE source session donates its team; a private session's
+      // routing team_id must not become a team-readable decision grant.
+      const visibleTeam = teamVisibleConvTeam(conv);
+      if (visibleTeam) teamId = visibleTeam;
     }
 
     const now = Date.now();

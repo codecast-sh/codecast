@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { fleetBandFor, splitFleetBands, fleetTileMeta, fleetProgress } from "./fleetBands";
+import { fleetBandFor, splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, fleetProgress } from "./fleetBands";
 import type { InboxSession } from "../store/inboxStore";
 
 const NOW = 1_700_000_000_000;
@@ -49,6 +49,22 @@ describe("fleetBandFor", () => {
 
   it("escalates a session error to NEEDS YOU", () => {
     expect(fleetBandFor(sess({ session_error: "daemon exploded" }), noQueue)).toBe("needsYou");
+  });
+
+  it("treats a cleanly finished run (stopped + idle) as FINISHED, never NEEDS YOU", () => {
+    // "stopped" + idle is the NORMAL end state of a run in real accounts (the
+    // inbox's needs-input bucket counts these; the board must not).
+    expect(fleetBandFor(sess({ agent_status: "stopped", is_idle: true, message_count: 40 }), noQueue)).toBe("finished");
+  });
+
+  it("escalates a mid-task death (stopped while NOT idle) to NEEDS YOU", () => {
+    expect(
+      fleetBandFor(sess({ agent_status: "stopped", is_idle: false, updated_at: NOW - 10 * 60_000 }), noQueue),
+    ).toBe("needsYou");
+  });
+
+  it("escalates an unresponsive non-idle agent to NEEDS YOU", () => {
+    expect(fleetBandFor(sess({ is_unresponsive: true, is_idle: false, agent_status: "working" }), noQueue)).toBe("needsYou");
   });
 
   it("escalates an active-looking agent that went silent past the liveness TTL", () => {
@@ -136,14 +152,45 @@ describe("fleetTileMeta", () => {
     expect(meta.tone).toBe("red");
   });
 
-  it("RUNNING shows model, message count, and elapsed", () => {
-    const s = sess({ is_idle: false, model: "claude-opus-5", message_count: 789, updated_at: NOW - 12 * 60_000 });
-    expect(fleetTileMeta(s, "running", NOW).text).toBe("opus-5 · 789 msgs · 12m");
+  it("tells a fatal api error apart from a self-retrying one", () => {
+    // A terminal status (400/404/…) parks the turn for good, so the tile names
+    // the remedy; a retryable 429/5xx is still being retried by the CLI and
+    // must not claim the user has to act.
+    const fatal = fleetTileMeta(sess({ pending_api_error: true, pending_api_error_kind: "fatal" }), "needsYou", NOW);
+    expect(fatal.text).toContain("send continue");
+    const retrying = fleetTileMeta(sess({ pending_api_error: true, pending_api_error_kind: "error" }), "needsYou", NOW);
+    expect(retrying.text).toContain("retrying");
+  });
+
+  it("RUNNING shows the live status and elapsed; context line carries model and count", () => {
+    const s = sess({ is_idle: false, agent_status: "thinking", model: "claude-opus-5", message_count: 789, updated_at: NOW - 12 * 60_000, git_root: "/Users/x/src/codecast" });
+    expect(fleetTileMeta(s, "running", NOW).text).toBe("thinking · 12m");
+    expect(fleetTileContext(s)).toBe("codecast · opus-5 · 789 msgs");
+  });
+
+  it("context line includes the worktree when the session runs in one", () => {
+    const s = sess({ git_root: "/Users/x/src/codecast", worktree_name: "fix-auth", model: "claude-fable-5" });
+    expect(fleetTileContext(s)).toBe("codecast/fix-auth · fable-5 · 3 msgs");
   });
 
   it("FINISHED shows a relative completion time", () => {
     const s = sess({ updated_at: NOW - 3 * 60 * 60_000 });
     expect(fleetTileMeta(s, "finished", NOW).text).toBe("finished · 3h ago");
+  });
+});
+
+describe("fleetTileSummary", () => {
+  it("prefers a fresh thread-state line, falls back to the idle summary", () => {
+    const withState = sess({
+      idle_summary: "Session insight headline",
+      thread_state: "Status: deploying pass 3\nNext: verify",
+      thread_state_status: "working",
+      thread_state_at: NOW - 60_000,
+      thread_state_msg_count: 3,
+    });
+    // threadStateCardLine strips the Status:/Blocked: prefix.
+    expect(fleetTileSummary(withState, NOW)).toBe("deploying pass 3");
+    expect(fleetTileSummary(sess({ idle_summary: "Session insight headline" }), NOW)).toBe("Session insight headline");
   });
 });
 

@@ -19,6 +19,7 @@
 
 import type { PageSession } from "./instance.js";
 import { settle } from "./instance.js";
+import { isMutatingStep } from "./autoShot.js";
 import { snapshotPage, matchRefs, type Snapshot } from "./snapshot.js";
 import {
   clearViewport, click, clickAt, DEVICES, evaluate, focus, hover, locate, pressKey,
@@ -96,6 +97,8 @@ export interface BatchContext {
    * output, or null. The CLI uses it to audit where in-page actions landed.
    */
   afterSettle?: () => Promise<string | null>;
+  /** Called after each page-changing step (autoShot.ts). Absent = off. */
+  autoShot?: () => Promise<void>;
 }
 
 /**
@@ -275,6 +278,11 @@ export async function runBatch(
         await settle(ctx.page, { timeoutMs: 8000 }).catch(() => {});
         const note = await ctx.afterSettle?.().catch(() => null);
         if (note) results[results.length - 1].output += `\n! ${note}`;
+      }
+      // After the settle, so the auto shot sees the page the step produced,
+      // not the loading state in between.
+      if (ctx.autoShot && isMutatingStep(args[0], args)) {
+        await ctx.autoShot();
       }
     } catch (err) {
       results.push({ step, ok: false, output: "", error: (err as Error).message });

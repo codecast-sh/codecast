@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { useInboxStore, useTrackedStore, type ChatMessageRow, type ChatRailRow } from "../store/inboxStore";
+import {
+  useInboxStore,
+  useTrackedStore,
+  type ChatMessageRow,
+  type ChatNotifyLevel,
+  type ChatRailRow,
+} from "../store/inboxStore";
 import { chatToastTier, type ChatToastTier } from "../lib/chatTimeline";
 import { ChatToast, toastPreview, type ChatToastData } from "../components/chat/ChatToast";
 import { getChatFocus } from "../lib/chatFocus";
 import { isChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
 import { memberName, type ChatMember } from "../lib/chatViews";
 import { soundChatMention } from "../lib/sounds";
+import { channelDisplayName } from "../lib/chatViews";
+import { dmOtherIds } from "@codecast/shared/chat";
 
 // Arriving chat messages → in-app toasts.
 //
@@ -66,8 +74,23 @@ export function useChatToasts(): void {
   );
 
   const mute = useCallback((channelId: string) => {
-    useInboxStore.getState().setChannelNotifyLevel(channelId, "none");
+    const state: any = useInboxStore.getState();
+    // Muting must not be SILENT: a one-click mute with no feedback reads as
+    // "the toast went away" and leaves the channel dead for weeks before anyone
+    // connects the missing notifications to that click.
+    const prior: ChatNotifyLevel =
+      (state.chatRail ?? []).find((r: ChatRailRow) => String(r.channel_id) === channelId)
+        ?.notify_level ?? "all";
+    const name = state.chatChannels?.[channelId]?.name ?? "channel";
+    state.setChannelNotifyLevel(channelId, "none");
     toast.dismiss(`chat:${channelId}`);
+    toast(`Muted #${name}`, {
+      description: "No more notifications from this channel.",
+      action: {
+        label: "Undo",
+        onClick: () => useInboxStore.getState().setChannelNotifyLevel(channelId, prior),
+      },
+    });
   }, []);
 
   const snooze = useCallback((minutes: number) => {
@@ -132,10 +155,13 @@ export function useChatToasts(): void {
       const recent = (burstRef.current.get(channelId) ?? []).filter(
         (t) => Date.now() - t < BURST_WINDOW_MS,
       );
+      const channelRow = channels[channelId];
+      const isDm = channelRow?.kind === "dm";
       const tier: ChatToastTier = chatToastTier({
         authorId: String(last.user_id),
         viewerId,
         mentionsViewer,
+        isDm,
         channelId,
         activeChannelId: focus.channelId,
         activeThreadRootId: focus.threadRootId,
@@ -158,7 +184,13 @@ export function useChatToasts(): void {
       const data: ChatToastData = {
         messageId,
         channelId,
-        channelName: channels[channelId]?.name ?? "channel",
+        channelName: isDm
+          ? channelDisplayName(
+              { name: "", kind: "dm", dmMemberIds: dmOtherIds(channelRow?.dm_key, viewerId) },
+              members,
+            )
+          : channelRow?.name ?? "channel",
+        isDm,
         authorName: memberName(author),
         authorAvatarUrl: isAgent ? undefined : author?.image || author?.github_avatar_url,
         authorIsAgent: isAgent,

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor } = require("electron");
+const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -958,8 +958,10 @@ ipcMain.handle("show-notification", (_e, { title, body, data }) => {
     if (mainWindow) {
       mainWindow.show();
       mainWindow.focus();
-      if (data?.conversationId) {
-        const path = `/conversation/${data.conversationId}`;
+      // `route` is the one click target (chat message, task, doc...); the bare
+      // conversationId form predates it and stays as the fallback.
+      const path = data?.route || (data?.conversationId ? `/conversation/${data.conversationId}` : null);
+      if (path) {
         mainWindow.webContents.executeJavaScript(
           `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify(path)} }))`
         );
@@ -1093,6 +1095,33 @@ app.whenReady().then(() => {
   // other host (production included) stays strict.
   session.defaultSession.setCertificateVerifyProc((request, callback) => {
     callback(request.hostname === LOCAL_DEV_HOST ? 0 : -3);
+  });
+
+  // Huddles media. Chromium asks the embedder for mic/camera permission; grant
+  // it only to the app's own origins (prod + local dev) so an externally
+  // navigated frame can never capture. macOS still shows its own system prompt
+  // the first time — that one is the OS's to ask.
+  const MEDIA_PERMISSIONS = new Set(["media", "audioCapture", "videoCapture"]);
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (!MEDIA_PERMISSIONS.has(permission)) return callback(false);
+    let host = "";
+    try {
+      host = new URL(webContents.getURL()).hostname;
+    } catch {}
+    callback(host === "codecast.sh" || host === LOCAL_DEV_HOST);
+  });
+
+  // Screen share: the renderer's getDisplayMedia needs a source from the main
+  // process. V1 shares the primary screen (the codecast gesture is "look at
+  // my screen", not a picker safari); a source picker is a later polish.
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    desktopCapturer
+      .getSources({ types: ["screen"] })
+      .then((sources) => {
+        if (sources[0]) callback({ video: sources[0] });
+        else callback({});
+      })
+      .catch(() => callback({}));
   });
 
   app.setAboutPanelOptions({

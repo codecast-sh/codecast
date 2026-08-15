@@ -31,12 +31,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import {
-  ENGINE_PACKAGE, engineSession, engineVersion, ensureEngine, findEngine, runEngine,
+  ENGINE_PACKAGE, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, runEngine,
 } from "./engine.js";
-import { browserHome, formatBytes, listRealProfiles } from "./profile.js";
+import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
+import { formatBytes, listRealProfiles } from "./profile.js";
+import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
+import { readState, stopInstance } from "./instance.js";
+import { isPidAlive } from "../workspace/chrome.js";
 import { auditLanding, NAVIGATING_VERBS, refuseNavigation, viaFor } from "./siteGuard.js";
 import { emitFailureBlock, engineSource } from "./capture.js";
 import { registerAuditCommand } from "./auditCommand.js";
+import { autoShotsEnabled, isMutatingStep, maybeAutoShot, setAutoShots, type AutoShotSource } from "./autoShot.js";
+import { tabFooterLines, TAB_AFFECTING_VERBS } from "./tabFooter.js";
+import { tokenize } from "./batch.js";
 import { ownerKey } from "./owner.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { uploadOne } from "../imageCommand.js";
@@ -54,36 +61,47 @@ function die(msg: string, hint?: string): never {
 }
 
 // ---------------------------------------------------------------------------
-// Which Chrome profile agents inherit logins from
+// The session, and the browser it attaches to
 // ---------------------------------------------------------------------------
 
-function profileConfigPath(): string {
-  return path.join(browserHome(), "profile.json");
+/** Options every engine call carries: this session. The browser is implied —
+ *  the one managed Chrome, whose port runEngine reads from the state file. */
+function ctx(): { session: string } {
+  return { session: engineSession() };
 }
 
 /**
- * The Chrome profile agents drive under.
- *
- * Remembered rather than asked for every time, and defaulting to the one the
- * human used last — an agent that opens a page should already be signed in to
- * whatever they are signed in to, without being told which profile that is.
+ * Make sure the managed browser is up before a verb needs it. `open` is where
+ * a session's browsing begins, so it starts the browser when there is none —
+ * quietly, behind the human's windows, reusing the profile clone.
  */
-export function currentProfile(): string | null {
-  try {
-    return JSON.parse(fs.readFileSync(profileConfigPath(), "utf-8")).profile ?? null;
-  } catch {
-    return listRealProfiles().find((p) => p.lastUsed)?.dir ?? null;
-  }
+async function ensureBrowser(): Promise<void> {
+  const state = readState();
+  if (state && isPidAlive(state.pid)) return;
+  await startLocalBrowser({ ...DEFAULT_START, quiet: true });
 }
 
-export function setProfile(dir: string | null): void {
-  fs.mkdirSync(browserHome(), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(profileConfigPath(), JSON.stringify({ profile: dir }, null, 2), { mode: 0o600 });
-}
-
-/** Options every engine call carries: this session, and the chosen profile. */
-function ctx(): { session: string; profile: string | null } {
-  return { session: engineSession(), profile: currentProfile() };
+/**
+ * The engine's own screenshot, as the small JPEG the auto-shot policy wants
+ * (autoShot.ts). The tab key is the engine session: one active tab per
+ * session, so "did this tab change" and "did this session's page change" are
+ * the same question.
+ */
+function engineAutoShotSource(o: Ctx): AutoShotSource {
+  return {
+    tabKey: `engine:${o.session}`,
+    capture: async () => {
+      const out = path.join(os.tmpdir(), `cast-autoshot-${process.pid}.jpg`);
+      const res = runEngine(["screenshot", out, "--screenshot-format", "jpeg", "--screenshot-quality", "60"], {
+        ...o,
+        timeoutMs: 20_000,
+      });
+      if (res.status !== 0) throw new Error(res.stderr || "screenshot failed");
+      const buf = fs.readFileSync(out);
+      fs.rmSync(out, { force: true });
+      return buf;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +134,6 @@ const PASSTHROUGH: Array<{ verb: string; engine?: string; args: string; desc: st
   { verb: "back", args: "[args...]", desc: "Go back in history" },
   { verb: "forward", args: "[args...]", desc: "Go forward in history" },
   { verb: "reload", args: "[args...]", desc: "Reload the page" },
-  { verb: "do", engine: "batch", args: "[args...]", desc: "Run several steps in one invocation" },
   { verb: "tab", args: "[args...]", desc: "Tabs: list, new, close, switch" },
   { verb: "console", args: "[args...]", desc: "What the page logged" },
   { verb: "errors", args: "[args...]", desc: "Uncaught errors on the page" },
@@ -148,66 +165,339 @@ const MOBILE_PRESETS = new Set(["tablet", "mobile", "mobile-small"]);
  *  driver stamps, so `cast browser audit` reads one trail whichever engine drove. */
 let auditOwner: () => string | null = () => ownerKey();
 
-/**
- * Forward a command line to the engine and exit with its status.
- *
- * This is the one choke point every engine verb goes through, so the hooks
- * that must apply to ALL of them live here.
- *
- * Site policy (siteGuard.ts), the same two hooks the built-in driver has: an
- * explicit `open` (alone or as a batch step) is refused before the engine runs
- * when its origin is off the allowlist, and after any verb that can move the
- * page we ask the engine where it landed and put that on the audit trail,
- * warning when an in-page action carried it somewhere off-policy. The page is
- * never yanked back.
- *
- * Failure capture (capture.ts): output is relayed rather than inherited so a
- * failing step can be recognised and, when it is one, followed by the same
- * failure context the built-in driver prints — console errors, failed
- * requests, a screenshot in the thread. `--no-capture` is ours and is stripped
- * before the engine sees it.
- */
-export async function passthrough(engineVerb: string, args: string[]): Promise<never> {
-  const { session, profile } = ctx();
-  const owner = auditOwner();
+type Ctx = ReturnType<typeof ctx>;
 
-  const opens: string[] = [];
-  if (engineVerb === "open") {
-    const url = args.find((a) => !a.startsWith("--"));
-    if (url) opens.push(url);
-  } else if (engineVerb === "batch") {
-    // Each batch arg is a whole step; only its `open <url>` steps navigate
-    // explicitly. (Steps piped as JSON on stdin are not inspected here — the
-    // post-step audit below still records where they went.)
-    for (const step of args) {
-      const m = /^\s*(?:open|goto)\s+(\S+)/.exec(step);
-      if (m) opens.push(m[1]);
+// ---------------------------------------------------------------------------
+// The vocabulary CLAUDE.md teaches → what the engine speaks
+// ---------------------------------------------------------------------------
+//
+// Every installed CLAUDE.md on every machine says `#e42`, `type … --submit`,
+// `scroll 800`, `find "Sign in"` then a bare `click`, `wait --ref`. That prose
+// is already in agents' context windows and cannot be recalled, so the engine
+// path has to accept it. The translations are small and mechanical; anything
+// not listed here goes to the engine untouched.
+
+/** `#e42` (what CLAUDE.md says) → `@e42` (what the engine reads). */
+export function engineRef(a: string): string {
+  return a.replace(/^#e(\d+)$/i, "@e$1");
+}
+
+/** Where a `find` remembers what it matched, so a bare action can use it. */
+function lastFindPath(session: string): string {
+  return path.join(engineHome(), "sessions", session, "last-find");
+}
+function rememberFind(session: string, ref: string): void {
+  try {
+    fs.mkdirSync(path.dirname(lastFindPath(session)), { recursive: true });
+    fs.writeFileSync(lastFindPath(session), ref);
+  } catch {
+    /* courtesy only */
+  }
+}
+function recallFind(session: string): string | null {
+  try {
+    return fs.readFileSync(lastFindPath(session), "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Verbs whose first positional argument is the element to act on. */
+const TARGETED = new Set(["click", "dblclick", "hover", "focus", "check", "uncheck", "select", "upload", "scrollintoview", "type", "fill", "drag", "download", "inspect", "highlight"]);
+/** Verbs that take an element AND a value, so one positional means "the value". */
+const TARGET_PLUS_VALUE = new Set(["type", "fill", "select", "upload", "download"]);
+
+/** Key names the built-in driver accepted, in the engine's spelling. */
+export function engineKey(k: string): string {
+  return k
+    .replace(/(^|\+)(cmd|command|meta|⌘)(?=\+|$)/gi, "$1Meta")
+    .replace(/(^|\+)(ctrl|control)(?=\+|$)/gi, "$1Control")
+    .replace(/(^|\+)(alt|option|opt)(?=\+|$)/gi, "$1Alt")
+    .replace(/(^|\+)shift(?=\+|$)/gi, "$1Shift")
+    .replace(/^(esc)$/i, "Escape")
+    .replace(/^(enter|return)$/i, "Enter")
+    .replace(/^(tab)$/i, "Tab")
+    .replace(/^(space)$/i, "Space")
+    .replace(/^(up|down|left|right)$/i, (m) => `Arrow${m[0].toUpperCase()}${m.slice(1).toLowerCase()}`);
+}
+
+export interface EngineCall {
+  args: string[];
+}
+
+/**
+ * One command in our vocabulary → the engine command lines that carry it out.
+ * Pure, so it is testable without a browser. `lastFind` is what a bare action
+ * falls back to.
+ */
+export function translate(verb: string, args: string[], lastFind: string | null): EngineCall[] {
+  const engineVerb = PASSTHROUGH.find((p) => p.verb === verb)?.engine ?? verb;
+  let a = args.map(engineRef);
+  const positional = () => a.filter((x) => !x.startsWith("--"));
+
+  if (verb === "press" && a[0]) a = [engineKey(a[0]), ...a.slice(1)];
+
+  if (verb === "scroll") {
+    // `scroll 800` / `scroll -800` / `scroll --up 400` → `scroll down|up 800`
+    const flags = a.filter((x) => x.startsWith("--"));
+    const rest = a.filter((x) => !x.startsWith("--"));
+    const up = flags.includes("--up");
+    const others = flags.filter((x) => x !== "--up");
+    if (rest.length && /^-?\d+$/.test(rest[0])) {
+      const n = parseInt(rest[0], 10);
+      a = [n < 0 || up ? "up" : "down", String(Math.abs(n)), ...rest.slice(1), ...others];
+    } else if (!rest.length) {
+      a = [up ? "up" : "down", ...others];
+    } else if (up && !/^(up|down|left|right)$/.test(rest[0])) {
+      a = ["up", ...rest, ...others];
     }
   }
-  for (const url of opens) {
-    const deny = refuseNavigation(url, owner, engineVerb === "batch" ? "batch" : "open");
+
+  if (verb === "wait") {
+    if (!a.length) a = ["--load", "networkidle"];
+    // `wait --ref #e12` was the built-in driver's spelling of `wait @e12`.
+    const i = a.indexOf("--ref");
+    if (i >= 0) a = [...a.slice(0, i), ...a.slice(i + 1)];
+  }
+
+  if (verb === "network" && (!a.length || a[0] === "--failed")) a = ["requests", ...a.slice(1)];
+
+  if (verb === "open") {
+    // The engine always waits and always navigates; these built-in flags have
+    // nothing to say to it.
+    const newTab = a.includes("--new-tab");
+    a = a.filter((x) => x !== "--no-wait" && x !== "--reload" && x !== "--wait" && x !== "--new-tab");
+    const i = a.findIndex((x) => !x.startsWith("--"));
+    if (i >= 0 && !/^[a-z]+:/i.test(a[i]) && a[i] !== "about:blank") a[i] = `https://${a[i]}`;
+    // A second page for this session: bind a new tab and go there.
+    if (newTab) return [{ args: ["tab", "new", ...a] }];
+  }
+
+  // A bare action after `find` acts on what find matched.
+  if (TARGETED.has(verb) && lastFind) {
+    const pos = positional();
+    const needsTarget = TARGET_PLUS_VALUE.has(verb) ? pos.length === 1 : pos.length === 0;
+    if (needsTarget) a = [lastFind, ...a];
+  }
+
+  const calls: EngineCall[] = [];
+  if ((verb === "type" || verb === "fill") && a.includes("--submit")) {
+    calls.push({ args: [engineVerb, ...a.filter((x) => x !== "--submit")] });
+    calls.push({ args: ["press", "Enter"] });
+    return calls;
+  }
+  calls.push({ args: [engineVerb, ...a] });
+  return calls;
+}
+
+// ---------------------------------------------------------------------------
+// Running one verb
+// ---------------------------------------------------------------------------
+
+/** After an action that may navigate, give the page a moment to arrive so the
+ *  screenshot, footer and audit describe where it ended up. Short, and never
+ *  a failure: polling apps are never network-idle. */
+function settle(o: Ctx): void {
+  // A flag, never an env override: the daemon treats a changed environment as
+  // a new launch config and resets the tab to about:blank.
+  runEngine(["wait", "--load", "networkidle", "--timeout", "3000"], { ...o, timeoutMs: 8_000 });
+}
+
+export interface RunOptions {
+  /** Inside `do`: no footer per step, the flow prints one at the end. */
+  quiet?: boolean;
+}
+
+/**
+ * Run one command in our vocabulary against the engine, with every hook that
+ * must apply to ALL of them:
+ *
+ * Site policy (siteGuard.ts), the same two hooks the built-in driver has: an
+ * explicit `open` is refused before the engine runs when its origin is off the
+ * allowlist, and after any verb that can move the page we record where it
+ * landed on the audit trail, warning when an in-page action carried it
+ * somewhere off-policy. The page is never yanked back.
+ *
+ * Failure capture (capture.ts): a failing step is followed by the same failure
+ * context the built-in driver prints — console errors, failed requests, a
+ * screenshot in the thread. `--no-capture` skips it.
+ *
+ * Auto screenshot (autoShot.ts): after a verb that can change what the page
+ * shows, a small capture lands in the conversation if the page visibly
+ * changed. `--no-shot` skips it.
+ *
+ * Tab footer (tabFooter.ts): the URL and tab id the web's "open tab" link reads.
+ */
+export async function runVerb(verb: string, args: string[], o: Ctx = ctx(), run: RunOptions = {}): Promise<number> {
+  const { session } = o;
+  const owner = auditOwner();
+
+  if (verb === "open") {
+    const url = args.find((a) => !a.startsWith("--"));
+    const deny = url ? refuseNavigation(url, owner, "open") : null;
     if (deny) die(deny.message, deny.hint);
+    await ensureBrowser();
+    // `open` is where a session's browsing begins, so it is also where tabs
+    // whose sessions have died get closed (engineReap.ts) — throttled, and
+    // never this session's own.
+    const swept = describeReap(reapEngineOrphans({ keep: session }));
+    if (swept) console.log(fmt.muted(`  ${swept}`));
   }
 
+  // Ours, never the engine's.
   const capture = !args.includes("--no-capture");
-  const forwarded = args.filter((a) => a !== "--no-capture");
-  const res = runEngine([engineVerb, ...forwarded], { session, profile });
-  if (res.stdout) process.stdout.write(res.stdout);
-  if (res.stderr) process.stderr.write(res.stderr);
-  if (res.status !== 0) {
-    const msg = engineFailureMessage(res.stderr, res.stdout);
-    await emitFailureBlock(engineSource({ session, profile }), msg, { disabled: !capture });
+  const shot = !args.includes("--no-shot");
+  const forwarded = args.filter((a) => a !== "--no-capture" && a !== "--no-shot");
+
+  for (const call of translate(verb, forwarded, recallFind(session))) {
+    let res = runEngine(call.args, o);
+    // The session is pinned to one tab. When that tab is gone (closed by the
+    // human, or by a reap of an earlier incarnation of this session), an
+    // `open` binds a fresh one instead of failing; anything else is asked to
+    // open first.
+    if (res.status !== 0 && /tab_gone/.test(res.stderr + res.stdout)) {
+      if (call.args[0] === "open") {
+        res = runEngine(["tab", "new", ...call.args.slice(1)], o);
+      } else {
+        res = { ...res, stderr: `this session's tab is gone — \`cast browser open <url>\` starts a new one\n`, stdout: "" };
+      }
+    }
+    if (res.stdout) process.stdout.write(res.stdout);
+    if (res.stderr) process.stderr.write(res.stderr);
+    if (res.status !== 0) {
+      const msg = engineFailureMessage(res.stderr, res.stdout);
+      await emitFailureBlock(engineSource({ session }), msg, { disabled: !capture });
+      return res.status;
+    }
   }
 
-  if (NAVIGATING_VERBS.has(engineVerb)) {
-    const where = runEngine(["get", "url"], { session, profile, timeoutMs: 10_000 });
-    const url = where.status === 0 ? where.stdout.trim() : "";
+  const mutating = isMutatingStep(verb, forwarded);
+  if (mutating) {
+    settle(o);
+    const file = await maybeAutoShot(engineAutoShotSource(o), shot);
+    if (file) console.log(inlineImageMarker(file));
+  }
+  if (!run.quiet && (TAB_AFFECTING_VERBS.has(verb) || NAVIGATING_VERBS.has(verb))) {
+    printFooter(o, verb, owner);
+  }
+  return 0;
+}
+
+/** The URL and tab id lines the conversation reads, plus the audit stamp. */
+function printFooter(o: Ctx, verb: string, owner: string | null): void {
+  const tabs = engineTabs(o);
+  // `open` already printed where it landed; repeat the URL only after verbs
+  // whose engine output does not say.
+  const lines = tabFooterLines(tabs);
+  for (const line of verb === "open" ? lines.slice(-1) : lines) console.log(line);
+  if (NAVIGATING_VERBS.has(verb)) {
+    const url = (tabs.find((t) => t.active) ?? tabs[0])?.url ?? "";
     // Tab identity on the engine path is the engine session: one active tab
     // per session, so per-session dedup is the same thing.
-    const warn = url ? auditLanding({ url, tab: `engine:${session}`, session: owner, via: viaFor(engineVerb) }) : null;
+    const warn = url ? auditLanding({ url, tab: `engine:${o.session}`, session: owner, via: viaFor(verb) }) : null;
     if (warn) console.log(`${fmt.warning("!")} ${warn}`);
   }
-  process.exit(res.status);
+}
+
+/** Run a verb and exit with its status — the shape commander actions want. */
+async function passthrough(verb: string, args: string[]): Promise<never> {
+  process.exit(await runVerb(verb, args));
+}
+
+/** `find <text>`: refs on the page whose accessible name matches, best first.
+ *  Remembers the best one so a following bare action can use it. */
+function findRefs(text: string, o: Ctx): { hits: string[]; total: number } {
+  const res = runEngine(["snapshot"], o);
+  if (res.status !== 0) die((res.stderr || res.stdout).trim().split("\n")[0] || "could not read the page");
+  const q = text.toLowerCase();
+  const lines = res.stdout.split("\n").filter((l) => l.includes("[ref="));
+  // Exact name first: "Save" must not be ambiguous just because "Save
+  // draft" also contains it.
+  const named = (l: string) => (l.match(/"([^"]*)"/) ?? [, ""])[1]!.toLowerCase();
+  const exact = lines.filter((l) => named(l) === q);
+  const hits = exact.length ? exact : lines.filter((l) => l.toLowerCase().includes(q));
+  const ref = hits[0]?.match(/\[ref=(e\d+)\]/)?.[1];
+  if (ref) rememberFind(o.session, `@${ref}`);
+  return { hits: hits.map((h) => h.trim()), total: lines.length };
+}
+
+/** `shot`: screenshot to a file, inline in the conversation, optionally shared. */
+async function takeShot(
+  pathArg: string | undefined,
+  o: { full?: boolean; share?: boolean; alt?: string; inline?: boolean; extra?: string[] },
+  c: Ctx,
+  deps: PublishDeps,
+): Promise<string> {
+  const out = pathArg ?? path.join(os.tmpdir(), `cast-shot-${Date.now()}.png`);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  const extra = [...(o.extra ?? [])];
+  if (o.full) extra.push("--full-page");
+  const res = runEngine(["screenshot", out, ...extra], c);
+  if (res.status !== 0) {
+    die((res.stderr || res.stdout).trim().split("\n")[0] || "the screenshot failed");
+  }
+  if (!fs.existsSync(out)) die(`the engine reported success but wrote no file at ${out}`);
+
+  const bytes = fs.statSync(out).size;
+  console.log(`${OK} ${out} (${formatBytes(bytes)})`);
+  // The codecast-specific half: put the picture in the conversation, under
+  // the command that took it, the way an extension screenshot appears.
+  if (o.inline !== false && bytes <= MAX_IMAGE_SIZE) {
+    console.log(inlineImageMarker(path.resolve(out)));
+  } else if (o.inline !== false) {
+    console.log(fmt.muted(`  (too large to show inline at ${formatBytes(bytes)} — pass --share for a link)`));
+  }
+  if (o.share) {
+    const img = await uploadOne(deps, out, o.alt || "screenshot");
+    console.log(img.markdown);
+  }
+  return out;
+}
+
+/**
+ * `do`: several steps in one invocation, in OUR vocabulary — `find` and `shot`
+ * included — each step through the same runner as its standalone command, so a
+ * flow behaves exactly like the commands typed one by one. One footer at the
+ * end.
+ */
+async function runFlow(
+  steps: string[],
+  o: { keepGoing?: boolean; shot?: boolean; capture?: boolean },
+  c: Ctx,
+  deps: PublishDeps,
+): Promise<number> {
+  const started = Date.now();
+  let failed = 0;
+  // Flow-level opt-outs apply to every step.
+  const flowFlags = [...(o.shot === false ? ["--no-shot"] : []), ...(o.capture === false ? ["--no-capture"] : [])];
+  for (const raw of steps) {
+    const [verb, ...rest] = tokenize(raw);
+    const args = [...rest, ...flowFlags];
+    if (!verb) continue;
+    let ok = true;
+    console.log(`${fmt.highlight("›")} ${raw}`);
+    try {
+      if (verb === "shot") {
+        await takeShot(args.find((a) => !a.startsWith("--")), { full: args.includes("--full") }, c, deps);
+      } else if (verb === "find") {
+        const { hits, total } = findRefs(args.join(" "), c);
+        if (!hits.length) throw new Error(`no element matching ${JSON.stringify(args.join(" "))} (${total} refs on the page)`);
+        for (const h of hits.slice(0, 5)) console.log(`    ${h}`);
+      } else {
+        ok = (await runVerb(verb, args, c, { quiet: true })) === 0;
+      }
+    } catch (err) {
+      ok = false;
+      console.log(`${BAD} ${(err as Error).message}`);
+    }
+    if (!ok) {
+      failed++;
+      if (!o.keepGoing) break;
+    }
+  }
+  printFooter(c, "batch", auditOwner());
+  console.log(fmt.muted(`  ${steps.length} step${steps.length === 1 ? "" : "s"} in ${((Date.now() - started) / 1000).toFixed(1)}s${failed ? `, ${failed} failed` : ""}`));
+  return failed ? 1 : 0;
 }
 
 /** The engine's one-line verdict, for failure classification. */
@@ -229,7 +519,7 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
       .description(p.desc)
       .allowUnknownOption(true)
       .helpOption(false)
-      .action((args: string[] = []) => passthrough(p.engine ?? p.verb, args));
+      .action((args: string[] = []) => passthrough(p.verb, args));
   }
 
   // Escape hatch: the engine gains verbs faster than this table does, and an
@@ -240,7 +530,10 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
     .helpOption(false)
     .action((args: string[] = []) => {
       if (!args.length) die("raw needs a command", "e.g. cast browser raw profiler start");
-      return passthrough(args[0], args.slice(1));
+      const res = runEngine(args, ctx());
+      if (res.stdout) process.stdout.write(res.stdout);
+      if (res.stderr) process.stderr.write(res.stderr);
+      process.exit(res.status);
     });
 
   // -------------------------------------------------------------- screenshots
@@ -253,38 +546,46 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
     .option("--no-inline", "Do not show the image in the conversation")
     .allowUnknownOption(true)
     .action(async (pathArg: string | undefined, o: any, cmd: any) => {
-      const out = pathArg ?? path.join(os.tmpdir(), `cast-shot-${Date.now()}.png`);
-      fs.mkdirSync(path.dirname(out), { recursive: true });
-
-      const extra: string[] = [];
-      if (o.full) extra.push("--full-page");
       // Anything we do not recognise belongs to the engine, not to us.
-      for (const a of cmd.args ?? []) if (typeof a === "string" && a.startsWith("--")) extra.push(a);
+      const extra = (cmd.args ?? []).filter((a: unknown) => typeof a === "string" && a.startsWith("--"));
+      await takeShot(pathArg, { ...o, extra }, ctx(), deps);
+    });
 
-      const { session, profile } = ctx();
-      const res = runEngine(["screenshot", out, ...extra], { session, profile });
-      if (res.status !== 0) {
-        die((res.stderr || res.stdout).trim().split("\n")[0] || "the screenshot failed");
+  br.command("do [steps...]")
+    .description("Run several steps in one invocation")
+    .option("--keep-going", "Continue past a failing step")
+    .option("--no-shot", "Skip the automatic screenshots after page-changing steps")
+    .option("--no-capture", "Skip the automatic failure context on a failing step")
+    .addHelpText(
+      "after",
+      `
+Steps are the same commands you would type one at a time, each in quotes.
+Pass \`-\` to read them from stdin, one per line:
+
+  cast browser do "open example.com" "find Sign in" click "wait --text Password" shot
+  cast browser do - <<'EOF'
+  open https://example.com
+  find "Sign in"
+  click
+  type #e42 "hunter2" --submit
+  shot
+  EOF
+
+A step with no ref uses whatever the last \`find\` matched.`,
+    )
+    .action(async (steps: string[] = [], o: { keepGoing?: boolean; shot?: boolean; capture?: boolean }) => {
+      let plan = steps;
+      if (steps.length === 1 && steps[0] === "-") {
+        const stdin = await new Promise<string>((resolve) => {
+          let buf = "";
+          process.stdin.setEncoding("utf-8");
+          process.stdin.on("data", (d) => (buf += d));
+          process.stdin.on("end", () => resolve(buf));
+        });
+        plan = stdin.split("\n").map((l) => l.trim()).filter(Boolean);
       }
-      if (!fs.existsSync(out)) die(`the engine reported success but wrote no file at ${out}`);
-
-      const bytes = fs.statSync(out).size;
-      console.log(`${OK} ${out} (${formatBytes(bytes)})`);
-
-      // The codecast-specific half: put the picture in the conversation, under
-      // the command that took it, the way an extension screenshot appears.
-      if (o.inline !== false && bytes <= MAX_IMAGE_SIZE) {
-        console.log(inlineImageMarker(path.resolve(out)));
-      } else if (o.inline !== false) {
-        console.log(
-          fmt.muted(`  (too large to show inline at ${formatBytes(bytes)} — pass --share for a link)`),
-        );
-      }
-
-      if (o.share) {
-        const img = await uploadOne(deps, out, o.alt || "screenshot");
-        console.log(img.markdown);
-      }
+      if (!plan.length) die("no steps given", 'try: cast browser do "open example.com" snapshot');
+      process.exit(await runFlow(plan, o, ctx(), deps));
     });
 
   // ------------------------------------------------------- compatibility verbs
@@ -302,23 +603,15 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   br.command("find <text>")
     .description("Find elements whose visible name matches")
     .action((text: string) => {
-      // The engine has no `find`. A snapshot already carries every ref with its
-      // accessible name, so matching here costs one call and keeps the verb.
-      const { session, profile } = ctx();
-      const res = runEngine(["snapshot"], { session, profile });
-      if (res.status !== 0) die((res.stderr || res.stdout).trim().split("\n")[0] || "could not read the page");
-      const q = text.toLowerCase();
-      const lines = res.stdout.split("\n").filter((l) => l.includes("[ref="));
-      // Exact name first: "Save" must not be ambiguous just because "Save
-      // draft" also contains it.
-      const named = (l: string) => (l.match(/"([^"]*)"/) ?? [, ""])[1]!.toLowerCase();
-      const exact = lines.filter((l) => named(l) === q);
-      const hits = exact.length ? exact : lines.filter((l) => l.toLowerCase().includes(q));
+      // The engine has no `find` of this shape. A snapshot already carries every
+      // ref with its accessible name, so matching here costs one call and keeps
+      // the verb — and remembers the match for a bare action to use.
+      const { hits, total } = findRefs(text, ctx());
       if (!hits.length) {
-        console.log(`no element matching ${JSON.stringify(text)} (${lines.length} refs on the page)`);
+        console.log(`no element matching ${JSON.stringify(text)} (${total} refs on the page)`);
         process.exit(1);
       }
-      for (const h of hits.slice(0, 25)) console.log(h.trim());
+      for (const h of hits.slice(0, 25)) console.log(h);
       if (hits.length > 25) console.log(fmt.muted(`  … and ${hits.length - 25} more`));
     });
 
@@ -326,13 +619,13 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
     .description("Resize the page, or emulate a device: desktop, laptop, wide, tablet, mobile, mobile-small")
     .option("--reset", "Back to the default size")
     .action((size: string | undefined, o: { reset?: boolean }) => {
-      const { session, profile } = ctx();
+      const c = ctx();
       if (o.reset || size === "reset") {
-        runEngine(["set", "viewport", "1440", "900"], { session, profile });
+        runEngine(["set", "viewport", "1440", "900"], c);
         return console.log(`${OK} viewport reset`);
       }
       if (!size) {
-        const res = runEngine(["eval", "JSON.stringify([innerWidth,innerHeight,devicePixelRatio])"], { session, profile });
+        const res = runEngine(["eval", "JSON.stringify([innerWidth,innerHeight,devicePixelRatio])"], c);
         console.log(res.stdout.trim());
         console.log(fmt.muted(`  presets: ${Object.keys(VIEWPORTS).join(", ")}  ·  or a size like 1024x768`));
         return;
@@ -343,7 +636,7 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
         die(`unknown size '${size}'`, `use a preset (${Object.keys(VIEWPORTS).join(", ")}) or WxH like 1024x768`);
       }
       const [w, h] = preset ?? [parseInt(explicit![1], 10), parseInt(explicit![2], 10)];
-      const res = runEngine(["set", "viewport", String(w), String(h)], { session, profile });
+      const res = runEngine(["set", "viewport", String(w), String(h)], c);
       if (res.status !== 0) die((res.stderr || res.stdout).trim().split("\n")[0] || "could not resize");
       console.log(`${OK} ${size} — ${w}x${h}`);
       if (preset && MOBILE_PRESETS.has(size)) {
@@ -366,10 +659,13 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
 
   br.command("start")
     .description("Get the browser ready (installs the engine on first use)")
-    .option("--profile <dir>", "Chrome profile to inherit logins from")
+    .option("--profile <dir>", "Chrome profile to inherit logins from (see `cast browser profiles`)")
     .option("--fresh", "Start signed out of everything")
+    .option("--resync", "Re-copy the profile even if a clone already exists")
     .option("--headless", "Run without a visible window")
-    .action((o: { profile?: string; fresh?: boolean; headless?: boolean }) => {
+    .option("--size <WxH>", "Window size", DEFAULT_START.size)
+    .option("--remote [host]", "Run the browser on a remote host (see `cast browser hosts`)")
+    .action(async (o: Partial<StartOptions>) => {
       let install;
       try {
         install = ensureEngine();
@@ -378,60 +674,80 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
       }
       if (install.installed) console.log(`${OK} browser engine installed (${ENGINE_PACKAGE})`);
 
-      if (o.fresh) {
-        setProfile(null);
-        console.log(`${OK} using a fresh profile — signed out of everything`);
-      } else if (o.profile) {
-        const known = listRealProfiles().find((p) => p.dir === o.profile);
-        setProfile(o.profile);
-        console.log(`${OK} using ${fmt.highlight(known?.name ?? o.profile)}${known?.email ? fmt.muted(` <${known.email}>`) : ""}`);
-      }
+      const session = engineSession();
+      const swept = describeReap(reapEngineOrphans({ force: true, keep: session }));
+      if (swept) console.log(fmt.muted(`  ${swept}`));
 
-      const { session, profile } = ctx();
-      const res = runEngine(["open", "about:blank"], { session, profile, headless: o.headless });
-      if (res.status !== 0) {
-        die((res.stderr || res.stdout).trim().split("\n")[0] || "the browser did not start");
-      }
-      console.log(`${OK} browser ready — session ${fmt.muted(session)}`);
-      if (profile) {
-        console.log(
-          fmt.muted("  It reads a COPY of your Chrome profile, so it is signed in to what you are signed in to,\n") +
-            fmt.muted("  and never writes to your real browser. `cast browser start --fresh` gives a signed-out one."),
-        );
-      }
-      console.log(fmt.muted("  next: cast browser open <url>"));
+      await startManagedBrowser({ ...DEFAULT_START, ...o });
+      console.log(fmt.muted(`  this session drives its own tab in it — session ${session}`));
     });
 
   br.command("status")
     .description("What the browser is doing")
     .action(() => {
       const binary = findEngine();
-      if (!binary) {
+      const state = readState();
+      if (!binary || !state) {
         console.log(`${fmt.muted(icons.dot)} not set up yet — run \`cast browser start\``);
         return;
       }
-      const { session, profile } = ctx();
-      console.log(`${OK} engine ${ENGINE_PACKAGE} ${engineVersion() ?? "?"}  ${fmt.muted(binary)}`);
-      console.log(`  session: ${session}`);
-      console.log(`  profile: ${profile ? `${profile} (logins inherited)` : "fresh — signed out"}`);
-      const res = runEngine(["tab", "list"], { session, profile });
+      const c = ctx();
+      const alive = isPidAlive(state.pid);
+      console.log(`${alive ? OK : BAD} browser ${alive ? "up" : "gone"} — pid ${state.pid}, CDP 127.0.0.1:${state.port}${state.headless ? ", headless" : ""}`);
+      console.log(`  engine: ${ENGINE_PACKAGE} ${engineVersion() ?? "?"}  ${fmt.muted(binary)}`);
+      console.log(`  session: ${c.session}`);
+      console.log(`  profile: ${state.sourceProfile ? `${state.sourceProfile} (logins inherited)` : "fresh — signed out"}`);
+      if (!alive) return;
+      const res = runEngine(["tab", "list"], c);
       if (res.status === 0 && res.stdout.trim()) {
-        console.log(`  tabs:`);
+        console.log(`  tabs (→ is this session's):`);
         for (const line of res.stdout.trim().split("\n")) console.log(`    ${line}`);
+      }
+      const others = listEngineSessions().filter((x) => x.running && x.key !== c.session);
+      if (others.length) {
+        console.log(fmt.muted(`  ${others.length} other session${others.length === 1 ? " is" : "s are"} browsing here too — abandoned tabs close on the next start`));
       }
     });
 
   br.command("stop")
-    .description("Close this session's browser")
-    .option("--all", "Close every session's browser, including other agents'")
-    .action((o: { all?: boolean }) => {
-      const { session, profile } = ctx();
-      const res = runEngine(["close", ...(o.all ? ["--all"] : [])], { session, profile });
-      console.log(
-        res.status === 0
-          ? `${OK} ${o.all ? "closed every session" : "closed this session's browser"}`
-          : `${BAD} ${(res.stderr || res.stdout).trim().split("\n")[0]}`,
-      );
+    .description("Close this session's tab; --all closes every session's and the browser")
+    .option("--all", "Close every session's tab and the browser itself")
+    .option("--wipe", "With --all: also remove the cloned profile")
+    .action(async (o: { all?: boolean; wipe?: boolean }) => {
+      const { session } = ctx();
+      // Detach the engine and close the tab it was pinned to; the browser
+      // stays for everyone else.
+      closeSessionTab(session);
+      console.log(`${OK} closed this session's tab`);
+      const swept = describeReap(reapEngineOrphans({ force: true, keep: o.all ? null : session, idleMs: o.all ? 0 : undefined }));
+      if (swept) console.log(fmt.muted(`  ${swept}`));
+      if (o.all) {
+        const state = readState();
+        if (state) {
+          await stopInstance(state);
+          console.log(`${OK} browser stopped`);
+          if (o.wipe) {
+            fs.rmSync(state.userDataDir, { recursive: true, force: true });
+            console.log(`${OK} removed the cloned profile`);
+          }
+        }
+      }
+    });
+
+  br.command("shots [mode]")
+    .description("Automatic screenshots after page-changing commands: on | off | status")
+    .action((mode?: string) => {
+      if (!mode || mode === "status") {
+        console.log(
+          autoShotsEnabled()
+            ? `${OK} auto screenshots are on — page-changing commands inline a small capture (\`--no-shot\` skips one)`
+            : `${fmt.muted(icons.dot)} auto screenshots are off — enable with \`cast browser shots on\``,
+        );
+        return;
+      }
+      if (mode !== "on" && mode !== "off") die(`'${mode}' is not a mode`, "use: cast browser shots on | off | status");
+      setAutoShots(mode === "on");
+      console.log(`${OK} auto screenshots ${mode}`);
     });
 
   br.command("profiles")
@@ -439,12 +755,12 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
     .action(() => {
       const profiles = listRealProfiles();
       if (!profiles.length) die("no Chrome profiles found on this machine");
-      const active = currentProfile();
+      const active = readState()?.sourceProfile ?? null;
       for (const p of profiles) {
         const mark = p.dir === active ? fmt.success("*") : " ";
         const tag = p.lastUsed ? fmt.muted(" (you used this last)") : "";
         console.log(`${mark} ${p.dir.padEnd(12)} ${fmt.highlight(p.name)}${p.email ? fmt.muted(` <${p.email}>`) : ""}${tag}`);
       }
-      console.log(fmt.muted(`\n  * = what agents use. Change it with: cast browser start --profile "<dir>"`));
+      console.log(fmt.muted(`\n  * = what agents use. Change it with: cast browser stop --all && cast browser start --profile "<dir>"`));
     });
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import {
+  addChannelMembers,
   createChannel,
   deleteMessage,
   editMessage,
@@ -11,6 +12,9 @@ import {
   listChannels,
   listMessages,
   markRead,
+  openDm,
+  listChannelMembers,
+  removeChannelMember,
   patchChat,
   purgeChatMembership,
   replyAsAnchor,
@@ -19,6 +23,7 @@ import {
   setAnchorFollow,
   setNotifyLevel,
   toggleReaction,
+  updateChannel,
 } from "./chat";
 import {
   chatPermalink,
@@ -37,6 +42,7 @@ import { ENTITY_TYPE, NOTIFICATION_TYPE, PREFERENCE_MAP } from "./notificationRo
 
 const ALICE = "user-alice" as any;
 const BOB = "user-bob" as any;
+const CAROL = "user-carol" as any;
 const OUTSIDER = "user-outsider" as any;
 const BOT = "user-bot" as any;
 const TEAM = "team-main" as any;
@@ -49,6 +55,7 @@ function users() {
   return [
     { _id: ALICE, name: "Alice", email: "alice@example.test", github_username: "alice" },
     { _id: BOB, name: "Bob", email: "bob@example.test", github_username: "bob" },
+    { _id: CAROL, name: "Carol", email: "carol@example.test", github_username: "carol" },
     { _id: OUTSIDER, name: "Outsider", email: "out@example.test", github_username: "outsider" },
     { _id: BOT, name: "Anchor", is_bot: true, bot_kind: "anchor" },
   ];
@@ -58,6 +65,7 @@ function memberships() {
   return [
     { _id: "m-alice", user_id: ALICE, team_id: TEAM, role: "member" },
     { _id: "m-bob", user_id: BOB, team_id: TEAM, role: "admin" },
+    { _id: "m-carol", user_id: CAROL, team_id: TEAM, role: "member" },
     { _id: "m-bot", user_id: BOT, team_id: TEAM, role: "member" },
     { _id: "m-outsider", user_id: OUTSIDER, team_id: OTHER_TEAM, role: "member" },
   ];
@@ -107,6 +115,7 @@ function context(authenticatedUser: string | null, seed: Record<string, any[]> =
     chat_messages: [],
     chat_reactions: [],
     chat_reads: [],
+    chat_channel_members: [],
     rate_limits: [],
     notifications: [],
     push_outbox: [],
@@ -697,6 +706,41 @@ describe("searchMessages", () => {
     await call(deleteMessage, ctx, { message_id: sent.message_id });
     const found = await call(searchMessages, ctx, { team_id: TEAM, q: "secret" });
     expect(found.results).toEqual([]);
+  });
+
+  test("a hit deep in a long message windows the snippet around the term", async () => {
+    const ctx = context(ALICE);
+    const filler = "lorem ipsum dolor sit amet ".repeat(30); // ~810 chars of prelude
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: `${filler}the zebra crossed the road` });
+    const found = await call(searchMessages, ctx, { team_id: TEAM, q: "zebra" });
+    expect(found.results.length).toBe(1);
+    expect(found.results[0].snippet.toLowerCase()).toContain("zebra");
+    expect(found.results[0].snippet.startsWith("…")).toBe(true);
+    expect(found.results[0].snippet.length).toBeLessThanOrEqual(202);
+  });
+
+  test("from_user_id keeps only that sender's lines", async () => {
+    const ctx = context(ALICE);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "standup at nine" });
+    await call(sendMessage, as(ctx, BOB), { channel_id: CHANNEL, content: "standup moved to ten" });
+    const all = await call(searchMessages, ctx, { team_id: TEAM, q: "standup" });
+    expect(all.results.length).toBe(2);
+    const bobs = await call(searchMessages, ctx, { team_id: TEAM, q: "standup", from_user_id: BOB });
+    expect(bobs.results.length).toBe(1);
+    expect(bobs.results[0].user_id).toBe(BOB);
+  });
+
+  test("a DM hit carries kind and dm_key so the client can name it", async () => {
+    const ctx = context(ALICE);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "quiet dm word: xylophone" });
+    const found = await call(searchMessages, ctx, { team_id: TEAM, q: "xylophone" });
+    expect(found.results.length).toBe(1);
+    expect(found.results[0].channel_kind).toBe("dm");
+    expect(typeof found.results[0].dm_key).toBe("string");
+    // The other member sees it; a teammate outside the DM never does.
+    expect((await call(searchMessages, as(ctx, BOB), { team_id: TEAM, q: "xylophone" })).results.length).toBe(1);
+    expect((await call(searchMessages, as(ctx, CAROL), { team_id: TEAM, q: "xylophone" })).results).toEqual([]);
   });
 });
 
@@ -1612,5 +1656,190 @@ describe("archive round-trip syncs", () => {
     // an absent field as "no information", never as a clear.
     expect(ctx.db._tables.chat_channels[0].archived_at).toBe(null);
     expect("archived_at" in ctx.db._tables.chat_channels[0]).toBe(true);
+  });
+});
+
+describe("private channels", () => {
+  const seedPrivate = () => context(ALICE, {
+    chat_channels: [...channels(), {
+      _id: "chat_channels_priv" as any,
+      team_id: TEAM,
+      name: "secrets",
+      kind: "private",
+      workspace: "restricted:chat_channels_priv",
+      created_by: ALICE,
+      created_at: 1_000,
+      updated_at: 1_000,
+    }],
+    chat_channel_members: [
+      { _id: "ccm-1", channel_id: "chat_channels_priv", user_id: ALICE, added_by: ALICE, added_at: 1_000 },
+      { _id: "ccm-2", channel_id: "chat_channels_priv", user_id: BOB, added_by: ALICE, added_at: 1_000 },
+    ],
+  });
+  const PRIV = "chat_channels_priv" as any;
+
+  test("a teammate outside the room cannot see it exists, read it, write it, or search it", async () => {
+    const ctx = seedPrivate();
+    await call(sendMessage, ctx, { channel_id: PRIV, content: "the launch price" });
+    const carol = as(ctx, CAROL);
+    // Not in the rail…
+    const rail = await call(listChannels, carol, { team_id: TEAM });
+    expect(rail.channels.map((c: any) => c.name)).not.toContain("secrets");
+    // …not readable or writable…
+    expect((await call(listMessages, carol, { channel_id: PRIV })).messages).toEqual([]);
+    await expect(call(sendMessage, carol, { channel_id: PRIV, content: "hi" }))
+      .rejects.toThrow("Channel not found");
+    // …and not searchable, even though the search index is team-wide.
+    const found = await call(searchMessages, carol, { team_id: TEAM, q: "launch" });
+    expect(found.results).toEqual([]);
+    // A member still finds it.
+    const mine = await call(searchMessages, ctx, { team_id: TEAM, q: "launch" });
+    expect(mine.results.length).toBe(1);
+  });
+
+  test("a mention of someone outside the room does not notify them", async () => {
+    const ctx = seedPrivate();
+    await call(sendMessage, ctx, { channel_id: PRIV, content: "@carol should not hear this" });
+    expect(ctx._emitted.length).toBe(0);
+  });
+
+  test("members appear in the rail with the roster attached", async () => {
+    const ctx = seedPrivate();
+    const view = await call(listChannels, ctx, { team_id: TEAM });
+    const row = view.rail.find((r: any) => String(r.channel_id) === "chat_channels_priv");
+    expect(row.member_ids.sort()).toEqual([ALICE, BOB].sort());
+    const pub = view.rail.find((r: any) => String(r.channel_id) === String(CHANNEL));
+    expect(pub.member_ids).toBeUndefined();
+  });
+
+  test("createChannel kind=private seeds the roster and notifies the invited", async () => {
+    const ctx = context(ALICE);
+    const made = await call(createChannel, ctx, {
+      team_id: TEAM, name: "warroom", kind: "private", member_ids: [BOB, BOB],
+    });
+    const members = await call(listChannelMembers, ctx, { channel_id: made.channel_id });
+    expect(members.members.map((m: any) => m.user_id).sort()).toEqual([ALICE, BOB].sort());
+    expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_added"]);
+    expect(ctx._emitted[0].args.direct_recipient_id).toBe(BOB);
+    // The access stamp is restricted:<own id>.
+    const row = ctx.db._tables.chat_channels.find((c: any) => c._id === made.channel_id);
+    expect(row.workspace).toBe(`restricted:${made.channel_id}`);
+  });
+
+  test("any member may add; a bot or an outsider may not be added", async () => {
+    const ctx = seedPrivate();
+    ctx._emitted.length = 0;
+    await call(addChannelMembers, as(ctx, BOB), { channel_id: PRIV, member_ids: [CAROL] });
+    const members = await call(listChannelMembers, ctx, { channel_id: PRIV });
+    expect(members.members.length).toBe(3);
+    expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_added"]);
+    await expect(call(addChannelMembers, ctx, { channel_id: PRIV, member_ids: [OUTSIDER] }))
+      .rejects.toThrow("not a member of this team");
+    await expect(call(addChannelMembers, ctx, { channel_id: PRIV, member_ids: [BOT] }))
+      .rejects.toThrow("human teammates");
+  });
+
+  test("leaving is always allowed; removing others takes the creator or an admin", async () => {
+    const ctx = seedPrivate();
+    // Bob (not the creator, but a team admin) removes Alice — allowed.
+    await call(removeChannelMember, as(ctx, BOB), { channel_id: PRIV, user_id: ALICE });
+    expect((await call(listMessages, ctx, { channel_id: PRIV })).messages).toEqual([]);
+    // Bob leaves himself: the room now has nobody, and he can no longer read it.
+    await call(removeChannelMember, as(ctx, BOB), { channel_id: PRIV, user_id: BOB });
+    await expect(call(sendMessage, as(ctx, BOB), { channel_id: PRIV, content: "x" }))
+      .rejects.toThrow("Channel not found");
+  });
+
+  test("a plain member may not remove someone else", async () => {
+    const ctx = seedPrivate();
+    await call(addChannelMembers, ctx, { channel_id: PRIV, member_ids: [CAROL] });
+    await expect(call(removeChannelMember, as(ctx, CAROL), { channel_id: PRIV, user_id: ALICE }))
+      .rejects.toThrow("creator or a team admin");
+  });
+
+  test("leaving the team drops private-room membership rows", async () => {
+    const ctx = seedPrivate();
+    await purgeChatMembership(ctx as any, BOB, TEAM);
+    const rows = ctx.db._tables.chat_channel_members.filter((r: any) => r.user_id === BOB);
+    expect(rows).toEqual([]);
+  });
+});
+
+describe("direct messages", () => {
+  test("openDm is idempotent on the member set, in any order", async () => {
+    const ctx = context(ALICE);
+    const first = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    expect(first.created).toBe(true);
+    const again = await call(openDm, as(ctx, BOB), { team_id: TEAM, member_ids: [ALICE] });
+    expect(again.created).toBe(false);
+    expect(String(again.channel_id)).toBe(String(first.channel_id));
+  });
+
+  test("a DM refuses bots, outsiders, and an empty set", async () => {
+    const ctx = context(ALICE);
+    await expect(call(openDm, ctx, { team_id: TEAM, member_ids: [BOT] }))
+      .rejects.toThrow("human teammates");
+    await expect(call(openDm, ctx, { team_id: TEAM, member_ids: [OUTSIDER] }))
+      .rejects.toThrow("not a member of this team");
+    await expect(call(openDm, ctx, { team_id: TEAM, member_ids: [ALICE] }))
+      .rejects.toThrow("at least one person");
+  });
+
+  test("every DM line notifies the other side, once, and reads count as mentions", async () => {
+    const ctx = context(ALICE);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    ctx._emitted.length = 0;
+    await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "plain line, no mention" });
+    expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_dm"]);
+    expect(ctx._emitted[0].args.direct_recipient_id).toBe(BOB);
+
+    // A mention outranks: still exactly one notification.
+    ctx._emitted.length = 0;
+    await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "hey @bob" });
+    expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_mention"]);
+
+    // The rail counts every unread DM line as addressed.
+    const rail = await call(listChannels, as(ctx, BOB), { team_id: TEAM });
+    const row = rail.rail.find((r: any) => String(r.channel_id) === String(dm.channel_id));
+    expect(row.unread_mentions).toBe(2);
+  });
+
+  test("a muted DM is silent; the mentions default still lets DM lines through", async () => {
+    const ctx = context(ALICE);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    // Bob has no read row: the "mentions" default must not silence a DM.
+    ctx._emitted.length = 0;
+    await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "first" });
+    expect(ctx._emitted.length).toBe(1);
+    // Bob mutes the room: nothing gets through, not even a mention.
+    await call(setNotifyLevel, as(ctx, BOB), { channel_id: dm.channel_id, notify_level: "none" });
+    ctx._emitted.length = 0;
+    await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "@bob still there?" });
+    expect(ctx._emitted.length).toBe(0);
+  });
+
+  test("a DM cannot be renamed, archived, grown, or left", async () => {
+    const ctx = context(ALICE);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    await expect(call(updateChannel, ctx, { channel_id: dm.channel_id, name: "sneaky" }))
+      .rejects.toThrow("can't be renamed");
+    await expect(call(archiveChannel, ctx, { channel_id: dm.channel_id, archived: true }))
+      .rejects.toThrow("mute it instead");
+    await expect(call(addChannelMembers, ctx, { channel_id: dm.channel_id, member_ids: [CAROL] }))
+      .rejects.toThrow("group message");
+    await expect(call(removeChannelMember, ctx, { channel_id: dm.channel_id, user_id: ALICE }))
+      .rejects.toThrow("member list");
+  });
+
+  test("a group DM holds its whole roster and notifies everyone else", async () => {
+    const ctx = context(ALICE);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB, CAROL] });
+    ctx._emitted.length = 0;
+    await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "group line" });
+    const recipients = ctx._emitted.map((e: any) => e.args.direct_recipient_id).sort();
+    expect(recipients).toEqual([BOB, CAROL].sort());
+    // A third teammate can't open the same pair's room by guessing.
+    const outsiderView = await call(listMessages, as(ctx, OUTSIDER), { channel_id: dm.channel_id });
+    expect(outsiderView.messages).toEqual([]);
   });
 });
