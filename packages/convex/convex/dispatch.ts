@@ -25,7 +25,7 @@ import {
 import { advanceLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { isSessionOwner } from "./sessionOwners";
 import { patchCommentWithRevision } from "./commentViewWrites";
-import { canAccessConversation, requireTeamMembership } from "./lib/access";
+import { canAccessConversation, requireTeamMembership, patchConversationVisibility } from "./lib/access";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 
@@ -971,7 +971,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const updates = isPrivate
       ? { is_private: true as const, team_visibility: "private" as const }
       : await buildShareUpdate(ctx, conv, userId);
-    await ctx.db.patch(convId as Id<"conversations">, updates);
+    // Also rewrites linked work items' stored access key.
+    await patchConversationVisibility(ctx, conv, updates);
   },
 
   setTeamVisibility: async (ctx, userId, [convId, visibility]: [string, "summary" | "full" | null]) => {
@@ -980,7 +981,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // Setting any team visibility shares the conversation, so guarantee a
     // team_id alongside it (else it's shared-with-nobody).
     const updates = await buildShareUpdate(ctx, conv, userId);
-    await ctx.db.patch(convId as Id<"conversations">, {
+    await patchConversationVisibility(ctx, conv, {
       ...updates,
       team_visibility: visibility ?? undefined,
     });

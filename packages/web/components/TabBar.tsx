@@ -9,13 +9,13 @@ import { PageIcon } from "./RecentlyViewedMenu";
 import { LivenessDot, sessionLivenessState } from "./LivenessDot";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 
-/** "#design" for /chat/<id>, once the store knows the channel. pathLabel can
+/** "design" for /chat/<id>, once the store knows the channel. pathLabel can
  *  only say "Chat", which turns three open channels into three identical tabs;
- *  the name is knowable, and this is where the store is in reach. */
+ *  the name is knowable, and this is where the store is in reach. No "#"
+ *  prefix: the tab's PageIcon is already a hash. */
 export function chatTabTitle(path: string, channels: Record<string, any> | undefined): string | null {
   const m = path.match(/^\/chat\/([^/?#]+)/);
-  const name = m ? channels?.[m[1]]?.name : undefined;
-  return name ? `#${name}` : null;
+  return (m ? channels?.[m[1]]?.name : undefined) ?? null;
 }
 
 /** The session a tab is pinned to: an explicit sessionId, or the ?s= deep link

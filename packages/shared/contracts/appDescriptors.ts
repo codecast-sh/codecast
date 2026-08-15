@@ -79,7 +79,7 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
       "Draft replies for your review — never send on its own",
       "Label and file mail by rules you state",
     ],
-    connectKind: "coming-soon",
+    connectKind: "oauth-popup",
     scope: "personal",
   },
   linear: {

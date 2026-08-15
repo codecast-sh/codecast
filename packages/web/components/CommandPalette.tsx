@@ -13,8 +13,9 @@ import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, filterInboxScopeFromState, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
+import { inActiveWorkspace } from "../lib/workspaceScope";
 import { PageIcon } from "./RecentlyViewedMenu";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score } from "../hooks/useMentionQuery";
@@ -450,7 +451,7 @@ function ActionSubmenu({
       return all
         .filter((t: any) =>
           !targetIds.has(String(t._id)) &&
-          (t.team_id ?? null) === teamKey &&
+          inActiveWorkspace(t, teamKey) &&
           t.status !== "done" && t.status !== "dropped" &&
           !String(t._id).startsWith("temp_") &&
           (q === "" || t.title?.toLowerCase().includes(q) || t.short_id?.toLowerCase().includes(q)))
@@ -1058,8 +1059,7 @@ function matchEntities(
   const ranked: Array<{ rec: MentionRecord; rank: number }> = [];
   for (const rec of Object.values(records)) {
     if (exclude?.(rec)) continue;
-    const team = rec.team_id ? String(rec.team_id) : null;
-    if (teamId ? team && team !== teamId : team) continue;
+    if (!inActiveWorkspace(rec, teamId)) continue;
     const titleRank = score(rec.title || "", q);
     const goalRank = rec.goal ? score(rec.goal, q) : Infinity;
     // File-synced docs are titled from their content heading, not their filename;
@@ -1151,8 +1151,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     () => (open ? useInboxStore.getState().mentionIndex : EMPTY_MENTION_INDEX),
     [open],
   );
+  // Workspace scoping uses the active-team pointer alone: an unset pointer IS
+  // the personal workspace, so falling back to the user's default team here
+  // would make personal rows unreachable from the palette.
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as string | undefined;
 
   // Merge locally-loaded inbox sessions (own, instant) with the server list (own +
   // team-visible). Shows local sessions immediately, re-merges once when the server
@@ -1164,7 +1166,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (recentFrozenRef.current) return;
     const byId = new Map<string, any>();
     for (const c of (recentConversations ?? [])) byId.set(c._id, c);
-    for (const s of Object.values(useInboxStore.getState().sessions)) {
+    // Scope the local cache like the inbox panel (and the chip counts above):
+    // the store caches sessions across scopes, so an unfiltered merge would
+    // resurface rows from a previously viewed scope as recents.
+    for (const s of Object.values(filterInboxScopeFromState(useInboxStore.getState()))) {
       if ((s as any).is_subagent) continue;
       byId.set(s._id, { ...byId.get(s._id), ...(s as any) });
     }
@@ -1275,16 +1280,16 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // query — the empty palette stays session-focused. Plan-type docs are excluded
   // from Documents so they don't double up with the Plans group.
   const taskMatches = useMemo(
-    () => matchEntities(mentionIndex.tasks as any, query, effectiveTeamId, ENTITY_RENDER_CAP, (t) => t.status === "dropped"),
-    [mentionIndex, query, effectiveTeamId],
+    () => matchEntities(mentionIndex.tasks as any, query, activeTeamId, ENTITY_RENDER_CAP, (t) => t.status === "dropped"),
+    [mentionIndex, query, activeTeamId],
   );
   const docMatches = useMemo(
-    () => matchEntities(mentionIndex.docs as any, query, effectiveTeamId, ENTITY_RENDER_CAP, (d) => d.doc_type === "plan"),
-    [mentionIndex, query, effectiveTeamId],
+    () => matchEntities(mentionIndex.docs as any, query, activeTeamId, ENTITY_RENDER_CAP, (d) => d.doc_type === "plan"),
+    [mentionIndex, query, activeTeamId],
   );
   const planMatches = useMemo(
-    () => matchEntities(mentionIndex.plans as any, query, effectiveTeamId, ENTITY_RENDER_CAP, (p) => p.status === "abandoned"),
-    [mentionIndex, query, effectiveTeamId],
+    () => matchEntities(mentionIndex.plans as any, query, activeTeamId, ENTITY_RENDER_CAP, (p) => p.status === "abandoned"),
+    [mentionIndex, query, activeTeamId],
   );
 
   // Debounced search for async conversation results

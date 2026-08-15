@@ -23,7 +23,36 @@ import type { RemoteHost } from "../remote/session-move.js";
 
 /** The profile the remote browser uses. Never a copy of ours. */
 const REMOTE_PROFILE = "~/.codecast/browser-profile";
-const REMOTE_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
+/**
+ * Where Chrome lives, and what it needs, on each kind of remote.
+ *
+ * Linux is not just a different path. A headless Chrome on a small cloud box
+ * needs two flags it never needs on a desktop: `--no-sandbox`, because the
+ * kernel namespaces it wants are often unavailable in a stock cloud image, and
+ * `--disable-dev-shm-usage`, because /dev/shm defaults to 64MB there and Chrome
+ * dies silently when it fills. Measured on a t3.small: without the second flag
+ * the process starts, never opens its debugging port, and writes nothing to its
+ * log — which reads as a network problem and is not.
+ */
+const REMOTE_TARGETS = {
+  darwin: {
+    binary: '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"',
+    extraArgs: "",
+  },
+  linux: {
+    binary: "google-chrome",
+    extraArgs: "--no-sandbox --disable-dev-shm-usage ",
+  },
+} as const;
+
+export type RemoteOs = keyof typeof REMOTE_TARGETS;
+
+/** Ask the remote what it is, so we launch the right binary with the right flags. */
+export function detectRemoteOs(host: RemoteHost): RemoteOs {
+  const uname = remoteExec(host, "uname -s", 20_000).trim().toLowerCase();
+  return uname.includes("darwin") ? "darwin" : "linux";
+}
 
 function sshArgs(host: RemoteHost): string[] {
   return [
@@ -62,6 +91,7 @@ export interface RemoteBrowser {
   /** The `ssh -N -L` process holding the tunnel open. */
   sshPid: number;
   chromeVersion: string;
+  os: RemoteOs;
 }
 
 /**
@@ -78,16 +108,22 @@ export async function startRemoteBrowser(
 ): Promise<RemoteBrowser> {
   const remotePort = opts.remotePort ?? 9222;
 
+  let os: RemoteOs;
   let chromeVersion: string;
   try {
-    chromeVersion = remoteExec(host, `"${REMOTE_CHROME}" --version 2>/dev/null || echo MISSING`);
+    os = detectRemoteOs(host);
+    chromeVersion = remoteExec(host, `${REMOTE_TARGETS[os].binary} --version 2>/dev/null || echo MISSING`);
   } catch (err) {
     throw new RemoteUnreachable(host, (err as Error).message.split("\n")[0]);
   }
   if (chromeVersion.includes("MISSING")) {
+    const install =
+      os === "darwin"
+        ? "brew install --cask google-chrome"
+        : "wget -qO /tmp/c.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt-get install -y /tmp/c.deb";
     throw new Error(
       `Google Chrome is not installed on ${host.address}.\n` +
-        `  Install it there first:  ssh ${host.user}@${host.address} 'brew install --cask google-chrome'`,
+        `  Install it there first:  ssh ${host.user}@${host.address} '${install}'`,
     );
   }
 
@@ -98,10 +134,11 @@ export async function startRemoteBrowser(
   await sleep(1000);
 
   const size = opts.windowSize ?? { width: 1440, height: 900 };
+  const t = REMOTE_TARGETS[os];
   const launch =
-    `mkdir -p ${REMOTE_PROFILE} && nohup "${REMOTE_CHROME}" ` +
+    `rm -rf ${REMOTE_PROFILE} && mkdir -p ${REMOTE_PROFILE} && nohup ${t.binary} ` +
     `--remote-debugging-port=${remotePort} --remote-debugging-address=127.0.0.1 ` +
-    `--user-data-dir=${REMOTE_PROFILE} --headless=new ` +
+    `--user-data-dir=${REMOTE_PROFILE} --headless=new ${t.extraArgs}` +
     `--window-size=${size.width},${size.height} ` +
     `--no-first-run --no-default-browser-check --disable-sync ` +
     `about:blank > /tmp/cast-browser.log 2>&1 & echo $!`;
@@ -111,7 +148,17 @@ export async function startRemoteBrowser(
   // process exists only to hold the forward open.
   const tunnel = spawn(
     "ssh",
-    [...sshArgs(host), "-N", "-L", `${opts.localPort}:127.0.0.1:${remotePort}`, `${host.user}@${host.address}`],
+    [
+      ...sshArgs(host),
+      "-N",
+      // Bind the near end to IPv4 explicitly. Left to itself ssh may listen on
+      // [::1] only, and every probe of 127.0.0.1 then misses a tunnel that is
+      // working perfectly — which looks exactly like the remote being down.
+      "-L", `127.0.0.1:${opts.localPort}:127.0.0.1:${remotePort}`,
+      // Fail loudly if the port is taken rather than running a tunnel to nowhere.
+      "-o", "ExitOnForwardFailure=yes",
+      `${host.user}@${host.address}`,
+    ],
     { stdio: ["ignore", "ignore", "ignore"], detached: true },
   );
   tunnel.unref();
@@ -120,7 +167,7 @@ export async function startRemoteBrowser(
   const deadline = Date.now() + 40_000;
   while (Date.now() < deadline) {
     if (await isCdpAlive(opts.localPort)) {
-      return { localPort: opts.localPort, remotePort, sshPid: tunnel.pid, chromeVersion };
+      return { localPort: opts.localPort, remotePort, sshPid: tunnel.pid, chromeVersion, os };
     }
     await sleep(400);
   }

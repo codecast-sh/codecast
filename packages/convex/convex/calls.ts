@@ -13,18 +13,14 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { authorizeRoom } from "./callRooms";
+import {
+  CALL_INVITE_TTL_MS,
+  CALL_MEMBER_STALE_MS,
+  authorizeRoom,
+} from "./callRooms";
 import { bucketTs } from "./presenceState";
 
-// Room membership is a lease: the dock heartbeats every CALL_HEARTBEAT_MS
-// while connected, readers ignore rows older than CALL_MEMBER_STALE_MS, so a
-// crashed client leaves by silence. Stale rows are deleted opportunistically
-// by whatever mutation next touches the room — no cron.
-export const CALL_HEARTBEAT_MS = 15_000;
-export const CALL_MEMBER_STALE_MS = 45_000;
-// A ring that was neither answered nor cancelled inside this window reads as
-// expired everywhere (missed call), even while the row still exists.
-export const CALL_INVITE_TTL_MS = 45_000;
+export { CALL_HEARTBEAT_MS, CALL_INVITE_TTL_MS, CALL_MEMBER_STALE_MS } from "./callRooms";
 
 function liveMembers(rows: Doc<"call_members">[], now: number) {
   return rows.filter((m) => now - m.last_seen < CALL_MEMBER_STALE_MS);
@@ -283,21 +279,59 @@ export const invite = mutation({
     if (!targetAuth.ok) throw new Error(`Recipient cannot join this room`);
 
     const now = Date.now();
-    // One active ring per (from, to): re-ringing refreshes rather than stacks,
-    // and any stale/answered rows for the pair are swept while we're here.
+    // Decline cooldown: a fresh decline/cancel means "not now" — re-ringing
+    // inside the window is refused so a looping caller cannot ring forever
+    // (each decline buys the recipient a quiet minute).
+    const RE_RING_COOLDOWN_MS = 60_000;
+    const settledFromMe = await Promise.all(
+      (["declined", "cancelled"] as const).map((status) =>
+        ctx.db
+          .query("call_invites")
+          .withIndex("by_from_status", (q) =>
+            q.eq("from_user", userId).eq("status", status),
+          )
+          .collect(),
+      ),
+    );
+    const recentlySettled = settledFromMe
+      .flat()
+      .some(
+        (inv) =>
+          String(inv.to_user) === String(args.to_user) &&
+          (inv.responded_at ?? inv.created_at) > now - RE_RING_COOLDOWN_MS,
+      );
+    if (recentlySettled) return { busy: false, cooldown: true };
+
+    // One active ring per (from, to): re-ringing REFRESHES the existing row in
+    // place (same _id, so the recipient's toast/sound dedupe holds — a
+    // delete+insert would mint a new id and re-fire the ring every call),
+    // and stale rows for other pairs are swept while we're here.
     const priorFromMe = await ctx.db
       .query("call_invites")
       .withIndex("by_from_status", (q) =>
         q.eq("from_user", userId).eq("status", "ringing"),
       )
       .collect();
+    let existing: Doc<"call_invites"> | null = null;
     for (const inv of priorFromMe) {
-      if (String(inv.to_user) === String(args.to_user) || !inviteAlive(inv, now)) {
+      if (String(inv.to_user) === String(args.to_user)) {
+        if (inviteAlive(inv, now)) existing = inv;
+        else await ctx.db.delete(inv._id);
+      } else if (!inviteAlive(inv, now)) {
         await ctx.db.delete(inv._id);
       }
     }
 
     const target = await ctx.db.get(args.to_user);
+    if (existing) {
+      // Keep created_at: the original ring's TTL clock keeps running, so
+      // hammering invite cannot extend a ring past CALL_INVITE_TTL_MS.
+      await ctx.db.patch(existing._id, {
+        room_key: args.room_key,
+        anchor_title: args.anchor_title,
+      });
+      return { busy: target?.status === "busy", cooldown: false };
+    }
     await ctx.db.insert("call_invites", {
       room_key: args.room_key,
       team_id: callerAuth.teamId,
@@ -436,6 +470,10 @@ export const mintAccessToken = action({
       name: grant.name,
       room: args.room_key,
       metadata: grant.image ? JSON.stringify({ image: grant.image }) : undefined,
+      // Short-lived: the SFU trusts the JWT alone, so a long token would keep
+      // working after team removal or the session going private. livekit-client
+      // reconnects re-mint (callManager), so 15 minutes costs nothing.
+      ttlSeconds: 15 * 60,
     });
     return { url, token };
   },

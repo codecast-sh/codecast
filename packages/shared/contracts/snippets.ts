@@ -37,6 +37,12 @@ export interface SnippetDescriptor {
   detail: string;
   /** Where the snippet is written on disk (shown as a subtle note). */
   writesTo: string;
+  /**
+   * ISO date (YYYY-MM-DD) the snippet first shipped. A rename keeps the
+   * original date (see wireSlug). The web compares this against the account's
+   * creation time to offer newly shipped features to existing users.
+   */
+  shipped: string;
   /** Config flag this snippet toggles (e.g. "workflow_enabled"). */
   enabledKey: string;
   /** Config field holding the installed snippet version (e.g. "workflow_version"). */
@@ -572,7 +578,7 @@ cast browser text                  # visible text, for reading rather than actin
 
 **Showing the human what you saw**: \`cast browser shot\` puts the picture straight into the conversation, under the command that took it — no flag needed. Add \`--share\` when you also want a link you can paste elsewhere, with \`--alt\` to caption it. Never link a local path — their browser cannot read files on this machine.
 
-**One browser, many agents.** Every agent on this machine drives the SAME Chrome, so tabs are owned per session: commands act on YOUR tab, and \`cast browser tabs\` marks it \`*\` and other agents' tabs \`~\`. Open your own with \`cast browser open --new-tab <url>\` and pass \`--tab <id>\` when you want to be certain. If a page suddenly looks wrong, run \`cast browser tabs\` before you debug the app — a tab someone else navigated looks exactly like a broken feature.
+**One browser, many agents.** Every agent on this machine drives the SAME Chrome, and each gets its own tab automatically — \`cast browser open <url>\` reuses the tab you already have, so just call it and keep working. \`cast browser tabs\` marks yours \`*\` and other agents' \`~\`; pass \`--tab <id>\` when you want to be certain. Reach for \`--new-tab\` only when you genuinely need a SECOND page open at once (comparing two, or keeping one loaded while you visit another) — opening one per step leaves a pile of tabs that slows the browser down for everyone. Re-opening the URL you are already on is free: it reuses the loaded page instead of reloading it (\`--reload\` forces a fresh load). If a page suddenly looks wrong, run \`cast browser tabs\` before you debug the app — a tab someone else navigated looks exactly like a broken feature.
 
 The browser keeps running between commands, so this is stateful: what you opened stays open until you close it or run \`cast browser stop\`. It starts from a COPY of the real Chrome profile, so it is signed in to what you are signed in to, and nothing it does touches the real browser. Treat that access the way the human would — it is their logged-in accounts. \`cast browser start --fresh\` gives a signed-out browser when that is what you want, and \`cast browser stop --wipe\` removes the copy.
 ${BROWSER_SNIPPET_END}
@@ -712,6 +718,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "conversations relevant to their current task. Nothing runs automatically — agents " +
       "call these when they need context.",
     writesTo: "CLAUDE.md — a ## Memory section with the command reference",
+    shipped: "2026-06-18",
     enabledKey: "memory_enabled",
     versionKey: "memory_version",
     section: {
@@ -734,6 +741,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "The text lands as a new turn in the target session, attributed to the sender, and " +
       "renders as a card in the dashboard showing who sent it.",
     writesTo: "CLAUDE.md — a ## Messaging section with the send command",
+    shipped: "2026-06-18",
     enabledKey: "messaging_enabled",
     versionKey: "messaging_version",
     section: { spec: MESSAGING_SECTION, body: MESSAGING_SNIPPET },
@@ -749,6 +757,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "sessions. Both land in your inbox as independent threads — unlike subagents, which " +
       "report back to the agent that launched them.",
     writesTo: "CLAUDE.md — a ## Forks & Sessions section",
+    shipped: "2026-06-18",
     enabledKey: "forks_enabled",
     versionKey: "forks_version",
     section: {
@@ -767,6 +776,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "create tasks, log progress, and mark work done, and you see it on the dashboard. " +
       "Agents only use this for real work, not questions or quick lookups.",
     writesTo: "CLAUDE.md — a ## Tasks & Plans section with guidelines and commands",
+    shipped: "2026-06-18",
     enabledKey: "work_enabled",
     versionKey: "work_version",
     section: {
@@ -794,6 +804,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "later in the same session, or in a fresh linked session with --spawn. Agents " +
       "only set triggers when they have a reason to.",
     writesTo: "CLAUDE.md — a ## Triggers section with trigger commands",
+    shipped: "2026-06-18",
     enabledKey: "task_enabled",
     versionKey: "task_version",
     wireSlug: "scheduling",
@@ -817,6 +828,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "each node is an agent session, a shell command, or a human approval gate. Workflows " +
       "only run when you explicitly invoke them.",
     writesTo: "CLAUDE.md — a ## Workflows section with the syntax reference",
+    shipped: "2026-06-18",
     enabledKey: "workflow_enabled",
     versionKey: "workflow_version",
     section: {
@@ -837,6 +849,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "it when a visual beats prose; the default stays markdown. Also teaches `cast image` — " +
       "upload a screenshot or image and get a stable link that renders inline in messages and canvases.",
     writesTo: "CLAUDE.md — a ## Visual Canvas section with the format",
+    shipped: "2026-06-18",
     enabledKey: "visual_enabled",
     versionKey: "visual_version",
     section: {
@@ -855,6 +868,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "Re-publishing the same file keeps the same link; links are unlisted but viewable " +
       "by anyone who has them.",
     writesTo: "CLAUDE.md — a ## Publishing pages section with the command",
+    shipped: "2026-07-31",
     enabledKey: "publish_enabled",
     versionKey: "publish_version",
     section: { spec: PUBLISH_SECTION, body: PUBLISH_SNIPPET },
@@ -872,6 +886,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "moves; the dashboard shows how far the thread has run since it was last written, so a " +
       "neglected one reads as stale rather than current.",
     writesTo: "CLAUDE.md — a ## Thread state section with the command",
+    shipped: "2026-08-12",
     enabledKey: "state_enabled",
     versionKey: "state_version",
     section: {
@@ -891,6 +906,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "and answer when someone @mentions the team's anchor in a thread. Sends from a managed " +
       "session are stamped as agent-written, so they can never wake another person's machine.",
     writesTo: "CLAUDE.md — a ## Team chat section with the command reference",
+    shipped: "2026-08-14",
     enabledKey: "chat_enabled",
     versionKey: "chat_version",
     section: { spec: CHAT_SECTION, body: CHAT_SNIPPET },
@@ -908,6 +924,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "never touched, and `cast browser start --fresh` gives a signed-out one instead. " +
       "Nothing launches until an agent runs `cast browser start`.",
     writesTo: "CLAUDE.md — a ## Browser section with the command reference",
+    shipped: "2026-08-13",
     enabledKey: "browser_enabled",
     versionKey: "browser_version",
     section: { spec: BROWSER_SECTION, body: BROWSER_SNIPPET },
@@ -924,6 +941,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "where you clear the stack one at a time with the keyboard; the chosen option arrives " +
       "back in the asking session as a normal message.",
     writesTo: "CLAUDE.md — a ## Asking for a decision section with the command",
+    shipped: "2026-08-14",
     enabledKey: "decide_enabled",
     versionKey: "decide_version",
     section: { spec: DECIDE_SECTION, body: DECIDE_SNIPPET },
@@ -940,6 +958,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "worktrees, spawning reviewers to check each one, and running critics for a final " +
       "integration sweep. Also installs two lifecycle hooks that fire only during orchestration.",
     writesTo: "~/.claude/skills/, ~/.claude/agents/, and ~/.claude/settings.json (hooks)",
+    shipped: "2026-06-18",
     enabledKey: "orch_enabled",
     versionKey: "orch_version",
   },

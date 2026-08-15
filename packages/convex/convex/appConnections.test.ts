@@ -102,9 +102,39 @@ describe("listConnections", () => {
     const apps = byId(await run(ctx(OWNER, tables())));
     expect(apps.slack).toEqual({ id: "slack", status: "not_connected" });
     expect(apps.github).toEqual({ id: "github", status: "not_connected" });
-    for (const id of ["gmail", "linear", "notion"]) {
+    // Gmail went live with the Google connector (ct-43290) — updated
+    // deliberately when its connectKind flipped to oauth-popup.
+    expect(apps.gmail).toEqual({ id: "gmail", status: "not_connected" });
+    for (const id of ["linear", "notion"]) {
       expect(apps[id]).toEqual({ id, status: "coming_soon" });
     }
+  });
+
+  test("a google install reports personal scope, the email, and a disconnect id", async () => {
+    const apps = byId(
+      await run(
+        ctx(
+          OWNER,
+          tables({
+            google_installations: [
+              {
+                _id: "gi_1",
+                scope_user_id: OWNER,
+                email: "ashot@example.com",
+                created_at: 1700000000000,
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    expect(apps.gmail).toMatchObject({
+      status: "connected",
+      scope: "personal",
+      by_me: true,
+      detail: "ashot@example.com",
+      disconnect_id: "gi_1",
+    });
   });
 
   test("team slack install reports who, when, scope — and no disconnect_id", async () => {
