@@ -1,8 +1,15 @@
-import { mutation, query, action, internalMutation } from "./functions";
+import { mutation, query, action, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createTeamFeedFilter } from "./privacy";
+import { createTeamFeedFilter, isTeamAdmin } from "./privacy";
+import {
+  PRESENCE_FRESH_MS,
+  bucketTs,
+  derivePresenceState,
+} from "./presenceState";
+import { CALL_MEMBER_STALE_MS, parseRoomKey } from "./callRooms";
+import type { Id } from "./_generated/dataModel";
 import { normalizeTeamTaskStatuses } from "@codecast/shared/tasks";
 import { purgeChatMembership } from "./chat";
 import { readLocalViewRevision } from "./localFirstCommands";
@@ -317,10 +324,75 @@ export const getTeamMembers = query({
     // must not expose its title/last-message. Pick the most recent *team-visible*
     // session in this team instead.
     const feedFilter = await createTeamFeedFilter(ctx, args.team_id);
+    const now = Date.now();
     const members = await Promise.all(
       memberships.map(async (m) => {
         const user = await ctx.db.get(m.user_id);
         if (!user) return null;
+        // Person presence (active/idle/away/offline), derived in one place
+        // (presenceState.ts) from the same rows push routing trusts. Devices
+        // are read only for machine-wide opt-ins with a live app surface —
+        // the same short-circuit readPresence uses.
+        const presenceRow = await ctx.db
+          .query("user_presence")
+          .withIndex("by_user", (q) => q.eq("user_id", user._id))
+          .first();
+        const surfaceAlive =
+          !!presenceRow && now - presenceRow.last_seen < PRESENCE_FRESH_MS;
+        const devices =
+          surfaceAlive && (user.machine_wide_presence ?? true)
+            ? await ctx.db
+                .query("devices")
+                .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+                .collect()
+            : [];
+        const presenceState = derivePresenceState(
+          {
+            presence: presenceRow,
+            devices,
+            machineWide: user.machine_wide_presence,
+            daemonLastSeen: user.daemon_last_seen,
+          },
+          now,
+        );
+        // Which huddle (if any) this member is sitting in. The raw room key
+        // is itself metadata (a dm key names both parties; a session key
+        // names a possibly-private conversation), so the VIEWER gets the key
+        // only for rooms they could join: their own dms, this team's
+        // channels, and feed-visible sessions. Everyone else sees a bare
+        // "in a huddle" boolean.
+        const callRows = await ctx.db
+          .query("call_members")
+          .withIndex("by_user", (q) => q.eq("user_id", user._id))
+          .collect();
+        const liveCall = callRows.find(
+          (c) => now - c.last_seen < CALL_MEMBER_STALE_MS,
+        );
+        let visibleRoomKey: string | undefined;
+        if (liveCall) {
+          const parsed = parseRoomKey(liveCall.room_key);
+          if (parsed?.kind === "dm") {
+            if (parsed.users.includes(String(authUserId))) {
+              visibleRoomKey = liveCall.room_key;
+            }
+          } else if (parsed?.kind === "channel") {
+            if (String(liveCall.team_id) === String(args.team_id)) {
+              visibleRoomKey = liveCall.room_key;
+            }
+          } else if (parsed?.kind === "session") {
+            const conv = await ctx.db.get(
+              parsed.conversationId as Id<"conversations">,
+            );
+            if (
+              conv &&
+              (String(conv.user_id) === String(authUserId) ||
+                (String(conv.team_id ?? "") === String(args.team_id) &&
+                  feedFilter.isVisible(conv)))
+            ) {
+              visibleRoomKey = liveCall.room_key;
+            }
+          }
+        }
         const recentConvos = await ctx.db
           .query("conversations")
           .withIndex("by_team_user_updated", (q) =>
@@ -346,6 +418,14 @@ export const getTeamMembers = query({
           bio: user.bio,
           status: user.status,
           timezone: user.timezone,
+          // Coarse person presence. Timestamps are bucketed to the minute so a
+          // 30s heartbeat usually yields a byte-identical result and Convex
+          // skips the push (the client additionally quantizes; see
+          // quantizePresence in the store's sync registry).
+          presence_state: presenceState,
+          presence_input_at: bucketTs(presenceRow?.last_input_at),
+          in_huddle: !!liveCall,
+          in_room_key: visibleRoomKey,
           recent_session_title: recentConvo?.title,
           recent_session_messages: recentConvo?.message_count,
           recent_session_updated: recentConvo?.updated_at,
@@ -736,6 +816,15 @@ export const removeFromTeam = mutation({
   },
 });
 
+// Admin check by real team membership, callable from actions (which have no
+// ctx.db). Authoritative source for "is this user an admin of THIS team".
+export const isTeamAdminInternal = internalQuery({
+  args: { user_id: v.id("users"), team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    return await isTeamAdmin(ctx, args.user_id, args.team_id);
+  },
+});
+
 export const syncGithubOrg = action({
   args: {
     requesting_user_id: v.id("users"),
@@ -757,11 +846,17 @@ export const syncGithubOrg = action({
     if (!requestingUser || requestingUser._id !== args.requesting_user_id) {
       throw new Error("Not authenticated");
     }
-    if (requestingUser.role !== "admin") {
-      throw new Error("Only admins can sync GitHub organizations");
-    }
     if (!requestingUser.team_id) {
       throw new Error("You must be part of a team to sync");
+    }
+    // Authorize against the ACTUAL team membership, not the denormalized
+    // users.role (which reflects whichever team was last activated and drifts).
+    const isAdmin = await ctx.runQuery(internal.teams.isTeamAdminInternal, {
+      user_id: requestingUser._id,
+      team_id: requestingUser.team_id,
+    });
+    if (!isAdmin) {
+      throw new Error("Only admins can sync GitHub organizations");
     }
     if (!requestingUser.github_access_token) {
       throw new Error("GitHub account not connected");

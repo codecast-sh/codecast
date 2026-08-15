@@ -14,7 +14,7 @@ import {
   useInboxStore, isConvexId, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
-  sessionsWakeSig, pendingSendWakeSig,
+  sessionsWakeSig, pendingSendWakeSig, filterInboxScope,
 } from '@codecast/web/store/inboxStore';
 import {
   AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, featuredModelOptions, launchRailOptions, toConvexAgentType,
@@ -1046,10 +1046,18 @@ export default function InboxScreen() {
   // Same synced per-user flag web reads (clientState.ui.inbox_show_old, stamped
   // LWW, default hide) so the phone and desktop render one identical set.
   const showOld = useInboxStore((s) => resolveShowOld(s.clientState.ui));
+  // Scope pre-filter BEFORE the old-session partition, exactly like web
+  // (GlobalSessionPanel): the never-prune cache holds rows from other inbox
+  // scopes/teams, and an unscoped partition renders them after a switch.
+  const inboxScope = useInboxStore((s) => s.clientState.ui?.inbox_scope ?? "mine");
+  const teamInboxIds = useInboxStore((s) => s.teamInboxIds);
+  const meId = useInboxStore((s) => s.currentUser?._id?.toString?.() ?? null);
   const { visibleSessions } = useMemo(
-    () => partitionOldSessions(sessions, liveInboxIds, showOld, currentSessionId),
+    () => partitionOldSessions(
+      filterInboxScope(sessions, inboxScope, meId, teamInboxIds, currentSessionId),
+      liveInboxIds, showOld, currentSessionId),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig stands in for the churny sessions ref
-    [sessionsSig, liveInboxIds, showOld, currentSessionId],
+    [sessionsSig, inboxScope, meId, teamInboxIds, liveInboxIds, showOld, currentSessionId],
   );
   // Full-args categorize (matches web): pendingSendIds keeps optimistic sends
   // in Working, and opts make isEngagedBlank work so the New section actually

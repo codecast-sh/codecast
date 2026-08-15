@@ -32,14 +32,22 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _chatApi } from "@codecast/convex/convex/_generated/api";
 const api = _chatApi as any;
-import { Lock, BellOff, Bell, Plus, AlertTriangle, RotateCw } from "lucide-react";
+import { Lock, BellOff, Bell, Plus, AlertTriangle, RotateCw, Search, SquarePen } from "lucide-react";
+import { ChannelMembersButton, DmHeadline } from "../../components/chat/ChannelPeople";
+import { NewMessageModal } from "../../components/chat/NewMessageModal";
+import { ChatSearch } from "../../components/chat/ChatSearch";
+import { useShortcutAction } from "../../shortcuts";
+import { MenuKeyCaps } from "../../components/KeyboardShortcutsHelp";
+import { channelDisplayName } from "../../lib/chatViews";
 import { useInboxStore, selectChannelReadMarker, selectNavCollapsed, type ChatNotifyLevel } from "../../store/inboxStore";
+import type { ChatAttachment } from "../../store/chatSlice";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import {
   useChannelMessages,
   useChannelMessagesSync,
   useChatMembers,
   useChatRail,
+  useOpenDm,
   useEnsureChatMessage,
   useChatMessageRow,
   useSupersededChannelId,
@@ -74,6 +82,17 @@ function subscribePresence(fn: () => void): () => void {
 
 function readPresence(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
+}
+
+/** The header's search affordance — a quiet pill wearing its shortcut. */
+function SearchPill({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button type="button" className="ch-search-open" title="Search messages" onClick={onOpen}>
+      <Search className="w-3 h-3" />
+      Search
+      <MenuKeyCaps action="chat.search" />
+    </button>
+  );
 }
 
 export default function ChatPage() {
@@ -222,17 +241,17 @@ export default function ChatPage() {
   );
 
   const send = useCallback(
-    (content: string) => {
+    (content: string, attachments?: ChatAttachment[]) => {
       if (!activeChannelId) return;
-      useInboxStore.getState().sendChatMessage(activeChannelId, content);
+      useInboxStore.getState().sendChatMessage(activeChannelId, content, { attachments });
     },
     [activeChannelId],
   );
 
   const sendReply = useCallback(
-    (content: string) => {
+    (content: string, attachments?: ChatAttachment[]) => {
       if (!activeChannelId || !threadRootId) return;
-      useInboxStore.getState().sendChatMessage(activeChannelId, content, { threadRootId });
+      useInboxStore.getState().sendChatMessage(activeChannelId, content, { threadRootId, attachments });
     },
     [activeChannelId, threadRootId],
   );
@@ -270,9 +289,81 @@ export default function ChatPage() {
     useInboxStore.getState().openCreateModal("chat");
   }, []);
 
+  // The new-message modal: one field for people, channels and groups.
+  const [newMessageOpen, setNewMessageOpen] = useState(false);
+  const openNewMessage = useCallback(() => setNewMessageOpen(true), []);
+
+  // Chat search — transient overlay; results are a server-ranked read.
+  //
+  // ?search= is a REQUEST, consumed exactly once: the query moves into state,
+  // the panel opens, and the param is stripped from the URL. Leaving it in the
+  // URL would make the same request unrepeatable (same path, no change to
+  // react to), reopen the panel on reload, and prefill a later manual open
+  // with a stale query. Keying the panel on the seed remounts it for a new
+  // request even while it is already open.
+  const searchParam = search.get("search") || undefined;
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchSeed, setSearchSeed] = useState<{ q: string; n: number } | undefined>(undefined);
+  useEffect(() => {
+    if (!searchParam) return;
+    setSearchSeed((prev) => ({ q: searchParam, n: (prev?.n ?? 0) + 1 }));
+    setSearchOpen(true);
+    const path = urlChannelId ? `/chat/${urlChannelId}` : "/chat";
+    router.replace(path);
+    // urlChannelId is read at consume time only; the effect keys on the request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParam, router]);
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchSeed(undefined);
+  }, []);
+  // Only the chat tab the reader is LOOKING at owns the chord. The tab shell
+  // keeps every opened chat page mounted, so an ungated handler in a hidden
+  // pane would open a search nobody can see — and, having "handled" the key,
+  // stop the chord reaching whatever surface actually holds focus.
+  useShortcutAction(
+    "chat.search",
+    useCallback(() => {
+      if (!tabActive) return false;
+      setSearchOpen(true);
+      return true;
+    }, [tabActive]),
+  );
+
+  // A suggested teammate in the rail becomes a room in the same tick.
+  const openDm = useOpenDm();
+  const openDmWith = useCallback((memberId: string) => openDm([memberId]), [openDm]);
+
   // The app's one context-menu system; the header bell and the rail's rows
   // (click and right-click) all open the same instance.
   const channelMenu = useChannelMenu();
+
+  // ── Images land anywhere ──────────────────────────────────────────────────
+  // The whole channel is the drop target; the composer's thumbnail strip is
+  // where the files land (MessageInput installs the handler on this ref).
+  const dropFilesRef = useRef<((files: File[]) => void) | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const dragDepthRef = useRef(0);
+  const onDragEnter = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    dragDepthRef.current++;
+    setDragging(true);
+  }, []);
+  const onDragLeave = useCallback(() => {
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragging(false);
+  }, []);
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+  }, []);
+  const onDrop = useCallback((e: React.DragEvent) => {
+    dragDepthRef.current = 0;
+    setDragging(false);
+    const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (files.length === 0) return;
+    e.preventDefault();
+    dropFilesRef.current?.(files);
+  }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
   const showEmpty = messages.length === 0 && !feed.loading && !feed.error;
@@ -293,20 +384,51 @@ export default function ChatPage() {
         }
         onSelect={selectChannel}
         onCreate={createChannel}
+        onNewMessage={openNewMessage}
+        onOpenDm={openDmWith}
       />}
 
-      <div className="ch-main">
+      <div
+        className="ch-main"
+        onDragEnter={onDragEnter}
+        onDragLeave={onDragLeave}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+      >
+        {dragging && (
+          <div className="ch-drop-overlay" aria-hidden="true">
+            <div className="ch-drop-card">Drop images to attach</div>
+          </div>
+        )}
         {activeChannelId ? (
           <>
             <header className="ch-head">
-              <span className="ch-head-name">
-                <span className="ch-head-hash" aria-hidden="true">
-                  {activeChannel?.isPrivate ? <Lock className="w-3 h-3 inline-block" /> : "#"}
+              {activeChannel?.kind === "dm" ? (
+                <DmHeadline channel={activeChannel} />
+              ) : (
+                <span className="ch-head-name">
+                  <span className="ch-head-hash" aria-hidden="true">
+                    {activeChannel?.isPrivate ? <Lock className="w-3 h-3 inline-block" /> : "#"}
+                  </span>
+                  {activeChannel?.name ?? "channel"}
                 </span>
-                {activeChannel?.name ?? "channel"}
-              </span>
-              {activeChannel?.topic && <span className="ch-head-topic">{activeChannel.topic}</span>}
-              {!activeChannel?.topic && <span className="ch-head-topic" />}
+              )}
+              {activeChannel?.kind !== "dm" && activeChannel?.topic
+                ? <span className="ch-head-topic">{activeChannel.topic}</span>
+                : <span className="ch-head-topic" />}
+              {activeChannel && (activeChannel.kind === "dm" || activeChannel.isPrivate) && (
+                <ChannelMembersButton channel={activeChannel} />
+              )}
+              <SearchPill onOpen={() => setSearchOpen(true)} />
+              <button
+                type="button"
+                className="ch-tool"
+                title="New message"
+                aria-haspopup="dialog"
+                onClick={openNewMessage}
+              >
+                <SquarePen className="w-3.5 h-3.5" />
+              </button>
               {/* One management surface for everything channel-shaped —
                   notifications, rename, topic, archive — shared verbatim with
                   the sidebar's channel rows (ChannelMenu). */}
@@ -389,9 +511,14 @@ export default function ChatPage() {
             )}
 
             <ChatComposer
+              dropFilesRef={dropFilesRef}
               channelId={activeChannelId}
               teamId={activeChannel?.teamId}
-              placeholder={`Message #${activeChannel?.name ?? "channel"}`}
+              placeholder={
+                activeChannel?.kind === "dm"
+                  ? `Message ${channelDisplayName(activeChannel, useInboxStore.getState().teamMembers)}`
+                  : `Message #${activeChannel?.name ?? "channel"}`
+              }
               onSend={send}
               autoFocus
             />
@@ -435,6 +562,16 @@ export default function ChatPage() {
       </div>
 
       <ChannelContextMenu state={channelMenu} />
+      {newMessageOpen && <NewMessageModal onClose={() => setNewMessageOpen(false)} />}
+      {searchOpen && (
+        <ChatSearch
+          key={searchSeed ? `seed-${searchSeed.n}` : "manual"}
+          channels={rail}
+          currentChannelId={activeChannelId}
+          initialQuery={searchSeed?.q}
+          onClose={closeSearch}
+        />
+      )}
       {threadRootId && activeChannelId && (
         <ChatThreadPanel
           channelId={activeChannelId}
