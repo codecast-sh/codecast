@@ -10,6 +10,11 @@ function isEnabled(): boolean {
   return useInboxStore.getState().clientState?.ui?.sounds_enabled !== false;
 }
 
+// Chat has its own switch (see clientState.ui.chat_sounds_enabled).
+function isChatEnabled(): boolean {
+  return useInboxStore.getState().clientState?.ui?.chat_sounds_enabled !== false;
+}
+
 function getCtx(): AudioContext {
   if (!ctx) ctx = new AudioContext();
   if (ctx.state === "suspended") ctx.resume();
