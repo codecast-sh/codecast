@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useQuery } from "convex/react";
+import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Blocks, Library, MonitorSmartphone, Plug } from "lucide-react";
 import { AuthGuard } from "../AuthGuard";
@@ -11,7 +11,7 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useDevices } from "../DeviceBadge";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useSyncCapabilityState } from "../../hooks/useSyncCapabilityState";
+import { useSyncCapabilityState, useSyncCapabilityBindings } from "../../hooks/useSyncCapabilityState";
 import {
   capabilityStateWakeSig,
   isCapabilityReportStale,
@@ -33,6 +33,8 @@ import {
 } from "./FleetMatrix";
 import { LibraryBrowse } from "./LibraryBrowse";
 import { AppsTab } from "./AppsTab";
+import { InstalledTab, projectChoicesFromSessions } from "./InstalledTab";
+import { EquipControl } from "./EquipControl";
 import {
   kindMeta,
   ScopeChip,
@@ -44,20 +46,20 @@ import { TokenCostBadge } from "./TokenCostBadge";
 import { Cmd, LoadingMatrix } from "./EmptyStates";
 
 /**
- * /capabilities — what every machine you own actually has, and what you could add.
+ * /capabilities — the library. Four tabs, in the order a person meets them:
  *
- * Two tabs, and they answer different questions:
+ *   Installed  the front door. One row per capability you have said anything
+ *              about, and the equip pill on every row: everywhere / this
+ *              project / this session. This is where people live.
+ *   Machines   the fleet matrix — one column per device, drift first. The ops
+ *              view, one click away, for when something is wrong.
+ *   Library    the store: the public registries cross-referenced against your
+ *              fleet, with the same equip pill on every card.
+ *   Apps       services agents act through, connected once per workspace.
  *
- *   Machines  one column per device, one row per capability. Drift first, because
- *             "my laptop is missing the skill I use every day" is the thing no
- *             single-machine tool can ever tell you.
- *   Library   the public catalogs, cross-referenced against your fleet and priced
- *             in context tokens — the two columns `/plugin` and the web catalogs
- *             do not have.
- *
- * This page never writes anything. It reads inventories the daemons already
- * report and renders the comparison, so it carries no consent model, no ownership
- * ledger and no security surface.
+ * Installed and Library WRITE bindings (optimistically, via the store); nothing
+ * on this page writes to a machine — the daemon's reconciler does that from
+ * the resolved desired state, on its own heartbeat.
  */
 
 // ------------------------------------------------------------- data plumbing
@@ -198,6 +200,7 @@ function useFleet(): {
   loading: boolean;
 } {
   useSyncCapabilityState();
+  useSyncCapabilityBindings();
   const { devices } = useDevices();
   // `useDevices().loaded` is `devices.length > 0`, which cannot tell "the roster
   // has not answered" from "this account owns no machines" — and that is exactly
@@ -352,7 +355,7 @@ function RowDetail({
 
 // ----------------------------------------------------------------- the page
 
-type Tab = "machines" | "library" | "apps";
+type Tab = "installed" | "machines" | "library" | "apps";
 
 export interface CapabilitiesPageProps {
   /**
@@ -376,13 +379,35 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
   const { devices, reports, driftKeys, loading } = useFleet();
 
   const urlTab = params.get("tab");
-  const tab: Tab = urlTab === "library" ? "library" : urlTab === "apps" ? "apps" : "machines";
+  // Installed is the front door: the simple "what is on, and where" list.
+  // Machines (the fleet matrix), Library and Apps are one click away.
+  const tab: Tab =
+    urlTab === "library" ? "library"
+    : urlTab === "apps" ? "apps"
+    : urlTab === "machines" ? "machines"
+    : "installed";
   const setTab = (t: string) => {
     const base = pathname && pathname.startsWith("/capabilities") ? pathname : "/capabilities";
     // Through the router, so the tab is in the URL, survives a reload and lands
     // in browser history like every other view change in the shell.
-    router.push(t === "machines" ? base : `${base}?tab=${t}`);
+    router.push(t === "installed" ? base : `${base}?tab=${t}`);
   };
+
+  // The equip control's choices: repos this user has sessions in (deduped by
+  // resolver key), and the session in view for session scope.
+  const sessionsForEquip = useInboxStore((s) => s.sessions);
+  const currentSessionId = useInboxStore((s) => s.currentSessionId);
+  const meId = useInboxStore((s) => (s as any).currentUser?._id as string | undefined);
+  const equipTarget = useMemo(
+    () => ({
+      projects: projectChoicesFromSessions(
+        Object.values(sessionsForEquip ?? {}) as any[],
+        meId ?? "me",
+      ),
+      sessionId: currentSessionId,
+    }),
+    [sessionsForEquip, currentSessionId, meId],
+  );
 
   const [filter, setFilter] = useState<FleetFilter>("all");
   const [query, setQuery] = useState("");
@@ -398,11 +423,24 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
   // A public catalog when one is wired up, otherwise the fleet's own. Either way
   // the install sites come from the fleet, because that cross-reference is the
   // reason to browse here rather than in `/plugin`.
+  // The public catalog: the MCP registry (and later the marketplaces) as
+  // ingested by refreshMcpRegistry. Paginated, never a synced collection —
+  // ~1000 rows multiplied by every user is a table that dwarfs the database.
+  const publicCatalog = usePaginatedQuery(api.capabilities.webCatalogList, {}, { initialNumItems: 200 });
   const catalog: CatalogEntry[] | undefined = useMemo(() => {
-    if (props.catalog) return withFleetInstalls(props.catalog, rows);
-    if (rows.length === 0) return undefined;
-    return catalogFromFleet(rows);
-  }, [props.catalog, rows]);
+    const own = rows.length === 0 ? [] : catalogFromFleet(rows);
+    const pub = (props.catalog ?? publicCatalog.results ?? []) as CatalogEntry[];
+    if (pub.length === 0 && own.length === 0) return undefined;
+    // Public rows first (they carry descriptions and publishers), the fleet's
+    // own after, deduped by slug so an installed registry server appears once.
+    // Within the merged list, an entry WITH a description outranks one without:
+    // a store card that says what the thing does beats a bare name, and the
+    // fleet's own rows are mostly bare names.
+    const seen = new Set(pub.map((c) => c.slug));
+    const merged = [...pub, ...own.filter((c) => !seen.has(c.slug))];
+    merged.sort((a, b) => Number(!!b.description) - Number(!!a.description));
+    return withFleetInstalls(merged, rows);
+  }, [props.catalog, publicCatalog.results, rows]);
 
   const kindTally = useMemo(() => {
     const t = new Map<string, number>();
@@ -420,14 +458,20 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
           <div className="min-w-0 flex-1">
             <h1 className="text-lg font-serif text-sol-text">Capabilities</h1>
             <p className="text-sm text-sol-text-muted mt-1 max-w-2xl leading-relaxed">
-              Every skill, command, subagent, plugin and MCP server your machines have — side by
-              side. Nothing here writes to a machine.
+              {tab === "installed"
+                ? "What your agents can do, and where. Turn things on everywhere, in one project, or just for this session."
+                : tab === "library"
+                  ? "Skills, plugins and MCP servers you could add — cross-referenced against what your machines already have."
+                  : tab === "apps"
+                    ? "Services agents act through. Connect once; tokens stay server-side."
+                    : "Every machine side by side. Drift first — the skill your laptop is missing is the thing no single-machine tool can tell you."}
             </p>
           </div>
           <SegmentedToggle
             value={tab}
             onChange={setTab}
             items={[
+              { key: "installed", label: "Installed", icon: Blocks, title: "What you have on, and where" },
               { key: "machines", label: "Machines", icon: MonitorSmartphone, title: "Compare your fleet" },
               { key: "library", label: "Library", icon: Library, title: "Browse what you could add" },
               { key: "apps", label: "Apps", icon: Plug, title: "Connect services agents act through" },
@@ -435,7 +479,32 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
           />
         </header>
 
-        {tab === "machines" ? (
+        {tab === "installed" ? (
+          <InstalledTab
+            catalog={catalog ?? []}
+            equip={equipTarget}
+            installedOn={(slug) => {
+              // A binding names a slug; the mirror names a (kind, identity).
+              // builtin/memory is the row whose identity is "memory"; a
+              // marketplace plugin's row identity is "name@marketplace". Match
+              // on the slug's leaf so a row is found however it was keyed.
+              const leaf = slug.split("/").pop()?.toLowerCase() ?? slug.toLowerCase();
+              return rows
+                .filter(
+                  (r) =>
+                    r.slug === slug ||
+                    r.key === slug ||
+                    r.identity.toLowerCase() === leaf ||
+                    r.identity.toLowerCase().startsWith(`${leaf}@`),
+                )
+                .flatMap((r) =>
+                  r.cells
+                    .filter((c) => c.status === "same" || c.status === "pin_differs" || c.status === "disabled")
+                    .map((c) => c.deviceId),
+                );
+            }}
+          />
+        ) : tab === "machines" ? (
           loading ? (
             <LoadingMatrix />
           ) : (
@@ -500,7 +569,7 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
           <AppsTab />
         ) : (
           <>
-            {!props.catalog && catalog && (
+            {!props.catalog && catalog && (publicCatalog.results?.length ?? 0) === 0 && (
               <p className="text-[11px] text-sol-text-dim">
                 Browsing what your own machines report. The public marketplace catalog has not been
                 ingested for this deployment yet — when it is, these rows keep their
@@ -510,12 +579,13 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
             <LibraryBrowse
               entries={catalog}
               devices={devices}
-              loading={props.catalogLoading || loading}
+              renderActions={(entry) => <EquipControl target={{ slug: entry.slug, ...equipTarget }} />}
+              loading={props.catalogLoading || (loading && publicCatalog.status === "LoadingFirstPage")}
               error={props.catalogError ?? null}
               onRetry={props.onCatalogRetry}
-              hasMore={props.hasMoreCatalog}
-              loadingMore={props.loadingMoreCatalog}
-              onLoadMore={props.onLoadMoreCatalog}
+              hasMore={props.hasMoreCatalog ?? publicCatalog.status === "CanLoadMore"}
+              loadingMore={props.loadingMoreCatalog ?? publicCatalog.status === "LoadingMore"}
+              onLoadMore={props.onLoadMoreCatalog ?? (() => publicCatalog.loadMore(200))}
               onOpen={(entry) => {
                 // An entry whose slug is a matrix row key opens that row's
                 // machine-by-machine detail. A public row we have nowhere is a

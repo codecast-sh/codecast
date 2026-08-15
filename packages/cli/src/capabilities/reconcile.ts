@@ -113,3 +113,86 @@ export function reconcileOnce(deps: ReconcileDeps, now: () => number = Date.now)
     elapsedMs,
   };
 }
+
+/* ==========================================================================
+ * The heartbeat entry point: fetch, resolve, apply builtins
+ * ========================================================================== */
+
+import { resolveCapabilities, type CapabilityBinding } from "@codecast/shared/contracts";
+import { applyBuiltins } from "./builtinDriver.js";
+import { deviceId } from "../remote/device.js";
+import { currentProjectScopeKey } from "./equip.js";
+
+export interface HeartbeatReconcileDeps {
+  siteUrl: string;
+  apiToken: string;
+  userId: string;
+  home: string;
+  log: (line: string) => void;
+  /** Injected for tests; the daemon passes fetch. */
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * One reconcile from the daemon's heartbeat path.
+ *
+ * Order matters and is the lock module's rule: FETCH FIRST (bindings, over the
+ * network), then lock, resolve and apply — never hold the lock across a
+ * network call. Cost ladder as reconcileNeeded documents: mode off = one field
+ * read; revisions equal = one compare; otherwise one bounded pass.
+ *
+ * Only builtins are materialized in this phase. Everything else resolves and
+ * is reported, so a binding on mkt/… shows honestly as pending on the fleet
+ * page rather than silently ignored.
+ */
+export async function reconcileFromHeartbeat(deps: HeartbeatReconcileDeps): Promise<ReconcileOutcome> {
+  const gate = reconcileNeeded();
+  if (gate.mode === "off") return { ran: false, mode: "off", skipped: "mode_off" };
+  if (!gate.behind) return { ran: false, mode: gate.mode, skipped: "revision_current" };
+
+  const started = Date.now();
+  const f = deps.fetchImpl ?? fetch;
+  let bindings: CapabilityBinding[] = [];
+  try {
+    const res = await f(`${deps.siteUrl}/cli/cap/bindings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: deps.apiToken }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const rows: any[] = await res.json();
+    if (!Array.isArray(rows)) throw new Error("bindings response was not a list");
+    bindings = rows.map((r, i) => ({
+      id: `${r.capability_slug}|${r.scope_kind}|${r.scope_key}|${i}`,
+      userId: deps.userId,
+      capabilitySlug: r.capability_slug,
+      scopeKind: r.scope_kind,
+      scopeKey: r.scope_key,
+      enabled: !!r.enabled,
+      updatedAt: typeof r.updated_at === "number" ? r.updated_at : 0,
+    }));
+  } catch (err) {
+    deps.log(`[capabilities] reconcile skipped: could not fetch bindings (${String(err).slice(0, 100)})`);
+    return { ran: false, mode: gate.mode, skipped: "lock_busy", elapsedMs: Date.now() - started };
+  }
+
+  const projectKey = currentProjectScopeKey(deps.userId, deps.home);
+  const state = resolveCapabilities(bindings, {
+    userId: deps.userId,
+    deviceId: deviceId(),
+    projectKeys: projectKey ? [projectKey] : [],
+    client: "claude",
+  });
+
+  const locked = withLock(deps.home, () => applyBuiltins(state, gate.mode === "dry"), deps.log);
+  const elapsedMs = Date.now() - started;
+  if (!locked.ok) return { ran: false, mode: gate.mode, skipped: "lock_busy", elapsedMs };
+
+  const o = locked.value;
+  const touched = o.installed.length + o.refreshed.length + o.removed.length;
+  deps.log(
+    `[perf] capability reconcile mode=${gate.mode} bindings=${bindings.length} resolved=${state.entries.length} builtins installed=${o.installed.length} refreshed=${o.refreshed.length} removed=${o.removed.length}${o.unknown.length ? ` unknown=${o.unknown.join(",")}` : ""} in ${elapsedMs}ms${gate.mode === "dry" ? " (dry, nothing written)" : ""}`,
+  );
+  if (gate.mode === "on") markRevisionApplied(convergenceState().desired);
+  return { ran: true, mode: gate.mode, planned: touched, wrote: gate.mode === "dry" ? 0 : touched, conflicts: 0, elapsedMs };
+}

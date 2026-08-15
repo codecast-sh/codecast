@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { ArrowUpDown, MonitorSmartphone, Search, Store, X } from "lucide-react";
 import { FilterDropdown } from "../FilterDropdown";
 import { SegmentedToggle, type SegmentedItem } from "../SegmentedToggle";
@@ -45,6 +45,8 @@ export interface LibraryBrowseProps {
   error?: string | null;
   onRetry?: () => void;
   onOpen?: (entry: CatalogEntry) => void;
+  /** Trailing controls per card — the equip control lands here. */
+  renderActions?: (entry: CatalogEntry) => React.ReactNode;
   /** Paging, when the source has more. */
   hasMore?: boolean;
   loadingMore?: boolean;
@@ -70,7 +72,7 @@ function score(entry: CatalogEntry, q: string): number {
  *  not, because nothing was ever downloaded there. */
 function installedCount(entry: CatalogEntry, reportingIds: Set<string>): number {
   const seen = new Set<string>();
-  for (const site of entry.installs) {
+  for (const site of entry.installs ?? []) {
     if (!site.broken && reportingIds.has(site.deviceId)) seen.add(site.deviceId);
   }
   return seen.size;
@@ -86,6 +88,7 @@ export function LibraryBrowse({
   hasMore,
   loadingMore,
   onLoadMore,
+  renderActions,
 }: LibraryBrowseProps) {
   const [query, setQuery] = useState("");
   // A kind we do not model is still a filter value, so this is a string.
@@ -353,6 +356,7 @@ export function LibraryBrowse({
                   devices={devices}
                   focused={i === clampedFocus}
                   onOpen={onOpen}
+                  actions={renderActions?.(entry)}
                 />
               </div>
             ))}

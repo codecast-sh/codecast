@@ -272,3 +272,96 @@ export const sweepCatalogCache = internalMutation({
     return { deleted };
   },
 });
+
+/* ==========================================================================
+ * Ingest — the public MCP registry into the catalog cache
+ * ========================================================================== */
+
+import { internalAction } from "./_generated/server";
+import { internal } from "./_generated/api";
+import {
+  MCP_REGISTRY_BASE_URL,
+  parseRegistryPage,
+  browsableServers,
+  describeServerSurface,
+  formatCapabilitySlug,
+} from "@codecast/shared/contracts";
+
+/** Pages per refresh. The registry holds ~200 servers at 100/page today; a
+ *  ceiling keeps a runaway cursor from turning one cron into a crawl. */
+const MAX_REGISTRY_PAGES = 10;
+
+/**
+ * Walk the MCP registry and upsert every browsable server into the catalog.
+ *
+ * Uses the SAME parser the CLI uses (shared/contracts/mcpRegistry) — the file
+ * split that made this possible was planned in that module's header. Total by
+ * construction: a slow or malformed registry yields fewer entries and a
+ * logged reason, never a thrown crawl that leaves the cache half-written.
+ *
+ * `version=latest` rides every request. Without it the registry returns every
+ * VERSION of every server and 100 rows hold ~65 distinct servers — verified
+ * live during phase 1, and the trap the CLI's fetcher was built around.
+ */
+export const refreshMcpRegistry = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ upserted: number; pages: number; error?: string }> => {
+    let cursor: string | undefined;
+    let pages = 0;
+    let upserted = 0;
+    const seen = new Set<string>();
+
+    for (; pages < MAX_REGISTRY_PAGES; pages++) {
+      const url = new URL("/v0.1/servers", MCP_REGISTRY_BASE_URL);
+      url.searchParams.set("version", "latest");
+      url.searchParams.set("limit", "100");
+      if (cursor) url.searchParams.set("cursor", cursor);
+
+      let raw: unknown;
+      try {
+        const res = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });
+        if (!res.ok) return { upserted, pages, error: `registry answered ${res.status}` };
+        raw = await res.json();
+      } catch (err) {
+        return { upserted, pages, error: `registry unreachable: ${String(err).slice(0, 120)}` };
+      }
+
+      const page = parseRegistryPage(raw);
+      const entries = browsableServers(page.servers)
+        .filter((s) => !seen.has(s.name))
+        .map((s) => {
+          seen.add(s.name);
+          const surface = describeServerSurface(s);
+          return {
+            slug: formatCapabilitySlug({ source: "mcp_registry", segments: s.name.split("/") }) ?? `mcp/${s.name}`,
+            kind: "mcp",
+            name: s.name,
+            description: s.description,
+            publisher: s.name.split("/")[0],
+            repo: s.repositoryUrl,
+            homepage: s.websiteUrl ?? s.repositoryUrl,
+            detail: {
+              version: s.version,
+              status: s.status,
+              surface,
+              packages: (s.packages ?? []).map((p) => ({ registry: p.registryType, id: p.identifier })),
+              remotes: s.remotes.map((r) => ({ type: r.type, url: r.url })),
+            },
+          };
+        });
+
+      if (entries.length > 0) {
+        await ctx.runMutation(internal.capabilities.upsertCatalogEntries, {
+          source: "mcp_registry",
+          origin: MCP_REGISTRY_BASE_URL,
+          fetched_at: Date.now(),
+          entries,
+        });
+        upserted += entries.length;
+      }
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    return { upserted, pages: pages + 1 };
+  },
+});

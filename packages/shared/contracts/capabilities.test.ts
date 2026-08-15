@@ -24,6 +24,7 @@ import {
   isScopeKind,
   isWellFormedCapabilitySlug,
   manifestHash,
+  observedScopeRank,
   parseAnyCapabilitySlug,
   parseCapabilitySlug,
   requiresExplicitConsent,
@@ -102,6 +103,25 @@ describe("scope ladder", () => {
       "user",
       "team",
     ]);
+  });
+});
+
+describe("observed scope narrowness", () => {
+  it("ranks every observed scope, narrowest lowest", () => {
+    // The ranking four modules used to keep their own copies of. `local` is a
+    // settings file overlay and therefore the most specific answer to "which
+    // scope switched this on here?".
+    expect(observedScopeRank("local")).toBeLessThan(observedScopeRank("project"));
+    expect(observedScopeRank("project")).toBeLessThan(observedScopeRank("user"));
+  });
+
+  it("ranks the whole vocabulary — no scope sorts to the end unranked", () => {
+    // The failure this guards is a scope added to OBSERVED_SCOPES and not to the
+    // ranking: `indexOf` answers -1, which sorts BELOW `local` and would make an
+    // unranked scope win every narrowness contest. The build check catches it at
+    // compile time; this catches it if that type is ever loosened.
+    for (const scope of OBSERVED_SCOPES) expect(observedScopeRank(scope)).toBeGreaterThanOrEqual(0);
+    expect(new Set(OBSERVED_SCOPES.map(observedScopeRank)).size).toBe(OBSERVED_SCOPES.length);
   });
 });
 

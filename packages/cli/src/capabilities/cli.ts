@@ -14,6 +14,7 @@ import type { PublishDeps } from "../publish.js";
 import { registerCapStatus } from "./status.js";
 import { registerCapLs } from "./ls.js";
 import { registerCapShow } from "./show.js";
+import { registerCapEquip } from "./equip.js";
 
 export function registerCapabilityCommand(program: Command, deps: PublishDeps): void {
   const cap = program
@@ -22,4 +23,5 @@ export function registerCapabilityCommand(program: Command, deps: PublishDeps): 
   registerCapStatus(cap, deps);
   registerCapLs(cap, deps);
   registerCapShow(cap, deps);
+  registerCapEquip(cap, deps);
 }
