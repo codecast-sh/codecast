@@ -51,6 +51,22 @@ describe("fleetBandFor", () => {
     expect(fleetBandFor(sess({ session_error: "daemon exploded" }), noQueue)).toBe("needsYou");
   });
 
+  it("treats a cleanly finished run (stopped + idle) as FINISHED, never NEEDS YOU", () => {
+    // "stopped" + idle is the NORMAL end state of a run in real accounts (the
+    // inbox's needs-input bucket counts these; the board must not).
+    expect(fleetBandFor(sess({ agent_status: "stopped", is_idle: true, message_count: 40 }), noQueue)).toBe("finished");
+  });
+
+  it("escalates a mid-task death (stopped while NOT idle) to NEEDS YOU", () => {
+    expect(
+      fleetBandFor(sess({ agent_status: "stopped", is_idle: false, updated_at: NOW - 10 * 60_000 }), noQueue),
+    ).toBe("needsYou");
+  });
+
+  it("escalates an unresponsive non-idle agent to NEEDS YOU", () => {
+    expect(fleetBandFor(sess({ is_unresponsive: true, is_idle: false, agent_status: "working" }), noQueue)).toBe("needsYou");
+  });
+
   it("escalates an active-looking agent that went silent past the liveness TTL", () => {
     // agent_status frozen on "working" but nothing heard for 2h → the status
     // is a lie; a silently dead worker is the user's to revive.

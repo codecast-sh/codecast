@@ -53,7 +53,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { AGENT_CLIENTS } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, observedScopeRank } from "@codecast/shared/contracts";
 import type { AgentClientId } from "@codecast/shared/contracts";
 
 // Both of these are the shared contract's, re-exported so this module's existing
@@ -294,10 +294,6 @@ interface SharedSkills {
   unplaced: Set<InventoryItem>;
 }
 
-/** Narrowness order for scope adoption: `local` is the most specific answer to
- *  "which scope switched this on", `user` the least. */
-const SCOPE_NARROWNESS: CapabilityScope[] = ["local", "project", "user"];
-
 /** Record one more client-dir path that links to a shared skill. */
 function appendLink(
   item: InventoryItem,
@@ -315,7 +311,7 @@ function appendLink(
   // scanner attributed each symlink entry to the dir it sat in; now that the
   // links collapse onto one item, a skill linked only into a project dir must
   // not claim user scope — that would misanswer "why is this active here?".
-  if (SCOPE_NARROWNESS.indexOf(scope) < SCOPE_NARROWNESS.indexOf(item.scope)) item.scope = scope;
+  if (observedScopeRank(scope) < observedScopeRank(item.scope)) item.scope = scope;
 }
 
 /** Skills: a `<dir>/<name>/SKILL.md`, or a bare `<dir>/<name>.md`.

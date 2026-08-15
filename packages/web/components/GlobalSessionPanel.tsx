@@ -35,6 +35,8 @@ import { SlotActions } from "./workspace/Slot";
 import { partitionTriggerInbox, groupSessionsByTrigger, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
+import { sessionHasOpenQuestion } from "../lib/decisionQueue";
+import { makeCollectionSig } from "../store/wakeSig";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
@@ -2865,6 +2867,9 @@ export function SessionListPanel({
     s => s.showFavorites,
     s => s.favorites,
     s => s.recentFreezeOrder,
+    // Explicit decisions (cast decide) split their sessions out of Needs Input
+    // into their own Questions section.
+    s => decisionsSectionSig(s.sessionDecisions),
   ]);
   const router = useRouter();
   const handleKillDismissed = useCallback((id: string) => {
@@ -3057,6 +3062,26 @@ export function SessionListPanel({
   const statusWorking = useMemo(
     () => filteredWorking.filter((sess) => !schedulePartition.absorbedIds.has(sess._id)),
     [filteredWorking, schedulePartition.absorbedIds],
+  );
+  // QUESTIONS is its own section, not a slice of the feed: a session that has
+  // ASKED something explicit is a different obligation from one that merely
+  // finished its turn. An authored `cast decide` row always qualifies; so does
+  // an open AskUserQuestion / permission prompt (sessionHasOpenQuestion).
+  const questionConvIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const d of Object.values(s.sessionDecisions) as any[]) {
+      if (d.status === "pending") ids.add(d.conversation_id);
+    }
+    return ids;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decisionsSectionSig(s.sessionDecisions)]);
+  const statusQuestions = useMemo(
+    () => statusNeedsInput.filter((sess) => questionConvIds.has(sess._id) || sessionHasOpenQuestion(sess)),
+    [statusNeedsInput, questionConvIds],
+  );
+  const statusNeedsInputRest = useMemo(
+    () => statusNeedsInput.filter((sess) => !questionConvIds.has(sess._id) && !sessionHasOpenQuestion(sess)),
+    [statusNeedsInput, questionConvIds],
   );
   // Schedule rows honor the project chip like session cards do.
   const scheduleRowsView = useMemo(
@@ -4315,7 +4340,9 @@ export function SessionListPanel({
         {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}
-        {renderSection("Needs Input", statusNeedsInput, "text-sol-yellow")}
+        {statusQuestions.length > 0 && <QuestionsSectionHeader count={statusQuestions.length} />}
+        {renderSection("Questions", statusQuestions, "text-sol-violet")}
+        {renderSection("Needs Input", statusNeedsInputRest, "text-sol-yellow")}
         {renderSection("Working", statusWorking, "text-sol-green", "working")}
         </>
         )}

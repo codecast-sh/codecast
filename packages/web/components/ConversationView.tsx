@@ -114,6 +114,7 @@ import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
+import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../lib/pollPayload";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
@@ -5409,12 +5410,8 @@ function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage 
 
 const _askUserSentState = new Map<string, Record<number, Array<{ key: string; label: string; text?: string }>>>();
 
-// Claude Code appends two synthetic affordance rows to every AskUserQuestion menu —
-// "Type something" (free text) and "Chat about this" (escape hatch). On a prompt scraped
-// from the terminal (no JSONL sidecar) they arrive as bare options; the web has its own
-// "Other" free-text affordance, so rendering them too is redundant clutter. Mirrors the
-// daemon's SYNTHETIC_OPTION so scraped polls render as clean as sidecar-sourced ones.
-const SYNTHETIC_POLL_OPTION = /^(?:type something\.?|chat about this)$/i;
+// The poll wire format (option keys, free-text decline, submit chords) lives in
+// lib/pollPayload so the decision queue answers polls the exact same way.
 
 // The check glyph shown in a selected poll option's index slot / pill.
 function PollCheckIcon({ className }: { className?: string }) {
@@ -5459,49 +5456,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   const isInteractive = !result && !!onSendMessage && !sent;
   const allAnswered = needsSubmit && questions.every((_, i) => (selections[i]?.length ?? 0) > 0);
 
-  const buildPayload = (sels: typeof selections) => {
-    const sorted = Object.keys(sels).sort((a, b) => Number(a) - Number(b));
-    const hasText = sorted.some(k => sels[Number(k)].some(s => s.text !== undefined));
-    const display = sorted.map(k => sels[Number(k)].map(s => s.label).join(", ")).join(", ");
-    if (hasText) {
-      // Claude Code's AskUserQuestion menu only accepts the listed options — there's no
-      // inline free-text slot. So a custom ("Other") answer can't be entered through the
-      // menu, and answering even one question with free text means the menu can't be used
-      // for the others either: the only way to enter free text is to decline the whole
-      // set (Escape) and type at the prompt, which discards every menu pick. Convert all
-      // answers to prose and send it as the daemon's decline-then-type `text` so the agent
-      // still gets every answer. (Driving a digit per question and Escaping for the text
-      // declined the poll mid-loop and spilled the leftover option digits into the
-      // reopened prompt box — the "211" bug, 2026-06-27.)
-      const text = sorted.map(k => {
-        const qSels = sels[Number(k)];
-        const ans = qSels.map(s => s.text ?? s.label).join(", ");
-        if (sorted.length === 1) return ans;
-        const q = questions[Number(k)];
-        const id = (q?.header?.trim()) || q?.question?.replace(/\s+/g, " ").trim().slice(0, 60) || `Q${Number(k) + 1}`;
-        return `${id}: ${ans}`;
-      }).join("\n\n");
-      return JSON.stringify({ __cc_poll: true, text, display });
-    }
-    // Key protocol (verified in tmux against Claude Code 2.1.201): on a multiSelect
-    // question a digit TOGGLES that option's checkbox and the menu stays up; Right
-    // advances to the next tab. Any multi-question or multiSelect form then parks on a
-    // "Review your answers" pane whose cursor sits on "1. Submit answers" — the trailing
-    // Enter confirms it. `multi` tells the daemon these digits are toggles, so its
-    // digit-didn't-advance heuristic must not "confirm" them with Enter (which would
-    // re-toggle the highlighted row).
-    const keys: string[] = [];
-    for (const k of sorted) {
-      const qSels = sels[Number(k)];
-      if (questions[Number(k)]?.multiSelect) {
-        keys.push(...qSels.map(s => s.key).sort((a, b) => Number(a) - Number(b)), "Right");
-      } else {
-        keys.push(qSels[0].key);
-      }
-    }
-    if (needsSubmit) keys.push("Enter");
-    return JSON.stringify({ __cc_poll: true, keys, display, ...(anyMultiSelect ? { multi: true } : {}) });
-  };
+  const buildPayload = (sels: typeof selections) => buildPollPayload(questions, sels);
 
   const handleSubmitAll = () => {
     if (!onSendMessage || !allAnswered) return;
@@ -5571,7 +5526,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 const on = isSelected || isLocalSelected;
                 const choose = () => {
                   setOtherOpen(prev => ({ ...prev, [i]: false }));
-                  const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
+                  const pollKey = pollKeyForOption(j, isConfirmation);
                   const sel = { key: pollKey, label: cleanLabel };
                   if (q.multiSelect) {
                     // Checkbox semantics: clicking toggles; Submit sends.

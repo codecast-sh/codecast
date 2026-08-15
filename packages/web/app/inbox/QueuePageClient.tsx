@@ -498,8 +498,15 @@ export function QueuePageClient() {
   useWatchEffect(() => {
     if (!isActiveTab) return;
     if (currentSessionId || currentSession || showMySessions || viewingDismissedId || pendingInjectId) return;
+    // Board home: an empty view means "show the fleet", never "adopt a
+    // conversation" — the board is the landing surface, drilling in is a
+    // gesture. Feed home keeps the old top-of-inbox adoption.
+    if (inboxHome === "board") {
+      setShowMySessions(true);
+      return;
+    }
     if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id, "adopt");
-  }, [currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab]);
+  }, [currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab, inboxHome, setShowMySessions]);
 
   // Sync URL when current session changes (but not before initial param is
   // resolved). Only the active tab owns the address bar — a background pane must
