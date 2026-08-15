@@ -3,6 +3,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { canAccessConversation } from "./lib/access";
+import { artifactUrl } from "./artifacts";
 import {
   sortReviewItems,
   type ReviewItem,
@@ -151,6 +152,7 @@ async function collectPageCommentItems(
       last_actor_is_viewer: !!newest.author_user_id && String(newest.author_user_id) === String(userId),
       count: open.length,
       artifact_slug: artifact.slug,
+      artifact_url: artifactUrl(artifact.slug),
     });
   }
   return items;
