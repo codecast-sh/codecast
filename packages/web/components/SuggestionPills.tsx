@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { useAction } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { Sparkles, Pencil, X } from "lucide-react";
@@ -19,7 +19,7 @@ import { isMac } from "../shortcuts";
 // anchor), the agent spoke last, and the session is waiting on the user —
 // a stale pill is worse than none.
 //
-// Clicking a pill (or Option+1/2/3) SENDS it — the suggestion is press-send
+// Clicking a pill (or Ctrl+1/2/3) SENDS it — the suggestion is press-send
 // ready by contract, so the click is the confirmation. The hover pencil is
 // the escape hatch: it fills the composer for editing instead.
 
@@ -62,8 +62,24 @@ export const SuggestionPills = memo(function SuggestionPills({
     isRealId ? { conversation_id: conversationId as Id<"conversations"> } : "skip",
   );
   const generate = useAction(api.composerSuggestions.generateComposerSuggestions);
+  const recordOutcome = useMutation(api.composerSuggestions.recordSuggestionOutcome);
   const attemptedRef = useRef<string | null>(null);
   const [dismissedAnchor, setDismissedAnchor] = useState<string | null>(null);
+
+  // Fire-and-forget outcome telemetry — ground truth for judging the
+  // suggester. Never blocks or fails the user gesture it rides on.
+  const report = useCallback(
+    (suggestion: string, outcome: "sent" | "edited" | "dismissed") => {
+      if (!row?.anchor_message_uuid) return;
+      recordOutcome({
+        conversation_id: conversationId as Id<"conversations">,
+        anchor_message_uuid: row.anchor_message_uuid,
+        suggestion,
+        outcome,
+      }).catch(() => {});
+    },
+    [recordOutcome, conversationId, row?.anchor_message_uuid],
+  );
 
   // Ask for fresh suggestions when the agent's turn has settled and the
   // stored row targets an older tail. The server dedupes by anchor, so a
@@ -89,9 +105,10 @@ export const SuggestionPills = memo(function SuggestionPills({
     row.anchor_message_uuid === tailKey &&
     dismissedAnchor !== row.anchor_message_uuid;
 
-  // Option+1/2/3 sends the matching pill. Capture phase so a focused textarea
-  // doesn't swallow the chord first (on macOS Option+digit otherwise inserts
-  // a glyph), and scoped hard to the visible row so nothing leaks into the
+  // Ctrl+1/2/3 sends the matching pill (Alt+digit is taken by workbench
+  // switching — stealing it here would turn a navigation habit into an
+  // accidental send). Capture phase so a focused textarea doesn't swallow the
+  // chord, and armed only while the row is visible so nothing leaks into the
   // global shortcut layer when there are no pills.
   const suggestions = visible ? row!.suggestions : [];
   const suggestionsRef = useRef(suggestions);
@@ -100,16 +117,17 @@ export const SuggestionPills = memo(function SuggestionPills({
     "keydown",
     useCallback(
       (e: KeyboardEvent) => {
-        if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+        if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
         const idx = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
         if (idx === -1) return;
         const text = suggestionsRef.current[idx];
         if (!text) return;
         e.preventDefault();
         e.stopPropagation();
+        report(text, "sent");
         onSend(text);
       },
-      [onSend],
+      [onSend, report],
     ),
     visible ? document : null,
     { capture: true },
@@ -130,21 +148,21 @@ export const SuggestionPills = memo(function SuggestionPills({
             type="button"
             // preventDefault so the composer keeps focus through the click.
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => onSend(text)}
+            onClick={() => { report(text, "sent"); onSend(text); }}
             title="Send"
             className="flex items-center gap-1.5 min-w-0 pl-2.5 pr-1 py-1 text-[11px] leading-none text-sol-text-muted group-hover:text-sol-text transition-colors"
           >
             <span className="truncate">{text}</span>
             {i < 3 && (
               <span className="shrink-0 opacity-50">
-                <KeyCap size="xs">{isMac ? `⌥${i + 1}` : `Alt+${i + 1}`}</KeyCap>
+                <KeyCap size="xs">{isMac ? `⌃${i + 1}` : `Ctrl+${i + 1}`}</KeyCap>
               </span>
             )}
           </button>
           <button
             type="button"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => onEdit(text)}
+            onClick={() => { report(text, "edited"); onEdit(text); }}
             title="Edit before sending"
             className="shrink-0 pl-0.5 pr-2 py-1 text-sol-text-dim/0 group-hover:text-sol-text-dim hover:!text-sol-text transition-colors"
           >
@@ -155,7 +173,7 @@ export const SuggestionPills = memo(function SuggestionPills({
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => setDismissedAnchor(row!.anchor_message_uuid)}
+        onClick={() => { suggestions.forEach((t) => report(t, "dismissed")); setDismissedAnchor(row!.anchor_message_uuid); }}
         title="Hide suggestions"
         className="w-4 h-4 flex items-center justify-center rounded-full text-sol-text-dim/40 hover:text-sol-text-dim transition-colors"
       >
