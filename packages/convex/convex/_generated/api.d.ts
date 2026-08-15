@@ -150,6 +150,7 @@ import type * as teams from "../teams.js";
 import type * as terminalStream from "../terminalStream.js";
 import type * as testDb from "../testDb.js";
 import type * as titleGeneration from "../titleGeneration.js";
+import type * as transcripts from "../transcripts.js";
 import type * as userMessagesFilter from "../userMessagesFilter.js";
 import type * as users from "../users.js";
 import type * as vaultMirror from "../vaultMirror.js";
@@ -306,6 +307,7 @@ declare const fullApi: ApiFromModules<{
   terminalStream: typeof terminalStream;
   testDb: typeof testDb;
   titleGeneration: typeof titleGeneration;
+  transcripts: typeof transcripts;
   userMessagesFilter: typeof userMessagesFilter;
   users: typeof users;
   vaultMirror: typeof vaultMirror;

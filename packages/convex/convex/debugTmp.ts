@@ -563,6 +563,9 @@ export const e2eSetupMultiparty = internalMutation({
         });
       }
     }
+    for (const uid of args.members) {
+      await ctx.db.patch(uid, { active_team_id: teamId });
+    }
     let channel = (await ctx.db.query("chat_channels").collect()).find(
       (c) => String(c.team_id) === String(teamId) && c.name === "e2e-huddle",
     );
@@ -574,7 +577,7 @@ export const e2eSetupMultiparty = internalMutation({
         created_at: now,
         updated_at: now,
       });
-      channel = await ctx.db.get(chId);
+      channel = (await ctx.db.get(chId)) ?? undefined;
     }
     return { teamId, channelId: channel!._id };
   },
@@ -603,5 +606,49 @@ export const e2eTeardownMultiparty = internalMutation({
     }
     await ctx.db.delete(team._id);
     return { removed: true };
+  },
+});
+
+// TEMPORARY: huddles transcription e2e — move one scratch conversation into
+// the e2e team and make it team-visible so the scribe (a test user) may route
+// a transcript into it. Raw patch is fine here: a fresh spawned conversation
+// has no linked work items whose workspace key could go stale. Safe to delete.
+export const e2eAdoptConversation = internalMutation({
+  args: { conversation_id: v.id("conversations"), team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) throw new Error("conversation not found");
+    await ctx.db.patch(conv._id, {
+      team_id: args.team_id,
+      is_private: false,
+      team_visibility: "full",
+    });
+    return { conversation_id: conv._id };
+  },
+});
+
+// TEMPORARY: transcription e2e inspection. Safe to delete.
+export const e2eTranscriptState = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const live = await ctx.db
+      .query("transcripts")
+      .withIndex("by_status", (q) => q.eq("status", "live"))
+      .collect();
+    const out = [];
+    for (const t of live.slice(-2)) {
+      const segs = await ctx.db
+        .query("transcript_segments")
+        .withIndex("by_transcript_seq", (q) => q.eq("transcript_id", t._id))
+        .collect();
+      out.push({
+        id: t._id,
+        room: t.room_key.slice(0, 16),
+        last_seq: t.last_seq,
+        routes: t.routes.map((r) => `${r.kind}:${r.target}@${r.mode} sent=${r.sent_seq}`),
+        segments: segs.slice(-6).map((s) => `${s.speaker_name}: ${s.text.slice(0, 60)}`),
+      });
+    }
+    return out;
   },
 });

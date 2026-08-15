@@ -25,6 +25,8 @@ import {
   type ParticipantTile,
 } from "../../lib/calls/callManager";
 import { parseRoomKey } from "@codecast/shared/contracts";
+import { TranscribeControls, CaptionStrip } from "./TranscribePanel";
+import { getRoom } from "../../lib/calls/callManager";
 import type { DesktopDisplaySource } from "../../lib/desktop";
 
 // The in-call surface: a floating pill above the composer, on every tab, only
@@ -198,6 +200,7 @@ function ExpandedPanel({
   return (
     <div className="border-b border-sol-border px-3 py-2.5">
       {videoTiles.length > 0 && <TileGrid tiles={videoTiles} speaking={speaking} />}
+      <CaptionStrip />
       {call.error && (
         <div className="mb-2 flex items-start gap-2 rounded-md border border-sol-orange/40 bg-sol-orange/10 px-2 py-1.5 text-[11px] leading-snug text-sol-orange">
           <span className="min-w-0 flex-1">{call.error}</span>
@@ -235,6 +238,7 @@ function ExpandedPanel({
           {call.camera ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
         </button>
         <ShareButton sharing={call.sharing} />
+        <TranscribeControls getRoom={getRoom} />
         {parsed?.kind === "session" && !viewingAnchor && (
           <button
             onClick={openAnchor}

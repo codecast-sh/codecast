@@ -503,6 +503,12 @@ function pushFlags() {
     .catch(() => {});
 }
 
+// The live Room, for modules that compose on the media plane (transcription
+// taps its audio tracks). Null when no call is up.
+export function getRoom(): Room | null {
+  return room;
+}
+
 export async function listDevices(kind: MediaDeviceKind): Promise<MediaDeviceInfo[]> {
   try {
     return await Room.getLocalDevices(kind);
@@ -598,5 +604,14 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     micLevel: getMicLevel,
     rebuildTiles,
     bound: () => !!convex,
+    convexHandle: () => convex,
+    // Actions exposed for dev-console driving and e2e harnesses: a dynamic
+    // import() of this file creates a SECOND module instance whose room/convex
+    // are null, so a harness must reach the app's instance through here.
+    joinCall,
+    leaveCall,
+    setMuted,
+    setCamera,
+    setScreenShare,
   };
 }
