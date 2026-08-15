@@ -44,7 +44,8 @@ import {
   webList,
   type NormalizedInventory,
   type NormalizedReport,
-} from "./capabilities";
+  listCapabilityState,
+  getDeviceCapabilityState,} from "./capabilities";
 import {
   CATALOG_STALE_MS,
   LIVENESS_WRITE_INTERVAL_MS,
@@ -920,6 +921,18 @@ describe("capabilityTables", () => {
         continue;
       }
       for (const index of exported.indexes) {
+        // Each entry here is a JUSTIFIED exception, argued at the index
+        // definition: by_team_created's reader is requireTeamAdmin (the tenant
+        // is the team), by_created serves only the internal retention sweep.
+        // Adding to this list is a review event, not a convenience.
+        const allowed = [
+          "capability_events.by_team_created",
+          "capability_events.by_created",
+          // Team bindings are read by team members and written by team admins;
+          // the tenant of this index is the team, gated at every reader.
+          "capability_bindings.by_team_updated",
+        ];
+        if (allowed.includes(`${name}.${index.indexDescriptor}`)) continue;
         expect(`${name}.${index.indexDescriptor} starts with ${index.fields[0]}`).toBe(
           `${name}.${index.indexDescriptor} starts with user_id`,
         );
@@ -1656,5 +1669,99 @@ describe("deleteDeviceState", () => {
     });
     expect(result).toEqual({ deleted: 2 });
     expect(tables.capability_state.map((r: any) => r._id).sort()).toEqual(["b1", "other"]);
+  });
+});
+
+// ------------------------------------------------------- owner read queries
+
+// The CLI's flat read shape (ct-42827). entries_json stays opaque on this wire;
+// the property these tests guard is SCOPING: the index leads with user_id and
+// the caller is the user, so no cross-user row is reachable however the args
+// are shaped.
+describe("listCapabilityState / getDeviceCapabilityState", () => {
+  test("returns only the caller's rows, opaque entries intact", async () => {
+    const t = await tokenTables({
+      capability_state: [
+        stateRow({ _id: "cs_mine", device_id: "dev_a" }),
+        stateRow({ _id: "cs_theirs", user_id: "u_other", device_id: "dev_x" }),
+      ],
+    });
+    const rows = await (listCapabilityState as any)._handler(ctx(null, t), { api_token: TOKEN });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].device_id).toBe("dev_a");
+    expect(typeof rows[0].entries_json).toBe("string");
+    expect(rows[0].hash.length).toBeGreaterThan(0);
+  });
+
+  test("device query narrows by device and optionally by scope", async () => {
+    const t = await tokenTables({
+      capability_state: [
+        stateRow({ _id: "cs_u", device_id: "dev_a", scope_key: "" }),
+        stateRow({ _id: "cs_p", device_id: "dev_a", scope_key: "git:github.com/o/r" }),
+        stateRow({ _id: "cs_b", device_id: "dev_b", scope_key: "" }),
+      ],
+    });
+    const all = await (getDeviceCapabilityState as any)._handler(ctx(null, t), {
+      api_token: TOKEN,
+      device_id: "dev_a",
+    });
+    expect(all).toHaveLength(2);
+    const scoped = await (getDeviceCapabilityState as any)._handler(ctx(null, t), {
+      api_token: TOKEN,
+      device_id: "dev_a",
+      scope_key: "git:github.com/o/r",
+    });
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0].hash).toBeDefined();
+  });
+
+  test("a bad token is refused, not given an empty list", async () => {
+    const t = await tokenTables({ capability_state: [stateRow({})] });
+    await expect(
+      (listCapabilityState as any)._handler(ctx(null, t), { api_token: "nope" }),
+    ).rejects.toThrow("Unauthorized");
+  });
+});
+
+// -------------------------------------------------------- the since watermark
+
+// The store polls this query and feeds pages into syncTable without pruning, so
+// re-sending unchanged rows every poll is pure churn. The watermark contract:
+// a second call with `since` set to the first call's max returns nothing.
+describe("webList since watermark", () => {
+  test("a quiet fleet costs zero rows on the second call", async () => {
+    const t = await tokenTables({
+      capability_state: [
+        stateRow({ _id: "cs_1", device_id: "dev_a", reported_at: 1000 }),
+        stateRow({ _id: "cs_2", device_id: "dev_b", reported_at: 2000 }),
+      ],
+    });
+    const first = await (webList as any)._handler(ctx(OWNER, t), {});
+    expect(first.items).toHaveLength(2);
+    const max = Math.max(...first.items.map((i: any) => i.reported_at));
+    const second = await (webList as any)._handler(ctx(OWNER, t), { since: max });
+    expect(second.items).toHaveLength(0);
+  });
+
+  test("only the changed row rides after a new report", async () => {
+    const t = await tokenTables({
+      capability_state: [
+        stateRow({ _id: "cs_1", device_id: "dev_a", reported_at: 1000 }),
+        stateRow({ _id: "cs_2", device_id: "dev_b", reported_at: 3000 }),
+      ],
+    });
+    const delta = await (webList as any)._handler(ctx(OWNER, t), { since: 1000 });
+    expect(delta.items).toHaveLength(1);
+    expect(delta.items[0].device_id).toBe("dev_b");
+  });
+
+  test("another user's rows never appear, watermark or not", async () => {
+    const t = await tokenTables({
+      capability_state: [
+        stateRow({ _id: "cs_them", user_id: "u_other", reported_at: 9999 }),
+      ],
+    });
+    const out = await (webList as any)._handler(ctx(OWNER, t), { since: 0 });
+    expect(out.items).toHaveLength(0);
   });
 });

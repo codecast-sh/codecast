@@ -155,6 +155,17 @@ export const capabilityTables = {
      *  fact from a machine with nothing installed, and the UI must not merge them. */
     last_error: v.optional(v.string()),
     reported_at: v.number(),
+    /** The last report for this (device, client) claimed full enumeration.
+     *  Retention keys on TWO consecutive fulls: one full omitting a scope may
+     *  be a fluke; two in a row is the daemon saying the scope is gone. */
+    was_full: v.optional(v.boolean()),
+    /** The server's authoritative copy of the machine's ownership ledgers
+     *  (per-target digests). Written ONLY by reportAppliedOps — the apply path
+     *  reporting what it legitimately did. The heartbeat merely mirrors the
+     *  local sidecar for comparison: on divergence the server copy WINS and a
+     *  conflict event fires, because the local sidecar alone is editable by
+     *  any hostile capability running as the user. */
+    owned_ops_json: v.optional(v.string()),
   })
     // ONE index, and every query is a prefix of it: (user) lists a fleet,
     // (user, device) lists a machine, the full tuple resolves the upsert target.
@@ -228,6 +239,88 @@ export const capabilityTables = {
    * reason, never a synced store collection. It is read through a paginated
    * query and rendered from whatever page arrives.
    */
+  /**
+   * A wish: "this capability, at this scope, on or off". The resolver folds
+   * these; nothing here materializes anything.
+   *
+   * `enabled: false` is a ROW, never a deletion — deleting the row would
+   * silently re-inherit whatever broader grant the disable was overriding.
+   */
+  capability_bindings: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    capability_slug: v.string(),
+    scope_kind: v.string(),
+    scope_key: v.string(),
+    enabled: v.boolean(),
+    /** Claude Code userConfig values. Substituted into MCP configs and hook
+     *  commands — the resolver's trust gate decides whether they may be used. */
+    config: v.optional(v.record(v.string(), v.string())),
+    client_filter: v.optional(v.array(v.string())),
+    min_client_version: v.optional(v.string()),
+    /** Optimistic-create idempotency, the tasks convention: the client mints a
+     *  key, a retry upserts instead of duplicating. */
+    client_key: v.optional(v.string()),
+    created_by: v.optional(v.string()),
+    updated_at: v.number(),
+  })
+    .index("by_user_scope", ["user_id", "capability_slug", "scope_kind", "scope_key"])
+    .index("by_user_updated", ["user_id", "updated_at"])
+    // Tenant exception, justified: team reads are gated by requireTeamAdmin /
+    // membership, the same rule capability_events.by_team_created carries.
+    .index("by_team_updated", ["team_id", "updated_at"])
+    .index("by_client_key", ["user_id", "client_key"]),
+
+  /**
+   * One human's yes to one build of one capability on one machine.
+   *
+   * Keyed (user, device, slug, manifest_hash) and deliberately NOT on the
+   * binding: a team-shared binding is one row serving N machines, so consent
+   * living there would mean "I approved this on my laptop" silently approves it
+   * on the production build box. The hash is the manifest hash — approval names
+   * the BYTES, so an upstream edit (even to a description) makes a new hash
+   * that has no row and must be approved again.
+   */
+  capability_consents: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    capability_slug: v.string(),
+    manifest_hash: v.string(),
+    consented_at: v.number(),
+    /** Who clicked yes. Usually user_id; differs when an admin pre-approves. */
+    actor_user_id: v.id("users"),
+  })
+    .index("by_user_device_slug", ["user_id", "device_id", "capability_slug"]),
+
+  /**
+   * The audit line an incident needs: what changed a machine's capabilities,
+   * who did it, from where. One insert on paths that already write.
+   */
+  capability_events: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    kind: v.union(
+      v.literal("bind"), v.literal("unbind"), v.literal("enable"), v.literal("disable"),
+      v.literal("consent"), v.literal("apply"), v.literal("conflict"), v.literal("import"),
+    ),
+    actor_user_id: v.id("users"),
+    device_id: v.optional(v.string()),
+    scope_kind: v.optional(v.string()),
+    scope_key: v.optional(v.string()),
+    capability_slug: v.optional(v.string()),
+    manifest_hash: v.optional(v.string()),
+    /** `apply` only: what the driver actually executed. */
+    ops_json: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_user_created", ["user_id", "created_at"])
+    // Tenant exception, justified: the reader is requireTeamAdmin, so the
+    // tenant of this index IS the team. See the invariant test's allowlist.
+    .index("by_team_created", ["team_id", "created_at"])
+    // Tenant exception, justified: the retention sweep ranges on age across all
+    // tenants and is internal-only — no public function may touch this index.
+    .index("by_created", ["created_at"]),
+
   capability_catalog_cache: defineTable({
     /** The flat global slug: `mkt/<marketplace>/<plugin>`, `mcp/<name>`, …
      *  Built by the ingest from a source it determined itself, never accepted
@@ -283,6 +376,8 @@ export interface CapabilityStateDoc {
   client_version?: string;
   last_error?: string;
   reported_at: number;
+  was_full?: boolean;
+  owned_ops_json?: string;
 }
 
 export interface CapabilityObservationDoc {
@@ -344,19 +439,72 @@ interface CapQuery<T> {
  * call sites. Once codegen with the splice is everywhere, delete `capDb()`
  * and its interface and let `ctx.db` type itself.
  */
+export interface CapabilityBindingDoc {
+  _id: string;
+  _creationTime: number;
+  user_id: string;
+  team_id?: string;
+  capability_slug: string;
+  scope_kind: string;
+  scope_key: string;
+  enabled: boolean;
+  config?: Record<string, string>;
+  client_filter?: string[];
+  min_client_version?: string;
+  client_key?: string;
+  created_by?: string;
+  updated_at: number;
+}
+
+export interface CapabilityConsentDoc {
+  _id: string;
+  _creationTime: number;
+  user_id: string;
+  device_id: string;
+  capability_slug: string;
+  manifest_hash: string;
+  consented_at: number;
+  actor_user_id: string;
+}
+
+export interface CapabilityEventDoc {
+  _id: string;
+  _creationTime: number;
+  user_id: string;
+  team_id?: string;
+  kind: "bind" | "unbind" | "enable" | "disable" | "consent" | "apply" | "conflict" | "import";
+  actor_user_id: string;
+  device_id?: string;
+  scope_kind?: string;
+  scope_key?: string;
+  capability_slug?: string;
+  manifest_hash?: string;
+  ops_json?: string;
+  created_at: number;
+}
+
 export interface CapabilityDb {
   query(table: "capability_state"): CapQuery<CapabilityStateDoc>;
   query(table: "capability_observation"): CapQuery<CapabilityObservationDoc>;
   query(table: "capability_catalog_cache"): CapQuery<CapabilityCatalogDoc>;
+  query(table: "capability_bindings"): CapQuery<CapabilityBindingDoc>;
+  query(table: "capability_consents"): CapQuery<CapabilityConsentDoc>;
+  query(table: "capability_events"): CapQuery<CapabilityEventDoc>;
   insert(table: "capability_state", doc: NewDoc<CapabilityStateDoc>): Promise<string>;
   insert(table: "capability_observation", doc: NewDoc<CapabilityObservationDoc>): Promise<string>;
   insert(table: "capability_catalog_cache", doc: NewDoc<CapabilityCatalogDoc>): Promise<string>;
+  insert(table: "capability_bindings", doc: NewDoc<CapabilityBindingDoc>): Promise<string>;
+  insert(table: "capability_consents", doc: NewDoc<CapabilityConsentDoc>): Promise<string>;
+  insert(table: "capability_events", doc: NewDoc<CapabilityEventDoc>): Promise<string>;
   patch(
     id: string,
     patch:
       | Partial<NewDoc<CapabilityStateDoc>>
       | Partial<NewDoc<CapabilityObservationDoc>>
-      | Partial<NewDoc<CapabilityCatalogDoc>>,
+      | Partial<NewDoc<CapabilityCatalogDoc>>
+      | Partial<NewDoc<CapabilityBindingDoc>>
+      | Partial<NewDoc<CapabilityConsentDoc>>
+      | Partial<NewDoc<CapabilityEventDoc>>,
   ): Promise<void>;
   delete(id: string): Promise<void>;
 }
