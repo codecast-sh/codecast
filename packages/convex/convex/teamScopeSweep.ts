@@ -1,39 +1,31 @@
 import { v } from "convex/values";
 import { internalMutation, internalAction } from "./functions";
 import { internal } from "./_generated/api";
-import { teamVisibleConvTeam, resolveTeamForPath, DirectoryMapping } from "./privacy";
+import { computeWorkspaceKey, linkedConversationId } from "./lib/access";
 
-// Sweep for misfiled work items: tasks/plans/docs whose team_id contradicts
-// what creation resolves today (directory mapping of the owner, or a
-// team-visible linked conversation). These rows were minted by the old
-// active-team fallback, which attached items from private ("Only Me")
-// directories to the creator's team — e.g. ct-38419.
+// Workspace reconciler + backfill for the stored ACCESS key on work items.
 //
-// Run read-only first, then apply:
-//   npx convex run teamScopeSweep:sweep '{}'
-//   npx convex run teamScopeSweep:sweep '{"apply": true}'
+// Every task/plan/doc/project carries `workspace` ("team:<id>" | "user:<id>"),
+// written at create and rewritten by recomputeWorkspaceForConversation when a
+// linked conversation's visibility changes. A stored value can only go stale
+// if that propagation misses a row, so this sweep is the proof: it recomputes
+// the key from today's rules (linked conversation's team visibility, else the
+// raw team tag, else personal to the row's OWNER) and reports every row whose
+// stored key disagrees. With apply it writes the recomputed key — which is
+// also the one-time backfill for rows minted before the field existed.
 //
-// Rows with no linked conversation AND no project_path are skipped — there is
-// nothing to contradict, and an explicit team choice in the web UI looks
-// exactly like that. Expected scope mirrors the creation flow: a team-visible
-// linked conversation wins; otherwise the owner's directory mapping for the
-// item's path decides; unmapped means personal (team_id cleared).
+//   npx convex run teamScopeSweep:sweep '{}'                 # report only
+//   npx convex run teamScopeSweep:sweep '{"apply": true}'    # backfill / repair
+//
+// The reconciler NEVER touches team_id: that is routing, and a mismatch
+// between team_id and workspace is the legitimate "routed to team T, readable
+// only by the owner" state, not drift.
 
-const TABLES = ["tasks", "plans", "docs"] as const;
-
-function linkedConvId(row: any): any {
-  return (
-    row.created_from_conversation ||
-    row.conversation_ids?.[0] ||
-    row.created_from_conversation_id ||
-    row.conversation_id ||
-    undefined
-  );
-}
+const TABLES = ["tasks", "plans", "docs", "projects"] as const;
 
 export const sweepPage = internalMutation({
   args: {
-    table: v.union(v.literal("tasks"), v.literal("plans"), v.literal("docs")),
+    table: v.union(v.literal("tasks"), v.literal("plans"), v.literal("docs"), v.literal("projects")),
     cursor: v.optional(v.string()),
     apply: v.optional(v.boolean()),
   },
@@ -43,74 +35,39 @@ export const sweepPage = internalMutation({
       numItems: 200,
     });
 
-    const mappingsByUser = new Map<string, DirectoryMapping[]>();
-    const nameCache = new Map<string, string>();
-    const nameOf = async (id: any): Promise<string> => {
-      if (!id) return "(personal)";
-      const key = String(id);
-      if (!nameCache.has(key)) {
-        const doc = await ctx.db.get(id);
-        nameCache.set(key, (doc as any)?.name || (doc as any)?.github_username || key);
-      }
-      return nameCache.get(key)!;
+    const convCache = new Map<string, any>();
+    const convOf = async (id: string | undefined) => {
+      if (!id) return null;
+      if (!convCache.has(id)) convCache.set(id, await ctx.db.get(id as any));
+      return convCache.get(id) ?? null;
     };
 
     const findings: any[] = [];
+    let missing = 0;
+    let stale = 0;
     for (const row of page.page as any[]) {
-      if (!row.team_id) continue;
-
-      let expected: any = undefined;
-      let reason = "";
-      let determinate = false;
-
-      const cid = linkedConvId(row);
-      if (cid) {
-        const conv = await ctx.db.get(cid);
-        if (conv) {
-          determinate = true;
-          expected = teamVisibleConvTeam(conv as any);
-          reason = expected ? "team-visible conversation" : "private conversation";
-        }
+      const conv = await convOf(linkedConversationId(row));
+      const expected = computeWorkspaceKey(row, conv);
+      const stored = typeof row.workspace === "string" && row.workspace ? row.workspace : undefined;
+      if (stored === expected) continue;
+      if (stored) stale++; else missing++;
+      if (stored) {
+        findings.push({
+          table: args.table,
+          short_id: row.short_id || String(row._id),
+          title: row.title,
+          stored,
+          expected,
+          reason: conv ? "linked conversation visibility" : "raw team tag / owner",
+        });
       }
-
-      const path = row.project_path || row.git_root;
-      if (!expected && path) {
-        let mappings = mappingsByUser.get(String(row.user_id));
-        if (!mappings) {
-          mappings = (await ctx.db
-            .query("directory_team_mappings")
-            .withIndex("by_user_id", (q: any) => q.eq("user_id", row.user_id))
-            .collect()) as any;
-          mappingsByUser.set(String(row.user_id), mappings!);
-        }
-        const r = resolveTeamForPath(mappings!, path, undefined);
-        expected = r.teamId;
-        determinate = true;
-        reason = expected
-          ? "directory mapping"
-          : `${reason ? reason + ", " : ""}unmapped path`;
-      }
-
-      if (!determinate) continue;
-      if (String(expected || "") === String(row.team_id || "")) continue;
-
-      findings.push({
-        table: args.table,
-        short_id: row.short_id || String(row._id),
-        title: row.title,
-        owner: await nameOf(row.user_id),
-        project_path: path || null,
-        current_team: await nameOf(row.team_id),
-        expected_team: await nameOf(expected),
-        reason,
-      });
-      if (args.apply) {
-        await ctx.db.patch(row._id, { team_id: expected });
-      }
+      if (args.apply) await ctx.db.patch(row._id, { workspace: expected });
     }
 
     return {
       findings,
+      missing,
+      stale,
       cursor: page.continueCursor,
       isDone: page.isDone,
       scanned: page.page.length,
@@ -123,6 +80,8 @@ export const sweep = internalAction({
   handler: async (ctx, args) => {
     const findings: any[] = [];
     let scanned = 0;
+    let missing = 0;
+    let stale = 0;
     for (const table of TABLES) {
       let cursor: string | undefined;
       for (;;) {
@@ -133,10 +92,12 @@ export const sweep = internalAction({
         });
         findings.push(...res.findings);
         scanned += res.scanned;
+        missing += res.missing;
+        stale += res.stale;
         if (res.isDone) break;
         cursor = res.cursor;
       }
     }
-    return { scanned, misfiled: findings.length, applied: !!args.apply, findings };
+    return { scanned, missing, stale, applied: !!args.apply, findings };
   },
 });
