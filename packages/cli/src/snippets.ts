@@ -277,10 +277,9 @@ export function installSectionToFile(
   snippet: string,
   update: boolean,
 ): SnippetInstallResult {
-  // Kept even though the writer below also creates the directory: it would
-  // derive the mode from the file's, so a fresh ~/.claude would come out 0700
-  // instead of the umask default every other tool creates it with. The file is
-  // ours to write; the directory is the agent's.
+  // Kept even though the writer below also creates the directory: that one
+  // derives the mode from the file's, so a fresh ~/.claude would land at 0700
+  // rather than the umask default every other tool creates it with.
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
   const exists = fs.existsSync(filePath);
   const existing = exists ? fs.readFileSync(filePath, "utf-8") : "";
@@ -292,14 +291,11 @@ export function installSectionToFile(
   // partway through a plain write truncates it, and the whole point of the
   // section machinery above is that we never destroy content we do not own.
   //
-  // No `mode`, so an existing file keeps the permissions it has and only a file
-  // we create gets the helper's 0600 default. That is what the plain
-  // `writeFileSync` this replaced did: its `mode` reached `open(2)` as a
-  // CREATION mode and the kernel dropped it whenever the file already existed.
-  // Passing 0600 here would re-chmod the file on every refresh instead —
-  // `refreshEnabledSnippets` runs on update, on restart and on daemon boot — so
-  // a CLAUDE.md the user deliberately made group-readable would keep snapping
-  // back to owner-only. We own a section of this file, not its permissions.
+  // No `mode`: the `writeFileSync` this replaced handed its 0600 to open(2) as a
+  // CREATION mode, which the kernel drops once the file exists. Passing it here
+  // would re-chmod on every write instead, and `refreshEnabledSnippets` runs on
+  // update, on restart and on daemon boot — so a CLAUDE.md the user made
+  // group-readable would keep snapping back. We own a section, not the file.
   if (write) atomicWriteFile(filePath, result.text);
   return { installed: result.installed, updated: result.updated, unchanged: !write };
 }
