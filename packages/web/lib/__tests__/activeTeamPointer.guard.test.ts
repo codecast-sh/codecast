@@ -1,0 +1,59 @@
+import { describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+
+// The active team lives in two places ON PURPOSE:
+//   • `users.active_team_id` — the CANONICAL pointer. The CLI and mobile read
+//     it, so it decides where `cast chat new` puts a channel.
+//   • `clientState.ui.active_team_id` — a local MIRROR, so the web UI can
+//     re-scope in the same tick instead of awaiting a round trip.
+//
+// A write to the mirror alone desyncs them, and the symptom appears somewhere
+// else entirely: the CLI keeps operating in the team you just left. That is
+// exactly what happened at app/settings/team/create — creating a team switched
+// the web app and left the pointer behind.
+//
+// So: every switch goes through hooks/useSwitchWorkspace, which writes both.
+
+const ROOT = join(import.meta.dir, "..", "..");
+const DIRS = ["app", "components", "hooks", "lib", "store"];
+
+// The mirror's legitimate writers.
+const ALLOWED = new Set([
+  "hooks/useSwitchWorkspace.ts", // the sanctioned switch
+  "store/inboxStore.ts", // defines updateClientUI and the ui bag
+]);
+
+function walk(dir: string, out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    if (name === "node_modules" || name === "__tests__" || name === ".next") continue;
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) walk(full, out);
+    else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) out.push(full);
+  }
+  return out;
+}
+
+describe("active-team pointer", () => {
+  test("nothing writes the ui mirror without the canonical pointer", () => {
+    const offenders: string[] = [];
+    for (const dir of DIRS) {
+      for (const file of walk(join(ROOT, dir))) {
+        const rel = file.slice(ROOT.length + 1);
+        if (ALLOWED.has(rel)) continue;
+        const src = readFileSync(file, "utf8");
+        // A mirror write is `updateClientUI({ ... active_team_id ... })`.
+        for (const m of src.matchAll(/updateClientUI\(\{[^}]*active_team_id[^}]*\}/g)) {
+          offenders.push(`${rel}: ${m[0].slice(0, 90)}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("the sanctioned switch writes BOTH halves", () => {
+    const src = readFileSync(join(ROOT, "hooks/useSwitchWorkspace.ts"), "utf8");
+    expect(src).toContain("updateClientUI({ active_team_id");
+    expect(src).toContain("saveActiveTeam");
+  });
+});
