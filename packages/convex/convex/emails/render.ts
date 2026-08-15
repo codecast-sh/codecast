@@ -288,7 +288,7 @@ function styleBlock(): string {
     }
     @media (prefers-color-scheme: dark) {
       .em-bg { background: ${d.bodyBg} !important; }
-      .em-card { background: ${d.cardBg} !important; border-color: ${d.border} !important; }
+      .em-card { background: ${d.cardBg} !important; border-color: ${d.border} !important; border-top-color: ${d.accent} !important; }
       .em-text { color: ${d.text} !important; }
       .em-muted { color: ${d.textMuted} !important; }
       .em-dim { color: ${d.textDim} !important; }
@@ -303,7 +303,7 @@ function styleBlock(): string {
     [data-ogsc] .em-dim { color: ${d.textDim} !important; }
     [data-ogsc] .em-link { color: ${d.accentLight} !important; }
     [data-ogsb] .em-bg { background: ${d.bodyBg} !important; }
-    [data-ogsb] .em-card { background: ${d.cardBg} !important; border-color: ${d.border} !important; }
+    [data-ogsb] .em-card { background: ${d.cardBg} !important; border-color: ${d.border} !important; border-top-color: ${d.accent} !important; }
     [data-ogsb] .em-inset { background: ${d.insetBg} !important; border-color: ${d.insetBorder} !important; }
   </style>`;
 }

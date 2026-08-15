@@ -98,7 +98,7 @@ export function passwordChanged(args: { email: string; changedAt: number }): Ren
       },
       {
         kind: "text",
-        value: `If this **wasn't** you, someone else may have access to your account. Reset your password now and email us at [${BRAND.supportEmail}](https://codecast.sh/support).`,
+        value: `If this **wasn't** you, someone else may have access to your account. Reset your password now and email us at **${BRAND.supportEmail}**.`,
       },
       { kind: "button", label: "Secure my account", url: `${BRAND.url}/forgot-password` },
     ],
@@ -138,7 +138,7 @@ export function welcome(args: { email: string; name?: string }): RenderedEmail {
       { kind: "button", label: "Open your inbox", url: `${BRAND.url}/inbox` },
       {
         kind: "note",
-        value: `Questions? Just reply — or write [${BRAND.supportEmail}](https://codecast.sh/support). A human reads every message.`,
+        value: `Questions? Just reply — or write **${BRAND.supportEmail}**. A human reads every message.`,
       },
     ],
     reason: `You received this one-time email because ${args.email} created a Codecast account.`,

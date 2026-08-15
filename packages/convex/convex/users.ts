@@ -425,6 +425,19 @@ export const daemonHeartbeat = mutation({
       .withIndex("by_key", (q) => q.eq("key", "min_cli_version"))
       .unique();
 
+    // Capability convergence (ct-42847/48). The revision is the pull signal: a
+    // laptop asleep when a toggle flipped compares one integer on its next beat
+    // and reconciles only when behind — pushed commands expire in 5 minutes,
+    // this never does. The mode is the kill switch: a reconciler bug reaches
+    // every machine on the next heartbeat, and without a server-side off you
+    // ship a new CLI to every machine to stop it. Global override outranks the
+    // user's setting; default dry (plan and report, never apply) until the
+    // zero-ops gate has been proven in the field.
+    const globalCapMode = await ctx.db
+      .query("system_config")
+      .withIndex("by_key", (q) => q.eq("key", "capabilities_mode"))
+      .unique();
+
     return {
       commands: visibleCommands.map((c) => ({
         id: c._id,
@@ -437,6 +450,8 @@ export const daemonHeartbeat = mutation({
       min_cli_version: minVersionConfig?.value ?? undefined,
       agent_permission_modes: user?.agent_permission_modes ?? undefined,
       agent_default_params: user?.agent_default_params ?? undefined,
+      capability_desired_revision: (user as any)?.capability_revision ?? 0,
+      capabilities_mode: (globalCapMode?.value as string | undefined) ?? (user as any)?.capabilities_mode ?? "dry",
     };
   },
 });

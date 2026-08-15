@@ -1,6 +1,8 @@
 import { useState, Suspense } from "react";
 import Link from "next/link";
 import { useAuthActions } from "@convex-dev/auth/react";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AppLoader } from "../../components/AppLoader";
 
@@ -14,6 +16,7 @@ function ResetPasswordForm() {
   const [loading, setLoading] = useState(false);
 
   const { signIn } = useAuthActions();
+  const notifyPasswordChanged = useMutation(api.emails.send.notifyPasswordChanged);
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -39,6 +42,10 @@ function ResetPasswordForm() {
         newPassword,
         flow: "reset-verification",
       });
+      // Security notice to the account's inbox. The reset just signed us in,
+      // so the authenticated mutation targets our own address. Best-effort —
+      // never block the redirect on it.
+      notifyPasswordChanged({}).catch(() => {});
       router.push("/login?reset=success");
     } catch (err) {
       if (err instanceof Error) {

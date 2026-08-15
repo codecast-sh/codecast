@@ -4,12 +4,13 @@ import { Email } from "@convex-dev/auth/providers/Email";
 import { ConvexCredentials } from "@convex-dev/auth/providers/ConvexCredentials";
 import GitHub from "@auth/core/providers/github";
 import Apple from "@auth/core/providers/apple";
-import { Resend as ResendAPI } from "resend";
 import { alphabet, generateRandomString } from "oslo/crypto";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { advanceCurrentUserViewRevision } from "./principalViewRevisions";
+import { deliver } from "./emails/send";
+import { passwordReset, verifyEmail } from "./emails/templates";
 
 // Native "Sign in with Apple": the iOS app presents Apple's own system sheet
 // (expo-apple-authentication) and sends us the resulting identity token. We
@@ -86,38 +87,32 @@ const DesktopRelay = ConvexCredentials({
 
 const ResendOTPPasswordReset = Email({
   id: "resend-otp-password-reset",
-  apiKey: process.env.RESEND_API_KEY,
   maxAge: 60 * 15,
   async generateVerificationToken() {
     return generateRandomString(6, alphabet("0-9", "A-Z"));
   },
-  async sendVerificationRequest({ identifier: email, provider, token }) {
-    const resend = new ResendAPI(provider.apiKey);
-    const { error } = await resend.emails.send({
-      from: "Codecast <support@codecast.sh>",
-      to: [email],
-      subject: "Reset your Codecast password",
-      html: `
-        <div style="font-family: system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
-          <h1 style="color: #1a1a1a; font-size: 24px; margin-bottom: 24px;">Reset your password</h1>
-          <p style="color: #4a4a4a; font-size: 16px; line-height: 1.5; margin-bottom: 24px;">
-            Use this code to reset your password. It expires in 15 minutes.
-          </p>
-          <div style="background: #f5f5f5; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 24px;">
-            <span style="font-family: monospace; font-size: 32px; font-weight: bold; letter-spacing: 4px; color: #1a1a1a;">${token}</span>
-          </div>
-          <p style="color: #888; font-size: 14px;">
-            If you didn't request this, you can safely ignore this email.
-          </p>
-        </div>
-      `,
-    });
-
-    if (error) {
-      throw new Error(JSON.stringify(error));
-    }
+  async sendVerificationRequest({ identifier: email, token }) {
+    await deliver(email, passwordReset({ code: token, email }), "password-reset");
   },
 });
+
+const ResendOTPVerify = Email({
+  id: "resend-otp-verify",
+  maxAge: 60 * 15,
+  async generateVerificationToken() {
+    return generateRandomString(6, alphabet("0-9", "A-Z"));
+  },
+  async sendVerificationRequest({ identifier: email, token }) {
+    await deliver(email, verifyEmail({ code: token, email }), "verify-email");
+  },
+});
+
+// Requiring email verification at password sign-up changes the client flow
+// (the signup page must collect the emailed code), so it ships dark: the web
+// UI handles the verification step first, then this env var flips it on in
+// the Convex dashboard. Enabling it before the web UI ships would strand
+// password signups.
+const emailVerificationEnabled = process.env.AUTH_EMAIL_VERIFICATION === "1";
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   session: {
@@ -179,6 +174,14 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         created_at: Date.now(),
       });
       await advanceCurrentUserViewRevision(ctx.db as any, userId as any);
+      // First time this person exists — greet them. Scheduled so a Resend
+      // hiccup can never fail the sign-up transaction.
+      if (email) {
+        await ctx.scheduler.runAfter(0, internal.emails.send.sendWelcome, {
+          email,
+          name: typeof profile.name === "string" ? profile.name : undefined,
+        });
+      }
       return userId;
     },
   },
@@ -216,6 +219,9 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
     }),
     AppleNative,
     DesktopRelay,
-    Password({ reset: ResendOTPPasswordReset }),
+    Password({
+      reset: ResendOTPPasswordReset,
+      ...(emailVerificationEnabled ? { verify: ResendOTPVerify } : {}),
+    }),
   ],
 });

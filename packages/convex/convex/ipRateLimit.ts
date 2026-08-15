@@ -18,31 +18,44 @@ import { v } from "convex/values";
 // (a query can't write a counter). Extending to those needs per-endpoint tuning or
 // @convex-dev/rate-limiter's token-bucket sharding — a deliberate follow-up.
 
+/**
+ * The fixed-window counter itself, callable from any mutation with db access.
+ * Keys are arbitrary strings — IP-derived for unauthenticated endpoints, or
+ * user-id-derived for authenticated abuse guards (e.g. invite emails).
+ */
+export async function bumpWindow(
+  db: any,
+  key: string,
+  max: number,
+  windowMs: number,
+): Promise<{ ok: boolean; retry_after_ms?: number }> {
+  const now = Date.now();
+  const existing = await db
+    .query("ip_rate_limits")
+    .withIndex("by_key", (q: any) => q.eq("key", key))
+    .first();
+
+  // New key, or the previous window fully elapsed → start a fresh window.
+  if (!existing || now - existing.window_start >= windowMs) {
+    if (existing) {
+      await db.patch(existing._id, { count: 1, window_start: now });
+    } else {
+      await db.insert("ip_rate_limits", { key, count: 1, window_start: now });
+    }
+    return { ok: true };
+  }
+
+  if (existing.count >= max) {
+    return { ok: false, retry_after_ms: windowMs - (now - existing.window_start) };
+  }
+  await db.patch(existing._id, { count: existing.count + 1 });
+  return { ok: true };
+}
+
 export const bump = internalMutation({
   args: { key: v.string(), max: v.number(), window_ms: v.number() },
-  handler: async (ctx, args): Promise<{ ok: boolean; retry_after_ms?: number }> => {
-    const now = Date.now();
-    const existing = await ctx.db
-      .query("ip_rate_limits")
-      .withIndex("by_key", (q) => q.eq("key", args.key))
-      .first();
-
-    // New key, or the previous window fully elapsed → start a fresh window.
-    if (!existing || now - existing.window_start >= args.window_ms) {
-      if (existing) {
-        await ctx.db.patch(existing._id, { count: 1, window_start: now });
-      } else {
-        await ctx.db.insert("ip_rate_limits", { key: args.key, count: 1, window_start: now });
-      }
-      return { ok: true };
-    }
-
-    if (existing.count >= args.max) {
-      return { ok: false, retry_after_ms: args.window_ms - (now - existing.window_start) };
-    }
-    await ctx.db.patch(existing._id, { count: existing.count + 1 });
-    return { ok: true };
-  },
+  handler: async (ctx, args): Promise<{ ok: boolean; retry_after_ms?: number }> =>
+    bumpWindow(ctx.db, args.key, args.max, args.window_ms),
 });
 
 // Drop windows older than 1h (covers any window we use). Bounded single scan —
