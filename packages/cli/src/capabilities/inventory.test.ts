@@ -10,6 +10,7 @@ import {
   toInvocableList,
 } from "./inventory.js";
 import { buildFleetDiff } from "./fleetDiff.js";
+import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 
 // One fixture tree shaped like a real machine: a HOME with user-scope skills,
 // commands, agents, plugins and MCP servers, plus a project carrying its own
@@ -539,6 +540,34 @@ describe("shared ~/.agents/skills", () => {
     fs.symlinkSync(target, path.join(onlyProj, ".claude", "skills", "solo"));
     const row = find(readInventory(onlyHome, onlyProj), "skill", "solo");
     expect(row).toMatchObject({ client: "shared", scope: "project" });
+  });
+
+  // Every shared slot the registry declares is scanned, driven off AGENT_CLIENTS
+  // rather than re-asserting `~/.agents/skills`.
+  //
+  // Today every client names that one dir, so this cannot yet catch a hardcoded
+  // path — it is the guard for the day one declares a different one, when a
+  // scanner that spelled the path out itself would silently skip the new dir and
+  // report the machine as simply not having those skills. Written against the
+  // registry now so that day fails a test instead of a user's fleet diff.
+  test("every cross-client skills dir a descriptor declares is scanned", () => {
+    const declared = [
+      ...new Set(
+        Object.values(AGENT_CLIENTS)
+          .map((c) => c.agentFileTargets?.skillsDir?.shared)
+          .filter((s): s is string => typeof s === "string"),
+      ),
+    ];
+    expect(declared.length).toBeGreaterThan(0);
+    const descHome = path.join(ROOT, "descriptor-shared");
+    for (const [i, template] of declared.entries()) {
+      const dir = path.join(descHome, template.replace(/^~\//, ""), `desc-skill-${i}`);
+      write(path.join(dir, "SKILL.md"), `---\nname: desc-skill-${i}\ndescription: from a declared slot\n---\n`);
+    }
+    const inv = readInventory(descHome);
+    for (const [i] of declared.entries()) {
+      expect(find(inv, "skill", `desc-skill-${i}`)).toMatchObject({ client: "shared" });
+    }
   });
 
   test("a real (non-link) client skill with the same name still reports separately", () => {

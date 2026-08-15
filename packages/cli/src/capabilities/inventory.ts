@@ -53,7 +53,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { AGENT_CLIENTS } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, observedScopeRank } from "@codecast/shared/contracts";
 import type { AgentClientId } from "@codecast/shared/contracts";
 
 // Both of these are the shared contract's, re-exported so this module's existing
@@ -294,10 +294,6 @@ interface SharedSkills {
   unplaced: Set<InventoryItem>;
 }
 
-/** Narrowness order for scope adoption: `local` is the most specific answer to
- *  "which scope switched this on", `user` the least. */
-const SCOPE_NARROWNESS: CapabilityScope[] = ["local", "project", "user"];
-
 /** Record one more client-dir path that links to a shared skill. */
 function appendLink(
   item: InventoryItem,
@@ -315,7 +311,7 @@ function appendLink(
   // scanner attributed each symlink entry to the dir it sat in; now that the
   // links collapse onto one item, a skill linked only into a project dir must
   // not claim user scope — that would misanswer "why is this active here?".
-  if (SCOPE_NARROWNESS.indexOf(scope) < SCOPE_NARROWNESS.indexOf(item.scope)) item.scope = scope;
+  if (observedScopeRank(scope) < observedScopeRank(item.scope)) item.scope = scope;
 }
 
 /** Skills: a `<dir>/<name>/SKILL.md`, or a bare `<dir>/<name>.md`.
@@ -739,11 +735,14 @@ function readClientItems(
     template && projectPath ? path.join(projectPath, template) : undefined;
   const out: InventoryItem[] = [];
 
-  // Skills. The user slot may BE the cross-client dir (codex documents
-  // ~/.agents/skills as its user path); that dir is read once up front, so an
-  // equal slot is skipped here rather than double-counted.
+  // Skills. The user slot may BE a cross-client dir (codex documents
+  // ~/.agents/skills as its user path); those are read once up front, so a slot
+  // naming one is skipped here rather than double-counted. Checked against every
+  // shared dir rather than only this client's own: what matters is whether the
+  // directory was already read, not which descriptor happened to declare it.
+  const sharedDirs = new Set(sharedSkillDirs(home));
   const skillsUser = user(targets.skillsDir?.user);
-  if (skillsUser && skillsUser !== user(targets.skillsDir?.shared)) {
+  if (skillsUser && !sharedDirs.has(skillsUser)) {
     out.push(...readSkillsIn(skillsUser, "user", clientId, sink, shared));
   }
   const skillsProject = project(targets.skillsDir?.project);
@@ -798,21 +797,39 @@ function readClientItems(
   return out;
 }
 
-/** The one read of ~/.agents/skills. Layouts match `readSkillsIn`; the index
- *  maps every real path a client symlink could resolve to (the skill's entry
- *  and its manifest) back to the emitted item. */
+/** The cross-client user skills dirs, taken from every descriptor that declares
+ *  one rather than spelled out here — the same rule the rest of this module
+ *  follows, and the reason a slot verified into the registry is scanned for
+ *  free. A SET because several clients name the same directory (`~/.agents/skills`
+ *  for both codex and cursor today): reading it twice would report one skill as
+ *  two, which the fleet diff renders as drift that is not there. */
+function sharedSkillDirs(home: string): string[] {
+  const dirs = new Set<string>();
+  for (const client of Object.values(AGENT_CLIENTS)) {
+    const shared = client.agentFileTargets?.skillsDir?.shared;
+    if (shared) dirs.add(fromHomeTemplate(home, shared));
+  }
+  return [...dirs];
+}
+
+/** The one read of the cross-client skills dirs. Layouts match `readSkillsIn`;
+ *  the index maps every real path a client symlink could resolve to (the skill's
+ *  entry and its manifest) back to the emitted item. */
 function readSharedAgentSkills(home: string, sink: UnreadablePath[]): { items: InventoryItem[]; shared: SharedSkills } {
   const shared: SharedSkills = { index: new Map(), unplaced: new Set() };
-  const items = readSkillsIn(path.join(home, ".agents", "skills"), "user", "shared", sink, undefined, (item, entryPath) => {
-    shared.unplaced.add(item);
-    try {
-      shared.index.set(fs.realpathSync(entryPath), item);
-      shared.index.set(fs.realpathSync(item.source), item);
-    } catch {
-      // The entry was just read, so a realpath failure is a race; the item
-      // still reports, it just cannot receive links.
-    }
-  });
+  const items: InventoryItem[] = [];
+  for (const dir of sharedSkillDirs(home)) {
+    items.push(...readSkillsIn(dir, "user", "shared", sink, undefined, (item, entryPath) => {
+      shared.unplaced.add(item);
+      try {
+        shared.index.set(fs.realpathSync(entryPath), item);
+        shared.index.set(fs.realpathSync(item.source), item);
+      } catch {
+        // The entry was just read, so a realpath failure is a race; the item
+        // still reports, it just cannot receive links.
+      }
+    }));
+  }
   return { items, shared };
 }
 

@@ -13,7 +13,6 @@
 // COPIES become one ~/.agents/skills content dir plus symlinks.
 
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 
 export interface MigrationReport {
@@ -119,7 +118,10 @@ const MIGRATIONS: Migration[] = [skillCopiesToSharedLinks];
 /** Run every applicable migration, in order. Called from the reconciler's
  *  startup path, under the target-root lock. */
 export function runMigrations(
-  home = process.env.HOME || os.homedir(),
+  // REQUIRED. This function moves files under the given home; a default of the
+  // real home directory is how a unit test once migrated the user's actual
+  // ~/.claude/skills. Callers say which home they mean, every time.
+  home: string,
   log: (line: string) => void = console.error,
 ): MigrationReport[] {
   const reports: MigrationReport[] = [];
