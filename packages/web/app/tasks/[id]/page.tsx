@@ -2,6 +2,7 @@
 import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { copyToClipboard, canonicalUrl } from "../../../lib/utils";
 import { compressImage } from "../../../lib/compressImage";
+import { inActiveWorkspace } from "../../../lib/workspaceScope";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -657,7 +658,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     return (Object.values(allTasks) as TaskItem[])
       .filter((t: any) =>
         t._id !== data._id &&
-        (t.team_id ?? null) === ((data as any).team_id ?? null) &&
+        inActiveWorkspace(t, (data as any).team_id ?? null) &&
         t.status !== "done" && t.status !== "dropped" &&
         !String(t._id).startsWith("temp_") &&
         (q === "" || t.title?.toLowerCase().includes(q) || t.short_id?.toLowerCase().includes(q)))

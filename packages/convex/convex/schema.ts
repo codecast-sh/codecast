@@ -110,7 +110,16 @@ export default defineSchema({
       // key must exist here or the settings toggle has nowhere to persist and the
       // mute silently does nothing.
       chat_activity: v.optional(v.boolean()),
+      // Master switch for the "while you were away" email digest
+      // (emails/digest.ts). Absent reads as ON; the unsubscribe link and the
+      // settings toggle both write false here.
+      email_notifications: v.optional(v.boolean()),
     })),
+    // Cooldown stamp for the email digest — at most one digest per cooldown
+    // window, and items created before this stamp are never re-emailed.
+    email_digest_last_sent_at: v.optional(v.number()),
+    // Bearer for the one-click unsubscribe link. Minted lazily on first digest.
+    email_unsub_token: v.optional(v.string()),
     pr_auto_comment_enabled: v.optional(v.boolean()),
     // Dedupe/cooldown state for the aggregated "sessions blocked" notification
     // (accountSwitch.blockedNotifyCheck). One write per incident, not per park.
@@ -186,6 +195,7 @@ export default defineSchema({
     local_project_roots_updated_at: v.optional(v.number()),
   })
     .index("email", ["email"])
+    .index("by_email_unsub_token", ["email_unsub_token"])
     .index("by_github_username", ["github_username"])
     .index("by_github_id", ["github_id"])
     .index("by_username", ["username"])
@@ -368,6 +378,18 @@ export default defineSchema({
     comment_fork_message_id: v.optional(v.string()),
     comment_fork_comment_id: v.optional(v.id("comments")),
     comment_fork_prompt_at: v.optional(v.number()),
+    // Denormalized comment signal for the inbox card, recomputed by
+    // comments.refreshCommentSignal on every comment create/resolve/delete.
+    // Count of OPEN threads plus who spoke last in them and what they said —
+    // enough for the session row to show "Alice: typo in step 2" with no extra
+    // query on the list render path. author_id is a users id string, or
+    // "agent" for agent replies, so the client can mute the chip when the
+    // viewer themselves commented last.
+    unresolved_comment_count: v.optional(v.number()),
+    last_comment_at: v.optional(v.number()),
+    last_comment_author: v.optional(v.string()),
+    last_comment_author_id: v.optional(v.string()),
+    last_comment_excerpt: v.optional(v.string()),
     // Visible-child pointer: the session that spawned this one (agent-team
     // teammate → its lead, `cast spawn` → its caller). Unlike
     // parent_conversation_id — whose mere presence marks a row as a subagent
@@ -1962,6 +1984,9 @@ export default defineSchema({
     .index("by_recipient", ["recipient_user_id"])
     .index("by_recipient_read", ["recipient_user_id", "read"])
     .index("by_recipient_created", ["recipient_user_id", "created_at"])
+    // Global recency scan for the email digest sweep (emails/digest.ts): find
+    // recently-created unread rows without touching every user.
+    .index("by_created", ["created_at"])
     // Session-state notifications (ready / needs permission / error) replace
     // per (recipient, conversation) instead of stacking — this is the lookup
     // for the row(s) being superseded.
@@ -2071,7 +2096,9 @@ export default defineSchema({
     resolved_by: v.optional(v.id("users")),
   })
     .index("by_user_status", ["user_id", "status"])
-    .index("by_conversation_status", ["conversation_id", "status"]),
+    .index("by_conversation_status", ["conversation_id", "status"])
+    // Global recency scan for the email digest sweep: recent pending decisions.
+    .index("by_status_created", ["status", "created_at"]),
 
   // A signed-in link recipient (someone who opened a shared conversation but is
   // neither its owner nor a team member) asking to do more than read: to send

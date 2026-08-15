@@ -11,6 +11,7 @@ import {
   NEEDS_INPUT_IDLE_CHECK_DELAY_MS,
   NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS,
 } from "./inboxFilters";
+import { listLiveManagedSessions } from "./lib/liveSessions";
 
 // A status CHANGE is the entry point to the needs-input push (see
 // notifications.checkNeedsInput). "idle" only settles into needs_input after
@@ -859,13 +860,7 @@ export const reportMetrics = mutation({
 // The row set behind the /sessions page. Split from the query wrapper (like
 // performRegisterManagedSession) so the projection is testable without auth.
 export async function performListActiveSessions(ctx: { db: QueryCtx["db"] }, userId: Id<"users">) {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  const sessions = await ctx.db
-    .query("managed_sessions")
-    .withIndex("by_user_heartbeat", (q: any) =>
-      q.eq("user_id", userId).gte("last_heartbeat", cutoff)
-    )
-    .collect();
+  const sessions = await listLiveManagedSessions(ctx, userId, { aliveMs: 24 * 60 * 60 * 1000 });
 
   const results = [];
   for (const session of sessions) {

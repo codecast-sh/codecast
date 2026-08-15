@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Hash } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
+import { inActiveWorkspace } from "../lib/workspaceScope";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 
 // New channel.
@@ -39,9 +40,11 @@ export function CreateChannelModal({
   const [topic, setTopic] = useState("");
 
   const slug = slugChannelName(name);
+  // Collision check scoped to the target workspace — the store caches channels
+  // across teams, and a name taken in another team is free in this one.
   const taken = useMemo(
-    () => Object.values(channels).some((c: any) => !c.archived_at && c.name === slug),
-    [channels, slug],
+    () => Object.values(channels).some((c: any) => !c.archived_at && c.name === slug && inActiveWorkspace(c, teamId)),
+    [channels, slug, teamId],
   );
   // A channel MUST land in the workspace the user is looking at. Omitting the
   // team would let the server default to users.active_team_id — a second

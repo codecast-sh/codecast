@@ -397,6 +397,13 @@ export type InboxSession = {
   // Teammate comment threads (message/code/global anchors) still unresolved —
   // the card's "someone flagged this" chip. Server-derived on the inbox row.
   open_comment_threads?: number;
+  // Who spoke last in those open threads and what they said (denormalized by
+  // comments.refreshCommentSignal). author_id is a users id string or "agent";
+  // the chip mutes itself when the viewer spoke last.
+  last_comment_author?: string | null;
+  last_comment_author_id?: string | null;
+  last_comment_excerpt?: string | null;
+  last_comment_at?: number | null;
   session_error?: string;
   // True when the session's latest turn is an unresolved Claude Code auth/API
   // error banner ("Please run /login · API Error: 401 …") — the CLI was signed
@@ -1044,10 +1051,6 @@ export type ClientUI = {
   // than this count as "N new" on the collapsed header. Refreshed whenever the
   // user toggles the section (expanding IS reading the briefing).
   schedules_seen_at?: number;
-  // Read watermark for the REVIEW dock (open comment threads, page comments,
-  // workflow gates): items raised after this count as "new". Same close-marks-
-  // read contract as schedules_seen_at.
-  review_seen_at?: number;
   // Sidebar subsection rows pinned to the top of the rail (lib/sidebarPins).
   // Structural shape rather than the SidebarPin import: sidebarPins.ts imports
   // this store, and a type import back the other way invites a require cycle.
@@ -1092,6 +1095,9 @@ export type ClientDismissed = {
   blocked_sessions_banner?: number;
   // "Set up account switching" promo inside that banner — permanent opt-out.
   cc_accounts_promo?: boolean;
+  // "New agent features" upsell — one stamp per snippet slug the user enabled
+  // or dismissed from the intro (timestamp; cross-device via per-key LWW).
+  [k: `snippet_intro_${string}`]: number | undefined;
 };
 
 export type ClientTips = {
@@ -1296,6 +1302,26 @@ export function filterInboxScope(
     if (id === focusedId || !isForeignRow(s, meId)) out[id] = s;
   }
   return out;
+}
+
+// filterInboxScope with its canonical arguments read off a store snapshot — the
+// one call every session picker / MRU list makes before enumerating the shared
+// cache. The cache holds rows from other scopes and previously viewed teams, so
+// any raw Object.values(sessions) surface leaks them.
+export function filterInboxScopeFromState(st: {
+  sessions: Record<string, InboxSession>;
+  clientState: { ui?: { inbox_scope?: "mine" | "team" } };
+  currentUser?: { _id: unknown } | null;
+  teamInboxIds: ReadonlySet<string>;
+  currentSessionId: string | null;
+}): Record<string, InboxSession> {
+  return filterInboxScope(
+    st.sessions,
+    st.clientState.ui?.inbox_scope ?? "mine",
+    st.currentUser?._id?.toString?.() ?? null,
+    st.teamInboxIds,
+    st.currentSessionId,
+  );
 }
 
 // Window the cross-device dismiss reconcile is authoritative over. Mirrors the
@@ -1762,7 +1788,10 @@ export function sessionStructuralSig(s: InboxSession): string {
     // Open teammate-comment threads — the card's comment chip. Changes only
     // when a human posts/resolves a comment, never on heartbeats. Paints a
     // chip; never moves a row between buckets, so it stays out of sortRank.
+    // last_comment_at stands in for the author/excerpt text (every comment
+    // write stamps a new timestamp), the same trick thread_state_at uses.
     s.open_comment_threads || 0,
+    s.last_comment_at || 0,
   ].join("\x1f");
 }
 
@@ -3357,10 +3386,18 @@ interface InboxStoreState extends ChatSliceState {
   wsToggle: (slot: SlotId, pane: Pane) => void;
   wsPromote: (slot: SlotId) => void;
   wsSetPresentation: (slot: SlotId, presentation: Presentation) => void;
-  /** Restore a saved arrangement wholesale — every slot, plus zen. */
-  applyWorkbench: (snap: WorkbenchSnapshot) => void;
+  /** Restore a saved arrangement wholesale — every slot, plus zen. `id` stamps
+   *  which saved workbench this is, so the rail can keep it highlighted (and
+   *  offer "update") while you adjust panels away from it. */
+  applyWorkbench: (snap: WorkbenchSnapshot, id?: string) => void;
+  /** The saved workbench the chrome was last switched to. Ephemeral bookkeeping
+   *  for the rail's highlight/update affordance — cleared on plain boots. */
+  activeWorkbenchId: string | null;
   /** Name the current arrangement and persist it as a saved view. */
   saveWorkbench: (name: string, path?: string) => any;
+  /** Overwrite a saved workbench with the CURRENT arrangement — the way an
+   *  existing workbench is adjusted: switch to it, move panels, update. */
+  updateWorkbench: (id: string, path?: string) => void;
   setNavCollapsed: (collapsed: boolean) => void;
   setDockOpen: (open: boolean) => void;
   wsSetSize: (slot: SlotId, size: number) => void;
@@ -3382,7 +3419,7 @@ interface InboxStoreState extends ChatSliceState {
   removeTaskStub: (clientKey: string) => void;
   createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[]; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
-  createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
+  createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   promoteDocToPlan: (docId: string) => Promise<any>;
   ensurePlanDoc: (planShortId: string) => Promise<any>;
   publishToDirectory: (opts: { conversation_id: string; title: string; description?: string; tags?: string[] }) => Promise<any>;
@@ -3400,6 +3437,27 @@ interface InboxStoreState extends ChatSliceState {
   currentUser: any | null;
   teams: any[];
   teamMembers: any[];
+  // Huddles (calls.ts). myCalls syncs the ring pipeline's whole world in one
+  // singleton: invites ringing at me, my outbound ring, my room membership.
+  // callOccupancy maps room_key → live roster for chips. Neither persists —
+  // a reload re-derives both from the subscription (a stale ring replayed
+  // from IDB would be a phantom ring).
+  myCalls: { incoming: any[]; outgoing: any[]; membership: any | null };
+  callOccupancy: Record<string, any[]>;
+  callConfig: { enabled: boolean; url?: string } | null;
+  // Ephemeral media-plane state, written only by lib/calls/callManager. The
+  // dock renders from THIS synchronously (local-first: joining paints
+  // "connecting" before any server or SFU round-trip).
+  call: {
+    phase: "idle" | "ringing_out" | "connecting" | "connected" | "error";
+    roomKey: string | null;
+    muted: boolean;
+    camera: boolean;
+    sharing: boolean;
+    speaking: string[];
+    error: string | null;
+  };
+  setCallState: (patch: Partial<InboxStoreState["call"]>) => void;
   teamUnreadCount: number | null;
   favorites: any[];
   bookmarks: any[];
@@ -3712,7 +3770,7 @@ function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boole
 // into value-identical no-ops, so the roster/user refs stay stable and their
 // subscribers stop re-rendering at idle.
 const PRESENCE_QUANTUM_MS = 60_000;
-const PRESENCE_FIELDS = ["daemon_last_seen", "last_heartbeat", "last_seen", "recent_session_updated"];
+const PRESENCE_FIELDS = ["daemon_last_seen", "last_heartbeat", "last_seen", "recent_session_updated", "presence_input_at"];
 // Streaming counters shown only in hover tooltips (a teammate's message count
 // ticks up on every agent turn); step them so the roster ref doesn't churn on
 // each increment.
@@ -3918,6 +3976,13 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     },
   },
   currentUser: { kind: "singleton", normalize: quantizePresence },
+  // Server-authoritative call state: wholesale replace (no local edits to
+  // protect — the optimistic layer for calls is the ephemeral `call` slice,
+  // not these rows). Timestamps are bucketed server-side (calls.ts), so
+  // no-change pushes bail on the JSON compare.
+  myCalls: { kind: "singleton" },
+  callOccupancy: { kind: "singleton" },
+  callConfig: { kind: "singleton" },
   teams: { kind: "list" },
   teamMembers: {
     kind: "list",
@@ -7981,10 +8046,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // restores in one draft, so the frame changes in a single paint. Subjects are
   // re-derived from where you are (the comments pane gets the conversation on
   // screen); a device that cannot host a terminal never inherits one.
-  applyWorkbench: action(function (this: Draft, snap: WorkbenchSnapshot) {
+  activeWorkbenchId: null,
+
+  applyWorkbench: action(function (this: Draft, snap: WorkbenchSnapshot, id?: string) {
     const conversationId = this.currentSessionId ?? this.viewingDismissedId ?? null;
     const allowTerminal = typeof window === "undefined" || window.innerWidth >= 768;
     this.workspace = applyWorkbenchPure(this.workspace as WorkspaceState, snap, { conversationId, allowTerminal });
+    this.activeWorkbenchId = id ?? null;
     persistWorkspace(this);
     const zen = snap.zen ?? false;
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
@@ -7994,8 +8062,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
-  // Saving reuses the saved-view pipeline wholesale (optimistic stub, outbox,
-  // share/delete); a workbench is just a view whose page is the workspace.
+  // Save and update reuse the saved-view pipeline wholesale (optimistic stub,
+  // outbox, share/delete); a workbench is just a view whose page is the
+  // workspace. Update IS the adjust gesture: arrange the chrome, overwrite.
   saveWorkbench: (name: string, path?: string) => {
     const st = get();
     const snap = captureWorkbench(st.workspace as WorkspaceState, {
@@ -8003,6 +8072,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
       path,
     });
     return st.createSavedView({ name, page: "workspace", prefs: snap });
+  },
+
+  updateWorkbench: (id: string, path?: string) => {
+    const st = get();
+    const prev = (st.savedViews as Record<string, SavedViewRow>)[id]?.prefs as WorkbenchSnapshot | undefined;
+    const snap = captureWorkbench(st.workspace as WorkspaceState, {
+      zen: st.clientState.ui?.zen_mode ?? false,
+      // Keep the workbench's surface unless the caller states a new one — an
+      // update from a different page shouldn't silently retarget the switch.
+      path: path ?? prev?.path,
+    });
+    st.updateSavedView(id, { prefs: snap });
   },
 
 
@@ -8152,6 +8233,23 @@ const inboxStoreConfig = (set: any, get: any) => ({
   favorites: [],
   bookmarks: [],
   bookmarkPending: {},
+
+  myCalls: { incoming: [], outgoing: [], membership: null },
+  callOccupancy: {},
+  callConfig: null,
+  call: {
+    phase: "idle" as const,
+    roomKey: null,
+    muted: true,
+    camera: false,
+    sharing: false,
+    speaking: [],
+    error: null,
+  },
+  // Raw set() by convention: ephemeral UI/media state, never shared or
+  // persisted (same class as modal toggles).
+  setCallState: (patch: Partial<InboxStoreState["call"]>) =>
+    set((s: any) => ({ call: { ...s.call, ...patch } })),
 
   // =====================
   // SELECTORS

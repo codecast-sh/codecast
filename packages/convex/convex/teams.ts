@@ -3,6 +3,12 @@ import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createTeamFeedFilter } from "./privacy";
+import {
+  PRESENCE_FRESH_MS,
+  bucketTs,
+  derivePresenceState,
+} from "./presenceState";
+import { CALL_MEMBER_STALE_MS } from "./callRooms";
 import { normalizeTeamTaskStatuses } from "@codecast/shared/tasks";
 import { purgeChatMembership } from "./chat";
 import { readLocalViewRevision } from "./localFirstCommands";
@@ -317,10 +323,46 @@ export const getTeamMembers = query({
     // must not expose its title/last-message. Pick the most recent *team-visible*
     // session in this team instead.
     const feedFilter = await createTeamFeedFilter(ctx, args.team_id);
+    const now = Date.now();
     const members = await Promise.all(
       memberships.map(async (m) => {
         const user = await ctx.db.get(m.user_id);
         if (!user) return null;
+        // Person presence (active/idle/away/offline), derived in one place
+        // (presenceState.ts) from the same rows push routing trusts. Devices
+        // are read only for machine-wide opt-ins with a live app surface —
+        // the same short-circuit readPresence uses.
+        const presenceRow = await ctx.db
+          .query("user_presence")
+          .withIndex("by_user", (q) => q.eq("user_id", user._id))
+          .first();
+        const surfaceAlive =
+          !!presenceRow && now - presenceRow.last_seen < PRESENCE_FRESH_MS;
+        const devices =
+          surfaceAlive && (user.machine_wide_presence ?? true)
+            ? await ctx.db
+                .query("devices")
+                .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+                .collect()
+            : [];
+        const presenceState = derivePresenceState(
+          {
+            presence: presenceRow,
+            devices,
+            machineWide: user.machine_wide_presence,
+            daemonLastSeen: user.daemon_last_seen,
+          },
+          now,
+        );
+        // Which huddle (if any) this member is sitting in, for the strip's
+        // shared-room hue and the hover card's "in a huddle" line.
+        const callRows = await ctx.db
+          .query("call_members")
+          .withIndex("by_user", (q) => q.eq("user_id", user._id))
+          .collect();
+        const liveCall = callRows.find(
+          (c) => now - c.last_seen < CALL_MEMBER_STALE_MS,
+        );
         const recentConvos = await ctx.db
           .query("conversations")
           .withIndex("by_team_user_updated", (q) =>
@@ -346,6 +388,13 @@ export const getTeamMembers = query({
           bio: user.bio,
           status: user.status,
           timezone: user.timezone,
+          // Coarse person presence. Timestamps are bucketed to the minute so a
+          // 30s heartbeat usually yields a byte-identical result and Convex
+          // skips the push (the client additionally quantizes; see
+          // quantizePresence in the store's sync registry).
+          presence_state: presenceState,
+          presence_input_at: bucketTs(presenceRow?.last_input_at),
+          in_room_key: liveCall?.room_key,
           recent_session_title: recentConvo?.title,
           recent_session_messages: recentConvo?.message_count,
           recent_session_updated: recentConvo?.updated_at,

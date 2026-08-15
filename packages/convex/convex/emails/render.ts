@@ -87,6 +87,11 @@ export type EmailBlock =
   | { kind: "terminal"; lines: Array<{ text: string; prompt?: boolean; muted?: boolean }> }
   /** Quoted text with attribution (comment notifications). */
   | { kind: "quote"; value: string; by?: string }
+  /**
+   * One digest entry: bold title line (supports **bold** markers), optional
+   * muted excerpt, and a link. Rendered as a coral-edged row.
+   */
+  | { kind: "item"; title: string; excerpt?: string; url: string; linkLabel?: string }
   /** Muted small print inside the card (safe-to-ignore notes). */
   | { kind: "note"; value: string }
   | { kind: "divider" };
@@ -229,6 +234,18 @@ function renderBlockHtml(block: EmailBlock): string {
   </tr>
 </table>`;
 
+    case "item":
+      return `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px 0;">
+  <tr>
+    <td style="border-left:3px solid ${palette.accent};padding:2px 0 2px 16px;">
+      <div class="em-text" style="font-family:${monoStack};font-size:13px;line-height:1.6;color:${palette.text};">${inlineHtml(block.title)}</div>
+      ${block.excerpt ? `<div class="em-muted" style="margin-top:4px;font-family:${monoStack};font-size:12px;line-height:1.6;color:${palette.textMuted};white-space:pre-wrap;">${escapeHtml(block.excerpt)}</div>` : ""}
+      <div style="margin-top:5px;font-family:${monoStack};font-size:12px;"><a href="${escapeHtml(block.url)}" class="em-link" style="color:${palette.accentDark};text-decoration:underline;">${escapeHtml(block.linkLabel ?? "Open")}&nbsp;&#8250;</a></div>
+    </td>
+  </tr>
+</table>`;
+
     case "note":
       return `<p class="em-muted" style="${noteStyle}">${inlineHtml(block.value)}</p>`;
 
@@ -262,6 +279,8 @@ function renderBlockText(block: EmailBlock): string {
           .map((l) => `    > ${l}`)
           .join("\n") + (block.by ? `\n    — ${block.by}` : "")
       );
+    case "item":
+      return `  * ${inlineText(block.title)}${block.excerpt ? `\n    ${block.excerpt.split("\n").join("\n    ")}` : ""}\n    ${block.url}`;
     case "note":
       return inlineText(block.value);
     case "divider":
