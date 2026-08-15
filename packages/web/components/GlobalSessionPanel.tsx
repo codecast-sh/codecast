@@ -1017,7 +1017,7 @@ function schedBadgeTone(task: { status: string; run_at?: number }, now: number):
 // the surfaces can't drift: readable name, one-sentence gist of what each run
 // does (Haiku-distilled display fields), cadence + live countdown, last
 // outcome, and hover verbs (run now / pause / cancel) on every surface.
-function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, projectChip, onNavigated }: {
+const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, projectChip, onNavigated }: {
   row: TriggerRow;
   activeSessionId?: string | null;
   onOpen: (row: TriggerRow) => void;
@@ -1413,7 +1413,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
       )}
     </div>
   );
-}
+})
 
 // -- Monitor bars (live background watches) --
 // A live Monitor (the harness background-watch tool) stacks under its session
