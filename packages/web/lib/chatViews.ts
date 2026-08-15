@@ -10,6 +10,7 @@
 // time — which is what makes a renamed teammate rename everywhere at once.
 
 import { memberAvatarUrl, memberDisplayName } from "./liveEntities";
+import { compareMembersByPresence } from "../components/presence/memberPresence";
 import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
 import type { ChatAuthor, ChatMessageView, ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
@@ -26,11 +27,71 @@ export type ChatMember = {
 
 const UNKNOWN: ChatAuthor = { id: "", name: "Someone" };
 
+/** What a room is called where a name is shown.
+ *
+ *  A channel is its slug. A DM is the OTHER side's names, resolved live from
+ *  the roster (liveEntities' rule), so a renamed teammate renames the room —
+ *  "Sam" alone for a 1:1, "Sam, Jason" for a group. A DM whose roster hasn't
+ *  loaded yet is honestly a "Direct message", never a blank. */
+export function channelDisplayName(
+  view: { name: string; kind?: string; dmMemberIds?: string[] },
+  members: ChatMember[] | undefined,
+): string {
+  if (view.kind !== "dm") return view.name;
+  const ids = view.dmMemberIds ?? [];
+  if (ids.length === 0) return "Direct message";
+  const byId = new Map((members ?? []).map((m) => [String(m._id), m]));
+  const names = ids.map((id) => {
+    const m = byId.get(String(id));
+    // First name only past a 1:1 — three full names don't fit a rail row.
+    const full = memberName(m);
+    return ids.length > 1 ? full.split(/\s+/)[0] : full;
+  });
+  return names.join(", ");
+}
+
+/** The avatar-bearing side of a 1:1 DM, for surfaces that show a face. */
+export function dmCounterpart(
+  view: { kind?: string; dmMemberIds?: string[] },
+  members: ChatMember[] | undefined,
+): ChatMember | undefined {
+  if (view.kind !== "dm" || (view.dmMemberIds ?? []).length !== 1) return undefined;
+  return (members ?? []).find((m) => String(m._id) === String(view.dmMemberIds![0]));
+}
+
 /** The app's one naming rule (lib/liveEntities), with chat's own placeholder for
  *  a member the roster has not loaded. Chat used to carry its own chain, which
  *  drifted from every other surface's. */
 export function memberName(m: ChatMember | undefined): string {
   return memberDisplayName(m, "Someone");
+}
+
+/** Teammates the DM section offers before any conversation exists.
+ *
+ *  A DM list that only shows rooms already opened makes the first message the
+ *  hardest one: the section is empty exactly when messaging someone would be
+ *  most useful. So the rail seeds it with everyone reachable — humans on the
+ *  team without an open 1:1 — and clicking one opens the room local-first.
+ *  Bots are excluded because openDm refuses them; the viewer because a DM with
+ *  yourself is a notes app this product doesn't have. Presence-sorted: the
+ *  people most likely to answer float to the top. Shared by the chat rail and
+ *  the app sidebar so the two DM sections can never disagree. */
+export function suggestedDmMembers(
+  channels: { kind?: string; dmMemberIds?: string[] }[],
+  members: ChatMember[] | undefined,
+  viewerId: string,
+  cap = 8,
+): ChatMember[] {
+  const open = new Set<string>();
+  for (const c of channels) {
+    if (c.kind !== "dm") continue;
+    const ids = c.dmMemberIds ?? [];
+    if (ids.length === 1) open.add(String(ids[0]));
+  }
+  return (members ?? [])
+    .filter((m) => !m.is_bot && String(m._id) !== String(viewerId) && !open.has(String(m._id)))
+    .sort(compareMembersByPresence)
+    .slice(0, cap);
 }
 
 function emailHandle(m: ChatMember): string | null {
@@ -171,6 +232,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
     editedAt: row.edited_at,
     deletedAt: row.deleted_at,
     mentionsMe: mentionsViewer(row, ctx.viewerId),
+    attachments: row.attachments?.length ? row.attachments : undefined,
     reactions: reactions && reactions.length > 0 ? reactions : undefined,
     agentStatus: row.agent_status,
     replyCount: replyCount || undefined,

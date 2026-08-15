@@ -3,6 +3,8 @@
 // sessionMessage.ts. ConversationView imports these for its cast-command cards
 // (the "Message to" / "read" blocks and the cast task/plan/doc renderers).
 
+import { extractBrowserTabId } from "../lib/browserFocus";
+
 // Agents routinely prefix a command with `cd <dir>;` or `cd <dir> &&` to run it
 // from the repo root (e.g. `cd /repo; cast send jx7abcd "hi"`). Strip that leading
 // prefix so command detection sees the bare command — otherwise a start-anchored
@@ -396,20 +398,33 @@ export interface BrowserRowInput {
   output: string;
 }
 
+/** What a `cast browser` row was acting on: the page, and the driven tab. */
+export interface BrowserRowState {
+  url?: string;
+  tabId?: string;
+}
+
 /**
- * Walk a conversation's browser rows in order and give every row a page URL:
- * its own when the output states one, else the last URL any earlier row
- * established. An `open` row's own URL wins over the carried one — it IS the
- * navigation.
+ * Walk a conversation's browser rows in order and give every row the page URL
+ * and tab id it was on: its own when the output states them, else the last
+ * ones any earlier row established. Only tab-affecting verbs print the tab
+ * footer (cli tabFooter.ts), so a `shot` or `find` row inherits the tab of the
+ * `open`/`click` before it. An `open` row's own URL wins over the carried one —
+ * it IS the navigation.
  */
-export function buildBrowserPageUrlMap(rows: BrowserRowInput[]): Record<string, string> {
-  const map: Record<string, string> = {};
-  let carried: string | null = null;
+export function buildBrowserRowMap(rows: BrowserRowInput[]): Record<string, BrowserRowState> {
+  const map: Record<string, BrowserRowState> = {};
+  let url: string | null = null;
+  let tabId: string | null = null;
   for (const row of rows) {
-    const own = extractBrowserPageUrl(row.subcommand, row.args, row.output);
-    const url = own ?? carried;
-    if (url) map[row.toolCallId] = url;
-    if (own) carried = own;
+    url = extractBrowserPageUrl(row.subcommand, row.args, row.output) ?? url;
+    tabId = extractBrowserTabId(row.output) ?? tabId;
+    if (url || tabId) map[row.toolCallId] = { ...(url && { url }), ...(tabId && { tabId }) };
   }
   return map;
+}
+
+export function sameBrowserRowMap(a: Record<string, BrowserRowState>, b: Record<string, BrowserRowState>): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => b[k] && a[k].url === b[k].url && a[k].tabId === b[k].tabId);
 }

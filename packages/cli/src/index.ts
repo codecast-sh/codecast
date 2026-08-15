@@ -41,6 +41,15 @@ import {
 } from "@codecast/shared/contracts";
 import { buildTaskTree } from "@codecast/shared/tasks";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
+import {
+  loadWorkspaceRoster,
+  resolveWorkspaceForRead,
+  resolveWorkspaceForWrite,
+  workspaceArgs,
+  workspaceLabel,
+  WorkspaceUnresolved,
+  type Workspace,
+} from "./resolveWorkspace.js";
 import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
@@ -5756,10 +5765,20 @@ program
         return;
       }
 
+      // Mark the ACTIVE workspace. The canonical pointer decides where every
+      // team-scoped command lands, so it should be readable, not inferred —
+      // "which team am I in" was previously answerable only by creating
+      // something and reading back where it went.
+      const ws = await readWorkspace();
+      const activeId = ws.kind === "team" ? ws.teamId : null;
       console.log(`\n${c.bold}Your Teams${c.reset}\n`);
       for (const team of teams) {
         const roleLabel = team.role === "admin" ? fmt.accent("admin") : fmt.muted("member");
-        console.log(`  ${fmt.value(team.name.padEnd(20))} ${roleLabel.padEnd(12)} ${fmt.muted(team._id)}`);
+        const marker = team._id === activeId ? fmt.accent(" ← active") : "";
+        console.log(`  ${fmt.value(team.name.padEnd(20))} ${roleLabel.padEnd(12)} ${fmt.muted(team._id)}${marker}`);
+      }
+      if (!activeId) {
+        console.log(`\n${fmt.muted("No active team — team-scoped commands need --team, and new work is personal.")}`);
       }
       console.log(`\n${fmt.muted("Run 'cast teams mappings' to see which projects share with which teams.")}`);
       return;
@@ -11567,10 +11586,13 @@ chat
   .command("channels")
   .alias("ls")
   .description("List the team's channels with unread counts")
-  .option("--team <id>", "Team to list (default: your active team)")
+  .option("--team <name|id>", "Team to list (default: your active team)")
   .option("--json", "Machine-readable output")
   .action(async (options: any) => {
-    const result = await cliPost("/cli/chat/channels", { team_id: options.team });
+    // A read may default: resolved here rather than server-side so the CLI and
+    // the web app answer "which workspace" from the same canonical pointer.
+    const ws = await readWorkspace(options.team);
+    const result = await cliPost("/cli/chat/channels", workspaceArgs(ws));
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
       return;
@@ -11597,18 +11619,22 @@ chat
   .command("new")
   .description("Create a channel")
   .argument("<name>", "Channel name (normalized to a slug)")
-  .option("--team <id>", "Team to create it in (default: your active team)")
+  .option("--team <name|id>", "Team to create it in (default: your active team)")
   .option("--topic <text>", "Channel topic")
   .action(async (name: string, options: any) => {
+    // A WRITE resolves its workspace here and sends it explicitly. Letting the
+    // server fall back to users.active_team_id is how `cast chat new` once put
+    // a channel in team Union while the shell context said codecast.
+    const ws = await writeWorkspace(options.team, { teamRequired: true });
     const result = await cliPost("/cli/chat/create-channel", {
-      team_id: options.team, name, topic: options.topic,
+      ...workspaceArgs(ws), name, topic: options.topic,
     });
-    // The team is PRINTED because it may have been guessed: with no --team the
-    // server resolves your active team, and a write must say where it landed.
+    // The landing team is PRINTED: a write must say where it went, even when
+    // it went where you expected.
     console.log(
       `${c.green}✓${c.reset} ${result.created ? "created" : "already there"} ` +
       `${c.cyan}${result.channel_id}${c.reset}` +
-      (result.team_name ? ` ${c.dim}in team${c.reset} ${c.bold}${result.team_name}${c.reset}` : ""),
+      ` ${c.dim}in team${c.reset} ${c.bold}${result.team_name || workspaceLabel(ws)}${c.reset}`,
     );
   });
 
@@ -11755,12 +11781,17 @@ chat
   .description("Search your team's chat")
   .argument("<query>", "What to look for")
   .option("--channel <id>", "Limit to one channel")
+  .option("--team <name|id>", "Team to search (default: your active team)")
   .option("-n, --limit <n>", "How many hits (default 20)")
   .option("--json", "Machine-readable output")
   .action(async (query: string, options: any) => {
+    // Scoped by the same canonical pointer as every other read, rather than by
+    // whatever the server happens to think your active team is.
+    const ws = await readWorkspace(options.team);
     const result = await cliPost("/cli/chat/search", {
       q: query,
       channel_id: options.channel,
+      ...workspaceArgs(ws),
       limit: options.limit ? parseInt(options.limit, 10) : 20,
     });
     if (options.json) {
@@ -12348,6 +12379,36 @@ function getCliEndpoint(): { siteUrl: string; apiToken: string } {
     siteUrl: config.convex_url.replace(".cloud", ".site"),
     apiToken: config.auth_token,
   };
+}
+
+// The CLI's single workspace resolver. Every subcommand that needs to know
+// "which team am I operating in" calls one of these two — never `options.team`
+// straight onto the wire, and never nothing-and-let-the-server-guess. See
+// resolveWorkspace.ts for why: reads may default, writes must be explicit.
+async function workspaceRoster() {
+  return loadWorkspaceRoster(async () => await cliPost("/cli/teams", {}));
+}
+
+/** Workspace for a READ. Defaults through the canonical pointer. */
+async function readWorkspace(explicitTeam?: string): Promise<Workspace> {
+  return resolveWorkspaceForRead(await workspaceRoster(), explicitTeam);
+}
+
+/** Workspace for a WRITE. Exits with the list of real teams rather than
+ *  letting the server guess where a created row belongs. */
+async function writeWorkspace(
+  explicitTeam?: string,
+  opts: { teamRequired?: boolean } = {},
+): Promise<Workspace> {
+  try {
+    return resolveWorkspaceForWrite(await workspaceRoster(), explicitTeam, opts);
+  } catch (e) {
+    if (e instanceof WorkspaceUnresolved) {
+      console.error(e.message);
+      process.exit(1);
+    }
+    throw e;
+  }
 }
 
 async function cliPost(urlPath: string, body: Record<string, any>): Promise<any> {

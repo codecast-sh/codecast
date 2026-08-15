@@ -15,6 +15,8 @@
  */
 
 import { CdpConnection, listTargets, type CdpTarget } from "./cdp.js";
+import { sessionTargetId } from "./engineReap.js";
+import { engineSessionKey } from "./engine.js";
 import { readState, type InstanceState } from "./instance.js";
 
 export interface WatchTab {
@@ -245,7 +247,19 @@ export async function openCdpScreencast(
 
 export function cdpWatchEngine(deps: CdpEngineDeps = realCdpDeps): WatchEngine {
   return {
-    resolveTab: (candidates) => resolveOwnedTab(deps.getState(), candidates),
+    resolveTab: (candidates) => {
+      const state = deps.getState();
+      const own = resolveOwnedTab(state, candidates);
+      if (!("error" in own) || own.error === "no-browser") return own;
+      // The engine path keeps no tabsBySession: each session's daemon records
+      // the tab it is pinned to in its own target file, keyed by the same
+      // owner key flattened into an engine session name (engine.ts).
+      for (const cand of candidates) {
+        const tabId = sessionTargetId(engineSessionKey(cand));
+        if (tabId) return { tabId };
+      }
+      return own;
+    },
     open(tabId, opts, handlers) {
       const state = deps.getState();
       if (!state) return Promise.reject(new Error("no-browser"));

@@ -17,35 +17,29 @@ export { isTeamMember };
 
 type AccessCtx = { db: any };
 
-// ── Owner-or-team: tasks, docs, plans ──
-// These three share one rule: the owner always has access; a non-owner has
-// access iff the entity carries a team_id AND the user is a member of that team.
-// Task assignment is also an explicit access grant; docs and plans use owner or
-// team membership only.
+// ── Owner-or-workspace: tasks, docs, plans, projects ──
+// One rule: the owner always has access; anyone else has access iff the row's
+// stored ACCESS key (`workspace`) names a team they belong to. Task assignment
+// is also an explicit grant. team_id is ROUTING and is never consulted here —
+// see the workspace-key section below.
 
 export async function canAccessTask(
   ctx: AccessCtx,
   userId: Id<"users">,
   task: any,
 ): Promise<boolean> {
-  if (task.user_id === userId) return true;
+  if (String(task.user_id) === String(userId)) return true;
   if (task.assignee && String(task.assignee) === String(userId)) return true;
-  if (!task.team_id) return false;
-  const membership = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task.team_id))
-    .first();
-  return !!membership;
+  return await workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, task));
 }
 
 export async function canAccessProject(
   ctx: AccessCtx,
   userId: Id<"users">,
-  project: { user_id: Id<"users">; team_id?: Id<"teams"> },
+  project: { user_id: Id<"users">; team_id?: Id<"teams">; workspace?: string },
 ): Promise<boolean> {
   if (String(project.user_id) === String(userId)) return true;
-  if (!project.team_id) return false;
-  return await isTeamMember(ctx, userId, project.team_id);
+  return await workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, project));
 }
 
 
@@ -85,37 +79,221 @@ export type AuthorizedWorkspace =
   | { type: "personal"; userId: Id<"users"> }
   | { type: "team"; teamId: Id<"teams"> };
 
-/** The conversation a record inherits workspace visibility from, if any. */
+/**
+ * The conversation a record inherits workspace visibility from, if any.
+ * This is THE canonical linkage rule — teamScopeSweep and the workspace
+ * compute both use it. Explicit creation links win over association links.
+ * Note `created_from_conversation_id`: the PLAN spelling of the same edge —
+ * omitting it made plans silently skip inheritance entirely.
+ */
 export function linkedConversationId(record: any): string | undefined {
-  if (record.conversation_id) return String(record.conversation_id);
   if (record.created_from_conversation) return String(record.created_from_conversation);
+  if (record.created_from_conversation_id) return String(record.created_from_conversation_id);
+  if (record.conversation_id) return String(record.conversation_id);
   if (record.related_conversation_ids?.[0]) return String(record.related_conversation_ids[0]);
   if (record.conversation_ids?.[0]) return String(record.conversation_ids[0]);
   return undefined;
 }
 
+// ── Stored workspace key (the ACCESS axis) ──────────────────────────────────
+//
+// One stored value per row answers "who may read this": `team:<teamId>` or
+// `user:<userId>`. It is INDEPENDENT state, not a projection of team_id:
+//   • team_id stays ROUTING (which team's surfaces/feeds/notifications the row
+//     shows in) and no access path may consult it.
+//   • workspace is ACCESS and no routing path may consult it.
+// The split is what makes "routed to team T but readable only by its owner"
+// expressible (team_id: T, workspace: user:<owner>) — a product requirement,
+// not a migration convenience.
+//
+// The key is written at WRITE time by computeWorkspaceKey (below) and
+// recomputed ONLY when a linked conversation's visibility changes
+// (recomputeWorkspaceForConversation). Reads are a single equality against
+// the viewer's active workspace key. The format is a discriminated string so
+// a future `restricted:<ref>` variant (subset sharing, session_owners-style
+// join table behind it) is additive; parseWorkspaceKey returns null for
+// unknown variants so every reader fails CLOSED on them.
+
+export type WorkspaceKey = string;
+
+/** The one constructor for a workspace key. */
+export function workspaceKey(ws: AuthorizedWorkspace): WorkspaceKey {
+  return ws.type === "team" ? `team:${ws.teamId}` : `user:${ws.userId}`;
+}
+
+/** Null for unknown/absent variants — callers must treat null as NO access. */
+export function parseWorkspaceKey(key: string | null | undefined): AuthorizedWorkspace | null {
+  if (!key) return null;
+  if (key.startsWith("team:")) return { type: "team", teamId: key.slice(5) as Id<"teams"> };
+  if (key.startsWith("user:")) return { type: "personal", userId: key.slice(5) as Id<"users"> };
+  return null;
+}
+
 /**
- * The team a record EFFECTIVELY belongs to. A record that links a conversation
- * inherits that conversation's team visibility — a private conversation makes
- * the record personal regardless of its raw team_id tag. This is the same rule
- * the list queries scope by (data.ts resolveEffectiveTeam); access checks must
- * use it too, or a record the lists correctly hide stays fetchable by id.
+ * WRITE-time compute of a row's workspace key from today's effective-access
+ * rules. Pure: the caller supplies the linked conversation row (or null).
+ * A linked conversation decides: team-visible → its team, otherwise the row is
+ * personal TO ITS OWNER (user_id — never the caller running the compute).
+ * Without a link, the raw team tag decides. This is the ONLY place the access
+ * axis may read team_id — it is the writer, not a reader.
+ */
+export function computeWorkspaceKey(
+  record: { user_id: Id<"users">; team_id?: Id<"teams"> },
+  linkedConv:
+    | { team_id?: Id<"teams">; is_private?: boolean; auto_shared?: boolean; team_visibility?: string }
+    | null
+    | undefined,
+): WorkspaceKey {
+  if (linkedConv) {
+    const teamId = teamVisibleConvTeam(linkedConv);
+    return teamId ? `team:${teamId}` : `user:${record.user_id}`;
+  }
+  return record.team_id ? `team:${record.team_id}` : `user:${record.user_id}`;
+}
+
+/** computeWorkspaceKey with the linked conversation fetched from the db. */
+export async function computeWorkspaceKeyDb(ctx: AccessCtx, record: any): Promise<WorkspaceKey> {
+  const cid = linkedConversationId(record);
+  const conv = cid ? await ctx.db.get(cid) : null;
+  return computeWorkspaceKey(record, conv);
+}
+
+/**
+ * The stored key when present, else the lazy compute — migration scaffolding
+ * for rows minted before the backfill. Once the backfill has run, the stored
+ * branch is the only one taken.
+ */
+export async function resolveWorkspaceKey(ctx: AccessCtx, record: any): Promise<WorkspaceKey> {
+  if (typeof record.workspace === "string" && record.workspace) return record.workspace;
+  return computeWorkspaceKeyDb(ctx, record);
+}
+
+/**
+ * Does this user belong to the workspace the key names? The ONE access
+ * predicate for key-carrying rows: personal keys match only that user; team
+ * keys require membership; unknown variants (future `restricted:`) and absent
+ * keys grant NOTHING here — fail closed.
+ */
+export async function workspaceGrantsAccess(
+  ctx: AccessCtx,
+  userId: Id<"users">,
+  key: WorkspaceKey | null | undefined,
+): Promise<boolean> {
+  const ws = parseWorkspaceKey(key);
+  if (!ws) return false;
+  if (ws.type === "personal") return String(ws.userId) === String(userId);
+  return await isTeamMember(ctx, userId, ws.teamId);
+}
+
+/**
+ * Patch a conversation's visibility fields AND propagate the resulting access
+ * key to linked work items in one call. Every visibility-changing write
+ * (share, unshare, lock private, late path restamp, reparent) MUST go through
+ * here — a raw ctx.db.patch of is_private / team_visibility / team_id /
+ * auto_shared leaves linked tasks/plans/docs with a stale stored key.
+ * Returns the number of work items rewritten.
+ */
+export async function patchConversationVisibility(
+  ctx: AccessCtx,
+  conversation: {
+    _id: Id<"conversations">;
+    user_id: Id<"users">;
+    team_id?: Id<"teams">;
+    is_private?: boolean;
+    auto_shared?: boolean;
+    team_visibility?: string;
+  },
+  updates: Record<string, any>,
+): Promise<number> {
+  await ctx.db.patch(conversation._id, updates);
+  const after = { ...conversation, ...updates };
+  return recomputeWorkspaceForConversation(ctx, after);
+}
+
+/**
+ * THE propagation hook: rewrite the stored workspace key of every work item
+ * linked to this conversation, after its visibility changed (share, unshare,
+ * lock private, late path restamp, fork/reparent inheritance changes). Call it
+ * AFTER patching the conversation, passing the POST-patch row.
+ *
+ * Coverage: direct links come off the reverse indexes; array-only links
+ * (conversation_ids / related_conversation_ids) ride the owner scan, since
+ * work items link their creator's own conversation. Rows outside both nets
+ * (someone else's row linking this conversation via an array) are caught by
+ * the workspace reconciler sweep.
+ */
+export async function recomputeWorkspaceForConversation(
+  ctx: AccessCtx,
+  conv: {
+    _id: Id<"conversations">;
+    user_id: Id<"users">;
+    team_id?: Id<"teams">;
+    is_private?: boolean;
+    auto_shared?: boolean;
+    team_visibility?: string;
+  },
+): Promise<number> {
+  const convId = String(conv._id);
+  const seen = new Set<string>();
+  const rows: any[] = [];
+  const gather = (batch: any[]) => {
+    for (const row of batch) {
+      const id = String(row._id);
+      if (!seen.has(id)) { seen.add(id); rows.push(row); }
+    }
+  };
+
+  gather(await ctx.db.query("tasks")
+    .withIndex("by_created_from_conversation", (q: any) => q.eq("created_from_conversation", conv._id))
+    .collect());
+  gather(await ctx.db.query("plans")
+    .withIndex("by_created_from_conversation_id", (q: any) => q.eq("created_from_conversation_id", conv._id))
+    .collect());
+  gather(await ctx.db.query("docs")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+    .collect());
+  for (const table of ["tasks", "plans", "docs"]) {
+    gather((await ctx.db.query(table)
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", conv.user_id))
+      .take(4000))
+      .filter((row: any) => linkedConversationId(row) === convId));
+  }
+
+  let updated = 0;
+  for (const row of rows) {
+    if (linkedConversationId(row) !== convId) continue;
+    const key = computeWorkspaceKey(row, conv);
+    if (row.workspace !== key) {
+      await ctx.db.patch(row._id, { workspace: key });
+      updated++;
+    }
+  }
+  return updated;
+}
+
+/**
+ * The team a record's ACCESS key names, or undefined when it is personal.
+ * Thin view over resolveWorkspaceKey for callers that still think in
+ * "effective team" terms; new code should compare workspace keys directly.
  */
 export async function effectiveTeamForResource(
   ctx: AccessCtx,
-  record: { team_id?: Id<"teams"> },
+  record: { team_id?: Id<"teams">; workspace?: string },
 ): Promise<Id<"teams"> | undefined> {
-  const cid = linkedConversationId(record);
-  if (cid) {
-    const conv = await ctx.db.get(cid);
-    if (conv) return teamVisibleConvTeam(conv);
-  }
-  return record.team_id;
+  const ws = parseWorkspaceKey(await resolveWorkspaceKey(ctx, record));
+  return ws?.type === "team" ? ws.teamId : undefined;
 }
 
+/**
+ * The workspace a resource lives in for CONTAINMENT (parent/child, plan/task,
+ * project/task joins). Stored access key when present; for legacy rows the
+ * raw tag, which the backfill makes identical for unlinked rows.
+ */
 export function workspaceForResource(
-  resource: { user_id: Id<"users">; team_id?: Id<"teams"> },
+  resource: { user_id: Id<"users">; team_id?: Id<"teams">; workspace?: string },
 ): AuthorizedWorkspace {
+  const stored = parseWorkspaceKey(resource.workspace);
+  if (stored) return stored;
   return resource.team_id
     ? { type: "team", teamId: resource.team_id }
     : { type: "personal", userId: resource.user_id };
@@ -159,17 +337,15 @@ export function requireWorkspaceMatch(
 }
 
 export function isSameWorkspace(
-  resource: { user_id: Id<"users">; team_id?: Id<"teams"> },
+  resource: { user_id: Id<"users">; team_id?: Id<"teams">; workspace?: string },
   workspace: AuthorizedWorkspace,
 ): boolean {
-  return workspace.type === "team"
-    ? String(resource.team_id) === String(workspace.teamId)
-    : !resource.team_id && String(resource.user_id) === String(workspace.userId);
+  return workspacesMatch(workspaceForResource(resource), workspace);
 }
 
 /** Relationships may only join resources inside the same authorization domain. */
 export function requireSameWorkspace(
-  resource: { user_id: Id<"users">; team_id?: Id<"teams"> },
+  resource: { user_id: Id<"users">; team_id?: Id<"teams">; workspace?: string },
   workspace: AuthorizedWorkspace,
   label: string,
 ): void {
@@ -245,15 +421,10 @@ export async function requireAccessiblePullRequest(
 export async function canAccessDoc(
   ctx: AccessCtx,
   userId: Id<"users">,
-  doc: { user_id: Id<"users">; team_id?: Id<"teams"> },
+  doc: { user_id: Id<"users">; team_id?: Id<"teams">; workspace?: string },
 ): Promise<boolean> {
-  if (doc.user_id === userId) return true;
-  // Team access follows the doc's EFFECTIVE team: a doc linked to a private
-  // conversation is personal even when team-tagged, so only its owner may
-  // read it. This keeps id-targeted access consistent with list scoping.
-  const effectiveTeam = await effectiveTeamForResource(ctx, doc);
-  if (!effectiveTeam) return false;
-  return await isTeamMember(ctx, userId, effectiveTeam);
+  if (String(doc.user_id) === String(userId)) return true;
+  return await workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, doc));
 }
 
 export async function canAccessPlan(
@@ -261,13 +432,8 @@ export async function canAccessPlan(
   userId: Id<"users">,
   plan: any,
 ): Promise<boolean> {
-  if (plan.user_id === userId) return true;
-  if (!plan.team_id) return false;
-  const membership = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", plan.team_id))
-    .first();
-  return !!membership;
+  if (String(plan.user_id) === String(userId)) return true;
+  return await workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, plan));
 }
 
 // ── Owner-or-team: conversations (faithful, NOT oversimplified) ──

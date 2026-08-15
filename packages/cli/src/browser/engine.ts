@@ -150,8 +150,13 @@ export interface EngineOptions {
 export function engineSession(detectSessionId?: () => string | null): string {
   const key = ownerKey(detectSessionId);
   if (!key) return "default";
-  // Session names end up in paths and process listings, so keep them plain.
-  return key.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 60);
+  return engineSessionKey(key);
+}
+
+/** An owner key as the engine session name: names end up in paths and process
+ *  listings, so keep them plain. */
+export function engineSessionKey(owner: string): string {
+  return owner.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 60);
 }
 
 // ---------------------------------------------------------------------------

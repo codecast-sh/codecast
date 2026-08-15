@@ -12,7 +12,7 @@ import { useInboxStore, type InboxSession } from "../store/inboxStore";
 import { ContextMenu, useContextMenu } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
 
-function parseSearchTerms(query: string): string[] {
+export function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
   const regex = /"([^"]+)"|(\S+)/g;
   let match;
@@ -23,7 +23,7 @@ function parseSearchTerms(query: string): string[] {
   return terms;
 }
 
-function highlightMatch(text: string, query: string): React.ReactNode {
+export function highlightMatch(text: string, query: string): React.ReactNode {
   if (!query.trim()) return text;
 
   const terms = parseSearchTerms(query);
@@ -54,7 +54,7 @@ function highlightMatch(text: string, query: string): React.ReactNode {
   );
 }
 
-function getSnippet(content: string, query: string, maxLen = 400): string {
+export function getSnippet(content: string, query: string, maxLen = 400): string {
   const lowerContent = content.toLowerCase();
   const terms = parseSearchTerms(query);
 

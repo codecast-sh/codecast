@@ -19,6 +19,7 @@ import {
   canAccessDoc,
   canAccessPlan,
   canAccessTask,
+  effectiveTeamForResource,
   isSameWorkspace,
   requireAccessibleDoc,
   requireAccessibleProject,
@@ -567,15 +568,14 @@ export const list = query({
     }
 
     if (needsAccessFilter) {
-      const memberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
-        .collect();
-      const memberTeamIds = new Set(memberships.map((m: any) => String(m.team_id)));
-      docs = docs.filter((d: any) =>
-        String(d.user_id) === String(auth.userId) ||
-        (d.team_id && memberTeamIds.has(String(d.team_id)))
-      );
+      // Route through canAccessDoc (owner or effective-team member) rather than a
+      // hand-rolled raw-team_id membership set, so a doc linked to a private
+      // conversation stays owner-only here too.
+      const accessible: any[] = [];
+      for (const d of docs) {
+        if (await canAccessDoc(ctx, auth.userId, d)) accessible.push(d);
+      }
+      docs = accessible;
     }
 
     // Exclude archived
@@ -1228,16 +1228,12 @@ export const webSearch = query({
       });
     }
 
-    const resolveTeam = (d: any) => {
-      const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
-      const conv = cid ? convMap.get(String(cid)) : undefined;
-      if (conv) {
-        if (!conv.is_private || conv.auto_shared) return conv.team_id;
-        if (conv.team_visibility && conv.team_visibility !== "private") return conv.team_id;
-        return undefined;
-      }
-      return d.team_id;
-    };
+    // The doc's ACCESS team: its stored workspace key when present, else the
+    // write-time rule recomputed against the conversation map. Shared with
+    // every other list path (data.ts), so this filter can't drift — the local
+    // copy this replaces also read only two of the four link fields, so a doc
+    // linked via created_from_conversation escaped the boundary entirely.
+    const resolveTeam = (d: any) => resolveEffectiveTeam(d, convMap);
 
     if (args.scope === "projects") {
       filtered = filtered.filter((d) => !resolveTeam(d));
@@ -2431,7 +2427,10 @@ export const webPromoteToPlan = mutation({
     const now = Date.now();
     const planId = await ctx.db.insert("plans", {
       user_id: doc.user_id,
-      team_id: doc.team_id,
+      // The plan carries NO conversation link, so effectiveTeamForResource can
+      // never rescue it later — resolve the doc's effective team at creation. A
+      // doc mined from a private session must not become a team-readable plan.
+      team_id: await effectiveTeamForResource(ctx, doc),
       project_id: doc.project_id,
       short_id,
       title: doc.title,

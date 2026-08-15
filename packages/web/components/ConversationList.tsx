@@ -753,6 +753,9 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
 
   const user = useInboxStore((s) => s.currentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
+  // MEMBERSHIP, not workspace scoping: this pair asks "does the user belong to
+  // any team" to gate team badges on cards. Do not copy it as a workspace
+  // pointer — workspace scoping reads active_team_id alone (unset = personal).
   const effectiveTeamId = activeTeamId || user?.team_id;
   const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : null);
   const hasTeammates = teamMembers && teamMembers.length > 1;

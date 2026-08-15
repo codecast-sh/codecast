@@ -7,13 +7,15 @@ import { CommentAvatar } from "../comments/CommentAvatar";
 import { remarkChatMentions } from "../../lib/remarkChatMentions";
 import { compactAge } from "../../lib/threadState";
 import { copyToClipboard } from "../../lib/utils";
-import type { ChatMessageView } from "./chatTypes";
+import type { ChatAttachmentView, ChatMessageView } from "./chatTypes";
+import { useStorageImageUrl } from "../../hooks/useStorageImageUrl";
+import { ImageLightbox } from "../ImageGallery";
 import "./chat.css";
 import "../editor/editor.css";
 
 // One chat message.
 //
-// The row is a two column grid: a fixed 46px gutter and the body. When a message
+// The row is a two column grid: a fixed gutter (--ch-gutter in chat.css) and the body. When a message
 // is grouped under the one above it — same author, close in time — the gutter
 // holds a hover-revealed timestamp instead of the avatar. Keeping the gutter the
 // same width in both states is what stops the text shifting sideways as messages
@@ -23,6 +25,38 @@ import "../editor/editor.css";
 // Presentational only: it takes a ChatMessageView and callbacks. That keeps it
 // renderable from a fixture and cheap to memo under a virtualizer, where rows
 // remount constantly.
+
+/** One attached image: resolves its storage URL, opens the shared lightbox.
+ *  A tile that is still resolving keeps its footprint (no reflow when the URL
+ *  lands); one that failed says so instead of leaving a hole. */
+function AttachmentTile({ att, onOpen }: { att: ChatAttachmentView; onOpen: (src: string) => void }) {
+  const url = useStorageImageUrl(att.storage_id);
+  if (url === null) {
+    return <span className="ch-att ch-att-missing">image unavailable</span>;
+  }
+  return (
+    <button
+      type="button"
+      className="ch-att"
+      onClick={() => url && onOpen(url)}
+      title={att.name || "View image"}
+    >
+      {url ? <img src={url} alt={att.name || "attachment"} loading="lazy" /> : <span className="ch-att-loading" />}
+    </button>
+  );
+}
+
+function ChatAttachments({ attachments }: { attachments: ChatAttachmentView[] }) {
+  const [lightbox, setLightbox] = useState<string | null>(null);
+  return (
+    <div className={`ch-atts ${attachments.length > 1 ? "ch-atts-grid" : ""}`}>
+      {attachments.map((att) => (
+        <AttachmentTile key={att.storage_id} att={att} onOpen={setLightbox} />
+      ))}
+      {lightbox && <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />}
+    </div>
+  );
+}
 
 const HOVER_TIME = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 const FULL_TIME = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -293,6 +327,9 @@ export const ChatMessage = memo(function ChatMessage({
             >
               {message.content}
             </ReactMarkdown>
+            {message.attachments && message.attachments.length > 0 && (
+              <ChatAttachments attachments={message.attachments} />
+            )}
             {message.editedAt && (
               <span className="ch-msg-edited" title={FULL_TIME.format(new Date(message.editedAt))}>
                 (edited)
@@ -404,12 +441,12 @@ export const ChatMessage = memo(function ChatMessage({
           )}
 
           {pickerOpen && (
-            <div className="ch-picker" role="menu" aria-label="React">
+            <div className="ch-emoji-picker" role="menu" aria-label="React">
               {QUICK_REACTIONS.map((emoji) => (
                 <button
                   key={emoji}
                   type="button"
-                  className="ch-picker-item"
+                  className="ch-emoji-picker-item"
                   title={`React ${emoji}`}
                   onClick={() => react(emoji)}
                 >
