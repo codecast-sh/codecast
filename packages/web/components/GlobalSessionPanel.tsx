@@ -24,7 +24,7 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { isBlockedConversation, isSubagentConversation, nestParentIdOf, LOGIN_FLOW_STALE_MS } from "@codecast/convex/convex/ccAccountsShared";
-import { isLivenessStale, blockedContinueClientId } from "@codecast/shared/contracts";
+import { isLivenessStale, blockedContinueClientId, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -48,6 +48,7 @@ import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock,
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
+import { ReviewDock } from "./review/ReviewDock";
 import { useTipActions, checkMilestone } from "../tips";
 import { RESTART_GIVE_UP_AFTER_MS } from "../hooks/useSessionRestart";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -318,9 +319,23 @@ function ForkCorner({ colorKey }: { colorKey: string }) {
 // Shared by both SessionCard variants.
 function AuthErrorBadge({ kind, agentType }: { kind?: string | null; agentType?: string | null }) {
   // Only the parked-and-won't-heal kinds get a badge. kind "error" (statusful
-  // 529/500 provider failures) self-retries — badging it paints a healthy
+  // 429/5xx provider failures) self-retries — badging it paints a healthy
   // session as blocked.
-  if (kind !== "limit" && kind !== "auth" && kind !== "connection") return null;
+  if (kind !== "limit" && kind !== "auth" && kind !== "connection" && kind !== "fatal") return null;
+  if (kind === "fatal") {
+    return (
+      <span
+        className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30"
+        title="API request failed and won't auto-retry — send continue (or any message) to retry the turn"
+      >
+        <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 8v4M12 15.5v.5" strokeLinecap="round" />
+        </svg>
+        failed
+      </span>
+    );
+  }
   if (kind === "connection") {
     return (
       <span
@@ -382,7 +397,7 @@ type LoginFlowState = {
 // email. The device row's cc_login_flow field is the whole state channel:
 // pending renders the waiting spinner, confirmed announces the revive the
 // server already kicked off, rejected says why and brings the button back.
-function SignInCta({
+export function SignInCta({
   device,
   authSessionIds,
   disabled,
@@ -566,10 +581,11 @@ function BlockedSessionsBanner({
   const acted = effectiveInclude ? blocked : blocked.filter((sess) => !isSubagentConversation(sess));
   const authCount = acted.filter((sess) => sess.pending_api_error_kind === "auth").length;
   const connCount = acted.filter((sess) => sess.pending_api_error_kind === "connection").length;
-  const limitCount = acted.length - authCount - connCount;
-  // limit + connection both un-park with a plain "continue" (matches the
-  // server's default kinds in continueAllBlocked); only auth needs more.
-  const nudgeCount = limitCount + connCount;
+  const fatalCount = acted.filter((sess) => sess.pending_api_error_kind === "fatal").length;
+  const limitCount = acted.length - authCount - connCount - fatalCount;
+  // limit + connection + fatal all un-park with a plain "continue" (matches
+  // the server's default kinds in continueAllBlocked); only auth needs more.
+  const nudgeCount = limitCount + connCount + fatalCount;
   // Newest-flagged first — the same order the revive acts on (and the order
   // that answers "which sessions?" most usefully: fresh casualties on top).
   const blockedSorted = [...blocked].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
@@ -610,8 +626,8 @@ function BlockedSessionsBanner({
   // dedups server-side into a single send.
   const handleContinueAll = () => {
     const store = useInboxStore.getState();
-    const targets = acted.filter(
-      (sess) => sess.pending_api_error_kind === "limit" || sess.pending_api_error_kind === "connection",
+    const targets = acted.filter((sess) =>
+      CONTINUE_BANNER_KINDS.includes(sess.pending_api_error_kind ?? ""),
     );
     const at = Date.now();
     for (const sess of targets) {
@@ -703,24 +719,24 @@ function BlockedSessionsBanner({
     );
 
   // Plain "continue" — no restart, no account change, so it can only reach
-  // the limit/connection slice (signed-out sessions need a restart or a
+  // the limit/connection/fatal slice (signed-out sessions need a restart or a
   // sign-in). The label says "N of M" whenever that slice is smaller than
   // the acted set, so its count visibly differs from the other buttons for
   // a stated reason instead of looking like a duplicate action. For dropped
-  // connections this is THE right action (the turn just resumes), so it
-  // renders amber; for limit-only sets it dims (the limit may not have
-  // reset yet, so switching accounts is usually the faster path).
+  // connections and fatal api errors this is THE right action (the turn just
+  // retries), so it renders amber; for limit-only sets it dims (the limit may
+  // not have reset yet, so switching accounts is usually the faster path).
   const plainContinue = nudgeCount > 0 && (
     <button
       onClick={handleContinueAll}
       disabled={busy !== null}
       title={
         nudgeCount < acted.length
-          ? `Send "continue" (no restart, no account change) to the ${nudgeCount} that hit a limit or dropped — the ${authCount} signed out need a restart or a sign-in, so this skips them`
+          ? `Send "continue" (no restart, no account change) to the ${nudgeCount} that hit a limit, dropped, or failed — the ${authCount} signed out need a restart or a sign-in, so this skips them`
           : `Send "continue" to each blocked session — no restart, no account change${limitCount > 0 ? "; they resume once the limit resets" : ""}`
       }
       className={`rounded px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-60 ${
-        connCount === 0 && switchTargets.length > 0
+        connCount === 0 && fatalCount === 0 && switchTargets.length > 0
           ? "text-sol-text-dim hover:text-sol-text"
           : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
       }`}
@@ -804,7 +820,7 @@ function BlockedSessionsBanner({
           >
             <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
             {blocked.length} session{blocked.length === 1 ? "" : "s"} blocked on{" "}
-            {limitCount > 0 ? "usage limits" : connCount > 0 ? "dropped connections" : "login"}
+            {limitCount > 0 ? "usage limits" : connCount > 0 ? "dropped connections" : fatalCount > 0 ? "api errors" : "login"}
           </button>
           {/* The breakdown items always sum to the headline count: when the
               checkbox excludes subagents from the acted set, the excluded
@@ -814,6 +830,7 @@ function BlockedSessionsBanner({
             {[
               limitCount > 0 ? `${limitCount} hit a usage limit` : null,
               connCount > 0 ? `${connCount} dropped mid-response` : null,
+              fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
               authCount > 0 ? `${authCount} signed out` : null,
               !effectiveInclude && subagents.length > 0
                 ? `${subagents.length} subagent worker${subagents.length === 1 ? "" : "s"} skipped`
@@ -860,7 +877,7 @@ function BlockedSessionsBanner({
           mixed fleet (limits + a few signed out) the remedy the banner leads
           with is continue/switch; a loud sign-in button under a "usage
           limits" headline reads as the wrong fix. */}
-      {authCount > 0 && limitCount === 0 && connCount === 0 && loginDevice && (
+      {authCount > 0 && limitCount === 0 && connCount === 0 && fatalCount === 0 && loginDevice && (
         <SignInCta device={loginDevice} authSessionIds={actedAuthIds} disabled={busy !== null} />
       )}
       {expanded && (
@@ -923,10 +940,10 @@ function BlockedSessionsBanner({
         </div>
       )}
       <div className="mt-2 flex flex-col gap-1.5">
-        {/* Dropped connections resume with a plain "continue", so that row
-            leads; otherwise switching accounts is the faster remedy and its
-            row leads. */}
-        {connCount > 0 ? (
+        {/* Dropped connections and fatal api errors retry with a plain
+            "continue", so that row leads; otherwise switching accounts is the
+            faster remedy and its row leads. */}
+        {connCount > 0 || fatalCount > 0 ? (
           <>
             {currentAccountRow}
             {switchRow}
@@ -3224,7 +3241,7 @@ export function SessionListPanel({
 
   // Sessions parked on a limit/auth/connection banner — the fleet-level revive
   // banner's input. isBlockedConversation is the SAME predicate the server
-  // selection uses (limit/auth/connection kinds — statusful self-retrying 500s
+  // selection uses (limit/auth/connection/fatal kinds — self-retrying 429/5xx
   // never count — claude only, dismissed excluded), plus the same 48h window,
   // so the count shown always matches what a revive would act on.
   const blockedSessions = useMemo(() => {
@@ -4023,7 +4040,7 @@ export function SessionListPanel({
             <button
               key={blockedIncidentTs}
               onClick={openBlockedBanner}
-              title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on a usage limit, login, or dropped connection — restart them all`}
+              title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on a usage limit, login, dropped connection, or api error — restart them all`}
               className={`flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""}`}
             >
               <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -4351,6 +4368,10 @@ export function SessionListPanel({
         })}
         </>)}
       </div>
+      {/* The review dock: open comment threads, page comments, and workflow
+          gates across sessions — panel chrome under the list, sibling of the
+          trigger dock. Renders nothing when the queue is empty. */}
+      <ReviewDock />
       {/* The schedule dock is panel chrome, not list content: it renders under
           the scroll area in every view mode EXCEPT "by trigger" — there the
           whole list already IS the roster, so the dock would double it. */}

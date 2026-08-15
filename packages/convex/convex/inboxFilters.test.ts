@@ -487,16 +487,30 @@ describe("isApiErrorBanner", () => {
     expect(classifyApiErrorBanner("All good, deploy finished.")).toBe(null);
   });
 
-  test("statusless connection drops classify as connection, statusful failures stay error", () => {
+  test("statusless connection drops classify as connection, retryable statuses stay error", () => {
     // No status code = the provider never replied; the turn died at the
     // prompt and a plain continue resumes it — the blocked/revive set.
     expect(classifyApiErrorBanner("API Error: Connection closed mid-response. The response above may be incomplete.")).toBe("connection");
     expect(classifyApiErrorBanner("API Error: Connection error.")).toBe("connection");
     expect(classifyApiErrorBanner("API Error: Request timed out.")).toBe("connection");
-    // A status code = an HTTP response came back; the CLI retries these
-    // itself, so they stay out of the blocked set.
+    // Statuses the CLI retries on its own (408/409/429/5xx) stay out of the
+    // blocked set — badging them paints a mid-retry session as blocked.
     expect(classifyApiErrorBanner("API Error: 500 Internal server error")).toBe("error");
     expect(classifyApiErrorBanner('API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}')).toBe("error");
+    expect(classifyApiErrorBanner("API Error: 429 Too many requests")).toBe("error");
+    expect(classifyApiErrorBanner("API Error: 408 Request timeout")).toBe("error");
+  });
+
+  test("terminal statuses the CLI won't retry classify as fatal (blocked set), 401/403 as auth", () => {
+    // A 400 kills the turn — the CLI gives up and the session sits parked at
+    // the prompt exactly like a connection drop; continue retries it.
+    expect(classifyApiErrorBanner('API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages: text content blocks must be non-empty"}}')).toBe("fatal");
+    expect(classifyApiErrorBanner("API Error: 404 Not found")).toBe("fatal");
+    expect(classifyApiErrorBanner("API Error: 413 Payload too large")).toBe("fatal");
+    // A bare 401/403 is the provider refusing the credential — /login is the
+    // cure, so it routes to the auth card even without the "/login" lead-in.
+    expect(classifyApiErrorBanner("API Error: 401 Invalid bearer token")).toBe("auth");
+    expect(classifyApiErrorBanner("API Error: 403 Forbidden")).toBe("auth");
   });
 
   test("expired-grant banner forms classify as auth", () => {

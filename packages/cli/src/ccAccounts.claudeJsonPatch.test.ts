@@ -115,24 +115,44 @@ describe("patchOauthAccount: never trade CC's config for one key", () => {
     expect((fs.statSync(configPath()).mode & 0o777).toString(8)).toBe("600");
   });
 
-  it("says what to do next in every refusal", () => {
-    const messages: string[] = [];
-    for (const [body, _label] of [
-      ["{ broken", "torn"],
-      ["[1, 2]", "array"],
-    ] as const) {
-      fs.writeFileSync(configPath(), body);
+  it("refuses valid JSON that is a bare null", () => {
+    fs.writeFileSync(configPath(), "null");
+
+    // `typeof null` is "object", so a shape check that trusts typeof lets this
+    // through and then throws a TypeError on the property assignment instead.
+    expect(() => patchOauthAccount(ACCOUNT)).toThrow(/parsed as null/);
+    expect(fs.readFileSync(configPath(), "utf-8")).toBe("null");
+  });
+
+  it("says which file, what did not happen, and what to do — in every refusal", () => {
+    const refusals: Array<[string, () => void]> = [
+      ["torn write", () => fs.writeFileSync(configPath(), "{ broken")],
+      ["array", () => fs.writeFileSync(configPath(), "[1, 2]")],
+      ["null", () => fs.writeFileSync(configPath(), "null")],
+      [
+        "unreadable",
+        () => {
+          fs.writeFileSync(configPath(), "{}");
+          fs.chmodSync(configPath(), 0o000);
+        },
+      ],
+    ];
+
+    for (const [label, setup] of refusals) {
+      if (label === "unreadable" && process.getuid?.() === 0) continue;
+      setup();
+      let message = "";
       try {
         patchOauthAccount(ACCOUNT);
-        throw new Error(`expected a refusal for ${body}`);
       } catch (err) {
-        messages.push((err as Error).message);
+        message = (err as Error).message;
       }
-    }
-    for (const message of messages) {
-      expect(message).toContain(".claude.json"); // which file
-      expect(message).toMatch(/refusing to rewrite/); // what did not happen
-      expect(message).toMatch(/re-run the switch|repair or move/i); // what to do
+      // An empty message means it did not refuse at all, and the first assertion
+      // reports that as clearly as a wrong one.
+      expect(message, label).toContain(".claude.json"); // which file
+      expect(message, label).toMatch(/refusing to rewrite/); // what did not happen
+      expect(message, label).toMatch(/re-run the switch|repair or move/i); // what next
+      fs.chmodSync(configPath(), 0o600);
     }
   });
 });

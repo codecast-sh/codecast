@@ -289,10 +289,11 @@ export function patchOauthAccount(oauthAccount: Record<string, any>): void {
       );
     }
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      // `typeof null` is "object", so name the shape rather than report it.
+      const shape = parsed === null ? "null" : Array.isArray(parsed) ? "an array" : typeof parsed;
       throw new CcAccountError(
-        `${p} parsed as ${Array.isArray(parsed) ? "an array" : typeof parsed}, ` +
-          `not a config object — refusing to rewrite it. Repair or move the file, ` +
-          `then re-run the switch.`,
+        `${p} parsed as ${shape}, not a config object — refusing to rewrite it. ` +
+          `Repair or move the file, then re-run the switch.`,
       );
     }
     cfg = parsed as Record<string, any>;
