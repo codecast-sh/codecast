@@ -128,4 +128,22 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // Capability rows for machines silent 90+ days: the daemon cannot clean up a
+  // laptop that was wiped, so the server notices the silence instead.
+  "sweep dead-device capability state",
+  { hours: 24 },
+  internal.capabilities.sweepCapabilityState,
+  {}
+);
+
+crons.interval(
+  // The capability audit trail keeps 90 days — enough for any incident that
+  // will actually be investigated, short enough that it cannot become the db.
+  "sweep capability events",
+  { hours: 24 },
+  internal.capabilities.sweepCapabilityEvents,
+  {}
+);
+
 export default crons;
