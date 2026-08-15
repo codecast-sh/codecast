@@ -19,10 +19,11 @@ import { parseInboundSessionMessage, isScheduledTaskMessage } from '@codecast/we
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
+import { SuggestionPills } from '@/components/SuggestionPills';
 import { PulsingDot } from '@/components/SessionItem';
 import { AssignmentChip } from '@/components/AssignmentChip';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { agentSupportsFork } from '@codecast/shared/contracts';
+import { agentSupportsFork, ACTIVE_AGENT_STATUSES } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText } from '@/components/MarkdownRenderer';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
@@ -3340,6 +3341,18 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     }
   };
 
+  // The optimistic-send core, shared by the composer's send button and the
+  // suggestion pills (which send fixed text with no attachments): pending row
+  // in the store instantly, fire-and-forget delivery via the outbox.
+  const dispatchSend = (content: string, storageIds?: string[]) => {
+    const store = useInboxStore.getState();
+    const images = storageIds?.length
+      ? storageIds.map(sid => ({ media_type: 'image/jpeg', storage_id: sid }))
+      : undefined;
+    const clientId = store.addOptimisticMessage(conversationId, content, images);
+    store.sendMessage(conversationId, content, storageIds?.length ? storageIds : undefined, clientId);
+  };
+
   // Optimistic, non-blocking send (mirrors web ContextChatInput). The message
   // is added to the store as pending and rendered instantly; sendMessage is
   // fire-and-forget (rides the store outbox, dedups on client_id). The input
@@ -3357,12 +3370,6 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     const storageIds = selectedImages.filter(img => img.storageId).map(img => img.storageId!);
     const content = trimmedMessage || (storageIds.length > 0 ? '[image]' : '');
 
-    const store = useInboxStore.getState();
-    const images = storageIds.length
-      ? storageIds.map(sid => ({ media_type: 'image/jpeg', storage_id: sid }))
-      : undefined;
-    const clientId = store.addOptimisticMessage(conversationId, content, images);
-
     // Clear the input immediately so the screen never feels blocked.
     setMessage('');
     draftRef.current = '';
@@ -3370,6 +3377,7 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     // Clear the draft both locally and on the server. Without the local clear,
     // a restart-right-after-send would re-hydrate the stale draft (cache-first).
     // clearDraft resolves stub ids; the server patch is gated on a real id.
+    const store = useInboxStore.getState();
     store.clearDraft(conversationId);
     store.syncRecord('conversations', conversationId, { draft_message: null });
     if (isConvexId(conversationId as string)) {
@@ -3380,7 +3388,7 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     setExpanded(false);
     Keyboard.dismiss();
 
-    store.sendMessage(conversationId, content, storageIds.length ? storageIds : undefined, clientId);
+    dispatchSend(content, storageIds);
   };
 
   const canSend = !!message.trim() || selectedImages.length > 0;
@@ -3452,10 +3460,25 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
 
   const placeholder = isActive ? "Type a message..." : "Send to resume session...";
 
+  // Suggestion pills (off-by-default pref, same stamped key as web). Idle =
+  // the agent is not actively producing; a pill tap sends its text directly
+  // through the shared dispatch, long-press fills the composer instead.
+  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  const agentStatus = managedSession?.managed ? managedSession.agent_status : undefined;
+
   return (
     <RNView style={[styles.inputContainer, { paddingBottom: insets.bottom || 12 }]}>
       {errorBannerEl}
       {imageStripEl}
+      {suggestionsEnabled && (
+        <SuggestionPills
+          conversationId={conversationId}
+          idle={!(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
+          hidden={!!message.trim() || selectedImages.length > 0}
+          onSend={(t) => dispatchSend(t)}
+          onEdit={(t) => { setMessage(t); inputRef.current?.focus(); }}
+        />
+      )}
       <RNView style={styles.composerCard}>
         <TextInput
           ref={inputRef}

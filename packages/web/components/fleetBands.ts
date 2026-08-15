@@ -16,8 +16,8 @@ import {
   type InboxSession,
   type CategorizedSessions,
   classifySession,
-  isSessionHardBlocked,
   isAgentActive,
+  getProjectName,
 } from "../store/inboxStore";
 import { isLivenessStale } from "@codecast/shared/contracts";
 import { threadStateView, compactAge } from "../lib/threadState";
@@ -42,12 +42,22 @@ export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
   // A message on its way to the agent reads as running, whatever the stale
   // status claims — same precedence isSessionWaitingForInput gives in-flight.
   if (inFlight(s, opts)) return "running";
-  if (isSessionHardBlocked(s, opts.queued) || !!s.session_error) return "needsYou";
+  // Concrete blockers only. Deliberately NOT isSessionHardBlocked: its "dead
+  // agent with output" arm counts every cleanly finished session ("stopped" +
+  // idle is the NORMAL end state of a run), which floods this band and makes
+  // it lie. A mid-task death (stopped while NOT idle) still lands here, via
+  // the liveness-stale check below.
+  const hasOutput = (s.message_count ?? 0) > 0;
+  if (s.session_error) return "needsYou";
+  if (s.awaiting_input) return "needsYou";
+  if (s.pending_api_error && hasOutput) return "needsYou";
+  if (s.agent_status === "permission_blocked" && hasOutput) return "needsYou";
   const { idle } = classifySession(s);
   if (!idle) {
-    // "Active" per status, but the liveness TTL says the agent went silent:
-    // a quietly dead worker is the user's to revive, not a running one.
-    return isLivenessStale(s, opts.now) ? "needsYou" : "running";
+    // "Active" per status, but the liveness TTL says the agent went silent
+    // (or the daemon marked it unresponsive): a quietly dead worker is the
+    // user's to revive, not a running one.
+    return isLivenessStale(s, opts.now) || s.is_unresponsive ? "needsYou" : "running";
   }
   // Idle, but the agent's own pinned state still declares it blocked — the
   // agent said "your move" in words; a stale declaration no longer counts.
@@ -96,6 +106,39 @@ export type FleetTileTone = "amber" | "red" | "green" | "dim";
 const firstLine = (t: string) => (t.split("\n").find((l) => l.trim()) ?? "").trim();
 
 /**
+ * The tile's context line — what tells two similarly-titled sessions apart:
+ * which repo, which model, how big the run is. Same fields the rail's card
+ * header shows, compressed to one dim line.
+ */
+export function fleetTileContext(s: InboxSession): string {
+  const parts: string[] = [];
+  const proj = getProjectName(s.git_root ?? undefined, s.project_path ?? undefined);
+  if (proj && proj !== "unknown") parts.push(s.worktree_name ? `${proj}/${s.worktree_name}` : proj);
+  const model = formatModel(s.model ?? undefined);
+  if (model) parts.push(model);
+  if ((s.message_count ?? 0) > 0) parts.push(`${s.message_count} msgs`);
+  return parts.join(" · ");
+}
+
+/**
+ * What the agent is ABOUT — the strongest disambiguator after the title.
+ * idle_summary / first subtitle bullet, or the agent's own pinned state line.
+ */
+export function fleetTileSummary(s: InboxSession, now: number): string {
+  const ts = threadStateView(s, s.message_count ?? 0, now);
+  return (ts && ts.freshness !== "stale" ? ts.cardLine : "") || sessionCardSummary(s);
+}
+
+/** Live agent status worth naming on a running tile ("thinking", "compacting"). */
+const RUNNING_STATUS_LABEL: Record<string, string> = {
+  thinking: "thinking",
+  compacting: "compacting",
+  waiting: "waiting on tasks",
+  starting: "starting",
+  resuming: "resuming",
+};
+
+/**
  * The tile's single metadata line. For NEEDS YOU it is the actual blocker —
  * the agent's declared "Blocked:" line, the question summary, the error — in
  * that order of specificity; generic labels only when the row carries nothing
@@ -132,9 +175,9 @@ export function fleetTileMeta(
   }
   if (band === "running") {
     if ((s.message_count ?? 0) === 0) return { text: "starting", tone: "green" };
-    const model = formatModel(s.model ?? undefined) || s.agent_type || "agent";
     const age = compactAge(now - (s.updated_at ?? now));
-    return { text: `${model} · ${s.message_count} msgs · ${age === "just now" ? "<1m" : age}`, tone: "green" };
+    const status = RUNNING_STATUS_LABEL[s.agent_status ?? ""] ?? "working";
+    return { text: `${status} · ${age === "just now" ? "<1m" : age}`, tone: "green" };
   }
   const age = compactAge(now - (s.updated_at ?? now));
   return { text: age === "just now" ? "finished just now" : `finished · ${age} ago`, tone: "dim" };

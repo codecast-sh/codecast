@@ -2,6 +2,7 @@
 import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { copyToClipboard, canonicalUrl } from "../../../lib/utils";
 import { compressImage } from "../../../lib/compressImage";
+import { inActiveWorkspace } from "../../../lib/workspaceScope";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -499,7 +500,7 @@ function SubtasksSection({ task, requestClose, onNavigate }: {
       </div>
       <div className="space-y-0.5">
         {children.map((t: any) => {
-          const cfg = statusVisual(taskStatusOf(t, taskStatuses));
+          const cfg = statusVisual(taskStatusOf(t, taskStatuses), taskStatuses);
           const RowIcon = cfg.icon;
           const closed = t.status === "done" || t.status === "dropped";
           // A stub whose server row hasn't synced yet has no real id/short_id —
@@ -657,7 +658,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     return (Object.values(allTasks) as TaskItem[])
       .filter((t: any) =>
         t._id !== data._id &&
-        (t.team_id ?? null) === ((data as any).team_id ?? null) &&
+        inActiveWorkspace(t, (data as any).team_id ?? null) &&
         t.status !== "done" && t.status !== "dropped" &&
         !String(t._id).startsWith("temp_") &&
         (q === "" || t.title?.toLowerCase().includes(q) || t.short_id?.toLowerCase().includes(q)))
@@ -821,7 +822,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     return <AppLoader className={isInline ? "w-[480px] flex-shrink-0 border-l border-sol-border/30 min-h-[16rem] h-full" : "min-h-[16rem] h-full"} />;
   }
 
-  const status = statusVisual(taskStatusOf(data as any, taskStatuses));
+  const status = statusVisual(taskStatusOf(data as any, taskStatuses), taskStatuses);
   const StatusIcon = status.icon;
 
   return (

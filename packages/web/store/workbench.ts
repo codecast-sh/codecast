@@ -15,6 +15,8 @@
 // Pure functions over WorkspaceState, like store/workspace.ts; inboxStore
 // actions are thin wrappers. Saved workbenches persist as saved_views rows
 // (page: "workspace"), so naming/sharing/deleting reuses that whole pipeline.
+// There are no shipped presets: every workbench starts as "save what I have
+// now", and is adjusted the same way — arrange, then update it in place.
 
 import {
   SLOT_IDS,
@@ -164,99 +166,11 @@ export function matchesWorkbench(
     // A kind that could not materialize (comments with no conversation on
     // screen, terminal on a phone) leaves the slot empty; that still counts as
     // this workbench — the arrangement is right, the subject merely absent.
-    if (have === "empty" && MAY_FAIL_TO_MATERIALIZE.has(want.pane as PaneKind)) continue;
+    // A slot the user CLOSED is different: userClosed marks the dismissal, and
+    // a hand-close is exactly the drift the update affordance must surface.
+    if (have === "empty" && !cur.userClosed && MAY_FAIL_TO_MATERIALIZE.has(want.pane as PaneKind)) continue;
     return false;
   }
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// Presets. Four activities, from the chosen product direction: the arrangement
-// is designed once per activity, and a wrong preset is a cage — so each of
-// these states only what its activity needs, nothing speculative.
-// ---------------------------------------------------------------------------
-
-export type WorkbenchPreset = {
-  id: string;
-  name: string;
-  snapshot: WorkbenchSnapshot;
-};
-
-const slot = (pane: WorkbenchOccupant, presentation: Presentation, size?: number): WorkbenchSlot =>
-  size === undefined ? { pane, presentation } : { pane, presentation, size };
-
-export const WORKBENCH_PRESETS: readonly WorkbenchPreset[] = [
-  {
-    // Clearing interruptions: the inbox list, the one you picked, and the
-    // session rail as "everything else". The nav folds away — triage is about
-    // the fleet, not about navigating the app.
-    id: "wb-triage",
-    name: "Triage",
-    snapshot: {
-      path: "/inbox",
-      zen: false,
-      slots: {
-        nav: slot("empty", "collapsed"),
-        list: slot("empty", "split"),
-        primary: slot("page", "split"),
-        secondary: slot("empty", "overlay"),
-        context: slot("sessionList", "split", 26),
-        dock: slot("empty", "split"),
-      },
-    },
-  },
-  {
-    // Working a task with the agent beside it: the task on the stage, the
-    // conversation as a pinned companion, a terminal underneath.
-    id: "wb-build",
-    name: "Build",
-    snapshot: {
-      path: "/tasks",
-      zen: false,
-      slots: {
-        nav: slot("empty", "collapsed"),
-        list: slot("empty", "split"),
-        primary: slot("page", "split"),
-        secondary: slot("subject", "split", 42),
-        context: slot("empty", "split"),
-        dock: slot("terminal", "split"),
-      },
-    },
-  },
-  {
-    // Reading a session's work: the conversation full-width with its comment
-    // thread beside it. Everything else gets out of the way.
-    id: "wb-review",
-    name: "Review",
-    snapshot: {
-      path: "/inbox",
-      zen: false,
-      slots: {
-        nav: slot("empty", "collapsed"),
-        list: slot("empty", "split"),
-        primary: slot("page", "split"),
-        secondary: slot("empty", "overlay"),
-        context: slot("comments", "split", 340),
-        dock: slot("empty", "split"),
-      },
-    },
-  },
-  {
-    // Plans with the rails away and the nav OPEN — planning is the one
-    // activity where hopping between surfaces is the work itself.
-    id: "wb-plan",
-    name: "Plan",
-    snapshot: {
-      path: "/plans",
-      zen: false,
-      slots: {
-        nav: slot("empty", "split"),
-        list: slot("empty", "split"),
-        primary: slot("page", "split"),
-        secondary: slot("empty", "overlay"),
-        context: slot("empty", "split"),
-        dock: slot("empty", "split"),
-      },
-    },
-  },
-];

@@ -8,14 +8,30 @@ import { bridge, isDesktop, isDetachedTabWindow } from "../lib/desktop";
 import { PageIcon } from "./RecentlyViewedMenu";
 import { LivenessDot, sessionLivenessState } from "./LivenessDot";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
+import { channelDisplayName } from "../lib/chatViews";
+import { dmOtherIds } from "@codecast/shared/chat";
 
-/** "#design" for /chat/<id>, once the store knows the channel. pathLabel can
+/** "design" for /chat/<id>, once the store knows the channel. pathLabel can
  *  only say "Chat", which turns three open channels into three identical tabs;
- *  the name is knowable, and this is where the store is in reach. */
-export function chatTabTitle(path: string, channels: Record<string, any> | undefined): string | null {
+ *  the name is knowable, and this is where the store is in reach. No "#"
+ *  prefix: the tab's PageIcon is already a hash. A DM tab wears the other
+ *  side's names, the same derivation every chat surface uses. */
+export function chatTabTitle(
+  path: string,
+  channels: Record<string, any> | undefined,
+  members?: any[],
+  viewerId?: string,
+): string | null {
   const m = path.match(/^\/chat\/([^/?#]+)/);
-  const name = m ? channels?.[m[1]]?.name : undefined;
-  return name ? `#${name}` : null;
+  const channel = m ? channels?.[m[1]] : undefined;
+  if (!channel) return null;
+  if (channel.kind === "dm") {
+    return channelDisplayName(
+      { name: "", kind: "dm", dmMemberIds: dmOtherIds(channel.dm_key, viewerId ?? "") },
+      members,
+    );
+  }
+  return channel.name || null;
 }
 
 /** The session a tab is pinned to: an explicit sessionId, or the ?s= deep link
@@ -25,13 +41,13 @@ export function tabSessionId(tab: Pick<AppTab, "sessionId" | "path">): string | 
   return tab.sessionId ?? inboxTabSessionId(tab.path);
 }
 
-export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: Record<string, any>): string {
+export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: Record<string, any>, members?: any[], viewerId?: string): string {
   const sid = tabSessionId(tab);
   if (sid && sessions[sid]) {
     const s = sessions[sid];
     return s.title || s.session_id?.slice(0, 12) || "Session";
   }
-  const chat = chatTabTitle(tab.path, channels);
+  const chat = chatTabTitle(tab.path, channels, members, viewerId);
   if (chat) return chat;
   // A vault note is titled by its own H1 or frontmatter title when the index
   // knows one — the filename is the fallback, not the identity (Obsidian's
@@ -59,8 +75,9 @@ export function TabBar() {
     (s) => s.tabs.map((t) => { const id = tabSessionId(t); return id ? s.sessions[id]?.title ?? "" : ""; }).join("\x1f"),
     (s) => s.tabs.map((t) => { const id = tabSessionId(t); const row = id ? s.sessions[id] : null; return row ? sessionLivenessState(row) : ""; }).join("\x1f"),
     // Same rule for a channel tab's name: a signature over the referenced
-    // channels only, never the whole collection.
-    (s) => s.tabs.map((t) => chatTabTitle(t.path, s.chatChannels) ?? "").join("\x1f"),
+    // channels only, never the whole collection. The full derivation IS the
+    // signature, so a DM tab also wakes when its counterpart's name loads.
+    (s) => s.tabs.map((t) => chatTabTitle(t.path, s.chatChannels, s.teamMembers, (s as any).currentUser?._id) ?? "").join("\x1f"),
   ]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -196,7 +213,7 @@ export function TabBar() {
       >
         {tabs.map((tab: AppTab, i: number) => {
           const isActive = tab.id === activeTabId;
-          const title = tabTitle(tab, s.sessions, s.chatChannels);
+          const title = tabTitle(tab, s.sessions, s.chatChannels, s.teamMembers, (s as any).currentUser?._id);
           const sid = tabSessionId(tab);
           const sessionRow = sid ? s.sessions[sid] : null;
           const prevActive = i > 0 && tabs[i - 1].id === activeTabId;

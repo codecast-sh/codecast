@@ -1,28 +1,36 @@
 import {
   CheckCircle2,
-  Circle,
-  CircleDot,
-  CircleDotDashed,
   XCircle,
   AlertTriangle,
   HelpCircle,
   type LucideIcon,
 } from "lucide-react";
+import type { ComponentType } from "react";
 import { cn } from "@/lib/utils";
+import { StatusCircle } from "./StatusCircle";
 
 export type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type ExecutionStatus = "done" | "done_with_concerns" | "blocked" | "needs_context";
 
+type StatusIcon = ComponentType<{ className?: string }>;
+
+// Category glyphs: the status circle at each category's default fill (a
+// team's own statuses get graduated fills via lib/taskStatuses.statusVisual).
+const circle = (category: TaskStatus, fill?: number): StatusIcon =>
+  function CategoryStatusIcon({ className }: { className?: string }) {
+    return <StatusCircle category={category} progress={fill} className={className} />;
+  };
+
 /** The one task-status vocabulary: icon, label and colour per status. Exported
  *  because the task list, its groupers and this badge all render the same six
  *  statuses — a second copy is how they drift apart. */
-export const TASK_STATUS: Record<TaskStatus, { icon: LucideIcon; label: string; color: string; bg: string; border: string }> = {
-  backlog: { icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10", border: "border-sol-text-dim/30" },
-  open: { icon: Circle, label: "Open", color: "text-sol-blue", bg: "bg-sol-blue/10", border: "border-sol-blue/30" },
-  in_progress: { icon: CircleDot, label: "In Progress", color: "text-sol-yellow", bg: "bg-sol-yellow/10", border: "border-sol-yellow/30" },
-  in_review: { icon: CircleDot, label: "In Review", color: "text-sol-violet", bg: "bg-sol-violet/10", border: "border-sol-violet/30" },
-  done: { icon: CheckCircle2, label: "Done", color: "text-sol-green", bg: "bg-sol-green/10", border: "border-sol-green/30" },
-  dropped: { icon: XCircle, label: "Dropped", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10", border: "border-sol-text-dim/30" },
+export const TASK_STATUS: Record<TaskStatus, { icon: StatusIcon; label: string; color: string; bg: string; border: string }> = {
+  backlog: { icon: circle("backlog"), label: "Backlog", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10", border: "border-sol-text-dim/30" },
+  open: { icon: circle("open"), label: "Open", color: "text-sol-blue", bg: "bg-sol-blue/10", border: "border-sol-blue/30" },
+  in_progress: { icon: circle("in_progress", 0.5), label: "In Progress", color: "text-sol-yellow", bg: "bg-sol-yellow/10", border: "border-sol-yellow/30" },
+  in_review: { icon: circle("in_review", 0.75), label: "In Review", color: "text-sol-violet", bg: "bg-sol-violet/10", border: "border-sol-violet/30" },
+  done: { icon: circle("done"), label: "Done", color: "text-sol-green", bg: "bg-sol-green/10", border: "border-sol-green/30" },
+  dropped: { icon: circle("dropped"), label: "Dropped", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10", border: "border-sol-text-dim/30" },
 };
 
 /** Work-first ordering: what you are doing, then what you could pick up, then

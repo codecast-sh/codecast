@@ -4,8 +4,8 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { useMemo, useState } from 'react';
-import { useRouter } from 'expo-router';
+import { useLayoutEffect, useMemo, useState } from 'react';
+import { useNavigation, useRouter } from 'expo-router';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Theme, Spacing } from '@/constants/Theme';
 import { NotificationListSkeleton } from '@/components/SkeletonLoader';
@@ -121,8 +121,13 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
 
   // The title is what the notification is about — the session, else the person.
   // The event itself is a small colored word, never the headline.
-  const title = label || actorName || typeLabel(notification.type);
+  const typeLbl = typeLabel(notification.type);
+  const title = label || actorName || typeLbl;
   const who = actorName || (isSessionNotif ? (agentNames[agentType] || agentType) : null);
+  const showWho = !!who && who !== title;
+  // Don't echo the type when it already IS the title (a bare task/plan row with
+  // no session or actor to name).
+  const showType = title !== typeLbl;
 
   return (
     <TouchableOpacity
@@ -164,14 +169,18 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
           </RNText>
           {!notification.read && <RNView style={styles.unreadDot} />}
         </RNView>
-        <RNView style={styles.metaRow}>
-          {who && who !== title && (
-            <RNText style={styles.metaWho} numberOfLines={1}>{who}</RNText>
-          )}
-          <RNText style={[styles.metaType, { color: typeColorNative(notification.type) }]} numberOfLines={1}>
-            {typeLabel(notification.type)}
-          </RNText>
-        </RNView>
+        {(showWho || showType) && (
+          <RNView style={styles.metaRow}>
+            {showWho && (
+              <RNText style={styles.metaWho} numberOfLines={1}>{who}</RNText>
+            )}
+            {showType && (
+              <RNText style={[styles.metaType, { color: typeColorNative(notification.type) }]} numberOfLines={1}>
+                {typeLbl}
+              </RNText>
+            )}
+          </RNView>
+        )}
         <RNText style={styles.notificationMessage} numberOfLines={3}>
           {cleanNotificationBody(notification.message, 200)}
         </RNText>
@@ -201,6 +210,7 @@ export default function NotificationsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const router = useRouter();
+  const navigation = useNavigation();
 
   const notifications = useQuery(api.notifications.list) as Notification[] | undefined;
   const markAsRead = useMutation(api.notifications.markAsRead);
@@ -210,6 +220,18 @@ export default function NotificationsScreen() {
     () => (notifications ?? []).filter((n) => !n.read).length,
     [notifications]
   );
+
+  // "Read all" lives in the nav header, so the filter row is free for tabs.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () =>
+        unreadCount > 0 ? (
+          <TouchableOpacity onPress={() => markAllAsRead({})} activeOpacity={0.7} style={styles.headerAction}>
+            <RNText style={styles.headerActionText}>Read all</RNText>
+          </TouchableOpacity>
+        ) : null,
+    });
+  }, [navigation, unreadCount, markAllAsRead]);
 
   const sections = useMemo(() => {
     const filtered = (notifications ?? []).filter((n) => matchesTab(n, activeTab));
@@ -284,27 +306,25 @@ export default function NotificationsScreen() {
 
   return (
     <RNView style={styles.container}>
-      <RNView style={styles.filterBar}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
-          {tabs.map((tab) => (
-            <TouchableOpacity
-              key={tab.key}
-              onPress={() => setActiveTab(tab.key)}
-              style={[styles.tab, activeTab === tab.key && styles.tabActive]}
-              activeOpacity={0.7}
-            >
-              <RNText style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
-                {tab.label}
-              </RNText>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-        {unreadCount > 0 && (
-          <TouchableOpacity onPress={() => markAllAsRead({})} activeOpacity={0.7} style={styles.markAllButton}>
-            <RNText style={styles.markAllText}>Read all</RNText>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.filterBar}
+        contentContainerStyle={styles.tabsRow}
+      >
+        {tabs.map((tab) => (
+          <TouchableOpacity
+            key={tab.key}
+            onPress={() => setActiveTab(tab.key)}
+            style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+            activeOpacity={0.7}
+          >
+            <RNText style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
+              {tab.label}
+            </RNText>
           </TouchableOpacity>
-        )}
-      </RNView>
+        ))}
+      </ScrollView>
       <SectionList
         sections={sections}
         renderItem={({ item }) => (
@@ -342,17 +362,17 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.bg,
   },
   filterBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexGrow: 0,
+    flexShrink: 0,
     backgroundColor: Theme.bg,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
-    paddingHorizontal: Spacing.md,
   },
   tabsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.xs,
+    paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
   },
   tab: {
@@ -371,12 +391,12 @@ const styles = StyleSheet.create({
     color: Theme.text,
     fontWeight: '600',
   },
-  markAllButton: {
-    paddingLeft: Spacing.md,
+  headerAction: {
+    paddingHorizontal: Spacing.md,
     paddingVertical: 6,
   },
-  markAllText: {
-    fontSize: 13,
+  headerActionText: {
+    fontSize: 14,
     color: Theme.accent,
     fontWeight: '600',
   },

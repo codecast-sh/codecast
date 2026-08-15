@@ -16,6 +16,7 @@ import { Theme, Spacing } from "@/constants/Theme";
 import { Mono } from "@/constants/fonts";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { computePlanProgress } from "@codecast/web/lib/liveEntities";
+import { inActiveWorkspace } from "@codecast/web/lib/workspaceScope";
 import { useSyncPlans } from "@/hooks/useSyncPlans";
 import { PLAN_STATUS_CONFIG } from "@/components/PlanItem";
 import { TaskItemRow, showTaskActions } from "@/components/TaskItem";
@@ -46,7 +47,11 @@ export default function PlanDetailScreen() {
     // Store-derived (live) tasks when the plan is in the store, so a task status
     // flip moves the progress bar instantly. Otherwise use the server snapshot.
     if (storePlan) {
-      return Object.values(tasks).filter((t) => t.plan?._id === storePlan._id);
+      // Plan membership AND the plan's own workspace: a cached row from
+      // another team must not ride in on a stale plan pointer.
+      return Object.values(tasks).filter(
+        (t) => t.plan?._id === storePlan._id && inActiveWorkspace(t, (storePlan as any).team_id),
+      );
     }
     return (planDetail?.tasks ?? []) as any[];
   }, [tasks, storePlan, planDetail]);

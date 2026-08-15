@@ -6,6 +6,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, PlanItem, DocItem } from "../../../store/inboxStore";
 import { useSyncTasks } from "../../../hooks/useSyncTasks";
+import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { TaskListContent } from "../../tasks/page";
 import { TaskDetailContent } from "../../tasks/[id]/page";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
@@ -228,9 +229,12 @@ function ProjectDetailContent() {
   const storeProjects = useInboxStore((s) => s.projects);
   const project = serverProject ?? (projectId ? (storeProjects as any)[projectId] : undefined);
 
-  const tasks = useInboxStore((s) => s.tasks);
-  const plans = useInboxStore((s) => s.plans);
-  const docs = useInboxStore((s) => s.docs);
+  // Workspace-scoped enumeration (the one sanctioned reader): the store caches
+  // rows from every workspace viewed, so these lists must be keyed to the
+  // active one before the project filter narrows them.
+  const wsTasks = useWorkspaceCollection<TaskItem>("tasks");
+  const wsPlans = useWorkspaceCollection<PlanItem>("plans");
+  const wsDocs = useWorkspaceCollection<DocItem>("docs");
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -238,20 +242,20 @@ function ProjectDetailContent() {
 
   // Plans in this project
   const projectPlans = useMemo(() =>
-    Object.values(plans).filter((p: any) => p.project_id === projectId)
+    wsPlans.filter((p: any) => p.project_id === projectId)
       .sort((a, b) => {
         // Active plans first, then by updated_at
         const statusOrder: Record<string, number> = { active: 0, draft: 1, paused: 2, done: 3, abandoned: 4 };
         const sd = (statusOrder[a.status] ?? 5) - (statusOrder[b.status] ?? 5);
         return sd !== 0 ? sd : b.updated_at - a.updated_at;
       }),
-    [plans, projectId]
+    [wsPlans, projectId]
   );
 
   // All tasks in this project
   const projectTasks = useMemo(() =>
-    Object.values(tasks).filter((t: any) => t.project_id === projectId),
-    [tasks, projectId]
+    wsTasks.filter((t: any) => t.project_id === projectId),
+    [wsTasks, projectId]
   );
 
   // Tasks grouped by plan_id for nesting under plans
@@ -284,9 +288,9 @@ function ProjectDetailContent() {
 
   // Docs in this project
   const projectDocs = useMemo(() =>
-    Object.values(docs).filter((d: any) => d.project_id === projectId)
+    wsDocs.filter((d: any) => d.project_id === projectId)
       .sort((a, b) => b.updated_at - a.updated_at),
-    [docs, projectId]
+    [wsDocs, projectId]
   );
 
   const handleStartEdit = useCallback(() => {

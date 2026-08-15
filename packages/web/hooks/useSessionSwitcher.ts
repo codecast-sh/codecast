@@ -1,5 +1,5 @@
 import { useRef, useCallback, useState } from "react";
-import { useInboxStore, InboxSession } from "../store/inboxStore";
+import { useInboxStore, InboxSession, filterInboxScopeFromState } from "../store/inboxStore";
 import { useEventListener } from "./useEventListener";
 import { usePathname } from "next/navigation";
 import { isInboxSessionView } from "../lib/inboxRouting";
@@ -35,8 +35,11 @@ export function useSessionSwitcher() {
     // switcher is "the last thing I looked at, period". Membership is just having
     // a recorded view (recordSessionView fires from every navigation path), so
     // anything you opened is reachable and never-opened sessions stay out.
-    const { _lastViewedAt, sessions } = useInboxStore.getState();
-    return Object.values(sessions)
+    // Scoped to the active inbox scope/team: a session viewed under another
+    // team must not stay reachable from this workspace's switcher.
+    const st = useInboxStore.getState();
+    const { _lastViewedAt } = st;
+    return Object.values(filterInboxScopeFromState(st))
       .filter((s) => _lastViewedAt[s._id] != null)
       .sort((a, b) => (_lastViewedAt[b._id] ?? 0) - (_lastViewedAt[a._id] ?? 0));
   }, []);

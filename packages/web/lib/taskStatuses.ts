@@ -7,9 +7,10 @@
  * for the surfaces that render or pick statuses (board columns, group headers,
  * palette / context-menu / dropdown options).
  */
-import { useMemo } from "react";
+import { createElement, useMemo, type ComponentType } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { TASK_STATUS, TASK_STATUS_ORDER } from "../components/TaskStatusBadge";
+import { StatusCircle } from "../components/StatusCircle";
 import {
   DEFAULT_TASK_STATUSES,
   resolveTaskStatus,
@@ -32,19 +33,55 @@ export const STATUS_COLOR_CLASSES: Record<string, { color: string; bg: string; b
 };
 
 export type StatusVisual = {
-  icon: (typeof TASK_STATUS)["open"]["icon"];
+  icon: ComponentType<{ className?: string }>;
   label: string;
   color: string;
   bg: string;
   border: string;
 };
 
-/** Icon from the category (shape = meaning), name/color from the status. */
-export function statusVisual(s: TeamTaskStatus): StatusVisual {
+// The "started" run: in_progress then in_review, one progression. A team's
+// statuses inside it fill the disc in order, so its second working status
+// reads as further along than its first (Linear's graduated circles).
+const STARTED: readonly TaskStatusCategory[] = ["in_progress", "in_review"];
+
+/**
+ * Disc fill for a started status: its rank across the team's started run,
+ * spread over (0, 1). Without the list, a category default — half for
+ * in_progress, three quarters for in_review — so lone call sites still shade.
+ */
+export function statusFill(s: TeamTaskStatus, statuses?: TeamTaskStatus[]): number {
+  if (!STARTED.includes(s.category)) return 0;
+  const run = statuses
+    ? orderedStatuses(statuses).filter((x) => STARTED.includes(x.category))
+    : [];
+  const i = run.findIndex((x) => x.id === s.id);
+  if (i < 0) return s.category === "in_progress" ? 0.5 : 0.75;
+  return (i + 1) / (run.length + 1);
+}
+
+// One component per (category, fill) so a re-render sees the same element
+// type and React keeps the DOM node instead of remounting the svg.
+const iconCache = new Map<string, ComponentType<{ className?: string }>>();
+function statusIcon(category: TaskStatusCategory, fill: number): ComponentType<{ className?: string }> {
+  const key = `${category}:${fill.toFixed(3)}`;
+  let Icon = iconCache.get(key);
+  if (!Icon) {
+    Icon = function StatusIcon({ className }: { className?: string }) {
+      return createElement(StatusCircle, { category, progress: fill, className });
+    };
+    iconCache.set(key, Icon);
+  }
+  return Icon;
+}
+
+/** Glyph from the category + position (shape and fill = meaning), name/color
+ *  from the status. Pass the team's list for graduated fills across statuses. */
+export function statusVisual(s: TeamTaskStatus, statuses?: TeamTaskStatus[]): StatusVisual {
   const base = TASK_STATUS[s.category];
   const custom = s.color ? STATUS_COLOR_CLASSES[s.color] : undefined;
   return {
-    icon: base.icon,
+    icon: statusIcon(s.category, statusFill(s, statuses)),
     label: s.name,
     color: custom?.color ?? base.color,
     bg: custom?.bg ?? base.bg,
@@ -109,7 +146,7 @@ export type StatusOption = {
 /** Picker options (palette, context menu, dropdowns), board-ordered. */
 export function statusEntityOptions(statuses: TeamTaskStatus[]): StatusOption[] {
   return orderedStatuses(statuses).map((s) => {
-    const v = statusVisual(s);
+    const v = statusVisual(s, statuses);
     return { key: s.id, label: v.label, icon: v.icon, color: v.color, category: s.category };
   });
 }

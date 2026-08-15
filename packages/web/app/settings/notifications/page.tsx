@@ -7,10 +7,10 @@ import { toast } from "sonner";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   Bell, BellOff, Users, MessageSquare, Laptop,
-  CheckCircle, Terminal,
+  CheckCircle, Terminal, Mail,
 } from "lucide-react";
 
-type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity" | "chat_activity";
+type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity" | "chat_activity" | "email_notifications";
 
 const NOTIF_SECTIONS = [
   {
@@ -54,6 +54,7 @@ const DEFAULT_PREFS = {
   plan_activity: true,
   artifact_activity: true,
   chat_activity: true,
+  email_notifications: true,
 };
 
 export default function NotificationsSettingsPage() {
@@ -142,6 +143,28 @@ export default function NotificationsSettingsPage() {
             </div>
           </div>
           <Switch checked={enabled} onCheckedChange={handleGlobalToggle} />
+        </div>
+      </Card>
+
+      {/* Email digest — its own channel, deliberately not gated behind the
+          push toggle: the unsubscribe link in every digest lands here. */}
+      <Card className="p-6 bg-sol-bg border-sol-border">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <Mail className="w-5 h-5 shrink-0 text-sol-base1" />
+            <div>
+              <span className="text-sm font-medium text-sol-text">Email me what I miss</span>
+              <p className="text-xs text-sol-base1 mt-0.5">
+                When you&apos;re away, one email batches unseen mentions, comments,
+                chat, and decisions your agents are waiting on. Never session
+                idle/error noise, and never while you&apos;re at the keyboard.
+              </p>
+            </div>
+          </div>
+          <Switch
+            checked={getPref("email_notifications")}
+            onCheckedChange={() => handleToggleType("email_notifications")}
+          />
         </div>
       </Card>
 

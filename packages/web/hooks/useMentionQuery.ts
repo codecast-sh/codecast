@@ -6,6 +6,7 @@ import { memberHandle } from "@codecast/shared/chat";
 import { useInboxStore, convBucketMap } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { useDebounce } from "./useDebounce";
+import { inActiveWorkspace } from "../lib/workspaceScope";
 
 export type MentionScope =
   | { kind: "team"; teamId: string }
@@ -17,9 +18,8 @@ const SEARCH_LIMIT_PER_TYPE = 12;
 
 function inScope(item: { team_id?: string | null; user_id?: string | null }, scope: MentionScope): boolean {
   if (scope.kind === "any") return true;
-  const itemTeam = item.team_id ? String(item.team_id) : null;
-  if (scope.kind === "team") return itemTeam === scope.teamId;
-  return !itemTeam && (item.user_id ? String(item.user_id) === scope.userId : true);
+  if (scope.kind === "team") return inActiveWorkspace(item, scope.teamId);
+  return inActiveWorkspace(item, null) && (item.user_id ? String(item.user_id) === scope.userId : true);
 }
 
 const EMPTY_SERVER_ITEMS: MentionItem[] = [];
@@ -82,8 +82,17 @@ export function useMentionServerSearch(
         }
       : "skip",
   ) as MentionItem[] | undefined;
+  // Convex full-text search ORs the terms and prefix-matches the last one, so
+  // a phrase like "jasonbenn lets do" returns every title with a "do…" word.
+  // Hold server rows to the same every-word rule the local cache uses, so a
+  // mention that has drifted into prose settles on zero matches instead of a
+  // dropdown full of strangers.
+  const items = useMemo(
+    () => (wantNow && settled && results ? results.filter((m) => mentionItemMatches(m, current)) : EMPTY_SERVER_ITEMS),
+    [wantNow, settled, results, current],
+  );
   return {
-    items: wantNow && settled && results ? results : EMPTY_SERVER_ITEMS,
+    items,
     loading: wantNow && (!settled || results === undefined),
   };
 }
@@ -152,6 +161,20 @@ export function matchScore(text: string, query: string): number {
     total += best;
   }
   return total;
+}
+
+// The one predicate every mention surface filters by: a query hits an item
+// through its label, its sublabel (handle, path, project), its short id, or a
+// session's idle summary. Empty query matches everything.
+export function mentionItemMatches(m: MentionItem, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    matchScore(m.label, q) !== Infinity ||
+    (!!m.shortId && m.shortId.toLowerCase().includes(q)) ||
+    (!!m.sublabel && matchScore(m.sublabel, q) !== Infinity) ||
+    (!!m.idleSummary && matchScore(m.idleSummary, q) !== Infinity)
+  );
 }
 
 export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
@@ -245,14 +268,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
 
     const sessionItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
     for (const sess of Object.values(s.sessions)) {
-      const sessTeam = sess.team_id ? String(sess.team_id) : null;
-      const inScopeForSession =
-        scope.kind === "any"
-          ? true
-          : scope.kind === "team"
-            ? sessTeam === scope.teamId
-            : !sessTeam;
-      if (!inScopeForSession) continue;
+      if (!inScope(sess, scope)) continue;
       const titleHit = q ? matchScore(sess.title || "", q) : 0;
       const summaryHit = q && sess.idle_summary ? matchScore(sess.idle_summary, q) : Infinity;
       const r = Math.min(titleHit, summaryHit);

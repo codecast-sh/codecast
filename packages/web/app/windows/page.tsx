@@ -3,7 +3,7 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { SessionWindow } from "@/components/SessionWindow";
 import { WindowTaskbar } from "@/components/WindowTaskbar";
 import { useWindowManager } from "@/store/windowManagerStore";
-import { useTrackedStore, isSessionEffectivelyIdle, type InboxSession } from "@/store/inboxStore";
+import { useTrackedStore, isSessionEffectivelyIdle, filterInboxScopeFromState, type InboxSession } from "@/store/inboxStore";
 import { cleanTitle } from "@/lib/conversationProcessor";
 import { Plus, MousePointerClick } from "lucide-react";
 
@@ -40,8 +40,9 @@ function WindowManagerView() {
     () => new Set(Object.values(windows).map(w => w.sessionId)),
     [windows],
   );
+  // Scoped enumeration — the cache holds rows from other inbox scopes/teams.
   const availableSessions = useMemo(
-    () => Object.values(s.sessions).filter(sess => !openSessionIds.has(sess._id) && sess.message_count > 0),
+    () => Object.values(filterInboxScopeFromState(s)).filter(sess => !openSessionIds.has(sess._id) && sess.message_count > 0),
     [s.sessions, openSessionIds],
   );
 

@@ -30,7 +30,7 @@ import {
   CtxSeparator,
   type ContextMenuState,
 } from "../../components/ui/context-menu";
-import { useInboxStore } from "../../store/inboxStore";
+import { useInboxStore, filterInboxScopeFromState } from "../../store/inboxStore";
 import {
   Clock,
   Play,
@@ -919,7 +919,9 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
   const sessions = useInboxStore((s) => s.sessions);
   const projectOptions = useMemo(() => {
     const seen = new Map<string, number>();
-    for (const s of Object.values(sessions ?? {})) {
+    // Scoped enumeration: cached sessions from other scopes/teams must not
+    // leak their project paths into this workspace's suggestions.
+    for (const s of Object.values(filterInboxScopeFromState(useInboxStore.getState()))) {
       const p = (s as any)?.project_path;
       if (!p) continue;
       const u = (s as any)?.updated_at ?? 0;

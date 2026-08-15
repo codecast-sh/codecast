@@ -1,6 +1,6 @@
 import { memo, useCallback, useState, useMemo, useRef, useEffect, type RefObject } from "react";
 import { useWindowManager, TASKBAR_HEIGHT_PX, type ArrangeMode } from "../store/windowManagerStore";
-import { useTrackedStore, isSessionEffectivelyIdle } from "../store/inboxStore";
+import { useTrackedStore, isSessionEffectivelyIdle, filterInboxScopeFromState } from "../store/inboxStore";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { LayoutGrid, Layers, Columns, Rows, X, Plus } from "lucide-react";
 
@@ -115,7 +115,9 @@ function SessionPicker({ onSelect, onClose }: { onSelect: (id: string) => void; 
   );
 
   const available = useMemo(() => {
-    const all = Object.values(s.sessions).filter(
+    // Scope the shared cache before enumerating — it holds rows from other
+    // inbox scopes/teams that must not surface in this picker.
+    const all = Object.values(filterInboxScopeFromState(s)).filter(
       sess => !openSessionIds.has(sess._id) && sess.message_count > 0,
     );
     if (!search) return all;

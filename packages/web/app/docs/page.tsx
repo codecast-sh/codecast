@@ -13,7 +13,7 @@ import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
-import { filterToWorkspace } from "../../lib/workspaceScope";
+import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { docSearchText } from "../../lib/liveEntities";
 import {
   FileText,
@@ -226,10 +226,7 @@ export function DocListContent() {
   // workspace (the sync overlay never prunes on team switch, IDB persists them
   // across reloads), so the view must re-assert the active workspace — a team
   // view shows only that team's docs, personal shows only teamless docs.
-  const docsList = useMemo(
-    () => filterToWorkspace(Object.values(docs), activeTeamId),
-    [docs, activeTeamId]
-  );
+  const docsList = useWorkspaceCollection<any>("docs");
 
   const allLabels = useMemo(() => {
     const set = new Set<string>(DEFAULT_LABELS);

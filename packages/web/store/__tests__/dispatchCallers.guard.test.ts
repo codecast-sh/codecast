@@ -91,9 +91,13 @@ describe("durable dispatch call-site guards", () => {
     const docsPage = await Bun.file(
       new URL("../../app/docs/page.tsx", import.meta.url),
     ).text();
+    // Sidebar left this list on 2026-08-15: the section-header "+" buttons were
+    // removed on request, so the rail no longer creates docs at all. If a create
+    // ever returns there, it must rejoin this guard.
     const sidebar = await Bun.file(
       new URL("../../components/Sidebar.tsx", import.meta.url),
     ).text();
+    expect(sidebar).not.toContain("createDoc(");
     // Inline label management still needs the canonical id to keep a fresh
     // zero-count chip visible. Session assignment callers, however, persist the
     // dependent filing intent in the create receipt instead of chaining it from
@@ -102,7 +106,7 @@ describe("durable dispatch call-site guards", () => {
     expect(palette).toContain('kind: "assignBucket"');
     expect(palette).toContain("conversationIds");
     expect(palette).not.toContain("store.assignSessionToBucket(convId, r._id)");
-    for (const source of [modal, docsPage, sidebar]) {
+    for (const source of [modal, docsPage]) {
       expect(source).toContain('{ version: 1, kind: "navigate" }');
     }
     expect(modal).not.toContain("router.push(`/docs/");

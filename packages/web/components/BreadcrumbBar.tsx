@@ -17,6 +17,8 @@
 import { useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
+import { channelDisplayName } from "../lib/chatViews";
+import { dmOtherIds } from "@codecast/shared/chat";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import { buildBreadcrumbs, type BreadcrumbLookups } from "../lib/breadcrumbs";
 import { projectDotClass } from "../lib/projectColors";
@@ -57,7 +59,20 @@ export function BreadcrumbBar() {
   const planShortId = useInboxStore((s) => (planId ? findRow(s.plans, planId)?.short_id : undefined));
 
   const channelId = head === "chat" ? first : undefined;
-  const channelName = useInboxStore((s) => (channelId ? findRow(s.chatChannels, channelId)?.name : undefined));
+  // A DM's crumb is the other side's names — same derivation as every chat
+  // surface; a channel's is its slug. Never the raw id.
+  const channelName = useInboxStore((s) => {
+    if (!channelId) return undefined;
+    const row = findRow(s.chatChannels, channelId);
+    if (!row) return undefined;
+    if ((row as any).kind === "dm") {
+      return channelDisplayName(
+        { name: "", kind: "dm", dmMemberIds: dmOtherIds((row as any).dm_key, String((s as any).currentUser?._id ?? "")) },
+        (s as any).teamMembers,
+      );
+    }
+    return row.name;
+  });
 
   const specs = useMemo(() => {
     const lookups: BreadcrumbLookups = {

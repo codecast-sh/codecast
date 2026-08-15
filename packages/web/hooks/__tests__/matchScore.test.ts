@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { matchScore, score } from "../useMentionQuery";
+import { matchScore, mentionItemMatches, score } from "../useMentionQuery";
 
 const DOC = "Union Outreach — The Roadmap, in Plain Language";
 
@@ -48,5 +48,33 @@ describe("matchScore", () => {
 
   it("ignores surrounding and repeated whitespace in the query", () => {
     expect(matchScore(DOC, "  plain   road  ")).toBeLessThan(Infinity);
+  });
+});
+
+describe("mentionItemMatches", () => {
+  const jason = { id: "u1", type: "person", label: "Jason Benn", sublabel: "@jasonbenn", shortId: "@jasonbenn" };
+  const task = { id: "t1", type: "task", label: "Decide: what is our fee, and how much do we say on a call" };
+  const sess = { id: "s1", type: "session", label: "Untitled", idleSummary: "Stop the matchmaker from waking up" };
+
+  it("hits a person through the handle in sublabel/shortId", () => {
+    expect(mentionItemMatches(jason, "jasonbenn")).toBe(true);
+    expect(mentionItemMatches(jason, "jason be")).toBe(true);
+  });
+
+  it("drops a server row that only ORed one word of the phrase", () => {
+    // Convex full-text search returned this task for "jasonbenn lets do"
+    // because of "do"; the every-word rule must throw it out.
+    expect(mentionItemMatches(task, "jasonbenn lets do")).toBe(false);
+    expect(mentionItemMatches(jason, "jasonbenn lets do")).toBe(false);
+  });
+
+  it("still finds a multi-word title when every word is present", () => {
+    expect(mentionItemMatches(task, "decide fee")).toBe(true);
+    expect(mentionItemMatches(sess, "matchmaker waking")).toBe(true);
+  });
+
+  it("matches everything on an empty query", () => {
+    expect(mentionItemMatches(task, "")).toBe(true);
+    expect(mentionItemMatches(task, "  ")).toBe(true);
   });
 });

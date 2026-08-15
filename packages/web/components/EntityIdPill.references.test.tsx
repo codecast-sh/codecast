@@ -109,21 +109,13 @@ const SEEDED_TASK = {
   title: "Seeded from the local store",
   status: "open",
 };
-const realStore = await import("../store/inboxStore");
-mock.module("../store/inboxStore", () => ({
-  ...realStore,
-  useInboxStore: {
-    getState: () => ({
-      tasks: { [SEEDED_TASK._id]: SEEDED_TASK },
-      plans: {},
-      docs: {},
-      projects: {},
-      conversations: {},
-      sessions: {},
-      mentionIndex: { tasks: {}, plans: {}, docs: {} },
-    }),
-  },
-}));
+// Seed the REAL store rather than mock.module-ing it: bun's module mocks are
+// process-global and never restored, so a getState-only stub here (no
+// setState) poisons every store suite that loads after this file in a full
+// `bun test` run. The pill reads via getState(), so a real seeded row behaves
+// identically.
+const { useInboxStore } = await import("../store/inboxStore");
+useInboxStore.setState({ tasks: { [SEEDED_TASK._id]: SEEDED_TASK } } as any);
 
 const { renderToStaticMarkup } = await import("react-dom/server");
 const { default: ReactMarkdown } = await import("react-markdown");
