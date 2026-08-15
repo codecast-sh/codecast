@@ -10054,6 +10054,7 @@ function closeNotifiedTasks(text: string, open: Set<string>): void {
 // bytes — same verdict, O(delta) memory. The offset only advances past complete
 // lines, so a half-written tail is re-read (not skipped) on the next call. A
 // shrink (rotation/rewrite) resets to a full scan.
+const SCAN_CHUNK_BYTES = 4 * 1024 * 1024;
 type OpenTaskScanState = { offset: number; open: Set<string>; sessionId?: string };
 const openTaskScanCache = new Map<string, OpenTaskScanState>();
 export function openBackgroundTaskIds(transcriptPath: string, sessionId?: string): string[] {
@@ -10063,20 +10064,35 @@ export function openBackgroundTaskIds(transcriptPath: string, sessionId?: string
     if (state && (state.offset > size || state.sessionId !== sessionId)) state = undefined;
     if (!state) state = { offset: 0, open: new Set<string>(), sessionId };
     if (size > state.offset) {
+      // Chunked, not one read of (size - offset): the FIRST scan of a session
+      // covers the whole transcript, and at boot the daemon first-scans every
+      // waiting session back to back — one-shot reads made that a ~500MB burst.
+      // A fixed window caps per-scan memory at SCAN_CHUNK_BYTES regardless of
+      // file size. Each pass consumes only complete lines ("\n" is a single
+      // byte, never inside a multi-byte UTF-8 sequence, so slicing at it is
+      // charset-safe); the partial tail bytes are re-read on the next pass.
       const fd = fs.openSync(transcriptPath, "r");
-      let chunk: string;
       try {
-        const buf = Buffer.alloc(size - state.offset);
-        const n = fs.readSync(fd, buf, 0, buf.length, state.offset);
-        chunk = buf.toString("utf8", 0, n);
+        let buf = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, size - state.offset));
+        while (state.offset < size) {
+          const want = Math.min(buf.length, size - state.offset);
+          const n = fs.readSync(fd, buf, 0, want, state.offset);
+          if (n <= 0) break;
+          let lastNl = buf.lastIndexOf(0x0a, n - 1);
+          if (lastNl >= n) lastNl = -1; // lastIndexOf clamps past-the-end offsets; stale bytes beyond n are not ours
+          if (lastNl < 0) {
+            if (state.offset + n >= size) break; // torn trailing line at EOF -> defer to next call
+            // One JSONL line larger than the window (e.g. an inlined image).
+            // Grow to cover the rest of the file so we never stall on it —
+            // mirrors processSessionFile's oversized-line handling.
+            buf = Buffer.alloc(size - state.offset);
+            continue;
+          }
+          scanOpenBackgroundTasksInto(state.open, buf.toString("utf8", 0, lastNl + 1), sessionId);
+          state.offset += lastNl + 1;
+        }
       } finally {
         fs.closeSync(fd);
-      }
-      const lastNewline = chunk.lastIndexOf("\n");
-      if (lastNewline >= 0) {
-        const complete = chunk.slice(0, lastNewline + 1);
-        scanOpenBackgroundTasksInto(state.open, complete, sessionId);
-        state.offset += Buffer.byteLength(complete, "utf8");
       }
       openTaskScanCache.set(transcriptPath, state);
     }

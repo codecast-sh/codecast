@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test";
-import { reconciledStatusWithTasks, scanOpenBackgroundTasks } from "./daemon.js";
+import { afterEach, describe, expect, test } from "bun:test";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { openBackgroundTaskIds, reconciledStatusWithTasks, scanOpenBackgroundTasks } from "./daemon.js";
 
 // Regression tests for the "settled turn with live background work reads as
 // needs_input" bug (session jx7e6ex, 2026-08-03). A turn that ends while a
@@ -146,5 +149,64 @@ describe("reconciledStatusWithTasks", () => {
     expect(reconciledStatusWithTasks("idle", "active", false)).toBe("working");
     expect(reconciledStatusWithTasks("idle", "active", true)).toBe("working");
     expect(reconciledStatusWithTasks("connected", "idle", true)).toBeNull();
+  });
+});
+
+// openBackgroundTaskIds is the on-disk, incremental form. It used to re-read the
+// whole transcript on every size change — and the sessions it's called for
+// ("waiting" on background work) grow on every heartbeat, so it re-materialized
+// multi-MB files as strings each tick (+140MB RSS per 31MB file, measured
+// 2026-08-15; daemon peak footprint 934MB). It now keeps the scanner's set and
+// a byte offset and reads only appended bytes. These pin: same verdict as a
+// whole-file scan across appends, a torn tail is deferred not consumed, and a
+// rewrite (size shrinks) restarts from zero.
+describe("openBackgroundTaskIds (incremental)", () => {
+  const dirs: string[] = [];
+  afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }); });
+  const tmpTranscript = () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "open-tasks-"));
+    dirs.push(d);
+    return path.join(d, `${SID}.jsonl`);
+  };
+  const wholeFile = (p: string) => [...scanOpenBackgroundTasks(fs.readFileSync(p, "utf8"), SID)].sort();
+
+  test("matches a whole-file scan after each append", () => {
+    const p = tmpTranscript();
+    fs.writeFileSync(p, transcript(bgStart("b1"), monitorStart("m1")) + "\n");
+    expect(openBackgroundTaskIds(p, SID).sort()).toEqual(["b1", "m1"]);
+    expect(openBackgroundTaskIds(p, SID).sort()).toEqual(wholeFile(p));
+
+    fs.appendFileSync(p, notification("b1", "completed") + "\n" + bgStart("b2") + "\n");
+    expect(openBackgroundTaskIds(p, SID).sort()).toEqual(["b2", "m1"]);
+    expect(openBackgroundTaskIds(p, SID).sort()).toEqual(wholeFile(p));
+
+    fs.appendFileSync(p, taskStop("m1") + "\n" + notification("b2", "stopped") + "\n");
+    expect(openBackgroundTaskIds(p, SID)).toEqual([]);
+    expect(openBackgroundTaskIds(p, SID)).toEqual(wholeFile(p));
+  });
+
+  test("a torn trailing line is not consumed until its newline lands", () => {
+    const p = tmpTranscript();
+    const closeLine = notification("b1", "completed");
+    fs.writeFileSync(p, bgStart("b1") + "\n" + closeLine.slice(0, 40)); // mid-write tail
+    expect(openBackgroundTaskIds(p, SID)).toEqual(["b1"]);
+    fs.appendFileSync(p, closeLine.slice(40) + "\n");                       // rest of the line arrives
+    expect(openBackgroundTaskIds(p, SID)).toEqual([]);
+  });
+
+  test("a rewritten (shorter) transcript restarts the scan from zero", () => {
+    const p = tmpTranscript();
+    fs.writeFileSync(p, transcript(bgStart("b1"), bgStart("b2"), notification("b1", "failed")) + "\n");
+    expect(openBackgroundTaskIds(p, SID)).toEqual(["b2"]);
+    fs.writeFileSync(p, bgStart("b9") + "\n"); // shorter than the consumed offset
+    expect(openBackgroundTaskIds(p, SID)).toEqual(["b9"]);
+  });
+
+  test("a different sessionId filter invalidates the cached state", () => {
+    const p = tmpTranscript();
+    fs.writeFileSync(p, transcript(bgStart("mine", SID), bgStart("theirs", "other-session")) + "\n");
+    expect(openBackgroundTaskIds(p, SID)).toEqual(["mine"]);
+    expect(openBackgroundTaskIds(p, undefined).sort()).toEqual(["mine", "theirs"]);
+    expect(openBackgroundTaskIds(p, SID)).toEqual(["mine"]);
   });
 });

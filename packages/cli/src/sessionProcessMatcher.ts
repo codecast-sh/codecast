@@ -313,3 +313,97 @@ export function matchSingleFreshStartedConversation<T extends { startedAt: numbe
   if (fresh.length !== 1) return null;
   return fresh[0][0];
 }
+
+// ── Which session does a process actually run? ──────────────────────────────
+// Every lookup that maps a session id to a pid (a registry file, a tmux session
+// named after the session, a cached pid) answers "where did this session run"
+// at some point in the past. None of them answers "what does that pid run NOW".
+// Observed live (2026-08-15): the tmux session cc-resume-c291b8e9 hosted a
+// `claude --resume 3d2a9117…` process, so the Screenplay conversation injected
+// its messages into the cold-pitch agent and its terminal showed the wrong
+// session. Two facts about a process settle its identity:
+//
+//   1. Its hook claims. The SessionStart hook writes session-registry/<id>.json
+//      {pid, tty, ts, term} for the session the process runs, on startup, resume,
+//      /clear and compact — so an in-process session switch produces a NEWER
+//      claim for the same pid. Only claims written after the process started
+//      count (a pid is reused; a claim older than the process is about a dead
+//      one). The newest live claim is the process's own word.
+//   2. Its argv. `claude --resume <id>` / `--session-id <id>` (codex `resume <id>`)
+//      states the session it was LAUNCHED for. Truthful at launch, stale after an
+//      in-process switch — which is why hook claims win when present.
+//
+// No signal at all (a bare `claude` with no hook claim) is "unknown": we cannot
+// refute the lookup, so callers keep today's behavior.
+export type ProcessIdentityVerdict = "owned" | "foreign" | "unknown";
+
+export interface ProcessSessionClaim {
+  sessionId: string;
+  /** Epoch seconds the claim was written (registry `ts`). */
+  ts: number;
+}
+
+const ARGV_ID = "([A-Za-z0-9][A-Za-z0-9._-]{7,})(?=\\s|$)";
+// claude: `--resume <id>` / `-r <id>` / `--session-id <id>`; codex: `codex resume <id>`
+// (bare `resume` is only trusted right after the codex binary — it is an ordinary
+// word inside a prompt argument otherwise).
+const ARGV_SESSION_FLAG_RES = [
+  new RegExp(`(?:^|\\s)(?:--resume|--session-id|-r)[\\s=]+${ARGV_ID}`),
+  new RegExp(`(?:^|\\s|/)codex\\s+resume\\s+${ARGV_ID}`),
+];
+
+/** The session id an agent process names on its own command line, or null. */
+export function argvSessionId(commandLine: string): string | null {
+  for (const re of ARGV_SESSION_FLAG_RES) {
+    const m = re.exec(commandLine);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** Parse `ps -o etime=` ("[[dd-]hh:]mm:ss") into seconds, or null. */
+export function parsePsEtimeSeconds(etime: string): number | null {
+  const s = etime.trim();
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(s);
+  if (!m) return null;
+  const days = m[1] ? parseInt(m[1], 10) : 0;
+  const hours = m[2] ? parseInt(m[2], 10) : 0;
+  return ((days * 24 + hours) * 60 + parseInt(m[3], 10)) * 60 + parseInt(m[4], 10);
+}
+
+/** Slack for the hook writing its claim a moment before `ps` measures the
+ *  process start (both read the same wall clock, so this only absorbs rounding). */
+const CLAIM_START_SLACK_SEC = 5;
+
+/**
+ * The session a process runs, from its hook claims (newest one written after the
+ * process started) or, absent any, its argv. Null when neither says anything.
+ */
+export function processDeclaredSessionId(args: {
+  argvId: string | null;
+  claims: readonly ProcessSessionClaim[];
+  /** Epoch seconds the process started; null when unknown (claims are then ignored —
+   *  without a start time a claim cannot be told apart from a reused pid's). */
+  processStartSec: number | null;
+}): string | null {
+  if (args.processStartSec !== null) {
+    let newest: ProcessSessionClaim | null = null;
+    for (const c of args.claims) {
+      if (c.ts < args.processStartSec - CLAIM_START_SLACK_SEC) continue;
+      if (!newest || c.ts > newest.ts) newest = c;
+    }
+    if (newest) return newest.sessionId;
+  }
+  return args.argvId;
+}
+
+export function judgeProcessIdentity(args: {
+  sessionId: string;
+  argvId: string | null;
+  claims: readonly ProcessSessionClaim[];
+  processStartSec: number | null;
+}): { verdict: ProcessIdentityVerdict; declared: string | null } {
+  const declared = processDeclaredSessionId(args);
+  if (!declared) return { verdict: "unknown", declared };
+  return { verdict: declared === args.sessionId ? "owned" : "foreign", declared };
+}
