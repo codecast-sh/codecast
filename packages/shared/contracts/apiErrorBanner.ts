@@ -118,6 +118,35 @@ export function isApiErrorBanner(content: string | null | undefined): boolean {
   return classifyApiErrorBanner(content) !== null;
 }
 
+// Claude Code's usage/billing interstitials arrive as a MENU, not a banner:
+// "What do you want to do?" over rows like "Stop and wait for limit to reset",
+// "Switch to usage credits", "Switch to Team plan", "Adjust monthly spend
+// limit". The daemon already converts the monthly-spend variant into a banner
+// (spendLimitDialogBanner) precisely because answering it is dangerous — the
+// keypress that "picks an option" is committing a BILLING change.
+//
+// The other variants still surface as ordinary AskUserQuestion polls, and the
+// decision queue must not offer them as decisions: they are an infrastructure
+// park (wait, pay, or switch model), not a judgment call about the work, and a
+// queue that advances on a digit press would put a plan change one keystroke
+// away. Recognized by the OPTION ROWS rather than the question, which is the
+// generic "What do you want to do?" — and requiring TWO matches so a real
+// question that merely mentions switching models is not swallowed.
+const USAGE_DIALOG_OPTION_RE =
+  /(?:wait (?:for|until) (?:the )?limit(?:\s+to)?\s+reset|limit (?:will )?reset|usage credits|monthly spend limit|spend limit|upgrade to (?:max|pro|team)|switch to (?:the )?(?:max|pro|team) plan|switch (?:to )?(?:a (?:different|another) )?model|\/usage-credits|\/upgrade)/i;
+
+export function isUsageLimitDialog(
+  optionLabels: readonly string[] | null | undefined
+): boolean {
+  if (!optionLabels || optionLabels.length === 0) return false;
+  let hits = 0;
+  for (const label of optionLabels) {
+    if (USAGE_DIALOG_OPTION_RE.test(label ?? "")) hits++;
+    if (hits >= 2) return true;
+  }
+  return false;
+}
+
 // The client_id every "continue" sent to un-park a blocked session carries,
 // whoever sends it: the web's fleet buttons, the server's continueAllBlocked
 // (the CLI path), and the daemon's post-switch revive. One shared key is what
