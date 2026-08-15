@@ -122,7 +122,7 @@ export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenD
   // Resolve through the task's own team so a row shows that team's vocabulary
   // ("Working on") even if it ever renders outside its workspace view.
   const teamStatuses = useTeamTaskStatusList((task as any).team_id);
-  const status = statusVisual(taskStatusOf(task as any, teamStatuses));
+  const status = statusVisual(taskStatusOf(task as any, teamStatuses), teamStatuses);
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.medium;
   const StatusIcon = status.icon;
   const PriorityIcon = priority.icon;
@@ -363,7 +363,7 @@ function fmtDate(ms: number): string {
  *  reader sees exactly which two rows the drop involved. */
 function TaskMiniCard({ task }: { task: TaskItem }) {
   const teamStatuses = useTeamTaskStatusList((task as any).team_id);
-  const status = statusVisual(taskStatusOf(task as any, teamStatuses));
+  const status = statusVisual(taskStatusOf(task as any, teamStatuses), teamStatuses);
   const StatusIcon = status.icon;
   return (
     <div className="flex items-center gap-2 rounded-md border border-sol-border/40 bg-sol-bg-alt/40 px-2.5 py-1.5 min-w-0">
@@ -626,7 +626,7 @@ function KanbanView({
       <div className="flex-1 flex gap-3 overflow-x-auto px-4 py-4 pb-6">
         {visibleStatuses.map((col) => {
           const status = col.id;
-          const cfg = statusVisual(col);
+          const cfg = statusVisual(col, statuses);
           const Icon = cfg.icon;
           const tasks = grouped[status] || [];
           return (
@@ -686,7 +686,7 @@ function KanbanView({
         <div className="w-44 border-l border-sol-border/20 px-3 py-4 flex-shrink-0 flex flex-col gap-1">
           <p className="text-[10px] text-sol-text-dim uppercase tracking-widest mb-2 font-medium">Hidden columns</p>
           {hiddenWithTasks.map((col) => {
-            const cfg = statusVisual(col);
+            const cfg = statusVisual(col, statuses);
             const Icon = cfg.icon;
             return (
               <button
@@ -949,7 +949,11 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   const { hasMore, loadMore } = useSyncTasks();
   const currentUser = useQuery(api.users.getCurrentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as any;
+  // One workspace pointer for the whole page: rows are scoped by activeTeamId
+  // (filterToWorkspace below), so the roster must use the same source — a
+  // currentUser.team_id fallback here made the two disagree in the personal
+  // space (personal rows, default team's roster).
+  const effectiveTeamId = activeTeamId as any;
   // The workspace's status vocabulary: the active team's custom statuses, or
   // the defaults in the personal space. Everything visible is one workspace
   // (filterToWorkspace below), so one list serves columns, groups and drops.

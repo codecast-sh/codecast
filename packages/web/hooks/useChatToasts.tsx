@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { useInboxStore, useTrackedStore, type ChatMessageRow, type ChatRailRow } from "../store/inboxStore";
+import {
+  useInboxStore,
+  useTrackedStore,
+  type ChatMessageRow,
+  type ChatNotifyLevel,
+  type ChatRailRow,
+} from "../store/inboxStore";
 import { chatToastTier, type ChatToastTier } from "../lib/chatTimeline";
 import { ChatToast, toastPreview, type ChatToastData } from "../components/chat/ChatToast";
 import { getChatFocus } from "../lib/chatFocus";
@@ -66,8 +72,23 @@ export function useChatToasts(): void {
   );
 
   const mute = useCallback((channelId: string) => {
-    useInboxStore.getState().setChannelNotifyLevel(channelId, "none");
+    const state: any = useInboxStore.getState();
+    // Muting must not be SILENT: a one-click mute with no feedback reads as
+    // "the toast went away" and leaves the channel dead for weeks before anyone
+    // connects the missing notifications to that click.
+    const prior: ChatNotifyLevel =
+      (state.chatRail ?? []).find((r: ChatRailRow) => String(r.channel_id) === channelId)
+        ?.notify_level ?? "all";
+    const name = state.chatChannels?.[channelId]?.name ?? "channel";
+    state.setChannelNotifyLevel(channelId, "none");
     toast.dismiss(`chat:${channelId}`);
+    toast(`Muted #${name}`, {
+      description: "No more notifications from this channel.",
+      action: {
+        label: "Undo",
+        onClick: () => useInboxStore.getState().setChannelNotifyLevel(channelId, prior),
+      },
+    });
   }, []);
 
   const snooze = useCallback((minutes: number) => {

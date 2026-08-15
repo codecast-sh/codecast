@@ -138,6 +138,49 @@ export function soundChatMention() {
   ], 0.045);
 }
 
+// One ring cycle for an incoming huddle: two warm fifths, held slightly —
+// unmistakably a "someone wants you", distinct from every notification chirp
+// above. The ring HOOK (useCallRing) repeats this on an interval and owns the
+// 45s ceiling; this stays a single cycle so a dismissed ring stops instantly.
+export function soundCallRing() {
+  if (!isEnabled()) return;
+  play([
+    { freq: 440, start: 0, dur: 0.35, gain: 0.4, type: "sine" },
+    { freq: 659.25, start: 0.05, dur: 0.4, gain: 0.3, type: "sine" },
+    { freq: 440, start: 0.55, dur: 0.35, gain: 0.35, type: "sine" },
+    { freq: 659.25, start: 0.6, dur: 0.4, gain: 0.25, type: "sine" },
+  ], 0.06);
+}
+
+// Someone joined the room you're in (or you connected): a soft rising triad.
+export function soundCallJoin() {
+  if (!isEnabled()) return;
+  play([
+    { freq: 523.25, start: 0, dur: 0.15, gain: 0.4, type: "sine" },
+    { freq: 659.25, start: 0.08, dur: 0.18, gain: 0.35, type: "sine" },
+    { freq: 783.99, start: 0.16, dur: 0.25, gain: 0.3, type: "sine" },
+  ], 0.05);
+}
+
+// A participant left / the call ended: the join triad, descending.
+export function soundCallLeave() {
+  if (!isEnabled()) return;
+  play([
+    { freq: 783.99, start: 0, dur: 0.15, gain: 0.35, type: "sine" },
+    { freq: 659.25, start: 0.08, dur: 0.18, gain: 0.3, type: "sine" },
+    { freq: 523.25, start: 0.16, dur: 0.25, gain: 0.25, type: "sine" },
+  ], 0.045);
+}
+
+// Your ring was declined or timed out — one low, brief, apologetic note.
+export function soundCallDeclined() {
+  if (!isEnabled()) return;
+  play([
+    { freq: 329.63, start: 0, dur: 0.25, gain: 0.4, type: "sine" },
+    { freq: 261.63, start: 0.18, dur: 0.3, gain: 0.3, type: "sine" },
+  ], 0.045);
+}
+
 export function soundSend() {
   if (!isEnabled() || !isSupported()) return;
   try {

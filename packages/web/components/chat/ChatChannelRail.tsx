@@ -1,6 +1,8 @@
 import { memo } from "react";
 import { Hash, Lock, Plus, BellOff } from "lucide-react";
 import type { ChatChannelView } from "./chatTypes";
+import { OccupancyChip } from "../calls/OccupancyChip";
+import { channelRoomKey } from "@codecast/shared/contracts";
 import "./chat.css";
 
 // The channel rail.
@@ -63,6 +65,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
                 {c.isPrivate ? <Lock className="w-3 h-3" /> : <Hash className="w-3 h-3" />}
               </span>
               <span className="ch-chan-name">{c.name}</span>
+              <OccupancyChip roomKey={channelRoomKey(String(c.id))} className="shrink-0" />
               {c.muted && <BellOff className="w-3 h-3 shrink-0 opacity-70" aria-label="Muted" />}
               {mentions > 0 ? (
                 <span className="ch-chan-badge" aria-label={`${mentions} mentions`}>

@@ -86,6 +86,7 @@
     "graphology-layout-forceatlas2": "^0.10.1",
     "hono": "^4.12.8",
     "katex": "^0.18.1",
+    "livekit-client": "^2.21.0",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.556.0",
     "mdast-util-find-and-replace": "^3.0.2",

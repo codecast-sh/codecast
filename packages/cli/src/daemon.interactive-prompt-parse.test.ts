@@ -622,6 +622,28 @@ describe("spendLimitDialogBanner", () => {
     expect(classifyApiErrorBanner(banner)).toBe("limit");
   });
 
+  // The exact shape from the 2026-08-14 screenshot: two-column rows, the
+  // "Press ← or →" helper row between options and footer, and a dated reset.
+  test("screenshot shape: helper row + dated reset column", () => {
+    const pane = [
+      "⏺ Still nothing on Apple's side — dropped again.",
+      "",
+      "▔".repeat(100),
+      "   What do you want to do?                                  Usage credit balance: $0.00",
+      "",
+      "   ❯ Adjust monthly spend limit: $702.77                        ← or → to set a limit",
+      "     Wait for limit to reset                          Resets Sep 1, 12:00am (America/New_York)",
+      "",
+      "   Press ← or → to set a limit.",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)?.isConfirmation).toBe(true);
+    const banner = spendLimitDialogBanner(pane);
+    expect(banner).toBe("You've hit your monthly spend limit · Resets Sep 1, 12:00am (America/New_York)");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+  });
+
   test("no reset column still yields a limit-classified banner", () => {
     const pane = [
       "▔".repeat(80),

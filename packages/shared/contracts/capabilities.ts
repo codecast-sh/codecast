@@ -486,6 +486,35 @@ export function isObservedScope(value: unknown): value is ObservedScope {
 }
 
 /**
+ * Observed scopes ranked NARROWEST first — the answer to "which scope switched
+ * this on here?", where the most specific answer wins.
+ *
+ * A declared RANKING, deliberately not `OBSERVED_SCOPES` reused. That list's
+ * order is a declaration order which happens to read the same way today, and a
+ * ranking borrowed from an incidental order silently changes meaning the day
+ * somebody appends to the list. This is the constant to import: four modules
+ * ranked these three strings independently, and a ranking with four copies is
+ * one edit away from two surfaces answering differently about the same machine.
+ *
+ * `_EveryObservedScopeIsRanked` is what keeps the two in step — a scope added to
+ * the vocabulary and not ranked here fails the build rather than sorting to the
+ * end on somebody's laptop.
+ */
+export const OBSERVED_SCOPE_NARROWNESS = ["local", "project", "user"] as const satisfies
+  readonly ObservedScope[];
+
+type RankedScope<T extends never> = T;
+type _EveryObservedScopeIsRanked = RankedScope<
+  Exclude<ObservedScope, (typeof OBSERVED_SCOPE_NARROWNESS)[number]>
+>;
+
+/** Rank of an observed scope, 0 being the narrowest. Lower wins when two scopes
+ *  both declare the same capability. */
+export function observedScopeRank(scope: ObservedScope): number {
+  return OBSERVED_SCOPE_NARROWNESS.indexOf(scope);
+}
+
+/**
  * One capability as observed on one machine, for one client.
  *
  * `enabled` and `installed` are independent, and collapsing them loses two real

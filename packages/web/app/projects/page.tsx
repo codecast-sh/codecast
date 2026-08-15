@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useInboxStore, ProjectItem } from "../../store/inboxStore";
 import { useSyncProjects } from "../../hooks/useSyncProjects";
 import { filterToWorkspace } from "../../lib/workspaceScope";
+import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import {
@@ -175,13 +176,17 @@ function CreateProjectInline({ onCreated }: { onCreated: () => void }) {
   const [color, setColor] = useState("cyan");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const createProject = useInboxStore((s) => s.createProject);
+  // Stamp the workspace at create time (same treatment as every other create):
+  // without it the server guesses from its lagging copy of the active-team
+  // pointer, which is racy across a team switch.
+  const workspace = useWorkspaceArgs();
 
   const handleSubmit = useCallback(async () => {
     const trimmed = title.trim();
     if (!trimmed) return;
     setIsSubmitting(true);
     try {
-      await createProject({ title: trimmed, description: description.trim() || undefined, color });
+      await createProject({ title: trimmed, description: description.trim() || undefined, color, ...workspaceStamp(workspace) });
       setTitle("");
       setDescription("");
       toast.success("Project created");
@@ -191,7 +196,7 @@ function CreateProjectInline({ onCreated }: { onCreated: () => void }) {
     } finally {
       setIsSubmitting(false);
     }
-  }, [title, description, color, createProject, onCreated]);
+  }, [title, description, color, createProject, workspace, onCreated]);
 
   return (
     <div className="bg-sol-bg rounded-lg border border-sol-border/40 p-4 space-y-3">

@@ -144,6 +144,8 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   chat_mention: ["chat mention", "chat mentions"],
   chat_reply: ["thread reply", "thread replies"],
   chat_here: ["channel announcement", "channel announcements"],
+  chat_dm: ["direct message", "direct messages"],
+  chat_added: ["channel invite", "channel invites"],
 };
 
 export function summarizePushBatch(

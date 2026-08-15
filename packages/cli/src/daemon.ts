@@ -4,7 +4,7 @@ import * as path from "path";
 import { randomUUID, createHash } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
-import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "./proc.js";
+import { execSync, execFileSync, exec, execFile, spawn, spawnSync, setSlowSyncSpawnSink } from "./proc.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
@@ -87,7 +87,7 @@ import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { getMachineKey } from "./machineKey.js";
-import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
+import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
@@ -159,7 +159,7 @@ import {
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, countModelSetEchoes, countEffortSetEchoes, isSwitchConfirmDialog, isStrandedSlashCommand } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -625,18 +625,41 @@ async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
   try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
 }
 
+// A long gap between timer ticks has two very different causes: the MACHINE slept
+// (the process consumed ~no CPU during the gap) or the EVENT LOOP was pinned by
+// synchronous work (the process burned CPU the whole time). They demand opposite
+// responses: a real wake needs recovery (watcher restart + unsynced sweep), while a
+// busy stall must NOT trigger recovery — the sweep it fires is itself the kind of
+// work that pins the loop, so recovery-on-stall becomes a self-sustaining freeze
+// loop (observed 2026-08-14: stall → "Sleep detected" → sweep → stall → …).
+// Threshold is deliberately low: a truly suspended process accrues ~zero CPU, so
+// anything above 20% of wall time can only be a busy process.
+export function classifyTickGap(elapsedMs: number, cpuMs: number): "sleep" | "stall" {
+  return cpuMs >= elapsedMs * 0.2 ? "stall" : "sleep";
+}
+
 // Sleep/wake detection: if the last tick was more than 30s ago, we probably just woke from sleep.
 // During the wake grace period, skip polling to let tmux recover and avoid zombie accumulation.
+// The grace period applies to stalls too — after the loop unfreezes, a short polling
+// pause helps drain the backlog before piling new work on.
 let lastTickTime = Date.now();
+let lastTickCpu = process.cpuUsage();
 const SLEEP_DETECTION_THRESHOLD_MS = 30_000;
 const WAKE_GRACE_PERIOD_MS = 5_000;
 let wakeGraceUntil = 0;
 setInterval(() => {
   const now = Date.now();
   const elapsed = now - lastTickTime;
+  const cpuDelta = process.cpuUsage(lastTickCpu);
+  lastTickCpu = process.cpuUsage();
   if (elapsed > SLEEP_DETECTION_THRESHOLD_MS) {
+    const cpuMs = (cpuDelta.user + cpuDelta.system) / 1000;
     wakeGraceUntil = now + WAKE_GRACE_PERIOD_MS;
-    log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
+    if (classifyTickGap(elapsed, cpuMs) === "stall") {
+      log(`Event-loop stall (${Math.round(elapsed / 1000)}s gap, ${Math.round(cpuMs / 1000)}s CPU), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
+    } else {
+      log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
+    }
   }
   lastTickTime = now;
 }, 5_000);
@@ -1493,11 +1516,17 @@ function enqueueRemoteLog(entry: RemoteLog): void {
   }
 }
 
+// The most recent log line, kept so a freeze report can name what the loop was
+// doing when it stopped — the last thing that logged is the best available
+// witness for what blocked it (see startLoopFreezeProbe).
+let lastLogLine = "";
+
 function log(message: string, level: LogLevel = "info", metadata?: RemoteLog["metadata"]): void {
   const timestamp = new Date().toISOString();
   const levelTag = level === "info" ? "" : `[${level.toUpperCase()}] `;
   const line = `[${timestamp}] ${levelTag}${message}\n`;
   fs.appendFileSync(LOG_FILE, line);
+  lastLogLine = `${timestamp} ${message.slice(0, 160)}`;
 
   enqueueRemoteLog({
     level,
@@ -5904,11 +5933,16 @@ export function subagentParentSessionFromPath(filePath: string): string | undefi
 // and the backlog grew without bound. Reading a bounded window and advancing the
 // position after each successfully-synced chunk makes progress monotonic and
 // guarantees convergence.
-const SYNC_BYTES_PER_PASS = 4 * 1024 * 1024;
-// How many bounded passes one invocation will chain before yielding to the next
-// file-watch event / watchdog. Drains up to SYNC_BYTES_PER_PASS * this per trigger
-// so a large idle backlog catches up fast instead of trickling at the 5-min watchdog.
-const MAX_SYNC_CONTINUATIONS = 6;
+// Per-pass read cap. The read+JSON-parse of a pass is synchronous main-thread work,
+// so this bounds the longest single event-loop hold a transcript sync can cause:
+// 1MB parses in low hundreds of ms, where the old 4MB slices held the loop for
+// seconds each and a backlogged sweep compounded them into minute-long freezes.
+const SYNC_BYTES_PER_PASS = 1 * 1024 * 1024;
+// How many bounded passes one invocation will chain (with an event-loop yield
+// between each) before deferring to the next file-watch event / watchdog. Drains up
+// to SYNC_BYTES_PER_PASS * this per trigger — kept at 24MB, matching the old
+// 4MB x 6 — so a large idle backlog catches up just as fast, in smaller bites.
+const MAX_SYNC_CONTINUATIONS = 24;
 
 export async function processSessionFile(
   filePath: string,
@@ -6843,6 +6877,10 @@ export async function processSessionFile(
       lastPosition + bytesConsumed < stats.size &&
       continuationDepth < MAX_SYNC_CONTINUATIONS
     ) {
+      // Let queued work (heartbeats, deliveries, timers) run between passes —
+      // each pass is a synchronous read+parse, and chaining them back-to-back
+      // is what turned big backlogs into event-loop freezes.
+      await new Promise((resolve) => setImmediate(resolve));
       await processSessionFile(
         filePath,
         sessionId,
@@ -8965,6 +9003,28 @@ export function spendLimitDialogBanner(paneContent: string): string | null {
   return `You've hit your monthly spend limit · ${resets ?? "parked at the spend limit dialog"}`;
 }
 
+// The same park, wearing the other costume. The spend dialog above has
+// UNNUMBERED rows so parseInteractivePrompt reads it as a confirmation; the
+// usage-limit variant — "What do you want to do?" over "Stop and wait for
+// limit to reset" / "Switch to usage credits" / "Switch to Team plan" — is a
+// NUMBERED menu, so it slipped past the confirmation-only check above and got
+// minted as an ordinary poll card (uuid `interactive-prompt-…`). That card is
+// the same hazard the spend dialog was fixed for: its options are billing
+// actions, so "answering" it changes the plan.
+//
+// Recognized by the option rows via the shared isUsageLimitDialog, which the
+// web's decision queue uses too, so the daemon and the queue can never
+// disagree about what counts as a billing interstitial.
+export function usageLimitMenuBanner(
+  paneContent: string,
+  optionLabels: readonly string[]
+): string | null {
+  if (!isUsageLimitDialog(optionLabels)) return null;
+  const tail = paneContent.split("\n").slice(-20).join("\n");
+  const resets = tail.match(/\b(Resets [^\n]+?)(?:\s{3,}|\s*$)/im)?.[1]?.trim();
+  return `You've hit your usage limit · ${resets ?? "parked at the usage limit dialog"}`;
+}
+
 // Claude Code renders each assistant message with a leading bullet ("⏺" on current
 // builds, "●" on older ones) and indents its continuation lines two spaces. A turn
 // that ends in AskUserQuestion is buffered out of the JSONL until answered, so while
@@ -9236,8 +9296,14 @@ async function checkForInteractivePrompt(
     // card whose "Continue" would confirm a billing action. The banner message
     // is what stamps pending_api_error_kind="limit" server-side, so the blocked
     // badge and the auto-switch check fire exactly as for a CLI-written banner.
-    if (prompt.isConfirmation) {
-      const limitBanner = spendLimitDialogBanner(paneContent);
+    // Both costumes of the park: the unnumbered spend dialog (a confirmation)
+    // and the numbered usage-limit menu. Neither is a question, so neither may
+    // become a card — the menu variant reaches here as an ordinary prompt and
+    // would otherwise be minted with billing actions as its options.
+    {
+      const limitBanner = prompt.isConfirmation
+        ? spendLimitDialogBanner(paneContent)
+        : usageLimitMenuBanner(paneContent, prompt.options.map((o) => o.label));
       if (limitBanner) {
         const now = Date.now();
         const digest = createHash("sha256").update(limitBanner).digest("hex").slice(0, 12);
@@ -16744,18 +16810,65 @@ function checkDiskVersionMismatch(): void {
   } catch {}
 }
 
+// A frozen event loop is invisible after the fact: nothing runs, so nothing
+// logs, and the 30s monitor only says "a gap happened". This fine probe ticks
+// every 500ms and names the freeze the moment the loop unblocks — how long,
+// and how much CPU the process burned meanwhile (near zero = blocked in a
+// syscall/child wait; near wall = pinned by our own compute). Paired with the
+// per-call [SLOW-SYNC-SPAWN] report from proc.ts, a stall reads as "the loop
+// froze 40s, and here are the sync spawns that ran inside it".
+const LOOP_FREEZE_PROBE_INTERVAL_MS = 500;
+const LOOP_FREEZE_REPORT_MS = 5_000;
+function startLoopFreezeProbe(): NodeJS.Timeout {
+  setSlowSyncSpawnSink((message) => log(message));
+  let lastProbe = Date.now();
+  let lastCpu = process.cpuUsage();
+  // Snapshot of lastLogLine at the previous tick: the newest line written
+  // before the loop stopped ticking. (Reading lastLogLine at report time would
+  // name whatever logged first AFTER the freeze — the wrong side of it.)
+  let logAtLastProbe = lastLogLine;
+  const t = setInterval(() => {
+    const now = Date.now();
+    const late = now - lastProbe - LOOP_FREEZE_PROBE_INTERVAL_MS;
+    const cpu = process.cpuUsage(lastCpu);
+    lastProbe = now;
+    lastCpu = process.cpuUsage();
+    if (late >= LOOP_FREEZE_REPORT_MS) {
+      const cpuMs = Math.round((cpu.user + cpu.system) / 1000);
+      log(`[LOOP-FREEZE] event loop blocked ${Math.round(late / 1000)}s (${cpuMs}ms CPU during the freeze); last log before it: ${logAtLastProbe}`);
+    }
+    logAtLastProbe = lastLogLine;
+  }, LOOP_FREEZE_PROBE_INTERVAL_MS);
+  t.unref?.();
+  return t;
+}
+
 function startEventLoopMonitor(): NodeJS.Timeout {
   let lastTickTime = Date.now();
+  let lastTickCpu = process.cpuUsage();
+  startLoopFreezeProbe();
 
   return setInterval(() => {
     const now = Date.now();
     const elapsed = now - lastTickTime;
     lastTickTime = now;
+    const cpuDelta = process.cpuUsage(lastTickCpu);
+    lastTickCpu = process.cpuUsage();
 
     saveDaemonState({ lastHeartbeatTick: now });
     lastEventLoopTick = now;
 
     if (elapsed > EVENT_LOOP_LAG_THRESHOLD_MS) {
+      // Only a genuine suspend gets recovery. A busy stall means the loop was
+      // pinned by our own synchronous work; firing the recovery sweep here is what
+      // used to turn one stall into a self-sustaining freeze loop (see
+      // classifyTickGap). The watcher never died during a stall — the process was
+      // running the whole time — so there is nothing to recover.
+      const cpuMs = (cpuDelta.user + cpuDelta.system) / 1000;
+      if (classifyTickGap(elapsed, cpuMs) === "stall") {
+        logLifecycle("event_loop_stall", `Event loop pinned for ${Math.round(elapsed / 1000)}s (${Math.round(cpuMs / 1000)}s CPU) — skipping wake recovery`);
+        return;
+      }
       logLifecycle("wake_detected", `System was suspended for ${Math.round(elapsed / 1000)}s, recovering`);
       // Re-arm to `now` so the watchdog's 60-min idle path doesn't also fire a
       // redundant restart in the gap before recovery completes. We no longer rely
@@ -16801,9 +16914,9 @@ function maybeUpdateDesktopApp(syncService: SyncService): void {
   })().catch(() => {});
 }
 
-function logHealthReport(retryQueue: RetryQueue, config: Config): void {
+async function logHealthReport(retryQueue: RetryQueue, config: Config): Promise<void> {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  const unsyncedFiles = findUnsyncedFiles(
+  const unsyncedFiles = await findUnsyncedFilesAsync(
     claudeProjectsDir,
     undefined,
     (filePath) => isTranscriptFileInSyncScope(filePath, config),
@@ -16830,7 +16943,7 @@ function startReconciliation(
   setTimeout(async () => {
     try {
       // Log health report
-      logHealthReport(retryQueue, config);
+      await logHealthReport(retryQueue, config);
 
       const result = await performReconciliation(
         syncService,
@@ -16866,7 +16979,7 @@ function startReconciliation(
 
     try {
       // Log health report
-      logHealthReport(retryQueue, config);
+      await logHealthReport(retryQueue, config);
 
       const result = await performReconciliation(
         syncService,
@@ -18510,7 +18623,7 @@ async function main(): Promise<void> {
 
     let unsyncedFiles: string[] = [];
     try {
-      unsyncedFiles = findUnsyncedFiles(
+      unsyncedFiles = await findUnsyncedFilesAsync(
         claudeProjectsDir,
         undefined,
         (filePath) => isTranscriptFileInSyncScope(filePath, config),
@@ -18524,6 +18637,10 @@ async function main(): Promise<void> {
       log(`${reason}: Found ${unsyncedFiles.length} files needing sync`);
 
       for (const filePath of unsyncedFiles) {
+        // Yield between files: processSessionFile's read+parse is synchronous CPU
+        // work, and a backlog sweep runs dozens of files. Without this the sweep
+        // monopolizes the loop for minutes and heartbeats/deliveries starve.
+        await new Promise((resolve) => setImmediate(resolve));
         const parts = filePath.split(path.sep);
         const sessionId = resolveSessionId(filePath);
 
@@ -18620,11 +18737,20 @@ async function main(): Promise<void> {
 
   // Expose the sweep to reconciliation (watcher-independent backstop) and define the
   // wake-recovery handler the event-loop monitor calls. Reentrancy is guarded so a
-  // burst of wake ticks collapses to a single restart+sweep in flight.
+  // burst of wake ticks collapses to a single restart+sweep in flight, and a
+  // completed recovery is not repeated within a floor interval — a second wake
+  // minutes after the first has a freshly-restarted watcher and a just-swept
+  // backlog, so re-running the full recovery only adds load at the worst time.
   pushUnsyncedFilesHandler = syncUnsyncedFiles;
+  const WAKE_RECOVERY_MIN_INTERVAL_MS = 3 * 60 * 1000;
   let wakeRecoveryInProgress = false;
+  let lastWakeRecoveryDoneAt = 0;
   wakeRecoveryHandler = () => {
     if (wakeRecoveryInProgress) return;
+    if (Date.now() - lastWakeRecoveryDoneAt < WAKE_RECOVERY_MIN_INTERVAL_MS) {
+      log("Wake recovery: skipped (previous recovery completed under 3 minutes ago)");
+      return;
+    }
     wakeRecoveryInProgress = true;
     void runWakeRecovery({
       restartWatcher: () => watcher.restart(),
@@ -18632,7 +18758,10 @@ async function main(): Promise<void> {
       onWatcherRestarted: () => { lastWatcherEventTime = Date.now(); },
       log: (msg) => log(msg),
       logError: (msg, err) => logError(msg, err),
-    }).finally(() => { wakeRecoveryInProgress = false; });
+    }).finally(() => {
+      wakeRecoveryInProgress = false;
+      lastWakeRecoveryDoneAt = Date.now();
+    });
   };
 
   // Run startup scan in background (don't block daemon startup)

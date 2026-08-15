@@ -110,7 +110,16 @@ export default defineSchema({
       // key must exist here or the settings toggle has nowhere to persist and the
       // mute silently does nothing.
       chat_activity: v.optional(v.boolean()),
+      // Master switch for the "while you were away" email digest
+      // (emails/digest.ts). Absent reads as ON; the unsubscribe link and the
+      // settings toggle both write false here.
+      email_notifications: v.optional(v.boolean()),
     })),
+    // Cooldown stamp for the email digest — at most one digest per cooldown
+    // window, and items created before this stamp are never re-emailed.
+    email_digest_last_sent_at: v.optional(v.number()),
+    // Bearer for the one-click unsubscribe link. Minted lazily on first digest.
+    email_unsub_token: v.optional(v.string()),
     pr_auto_comment_enabled: v.optional(v.boolean()),
     // Dedupe/cooldown state for the aggregated "sessions blocked" notification
     // (accountSwitch.blockedNotifyCheck). One write per incident, not per park.
@@ -186,6 +195,7 @@ export default defineSchema({
     local_project_roots_updated_at: v.optional(v.number()),
   })
     .index("email", ["email"])
+    .index("by_email_unsub_token", ["email_unsub_token"])
     .index("by_github_username", ["github_username"])
     .index("by_github_id", ["github_id"])
     .index("by_username", ["username"])
@@ -368,6 +378,18 @@ export default defineSchema({
     comment_fork_message_id: v.optional(v.string()),
     comment_fork_comment_id: v.optional(v.id("comments")),
     comment_fork_prompt_at: v.optional(v.number()),
+    // Denormalized comment signal for the inbox card, recomputed by
+    // comments.refreshCommentSignal on every comment create/resolve/delete.
+    // Count of OPEN threads plus who spoke last in them and what they said —
+    // enough for the session row to show "Alice: typo in step 2" with no extra
+    // query on the list render path. author_id is a users id string, or
+    // "agent" for agent replies, so the client can mute the chip when the
+    // viewer themselves commented last.
+    unresolved_comment_count: v.optional(v.number()),
+    last_comment_at: v.optional(v.number()),
+    last_comment_author: v.optional(v.string()),
+    last_comment_author_id: v.optional(v.string()),
+    last_comment_excerpt: v.optional(v.string()),
     // Visible-child pointer: the session that spawned this one (agent-team
     // teammate → its lead, `cast spawn` → its caller). Unlike
     // parent_conversation_id — whose mere presence marks a row as a subagent
@@ -969,6 +991,8 @@ export default defineSchema({
   decisions: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS axis — see tasks.workspace.
+    workspace: v.optional(v.string()),
     project_path: v.optional(v.string()),
     title: v.string(),
     rationale: v.string(),
@@ -983,6 +1007,7 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_project", ["user_id", "project_path"])
     .index("by_team_id", ["team_id"])
+    .index("by_workspace", ["workspace"])
     .searchIndex("search_decisions_v2", {
       searchField: "title",
       filterFields: ["user_id", "project_path"],
@@ -991,6 +1016,8 @@ export default defineSchema({
   patterns: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS axis — see tasks.workspace.
+    workspace: v.optional(v.string()),
     name: v.string(),
     description: v.string(),
     content: v.string(),
@@ -1005,6 +1032,7 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_name", ["user_id", "name"])
     .index("by_team_id", ["team_id"])
+    .index("by_workspace", ["workspace"])
     .searchIndex("search_patterns_v2", {
       searchField: "name",
       filterFields: ["user_id"],
@@ -1856,6 +1884,15 @@ export default defineSchema({
     user_id: v.id("users"),
     frequent: v.array(v.object({ text: v.string(), count: v.number() })),
     phrases: v.optional(v.array(v.object({ text: v.string(), count: v.number() }))),
+    // Generalized habits mined by LLM: what the user recurrently asks for,
+    // abstracted from topic ("demands e2e verification before accepting
+    // work"), with one real quote as voice evidence. The suggester APPLIES
+    // these to the current conversation instead of replaying old messages.
+    patterns: v.optional(v.array(v.object({
+      pattern: v.string(),
+      example: v.string(),
+      count: v.number(),
+    }))),
     recent: v.array(v.string()),
     generated_at: v.number(),
   }).index("by_user_id", ["user_id"]),
@@ -1924,10 +1961,14 @@ export default defineSchema({
       v.literal("artifact_commented"),
       // Team chat. There is deliberately no type for a plain channel message:
       // ordinary chatter produces unread state only, never a notification row and
-      // never a push.
+      // never a push. A direct message is the exception — it is addressed to you
+      // by construction, so every DM line notifies exactly like a mention.
       v.literal("chat_mention"),
       v.literal("chat_reply"),
-      v.literal("chat_here")
+      v.literal("chat_here"),
+      v.literal("chat_dm"),
+      // Someone added you to a private channel or a group message.
+      v.literal("chat_added")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -1962,6 +2003,9 @@ export default defineSchema({
     .index("by_recipient", ["recipient_user_id"])
     .index("by_recipient_read", ["recipient_user_id", "read"])
     .index("by_recipient_created", ["recipient_user_id", "created_at"])
+    // Global recency scan for the email digest sweep (emails/digest.ts): find
+    // recently-created unread rows without touching every user.
+    .index("by_created", ["created_at"])
     // Session-state notifications (ready / needs permission / error) replace
     // per (recipient, conversation) instead of stacking — this is the lookup
     // for the row(s) being superseded.
@@ -2071,7 +2115,9 @@ export default defineSchema({
     resolved_by: v.optional(v.id("users")),
   })
     .index("by_user_status", ["user_id", "status"])
-    .index("by_conversation_status", ["conversation_id", "status"]),
+    .index("by_conversation_status", ["conversation_id", "status"])
+    // Global recency scan for the email digest sweep: recent pending decisions.
+    .index("by_status_created", ["status", "created_at"]),
 
   // A signed-in link recipient (someone who opened a shared conversation but is
   // neither its owner nor a team member) asking to do more than read: to send
@@ -2259,6 +2305,8 @@ export default defineSchema({
   projects: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS axis — see tasks.workspace.
+    workspace: v.optional(v.string()),
     short_id: v.optional(v.string()),
     title: v.string(),
     description: v.optional(v.string()),
@@ -2280,6 +2328,7 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
     .index("by_team_id", ["team_id"])
+    .index("by_workspace", ["workspace"])
     .index("by_short_id", ["short_id"]),
 
   // Saved list views — a named set of filters/grouping/sort for /tasks, /docs or
@@ -2346,6 +2395,8 @@ export default defineSchema({
   plans: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS axis — see tasks.workspace.
+    workspace: v.optional(v.string()),
     project_id: v.optional(v.id("projects")),
     project_path: v.optional(v.string()),
     short_id: v.string(),
@@ -2492,6 +2543,8 @@ export default defineSchema({
     .index("by_user_status", ["user_id", "status"])
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])
+    .index("by_workspace", ["workspace"])
+    .index("by_created_from_conversation_id", ["created_from_conversation_id"])
     .index("by_project_id", ["project_id"])
     .index("by_current_session", ["current_session_id"])
     .index("by_doc_id", ["doc_id"]),
@@ -2499,6 +2552,10 @@ export default defineSchema({
   tasks: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS, independent of team_id (which stays routing): "team:<id>" or
+    // "user:<id>" — see lib/access.ts workspaceKey. Written at create,
+    // recomputed only when a linked conversation's visibility changes.
+    workspace: v.optional(v.string()),
     project_id: v.optional(v.id("projects")),
     parent_id: v.optional(v.id("tasks")),
     plan_id: v.optional(v.id("plans")),
@@ -2653,6 +2710,8 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])
     .index("by_team_updated", ["team_id", "updated_at"])
+    .index("by_workspace", ["workspace"])
+    .index("by_created_from_conversation", ["created_from_conversation"])
     .index("by_workflow_run", ["workflow_run_id"])
     .index("by_assignee_status", ["assignee", "status"])
     .index("by_assignee_updated", ["assignee", "updated_at"])
@@ -2738,6 +2797,8 @@ export default defineSchema({
   docs: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS axis — see tasks.workspace.
+    workspace: v.optional(v.string()),
     title: v.string(),
     content: v.string(),
     doc_type: v.union(
@@ -2813,6 +2874,7 @@ export default defineSchema({
     .index("by_parent_id", ["parent_id"])
     .index("by_project_id", ["project_id"])
     .index("by_team_id", ["team_id"])
+    .index("by_workspace", ["workspace"])
     .index("by_source_file", ["source_file"])
     .index("by_conversation_id", ["conversation_id"])
     .index("by_share_token", ["share_token"])

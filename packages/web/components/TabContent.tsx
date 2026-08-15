@@ -49,6 +49,8 @@ const ConfigPage = lazy(() => import("@/app/config/page"));
 const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
+// The decision queue: one question at a time, full width.
+const Questions = lazy(() => import("@/app/questions/page"));
 const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 
 type RouteEntry = {
@@ -101,6 +103,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/windows$/, paramNames: [], component: Windows },
   { pattern: /^\/config$/, paramNames: [], component: ConfigPage },
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
+  { pattern: /^\/questions$/, paramNames: [], component: Questions },
   { pattern: /^\/admin\/daemon-logs$/, paramNames: [], component: AdminDaemonLogs },
 ];
 
