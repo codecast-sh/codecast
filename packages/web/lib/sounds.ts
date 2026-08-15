@@ -194,6 +194,11 @@ export function soundChatMessage() {
   } catch {}
 }
 
+// Older name for soundChatMessage. useChatToasts still imports it on main;
+// the rename to soundChatMessage lands with the chat toast rework. Alias, not
+// a copy, so the two can never drift into different sounds.
+export const soundChatMention = soundChatMessage;
+
 // One ring cycle for an incoming huddle: two warm fifths, held slightly —
 // unmistakably a "someone wants you", distinct from every notification chirp
 // above. The ring HOOK (useCallRing) repeats this on an interval and owns the
