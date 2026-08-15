@@ -12,7 +12,9 @@
  *   - SECTION_BY_ENABLED_KEY maps the config flag → the section to cut out on
  *     `--disable`. A missing entry means the flag flips to false while the text
  *     stays in CLAUDE.md, so the agent keeps using a capability the human just
- *     turned off. That exact bug is what the comment above that table records.
+ *     turned off. It is now derived from the catalog rather than hand-listed,
+ *     and this file pins that derivation — the hand-written version had already
+ *     shipped with `decide` missing.
  *
  * These are asserted against the source text because index.ts runs
  * `program.parse()` at module scope and cannot be imported.
@@ -51,14 +53,12 @@ function tableBody(name: string): string {
 
 describe("every catalog snippet is wired into the CLI", () => {
   const behavior = tableBody("SNIPPET_BEHAVIOR");
-  const sections = tableBody("SECTION_BY_ENABLED_KEY");
 
-  test("the tables were located, not silently empty", () => {
-    // A source-scraping test that finds nothing passes everything. Both tables
-    // hold ten-odd entries, so anything tiny means the extraction slipped (it
+  test("the behavior table was located, not silently empty", () => {
+    // A source-scraping test that finds nothing passes everything. The table
+    // holds ten-odd entries, so anything tiny means the extraction slipped (it
     // first grabbed the type annotation instead of the object literal).
     expect(behavior.length).toBeGreaterThan(500);
-    expect(sections.length).toBeGreaterThan(200);
   });
 
   test.each(SNIPPET_CATALOG.map((s) => [s.slug, s] as const))(
@@ -68,12 +68,22 @@ describe("every catalog snippet is wired into the CLI", () => {
     },
   );
 
-  test.each(
-    // Orchestration is not a markdown section — it installs a skill, agent
-    // types and hooks, and `--disable` calls uninstallOrchestration() instead.
-    SNIPPET_CATALOG.filter((s) => s.slug !== "orchestration").map((s) => [s.slug, s] as const),
-  )("%s has a section to remove on --disable", (_slug, s) => {
-    expect(sections).toContain(`${s.enabledKey}:`);
+  test("--disable can remove every snippet's section", () => {
+    // This used to be a hand-written map, and a snippet added without a line in
+    // it flipped its config flag while leaving the section in CLAUDE.md — so
+    // the agent kept reading a capability the human had just turned off, with
+    // no error anywhere. `decide` shipped in exactly that state. Deriving the
+    // map from the catalog makes the omission impossible, so what is pinned
+    // here is the derivation itself.
+    expect(indexSource).toContain("SNIPPET_CATALOG.filter((d) => d.section).map((d) => [d.enabledKey, d.section!.spec])");
+
+    // And the catalog really does carry a section for everything that has one.
+    const missing = SNIPPET_CATALOG
+      .filter((d) => d.slug !== "orchestration" && !d.section)
+      .map((d) => d.slug);
+    expect(`snippets with no installable section: ${missing.join(", ") || "none"}`).toBe(
+      "snippets with no installable section: none",
+    );
   });
 
   test("browser is present, so agents can be told the command exists", () => {

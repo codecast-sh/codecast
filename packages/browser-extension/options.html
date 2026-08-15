@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cast Browser Bridge</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 13px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace;
+    max-width: 560px; margin: 2rem auto; padding: 0 1rem;
+  }
+  h1 { font-size: 15px; }
+  label { display: block; margin-top: 1rem; font-weight: 600; }
+  input {
+    width: 100%; box-sizing: border-box; margin-top: 0.25rem; padding: 0.45rem;
+    font: inherit; border: 1px solid #8884; border-radius: 4px; background: transparent; color: inherit;
+  }
+  button {
+    margin-top: 1.25rem; padding: 0.45rem 1rem; font: inherit; cursor: pointer;
+    border: 1px solid #8886; border-radius: 4px; background: transparent; color: inherit;
+  }
+  #status { margin-top: 1.25rem; padding: 0.6rem; border-radius: 4px; background: #8881; }
+  .ok { color: #2e7d32; } .bad { color: #c62828; } .muted { opacity: 0.65; }
+</style>
+</head>
+<body>
+  <h1>Cast Browser Bridge</h1>
+  <p class="muted">
+    Run <code>cast browser extension setup</code> in a terminal on this machine,
+    then paste the token it prints. The token never leaves this computer.
+  </p>
+  <label for="token">Token</label>
+  <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="64 hex characters">
+  <label for="port">Port</label>
+  <input id="port" type="number" placeholder="41729">
+  <button id="save">Save &amp; connect</button>
+  <div id="status">checking…</div>
+</body>
+<script src="options.js"></script>
+</html>

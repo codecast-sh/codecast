@@ -123,6 +123,15 @@ export interface Config {
   decide_version?: string;
   browser_enabled?: boolean;
   browser_version?: string;
+  // Machine-wide site allowlist for `cast browser` — origins agents may
+  // navigate to, unioned with any project list in .codecast/workspace.toml
+  // [browser].allow. Undefined = no policy. See browser/policy.ts.
+  browser_allow?: string[];
+  // Automatic failure context for `cast browser` steps (console errors, failed
+  // requests, screenshot printed when a step fails). "off" disables it
+  // machine-wide; anything else (or unset) leaves it on. Set via
+  // `cast config browser_capture off`; `--no-capture` overrides per command.
+  browser_capture?: string;
   chat_enabled?: boolean;
   chat_version?: string;
 

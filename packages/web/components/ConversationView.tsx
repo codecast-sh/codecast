@@ -19,6 +19,7 @@ import { textareaCaretRect } from "../lib/textareaCaret";
 import { useStorageImageUrl, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
+import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus } from "@codecast/shared/contracts";
@@ -110,6 +111,7 @@ import { AssignmentBadge } from "./AssignmentBadge";
 import { AssignedToYouBanner } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
+import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./browser/BrowserWatchSplit";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
@@ -124,7 +126,7 @@ import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, normalizeCastCategory, extractCastBodyParts, type CastBodyPart, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, normalizeCastCategory, extractCastBodyParts, extractBrowserPageUrl, buildBrowserPageUrlMap, type BrowserRowInput, type CastBodyPart, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -299,6 +301,13 @@ function parseSearchTerms(query: string): string[] {
 }
 
 const HighlightContext = createContext<string | undefined>(undefined);
+
+// toolCallId → the page URL a `cast browser` row was on, carried forward from
+// earlier rows when the row's own output doesn't restate it (most action verbs
+// don't — see buildBrowserPageUrlMap). CastCommandBlock falls back to this for
+// its "open tab" link. Provided by the message feed with a content-stable
+// identity so an unrelated message sync doesn't re-render every cast row.
+const CastBrowserUrlContext = createContext<Record<string, string>>({});
 
 type ReactMarkdownProps = ComponentProps<typeof ReactMarkdownBase>;
 
@@ -3540,7 +3549,7 @@ function FullscreenIcon() {
   );
 }
 
-function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode, messageId, conversationId, onStartShareSelection, onOpenComments, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; changeRange?: ToolChangeRange; shareSelectionMode?: boolean; messageId?: string; conversationId?: Id<"conversations">; onStartShareSelection?: (messageId: string) => void; onOpenComments?: () => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
+function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode, messageId, conversationId, onStartShareSelection, onOpenComments, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; changeRange?: ToolChangeRange; shareSelectionMode?: boolean; messageId?: string; conversationId?: Id<"conversations">; onStartShareSelection?: (messageId: string) => void; onOpenComments?: () => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]> }) {
   // opencode + pi name their built-in tools in lowercase (`edit`/`read`/`bash`/…);
   // gemini's glob matches too. Included alongside Claude's capitalized names and
   // codex's synonyms so every client's file/shell/search tools hit the same
@@ -4047,8 +4056,22 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
       </div>
 
       {(() => {
-        const toolImage = images?.find(img => img.tool_use_id === tool.id) || globalImageMap?.[tool.id];
-        return toolImage ? <ImageBlock image={toolImage} /> : null;
+        // A command can hand back several images at once (`cast browser shot
+        // --viewports`); side by side they read as the comparison they are,
+        // stacked they read as a sequence. Each keeps its own lightbox click.
+        let toolImages = images?.filter(img => img.tool_use_id === tool.id) ?? [];
+        if (!toolImages.length) toolImages = globalImageMap?.[tool.id] ?? [];
+        if (!toolImages.length) return null;
+        if (toolImages.length === 1) return <ImageBlock image={toolImages[0]} />;
+        return (
+          <div className="flex gap-2 items-start">
+            {toolImages.map((img, i) => (
+              <div key={i} className="flex-1 min-w-0 max-w-md">
+                <ImageBlock image={img} />
+              </div>
+            ))}
+          </div>
+        );
       })()}
 
       {expanded && (
@@ -4840,8 +4863,38 @@ function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: st
   );
 }
 
-function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+// The agent drives ONE stateful cast-browser page, so its mirror on the human
+// side is one tab: every "open tab" click lands in the same named tab and
+// focuses it, never a new one. The window name makes reuse survive reloads of
+// this app; the kept ref lets a same-URL re-click just focus without reloading
+// the page. Named reuse requires an opener relationship, so no noopener here.
+const CAST_BROWSER_TAB_NAME = "codecast-cast-browser";
+let castBrowserTab: Window | null = null;
+let castBrowserTabUrl: string | null = null;
+function openCastBrowserTab(url: string) {
+  const tab = castBrowserTab;
+  if (tab && !tab.closed) {
+    // Navigate through the kept ref, not window.open(url, name): Chrome resets
+    // a tab's window name once it navigates cross-origin, so a named reopen
+    // can miss the tab and mint a duplicate. Setting location and focus() are
+    // both allowed on a cross-origin WindowProxy.
+    try {
+      if (castBrowserTabUrl !== url) tab.location.href = url;
+      castBrowserTabUrl = url;
+      tab.focus();
+      return;
+    } catch {
+      // ref unusable — reopen below
+    }
+  }
+  castBrowserTab = window.open(url, CAST_BROWSER_TAB_NAME);
+  castBrowserTabUrl = url;
+  castBrowserTab?.focus();
+}
+
+function CastCommandBlock({ tool, result, images, globalImageMap, conversationId }: { tool: ToolCall; result?: ToolResult; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]>; conversationId?: Id<"conversations"> }) {
   const [expanded, setExpanded] = useState(false);
+  const convex = useConvex();
   const cast = parseCastCommand(tool)!;
   const { category, subcommand, args } = cast;
   const output = result?.content || "";
@@ -4953,20 +5006,25 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
   }, [args]);
 
   // `cast browser …` drives a page in the cloned Chrome. The CLI prints the
-  // page URL on its own line (pageLine / "→ navigated to"), so the freshest
-  // standalone URL in the output is the page the command left the browser on.
-  // Falls back to the argument of `open <url>` when there is no output yet.
+  // page URL on its own line (pageLine / "→ navigated to") only for some verbs,
+  // so the row's own output wins when it has one, and otherwise the
+  // conversation-level carry-forward map supplies the page the browser was
+  // already on (see CastBrowserUrlContext).
+  const carriedBrowserUrls = useContext(CastBrowserUrlContext);
   const browserUrl = useMemo(() => {
     if (cat !== "browser") return null;
-    const lines = [...stripAnsi(output).matchAll(/^\s*(https?:\/\/\S+)\s*$/gm)];
-    if (lines.length > 0) return lines[lines.length - 1][1];
-    if (subcommand === "open" && firstArg && firstArg !== "back" && firstArg !== "forward") {
-      if (/^https?:\/\//i.test(firstArg)) return firstArg;
-      if (/^[\w-]+(\.[\w-]+)+(\/|$)/.test(firstArg)) return `https://${firstArg}`;
-    }
-    return null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cat, subcommand, output, firstArg]);
+    return extractBrowserPageUrl(subcommand, args, output) ?? carriedBrowserUrls[tool.id] ?? null;
+  }, [cat, subcommand, args, output, carriedBrowserUrls, tool.id]);
+
+  // The tab this command acted on ("tab 4A2CDC7E — next: …"). When the viewer
+  // is on the session's machine, clicking "open tab" raises that real tab in
+  // the driven Chrome instead of opening a fresh copy of the page; anywhere
+  // else — other machine, daemon down, tab closed — the click quietly falls
+  // back to the URL. See lib/browserFocus.ts.
+  const browserTabId = useMemo(
+    () => (cat === "browser" ? extractBrowserTabId(output) : null),
+    [cat, output],
+  );
 
   const renderSummary = () => {
     const isShow = subcommand === "show" || subcommand === "status" || subcommand === "context";
@@ -5078,11 +5136,30 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
         {browserUrl && (
           <a
             href={browserUrl}
-            target="_blank"
-            rel="noopener noreferrer"
+            target={CAST_BROWSER_TAB_NAME}
             className="text-sol-cyan/70 hover:text-sol-cyan transition-colors flex-shrink-0 font-mono flex items-center gap-0.5"
-            onClick={(e) => e.stopPropagation()}
-            title={browserUrl}
+            // Warm the endpoint cache on hover so the focus attempt on click
+            // resolves inside the popup-blocker's activation window.
+            onMouseEnter={browserTabId ? () => prefetchBrowserFocusEndpoint(convex) : undefined}
+            onClick={(e) => {
+              e.stopPropagation();
+              // Modified clicks keep their native new-tab/window behavior.
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+              e.preventDefault();
+              const url = browserUrl;
+              if (!browserTabId) {
+                // No driven tab to raise: reuse the one named mirror tab.
+                if (url) openCastBrowserTab(url);
+                return;
+              }
+              // Try to raise the REAL driven tab first; only a confirmed focus
+              // suppresses the navigation. Otherwise fall back to the named
+              // mirror tab so repeated clicks never pile up new tabs.
+              void focusBrowserTab(convex, browserTabId).then((focused) => {
+                if (!focused && url) openCastBrowserTab(url);
+              });
+            }}
+            title={browserTabId ? `${browserUrl}\nfocuses the driven tab ${browserTabId} when it's on this machine` : browserUrl}
           >
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -5090,7 +5167,31 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
             <span>open tab</span>
           </a>
         )}
+        {cat === "browser" && conversationId && (
+          <BrowserWatchButton conversationId={conversationId} />
+        )}
       </div>
+
+      {(() => {
+        // A `cast browser shot` declares the file it wrote via an inline-image
+        // marker; the parser lifts it onto the message keyed by this tool call
+        // (see cli inlineImage.ts). Bind it here the same way ToolBlock does,
+        // so the screenshot renders under the row like an extension shot —
+        // several at once (`--viewports`) read side by side as a comparison.
+        let toolImages = images?.filter(img => img.tool_use_id === tool.id) ?? [];
+        if (!toolImages.length) toolImages = globalImageMap?.[tool.id] ?? [];
+        if (!toolImages.length) return null;
+        if (toolImages.length === 1) return <ImageBlock image={toolImages[0]} />;
+        return (
+          <div className="flex gap-2 items-start">
+            {toolImages.map((img, i) => (
+              <div key={i} className="flex-1 min-w-0 max-w-md">
+                <ImageBlock image={img} />
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {bodyParts.length > 0 && <CastMutationBody parts={bodyParts} accent={config.accent} />}
 
@@ -5123,6 +5224,35 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * "watch live" on a `cast browser` row: opens the read-only stream of the tab
+ * this agent is driving (BrowserWatchSplit), docked above the conversation.
+ * Rendered on every browser row — whether a stream actually exists is the
+ * daemon's call, and the split reports it honestly on connect.
+ */
+function BrowserWatchButton({ conversationId }: { conversationId: Id<"conversations"> }) {
+  const convKey = conversationId.toString();
+  const open = useBrowserWatchOpen(convKey);
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        toggleBrowserWatch(convKey);
+      }}
+      className={`transition-colors flex-shrink-0 font-mono flex items-center gap-0.5 ${
+        open ? "text-sol-red hover:text-sol-red/80" : "text-sol-cyan/70 hover:text-sol-cyan"
+      }`}
+      title={open ? "Close the live browser view" : "Watch what this agent's browser shows, live (read-only)"}
+    >
+      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+      </svg>
+      <span>{open ? "watching" : "watch live"}</span>
+    </button>
   );
 }
 
@@ -7655,7 +7785,7 @@ function CondensedImageThumb({ image }: { image: ImageData }) {
 // the collapsed tools ride along as clickable thumbnails, so images stay
 // reachable without expanding the group — which is why the root is a div, not
 // a button (thumbnails are interactive, and buttons can't nest).
-const CondensedToolsLine = memo(function CondensedToolsLine({ tools, expanded, onToggle, images, globalImageMap }: { tools: ToolCall[]; expanded: boolean; onToggle: () => void; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
+const CondensedToolsLine = memo(function CondensedToolsLine({ tools, expanded, onToggle, images, globalImageMap }: { tools: ToolCall[]; expanded: boolean; onToggle: () => void; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]> }) {
   const { summary, screenshots } = useMemo(() => {
     const counts = new Map<string, number>();
     const actions: { name: string; input: string }[] = [];
@@ -7667,8 +7797,9 @@ const CondensedToolsLine = memo(function CondensedToolsLine({ tools, expanded, o
         counts.set(action.name, (counts.get(action.name) ?? 0) + 1);
         actions.push(action);
       }
-      const toolImage = images?.find(img => img.tool_use_id === tc.id) || globalImageMap?.[tc.id];
-      if (toolImage) shots.push({ id: tc.id, image: toolImage });
+      let toolImages = images?.filter(img => img.tool_use_id === tc.id) ?? [];
+      if (!toolImages.length) toolImages = globalImageMap?.[tc.id] ?? [];
+      toolImages.forEach((image, i) => shots.push({ id: `${tc.id}:${i}`, image }));
     }
     const counted = [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
     return {
@@ -7824,7 +7955,7 @@ function AssistantBlockImpl({
   model?: string;
   onSendInlineMessage?: (content: string) => void;
   isConversationActive?: boolean;
-  globalImageMap?: Record<string, ImageData>;
+  globalImageMap?: Record<string, ImageData[]>;
 }) {
   const CONTENT_MAX_HEIGHT = 800;
 
@@ -8068,7 +8199,7 @@ function AssistantBlockImpl({
           ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
             <PlanModeBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} conversationId={conversationId} messageId={messageId} onSendMessage={onSendInlineMessage} />
           ) : parseCastCommand(tc) ? (
-            <CastCommandBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
+            <CastCommandBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} images={images} globalImageMap={globalImageMap} conversationId={conversationId} />
           ) : (
             <ToolBlock
               key={tc.id}
@@ -14362,15 +14493,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [conversation?.messages]);
 
+  // Tool images live on the tool_result message, not the assistant message
+  // that made the call, so the ToolBlock finds them by tool id here. A list,
+  // not a single image: one command can hand back several (`cast browser
+  // shot --viewports`), and keeping only the last would silently drop the rest.
   const globalImageMap = useMemo(() => {
-    const map: Record<string, ImageData> = {};
+    const map: Record<string, ImageData[]> = {};
     const sources = [conversation?.messages].filter(Boolean) as Message[][];
     for (const msgs of sources) {
       for (const msg of msgs) {
         if (msg.images) {
           for (const img of msg.images) {
             if (img.tool_use_id) {
-              map[img.tool_use_id] = img;
+              (map[img.tool_use_id] ??= []).push(img);
             }
           }
         }
@@ -14378,6 +14513,30 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     return map;
   }, [conversation?.messages]);
+
+  // toolCallId → page URL for every `cast browser` row, carrying the last
+  // known URL across rows whose output doesn't restate it. Identity is kept
+  // stable across recomputes with identical content (the common case: a
+  // message sync that added no browser rows), so the CastBrowserUrlContext
+  // consumers — every cast row — don't re-render on unrelated syncs.
+  const browserUrlMapRef = useRef<Record<string, string>>({});
+  const browserPageUrlMap = useMemo(() => {
+    const rows: BrowserRowInput[] = [];
+    for (const msg of conversation?.messages ?? []) {
+      for (const tc of msg.tool_calls ?? []) {
+        const cast = parseCastCommand(tc);
+        if (!cast || normalizeCastCategory(cast.category) !== "browser") continue;
+        const result = msg.tool_results?.find((tr) => tr.tool_use_id === tc.id) || globalToolResultMap[tc.id];
+        rows.push({ toolCallId: tc.id, subcommand: cast.subcommand, args: cast.args, output: result?.content || "" });
+      }
+    }
+    const next = buildBrowserPageUrlMap(rows);
+    const prev = browserUrlMapRef.current;
+    const prevKeys = Object.keys(prev);
+    const same = prevKeys.length === Object.keys(next).length && prevKeys.every((k) => prev[k] === next[k]);
+    if (!same) browserUrlMapRef.current = next;
+    return browserUrlMapRef.current;
+  }, [conversation?.messages, globalToolResultMap]);
 
   // Every image in the session, in transcript order — the header gallery's
   // source list (attachments, tool screenshots, trusted markdown images).
@@ -14786,6 +14945,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   return (
     <HighlightContext.Provider value={highlightQuery}>
+    <CastBrowserUrlContext.Provider value={browserPageUrlMap}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
     <main className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
@@ -15506,6 +15666,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         {conversation && (
           <ErrorBoundary name="ConversationTerminal" level="inline" fallback={null}>
             <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
+            <BrowserWatchSplit convKey={conversation._id.toString()} sessionUuid={managedSession?.session_id} tmuxSession={managedSession?.tmux_session} />
           </ErrorBoundary>
         )}
       </header>
@@ -16046,6 +16207,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     </main>
     </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
+    </CastBrowserUrlContext.Provider>
     </HighlightContext.Provider>
   );
 });

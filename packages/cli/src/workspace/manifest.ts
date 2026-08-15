@@ -105,7 +105,7 @@ function validateBrowser(raw: unknown, file?: string): BrowserSpec {
   if (!isPlainObject(raw)) {
     throw new ManifestError("'browser' must be a table", file, "browser");
   }
-  const known = new Set(["enabled", "headless", "cdp_port"]);
+  const known = new Set(["enabled", "headless", "cdp_port", "allow"]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) {
       throw new ManifestError(
@@ -152,10 +152,17 @@ function validateBrowser(raw: unknown, file?: string): BrowserSpec {
     }
     cdpPort = { base, range };
   }
+  // Absent and empty differ on purpose: no `allow` key means no site policy,
+  // while `allow = []` locks the project down (see browser/policy.ts).
+  const allow =
+    raw["allow"] === undefined
+      ? undefined
+      : validateStringArray(raw["allow"], "browser.allow", file);
   return {
     enabled: enabled ?? DEFAULT_BROWSER.enabled,
     headless: headless ?? DEFAULT_BROWSER.headless,
     cdpPort,
+    ...(allow !== undefined ? { allow } : {}),
   };
 }
 

@@ -196,8 +196,11 @@ export interface DialogEntry {
  */
 export async function armRecorder(page: PageSession): Promise<void> {
   const src = recorderSource();
-  await page.conn.send("Page.addScriptToEvaluateOnNewDocument", { source: src }, page.sessionId).catch(() => {});
-  await page.conn.send("Runtime.evaluate", { expression: src }, page.sessionId).catch(() => {});
+  // Independent registrations, so both round trips overlap.
+  await Promise.all([
+    page.conn.send("Page.addScriptToEvaluateOnNewDocument", { source: src }, page.sessionId).catch(() => {}),
+    page.conn.send("Runtime.evaluate", { expression: src }, page.sessionId).catch(() => {}),
+  ]);
 }
 
 export async function readRecording(page: PageSession): Promise<Recording> {
