@@ -24,7 +24,7 @@ import type { Command } from "commander";
 import { CdpConnection, listTargets, type CdpTarget } from "./cdp.js";
 import {
   acquireStartLock, attachToTarget, clearState, freePort, killStrayChrome, launchManagedChrome,
-  probeLiveness, pruneTabOwnership, readState, resolveTarget, setActiveTarget, settle, stopInstance,
+  probeLiveness, pruneTabOwnership, readState, recordNavigation, resolveTarget, setActiveTarget, settle, stopInstance,
   TabUnresponsive, waitForStraysGone, writeState,
   type InstanceState, type PageSession,
 } from "./instance.js";
@@ -38,10 +38,14 @@ import {
 } from "./actions.js";
 import { armRecorder, clearRecording, readRecording } from "./observe.js";
 import { ownerKey } from "./owner.js";
+import { registerEngineCommands } from "./cliEngine.js";
+import { ENGINE_MIN_VERSION, ENGINE_PACKAGE, engineFitness, findEngine } from "./engine.js";
+import { sameDocument } from "./url.js";
 import { runBatch, type BatchContext } from "./batch.js";
 import { provisionCredentials } from "./credentials.js";
 import { startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
-import { loadRemoteHost } from "../remote/session-move.js";
+import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
+import { readHosts, ensureUp, toRemoteHost, stopHost, hostState, upsertHost, type CloudHost } from "./cloudHost.js";
 import { downscaleWithSips, uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
@@ -120,6 +124,31 @@ async function withPage<T>(
   }
 }
 
+/**
+ * Arguments for every tab this driver opens.
+ *
+ * `background: true` is the whole point: without it Chrome brings its window
+ * forward when a tab appears, so a fleet of agents working in parallel keeps
+ * snatching the screen from whatever the human is doing. An agent's browsing
+ * should be visible when you go looking for it, never in your way.
+ */
+const NEW_TAB = { url: "about:blank", background: true } as const;
+
+/** The URL a tab is on, or null if it cannot say. */
+async function currentUrl(page: PageSession): Promise<string | null> {
+  try {
+    const r = await page.conn.send<any>(
+      "Runtime.evaluate",
+      { expression: "location.href", returnByValue: true },
+      page.sessionId,
+      3000,
+    );
+    return typeof r.result?.value === "string" ? r.result.value : null;
+  } catch {
+    return null;
+  }
+}
+
 function shortId(id: string): string {
   return id.slice(0, 8);
 }
@@ -147,6 +176,13 @@ function pageLine(url: string, title: string): string {
   return `${fmt.highlight(title || "(untitled)")}\n${fmt.muted(url)}`;
 }
 
+/** Told to the user when a start queues behind another agent's launch. */
+function waitingOnLaunch(holderPid: number): void {
+  console.log(
+    fmt.muted(`  another agent (pid ${holderPid}) is starting the browser — waiting for it, then reusing it`),
+  );
+}
+
 interface StartOptions {
   profile?: string;
   channel: ChromeChannel;
@@ -165,7 +201,7 @@ interface StartOptions {
  * failure, and their retries restarted the browser under everyone else.
  */
 async function startLocalBrowser(o: StartOptions): Promise<void> {
-  const release = await acquireStartLock();
+  const release = await acquireStartLock(undefined, waitingOnLaunch);
   try {
     const existing = readState();
     // Patient on purpose: this is the one probe whose false "dead" leads to
@@ -259,6 +295,74 @@ async function startLocalBrowser(o: StartOptions): Promise<void> {
   }
 }
 
+/**
+ * Should the engine drive, or our built-in CDP driver?
+ *
+ * The engine wins whenever it is present, and `cast browser start` installs it,
+ * so in practice it always is. `CAST_BROWSER_LEGACY=1` forces the built-in
+ * driver — kept as an escape hatch for diagnosing an engine problem without
+ * uninstalling anything, and as the honest answer for a machine that cannot
+ * install it at all.
+ */
+function useEngine(): boolean {
+  if (process.env.CAST_BROWSER_LEGACY === "1") return false;
+  const fit = engineFitness();
+  if (fit.ok) return true;
+  // Say why, once, on stderr — so a machine quietly running the older driver is
+  // diagnosable without anyone having to read this function. "missing" is the
+  // ordinary first-run state and needs no announcement; a version we refuse to
+  // drive does.
+  if (fit.reason === "too-old") {
+    process.stderr.write(
+      `  ${fmt.warning("!")} browser engine ${fit.version} is older than ${ENGINE_MIN_VERSION}; using the built-in driver.\n` +
+        `    Upgrade with: npm install -g ${ENGINE_PACKAGE}@latest\n`,
+    );
+  }
+  return false;
+}
+
+/**
+ * Turn `--remote [name]` into a reachable host, whichever cloud it lives in.
+ *
+ * Two backends, deliberately different in character:
+ *
+ *   linux  — an EC2 instance. Stops in seconds and costs only its disk when
+ *            idle, so it is the default and the right answer for browser work.
+ *   mac    — a Scaleway Apple silicon Mac. Cannot stop at all: Apple's licence
+ *            imposes a 24-hour minimum lease, so it bills until deleted. Worth
+ *            it only for work that genuinely needs macOS.
+ *
+ * `ensureUp` hides the difference at the call site — asking for a host is one
+ * act whether or not the machine happens to be awake.
+ */
+async function resolveRemote(name: string | boolean): Promise<{ host: RemoteHost; label: string; canSleep: boolean }> {
+  const wanted = typeof name === "string" ? name.toLowerCase() : "";
+  const hosts = readHosts();
+
+  // "mac" (or a Scaleway host id) goes to the Apple silicon registry.
+  const wantsMac = wanted === "mac" || wanted === "darwin" || wanted === "scaleway";
+  if (wantsMac || (wanted && hosts.every((h) => h.id !== wanted && h.provider !== wanted))) {
+    if (wantsMac || !hosts.length) {
+      const host = loadRemoteHost(wantsMac ? undefined : wanted || undefined);
+      return { host, label: `mac ${host.user}@${host.address}`, canSleep: false };
+    }
+  }
+
+  const picked =
+    hosts.find((h) => h.id === wanted) ??
+    hosts.find((h) => h.provider === (wanted === "linux" ? "aws" : wanted)) ??
+    hosts.find((h) => h.provider === "aws") ??
+    hosts[0];
+  if (!picked) {
+    die(
+      "no remote hosts are registered",
+      "add one with `cast browser hosts add` — a Linux box costs about a dollar a month idle",
+    );
+  }
+  const up = await ensureUp(picked, (m) => console.log(fmt.muted(`  ${m}`)));
+  return { host: toRemoteHost(up), label: `${up.provider} ${up.id}`, canSleep: true };
+}
+
 export function registerBrowserCommand(program: Command, deps: PublishDeps): void {
   // Which agent is calling. Tabs are owned per session so parallel agents on
   // one machine do not drive each other's pages; a human at a terminal has no
@@ -273,6 +377,76 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .command("browser")
     .alias("br")
     .description("Drive a real Chrome: snapshot pages, click, type, screenshot, read console");
+
+  // The agent-browser engine drives everything it covers, which is nearly all
+  // of it. Our own CDP driver stays behind it as a fallback for a machine that
+  // cannot install the engine — no npm, no network — so `cast browser` keeps
+  // working rather than failing on a dependency the agent cannot fix.
+  //
+  // The choice is made once, at registration, because two implementations of
+  // the same verb cannot both be registered and a per-call decision would make
+  // the help text lie about what is going to run.
+  const hosts = br.command("hosts").description("Remote machines a browser can run on");
+
+  hosts
+    .command("ls", { isDefault: true })
+    .description("List remote hosts, what they cost, and whether they are awake")
+    .action(() => {
+      const rows = readHosts();
+      if (!rows.length) {
+        console.log(fmt.muted("no remote hosts registered — `cast browser hosts add --help`"));
+        return;
+      }
+      for (const h of rows) {
+        const s = hostState(h);
+        const mark = s.state === "running" ? fmt.success("awake") : s.state === "stopped" ? fmt.muted("asleep") : fmt.warning(s.state);
+        console.log(`  ${h.id.padEnd(22)} ${h.provider.padEnd(13)} ${mark.padEnd(18)} ${s.address ?? fmt.muted("(no address until it wakes)")}`);
+      }
+      console.log(
+        fmt.muted(
+          "\n  A Linux host sleeps when idle and then costs only its disk, about a dollar a month.\n" +
+            "  An Apple silicon Mac cannot sleep — Apple's licence sets a 24-hour minimum lease, so it\n" +
+            "  bills continuously (~EUR75/month) until deleted. Use one only for work that needs macOS.",
+        ),
+      );
+    });
+
+  hosts
+    .command("add <instanceId>")
+    .description("Register an existing EC2 instance as a browser host")
+    .requiredOption("--key <path>", "SSH private key for it")
+    .option("--region <name>", "AWS region", "us-west-2")
+    .option("--user <name>", "SSH user for the image", "ubuntu")
+    .action((instanceId: string, o: { key: string; region: string; user: string }) => {
+      const host: CloudHost = {
+        id: instanceId, provider: "aws", region: o.region, user: o.user,
+        keyPath: path.resolve(o.key),
+      };
+      const s = hostState(host);
+      if (s.state === "missing") die(`${instanceId} was not found in ${o.region}`);
+      upsertHost({ ...host, address: s.address });
+      console.log(`${OK} registered ${instanceId} (${s.state})`);
+    });
+
+  hosts
+    .command("sleep [id]")
+    .description("Stop a host so it stops costing money")
+    .action((id: string | undefined) => {
+      const rows = readHosts();
+      const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
+      if (!h) die(id ? `no host ${id}` : "no stoppable host registered");
+      try {
+        stopHost(h);
+        console.log(`${OK} ${h.id} is stopping — it will cost only its disk until something wakes it`);
+      } catch (err) {
+        die((err as Error).message);
+      }
+    });
+
+  if (useEngine()) {
+    registerEngineCommands(br, deps);
+    return;
+  }
 
   // ---------------------------------------------------------------- lifecycle
 
@@ -302,7 +476,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       // A browser on another Mac. Its profile starts empty and gains logins as
       // pages are visited (credentials.ts), so nothing of yours is copied there.
       if (o.remote) {
-        const release = await acquireStartLock();
+        const release = await acquireStartLock(undefined, waitingOnLaunch);
         try {
           const existingRemote = readState();
           const remoteLive = await probeLiveness(existingRemote, 8000);
@@ -315,7 +489,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
               "it is likely overloaded, not dead — retry shortly, or `cast browser stop` to replace it deliberately",
             );
           }
-          const host = loadRemoteHost(typeof o.remote === "string" ? o.remote : undefined);
+          const resolved = await resolveRemote(o.remote!);
+          const host = resolved.host;
           const [rw, rh] = o.size.split("x").map((n) => parseInt(n, 10));
           console.log(`  starting Chrome on ${fmt.highlight(`${host.user}@${host.address}`)}…`);
           let rb;
@@ -408,7 +583,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .description("Open a URL (starts the browser if needed)")
     .option("--new-tab", "Open in a new tab instead of the current one")
     .option("--no-wait", "Return without waiting for the page to settle")
-    .action(async (url: string, o: { newTab?: boolean; wait: boolean }) => {
+    .option("--reload", "Load the page again even if the tab is already on it")
+    .action(async (url: string, o: { newTab?: boolean; wait: boolean; reload?: boolean }) => {
       if (!/^[a-z]+:\/\//i.test(url)) url = `https://${url}`;
 
       let state = readState();
@@ -439,7 +615,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         const blank = targets.find((t) => t.url === "about:blank");
         const mine = sessionId ? s.tabsBySession?.[sessionId] : null;
         if (o.newTab || !targets.length) {
-          const res = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+          const res = await conn.send<{ targetId: string }>("Target.createTarget", NEW_TAB);
           targetId = res.targetId;
         } else if (mine && targets.some((t) => t.targetId === mine)) {
           // Reuse the tab this session already owns rather than the last tab
@@ -451,7 +627,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         } else {
           // No tab of our own and none spare: take a new one instead of
           // commandeering a page another agent may be mid-flow on.
-          const res = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+          const res = await conn.send<{ targetId: string }>("Target.createTarget", NEW_TAB);
           targetId = res.targetId;
         }
 
@@ -465,7 +641,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         } catch (err) {
           if (!(err instanceof TabUnresponsive)) throw err;
           console.log(fmt.muted(`  tab ${shortId(targetId)} was not responding — opening a new one`));
-          const res = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+          const res = await conn.send<{ targetId: string }>("Target.createTarget", NEW_TAB);
           targetId = res.targetId;
           page = await attachToTarget(conn, targetId);
         }
@@ -484,14 +660,36 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           }
         }
 
-        await conn.send("Page.navigate", { url }, page.sessionId);
+        // Don't reload a page we are already on.
+        //
+        // `open` reads as "get me to this URL", and an agent re-running it to
+        // re-orient — or a batch that opens before acting — should not throw
+        // away a loaded page. Reloading costs seconds, discards scroll position
+        // and any state the agent just built up, and on a heavy app it is the
+        // difference between instant and unusable. `--reload` forces it.
+        const already = await currentUrl(page);
+        const lastNav = s.navByTab?.[targetId];
+        // Either we are already on the page asked for, or this exact request
+        // has already run in this tab and the page has not moved since — in
+        // which case running it again would land in the same place at the cost
+        // of a full load.
+        const requestAlreadyRan =
+          !!lastNav && already !== null && sameDocument(lastNav.requested, url) && sameDocument(lastNav.landed, already);
+        const sameUrl = !o.reload && already !== null && (sameDocument(already, url) || requestAlreadyRan);
+        if (sameUrl) {
+          const detail = sameDocument(already!, url) ? "" : ` (it redirected here last time)`;
+          console.log(fmt.muted(`  already on this page${detail} — reusing it (--reload to load it again)`));
+        } else {
+          await conn.send("Page.navigate", { url }, page.sessionId);
+        }
         setActiveTarget(s, targetId, sessionId);
 
-        if (o.wait !== false) {
+        if (o.wait !== false && !sameUrl) {
           const r = await settle(page);
           if (!r.settled) console.log(fmt.muted(`  (did not fully settle: ${r.reason})`));
         }
         const snap = await snapshotPage(page, { maxChars: 1 });
+        if (!sameUrl) recordNavigation(targetId, url, snap.url);
         console.log(pageLine(snap.url, snap.title));
         console.log(fmt.muted(`  tab ${shortId(targetId)} — next: cast browser snapshot`));
       } catch (err) {
@@ -552,11 +750,20 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
 
   br.command("tab <id>")
     .description("Switch the active tab (id prefix or a substring of its URL)")
-    .action(async (id: string) => {
+    .option("--show", "Also raise the browser window (steals focus)")
+    .action(async (id: string, o: { show?: boolean }) => {
       const state = await requireLive();
       const target = await resolveTarget(state!.port, state!, id, me());
       setActiveTarget(state!, target.targetId, me());
-      // Bring it to the front so a watching human sees what the agent sees.
+      // Raising the window is opt-in. Doing it on every `tab` pulled Chrome in
+      // front of whatever the human was working in, and with a fleet of agents
+      // switching tabs that means the browser is constantly taking the screen.
+      // Switching is bookkeeping in a state file, so without --show there is
+      // nothing to connect to the browser for at all.
+      if (!o.show) {
+        console.log(`${OK} active tab: ${target.title || target.url}`);
+        return;
+      }
       const conn = await CdpConnection.fromPort(state!.port);
       try {
         const page = await attachToTarget(conn, target.targetId);
@@ -1021,6 +1228,14 @@ A step with no ref uses whatever the last \`find\` matched.`,
           },
           navigate: async (url) => {
             const target = /^[a-z]+:\/\//i.test(url) ? url : `https://${url}`;
+            // Same reuse rule as the `open` command: a batch that starts with
+            // `open` to be explicit about where it is working should not throw
+            // away the page it is already on.
+            const already = await currentUrl(page);
+            if (already !== null && sameDocument(already, target)) {
+              const snap = await snapshotPage(page, { maxChars: 1 });
+              return `already on ${snap.title || snap.url}`;
+            }
             await conn.send("Page.navigate", { url: target }, page.sessionId);
             await settle(page);
             const snap = await snapshotPage(page, { maxChars: 1 });

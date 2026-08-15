@@ -24,6 +24,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { readLocalCredential } from "./remote/session-move.js";
+import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 
 const ACTIVE_KEYCHAIN_SERVICE = "Claude Code-credentials";
@@ -370,11 +371,10 @@ interface ProfileIndex {
 }
 
 export function readProfileIndex(): ProfileIndex {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(indexPath(), "utf-8"));
-    if (parsed && typeof parsed.profiles === "object") return parsed;
-  } catch {}
-  return { profiles: {} };
+  return readProfileIndexFile<Omit<CcProfileMeta, "name" | "active">>(
+    indexPath(),
+    (message) => new CcAccountError(message),
+  );
 }
 
 function writeProfileIndex(index: ProfileIndex): void {

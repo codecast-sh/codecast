@@ -1,5 +1,50 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserPageUrlMap } from "./castCommand";
+
+describe("stripEnvPrefix", () => {
+  test("strips a leading assignment", () => {
+    expect(stripEnvPrefix('CAST_BROWSER_LEGACY=1 cast browser open example.com')).toBe(
+      "cast browser open example.com",
+    );
+  });
+
+  test("strips several assignments, including quoted values", () => {
+    expect(stripEnvPrefix('FOO=1 BAR="a b" cast task ready')).toBe("cast task ready");
+  });
+
+  test("strips an `env` prefix with -u flags and assignments", () => {
+    expect(stripEnvPrefix("env -u CLAUDECODE FOO=1 cast send jx7a6xc hi")).toBe(
+      "cast send jx7a6xc hi",
+    );
+  });
+
+  test("leaves a command with no env words untouched", () => {
+    expect(stripEnvPrefix('cast send jx7a6xc "hi"')).toBe('cast send jx7a6xc "hi"');
+  });
+
+  test("does not eat an assignment-looking word past the command start", () => {
+    expect(stripEnvPrefix("cast config browser_capture=off")).toBe(
+      "cast config browser_capture=off",
+    );
+  });
+});
+
+describe("parseCastCommandString with env prefixes", () => {
+  test("an env-prefixed cast browser command still parses as a cast row", () => {
+    const parsed = parseCastCommandString("CAST_BROWSER_LEGACY=1 cast browser open example.com");
+    expect(parsed?.category).toBe("browser");
+    expect(parsed?.subcommand).toBe("open");
+  });
+
+  test("cd prefix and env prefix compose", () => {
+    const parsed = parseCastCommandString("cd /repo && FOO=1 cast task ready");
+    expect(parsed?.category).toBe("task");
+  });
+
+  test("an env-prefixed non-cast command stays null", () => {
+    expect(parseCastCommandString("FOO=1 ls -la")).toBeNull();
+  });
+});
 
 describe("stripCdPrefix", () => {
   test("strips a leading `cd <dir>;` prefix", () => {
@@ -389,5 +434,60 @@ describe("extractCastBodyParts", () => {
 
   test("a shell-expanded body yields nothing to quote", () => {
     expect(extractCastBodyParts("task", "comment", 'ct-1 "$(cat notes.md)"')).toEqual([]);
+  });
+});
+
+describe("extractBrowserPageUrl", () => {
+  test("takes the freshest standalone URL line from output, ignoring ANSI", () => {
+    const output = "\x1b[1mPage title\x1b[0m\n\x1b[2mhttps://example.com/one\x1b[0m\nsome text\n  https://example.com/two  \n  3 refs";
+    expect(extractBrowserPageUrl("snapshot", "", output)).toBe("https://example.com/two");
+  });
+
+  test("click that navigated reports the indented destination URL", () => {
+    const output = "  → navigated to Dashboard\n    https://app.example.com/dash";
+    expect(extractBrowserPageUrl("click", "#e42", output)).toBe("https://app.example.com/dash");
+  });
+
+  test("falls back to the open argument, normalizing a bare domain", () => {
+    expect(extractBrowserPageUrl("open", "example.com/x", "")).toBe("https://example.com/x");
+    expect(extractBrowserPageUrl("open", '"https://a.dev"', "")).toBe("https://a.dev");
+    expect(extractBrowserPageUrl("open", "-", "")).toBeNull();
+  });
+
+  test("actions with no URL in output yield null", () => {
+    expect(extractBrowserPageUrl("find", '"Sign in"', '  link "Sign in" #e12')).toBeNull();
+    expect(extractBrowserPageUrl("shot", "", "  /var/folders/x/shot.png (149K)")).toBeNull();
+  });
+});
+
+describe("buildBrowserPageUrlMap", () => {
+  const row = (toolCallId: string, subcommand: string, args: string, output: string) => ({ toolCallId, subcommand, args, output });
+
+  test("carries the last known URL into rows that state none", () => {
+    const map = buildBrowserPageUrlMap([
+      row("t1", "open", "example.com", "Title\nhttps://example.com/"),
+      row("t2", "find", '"Sign in"', '  link "Sign in" #e12'),
+      row("t3", "click", "#e12", "  → navigated to Login\n    https://example.com/login"),
+      row("t4", "shot", "", "  /tmp/x.png (10K)"),
+    ]);
+    expect(map).toEqual({
+      t1: "https://example.com/",
+      t2: "https://example.com/",
+      t3: "https://example.com/login",
+      t4: "https://example.com/login",
+    });
+  });
+
+  test("rows before any known URL get no link", () => {
+    const map = buildBrowserPageUrlMap([
+      row("t1", "find", '"x"', "  nothing"),
+      row("t2", "open", "a.dev", "A\nhttps://a.dev/"),
+    ]);
+    expect(map).toEqual({ t2: "https://a.dev/" });
+  });
+
+  test("an open row with no output yet links to its destination argument", () => {
+    const map = buildBrowserPageUrlMap([row("t1", "open", "b.dev/path", "")]);
+    expect(map).toEqual({ t1: "https://b.dev/path" });
   });
 });

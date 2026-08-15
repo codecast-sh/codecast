@@ -2127,21 +2127,20 @@ function installSnippetSection(
   return result;
 }
 
-/** Every section spec the CLI can install, by the config key that switches it
- *  on — the bridge `--disable` needs to find what to remove. */
-const SECTION_BY_ENABLED_KEY: Record<string, SectionSpec> = {
-  memory_enabled: SNIPPET_SECTIONS.memory.spec,
-  task_enabled: SNIPPET_SECTIONS.triggers.spec,
-  work_enabled: SNIPPET_SECTIONS.work.spec,
-  workflow_enabled: SNIPPET_SECTIONS.workflow.spec,
-  visual_enabled: SNIPPET_SECTIONS.visual.spec,
-  forks_enabled: SNIPPET_SECTIONS.forks.spec,
-  state_enabled: SNIPPET_SECTIONS.state.spec,
-  messaging_enabled: MESSAGING_SECTION,
-  publish_enabled: PUBLISH_SECTION,
-  browser_enabled: BROWSER_SECTION,
-  chat_enabled: CHAT_SECTION,
-};
+/**
+ * Every section spec the CLI can install, by the config key that switches it
+ * on — the bridge `--disable` needs to find what to remove.
+ *
+ * Derived from the catalog rather than listed by hand. The hand-written version
+ * silently omitted `decide`, so `cast install decide --disable` flipped the
+ * config flag while leaving the section in CLAUDE.md — the agent kept reading a
+ * capability the human had just turned off. Every new snippet had to remember
+ * to add a line here, and forgetting it produced exactly that bug with no
+ * error; deriving means a snippet with a section is wired the moment it exists.
+ */
+const SECTION_BY_ENABLED_KEY: Record<string, SectionSpec> = Object.fromEntries(
+  SNIPPET_CATALOG.filter((d) => d.section).map((d) => [d.enabledKey, d.section!.spec]),
+);
 
 /**
  * Take a snippet's section back off this machine.

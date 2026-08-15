@@ -14,7 +14,6 @@ import {
   captureWorkbench,
   applyWorkbench,
   matchesWorkbench,
-  WORKBENCH_PRESETS,
 } from "../workbench";
 
 const convo = (ref: string): Pane => ({ kind: "conversation", ref });
@@ -126,67 +125,54 @@ describe("apply", () => {
 });
 
 describe("matching (the active highlight)", () => {
-  it("a freshly applied workbench matches", () => {
-    const snap = WORKBENCH_PRESETS.find((p) => p.id === "wb-triage")!.snapshot;
-    const ws = applyWorkbench(createWorkspace(), snap);
+  it("a freshly applied workbench matches — save then switch back is stable", () => {
+    const snap = captureWorkbench(workedIn());
+    const ws = applyWorkbench(createWorkspace(), snap, { conversationId: "c" });
     expect(matchesWorkbench(ws, snap)).toBe(true);
   });
 
   it("hand-closing a rail the workbench opened deselects it", () => {
-    const snap = WORKBENCH_PRESETS.find((p) => p.id === "wb-triage")!.snapshot;
+    const snap = captureWorkbench(workedIn());
     let ws = applyWorkbench(createWorkspace(), snap);
     ws = hidePane(ws, "context", { remember: true });
     expect(matchesWorkbench(ws, snap)).toBe(false);
   });
 
   it("a drag-resize or a different subject does not deselect", () => {
-    const build = WORKBENCH_PRESETS.find((p) => p.id === "wb-build")!.snapshot;
-    let ws = applyWorkbench(createWorkspace(), build);
+    const snap = captureWorkbench(workedIn()); // secondary: subject
+    let ws = applyWorkbench(createWorkspace(), snap);
     ws = setSize(ws, "secondary", 55);
     ws = showPane(ws, "secondary", convo("other"), { presentation: "split" });
-    expect(matchesWorkbench(ws, build)).toBe(true);
+    expect(matchesWorkbench(ws, snap)).toBe(true);
   });
 
   it("zen is part of the arrangement", () => {
-    const snap = WORKBENCH_PRESETS.find((p) => p.id === "wb-plan")!.snapshot;
+    const snap = captureWorkbench(workedIn(), { zen: false });
     const ws = applyWorkbench(createWorkspace(), snap);
     expect(matchesWorkbench(ws, snap, { zen: true })).toBe(false);
   });
 
   it("a workbench that could not materialize its subject still matches", () => {
-    const review = WORKBENCH_PRESETS.find((p) => p.id === "wb-review")!.snapshot;
-    const ws = applyWorkbench(createWorkspace(), review, {}); // no conversation
+    let base = createWorkspace();
+    base = showPane(base, "context", comments("c1"));
+    const snap = captureWorkbench(base);
+    const ws = applyWorkbench(createWorkspace(), snap, {}); // no conversation
     expect(ws.context.pane).toBeNull();
-    expect(matchesWorkbench(ws, review)).toBe(true);
-  });
-});
-
-describe("presets", () => {
-  it("each preset names every slot — switching must be total", () => {
-    for (const p of WORKBENCH_PRESETS) {
-      for (const id of ["nav", "list", "primary", "secondary", "context", "dock"] as const) {
-        expect(p.snapshot.slots[id]).toBeDefined();
-      }
-      expect(p.snapshot.path).toBeTruthy();
-    }
+    expect(matchesWorkbench(ws, snap)).toBe(true);
   });
 
-  it("presets are distinct arrangements", () => {
-    const shapes = WORKBENCH_PRESETS.map((p) => JSON.stringify({ path: p.snapshot.path, slots: p.snapshot.slots }));
-    expect(new Set(shapes).size).toBe(WORKBENCH_PRESETS.length);
+  it("hand-closing an excusable pane IS drift — that's what update surfaces", () => {
+    const snap = captureWorkbench(workedIn()); // dock: terminal
+    let ws = applyWorkbench(createWorkspace(), snap, { conversationId: "c" });
+    expect(matchesWorkbench(ws, snap)).toBe(true);
+    ws = hidePane(ws, "dock", { remember: true });
+    expect(matchesWorkbench(ws, snap)).toBe(false);
   });
 
-  it("fully materialized presets do not match each other", () => {
-    const ctx = { conversationId: "c", allowTerminal: true };
-    for (const a of WORKBENCH_PRESETS) {
-      const ws = applyWorkbench(createWorkspace(), a.snapshot, ctx);
-      for (const b of WORKBENCH_PRESETS) {
-        if (a.id === b.id) continue;
-        // The one excused asymmetry: an arrangement whose comments/terminal
-        // slot happens to be empty may match a preset that wants one there.
-        // With a full context nothing is empty, so all pairs must differ.
-        expect(matchesWorkbench(ws, b.snapshot)).toBe(false);
-      }
+  it("capture names every slot — switching must be total", () => {
+    const snap = captureWorkbench(createWorkspace());
+    for (const id of ["nav", "list", "primary", "secondary", "context", "dock"] as const) {
+      expect(snap.slots[id]).toBeDefined();
     }
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { shouldSelfHeal, buildLaunchdKickstartCommand, buildLaunchdPlistReloadCommand, parseLaunchdPrintPid } from "./daemon.js";
+import { shouldSelfHeal, buildLaunchdKickstartCommand, buildLaunchdPlistReloadCommand, parseLaunchdPrintPid, summarizeSamplingTraces } from "./daemon.js";
 
 const THRESHOLD = 5 * 60 * 1000;
 
@@ -88,5 +88,39 @@ describe("parseLaunchdPrintPid", () => {
   test("ignores pid-like text that is not the instance pid line", () => {
     expect(parseLaunchdPrintPid('\tspawn type = daemon\n\tsomething = "pid = 999 in a string"\n')).toBeNull();
     expect(parseLaunchdPrintPid("")).toBeNull();
+  });
+});
+
+describe("summarizeSamplingTraces", () => {
+  const frame = (name: string, file = "daemon.ts", line = 1) => ({ name, sourceURL: `/x/${file}`, line });
+
+  test("names the dominant frame with its share of traces", () => {
+    const traces = {
+      traces: [
+        { frames: [frame("parseChunk"), frame("syncPass")] },
+        { frames: [frame("parseChunk"), frame("syncPass")] },
+        { frames: [frame("idleTick")] },
+        { frames: [frame("parseChunk"), frame("syncPass")] },
+      ],
+    };
+    const out = summarizeSamplingTraces(traces, 2);
+    expect(out).toBe("parseChunk@daemon.ts:1 75%, syncPass@daemon.ts:1 75%");
+  });
+
+  test("counts a self-recursive frame once per trace", () => {
+    const traces = {
+      traces: [
+        { frames: [frame("walk"), frame("walk"), frame("walk"), frame("main")] },
+        { frames: [frame("main")] },
+      ],
+    };
+    expect(summarizeSamplingTraces(traces, 1)).toBe("main@daemon.ts:1 100%");
+  });
+
+  test("accepts the JSON-string form and returns empty on garbage or no traces", () => {
+    expect(summarizeSamplingTraces(JSON.stringify({ traces: [{ frames: [frame("f")] }] }))).toBe("f@daemon.ts:1 100%");
+    expect(summarizeSamplingTraces("not json")).toBe("");
+    expect(summarizeSamplingTraces(null)).toBe("");
+    expect(summarizeSamplingTraces({ traces: [] })).toBe("");
   });
 });

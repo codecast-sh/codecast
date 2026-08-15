@@ -1,7 +1,14 @@
 import { Id } from "./_generated/dataModel";
 import { resolveTeamForPath, DirectoryMapping, isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { invalidScope, forbidden } from "./lib/auth";
-import { linkedConversationId, requireTeamMembership } from "./lib/access";
+import {
+  linkedConversationId,
+  requireTeamMembership,
+  workspaceKey,
+  computeWorkspaceKey,
+  parseWorkspaceKey,
+  type WorkspaceKey,
+} from "./lib/access";
 
 type Workspace =
   | { type: "team"; teamId: Id<"teams"> }
@@ -33,13 +40,23 @@ type ScopedFetchOpts = {
   stripFields?: string[];
 };
 
-// Batch variant of lib/access.ts effectiveTeamForResource: same rule, resolved
-// against a pre-fetched conversation map instead of per-record db reads.
-export function resolveEffectiveTeam(record: any, convMap: Map<string, any>): Id<"teams"> | undefined {
+// The row's ACCESS workspace key: the stored field when present, else the
+// write-time compute against a pre-fetched conversation map (legacy rows
+// minted before the backfill). Every list filter and the shipped-row stamp
+// key on this ONE value — never on the raw team tag.
+export function resolveWorkspaceKeyBatch(record: any, convMap: Map<string, any>): WorkspaceKey {
+  if (typeof record.workspace === "string" && record.workspace) return record.workspace;
   const cid = linkedConversationId(record);
   const conv = cid ? convMap.get(cid) : undefined;
-  if (conv) return teamVisibleConvTeam(conv);
-  return record.team_id;
+  return computeWorkspaceKey(record, conv ?? null);
+}
+
+// The team a row's ACCESS key names, or undefined for personal / unknown
+// variants. Kept for callers that still think in "effective team" terms; new
+// code should compare workspace keys directly.
+export function resolveEffectiveTeam(record: any, convMap: Map<string, any>): Id<"teams"> | undefined {
+  const ws = parseWorkspaceKey(resolveWorkspaceKeyBatch(record, convMap));
+  return ws?.type === "team" ? ws.teamId : undefined;
 }
 
 export async function scopedFetch(
@@ -149,18 +166,21 @@ export async function scopedFetch(
   // in its owner's personal workspace and nowhere else — it must never follow
   // the user into a team space (that was the "personal task shows up in the
   // Union team view" leak).
+  // One equality against the viewer's workspace key. Boundaries are strict: a
+  // team view returns ONLY rows keyed to that team, the personal view ONLY
+  // rows keyed to the viewer. A personal row never follows the user into a
+  // team space, and one team's rows never appear in another's.
   let records: any[];
   if (workspace === "all") {
     // No team filter — caller wants every record the user can see across
     // their memberships plus their own untagged items.
     records = all;
   } else if ((workspace === "team" || !workspace) && teamId) {
-    records = all.filter(r => {
-      const eff = resolveEffectiveTeam(r, convMap);
-      return !!eff && String(eff) === String(teamId);
-    });
+    const key = workspaceKey({ type: "team", teamId });
+    records = all.filter(r => resolveWorkspaceKeyBatch(r, convMap) === key);
   } else if (workspace === "personal") {
-    records = all.filter(r => !resolveEffectiveTeam(r, convMap));
+    const key = workspaceKey({ type: "personal", userId });
+    records = all.filter(r => resolveWorkspaceKeyBatch(r, convMap) === key);
   } else {
     records = all;
   }
@@ -169,15 +189,18 @@ export async function scopedFetch(
   return { records, convMap };
 }
 
-// Normalize workspace truth onto rows we ship to clients: team_id becomes the
-// EFFECTIVE team (conversation-derived when the record links a conversation,
-// the raw tag otherwise). Client-side workspace filters and the docs crawl's
-// absent-prune all key on row.team_id, so shipping the resolved value keeps
-// every layer — server filter, client filter, prune scope — agreeing on one
-// field. Mutates in place (rows are per-request copies, same as enrichTasks).
+// Normalize workspace truth onto rows we ship to clients: `workspace` becomes
+// the resolved ACCESS key and team_id the team that key names (undefined for
+// personal). Client-side workspace filters and the docs crawl's absent-prune
+// key on these, so shipping the resolved values keeps every layer — server
+// filter, client filter, prune scope — agreeing on one value. Mutates in
+// place (rows are per-request copies, same as enrichTasks).
 export function stampEffectiveTeam(records: any[], convMap: Map<string, any>): void {
   for (const r of records) {
-    r.team_id = resolveEffectiveTeam(r, convMap);
+    const key = resolveWorkspaceKeyBatch(r, convMap);
+    r.workspace = key;
+    const ws = parseWorkspaceKey(key);
+    r.team_id = ws?.type === "team" ? ws.teamId : undefined;
   }
 }
 
@@ -191,13 +214,21 @@ export function scopeByProject<T extends Record<string, any>>(
 
 export async function createDataContext(ctx: { db: any }, opts: DataContextOpts) {
   const workspace = await resolveWorkspace(ctx, opts);
+  const key = workspaceKey(workspace);
   const projectPath = opts.project_path;
 
   const self = {
     workspace,
+    workspaceKey: key,
     userId: opts.userId,
     projectPath,
 
+    // Every scoped insert carries BOTH axes: team_id (routing) and workspace
+    // (access). At the data-context boundary they agree, because the context
+    // was resolved from one workspace choice; the two only diverge later
+    // through conversation-visibility propagation (private work routed to a
+    // team). A caller may pass an explicit `workspace` to mint that divergence
+    // deliberately.
     async insert(table: string, fields: Record<string, any>) {
       const now = Date.now();
       const doc: Record<string, any> = {
@@ -208,6 +239,7 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
       };
       if (SCOPED_TABLES.has(table)) {
         doc.team_id = workspace.type === "team" ? workspace.teamId : undefined;
+        doc.workspace = typeof fields.workspace === "string" && fields.workspace ? fields.workspace : key;
         if (projectPath && !doc.project_path) {
           doc.project_path = projectPath;
         }
@@ -222,28 +254,24 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
           ? wrapProjectQuery(ctx.db.query(table), projectPath)
           : ctx.db.query(table);
       }
-      if (workspace.type === "team") {
-        const base = ctx.db.query(table)
-          .withIndex("by_team_id", (q: any) => q.eq("team_id", workspace.teamId));
-        return applyProjectScope ? wrapProjectQuery(base, projectPath) : base;
-      }
-      const personal = wrapPersonalQuery(
-        ctx.db.query(table)
-          .withIndex("by_user_id", (q: any) => q.eq("user_id", opts.userId))
-      );
-      return applyProjectScope ? wrapProjectQuery(personal, projectPath) : personal;
+      // by_workspace is the chokepoint index. Legacy rows (no stored key yet)
+      // ride the old routing index for the team space / owner index for the
+      // personal space, filtered by their computed key — same answer, one
+      // predicate, until the backfill retires the fallback.
+      const base = wrapWorkspaceQuery(ctx, table, workspace, key, opts.userId);
+      return applyProjectScope ? wrapProjectQuery(base, projectPath) : base;
     },
 
     async get(id: any) {
       const doc = await ctx.db.get(id);
       if (!doc) return null;
-      if (!canAccess(doc, opts.userId, workspace)) return null;
+      if (!(await canAccess(ctx, doc, opts.userId, workspace, key))) return null;
       return doc;
     },
 
     async patch(id: any, fields: Record<string, any>) {
       const doc = await ctx.db.get(id);
-      if (!doc || !canAccess(doc, opts.userId, workspace)) {
+      if (!doc || !(await canAccess(ctx, doc, opts.userId, workspace, key))) {
         throw new Error("Not found or no access");
       }
       return ctx.db.patch(id, { ...fields, updated_at: Date.now() });
@@ -251,7 +279,7 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
 
     async delete(id: any) {
       const doc = await ctx.db.get(id);
-      if (!doc || !canAccess(doc, opts.userId, workspace)) {
+      if (!doc || !(await canAccess(ctx, doc, opts.userId, workspace, key))) {
         throw new Error("Not found or no access");
       }
       return ctx.db.delete(id);
@@ -294,35 +322,84 @@ async function resolveWorkspace(ctx: { db: any }, opts: DataContextOpts): Promis
   return { type: "personal", userId: opts.userId };
 }
 
-function canAccess(doc: any, userId: Id<"users">, workspace: Workspace): boolean {
-  if (String(doc.user_id) === String(userId)) return true;
-  if (workspace.type === "team" && String(doc.team_id) === String(workspace.teamId)) return true;
-  return false;
+// The row's access key, resolved lazily for legacy rows (one conversation
+// read at most). After the backfill the stored branch is the only one taken.
+async function rowWorkspaceKey(ctx: { db: any }, doc: any): Promise<WorkspaceKey> {
+  if (typeof doc.workspace === "string" && doc.workspace) return doc.workspace;
+  const cid = linkedConversationId(doc);
+  const conv = cid ? await ctx.db.get(cid) : null;
+  return computeWorkspaceKey(doc, conv);
 }
 
-function wrapPersonalQuery(inner: any): any {
-  const wrap = (q: any) => ({
-    filter: (fn: any) => wrap(q.filter(fn)),
-    order: (dir: any) => wrap(q.order(dir)),
-    async collect() {
-      const results = await q.collect();
-      return results.filter((d: any) => !d.team_id);
-    },
-    async first() {
-      const results = await q.collect();
-      return results.find((d: any) => !d.team_id) ?? null;
-    },
-    async take(n: number) {
-      const results = await q.collect();
-      return results.filter((d: any) => !d.team_id).slice(0, n);
-    },
-    withIndex: (name: string, fn: any) => wrap(q.withIndex(name, fn)),
+// Owner always; otherwise the row's ACCESS key must equal the context's key.
+// team_id is never consulted here — a team-routed private row (team_id: T,
+// workspace: user:<owner>) is invisible to every other member of T.
+async function canAccess(
+  ctx: { db: any },
+  doc: any,
+  userId: Id<"users">,
+  _workspace: Workspace,
+  key: WorkspaceKey,
+): Promise<boolean> {
+  if (String(doc.user_id) === String(userId)) return true;
+  return (await rowWorkspaceKey(ctx, doc)) === key;
+}
+
+// Chokepoint query for a scoped table: rows whose ACCESS key equals the
+// context's key. Reads by_workspace, then unions the legacy rows (no stored key
+// yet) from the old routing/owner index, filtered by their computed key —
+// so the answer is identical before and after the backfill.
+function wrapWorkspaceQuery(
+  ctx: { db: any },
+  table: string,
+  workspace: Workspace,
+  key: WorkspaceKey,
+  userId: Id<"users">,
+): any {
+  const legacyBase = () => workspace.type === "team"
+    ? ctx.db.query(table).withIndex("by_team_id", (q: any) => q.eq("team_id", workspace.teamId))
+    : ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId));
+  const keyed = () => ctx.db.query(table).withIndex("by_workspace", (q: any) => q.eq("workspace", key));
+
+  const build = (mods: Array<(q: any) => any>) => {
+    let a = keyed();
+    let b = legacyBase();
+    for (const m of mods) { a = m(a); b = m(b); }
+    return [a, b];
+  };
+  const merge = async (mods: Array<(q: any) => any>): Promise<any[]> => {
+    const [a, b] = build(mods);
+    const out: any[] = await a.collect();
+    const seen = new Set(out.map((d: any) => String(d._id)));
+    for (const d of await b.collect()) {
+      if (seen.has(String(d._id))) continue;
+      if (typeof d.workspace === "string" && d.workspace) continue; // keyed elsewhere
+      if ((await rowWorkspaceKey(ctx, d)) === key) { seen.add(String(d._id)); out.push(d); }
+    }
+    return out;
+  };
+
+  const wrap = (mods: Array<(q: any) => any>): any => ({
+    filter: (fn: any) => wrap([...mods, (q) => q.filter(fn)]),
+    order: (dir: any) => wrap([...mods, (q) => q.order(dir)]),
+    withIndex: (_name: string, _fn: any) => wrap(mods), // scope index is fixed
+    async collect() { return merge(mods); },
+    async first() { return (await merge(mods))[0] ?? null; },
+    async take(n: number) { return (await merge(mods)).slice(0, n); },
     async paginate(opts: any) {
-      const result = await q.paginate(opts);
-      return { ...result, page: result.page.filter((d: any) => !d.team_id) };
+      // Pagination rides the keyed index; legacy rows (no stored key) join
+      // only after the backfill. Every page is still filtered by the key so
+      // the boundary never depends on the index alone.
+      const [a] = build(mods);
+      const result = await a.paginate(opts);
+      const page: any[] = [];
+      for (const d of result.page) {
+        if ((await rowWorkspaceKey(ctx, d)) === key) page.push(d);
+      }
+      return { ...result, page };
     },
   });
-  return wrap(inner);
+  return wrap([]);
 }
 
 function wrapProjectQuery(inner: any, projectPath: string): any {

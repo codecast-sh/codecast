@@ -1,6 +1,11 @@
-import { memo } from "react";
+import { memo, useRef } from "react";
+import { ImagePlus } from "lucide-react";
 import { MessageInput } from "../ConversationView";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { useTypingMembers, useTypingReporter } from "../../hooks/useChatTyping";
+import { TypingIndicator } from "./TypingIndicator";
+import { pendingImageUploads } from "../../lib/draftImages";
+import type { ChatAttachment } from "../../store/chatSlice";
 import "./chat.css";
 
 // The chat composer.
@@ -13,9 +18,21 @@ import "./chat.css";
 // would give chat a second, worse text box that drifts from the one people
 // already know.
 //
+// Images ride the same machinery: paste/drop/pick lands in MessageInput's
+// thumbnail strip and its upload pipeline; the gate hands the settled storage
+// ids over as chat attachments. A send with uploads still in flight awaits
+// their promises (module-level, so a remount can't lose them) and dispatches
+// the moment they settle — the box itself already cleared.
+//
 // The draft key is the composer's identity: `chat:<channel>` for the channel and
 // `chat:<channel>:<root>` for a thread, so a half-written reply and a
 // half-written channel message never overwrite each other.
+//
+// Typing presence starts and ends here too. The reporter listens to the input
+// events that BUBBLE out of MessageInput's textarea — no prop threaded through
+// the shared component — and the matching indicator sits in the foot row, so
+// both halves of the feature live at the one point that knows the scope
+// (channel vs thread).
 
 export function chatDraftKey(channelId: string, threadRootId?: string): string {
   return threadRootId ? `chat:${channelId}:${threadRootId}` : `chat:${channelId}`;
@@ -29,6 +46,7 @@ export const ChatComposer = memo(function ChatComposer({
   onSend,
   autoFocus,
   compact,
+  dropFilesRef,
 }: {
   channelId: string;
   threadRootId?: string;
@@ -37,14 +55,26 @@ export const ChatComposer = memo(function ChatComposer({
    *  every team task/doc/plan vanishes from the @ popup. */
   teamId?: string;
   placeholder: string;
-  onSend: (content: string) => void;
+  onSend: (content: string, attachments?: ChatAttachment[]) => void;
   autoFocus?: boolean;
   /** The thread panel is narrower and sits under its own scroll region. */
   compact?: boolean;
+  /** Handed to the page so the whole transcript is a drop target: files dropped
+   *  anywhere on the channel land in this composer's thumbnail strip. */
+  dropFilesRef?: React.MutableRefObject<((files: File[]) => void) | null>;
 }) {
   const draftKey = chatDraftKey(channelId, threadRootId);
+  const typing = useTypingReporter(channelId, threadRootId);
+  const typists = useTypingMembers(channelId, threadRootId);
+  const ownDropRef = useRef<((files: File[]) => void) | null>(null);
+  const dropRef = dropFilesRef ?? ownDropRef;
+  const pickerRef = useRef<HTMLInputElement | null>(null);
   return (
-    <div className="ch-composer" style={compact ? { margin: "0 12px 12px" } : undefined}>
+    <div
+      className="ch-composer"
+      style={compact ? { margin: "0 12px 12px" } : undefined}
+      onInput={typing.onTyping}
+    >
       <MessageInput
         // Remount on a channel or thread switch so the box never carries the
         // previous room's draft into the new one.
@@ -55,12 +85,52 @@ export const ChatComposer = memo(function ChatComposer({
         mentionTeamId={teamId}
         composerPlaceholder={placeholder}
         autoFocusInput={autoFocus}
-        onGateSend={async (text: string) => {
+        onDropFiles={dropRef}
+        onGateSend={async (text: string, images) => {
+          typing.stop();
           const content = text.trim();
-          if (content) onSend(content);
+          const list = images ?? [];
+          if (!content && list.length === 0) return;
+          // Settle what's still uploading; the registry outlives any remount.
+          const settled = await Promise.all(
+            list.map(async (img) => ({
+              ...img,
+              storageId:
+                img.storageId ??
+                (await (pendingImageUploads.get(img.previewUrl) ?? Promise.resolve(null))),
+            })),
+          );
+          const attachments: ChatAttachment[] = settled
+            .filter((img) => img.storageId)
+            .map((img) => ({ storage_id: img.storageId as string, mime: img.mime }));
+          // Every upload failed and nothing was typed — uploadImage already
+          // toasted each failure; there is nothing real to send.
+          if (!content && attachments.length === 0) return;
+          onSend(content, attachments.length ? attachments : undefined);
         }}
       />
       <div className="ch-composer-foot">
+        <button
+          type="button"
+          className="ch-composer-attach"
+          title="Attach an image"
+          onClick={() => pickerRef.current?.click()}
+        >
+          <ImagePlus className="w-3.5 h-3.5" />
+        </button>
+        <input
+          ref={pickerRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            if (files.length) dropRef.current?.(files);
+            e.target.value = "";
+          }}
+        />
+        <TypingIndicator members={typists} />
         {/* The optional half is shed by WIDTH, not by which panel this is. The
             thread panel was the narrow case the flag was written for, but the
             main composer gets just as narrow with a rail and a thread beside it

@@ -38,6 +38,7 @@
 // double-post, however many times the user presses retry.
 
 import { inActiveWorkspace } from "../lib/workspaceScope";
+import { dmKeyFor, dmOtherIds } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
 import type { PendingEntry } from "./syncProtocol";
@@ -67,6 +68,14 @@ export type ChatChannelRow = {
   _id: string;
   team_id?: string;
   name: string;
+  /** Absent = public. Private channels and DMs gate on membership server-side;
+   *  the client only shapes the surface (icon, naming, what the menu offers). */
+  kind?: "public" | "private" | "dm";
+  /** ACCESS stamp (workspaceKey-shaped); the client never branches on it. */
+  workspace?: string;
+  /** `<teamId>:<sorted member ids>` — a DM's identity, and the client's source
+   *  for naming the room (the other side's names, resolved at render). */
+  dm_key?: string;
   topic?: string;
   is_default?: boolean;
   created_by?: string;
@@ -158,6 +167,9 @@ export type ChatRailRow = {
   unread_mentions: number;
   notify_level: ChatNotifyLevel;
   joined: boolean;
+  /** Roster of a private room or DM — derived by the server, absent on public
+   *  channels (their audience is the team). */
+  member_ids?: string[];
 };
 
 // ── Stub ids ────────────────────────────────────────────────────────────────
@@ -246,14 +258,35 @@ export type ChatSliceActions = {
   /** Archive (or restore) a channel. Optimistic: the row leaves the rail at
    *  once. Restore writes null, the tombstone a delta sync can see. */
   archiveChatChannel: (channelId: string, archived: boolean) => void;
+  /** Grow a private room. The roster is server-derived (the rail's member_ids),
+   *  so there is no local row to write — the echo carries the new face. */
+  addChatChannelMembers: (channelId: string, memberIds: string[]) => void;
+  /** Remove someone (creator/admin), or yourself (leaving). Leaving also drops
+   *  the room locally at once — waiting for the echo would leave you looking at
+   *  a room you just walked out of. */
+  removeChatChannelMember: (channelId: string, userId: string) => void;
   /** Returns the stub channel id, so the rail can select the new channel in the
    *  same tick. The altKey supersede moves it onto the real id on echo. */
-  createChatChannel: (name: string, opts?: { topic?: string; teamId?: string }) => string;
+  createChatChannel: (name: string, opts?: ChatCreateChannelOptions) => string;
   dispatchCreateChatChannel: (
     clientId: string,
     name: string,
-    opts?: { topic?: string; teamId?: string },
+    opts?: ChatCreateChannelOptions,
   ) => Promise<any>;
+  /** Open (or find) the DM with these teammates. Local-first: a room the store
+   *  already holds returns its real id in the same tick; a new one returns a
+   *  stub that the altKey supersede rekeys on echo. */
+  openDmChannel: (memberIds: string[], teamId?: string) => string;
+  dispatchOpenDm: (clientId: string, memberIds: string[], teamId?: string) => Promise<any>;
+};
+
+export type ChatCreateChannelOptions = {
+  topic?: string;
+  teamId?: string;
+  /** "private" gates the room on a member list. */
+  kind?: "private";
+  /** Initial roster for a private room, besides the creator. */
+  memberIds?: string[];
 };
 
 export type ChatSliceState = ChatSliceData & ChatSliceActions;
@@ -262,12 +295,13 @@ export type ChatSliceState = ChatSliceData & ChatSliceActions;
 // a promise; the function BODY returns nothing. The slice is written against the
 // body's signature, the store interface against the caller's.
 type ChatSliceImpl = ChatSliceData &
-  Omit<ChatSliceActions, "dispatchCreateChatChannel"> & {
+  Omit<ChatSliceActions, "dispatchCreateChatChannel" | "dispatchOpenDm"> & {
     dispatchCreateChatChannel: (
       clientId: string,
       name: string,
-      opts?: { topic?: string; teamId?: string },
+      opts?: ChatCreateChannelOptions,
     ) => void;
+    dispatchOpenDm: (clientId: string, memberIds: string[], teamId?: string) => void;
   };
 
 // What a chat action may touch on the draft. Deliberately narrow: chat writes
@@ -540,13 +574,32 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       return { channelId, archived };
     }),
 
+    addChatChannelMembers: action(function (this: ChatDraft, channelId: string, memberIds: string[]) {
+      // Nothing local: the roster lives on the server-derived rail row. The
+      // action exists for its dispatch.
+      return { channelId, memberIds };
+    }),
+
+    removeChatChannelMember: action(function (this: ChatDraft, channelId: string, userId: string) {
+      if (userId === viewerId(this)) {
+        // Leaving: the room disappears for you now. The server deletes the
+        // membership + read rows; locally the channel row goes so the rail and
+        // any open tab stop showing a room you cannot re-enter.
+        delete this.chatChannels[channelId];
+        for (const id in this.chatReads) {
+          if (this.chatReads[id]?.channel_id === channelId) delete this.chatReads[id];
+        }
+      }
+      return { channelId, userId };
+    }),
+
     setChannelNotifyLevel: action(function (this: ChatDraft, channelId: string, level: ChatNotifyLevel) {
       upsertRead(this, channelId, { notify_level: level });
     }),
 
     // ── Channels ────────────────────────────────────────────────────────────
 
-    createChatChannel: (name: string, opts?: { topic?: string; teamId?: string }) => {
+    createChatChannel: (name: string, opts?: ChatCreateChannelOptions) => {
       const clientId = newChatChannelClientId();
       void (get().dispatchCreateChatChannel(clientId, name, opts) as Promise<any>).catch(() => {
         // Delivery is the outbox's problem: the entry is journaled and re-driven.
@@ -563,7 +616,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       this: ChatDraft,
       clientId: string,
       name: string,
-      opts?: { topic?: string; teamId?: string },
+      opts?: ChatCreateChannelOptions,
     ) {
       const now = Date.now();
       this.chatChannels[clientId] = {
@@ -572,6 +625,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         // chatText's rule, not a local copy: the stub must carry the exact name
         // the server row will arrive with, or the rail renames on echo.
         name: normalizeChannelName(name),
+        kind: opts?.kind,
         topic: opts?.topic,
         team_id: opts?.teamId,
         created_by: viewerId(this),
@@ -579,6 +633,44 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         updated_at: now,
       };
       // Creating a channel joins it, loudly — the same thing the server does.
+      upsertRead(this, clientId, { last_read_at: now, notify_level: "all" });
+    }),
+
+    openDmChannel: (memberIds: string[], teamId?: string) => {
+      const state = get();
+      const viewer = (state as any).currentUser?._id ?? "";
+      const dmKey = dmKeyFor(teamId ?? "", [viewer, ...memberIds]);
+      // The room may already be here — same tick, real id, no server wait.
+      for (const id in state.chatChannels) {
+        if (state.chatChannels[id]?.dm_key === dmKey) return id;
+      }
+      const clientId = newChatChannelClientId();
+      void (get().dispatchOpenDm(clientId, memberIds, teamId) as Promise<any>).catch(() => {
+        // Delivery is the outbox's problem; see createChatChannel.
+      });
+      return clientId;
+    },
+
+    dispatchOpenDm: asyncAction(function (
+      this: ChatDraft,
+      clientId: string,
+      memberIds: string[],
+      teamId?: string,
+    ) {
+      const now = Date.now();
+      const viewer = viewerId(this);
+      this.chatChannels[clientId] = {
+        _id: clientId,
+        client_id: clientId,
+        // A DM has no name; every surface derives one from dm_key at render.
+        name: "",
+        kind: "dm",
+        dm_key: dmKeyFor(teamId ?? "", [viewer, ...memberIds]),
+        team_id: teamId,
+        created_by: viewer,
+        created_at: now,
+        updated_at: now,
+      };
       upsertRead(this, clientId, { last_read_at: now, notify_level: "all" });
     }),
   };
@@ -834,6 +926,7 @@ export function selectChatRail(
     const read = readByChannel.get(id);
     const rail = railByChannel.get(id);
     const loaded = messagesByChannel.get(id);
+    const isDm = channel.kind === "dm";
 
     let unread = rail?.unread ?? 0;
     let mentions = rail?.unread_mentions ?? 0;
@@ -860,8 +953,10 @@ export function selectChatRail(
         loaded.map((m) => ({
           createdAt: m.created_at,
           authorId: m.user_id,
+          // In a DM every line is addressed to the viewer — the local tally
+          // mirrors the server's rail rule exactly.
           mentionsViewer:
-            m.mention_scope === "here" || !!m.mentions?.includes(viewer),
+            isDm || m.mention_scope === "here" || !!m.mentions?.includes(viewer),
           deletedAt: m.deleted_at,
           // Engages the server-mirrored rule: replies do not tick the channel
           // number; mentions count wherever they live.
@@ -876,9 +971,20 @@ export function selectChatRail(
     }
 
     const notifyLevel = read?.notify_level ?? rail?.notify_level ?? "mentions";
+    // Who else is in the room: the dm_key names the set (works for stubs the
+    // rail has never seen); the rail's roster covers private channels.
+    let dmMemberIds: string[] | undefined;
+    if (isDm) {
+      const fromKey = channel.dm_key ? dmOtherIds(channel.dm_key, viewer) : undefined;
+      dmMemberIds = fromKey ?? rail?.member_ids?.filter((uid) => uid !== viewer);
+    }
     out.push({
       id,
       name: channel.name,
+      kind: channel.kind,
+      isPrivate: channel.kind === "private",
+      dmMemberIds,
+      memberIds: rail?.member_ids,
       topic: channel.topic,
       unreadCount: unread,
       mentionCount: mentions,

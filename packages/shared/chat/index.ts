@@ -7,3 +7,4 @@
 // reports — the phone just buzzes for something the desktop said was read.
 export * from "./timeline";
 export * from "./handles";
+export * from "./dm";
