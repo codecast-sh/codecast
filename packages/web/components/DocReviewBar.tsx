@@ -11,7 +11,7 @@ import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { nanoid } from "nanoid";
-import { useInboxStore, getProjectName, type InboxSession } from "../store/inboxStore";
+import { useInboxStore, getProjectName, filterInboxScopeFromState, type InboxSession } from "../store/inboxStore";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { LivenessDot, sessionLivenessState } from "./LivenessDot";
 import { formatPendingComments, sortPendingComments, formatDocFeedback } from "../lib/quoteFormat";
@@ -149,7 +149,10 @@ function SessionPicker({
   const [q, setQ] = useState("");
 
   const rows = useMemo(() => {
-    const all = (Object.values(sessions) as InboxSession[]).filter(
+    // Scope the shared cache before enumerating — it holds rows from other
+    // inbox scopes/teams that must not surface in this picker.
+    const scoped = filterInboxScopeFromState(useInboxStore.getState());
+    const all = (Object.values(scoped) as InboxSession[]).filter(
       (s) => !currentUserId || !s.user_id || String(s.user_id) === String(currentUserId),
     );
     const query = q.trim().toLowerCase();
