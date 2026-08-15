@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
+import { accessiblePlanIdForShortId } from "./orchestrationEvents";
 
 export const append = mutation({
   args: {
@@ -15,14 +16,7 @@ export const append = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    let plan_id;
-    if (args.plan_short_id) {
-      const plan = await ctx.db
-        .query("plans")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_short_id))
-        .first();
-      if (plan) plan_id = plan._id;
-    }
+    const plan_id = await accessiblePlanIdForShortId(ctx, auth.userId, args.plan_short_id);
 
     const existing = await ctx.db
       .query("progress_events")
@@ -56,6 +50,7 @@ export const replay = query({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
+    await accessiblePlanIdForShortId(ctx, auth.userId, args.plan_short_id);
 
     let q = ctx.db
       .query("progress_events")
@@ -79,6 +74,7 @@ export const latest = query({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
+    await accessiblePlanIdForShortId(ctx, auth.userId, args.plan_short_id);
 
     const events = await ctx.db
       .query("progress_events")

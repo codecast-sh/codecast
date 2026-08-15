@@ -4,6 +4,7 @@ import { httpAction } from "./_generated/server";
 import { auth } from "./auth";
 import { internal, api } from "./_generated/api";
 import { callback as googleOAuthCallback, GOOGLE_CALLBACK_PATH } from "./googleOAuth";
+import { callback as connectorCallback, CONNECTOR_CALLBACK_PATH } from "./oauthConnectors";
 
 const http = httpRouter();
 
@@ -53,6 +54,13 @@ http.route({
   path: GOOGLE_CALLBACK_PATH,
   method: "GET",
   handler: googleOAuthCallback,
+});
+// Linear, Notion, and any provider added to oauthConnectors.PROVIDERS share
+// one callback: the signed state carries the provider.
+http.route({
+  path: CONNECTOR_CALLBACK_PATH,
+  method: "GET",
+  handler: connectorCallback,
 });
 
 http.route({
@@ -3576,7 +3584,30 @@ function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) 
 cliRoute("/cli/cap/status", async (ctx, body) => {
   return await ctx.runQuery(api.capabilities.listCapabilityState, body);
 });
-for (const verb of ["bind", "unbind", "toggle", "resolve", "why"]) {
+cliRoute("/cli/cap/bind", async (ctx, body) => {
+  return await ctx.runMutation(api.capabilities.bindCapability, body);
+});
+cliRoute("/cli/cap/unbind", async (ctx, body) => {
+  return await ctx.runMutation(api.capabilities.unbindCapability, body);
+});
+cliRoute("/cli/cap/toggle", async (ctx, body) => {
+  // toggle is bind with the flag: same upsert, same key, so the CLI and the
+  // web can never disagree on which row a toggle lands on.
+  return await ctx.runMutation(api.capabilities.bindCapability, body);
+});
+cliRoute("/cli/whoami", async (ctx, body) => {
+  return await ctx.runQuery(api.capabilities.whoamiForToken, body);
+});
+cliRoute("/cli/cap/surfaces", async (ctx, body) => {
+  return await ctx.runQuery(api.capabilities.surfacesForSlug, body);
+});
+cliRoute("/cli/cap/mode", async (ctx, body) => {
+  return await ctx.runMutation(api.capabilities.setCapabilitiesMode, body);
+});
+cliRoute("/cli/cap/bindings", async (ctx, body) => {
+  return await ctx.runQuery(api.capabilities.listBindingsForToken, body);
+});
+for (const verb of ["resolve", "why"]) {
   cliRoute(`/cli/cap/${verb}`, async () => {
     throw new ConvexError({
       code: "NOT_IMPLEMENTED",
@@ -4016,5 +4047,29 @@ cliRoute("/cli/artifacts/delete", async (ctx, body) => ctx.runMutation(api.artif
 // CSP `sandbox` makes the document an opaque origin even when opened directly:
 // scripts run, but the page can never touch convex.codecast.sh state.
 http.route({ pathPrefix: "/cli/a/", method: "GET", handler: artifactServe });
+
+// One-click unsubscribe for the notification digest (emails/digest.ts). Lives
+// under /cli/ because Caddy forwards only that prefix to HTTP actions. GET
+// serves the human clicking the footer link; POST serves RFC 8058 one-click
+// (Gmail/Yahoo fire it without opening a page). Token-bearing and idempotent.
+const emailUnsubscribe = httpAction(async (ctx, request) => {
+  const token = new URL(request.url).searchParams.get("token") ?? "";
+  const result: { ok: boolean } = await ctx.runMutation(
+    internal.emails.digest.unsubscribeByToken,
+    { token },
+  );
+  if (request.method === "POST") {
+    return new Response(result.ok ? "ok" : "unknown token", { status: result.ok ? 200 : 404 });
+  }
+  const body = result.ok
+    ? `<h1>You're unsubscribed</h1><p>Codecast will no longer email you notification digests. Turn them back on any time in <a href="https://codecast.sh/settings/notifications">notification settings</a>.</p>`
+    : `<h1>Link expired</h1><p>This unsubscribe link is no longer valid. Manage email in <a href="https://codecast.sh/settings/notifications">notification settings</a>.</p>`;
+  return new Response(
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Codecast</title><style>body{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;background:#eee8d5;color:#002b36;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}main{background:#fdf6e3;border:1px solid #d9d2bc;border-top:3px solid #e86c5d;border-radius:14px;padding:40px;max-width:440px}h1{font-size:20px;margin:0 0 12px}p{font-size:14px;line-height:1.7;margin:0}a{color:#c2543f}</style></head><body><main>${body}</main></body></html>`,
+    { status: result.ok ? 200 : 404, headers: { "Content-Type": "text/html; charset=utf-8" } },
+  );
+});
+http.route({ path: "/cli/email/unsubscribe", method: "GET", handler: emailUnsubscribe });
+http.route({ path: "/cli/email/unsubscribe", method: "POST", handler: emailUnsubscribe });
 
 export default http;

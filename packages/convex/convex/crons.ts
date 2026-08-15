@@ -146,4 +146,24 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // The public MCP registry into the catalog cache, so the Library tab has
+  // something to browse. Six hours: the registry moves slowly, and the cache
+  // sweep drops anything not refreshed in 30 days.
+  "refresh mcp registry catalog",
+  { hours: 6 },
+  internal.capabilities.refreshMcpRegistry,
+  {}
+);
+
+crons.interval(
+  // "While you were away" email digest: batches unseen mentions, comments,
+  // chat and pending decisions for people who are away. Grace/cooldown live in
+  // emails/digest.ts; the 10-minute tick only bounds detection latency.
+  "email notification digest sweep",
+  { minutes: 10 },
+  internal.emails.digest.sweep,
+  {}
+);
+
 export default crons;

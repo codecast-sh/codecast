@@ -402,7 +402,21 @@ export const getPRsForConversation = query({
         .withIndex("by_team_id", (q) => q.eq("team_id", conversation.team_id!))
         .collect();
     } else {
-      prs = await ctx.db.query("pull_requests").collect();
+      // Teamless conversation: a PR is only accessible when the caller belongs
+      // to the PR's team (canAccessPullRequest), so scan just the caller's own
+      // teams via by_team_id instead of the whole pull_requests table.
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .collect();
+      prs = [];
+      for (const m of memberships) {
+        const teamPrs = await ctx.db
+          .query("pull_requests")
+          .withIndex("by_team_id", (q) => q.eq("team_id", m.team_id))
+          .collect();
+        prs.push(...teamPrs);
+      }
     }
     const visible = [];
     for (const pr of prs) {

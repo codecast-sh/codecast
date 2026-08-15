@@ -6,6 +6,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { maybeScheduleTitleGeneration } from "./titleGeneration";
 import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } from "./privacy";
+import { computeWorkspaceKey } from "./lib/access";
 import { redactSecrets } from "./redact";
 import { canSendProductMessage, markPendingDelivered } from "./pendingMessages";
 import { validateCommandId } from "./localFirstCommands";
@@ -229,6 +230,8 @@ async function upsertFileSyncDoc(
       // Docs mirrored out of a private session stay personal — team_id alone
       // grants teammates access (canAccessDoc has no privacy gate).
       team_id: teamVisibleConvTeam(conversation),
+      // ACCESS key alongside the routing tag (lib/access computeWorkspaceKey).
+      workspace: computeWorkspaceKey({ user_id: conversation.user_id } as any, conversation as any),
       title: extractTitleFromContent(content),
       content,
       doc_type: docType,

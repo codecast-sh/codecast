@@ -1,4 +1,4 @@
-import { mutation, query, action, internalQuery } from "./functions";
+import { mutation, query, action, internalAction, internalQuery } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
@@ -400,7 +400,10 @@ export const getActiveRepositoriesForUser = internalQuery({
   },
 });
 
-export const syncRepositoriesForUser = action({
+// Internal only: this loads the target user's github_access_token and drives
+// GitHub as them. No client calls it, and a public shape taking a raw user_id
+// would let any caller spend any user's credential.
+export const syncRepositoriesForUser = internalAction({
   args: {
     user_id: v.id("users"),
     per_page: v.optional(v.number()),

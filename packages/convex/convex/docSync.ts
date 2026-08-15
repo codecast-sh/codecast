@@ -4,6 +4,9 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { packSnapshotContent, readSnapshotContent } from "./lib/docSnapshot";
+import { requireAccessibleDoc, canAccessConversation } from "./lib/access";
+import { checkConversationAccess } from "./privacy";
+import { notFound } from "./lib/auth";
 
 const MAX_DELTA_FETCH = 100;
 const MAX_SNAPSHOT_FETCH = 10;
@@ -14,6 +17,36 @@ async function requireAuth(ctx: any): Promise<Id<"users">> {
   const userId = await getAuthUserId(ctx);
   if (!userId) throw new Error("Not authenticated");
   return userId;
+}
+
+// The sync/presence id names the entity whose content is being synced: a real
+// `docs` row id (the document editor), or a synthetic "<ns>:<conversationId>"
+// id — "compose:" for the collab composer, "comment:" for comment threads
+// (which also allow ":<messageId>" suffixes). The OT buffer and presence
+// drafts ARE that entity's content, so every endpoint gates on access to it.
+// Unknown id shapes fail closed.
+async function requireSyncableEntity(ctx: any, userId: Id<"users">, id: string): Promise<void> {
+  const docId = ctx.db.normalizeId("docs", id);
+  if (docId) {
+    await requireAccessibleDoc(ctx, userId, docId);
+    return;
+  }
+  const synthetic = id.match(/^(compose|comment):([^:]+)/);
+  if (synthetic) {
+    const convId = ctx.db.normalizeId("conversations", synthetic[2]);
+    const conversation = convId ? await ctx.db.get(convId) : null;
+    if (!conversation) notFound();
+    if (synthetic[1] === "comment") {
+      // Comment threads follow the conversation's full access ladder — a
+      // share-token holder may read and write comments, so their presence
+      // belongs on the thread too.
+      if ((await checkConversationAccess(ctx, userId, conversation)) === "denied") notFound();
+      return;
+    }
+    if (!(await canAccessConversation(ctx, userId, conversation))) notFound();
+    return;
+  }
+  notFound();
 }
 
 /**
@@ -57,7 +90,8 @@ export const getSnapshot = query({
     v.object({ content: v.string(), version: v.number() }),
   ),
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
+    const userId = await requireAuth(ctx);
+    await requireSyncableEntity(ctx, userId, args.id);
     const snapshot = await ctx.db
       .query("doc_snapshots")
       .withIndex("id_version", (q: any) =>
@@ -79,6 +113,7 @@ export const submitSnapshot = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx);
+    await requireSyncableEntity(ctx, userId, args.id);
     const existing = await ctx.db
       .query("doc_snapshots")
       .withIndex("id_version", (q: any) =>
@@ -317,7 +352,8 @@ export const latestVersion = query({
   args: { id: v.string() },
   returns: v.union(v.null(), v.number()),
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
+    const userId = await requireAuth(ctx);
+    await requireSyncableEntity(ctx, userId, args.id);
     const latestDelta = await ctx.db
       .query("doc_deltas")
       .withIndex("id_version", (q: any) => q.eq("id", args.id))
@@ -341,7 +377,8 @@ export const getSteps = query({
     version: v.number(),
   }),
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
+    const userId = await requireAuth(ctx);
+    await requireSyncableEntity(ctx, userId, args.id);
     const deltas = await ctx.db
       .query("doc_deltas")
       .withIndex("id_version", (q: any) =>
@@ -385,7 +422,8 @@ export const submitSteps = mutation({
     v.object({ status: v.literal("synced") }),
   ),
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
+    const userId = await requireAuth(ctx);
+    await requireSyncableEntity(ctx, userId, args.id);
     const changes = await ctx.db
       .query("doc_deltas")
       .withIndex("id_version", (q: any) =>
@@ -428,6 +466,7 @@ export const updatePresence = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx);
+    await requireSyncableEntity(ctx, userId, args.doc_id);
     const user = await ctx.db.get(userId);
     if (!user) return;
     const existing = await ctx.db
@@ -486,6 +525,7 @@ export const getPresence = query({
   })),
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx);
+    await requireSyncableEntity(ctx, userId, args.doc_id);
     const staleThreshold = Date.now() - 30_000;
     const presences = await ctx.db
       .query("doc_presence")

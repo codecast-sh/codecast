@@ -17,6 +17,7 @@ import { createDataContext, scopeByProject } from "./data";
 import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
+import { listLiveManagedSessions } from "./lib/liveSessions";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
@@ -2281,47 +2282,52 @@ export const webTaskOrigins = query({
 // webList so the 13MB task payload doesn't re-ship on every heartbeat.
 //
 // Returns: { [taskId]: { _id, session_id, title?, agent_status?, agent_type?, started_by?, last_message_at? } }
+// Split from the query wrapper (like performListActiveSessions) so the body is
+// callable from the debugTmp timing probes without auth.
 export const webActiveSessions = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return {};
+    return performWebActiveSessions(ctx, userId);
+  },
+});
 
-    const now = Date.now();
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
+export async function performWebActiveSessions(ctx: { db: any }, userId: Id<"users">) {
+    const managedSessions = await listLiveManagedSessions(ctx, userId);
 
     // started_by = the session owner's display name, last_message_at =
     // conv.updated_at (bumped on every message). Together the badge reads
     // "who · when" ("ashot · now"), consistent with the dormant origin badge.
     // Owner names are cached since this overlay is scoped to the viewer's own
-    // daemons — typically one or two distinct users.
-    const nameCache = new Map<string, string | undefined>();
-    const ownerName = async (uid: any): Promise<string | undefined> => {
+    // daemons — typically one or two distinct users. The cache holds promises
+    // so the concurrent per-session lookups below coalesce into one fetch.
+    const nameCache = new Map<string, Promise<string | undefined>>();
+    const ownerName = (uid: any): Promise<string | undefined> => {
       const key = uid.toString();
-      if (nameCache.has(key)) return nameCache.get(key);
-      let name: string | undefined;
-      try { const u = await ctx.db.get(uid as Id<"users">); name = u ? (u.name || u.email || undefined) : undefined; } catch {}
-      nameCache.set(key, name);
-      return name;
+      const cached = nameCache.get(key);
+      if (cached) return cached;
+      const p: Promise<string | undefined> = ctx.db.get(uid as Id<"users">)
+        .then((u: any) => (u ? (u.name || u.email || undefined) : undefined))
+        .catch(() => undefined);
+      nameCache.set(key, p);
+      return p;
     };
 
-    const map: Record<string, { _id: string; session_id: string; title?: string; agent_status?: string; agent_type?: string; started_by?: string; last_message_at?: number }> = {};
-    for (const s of managedSessions) {
-      if (now - s.last_heartbeat >= HEARTBEAT_ALIVE_MS) continue;
-      if (!s.conversation_id) continue;
+    // Per-session reads run concurrently (like webTaskOrigins): with dozens of
+    // live sessions, a sequential get/access-check chain is hundreds of serial
+    // round-trips and times out under backend load ("too many system operations").
+    const entries = await Promise.all(managedSessions.map(async (s) => {
+      if (!s.conversation_id) return null;
       const conv = await ctx.db.get(s.conversation_id);
-      if (!conv || !(await canAccessConversation(ctx, userId, conv)) || !conv.active_task_id) continue;
+      if (!conv || !(await canAccessConversation(ctx, userId, conv)) || !conv.active_task_id) return null;
       const task = await ctx.db.get(conv.active_task_id);
       if (
         !task
         || !workspacesMatch(workspaceForConversation(conv), workspaceForResource(task))
         || !(await canAccessTask(ctx, userId, task))
-      ) continue;
-      map[conv.active_task_id.toString()] = {
+      ) return null;
+      return [conv.active_task_id.toString(), {
         _id: conv._id.toString(),
         session_id: conv.session_id,
         title: conv.title || undefined,
@@ -2329,11 +2335,12 @@ export const webActiveSessions = query({
         agent_type: conv.agent_type || undefined,
         started_by: await ownerName(conv.user_id),
         last_message_at: conv.updated_at,
-      };
-    }
+      }] as const;
+    }));
+    const map: Record<string, { _id: string; session_id: string; title?: string; agent_status?: string; agent_type?: string; started_by?: string; last_message_at?: number }> = {};
+    for (const e of entries) if (e) map[e[0]] = e[1];
     return map;
-  },
-});
+}
 
 // Compact projection of tasks for mention/@-search store sync. Returns only
 // the fields needed to render and filter in the dropdown — orders of magnitude

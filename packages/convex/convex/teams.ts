@@ -816,6 +816,15 @@ export const removeFromTeam = mutation({
   },
 });
 
+// Admin check by real team membership, callable from actions (which have no
+// ctx.db). Authoritative source for "is this user an admin of THIS team".
+export const isTeamAdminInternal = internalQuery({
+  args: { user_id: v.id("users"), team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    return await isTeamAdmin(ctx, args.user_id, args.team_id);
+  },
+});
+
 export const syncGithubOrg = action({
   args: {
     requesting_user_id: v.id("users"),
@@ -837,11 +846,17 @@ export const syncGithubOrg = action({
     if (!requestingUser || requestingUser._id !== args.requesting_user_id) {
       throw new Error("Not authenticated");
     }
-    if (requestingUser.role !== "admin") {
-      throw new Error("Only admins can sync GitHub organizations");
-    }
     if (!requestingUser.team_id) {
       throw new Error("You must be part of a team to sync");
+    }
+    // Authorize against the ACTUAL team membership, not the denormalized
+    // users.role (which reflects whichever team was last activated and drifts).
+    const isAdmin = await ctx.runQuery(internal.teams.isTeamAdminInternal, {
+      user_id: requestingUser._id,
+      team_id: requestingUser.team_id,
+    });
+    if (!isAdmin) {
+      throw new Error("Only admins can sync GitHub organizations");
     }
     if (!requestingUser.github_access_token) {
       throw new Error("GitHub account not connected");

@@ -36,7 +36,9 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("artifact_commented"),
   v.literal("chat_mention"),
   v.literal("chat_reply"),
-  v.literal("chat_here")
+  v.literal("chat_here"),
+  v.literal("chat_dm"),
+  v.literal("chat_added")
 );
 
 export const PREFERENCE_MAP: Record<string, string> = {
@@ -64,6 +66,9 @@ export const PREFERENCE_MAP: Record<string, string> = {
   chat_mention: "mention",
   chat_reply: "chat_activity",
   chat_here: "chat_activity",
+  // A DM is addressed to you by construction — same class as a mention.
+  chat_dm: "mention",
+  chat_added: "chat_activity",
 };
 
 function isNotificationEnabled(

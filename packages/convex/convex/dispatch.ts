@@ -25,7 +25,7 @@ import {
 import { advanceLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { isSessionOwner } from "./sessionOwners";
 import { patchCommentWithRevision } from "./commentViewWrites";
-import { canAccessConversation, requireTeamMembership } from "./lib/access";
+import { canAccessConversation, requireTeamMembership, patchConversationVisibility } from "./lib/access";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 
@@ -971,7 +971,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const updates = isPrivate
       ? { is_private: true as const, team_visibility: "private" as const }
       : await buildShareUpdate(ctx, conv, userId);
-    await ctx.db.patch(convId as Id<"conversations">, updates);
+    // Also rewrites linked work items' stored access key.
+    await patchConversationVisibility(ctx, conv, updates);
   },
 
   setTeamVisibility: async (ctx, userId, [convId, visibility]: [string, "summary" | "full" | null]) => {
@@ -980,7 +981,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // Setting any team visibility shares the conversation, so guarantee a
     // team_id alongside it (else it's shared-with-nobody).
     const updates = await buildShareUpdate(ctx, conv, userId);
-    await ctx.db.patch(convId as Id<"conversations">, {
+    await patchConversationVisibility(ctx, conv, {
       ...updates,
       team_visibility: visibility ?? undefined,
     });
@@ -1596,13 +1597,60 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   dispatchCreateChatChannel: async (
     ctx,
     _userId,
-    [clientId, name, opts]: [string, string, { topic?: string; teamId?: string }?],
+    [clientId, name, opts]: [
+      string,
+      string,
+      { topic?: string; teamId?: string; kind?: "private"; memberIds?: string[] }?,
+    ],
   ) => {
     return await ctx.runMutation!(api.chat.createChannel, {
       name,
       client_id: clientId,
       ...(opts?.topic ? { topic: opts.topic } : {}),
       ...(opts?.teamId && isServerId(opts.teamId) ? { team_id: opts.teamId as Id<"teams"> } : {}),
+      ...(opts?.kind === "private"
+        ? {
+            kind: "private" as const,
+            member_ids: (opts.memberIds ?? []).filter(isServerId) as Id<"users">[],
+          }
+        : {}),
+    });
+  },
+
+  addChatChannelMembers: async (
+    ctx,
+    _userId,
+    [channelId, memberIds]: [string, string[]],
+  ) => {
+    if (!isServerId(channelId)) return;
+    return await ctx.runMutation!(api.chat.addChannelMembers, {
+      channel_id: channelId as Id<"chat_channels">,
+      member_ids: memberIds.filter(isServerId) as Id<"users">[],
+    });
+  },
+  removeChatChannelMember: async (
+    ctx,
+    _userId,
+    [channelId, userId]: [string, string],
+  ) => {
+    if (!isServerId(channelId) || !isServerId(userId)) return;
+    return await ctx.runMutation!(api.chat.removeChannelMember, {
+      channel_id: channelId as Id<"chat_channels">,
+      user_id: userId as Id<"users">,
+    });
+  },
+
+  // Idempotent twice over: on client_id like every create, and on dm_key by
+  // construction — the same member set always resolves to the same room.
+  dispatchOpenDm: async (
+    ctx,
+    _userId,
+    [clientId, memberIds, teamId]: [string, string[], string?],
+  ) => {
+    return await ctx.runMutation!(api.chat.openDm, {
+      member_ids: memberIds.filter(isServerId) as Id<"users">[],
+      client_id: clientId,
+      ...(teamId && isServerId(teamId) ? { team_id: teamId as Id<"teams"> } : {}),
     });
   },
 

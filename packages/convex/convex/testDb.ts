@@ -176,7 +176,13 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       return (tables[table] ?? []).some((row: any) => String(row._id) === String(id)) ? id : null;
     },
     async insert(table: string, doc: any) {
-      const _id = `${table}_${inserted.length + 1}`;
+      // Skip ids the seed already uses: a seeded "chat_channels_1" and a minted
+      // "chat_channels_1" would make db.get() answer with the wrong row.
+      let n = inserted.length + 1;
+      const taken = (id: string) =>
+        Object.values(tables).some((rows) => rows.some((r: any) => r._id === id));
+      let _id = `${table}_${n}`;
+      while (taken(_id)) _id = `${table}_${++n}`;
       (tables[table] ??= []).push({ _id, ...doc });
       inserted.push({ table, doc, _id });
       return _id;

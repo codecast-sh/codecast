@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, internalAction, internalQuery } from "./functions";
 import { internal, api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { teamVisibleConvTeam } from "./privacy";
 
 export const storeWebhookEvent = internalMutation({
   args: {
@@ -468,7 +469,15 @@ export const matchPRToConversation = internalMutation({
       .withIndex("by_git_branch", (q) => q.eq("git_branch", args.head_ref))
       .take(50);
 
-    let teamId = conversations[0]?.team_id;
+    // This is a GLOBAL branch-name scan, so conversations[0] could be any user's
+    // private session that happens to sit on a branch like `main`. Its ROUTING
+    // team_id must not become the PR's team — only a team-visible session may
+    // donate one. The repo installation (below) is the authoritative fallback.
+    let teamId: Id<"teams"> | undefined;
+    for (const conv of conversations) {
+      const visibleTeam = teamVisibleConvTeam(conv);
+      if (visibleTeam) { teamId = visibleTeam; break; }
+    }
 
     if (!teamId) {
       const [owner] = args.repository.split("/");

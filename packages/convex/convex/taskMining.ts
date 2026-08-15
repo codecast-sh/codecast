@@ -4,9 +4,12 @@ import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { teamVisibleConvTeam } from "./privacy";
+import { computeWorkspaceKey } from "./lib/access";
+import { canAccessDoc } from "./lib/access";
 import { nextShortId } from "./counters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { inboxVisibilityFields } from "./inboxProjection";
+import { liveConversationIdSet } from "./lib/liveSessions";
 
 // Called after generateSessionInsight saves a new insight — mines tasks + docs for that conversation
 export const mineConversationAfterInsight = internalAction({
@@ -208,6 +211,9 @@ export const mineTasksFromInsights = internalMutation({
         // grants the whole team read access, so only team-visible source
         // sessions may hand their team over.
         team_id: teamVisibleConvTeam(conv),
+        // ACCESS key alongside the routing tag. Same rule, stored once so no
+        // read has to re-derive it (lib/access computeWorkspaceKey).
+        workspace: computeWorkspaceKey({ user_id: args.user_id } as any, conv as any),
         labels,
         conversation_ids: [insight.conversation_id],
         created_from_conversation: insight.conversation_id,
@@ -656,6 +662,11 @@ export const insertExtractedDocs = internalMutation({
         // Inline assistant prose is implicit extraction, never an intentional
         // team publish. File-backed Markdown inherits the conversation scope.
         team_id: isInline ? undefined : teamVisibleConvTeam(conv),
+        // Inline prose is never a team publish, so its access key is personal
+        // regardless of the source session's visibility.
+        workspace: isInline
+          ? `user:${args.user_id}`
+          : computeWorkspaceKey({ user_id: args.user_id } as any, conv as any),
         title,
         content: doc.content,
         doc_type: docType as any,
@@ -1030,9 +1041,10 @@ export const webGetDocDetail = query({
     const doc = await ctx.db.get(docId);
     if (!doc) return null;
 
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id;
-    if (doc.user_id !== userId && doc.team_id !== team_id) return null;
+    // Owner or effective-team member. The hand-rolled raw-tag check leaked a doc
+    // linked to a private conversation to the team; canAccessDoc resolves the
+    // effective team instead.
+    if (!(await canAccessDoc(ctx, userId, doc))) return null;
 
     let conversation = null;
     if (doc.conversation_id) {
@@ -1062,13 +1074,14 @@ export const webGetDocDetail = query({
       );
     }
 
-    // Find other sessions that reference the same themes
+    // Find other sessions that reference the same themes, scoped to the doc's
+    // own team. A teamless (personal) doc has no cross-session neighbourhood.
     let relatedSessions: any[] = [];
-    if (doc.labels?.length && doc.conversation_id) {
+    if (doc.labels?.length && doc.conversation_id && doc.team_id) {
       const insights = await ctx.db
         .query("session_insights")
         .withIndex("by_team_generated_at", (q) =>
-          q.eq("team_id", (doc.team_id || team_id) as Id<"teams">)
+          q.eq("team_id", doc.team_id as Id<"teams">)
         )
         .order("desc")
         .take(100);
@@ -1207,16 +1220,7 @@ export const webGetTaskDetail = query({
 
     const now = Date.now();
     const fiveMinutesAgo = now - 5 * 60 * 1000;
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", task.user_id))
-      .collect();
-    const liveConvIds = new Set(
-      managedSessions
-        .filter((s: any) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
-        .map((s: any) => s.conversation_id!.toString())
-    );
+    const liveConvIds = await liveConversationIdSet(ctx, task.user_id, { now });
 
     const linkedConversations: any[] = [];
     const seenConvIds = new Set<string>();

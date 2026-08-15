@@ -3,7 +3,6 @@ import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
 import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
-import { countOpenCommentThreads } from "./comments";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus } from "@codecast/shared/contracts";
@@ -35,6 +34,7 @@ import {
   buildPathRestampUpdate,
   type AccessLevel,
 } from "./privacy";
+import { patchConversationVisibility } from "./lib/access";
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
 import { mergeUserMessageFeed, type FeedCandidate } from "./messageFeed";
 import { assignConversationToBucketForUser, resolveLabelConvIds, matchBucketByName } from "./buckets";
@@ -50,6 +50,7 @@ import {
 } from "./searchCore";
 import { MIRROR_WINDOW_MS } from "./searchMirror";
 import { requireUser } from "./lib/auth";
+import { liveConversationIdSet } from "./lib/liveSessions";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import {
   FAVORITES_GRANT_KEY,
@@ -1324,14 +1325,18 @@ export const getConversation = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "New Session";
 
+    // active_plan / active_task are team-scoped work items. A share-token guest
+    // (accessLevel "shared") must never receive them — only an owner or a
+    // team-visible viewer.
+    const hasFullAccess = accessLevel === "owner" || accessLevel === "team";
     let active_plan = null;
-    if (conversation.active_plan_id) {
+    if (hasFullAccess && conversation.active_plan_id) {
       const plan = await ctx.db.get(conversation.active_plan_id);
       if (plan) active_plan = { _id: plan._id, short_id: plan.short_id, title: plan.title, status: plan.status };
     }
 
     let active_task = null;
-    if (conversation.active_task_id) {
+    if (hasFullAccess && conversation.active_task_id) {
       const task = await ctx.db.get(conversation.active_task_id);
       if (task) active_task = { _id: task._id, short_id: task.short_id, title: task.title, status: task.status };
     }
@@ -1412,15 +1417,26 @@ export const getAllMessages = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "New Session";
 
+    // Child conversations are independent sessions with their own privacy. A
+    // share-token guest (accessLevel "shared") must not enumerate them or read
+    // their previews through the parent's grant — only an owner/team viewer does.
+    const hasFullAccess = accessLevel === "owner" || accessLevel === "team";
     const { children: childConversations, map: childConversationMap, agentNameEntries } =
-      messages.length > 0
+      hasFullAccess && messages.length > 0
         ? await findChildConversations(ctx, args.conversation_id, messages)
         : { children: [], map: {}, agentNameEntries: [] };
 
     let forkedFromDetails = null;
     if (conversation.forked_from) {
       const originalConv = await ctx.db.get(conversation.forked_from);
-      if (originalConv) {
+      // The parent is an independent conversation. Reveal it (and NEVER its
+      // share_token) only when THIS viewer can access the parent in its own
+      // right — otherwise a guest holding the fork's token would inherit the
+      // parent's shared view.
+      if (
+        originalConv &&
+        (await checkConversationAccess(ctx, authUserId, originalConv)) !== "denied"
+      ) {
         const originalUser = await ctx.db.get(originalConv.user_id);
         forkedFromDetails = {
           conversation_id: originalConv._id,
@@ -2282,17 +2298,8 @@ export const listConversations = query({
 
     const now = Date.now();
     const fiveMinutesAgo = now - 5 * 60 * 1000;
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
 
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-    const liveConvIds = new Set(
-      managedSessions
-        .filter((s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
-        .map((s) => s.conversation_id!.toString())
-    );
+    const liveConvIds = await liveConversationIdSet(ctx, userId, { now });
 
     const needsBatchScan = !!(args.subagentFilter || args.directoryFilter || args.timeFilter);
 
@@ -3436,7 +3443,9 @@ export const setPrivacy = mutation({
       ? { is_private: true as const, team_visibility: "private" as const }
       : await buildShareUpdate(ctx, conversation, authUserId);
 
-    await ctx.db.patch(args.conversation_id, updates);
+    // Patches the conversation AND rewrites linked work items' stored access
+    // key (tasks/plans/docs follow the session's visibility).
+    await patchConversationVisibility(ctx, conversation, updates);
     // Access inputs changed without a comment write: move the comment view
     // head so viewers who regain access can re-materialize (matrix SRV-02).
     await advanceCommentsAccessRevision(ctx, conversation);
@@ -3465,7 +3474,7 @@ export const setTeamVisibility = mutation({
     // Setting any team visibility shares the conversation, so guarantee a
     // team_id alongside it (else it's shared-with-nobody).
     const updates = await buildShareUpdate(ctx, conversation, authUserId);
-    await ctx.db.patch(args.conversation_id, {
+    await patchConversationVisibility(ctx, conversation, {
       ...updates,
       team_visibility: args.team_visibility ?? undefined,
     });
@@ -3502,7 +3511,7 @@ export const setPrivacyBySessionId = mutation({
     const updates = args.is_private
       ? { is_private: true as const, team_visibility: "private" as const }
       : await buildShareUpdate(ctx, conversation, authUserId);
-    await ctx.db.patch(conversation._id, updates);
+    await patchConversationVisibility(ctx, conversation, updates);
     await advanceCommentsAccessRevision(ctx, conversation);
 
     if (args.api_token) {
@@ -3529,7 +3538,7 @@ export const makeAllPrivate = mutation({
 
     let updated = 0;
     for (const conv of conversations) {
-      await ctx.db.patch(conv._id, { is_private: true });
+      await patchConversationVisibility(ctx, conv, { is_private: true });
       updated++;
     }
 
@@ -3553,7 +3562,7 @@ export const makeAllPrivateAdmin = internalMutation({
 
     let updated = 0;
     for (const conv of conversations) {
-      await ctx.db.patch(conv._id, { is_private: true });
+      await patchConversationVisibility(ctx, conv, { is_private: true });
       updated++;
     }
 
@@ -4697,7 +4706,9 @@ export const updateTitle = mutation({
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     let hasTeamAccess = false;
     if (!isOwner && conversation.team_id) {
-      hasTeamAccess = await isTeamMember(ctx, authUserId, conversation.team_id);
+      // Team WRITE access follows real visibility, not the routing team — a
+      // member of a private session's routing team must not rename it.
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
     }
 
     if (!isOwner && !hasTeamAccess) {
@@ -4814,7 +4825,10 @@ export const updateProjectPath = mutation({
     );
     if (restamp) Object.assign(patch, restamp);
 
-    await ctx.db.patch(conversation._id, patch);
+    // A restamp can flip visibility (born-blank → team-shared), so linked
+    // work items must follow; a plain path patch has nothing to propagate.
+    if (restamp) await patchConversationVisibility(ctx, conversation, patch);
+    else await ctx.db.patch(conversation._id, patch);
 
     return { updated: true, id: conversation._id };
   },
@@ -4840,7 +4854,9 @@ export const setSkipTitleGeneration = mutation({
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     let hasTeamAccess = false;
     if (!isOwner && conversation.team_id) {
-      hasTeamAccess = await isTeamMember(ctx, authUserId, conversation.team_id);
+      // Team WRITE access follows real visibility, not the routing team — a
+      // member of a private session's routing team must not rename it.
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
     }
 
     if (!isOwner && !hasTeamAccess) {
@@ -5157,13 +5173,24 @@ export const forkConversation = mutation({
 
     const original = originalConversations[0];
 
+    // The fork is owned by authUserId, a DIFFERENT user than the original's
+    // owner. team_id must be resolved under the FORKER's own directory mappings,
+    // not copied from the original — otherwise the fork silently carries the
+    // original owner's team, and a later share (buildShareUpdate keeps an
+    // existing team_id) publishes it to a team the forker may not belong to.
+    const { team_id: forkTeamId } = await resolveCreationPrivacy(
+      ctx,
+      authUserId,
+      original.git_root || original.project_path,
+    );
+
     // Trust the denormalized message_count for display; the actual copy is
     // driven by advanceForkCopy walking the source by timestamp cursor and
     // does not need an exact precomputed total.
     const now = Date.now();
     const newConversationId = await ctx.db.insert("conversations", {
       user_id: authUserId,
-      team_id: original.team_id,
+      team_id: forkTeamId,
       agent_type: original.agent_type,
       session_id: `forked-${original.session_id}-${crypto.randomUUID()}`,
       slug: original.slug,
@@ -6767,7 +6794,16 @@ export const deleteByProjectHash = mutation({
 
     let convId: Id<"conversations"> | null = null;
     if (args.conv_id) {
-      convId = args.conv_id as Id<"conversations">;
+      // Continuation branch: the id is client-supplied, so prove ownership
+      // before deleting anything. Deletion is owner-only — team visibility
+      // never grants it.
+      const cid = ctx.db.normalizeId("conversations", args.conv_id);
+      const conv = cid ? await ctx.db.get(cid) : null;
+      if (!conv) return { deleted: 0, hasMore: false, conv_id: null };
+      if (conv.user_id.toString() !== authUserId.toString()) {
+        throw new Error("Not authorized");
+      }
+      convId = conv._id;
     } else {
       const convs = await ctx.db
         .query("conversations")
@@ -6973,7 +7009,7 @@ export const backfillConversationTeamIds = internalMutation({
           conv.git_root || conv.project_path
         );
         if (patch) {
-          await ctx.db.patch(conv._id, patch);
+          await patchConversationVisibility(ctx, conv, patch);
           updated++;
         }
       }
@@ -7073,6 +7109,16 @@ export const getConversationMeta = query({
       return null;
     }
 
+    // OG-unfurl meta. The caller (bot-meta middleware) is unauthenticated, so
+    // this resolves to "shared" only for a conversation carrying a share_token
+    // and "denied" for a private one — revealing nothing about private sessions
+    // while genuine shares still unfurl. An authed viewer (owner/team) also
+    // passes. Mirrors getSharedConversationMeta's shape (no project_path).
+    const viewerId = await getAuthUserId(ctx);
+    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+      return null;
+    }
+
     const user = await ctx.db.get(conversation.user_id);
 
     const messages = await ctx.db
@@ -7111,7 +7157,6 @@ export const getConversationMeta = query({
       description,
       author: user?.name || null,
       message_count: conversation.message_count || 0,
-      project_path: conversation.project_path || null,
     };
   },
 });
@@ -7121,6 +7166,12 @@ export const getConversationMention = query({
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return null;
+    // Mention-pill enrichment leaks idle_summary/model/status/project_path.
+    // Gate on real access — routing team_id is not a read grant.
+    const viewerId = await getAuthUserId(ctx);
+    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+      return null;
+    }
     return {
       _id: conversation._id,
       title: conversation.title || "Session",
@@ -7175,7 +7226,7 @@ export const backfillAutoSharedConversations = internalMutation({
       if (!matchesMapping) continue;
 
       if (!args.dry_run) {
-        await ctx.db.patch(conv._id, { is_private: false });
+        await patchConversationVisibility(ctx, conv, { is_private: false });
         // Grants teammate access without a comment write (matrix SRV-02).
         await advanceCommentsAccessRevision(ctx, conv);
       }
@@ -7211,7 +7262,7 @@ export const backfillSharedTeamlessTeamId = internalMutation({
         unresolved.push({ _id: c._id, title: c.title, project_path: c.project_path });
         continue;
       }
-      if (!args.dry_run) await ctx.db.patch(c._id, { team_id });
+      if (!args.dry_run) await patchConversationVisibility(ctx, c, { team_id });
       fixed++;
     }
     return { broken: broken.length, fixed, unresolved, dry_run: !!args.dry_run };
@@ -7232,7 +7283,7 @@ export const revertBackfilledTeamVisibility = internalMutation({
     for (const conv of result.page) {
       if (conv.auto_shared && conv.team_visibility === "full" && conv.is_private === false) {
         if (!args.dry_run) {
-          await ctx.db.patch(conv._id, { team_visibility: undefined });
+          await patchConversationVisibility(ctx, conv, { team_visibility: undefined });
           // Team visibility is an access input (matrix SRV-02).
           await advanceCommentsAccessRevision(ctx, conv);
         }
@@ -7722,14 +7773,9 @@ async function enrichInboxSessionRow(
 
   // Open teammate-comment threads (message, code-line, or global anchors) so
   // the card can surface "someone flagged this" without the conversation being
-  // open. Comment writes are human-paced, so invalidating the inbox
-  // subscription on them is fine — this is nothing like the heartbeat churn
-  // the liveness overlay exists for.
-  const sessionComments = await ctx.db
-    .query("comments")
-    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
-    .collect();
-  const open_comment_threads = countOpenCommentThreads(sessionComments);
+  // open. Read off the denormalized signal comments.refreshCommentSignal
+  // maintains on the row — no per-row comments collect on this hot path.
+  const open_comment_threads = conv.unresolved_comment_count ?? 0;
 
   const row = {
     _id: conv._id,
@@ -7776,6 +7822,13 @@ async function enrichInboxSessionRow(
     // Presence doubles as "this session has images".
     image_preview_url: conv.image_preview_url ?? null,
     open_comment_threads,
+    // Who spoke last in the open threads and what they said — the chip's
+    // "Alice: typo in step 2" without any per-row query. author_id is a users
+    // id string or "agent"; the client mutes the chip when it's the viewer.
+    last_comment_author: conv.last_comment_author ?? null,
+    last_comment_author_id: conv.last_comment_author_id ?? null,
+    last_comment_excerpt: conv.last_comment_excerpt ?? null,
+    last_comment_at: conv.last_comment_at ?? null,
     session_error: conv.session_error,
     // True when the latest turn is an unresolved Claude Code auth/API-error
     // banner ("Please run /login · API Error: 401 …", "You've hit your session
@@ -10079,13 +10132,18 @@ export const adminFindChildren = mutation({
         q.eq("parent_conversation_id", args.parent_conversation_id)
       )
       .collect();
-    return children.map((c) => ({
-      _id: c._id,
-      session_id: c.session_id,
-      title: c.title,
-      is_subagent: c.is_subagent,
-      parent_conversation_id: c.parent_conversation_id,
-    }));
+    // Scope to the caller's own children, matching adminLookupConversation. The
+    // sibling was correctly user-scoped; this one dropped it and listed any
+    // parent's children.
+    return children
+      .filter((c) => c.user_id.toString() === userId.toString())
+      .map((c) => ({
+        _id: c._id,
+        session_id: c.session_id,
+        title: c.title,
+        is_subagent: c.is_subagent,
+        parent_conversation_id: c.parent_conversation_id,
+      }));
   },
 });
 
@@ -10194,7 +10252,12 @@ export const updateSessionId = mutation({
       if (restamp) Object.assign(patch, restamp);
     }
 
-    await ctx.db.patch(args.conversation_id, patch);
+    // A restamp can flip visibility, so linked work items must follow.
+    if (patch.is_private !== undefined || patch.team_id !== undefined || patch.auto_shared !== undefined || patch.team_visibility !== undefined) {
+      await patchConversationVisibility(ctx, conv, patch);
+    } else {
+      await ctx.db.patch(args.conversation_id, patch);
+    }
     // A stable-context record posted under the REAL agent session id before
     // this rebind (web-started sessions briefly carry the client stub id)
     // is waiting in the spool — attach it now.

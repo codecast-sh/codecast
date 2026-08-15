@@ -4,6 +4,7 @@ import { internalQuery, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
 import { advanceLocalViewRevision } from "./localFirstCommands";
+import { performWebActiveSessions } from "./tasks";
 
 // TEMPORARY: insert a switch_account daemon command scoped to ONE conversation
 // — exercises the daemon's swap+kill+continue handler end-to-end without
@@ -418,6 +419,27 @@ export const timeManagedScan = internalQuery({
   },
 });
 
+// TEMPORARY: run the real tasks.webActiveSessions body for a user and time it
+// (the query timed out in prod with "too many system operations"). Safe to delete.
+export const timeWebActiveSessions = internalQuery({
+  args: { who: v.string() },
+  handler: async (ctx, args) => {
+    const user =
+      (await ctx.db
+        .query("users")
+        .withIndex("email", (q) => q.eq("email", args.who))
+        .first()) ??
+      (await ctx.db
+        .query("users")
+        .withIndex("by_username", (q) => q.eq("username", args.who))
+        .first());
+    if (!user) return { error: "no user" };
+    const t0 = Date.now();
+    const map = await performWebActiveSessions(ctx, user._id);
+    return { ms: Date.now() - t0, tasks_with_live_sessions: Object.keys(map).length };
+  },
+});
+
 // TEMPORARY: list users that have a role set (find the admin account). Safe to delete.
 export const listRoleUsers = internalQuery({
   args: {},
@@ -506,5 +528,80 @@ export const attachImagesToUserMessage = internalMutation({
     }
     await ctx.db.patch(args.message_id, { images: args.images });
     return { attached: args.images.length, applied: true };
+  },
+});
+
+// TEMPORARY: multiparty huddle e2e scaffolding. Creates a scratch team with
+// the given members and one chat channel, so a channel room can host a 3-way
+// call. Safe to delete with e2eTeardownMultiparty below.
+export const e2eSetupMultiparty = internalMutation({
+  args: { members: v.array(v.id("users")) },
+  handler: async (ctx, args) => {
+    const NAME = "Huddle E2E";
+    let team = (await ctx.db.query("teams").collect()).find((t) => t.name === NAME);
+    const now = Date.now();
+    const teamId =
+      team?._id ??
+      (await ctx.db.insert("teams", {
+        name: NAME,
+        icon: "atom",
+        icon_color: "violet",
+        created_at: now,
+        invite_code: `E2E${now}`,
+      }));
+    for (const uid of args.members) {
+      const existing = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q) => q.eq("user_id", uid).eq("team_id", teamId))
+        .unique();
+      if (!existing) {
+        await ctx.db.insert("team_memberships", {
+          user_id: uid,
+          team_id: teamId,
+          role: "member",
+          joined_at: now,
+        });
+      }
+    }
+    let channel = (await ctx.db.query("chat_channels").collect()).find(
+      (c) => String(c.team_id) === String(teamId) && c.name === "e2e-huddle",
+    );
+    if (!channel) {
+      const chId = await ctx.db.insert("chat_channels", {
+        team_id: teamId,
+        name: "e2e-huddle",
+        created_by: args.members[0],
+        created_at: now,
+        updated_at: now,
+      });
+      channel = await ctx.db.get(chId);
+    }
+    return { teamId, channelId: channel!._id };
+  },
+});
+
+export const e2eTeardownMultiparty = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const team = (await ctx.db.query("teams").collect()).find((t) => t.name === "Huddle E2E");
+    if (!team) return { removed: false };
+    for (const c of (await ctx.db.query("chat_channels").collect()).filter(
+      (c) => String(c.team_id) === String(team._id),
+    )) {
+      await ctx.db.delete(c._id);
+    }
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_team_id", (q) => q.eq("team_id", team._id))
+      .collect();
+    for (const m of memberships) {
+      await ctx.db.delete(m._id);
+      const u = await ctx.db.get(m.user_id);
+      if (u && String(u.active_team_id ?? "") === String(team._id)) {
+        await ctx.db.patch(m.user_id, { active_team_id: u.team_id ?? undefined });
+      }
+    }
+    await ctx.db.delete(team._id);
+    return { removed: true };
   },
 });
