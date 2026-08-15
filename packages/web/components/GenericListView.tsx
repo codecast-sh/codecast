@@ -24,6 +24,8 @@ import {
   ChevronLeft,
   ArrowUp,
   ArrowDown,
+  RotateCcw,
+  BookmarkPlus,
 } from "lucide-react";
 
 export interface ListTab {
@@ -743,7 +745,7 @@ export function GenericListView<T>({
   const ctxMenu = useContextMenu<T[]>();
   const openContextMenuForItems = useCallback((e: React.MouseEvent, items: T[]) => {
     ctxMenu.open(e, items);
-  }, [ctxMenu]);
+  }, [ctxMenu.open]);
 
   // --- Drag & drop. One dragged row id + one hint describing what a release
   // would do: move to a bucket, combine with a row, or insert into a gap. The
@@ -1266,7 +1268,11 @@ export function GenericListView<T>({
                   title={`Go back to "${filters.dirtyView.name}" as saved`}
                   className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
                 >
-                  <X className="w-3 h-3 flex-shrink-0" />
+                  {/* A revert arrow, NOT an X: the labels collapse to icons in a
+                      narrow pane, and Clear-filters beside it is already an X.
+                      Two identical icons a few pixels apart, meaning different
+                      things, is worse than no icon at all. */}
+                  <RotateCcw className="w-3 h-3 flex-shrink-0" />
                   <span className="cq-header-collapse">Discard</span>
                 </button>
               </>
@@ -1277,7 +1283,9 @@ export function GenericListView<T>({
                 title={filters.dirtyView ? "Save these filters as a new view" : "Save current view as a shortcut"}
                 className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
               >
-                <Bookmark className="w-3 h-3 flex-shrink-0" />
+                {filters.dirtyView
+                  ? <BookmarkPlus className="w-3 h-3 flex-shrink-0" />
+                  : <Bookmark className="w-3 h-3 flex-shrink-0" />}
                 <span className="cq-header-collapse">{filters.dirtyView ? "Save as new" : "Save view"}</span>
               </button>
             )}

@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 // Shared coarse clocks. One interval timer per distinct intervalMs, fanned out to
 // every subscriber — so a list of N cards all calling useCoarseNow(30000) costs a
@@ -48,4 +48,30 @@ export function useCoarseNow(intervalMs: number): number {
     () => c.now,
     () => c.now,
   );
+}
+
+/**
+ * A clock that re-renders only when it MATTERS. `sig(now)` projects the clock
+ * onto the decisions the caller renders from it (e.g. "is the last activity
+ * under 45s old?"); the component re-renders when that projection changes,
+ * not on every tick. For an always-mounted, expensive component (the
+ * conversation view re-rendered every 10s to recompute three booleans) this
+ * turns a periodic full re-render into a re-render at each threshold crossing.
+ * The returned `now` is the clock at the last (re)render, so it is at most one
+ * threshold crossing stale — exactly what the caller's decisions can tolerate.
+ */
+export function useNowWhen(sig: (now: number) => string, intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  const sigRef = useRef(sig);
+  sigRef.current = sig;
+  const renderedSigRef = useRef("");
+  renderedSigRef.current = sig(now);
+  useEffect(() => {
+    const id = setInterval(() => {
+      const t = Date.now();
+      if (sigRef.current(t) !== renderedSigRef.current) setNow(t);
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
 }

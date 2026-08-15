@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHan
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, hasOpenModal, altChordDirection, type ShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
@@ -23,7 +24,7 @@ import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } fr
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus, type ThreadStateFields } from "@codecast/shared/contracts";
-import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import {
   describeSmallToolGroup,
   describeToolGroup,
@@ -169,7 +170,7 @@ import { BranchSelector } from "./BranchSelector";
 import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
-import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
+import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2 } from "lucide-react";
@@ -178,9 +179,9 @@ import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentCla
 import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
-import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
+import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
-import { sessionStartupState } from "../lib/sessionLifecycle";
+import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type RestartProgressRow, type RestartPhase, type RestartStage } from "../hooks/useSessionRestart";
@@ -190,8 +191,9 @@ import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type Res
 // more space-separated words, with an optional trailing space so the popup stays
 // open while you pause mid-phrase. Only an ASCII space extends it — a tab or
 // newline still terminates the mention. The 4-word cap stops it eating a whole
-// sentence, and the dropdown self-hides the instant nothing matches (the items
-// list goes empty), so a stray "@foo bar baz" quietly falls back to prose.
+// sentence, and once a phrase settles on zero matches the trigger latches shut
+// (mentionDeadEndRef below), so a stray "@foo bar baz" quietly falls back to
+// prose instead of re-searching on every keystroke.
 // MENTION_TRIGGER_RE matches at the cursor (text before the caret, $-anchored);
 // MENTION_QUERY_RE re-extracts the same body from the text after the "@".
 // Native textarea autosize (Chromium 123+ / the Electron desktop app): the
@@ -2173,7 +2175,7 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
     return { message: body || "The model could not complete this turn.", isClientError: true };
   }
 
-  // Banner detection (auth / limit / connection) shares the backend's
+  // Banner detection (auth / limit / connection / fatal) shares the backend's
   // classifier in @codecast/shared/contracts: anchored prefixes + a length cap
   // keep a long prose reply that merely opens like a banner from rendering as
   // a card. The generic "API Error:"-prefixed form keeps its original anchored
@@ -2184,7 +2186,7 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   const isConnection = bannerKind === "connection";
   const isFatal = bannerKind === "fatal";
   const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
-  if (!isAuth && !isLimit && !isConnection && !match) return null;
+  if (!isAuth && !isLimit && !isConnection && !isFatal && !match) return null;
 
   // The status code may be the leading "API Error: NNN" (generic form) or
   // embedded in an auth banner ("Please run /login · API Error: 401 …").
@@ -5518,9 +5520,8 @@ function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage 
 
 const _askUserSentState = new Map<string, Record<number, Array<{ key: string; label: string; text?: string }>>>();
 
-// SYNTHETIC_POLL_OPTION and the rest of the poll wire format live in
-// lib/pollPayload, imported above — the decision queue answers polls
-// through the same module, so the option filter can never drift.
+// The poll wire format (option keys, free-text decline, submit chords) lives in
+// lib/pollPayload so the decision queue answers polls the exact same way.
 
 // The check glyph shown in a selected poll option's index slot / pill.
 function PollCheckIcon({ className }: { className?: string }) {
@@ -5565,49 +5566,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   const isInteractive = !result && !!onSendMessage && !sent;
   const allAnswered = needsSubmit && questions.every((_, i) => (selections[i]?.length ?? 0) > 0);
 
-  const buildPayload = (sels: typeof selections) => {
-    const sorted = Object.keys(sels).sort((a, b) => Number(a) - Number(b));
-    const hasText = sorted.some(k => sels[Number(k)].some(s => s.text !== undefined));
-    const display = sorted.map(k => sels[Number(k)].map(s => s.label).join(", ")).join(", ");
-    if (hasText) {
-      // Claude Code's AskUserQuestion menu only accepts the listed options — there's no
-      // inline free-text slot. So a custom ("Other") answer can't be entered through the
-      // menu, and answering even one question with free text means the menu can't be used
-      // for the others either: the only way to enter free text is to decline the whole
-      // set (Escape) and type at the prompt, which discards every menu pick. Convert all
-      // answers to prose and send it as the daemon's decline-then-type `text` so the agent
-      // still gets every answer. (Driving a digit per question and Escaping for the text
-      // declined the poll mid-loop and spilled the leftover option digits into the
-      // reopened prompt box — the "211" bug, 2026-06-27.)
-      const text = sorted.map(k => {
-        const qSels = sels[Number(k)];
-        const ans = qSels.map(s => s.text ?? s.label).join(", ");
-        if (sorted.length === 1) return ans;
-        const q = questions[Number(k)];
-        const id = (q?.header?.trim()) || q?.question?.replace(/\s+/g, " ").trim().slice(0, 60) || `Q${Number(k) + 1}`;
-        return `${id}: ${ans}`;
-      }).join("\n\n");
-      return JSON.stringify({ __cc_poll: true, text, display });
-    }
-    // Key protocol (verified in tmux against Claude Code 2.1.201): on a multiSelect
-    // question a digit TOGGLES that option's checkbox and the menu stays up; Right
-    // advances to the next tab. Any multi-question or multiSelect form then parks on a
-    // "Review your answers" pane whose cursor sits on "1. Submit answers" — the trailing
-    // Enter confirms it. `multi` tells the daemon these digits are toggles, so its
-    // digit-didn't-advance heuristic must not "confirm" them with Enter (which would
-    // re-toggle the highlighted row).
-    const keys: string[] = [];
-    for (const k of sorted) {
-      const qSels = sels[Number(k)];
-      if (questions[Number(k)]?.multiSelect) {
-        keys.push(...qSels.map(s => s.key).sort((a, b) => Number(a) - Number(b)), "Right");
-      } else {
-        keys.push(qSels[0].key);
-      }
-    }
-    if (needsSubmit) keys.push("Enter");
-    return JSON.stringify({ __cc_poll: true, keys, display, ...(anyMultiSelect ? { multi: true } : {}) });
-  };
+  const buildPayload = (sels: typeof selections) => buildPollPayload(questions, sels);
 
   const handleSubmitAll = () => {
     if (!onSendMessage || !allAnswered) return;
@@ -5677,7 +5636,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 const on = isSelected || isLocalSelected;
                 const choose = () => {
                   setOtherOpen(prev => ({ ...prev, [i]: false }));
-                  const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
+                  const pollKey = pollKeyForOption(j, isConfirmation);
                   const sel = { key: pollKey, label: cleanLabel };
                   if (q.multiSelect) {
                     // Checkbox semantics: clicking toggles; Submit sends.
@@ -7268,11 +7227,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     }
   };
 
-  const isRealMessageId = !!messageId && isConvexId(messageId);
-  const commentCount = useQuery(api.comments.getCommentCount,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
-
   const { isBookmarked, toggleBookmark: handleToggleBookmark } = useMessageBookmark(conversationId, messageId);
 
   const handleCopy = () => {
@@ -7850,6 +7804,15 @@ const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content, onExp
   );
 });
 
+const EMPTY_RECEIPT_TOOLS: ToolCall[] = [];
+const EMPTY_CHILD_CONVERSATIONS: any[] = [];
+
+function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 function AssistantBlockImpl({
   content,
   timestamp,
@@ -7958,11 +7921,6 @@ function AssistantBlockImpl({
   const visibleThinking = hasThinking && !!showThinking;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images?.some(img => !img.tool_use_id) ?? false;
-
-  const isRealMessageId = !!messageId && isConvexId(messageId);
-  const commentCount = useQuery(api.comments.getCommentCount,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
 
   const { isBookmarked, toggleBookmark: handleToggleBookmark } = useMessageBookmark(conversationId, messageId);
 
@@ -8654,9 +8612,6 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
   const [isOverflowing, setIsOverflowing] = useState(false);
 
   const isRealMessageId = !!messageId && isConvexId(messageId);
-  const commentCount = useQuery(api.comments.getCommentCount,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
   const { isBookmarked, toggleBookmark: handleToggleBookmark } = useMessageBookmark(conversationId, messageId);
 
   useWatchEffect(() => {
@@ -9140,7 +9095,7 @@ function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolL
   );
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -9361,13 +9316,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           // tells about what the send will do.
           if (chatMentionMode && m.type === "label") continue;
           if (chatMentionMode && m.type === "person" && !m.handle) continue;
-          if (acQuery) {
-            const hit =
-              matchScore(m.label, acQuery) !== Infinity ||
-              (m.shortId && m.shortId.toLowerCase().includes(acQuery)) ||
-              (m.sublabel ? matchScore(m.sublabel, acQuery) !== Infinity : false);
-            if (!hit) continue;
-          }
+          if (!mentionItemMatches(m, acQuery)) continue;
           const c = perType[m.type] || 0;
           if (c >= perTypeCap) continue;
           perType[m.type] = c + 1;
@@ -9433,6 +9382,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   }, [acTrigger, acQuery, skills, acServerItems, localMentionTick, chatMentionMode]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
+
+  // A multi-word @ query that has settled on zero matches is prose, not a
+  // mention: every word must hit, so typing more can never bring matches back.
+  // Close the trigger and remember where it died; handleMessageChange keeps it
+  // closed while the query only grows, and lets it reopen once the user
+  // deletes back past that point. Without this every further keystroke would
+  // reopen the popup on a spinner and fire another server search.
+  const mentionDeadEndRef = useRef<{ startPos: number; len: number } | null>(null);
+  useEffect(() => {
+    if (!acTrigger || acTrigger.type !== "@" || acServerLoading) return;
+    if (acItems.length > 0 || !acQuery.includes(" ")) return;
+    mentionDeadEndRef.current = { startPos: acTrigger.startPos, len: acQuery.length };
+    setAcTrigger(null);
+  }, [acTrigger, acItems, acServerLoading, acQuery]);
 
   const applyAutocomplete = useCallback((item: AcItem) => {
     if (!acTrigger) return;
@@ -9975,8 +9938,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const cursorPos = textareaRef.current?.selectionStart ?? val.length;
       const textBefore = val.slice(0, cursorPos);
       const atMatch = textBefore.match(MENTION_TRIGGER_RE);
-      if (atMatch) {
-        setAcTrigger({ type: "@", startPos: cursorPos - atMatch[0].length });
+      const startPos = atMatch ? cursorPos - atMatch[0].length : -1;
+      const dead = mentionDeadEndRef.current;
+      if (atMatch && dead && dead.startPos === startPos && (atMatch[1] || "").trim().length > dead.len) {
+        // Still extending a mention that already settled on nothing.
+        setAcTrigger(null);
+      } else if (atMatch) {
+        mentionDeadEndRef.current = null;
+        setAcTrigger({ type: "@", startPos });
         setAcIndex(0);
         queryMentions(atMatch[1] || "");
       } else {
@@ -10142,6 +10111,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // user can refer to attachments in prose ("crop it like [Image 2]"). Numbers
   // follow attach order, which is the order the agent receives the images in.
   const addImagePlaceholder = useCallback((n: number) => {
+    // Gate mode (chat): attachments render as their own grid under the message,
+    // so the draft never carries an [Image N] token to point at them.
+    if (onGateSend) return;
     if (composeMode && composeRef.current) {
       composeRef.current.insertText(`${imagePlaceholderToken(n)} `);
       return;
@@ -10167,11 +10139,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         textareaRef.current.selectionStart = textareaRef.current.selectionEnd = next.caret;
       }
     }, 0);
-  }, [composeMode, setMessage]);
+  }, [composeMode, setMessage, onGateSend]);
 
   // The nth image is gone: drop its token and renumber the rest, so what's left
   // still points at the attachments the agent will actually receive.
   const removeImagePlaceholder = useCallback((n: number) => {
+    if (onGateSend) return;
     if (composeMode && composeRef.current) {
       const md = composeRef.current.getMarkdown();
       const next = dropImagePlaceholder(md, n);
@@ -10182,7 +10155,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (next === messageRef.current) return;
     setMessage(next);
     messageRef.current = next;
-  }, [composeMode, setMessage]);
+  }, [composeMode, setMessage, onGateSend]);
 
   const clearImage = useCallback((index: number) => {
     // Renumber first: persistDraftImages below snapshots messageRef, so the
@@ -10307,14 +10280,30 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       : messageRef.current;
     if (onGateSend) {
       const text = message.trim();
-      if (!text) return;
+      // Same reconcile as the main path: the durable draft is the record of
+      // pasted images, memory can lose rows across a remount (jx7byyk).
+      const gateDraftRows = restoreDraftImages(useInboxStore.getState().drafts[conversationId] ?? undefined);
+      const gateMemory = pastedImagesRef.current.filter(img => img.storageId || img.uploading);
+      const gateDraftOnly = gateDraftRows.filter(
+        row => row.storageId && !gateMemory.some(img => img.storageId === row.storageId)
+      ) as typeof gateMemory;
+      const gateImages = [...gateMemory, ...gateDraftOnly].map(img => ({
+        storageId: img.storageId as string | undefined,
+        previewUrl: img.previewUrl,
+        mime: img.file?.type ?? "image/png",
+        uploading: !!img.uploading,
+      }));
+      if (!text && gateImages.length === 0) return;
       sendingRef.current = true;
       if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
       setMessage("");
       messageRef.current = "";
+      // In-flight uploads keep their blobs alive in pendingImageUploads; the
+      // settled ones are done with theirs.
+      clearAllImages(true);
       useInboxStore.getState().clearDraftFinal(conversationId);
       sendingRef.current = false;
-      await onGateSend(text);
+      await onGateSend(text, gateImages);
       return;
     }
     if (onWorkflowLaunch) {
@@ -11058,7 +11047,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               </div>
             </div>
           )}
-          {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading)) && (() => {
+          {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading && !acQuery.includes(" "))) && (() => {
             const typeConfig: Record<string, { icon: typeof User; color: string; label: string }> = {
               person: { icon: User, color: "text-sol-green", label: "People" },
               task: { icon: CheckSquare, color: "text-sol-yellow", label: "Tasks" },
@@ -11784,7 +11773,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // teammate's daemon, fork replies); resolve it against the cached team
   // roster so the prompt shows the actual sender, falling back to the
   // conversation owner for owner-typed and legacy messages.
-  const teamRoster = useInboxStore((s) => s.teamMembers) as any[] | null;
+  const teamRoster = useTeamRosterIdentity();
   const senderById = useMemo(() => {
     const m = new Map<string, { name?: string; avatar_url?: string | null }>();
     for (const mem of teamRoster || []) {
@@ -11955,15 +11944,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // /agents, …) are *only ever* synthetic and have no JSONL counterpart, so a
     // conversation-global "drop all synthetic polls" filter wrongly erases them.
     // Suppress a synthetic poll only when a real AUQ sits near it in time.
-    const realAskTimes = base
+    const withoutProseTwins = dropScrapedProseTwins(base);
+
+    const realAskTimes = withoutProseTwins
       .filter(m =>
         m.tool_calls?.some(tc => tc.name === "AskUserQuestion") &&
         !m.message_uuid?.startsWith("interactive-prompt-")
       )
       .map(m => m.timestamp);
-    if (realAskTimes.length === 0) return base;
+    if (realAskTimes.length === 0) return withoutProseTwins;
     const DUP_WINDOW_MS = 2 * 60_000;
-    return base.filter(m => {
+    return withoutProseTwins.filter(m => {
       if (!m.message_uuid?.startsWith("interactive-prompt-")) return true;
       return !realAskTimes.some(rt => Math.abs(rt - m.timestamp) <= DUP_WINDOW_MS);
     });
@@ -12756,11 +12747,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const buildMentionItems = useCallback(() => {
     const state = useInboxStore.getState();
     const byRecency = (a: { updatedAt?: number }, b: { updatedAt?: number }) => (b.updatedAt || 0) - (a.updatedAt || 0);
-    const inScope = (rec: any): boolean => {
-      const recTeam = rec.team_id ? String(rec.team_id) : null;
-      if (convTeamId) return recTeam === convTeamId;
-      return !recTeam;
-    };
+    const inScope = (rec: any): boolean => inActiveWorkspace(rec, convTeamId);
     const persons: MentionItem[] = (state.teamMembers || []).map((m: any) => ({ id: String(m._id || m.id), type: "person", label: m.name || m.github_username || "Unknown", sublabel: m.github_username ? `@${m.github_username}` : m.email, image: m.image || m.github_avatar_url }));
     const tasks: MentionItem[] = Object.values(state.mentionIndex?.tasks ?? {})
       .filter(inScope)
@@ -14370,11 +14357,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // The tool currently in flight, surfaced in the "working" status line — e.g. a
   // multi-minute deploy reads as "Working · 3:14 · Bash". See deriveRunningTool.
   const workingTool = useMemo(() => deriveRunningTool(timeline), [timeline]);
-  const [now, setNow] = useState(Date.now());
-  useMountEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 10_000);
-    return () => clearInterval(id);
-  });
+  // Clock for the liveness booleans below. Re-renders THIS whole view only when
+  // one of them would flip (45s / 5min since last activity; 30s / 120s of age),
+  // not on every tick — an unconditional 10s ticker re-rendered the entire
+  // conversation view (60–250ms) forever, for three booleans.
+  const startedAtForClock = conversation?.started_at ?? 0;
+  const now = useNowWhen(
+    (t) => {
+      const idle = t - lastActivityAt;
+      const age = t - startedAtForClock;
+      return `${idle < 45 * 1000 ? 1 : 0}${idle < 5 * 60 * 1000 ? 1 : 0}${age < SESSION_STARTING_GRACE_MS ? 1 : 0}${age < 120_000 ? 1 : 0}`;
+    },
+    10_000,
+  );
   const isSessionConnected = !!conversation && conversation.status === "active" && (now - lastActivityAt) < 5 * 60 * 1000;
   const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
   const isConversationLive = isWorking;
@@ -14431,6 +14426,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   });
 
   useWatchEffect(() => {
+    // A detached tab window's OS title is owned by DashboardLayout
+    // (useDetachedWindowTitle) — writing here would clobber its surface prefix.
+    if (isDetachedTabWindow()) return;
     if (conversation) {
       document.title = `codecast | ${truncatedTitle}`;
     }
@@ -14659,6 +14657,95 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return null;
   };
 
+  // Caches for renderItem's per-row derived props (see the assistant branch).
+  // Keyed by the message row object, which the store keeps identity-stable
+  // until the message itself changes; entries validate against the inputs
+  // they were derived from, and reuse the previous array when its contents
+  // did not change (a new timeline array from an unrelated append must not
+  // hand every row a fresh runMessageIds).
+  const assistantRowCacheRef = useRef(new WeakMap<Message, { timeline: TimelineItem[]; showThinking: boolean; isFirstInSequence: boolean; runMessageIds: string[] }>());
+  const assistantRowDerived = (msg: Message, index: number) => {
+    const cache = assistantRowCacheRef.current;
+    const hit = cache.get(msg);
+    if (hit && hit.timeline === timeline && hit.showThinking === showThinking) return hit;
+    // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
+    // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
+    let prevIdx = index - 1;
+    while (prevIdx >= 0) {
+      const checkItem = timeline[prevIdx];
+      if (checkItem.type === 'commit') { prevIdx--; continue; }
+      if (checkItem.type !== 'message') break;
+      const checkMsg = checkItem.data as Message;
+      if (checkMsg.role !== 'assistant') break;
+      const hasVisibleContent = (checkMsg.content && stripSystemTags(checkMsg.content).trim().length > 0)
+        || (checkMsg.tool_calls && checkMsg.tool_calls.length > 0)
+        || (showThinking && checkMsg.thinking && checkMsg.thinking.trim().length > 0)
+        || (checkMsg.images && checkMsg.images.length > 0);
+      if (hasVisibleContent) break;
+      prevIdx--;
+    }
+    const prevItem = prevIdx >= 0 ? timeline[prevIdx] : null;
+    const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
+    const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant";
+    // Compute all message IDs in the current run (for sharing)
+    let runMessageIds: string[] = [];
+    for (let i = index; i >= 0; i--) {
+      const checkItem = timeline[i];
+      if (!checkItem) break;
+      if (checkItem.type !== 'message') continue;
+      const checkMsg = checkItem.data as Message;
+      if (checkMsg.role === "user") break;
+      if (checkMsg.role === "assistant") runMessageIds.unshift(checkMsg._id);
+    }
+    for (let i = index + 1; i < timeline.length; i++) {
+      const checkItem = timeline[i];
+      if (!checkItem) break;
+      if (checkItem.type !== 'message') continue;
+      const checkMsg = checkItem.data as Message;
+      if (checkMsg.role === "user") break;
+      if (checkMsg.role === "assistant") runMessageIds.push(checkMsg._id);
+    }
+    if (hit && sameStringArray(hit.runMessageIds, runMessageIds)) runMessageIds = hit.runMessageIds;
+    const entry = { timeline, showThinking, isFirstInSequence, runMessageIds };
+    cache.set(msg, entry);
+    return entry;
+  };
+  const toolResultsCacheRef = useRef(new WeakMap<Message, { globalToolResultMap: typeof globalToolResultMap; results: ToolResult[] | undefined }>());
+  const relevantToolResultsFor = (msg: Message): ToolResult[] | undefined => {
+    const cache = toolResultsCacheRef.current;
+    const hit = cache.get(msg);
+    if (hit && hit.globalToolResultMap === globalToolResultMap) return hit.results;
+    let results = msg.tool_calls
+      ?.map(tc => msg.tool_results?.find((tr) => tr.tool_use_id === tc.id) || globalToolResultMap[tc.id])
+      .filter((tr): tr is ToolResult => tr !== undefined);
+    if (hit && hit.results && results && hit.results.length === results.length && hit.results.every((r, i) => r === results![i])) results = hit.results;
+    cache.set(msg, { globalToolResultMap, results });
+    return results;
+  };
+
+  // Same identity discipline for the condensed/compact per-row objects: a fresh
+  // `{tools, expanded, onToggle}` per render re-rendered every visible row on
+  // every virtualizer pass in condensed view.
+  const receiptCacheRef = useRef(new WeakMap<Message, { tools: ToolCall[]; expanded: boolean; toggleTurn: typeof toggleTurn; value: { tools: ToolCall[]; expanded: boolean; onToggle: () => void } | undefined }>());
+  const condensedReceiptFor = (msg: Message, tools: ToolCall[], expanded: boolean, turnKey: string | undefined) => {
+    if (!tools.length) return undefined;
+    const cache = receiptCacheRef.current;
+    const hit = cache.get(msg);
+    if (hit && hit.tools === tools && hit.expanded === expanded && hit.toggleTurn === toggleTurn) return hit.value;
+    const value = { tools, expanded, onToggle: () => toggleTurn(turnKey!) };
+    cache.set(msg, { tools, expanded, toggleTurn, value });
+    return value;
+  };
+  const collapseHandlerCacheRef = useRef(new WeakMap<Message, { turnKey: string; toggleTurn: typeof toggleTurn; fn: () => void }>());
+  const collapseTurnHandlerFor = (msg: Message, turnKey: string) => {
+    const cache = collapseHandlerCacheRef.current;
+    const hit = cache.get(msg);
+    if (hit && hit.turnKey === turnKey && hit.toggleTurn === toggleTurn) return hit.fn;
+    const fn = () => toggleTurn(turnKey);
+    cache.set(msg, { turnKey, toggleTurn, fn });
+    return fn;
+  };
+
   const renderItem = (item: TimelineItem, index: number) => {
     if (!item || index < 0 || index >= timeline.length) return null;
     if (item.type === 'commit') {
@@ -14785,44 +14872,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       // Skip empty "No response requested." messages
       if (isHiddenStubMessage(msg)) return null;
 
-      // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
-      // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
-      let prevIdx = index - 1;
-      while (prevIdx >= 0) {
-        const checkItem = timeline[prevIdx];
-        if (checkItem.type === 'commit') { prevIdx--; continue; }
-        if (checkItem.type !== 'message') break;
-        const checkMsg = checkItem.data as Message;
-        if (checkMsg.role !== 'assistant') break;
-        const hasVisibleContent = (checkMsg.content && stripSystemTags(checkMsg.content).trim().length > 0)
-          || (checkMsg.tool_calls && checkMsg.tool_calls.length > 0)
-          || (showThinking && checkMsg.thinking && checkMsg.thinking.trim().length > 0)
-          || (checkMsg.images && checkMsg.images.length > 0);
-        if (hasVisibleContent) break;
-        prevIdx--;
-      }
-      const prevItem = prevIdx >= 0 ? timeline[prevIdx] : null;
-      const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
-      const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant";
-
-      // Compute all message IDs in the current run (for sharing)
-      const runMessageIds: string[] = [];
-      for (let i = index; i >= 0; i--) {
-        const checkItem = timeline[i];
-        if (!checkItem) break;
-        if (checkItem.type !== 'message') continue;
-        const checkMsg = checkItem.data as Message;
-        if (checkMsg.role === "user") break;
-        if (checkMsg.role === "assistant") runMessageIds.unshift(checkMsg._id);
-      }
-      for (let i = index + 1; i < timeline.length; i++) {
-        const checkItem = timeline[i];
-        if (!checkItem) break;
-        if (checkItem.type !== 'message') continue;
-        const checkMsg = checkItem.data as Message;
-        if (checkMsg.role === "user") break;
-        if (checkMsg.role === "assistant") runMessageIds.push(checkMsg._id);
-      }
+      // Per-message derived props (first-in-sequence, the run's ids), cached on
+      // the message row so a re-render that changed neither the timeline nor the
+      // thinking toggle hands AssistantBlock the SAME arrays — memo(AssistantBlock)
+      // holds and the row is skipped. Without this every virtualizer range
+      // change re-rendered every visible row (fresh arrays each pass).
+      const { isFirstInSequence, runMessageIds } = assistantRowDerived(msg, index);
 
       // Turn-level behavior for the condensed/compact feeds.
       const turnKey = turnAggregates.turnKeyOf.get(msg._id);
@@ -14857,15 +14912,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const isTurnFirst = turnKey ? turnAggregates.firstAssistOf.get(turnKey) === msg._id : false;
       // Condensed: this message's segment tools fold into one receipt rendered
       // inline right after its text — where the activity happened.
-      const receiptTools = feedDensity === "condensed" ? (turnAggregates.receiptOf.get(msg._id) ?? []) : [];
-      const condensedReceipt = receiptTools.length
-        ? { tools: receiptTools, expanded: turnExpanded, onToggle: () => toggleTurn(turnKey!) }
-        : undefined;
-      const onCollapseTurn = feedDensity === "compact" && turnKey && isTurnFirst ? () => toggleTurn(turnKey) : undefined;
+      const receiptTools = feedDensity === "condensed" ? (turnAggregates.receiptOf.get(msg._id) ?? EMPTY_RECEIPT_TOOLS) : EMPTY_RECEIPT_TOOLS;
+      const condensedReceipt = condensedReceiptFor(msg, receiptTools, turnExpanded, turnKey);
+      const onCollapseTurn = feedDensity === "compact" && turnKey && isTurnFirst ? collapseTurnHandlerFor(msg, turnKey) : undefined;
 
-      const relevantToolResults = msg.tool_calls
-        ?.map(tc => msg.tool_results?.find((tr) => tr.tool_use_id === tc.id) || globalToolResultMap[tc.id])
-        .filter((tr): tr is ToolResult => tr !== undefined);
+      const relevantToolResults = relevantToolResultsFor(msg);
 
       return (
         <AssistantBlock
@@ -14916,6 +14967,56 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return null;
   };
 
+  // "Continued in" chips at the feed's end. Derived per (children, inline map,
+  // messages) change rather than per render — it walked all loaded messages
+  // on every pass.
+  const continuationChildren = useMemo(() => {
+    const children = conversation?.child_conversations;
+    if (!children || children.length === 0) return EMPTY_CHILD_CONVERSATIONS;
+    const childMap = conversation.child_conversation_map || {};
+    const messageUuids = new Set(messages.map(m => m.message_uuid).filter(Boolean));
+    const renderedInlineIds = new Set(
+      Object.entries(childMap)
+        .filter(([uuid]) => messageUuids.has(uuid))
+        .map(([, childId]) => childId)
+    );
+    return children.filter(c => !renderedInlineIds.has(c._id) && !c.is_subagent && c._id !== conversation._id);
+  }, [conversation?.child_conversations, conversation?.child_conversation_map, conversation?._id, messages]);
+
+  // Header menu: the subagent list. Built once per change of the child set,
+  // not per render — a parent with 174 subagents otherwise re-created ~900
+  // elements on every conversation re-render (a closed Radix menu never mounts
+  // them, but the JSX was still evaluated each pass).
+  const subagentChildren = conversation?.child_conversations;
+  const subagentMenuSig = useMemo(() => {
+    if (!subagentChildren) return "";
+    let sig = "";
+    for (const c of subagentChildren) if (c.is_subagent) sig += `${c._id}\u0000${c.title ?? ""}\n`;
+    return sig;
+  }, [subagentChildren]);
+  const subagentMenuItems = useMemo(() => {
+    if (!subagentMenuSig) return null;
+    const subagents = subagentChildren!.filter((c) => c.is_subagent);
+    return (
+      <>
+        <DropdownMenuItem disabled className="text-[10px] uppercase tracking-wider text-sol-text-dim">
+          Subagents ({subagents.length})
+        </DropdownMenuItem>
+        {subagents.map((child) => (
+          <DropdownMenuItem key={child._id} asChild>
+            <Link href={convLink(child._id)} className="text-xs">
+              <svg className="w-3 h-3 mr-1.5 text-sol-cyan flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+              </svg>
+              <span className="truncate">{child.title}</span>
+            </Link>
+          </DropdownMenuItem>
+        ))}
+      </>
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the array
+  }, [subagentMenuSig]);
+
   return (
     <HighlightContext.Provider value={highlightQuery}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
@@ -14930,7 +15031,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
+      <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         <div>
           <div className="cc-panel__head cc-panel__head--flow gap-2 min-w-0">
             <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
@@ -15567,23 +15668,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         {conversation.compaction_count} compaction{conversation.compaction_count === 1 ? '' : 's'}
                       </DropdownMenuItem>
                     )}
-                    {conversation.child_conversations && conversation.child_conversations.filter(c => c.is_subagent).length > 0 && (
-                      <>
-                        <DropdownMenuItem disabled className="text-[10px] uppercase tracking-wider text-sol-text-dim">
-                          Subagents ({conversation.child_conversations.filter(c => c.is_subagent).length})
-                        </DropdownMenuItem>
-                        {conversation.child_conversations.filter(c => c.is_subagent).map((child) => (
-                          <DropdownMenuItem key={child._id} asChild>
-                            <Link href={convLink(child._id)} className="text-xs">
-                              <svg className="w-3 h-3 mr-1.5 text-sol-cyan flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                              </svg>
-                              <span className="truncate">{child.title}</span>
-                            </Link>
-                          </DropdownMenuItem>
-                        ))}
-                      </>
-                    )}
+                    {subagentMenuItems}
                     {conversation?._id && <ConversationTaskStatsMenuItem conversationId={conversation._id} />}
                     {latestUsage && (
                       <>
@@ -15905,16 +15990,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
           </div>
           )}
-          {conversation?.child_conversations && conversation.child_conversations.length > 0 && !hasMoreBelow && (() => {
-            const childMap = conversation.child_conversation_map || {};
-            const messageUuids = new Set(messages.map(m => m.message_uuid).filter(Boolean));
-            const renderedInlineIds = new Set(
-              Object.entries(childMap)
-                .filter(([uuid]) => messageUuids.has(uuid))
-                .map(([, childId]) => childId)
-            );
-            const continuationChildren = conversation.child_conversations.filter(c => !renderedInlineIds.has(c._id) && !c.is_subagent && c._id !== conversation._id);
-            if (continuationChildren.length === 0) return null;
+          {continuationChildren.length > 0 && !hasMoreBelow && (() => {
             return (
               <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-3 pb-8">
                 <div className="flex flex-wrap items-center gap-2">
