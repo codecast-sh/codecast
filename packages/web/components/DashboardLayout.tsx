@@ -52,6 +52,7 @@ import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { useSyncTeamInboxSessions } from "../hooks/useSyncTeamInboxSessions";
 import { useSyncChangeFeed } from "../hooks/useSyncChangeFeed";
 import { useSyncBuckets } from "../hooks/useSyncBuckets";
+import { useSyncSessionDecisions } from "../hooks/useSyncSessionDecisions";
 import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
 import { useChatToasts } from "../hooks/useChatToasts";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
@@ -203,6 +204,9 @@ function DashboardSyncEffects() {
   useSyncTeamInboxSessions();
   useSyncChangeFeed();
   useSyncBuckets();
+  // The decision queue: pending cast-decide questions feed the Questions
+  // section and the /questions queue app-wide (sidebar badge included).
+  useSyncSessionDecisions();
   // Chat's channel rail runs app-wide, not on the chat page: the sidebar badge,
   // the document title and the arrival toasts all read it, and a toast that only
   // fires while chat is open is a toast nobody needs.

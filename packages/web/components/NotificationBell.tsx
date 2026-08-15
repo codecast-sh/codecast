@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { notificationRoute, sessionTypes, typeColors, typeLabels } from "../lib/notificationTypes";
+import { agentNames, notificationRoute, sessionLabel, sessionTypes, typeColors, typeLabels } from "../lib/notificationTypes";
 import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 
@@ -60,24 +60,6 @@ function AgentIcon({ agentType, className = "w-9 h-9" }: { agentType: string; cl
       <ClaudeIcon className="w-4 h-4 text-sol-bg" />
     </span>
   );
-}
-
-const agentNames: Record<string, string> = {
-  claude_code: "claude",
-  codex: "codex",
-  codex_cli: "codex",
-  cursor: "cursor",
-  gemini: "gemini",
-};
-
-function sessionLabel(conversation: { title?: string; project_path?: string; agent_type?: string } | null): string | null {
-  if (!conversation) return null;
-  if (conversation.title) return conversation.title;
-  if (conversation.project_path) {
-    const parts = conversation.project_path.split("/");
-    return parts[parts.length - 1] || parts[parts.length - 2] || conversation.project_path;
-  }
-  return null;
 }
 
 export function NotificationBell() {

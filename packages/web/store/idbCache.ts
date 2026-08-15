@@ -30,6 +30,8 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 class CacheDB extends Dexie {
   sessions!: Dexie.Table<any, string>;
   tasks!: Dexie.Table<any, string>;
+  capabilityState!: Dexie.Table<any, string>;
+  sessionDecisions!: Dexie.Table<any, string>;
   docs!: Dexie.Table<any, string>;
   plans!: Dexie.Table<any, string>;
   projects!: Dexie.Table<any, string>;
@@ -155,6 +157,47 @@ class CacheDB extends Dexie {
       chatMessages: "_id, channel_id, thread_root_id",
       chatReactions: "_id, message_id",
       chatReads: "_id, channel_id",
+      meta: "key",
+      conversationMessages: "convId, latestTimestamp",
+      dispatchOutbox: "id, ts",
+    });
+    this.version(10).stores({
+      sessions: "_id",
+      tasks: "_id",
+      docs: "_id",
+      plans: "_id",
+      projects: "_id",
+      buckets: "_id",
+      bucketAssignments: "_id",
+      comments: "_id",
+      chatChannels: "_id",
+      chatMessages: "_id, channel_id, thread_root_id",
+      chatReactions: "_id, message_id",
+      chatReads: "_id, channel_id",
+      // The fleet mirror: one row per (device, client, scope), keyed by the
+      // server _id like every other synced collection.
+      capabilityState: "_id",
+      meta: "key",
+      conversationMessages: "convId, latestTimestamp",
+      dispatchOutbox: "id, ts",
+    });
+    this.version(11).stores({
+      sessions: "_id",
+      tasks: "_id",
+      docs: "_id",
+      plans: "_id",
+      projects: "_id",
+      buckets: "_id",
+      bucketAssignments: "_id",
+      comments: "_id",
+      chatChannels: "_id",
+      chatMessages: "_id, channel_id, thread_root_id",
+      chatReactions: "_id, message_id",
+      chatReads: "_id, channel_id",
+      capabilityState: "_id",
+      // The decision queue: explicit questions agents hand to their human
+      // (cast decide). One row per open or recently resolved decision.
+      sessionDecisions: "_id",
       meta: "key",
       conversationMessages: "convId, latestTimestamp",
       dispatchOutbox: "id, ts",

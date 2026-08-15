@@ -84,6 +84,29 @@ export const typeColors: Record<string, string> = {
   chat_here: "text-sol-orange",
 };
 
+export const agentNames: Record<string, string> = {
+  claude_code: "claude",
+  codex: "codex",
+  codex_cli: "codex",
+  cursor: "cursor",
+  gemini: "gemini",
+  opencode: "opencode",
+  pi: "pi",
+};
+
+/** Display label for the session a notification belongs to: title, else project basename. */
+export function sessionLabel(
+  conversation: { title?: string; project_path?: string; agent_type?: string } | null | undefined,
+): string | null {
+  if (!conversation) return null;
+  if (conversation.title) return conversation.title;
+  if (conversation.project_path) {
+    const parts = conversation.project_path.split("/");
+    return parts[parts.length - 1] || parts[parts.length - 2] || conversation.project_path;
+  }
+  return null;
+}
+
 /**
  * Where a notification's entity opens, given the entity it names and — for
  * chat, which addresses a position inside a page — the message it points at.

@@ -23,9 +23,14 @@ export type SidebarPin = {
   label: string;
 };
 
+// Stable no-pins reference: readPins is used inside zustand selectors, and a
+// fresh [] per call reads as a changed snapshot on every check — an infinite
+// re-render loop for any user with no pins yet.
+const NO_PINS: SidebarPin[] = [];
+
 export function readPins(state: any): SidebarPin[] {
   const raw = state.clientState?.ui?.sidebar_pins;
-  return Array.isArray(raw) ? (raw as SidebarPin[]) : [];
+  return Array.isArray(raw) ? (raw as SidebarPin[]) : NO_PINS;
 }
 
 export function isPinned(state: any, kind: SidebarPinKind, id: string): boolean {

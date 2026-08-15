@@ -126,9 +126,13 @@ describe("clientState server sync never navigates", () => {
 });
 
 describe("sessions-sync restore fallback", () => {
+  // The fleet board (inbox_home default) intercepts boot adoption entirely —
+  // these tests pin the CONVERSATION restore path, so they opt into the feed.
+  const feedUi = { ui: { inbox_home: "feed" as const } };
+
   beforeEach(() => {
     resetStore();
-    useInboxStore.setState({ sessions: {} });
+    useInboxStore.setState({ sessions: {}, clientState: { current_conversation_id: "convB", ...feedUi } });
   });
 
   const syncSessions = () =>
@@ -136,6 +140,17 @@ describe("sessions-sync restore fallback", () => {
       { ...session("convA"), updated_at: 10 },
       { ...session("convB"), updated_at: 5 },
     ]);
+
+  it("lands on the fleet board by default, adopting NO conversation", () => {
+    useInboxStore.setState({
+      lastFocusedConversationId: "convB",
+      clientState: { current_conversation_id: "convB" },
+    });
+    syncSessions();
+    const s = useInboxStore.getState();
+    expect(s.currentSessionId).toBeNull();
+    expect(s.showMySessions).toBe(true);
+  });
 
   it("restores this client's own position when it exists", () => {
     useInboxStore.setState({ lastFocusedConversationId: "convB" });
@@ -146,7 +161,7 @@ describe("sessions-sync restore fallback", () => {
   it("falls back to the synced pointer only on a client with no history", () => {
     useInboxStore.setState({
       lastFocusedConversationId: null,
-      clientState: { current_conversation_id: "convB" },
+      clientState: { current_conversation_id: "convB", ...feedUi },
     });
     syncSessions();
     expect(useInboxStore.getState().currentSessionId).toBe("convB");
@@ -155,7 +170,7 @@ describe("sessions-sync restore fallback", () => {
   it("a client with history whose position is gone falls to the inbox top, NEVER the synced pointer", () => {
     useInboxStore.setState({
       lastFocusedConversationId: "convGone",
-      clientState: { current_conversation_id: "convB" },
+      clientState: { current_conversation_id: "convB", ...feedUi },
     });
     syncSessions();
     // convA sorts first (most recent), convB is what a poisoned pointer says.
