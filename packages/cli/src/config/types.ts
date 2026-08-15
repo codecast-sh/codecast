@@ -157,6 +157,11 @@ export interface Config {
   // OS-chosen, self-discovered from the server's announce line).
   opencode_server?: { enabled?: boolean; port?: number };
 
+  // --- Browser (`cast browser`, browser/autoShot.ts) ---
+  // Automatic screenshots after page-changing browser commands, so a browsing
+  // thread self-documents. Absent → ON; `cast browser shots off` sets false.
+  browser?: { auto_shots?: boolean };
+
   // --- Vaults (index.ts `cast vault`, daemon /vault/* routes) ---
   // Directories of markdown the user registered for browsing over the loopback
   // bridge. Managed through vault/vaultRegistry.ts — never hand-edited elsewhere,

@@ -307,7 +307,9 @@ export async function freePort(): Promise<number> {
 export function strayPids(userDataDir: string): number[] {
   try {
     const { execSync } = require("node:child_process") as typeof import("node:child_process");
-    const out = execSync(`pgrep -f ${JSON.stringify(`--user-data-dir=${userDataDir}`)}`, {
+    // `--` before the pattern: it begins with `--user-data-dir`, which pgrep
+    // would otherwise read as an option and reject — silently finding nothing.
+    const out = execSync(`pgrep -f -- ${JSON.stringify(`--user-data-dir=${userDataDir}`)}`, {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
     });

@@ -27,31 +27,9 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import type { VaultInfo } from "@codecast/shared/contracts";
-import type { Config } from "../config/types.js";
 import { enumerateProjectRoots } from "../projectRoots.js";
 import { probeProjectVault } from "./vaultScope.js";
-import { atomicWriteFile } from "../atomicWrite.js";
-
-function configFile(configDir: string): string {
-  return path.join(configDir, "config.json");
-}
-
-function readConfig(configDir: string): Config {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(configFile(configDir), "utf-8"));
-    return parsed && typeof parsed === "object" ? (parsed as Config) : {};
-  } catch {
-    return {};
-  }
-}
-
-// Read-modify-write of the shared config file, atomically: every other field
-// belongs to another writer and must survive untouched.
-function writeConfig(configDir: string, config: Config): void {
-  const file = configFile(configDir);
-  fs.mkdirSync(configDir, { recursive: true });
-  atomicWriteFile(file, JSON.stringify(config, null, 2) + "\n");
-}
+import { readSharedConfig as readConfig, writeSharedConfig as writeConfig } from "../config/sharedConfig.js";
 
 /** Stable vault id: 12-hex sha256 prefix of the absolute root path. Derived, not
  *  stored-and-generated, so the same directory registered twice is the same

@@ -44,8 +44,10 @@ import { armRecorder, clearRecording, readRecording } from "./observe.js";
 import { emitFailureContext } from "./capture.js";
 import { pageViewportCapture, parseViewport, runViewportRow, ViewportArgError, viewportChoices } from "./viewports.js";
 import { writeShotFile } from "./shotFile.js";
+import { autoShotsEnabled, cdpAutoShotSource, maybeAutoShot, pruneHashes, setAutoShots } from "./autoShot.js";
 import { ownerKey } from "./owner.js";
 import { registerEngineCommands } from "./cliEngine.js";
+import { DEFAULT_CLONE, resolveRemote, startLocalBrowser, startManagedBrowser, waitingOnLaunch, type StartOptions } from "./managedBrowser.js";
 import { ENGINE_MIN_VERSION, ENGINE_PACKAGE, engineFitness, findEngine } from "./engine.js";
 import { sameDocument } from "./url.js";
 import { loadSitePolicy } from "./policy.js";
@@ -75,7 +77,6 @@ const OK = `${fmt.success(icons.check)}`;
 const BAD = `${fmt.error(icons.cross)}`;
 const WARN = `${fmt.warning("!")}`;
 
-const DEFAULT_CLONE = "default";
 
 function die(msg: string, hint?: string): never {
   console.error(`${BAD} ${msg}`);
@@ -179,125 +180,6 @@ function pageLine(url: string, title: string): string {
   return `${fmt.highlight(title || "(untitled)")}\n${fmt.muted(url)}`;
 }
 
-/** Told to the user when a start queues behind another agent's launch. */
-function waitingOnLaunch(holderPid: number): void {
-  console.log(
-    fmt.muted(`  another agent (pid ${holderPid}) is starting the browser — waiting for it, then reusing it`),
-  );
-}
-
-interface StartOptions {
-  profile?: string;
-  channel: ChromeChannel;
-  headless?: boolean;
-  fresh?: boolean;
-  resync?: boolean;
-  size: string;
-}
-
-/**
- * Start (or reuse) the local managed browser. Shared by `start` and by `open`'s
- * auto-start, and serialized under the launch lock: when several agents race
- * here, one launches and the rest wait, re-probe, and reuse the winner's
- * browser. Before the lock existed the losers' Chromes handed their command
- * lines to the winner's singleton and exited, each loser reported a cryptic
- * failure, and their retries restarted the browser under everyone else.
- */
-async function startLocalBrowser(o: StartOptions): Promise<void> {
-  const release = await acquireStartLock(undefined, waitingOnLaunch);
-  try {
-    const existing = readState();
-    // Patient on purpose: this is the one probe whose false "dead" leads to
-    // killing a live browser. 8s of waiting is cheap; the stampede was not.
-    const live = await probeLiveness(existing, 8000);
-    if (live === "live") {
-      console.log(`${OK} already running on port ${existing!.port} (pid ${existing!.pid})`);
-      console.log(fmt.muted("  `cast browser stop` first if you want a different profile"));
-      return;
-    }
-    if (live === "unresponsive") {
-      die(
-        `a managed browser (pid ${existing!.pid}) exists but CDP is not answering`,
-        "it is likely overloaded, not dead — retry shortly, or `cast browser stop` to replace it deliberately",
-      );
-    }
-
-    const userDataDir = clonePath(DEFAULT_CLONE);
-    let sourceProfile: string | null = null;
-
-    if (o.fresh) {
-      fs.rmSync(userDataDir, { recursive: true, force: true });
-      fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
-      console.log(`${OK} fresh profile (logged out of everything)`);
-    } else {
-      const profiles = listRealProfiles(o.channel);
-      const pick = o.profile ?? profiles.find((p) => p.lastUsed)?.dir ?? "Default";
-      const known = profiles.find((p) => p.dir === pick);
-      sourceProfile = pick;
-      const needsClone = o.resync || !fs.existsSync(path.join(userDataDir, "Default", "Cookies"));
-      if (needsClone) {
-        console.log(`  cloning ${fmt.highlight(known?.name ?? pick)}${known?.email ? fmt.muted(` <${known.email}>`) : ""}…`);
-        const res = cloneProfile({ sourceDir: pick, destRoot: userDataDir, channel: o.channel });
-        console.log(`${OK} cloned ${res.files} items, ${formatBytes(res.bytes)}`);
-        if (!res.cookiesFound) {
-          console.log(
-            `${WARN} no cookie store was copied — the browser will start logged out.\n` +
-              `  ${fmt.muted("Chrome may have been mid-write; try `cast browser start --resync` with Chrome closed.")}`,
-          );
-        }
-      } else {
-        console.log(`  reusing existing clone ${fmt.muted(userDataDir)} ${fmt.muted("(--resync to refresh logins)")}`);
-      }
-    }
-
-    // An abandoned Chrome still holding this profile would swallow the launch.
-    // Safe to kill here: the probe above said no live managed browser exists,
-    // and the lock keeps another agent's mid-launch Chrome out of this window.
-    const strays = killStrayChrome(userDataDir);
-    if (strays) {
-      console.log(fmt.muted(`  cleared ${strays} stray Chrome process(es) holding the profile`));
-      // SIGTERM is not instant; launching while one is still exiting hands our
-      // command line to a dying Chrome and nothing ever listens.
-      await waitForStraysGone(userDataDir);
-    }
-
-    const [w, h] = o.size.split("x").map((n) => parseInt(n, 10));
-    const port = await freePort();
-    let pid: number;
-    try {
-      pid = await launchManagedChrome({
-        userDataDir,
-        port,
-        headless: o.headless,
-        channel: o.channel,
-        windowSize: { width: w || 1440, height: h || 900 },
-      });
-    } catch (err) {
-      die((err as Error).message);
-    }
-
-    const state: InstanceState = {
-      pid, port, userDataDir,
-      wsUrl: await browserSocketUrl(port).catch(() => undefined),
-      headless: !!o.headless,
-      sourceProfile,
-      channel: o.channel,
-      startedAt: Date.now(),
-      activeTargetId: null,
-    };
-    writeState(state);
-    console.log(`${OK} browser up — pid ${pid}, CDP 127.0.0.1:${port}${o.headless ? ", headless" : ""}`);
-    if (!o.fresh) {
-      console.log(
-        fmt.muted("  This is a COPY of your profile. The agent's browsing never touches your real Chrome,\n") +
-          fmt.muted("  and the copy holds live session cookies — `cast browser stop --wipe` removes it."),
-      );
-    }
-    console.log(fmt.muted("  next: cast browser open <url>"));
-  } finally {
-    release();
-  }
-}
 
 /**
  * Should the engine drive, or our built-in CDP driver?
@@ -325,47 +207,6 @@ function useEngine(): boolean {
   return false;
 }
 
-/**
- * Turn `--remote [name]` into a reachable host, whichever cloud it lives in.
- *
- * Two backends, deliberately different in character:
- *
- *   linux  — an EC2 instance. Stops in seconds and costs only its disk when
- *            idle, so it is the default and the right answer for browser work.
- *   mac    — a Scaleway Apple silicon Mac. Cannot stop at all: Apple's licence
- *            imposes a 24-hour minimum lease, so it bills until deleted. Worth
- *            it only for work that genuinely needs macOS.
- *
- * `ensureUp` hides the difference at the call site — asking for a host is one
- * act whether or not the machine happens to be awake.
- */
-async function resolveRemote(name: string | boolean): Promise<{ host: RemoteHost; label: string; canSleep: boolean }> {
-  const wanted = typeof name === "string" ? name.toLowerCase() : "";
-  const hosts = readHosts();
-
-  // "mac" (or a Scaleway host id) goes to the Apple silicon registry.
-  const wantsMac = wanted === "mac" || wanted === "darwin" || wanted === "scaleway";
-  if (wantsMac || (wanted && hosts.every((h) => h.id !== wanted && h.provider !== wanted))) {
-    if (wantsMac || !hosts.length) {
-      const host = loadRemoteHost(wantsMac ? undefined : wanted || undefined);
-      return { host, label: `mac ${host.user}@${host.address}`, canSleep: false };
-    }
-  }
-
-  const picked =
-    hosts.find((h) => h.id === wanted) ??
-    hosts.find((h) => h.provider === (wanted === "linux" ? "aws" : wanted)) ??
-    hosts.find((h) => h.provider === "aws") ??
-    hosts[0];
-  if (!picked) {
-    die(
-      "no remote hosts are registered",
-      "add one with `cast browser hosts add` — a Linux box costs about a dollar a month idle",
-    );
-  }
-  const up = await ensureUp(picked, (m) => console.log(fmt.muted(`  ${m}`)));
-  return { host: toRemoteHost(up), label: `${up.provider} ${up.id}`, canSleep: true };
-}
 
 export function registerBrowserCommand(program: Command, deps: PublishDeps): void {
   // Which agent is calling. Tabs are owned per session so parallel agents on
@@ -491,52 +332,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--size <WxH>", "Window size", "1440x900")
     .option("--remote [host]", "Run the browser on a remote Mac, reached over SSH")
     .action(async (o: { profile?: string; channel: ChromeChannel; headless?: boolean; fresh?: boolean; resync?: boolean; size: string; remote?: string | boolean }) => {
-      // A browser on another Mac. Its profile starts empty and gains logins as
-      // pages are visited (credentials.ts), so nothing of yours is copied there.
-      if (o.remote) {
-        const release = await acquireStartLock(undefined, waitingOnLaunch);
-        try {
-          const existingRemote = readState();
-          const remoteLive = await probeLiveness(existingRemote, 8000);
-          if (remoteLive === "live") {
-            die("a browser is already running", "`cast browser stop` first");
-          }
-          if (remoteLive === "unresponsive") {
-            die(
-              `a managed browser (pid ${existingRemote!.pid}) exists but CDP is not answering`,
-              "it is likely overloaded, not dead — retry shortly, or `cast browser stop` to replace it deliberately",
-            );
-          }
-          const resolved = await resolveRemote(o.remote!);
-          const host = resolved.host;
-          const [rw, rh] = o.size.split("x").map((n) => parseInt(n, 10));
-          console.log(`  starting Chrome on ${fmt.highlight(`${host.user}@${host.address}`)}…`);
-          let rb;
-          try {
-            rb = await startRemoteBrowser(host, {
-              localPort: await freePort(),
-              windowSize: { width: rw || 1440, height: rh || 900 },
-            });
-          } catch (err) {
-            die((err as Error).message);
-          }
-          writeState({
-            pid: rb.sshPid, port: rb.localPort,
-            userDataDir: clonePath(DEFAULT_CLONE),   // the LOCAL profile we read cookies from
-            headless: true, sourceProfile: null, channel: o.channel,
-            startedAt: Date.now(), activeTargetId: null,
-            remote: { host: host.address, user: host.user, sshPid: rb.sshPid },
-          });
-          console.log(`${OK} remote browser up — ${rb.chromeVersion.trim()}`);
-          console.log(fmt.muted(`  CDP tunnelled to 127.0.0.1:${rb.localPort}; its profile starts signed out.`));
-          console.log(fmt.muted(`  Logins are carried over per site as you navigate — no list to maintain.`));
-          return;
-        } finally {
-          release();
-        }
-      }
-
-      await startLocalBrowser(o);
+      await startManagedBrowser(o);
     });
 
   br.command("status")
@@ -799,7 +595,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--no-wait", "Return without waiting for the page to settle")
     .option("--reload", "Load the page again even if the tab is already on it")
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
-    .action(async (url: string, o: { newTab?: boolean; wait: boolean; reload?: boolean; capture: boolean; real?: boolean; clone?: boolean }) => {
+    .option("--no-shot", "Skip the automatic screenshot")
+    .action(async (url: string, o: { newTab?: boolean; wait: boolean; reload?: boolean; capture: boolean; shot?: boolean; real?: boolean; clone?: boolean }) => {
       if (!/^[a-z]+:\/\//i.test(url)) url = `https://${url}`;
       if (isRealMode(o, me())) return openReal(url, o);
 
@@ -918,6 +715,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         const landed = auditLanding({ url: snap.url, tab: targetId, session: me(), via: "open", policy });
         if (landed) console.log(`${WARN} ${landed}`);
         console.log(fmt.muted(`  ${tabLine(targetId, "next: cast browser snapshot")}`));
+        await emitAutoShot(page, o.shot);
       } catch (err) {
         const msg = explainConnectionLoss((err as Error).message);
         await emitFailureContext(page, msg, { disabled: o.capture === false });
@@ -933,10 +731,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   ] as const) {
     br.command(name)
       .description(desc)
+      .option("--no-shot", "Skip the automatic screenshot")
       .option("--tab <id>", "Act on a specific tab")
     .option("--real", "Act on your real Chrome through the cast bridge extension")
     .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
-      .action(async (o: { tab?: string }) => {
+      .action(async (o: { shot?: boolean; tab?: string }) => {
         await act(o, async (page) => {
           const hist = await page.conn.send<any>("Page.getNavigationHistory", {}, page.sessionId);
           const idx = method === "back" ? hist.currentIndex - 1 : hist.currentIndex + 1;
@@ -948,6 +747,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           console.log(pageLine(snap.url, snap.title));
           const landed = auditLanding({ url: snap.url, tab: page.targetId, session: me(), via: "history", policy: loadSitePolicy() });
           if (landed) console.log(`${WARN} ${landed}`);
+          await emitAutoShot(page, o.shot);
         });
       });
   }
@@ -955,10 +755,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   br.command("reload")
     .description("Reload the page")
     .option("--hard", "Bypass the cache")
+    .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
     .option("--real", "Act on your real Chrome through the cast bridge extension")
     .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
-    .action(async (o: { hard?: boolean; tab?: string }) => {
+    .action(async (o: { hard?: boolean; shot?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         await page.conn.send("Page.reload", { ignoreCache: !!o.hard }, page.sessionId);
         await settle(page);
@@ -966,6 +767,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         console.log(pageLine(snap.url, snap.title));
         const landed = auditLanding({ url: snap.url, tab: page.targetId, session: me(), via: "reload", policy: loadSitePolicy() });
         if (landed) console.log(`${WARN} ${landed}`);
+        await emitAutoShot(page, o.shot);
       });
     });
 
@@ -994,7 +796,9 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         if (others.size) {
           console.log(fmt.muted(`\n  ~ = another agent's tab. Yours is marked *; pass --tab to be explicit.`));
         }
-        pruneTabOwnership(state, new Set(targets.map((t) => t.targetId)));
+        const liveIds = new Set(targets.map((t) => t.targetId));
+        pruneTabOwnership(state, liveIds);
+        pruneHashes(liveIds);
       } finally {
         driver.close();
       }
@@ -1057,6 +861,22 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       } finally {
         driver.close();
       }
+    });
+
+  br.command("shots [mode]")
+    .description("Automatic screenshots after page-changing commands: on | off | status")
+    .action((mode?: string) => {
+      if (!mode || mode === "status") {
+        console.log(
+          autoShotsEnabled()
+            ? `${OK} auto screenshots are on — page-changing commands inline a small capture (\`--no-shot\` skips one)`
+            : `${fmt.muted(icons.dot)} auto screenshots are off — enable with \`cast browser shots on\``,
+        );
+        return;
+      }
+      if (mode !== "on" && mode !== "off") die(`'${mode}' is not a mode`, "use: cast browser shots on | off | status");
+      setAutoShots(mode === "on");
+      console.log(`${OK} auto screenshots ${mode}`);
     });
 
   // -------------------------------------------------------------- perception
@@ -1175,8 +995,19 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     return n;
   };
 
+  /** Auto shot after a page-changing command: capture, dedupe, inline. Quiet —
+   *  the only output is the image itself, and only when the page changed. */
+  async function emitAutoShot(page: PageSession, shotFlag?: boolean): Promise<void> {
+    const shot = await maybeAutoShot(cdpAutoShotSource(page), shotFlag);
+    if (shot) console.log(inlineImageMarker(shot));
+  }
+
   /** Report what an action changed, so the agent rarely needs a second call. */
-  async function reportAfter(page: PageSession, before: { url: string; title: string }): Promise<void> {
+  async function reportAfter(
+    page: PageSession,
+    before: { url: string; title: string },
+    shotFlag?: boolean,
+  ): Promise<void> {
     const r = await settle(page, { timeoutMs: 8000 });
     const snap = await snapshotPage(page, { maxChars: 1 });
     if (snap.url !== before.url) {
@@ -1190,6 +1021,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     } else if (!r.settled) {
       console.log(fmt.muted(`  (page still busy: ${r.reason})`));
     }
+    await emitAutoShot(page, shotFlag);
   }
 
   br.command("click <ref>")
@@ -1198,10 +1030,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--right", "Right click")
     .option("--double", "Double click")
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
+    .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
     .option("--real", "Act on your real Chrome through the cast bridge extension")
     .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
-    .action(async (ref: string, o: { force?: boolean; right?: boolean; double?: boolean; tab?: string }) => {
+    .action(async (ref: string, o: { force?: boolean; right?: boolean; double?: boolean; shot?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
         const pt = await click(page, refOf(ref), {
@@ -1210,22 +1043,23 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           clickCount: o.double ? 2 : 1,
         });
         console.log(`${OK} clicked #e${refOf(ref)} at ${Math.round(pt.x)},${Math.round(pt.y)}`);
-        await reportAfter(page, before);
+        await reportAfter(page, before, o.shot);
       });
     });
 
   br.command("click-at <x> <y>")
     .description("Click raw viewport coordinates (escape hatch when no ref fits)")
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
+    .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
     .option("--real", "Act on your real Chrome through the cast bridge extension")
     .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
-    .action(async (x: string, y: string, o: { tab?: string }) => {
+    .action(async (x: string, y: string, o: { shot?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
         await clickAt(page, { x: parseFloat(x), y: parseFloat(y) });
         console.log(`${OK} clicked ${x},${y}`);
-        await reportAfter(page, before);
+        await reportAfter(page, before, o.shot);
       });
     });
 
@@ -1236,6 +1070,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--per-key", "One key event per character — needed for autocompletes")
     .option("--delay <ms>", "Delay between keys with --per-key", "20")
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
+    .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
     .option("--real", "Act on your real Chrome through the cast bridge extension")
     .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
@@ -1246,22 +1081,25 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           clear: o.clear, submit: o.submit, perKey: o.perKey, delayMs: parseInt(o.delay, 10),
         });
         console.log(`${OK} typed ${JSON.stringify(text.slice(0, 60))} into #e${refOf(ref)}${o.submit ? " and submitted" : ""}`);
-        await reportAfter(page, before);
+        // Keystrokes into a field are mid-flow — the page that matters is the
+        // one a submit produces, so a plain `type` takes no auto shot.
+        await reportAfter(page, before, o.submit ? o.shot : false);
       });
     });
 
   br.command("press <key>")
     .description('Press a key: Enter, Escape, Tab, ArrowDown, "cmd+a", "/"')
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
+    .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
     .option("--real", "Act on your real Chrome through the cast bridge extension")
     .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
-    .action(async (key: string, o: { tab?: string }) => {
+    .action(async (key: string, o: { shot?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
         await pressKey(page, key);
         console.log(`${OK} pressed ${key}`);
-        await reportAfter(page, before);
+        await reportAfter(page, before, o.shot);
       });
     });
 
@@ -1292,15 +1130,16 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   br.command("select <ref> <value>")
     .description("Choose an option in a <select>")
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
+    .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
     .option("--real", "Act on your real Chrome through the cast bridge extension")
     .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
-    .action(async (ref: string, value: string, o: { tab?: string }) => {
+    .action(async (ref: string, value: string, o: { shot?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
         await selectOption(page, refOf(ref), value);
         console.log(`${OK} selected ${JSON.stringify(value)}`);
-        await reportAfter(page, before);
+        await reportAfter(page, before, o.shot);
       });
     });
 
@@ -1381,15 +1220,17 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
 
   br.command("upload <ref> <files...>")
     .description("Attach files to a file input, with no OS picker")
+    .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
     .option("--real", "Act on your real Chrome through the cast bridge extension")
     .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
-    .action(async (ref: string, files: string[], o: { tab?: string }) => {
+    .action(async (ref: string, files: string[], o: { shot?: boolean; tab?: string }) => {
       const abs = files.map((f) => path.resolve(f));
       for (const f of abs) if (!fs.existsSync(f)) die(`no such file: ${f}`);
       await act(o, async (page) => {
         await uploadFiles(page, refOf(ref), abs);
         console.log(`${OK} attached ${abs.length} file(s) to #e${refOf(ref)}`);
+        await emitAutoShot(page, o.shot);
       });
     });
 
@@ -1456,6 +1297,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .description("Run several steps in one go — much faster than separate commands")
     .option("--keep-going", "Carry on after a step fails")
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
+    .option("--no-shot", "Skip the automatic screenshots after page-changing steps")
     .option("--tab <id>", "Act on a specific tab")
     .option("--real", "Act on your real Chrome through the cast bridge extension")
     .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
@@ -1477,7 +1319,7 @@ Or one per line from stdin, which keeps long flows readable:
 
 A step with no ref uses whatever the last \`find\` matched.`,
     )
-    .action(async (steps: string[], o: { keepGoing?: boolean; tab?: string; capture: boolean }) => {
+    .action(async (steps: string[], o: { keepGoing?: boolean; shot?: boolean; tab?: string; capture: boolean }) => {
       // `-` reads the flow from stdin, the same convention as `cast send -`.
       let plan = steps;
       if (steps.length === 1 && steps[0] === "-") {
@@ -1493,6 +1335,9 @@ A step with no ref uses whatever the last \`find\` matched.`,
 
       await act(o, async (page, state, conn) => {
         const started = Date.now();
+        // Auto shots taken at step boundaries, in order. Kept separate from
+        // ctx.shots: those are files the agent asked for and got paths back.
+        const autoShots: string[] = [];
         const policy = loadSitePolicy();
         const ctx: BatchContext = {
           page,
@@ -1502,6 +1347,10 @@ A step with no ref uses whatever the last \`find\` matched.`,
           afterSettle: async () => {
             const snap = await snapshotPage(page, { maxChars: 1 });
             return auditLanding({ url: snap.url, tab: page.targetId, session: me(), via: "batch", policy });
+          },
+          autoShot: async () => {
+            const shot = await maybeAutoShot(cdpAutoShotSource(page), o.shot);
+            if (shot) autoShots.push(shot);
           },
           // Reuse the same capture and navigate paths the single commands use,
           // so a batched shot behaves identically — downscale, inline marker.
@@ -1551,6 +1400,7 @@ A step with no ref uses whatever the last \`find\` matched.`,
         }
 
         for (const shot of ctx.shots) console.log(inlineImageMarker(path.resolve(shot)));
+        for (const shot of autoShots) console.log(inlineImageMarker(path.resolve(shot)));
 
         // A viewport set inside a batch has to outlive it, like one set by the
         // command — otherwise the next command silently snaps back.

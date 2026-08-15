@@ -33,6 +33,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
 import { browserHome } from "./profile.js";
+import { readState } from "./instance.js";
 import { ownerKey } from "./owner.js";
 
 /** Pinned: agent-browser is pre-1.0, so an unpinned upgrade can move the CLI
@@ -128,12 +129,10 @@ export interface EngineRun {
 }
 
 export interface EngineOptions {
-  /** Chrome profile directory to inherit logins from ("Default", "Profile 7"). */
-  profile?: string | null;
-  /** Run without a visible window. */
-  headless?: boolean;
   /** Override the session key; defaults to this codecast session. */
   session?: string | null;
+  /** Override the managed browser's port; defaults to the state file's. */
+  port?: number;
   timeoutMs?: number;
   /** Stream output straight through instead of capturing it. */
   inherit?: boolean;
@@ -155,7 +154,39 @@ export function engineSession(detectSessionId?: () => string | null): string {
   return key.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 60);
 }
 
-/** Run the engine with codecast's session and profile applied. */
+// ---------------------------------------------------------------------------
+// The browser each session drives
+// ---------------------------------------------------------------------------
+//
+// The engine does not launch a browser of its own. It attaches over CDP to the
+// one managed Chrome on this machine (managedBrowser.ts) — the same browser
+// the built-in driver uses — and pins each session to a tab of its own
+// (`--pin-tab`). That keeps everything the engine is good at (isolation
+// between sessions, its verbs) while the browser itself stays one visible
+// window that opened without taking focus, holds one clone of the human's
+// logins, and can be pointed at by the web's "open tab" link. A browser per
+// session was tried first: each launch is a new Chrome window that takes
+// focus on macOS, and copies of the profile piled up in the tmp dir.
+
+/** Where the engine keeps its per-session daemon files (pid, socket, target). */
+export function engineStateDir(): string {
+  return process.env.AGENT_BROWSER_HOME ?? path.join(os.homedir(), ".agent-browser");
+}
+
+/** The debugging port of the managed browser, or null when none is recorded. */
+export function managedPort(): number | null {
+  const state = readState();
+  return state?.port ?? null;
+}
+
+/**
+ * Run the engine attached to the managed browser, as this session.
+ *
+ * The flags are the same on every call on purpose: the daemon treats a changed
+ * launch configuration (a different port, environment or profile) as a reason
+ * to reset its tab, so nothing here may vary between one command and the next
+ * except the command itself.
+ */
 export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
   const binary = findEngine();
   if (!binary) {
@@ -164,10 +195,13 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
         `\`npm install -g ${ENGINE_PACKAGE}\``,
     );
   }
+  const port = opts.port ?? managedPort();
+  if (!port) {
+    return { status: 1, stdout: "", stderr: "no managed browser is running — run `cast browser start`" };
+  }
 
-  const full = [...args];
-  if (opts.profile) full.push("--profile", opts.profile);
-  if (opts.headless) full.push("--headless");
+  const session = opts.session ?? engineSession();
+  const full = [...args, "--cdp", String(port), "--pin-tab"];
 
   const res = spawnSync(binary, full, {
     encoding: "utf-8",
@@ -176,7 +210,7 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
     env: {
       ...process.env,
       // The isolation that replaces our tab-ownership bookkeeping.
-      AGENT_BROWSER_SESSION: opts.session ?? engineSession(),
+      AGENT_BROWSER_SESSION: session,
     },
   });
 
@@ -353,7 +387,11 @@ export async function engineCdpEndpoint(opts: EngineOptions = {}): Promise<Engin
   const owned = new Set(tabs.map((t) => t.targetId).filter(Boolean));
   if (!owned.size) return null;
 
-  for (const port of candidatePorts()) {
+  // The managed browser first — that is where sessions attach — then any
+  // other Chrome on the machine, for a session driving something else.
+  const managed = managedPort();
+  const ports = managed ? [managed, ...candidatePorts().filter((p) => p !== managed)] : candidatePorts();
+  for (const port of ports) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) });
       if (!res.ok) continue;
