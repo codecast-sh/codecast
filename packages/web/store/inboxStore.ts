@@ -977,6 +977,10 @@ export type ClientUI = {
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
   sounds_enabled?: boolean;
+  // Chat toast sounds, split from the above: an agent fleet's chirps and a
+  // teammate speaking are different interruptions, and people who mute one
+  // usually still want the other. Absent = on, same as sounds_enabled.
+  chat_sounds_enabled?: boolean;
   // Chat toasts stay quiet until this instant. Set from the snooze button on a
   // toast — the off switch has to be one gesture from the annoyance, or people
   // mute everything after one bad afternoon.
