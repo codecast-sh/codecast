@@ -1,7 +1,8 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useInboxStore, DocDetail } from "../../../store/inboxStore";
+import { useInboxStore, DocDetail, type DocItem } from "../../../store/inboxStore";
+import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
@@ -143,7 +144,9 @@ function DocDetailContent() {
 
   const detail = useInboxStore((s) => s.docDetails[id]) as DocDetail | undefined;
   const listItem = useInboxStore((s) => s.docs[id]) as DocDetail | undefined;
-  const allDocs = useInboxStore((s) => s.docs);
+  // Backlinks and child pages are LISTS, so they read through the sanctioned
+  // workspace reader — the store caches docs from every workspace viewed.
+  const allDocs = useWorkspaceCollection<DocItem>("docs");
   const data = detail || listItem;
 
   // The id may be a conversation's (malformed /docs/<conversationId> link).
@@ -157,13 +160,13 @@ function DocDetailContent() {
 
   // Compute backlinks: docs that link to this doc via linked_doc_ids
   const backlinks = useMemo(() => {
-    return Object.values(allDocs).filter(
+    return allDocs.filter(
       (d) => d._id !== id && d.linked_doc_ids?.includes(id)
     );
   }, [allDocs, id]);
   // Child docs (pages nested under this doc)
   const childDocs = useMemo(() => {
-    return Object.values(allDocs)
+    return allDocs
       .filter((d) => d.parent_id === id)
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
   }, [allDocs, id]);

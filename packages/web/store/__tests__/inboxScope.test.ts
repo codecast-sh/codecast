@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { filterInboxScope, type InboxSession } from "../inboxStore";
+import { filterInboxScope, filterInboxScopeFromState, type InboxSession } from "../inboxStore";
 
 // filterInboxScope is the gate that keeps the two inbox scopes coherent even
 // though both read the SAME never-prune sessions cache:
@@ -104,5 +104,37 @@ describe("filterInboxScope — team", () => {
     const theirs = mk(cid(2), { user_id: THEM });
     const out = filterInboxScope(byId([mine, theirs]), "team", ME, new Set());
     expect(ids(out)).toEqual([cid(1)]);
+  });
+});
+
+describe("filterInboxScopeFromState", () => {
+  // The snapshot helper every session picker/MRU calls before enumerating the
+  // shared cache. It must read the SAME canonical arguments the inbox panel
+  // uses, so a picker can never disagree with the inbox about what is visible.
+  const state = (over: Record<string, unknown> = {}) => ({
+    sessions: byId([mk(cid(1), { user_id: ME }), mk(cid(2), { user_id: THEM })]),
+    clientState: { ui: {} as { inbox_scope?: "mine" | "team" } },
+    currentUser: { _id: ME },
+    teamInboxIds: new Set<string>(),
+    currentSessionId: null as string | null,
+    ...over,
+  });
+
+  it("defaults to the mine scope and drops teammate rows", () => {
+    const out = filterInboxScopeFromState(state());
+    expect(ids(out)).toEqual([cid(1)]);
+  });
+
+  it("honors the team scope with the reported team set", () => {
+    const out = filterInboxScopeFromState(state({
+      clientState: { ui: { inbox_scope: "team" as const } },
+      teamInboxIds: new Set([cid(2)]),
+    }));
+    expect(ids(out)).toEqual([cid(2)]);
+  });
+
+  it("keeps the focused session regardless of scope", () => {
+    const out = filterInboxScopeFromState(state({ currentSessionId: cid(2) }));
+    expect(ids(out)).toEqual([cid(1), cid(2)]);
   });
 });

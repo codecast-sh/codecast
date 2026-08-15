@@ -110,7 +110,16 @@ export default defineSchema({
       // key must exist here or the settings toggle has nowhere to persist and the
       // mute silently does nothing.
       chat_activity: v.optional(v.boolean()),
+      // Master switch for the "while you were away" email digest
+      // (emails/digest.ts). Absent reads as ON; the unsubscribe link and the
+      // settings toggle both write false here.
+      email_notifications: v.optional(v.boolean()),
     })),
+    // Cooldown stamp for the email digest — at most one digest per cooldown
+    // window, and items created before this stamp are never re-emailed.
+    email_digest_last_sent_at: v.optional(v.number()),
+    // Bearer for the one-click unsubscribe link. Minted lazily on first digest.
+    email_unsub_token: v.optional(v.string()),
     pr_auto_comment_enabled: v.optional(v.boolean()),
     // Dedupe/cooldown state for the aggregated "sessions blocked" notification
     // (accountSwitch.blockedNotifyCheck). One write per incident, not per park.
@@ -186,6 +195,7 @@ export default defineSchema({
     local_project_roots_updated_at: v.optional(v.number()),
   })
     .index("email", ["email"])
+    .index("by_email_unsub_token", ["email_unsub_token"])
     .index("by_github_username", ["github_username"])
     .index("by_github_id", ["github_id"])
     .index("by_username", ["username"])
@@ -368,6 +378,18 @@ export default defineSchema({
     comment_fork_message_id: v.optional(v.string()),
     comment_fork_comment_id: v.optional(v.id("comments")),
     comment_fork_prompt_at: v.optional(v.number()),
+    // Denormalized comment signal for the inbox card, recomputed by
+    // comments.refreshCommentSignal on every comment create/resolve/delete.
+    // Count of OPEN threads plus who spoke last in them and what they said —
+    // enough for the session row to show "Alice: typo in step 2" with no extra
+    // query on the list render path. author_id is a users id string, or
+    // "agent" for agent replies, so the client can mute the chip when the
+    // viewer themselves commented last.
+    unresolved_comment_count: v.optional(v.number()),
+    last_comment_at: v.optional(v.number()),
+    last_comment_author: v.optional(v.string()),
+    last_comment_author_id: v.optional(v.string()),
+    last_comment_excerpt: v.optional(v.string()),
     // Visible-child pointer: the session that spawned this one (agent-team
     // teammate → its lead, `cast spawn` → its caller). Unlike
     // parent_conversation_id — whose mere presence marks a row as a subagent
@@ -969,6 +991,8 @@ export default defineSchema({
   decisions: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS axis — see tasks.workspace.
+    workspace: v.optional(v.string()),
     project_path: v.optional(v.string()),
     title: v.string(),
     rationale: v.string(),
@@ -983,6 +1007,7 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_project", ["user_id", "project_path"])
     .index("by_team_id", ["team_id"])
+    .index("by_workspace", ["workspace"])
     .searchIndex("search_decisions_v2", {
       searchField: "title",
       filterFields: ["user_id", "project_path"],
@@ -991,6 +1016,8 @@ export default defineSchema({
   patterns: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS axis — see tasks.workspace.
+    workspace: v.optional(v.string()),
     name: v.string(),
     description: v.string(),
     content: v.string(),
@@ -1005,6 +1032,7 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_name", ["user_id", "name"])
     .index("by_team_id", ["team_id"])
+    .index("by_workspace", ["workspace"])
     .searchIndex("search_patterns_v2", {
       searchField: "name",
       filterFields: ["user_id"],
@@ -1847,6 +1875,19 @@ export default defineSchema({
     generated_at: v.number(),
   }).index("by_conversation_id", ["conversation_id"]),
 
+  // Append-only record of what happened to each shown suggestion: sent as-is,
+  // edited first, or dismissed. This is the ground truth for judging (and
+  // later calibrating) the suggester — the model's self-reported confidence
+  // is uncalibrated until measured against these.
+  suggestion_outcomes: defineTable({
+    user_id: v.id("users"),
+    conversation_id: v.id("conversations"),
+    anchor_message_uuid: v.string(),
+    suggestion: v.string(),
+    outcome: v.union(v.literal("sent"), v.literal("edited"), v.literal("dismissed")),
+    created_at: v.number(),
+  }).index("by_user_created", ["user_id", "created_at"]),
+
   // Per-user mined composer-input corpus: how this user actually talks to
   // their agents. `phrases` are recurring multi-word fragments mined across
   // inputs (each counted once per message); `frequent` is repeated whole
@@ -1856,6 +1897,15 @@ export default defineSchema({
     user_id: v.id("users"),
     frequent: v.array(v.object({ text: v.string(), count: v.number() })),
     phrases: v.optional(v.array(v.object({ text: v.string(), count: v.number() }))),
+    // Generalized habits mined by LLM: what the user recurrently asks for,
+    // abstracted from topic ("demands e2e verification before accepting
+    // work"), with one real quote as voice evidence. The suggester APPLIES
+    // these to the current conversation instead of replaying old messages.
+    patterns: v.optional(v.array(v.object({
+      pattern: v.string(),
+      example: v.string(),
+      count: v.number(),
+    }))),
     recent: v.array(v.string()),
     generated_at: v.number(),
   }).index("by_user_id", ["user_id"]),
@@ -1924,10 +1974,14 @@ export default defineSchema({
       v.literal("artifact_commented"),
       // Team chat. There is deliberately no type for a plain channel message:
       // ordinary chatter produces unread state only, never a notification row and
-      // never a push.
+      // never a push. A direct message is the exception — it is addressed to you
+      // by construction, so every DM line notifies exactly like a mention.
       v.literal("chat_mention"),
       v.literal("chat_reply"),
-      v.literal("chat_here")
+      v.literal("chat_here"),
+      v.literal("chat_dm"),
+      // Someone added you to a private channel or a group message.
+      v.literal("chat_added")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -1962,6 +2016,9 @@ export default defineSchema({
     .index("by_recipient", ["recipient_user_id"])
     .index("by_recipient_read", ["recipient_user_id", "read"])
     .index("by_recipient_created", ["recipient_user_id", "created_at"])
+    // Global recency scan for the email digest sweep (emails/digest.ts): find
+    // recently-created unread rows without touching every user.
+    .index("by_created", ["created_at"])
     // Session-state notifications (ready / needs permission / error) replace
     // per (recipient, conversation) instead of stacking — this is the lookup
     // for the row(s) being superseded.
@@ -2071,7 +2128,9 @@ export default defineSchema({
     resolved_by: v.optional(v.id("users")),
   })
     .index("by_user_status", ["user_id", "status"])
-    .index("by_conversation_status", ["conversation_id", "status"]),
+    .index("by_conversation_status", ["conversation_id", "status"])
+    // Global recency scan for the email digest sweep: recent pending decisions.
+    .index("by_status_created", ["status", "created_at"]),
 
   // A signed-in link recipient (someone who opened a shared conversation but is
   // neither its owner nor a team member) asking to do more than read: to send
@@ -2259,6 +2318,8 @@ export default defineSchema({
   projects: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS axis — see tasks.workspace.
+    workspace: v.optional(v.string()),
     short_id: v.optional(v.string()),
     title: v.string(),
     description: v.optional(v.string()),
@@ -2280,6 +2341,7 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
     .index("by_team_id", ["team_id"])
+    .index("by_workspace", ["workspace"])
     .index("by_short_id", ["short_id"]),
 
   // Saved list views — a named set of filters/grouping/sort for /tasks, /docs or
@@ -2346,6 +2408,8 @@ export default defineSchema({
   plans: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS axis — see tasks.workspace.
+    workspace: v.optional(v.string()),
     project_id: v.optional(v.id("projects")),
     project_path: v.optional(v.string()),
     short_id: v.string(),
@@ -2492,6 +2556,8 @@ export default defineSchema({
     .index("by_user_status", ["user_id", "status"])
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])
+    .index("by_workspace", ["workspace"])
+    .index("by_created_from_conversation_id", ["created_from_conversation_id"])
     .index("by_project_id", ["project_id"])
     .index("by_current_session", ["current_session_id"])
     .index("by_doc_id", ["doc_id"]),
@@ -2499,6 +2565,10 @@ export default defineSchema({
   tasks: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS, independent of team_id (which stays routing): "team:<id>" or
+    // "user:<id>" — see lib/access.ts workspaceKey. Written at create,
+    // recomputed only when a linked conversation's visibility changes.
+    workspace: v.optional(v.string()),
     project_id: v.optional(v.id("projects")),
     parent_id: v.optional(v.id("tasks")),
     plan_id: v.optional(v.id("plans")),
@@ -2653,6 +2723,8 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])
     .index("by_team_updated", ["team_id", "updated_at"])
+    .index("by_workspace", ["workspace"])
+    .index("by_created_from_conversation", ["created_from_conversation"])
     .index("by_workflow_run", ["workflow_run_id"])
     .index("by_assignee_status", ["assignee", "status"])
     .index("by_assignee_updated", ["assignee", "updated_at"])
@@ -2738,6 +2810,8 @@ export default defineSchema({
   docs: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // ACCESS axis — see tasks.workspace.
+    workspace: v.optional(v.string()),
     title: v.string(),
     content: v.string(),
     doc_type: v.union(
@@ -2813,6 +2887,7 @@ export default defineSchema({
     .index("by_parent_id", ["parent_id"])
     .index("by_project_id", ["project_id"])
     .index("by_team_id", ["team_id"])
+    .index("by_workspace", ["workspace"])
     .index("by_source_file", ["source_file"])
     .index("by_conversation_id", ["conversation_id"])
     .index("by_share_token", ["share_token"])
@@ -3465,16 +3540,15 @@ export default defineSchema({
     .index("by_team_seq", ["team_id", "seq"]),
 
   // ── Team chat ───────────────────────────────────────────────────────────────
-  // A Slack-shaped chat inside codecast: channels, flat threads, mentions,
-  // reactions, read state. Four tables, all scoped to ONE team.
+  // A Slack-shaped chat inside codecast: channels, private channels, DMs, flat
+  // threads, mentions, reactions, read state. Five tables, all routed to ONE
+  // team.
   //
-  // v1 scope, and why it is this small:
-  //  - Every channel is visible to every member of its team. There is no private
-  //    channel and no direct message, so `canAccessChannel` (chat.ts) is exactly
-  //    "is the caller a member of channel.team_id" — one check, one shape, no
-  //    second membership model to disagree with the first. Private channels and
-  //    DMs are a later phase; adding the fields later costs nothing because every
-  //    new field is optional and this schema does not re-validate on push.
+  // Scope notes:
+  //  - A public channel (kind absent) is visible to every member of its team.
+  //    Private channels and DMs gate on `chat_channel_members` rows on top of
+  //    the team check — `canAccessChannel` (chat.ts) is the one gate for all
+  //    three kinds, and every read and write goes through it.
   //  - Nothing here denormalizes a counter onto a shared row. `last_message_at`
   //    and `message_count` on the channel would make EVERY member a writer of the
   //    same document on every send — the hot-document pattern that has cost this
@@ -3497,11 +3571,28 @@ export default defineSchema({
   // `updated_at`: there is no patch to bump.
 
   chat_channels: defineTable({
+    // ROUTING only — which team's chat surface this room appears in. Access is
+    // decided by `kind` + membership, never by this field (the locked contract:
+    // team_id routes, a separate access answer gates).
     team_id: v.id("teams"),
     // Slug, lowercase, unique per team on a best-effort basis only. Routing is by
     // _id — two concurrent creates can both pass the uniqueness read, so a name
     // must never be the thing that resolves to a channel row.
+    // For a DM the name is "" — identity is the member set, and the client
+    // renders the other side's names instead.
     name: v.string(),
+    // Absent = "public" (every pre-membership channel). "private" and "dm" are
+    // readable/writable only by their chat_channel_members rows. A DM is a
+    // private room whose member set IS its identity: no name, no rename, no
+    // invite affordance beyond group-DM creation.
+    kind: v.optional(v.union(v.literal("public"), v.literal("private"), v.literal("dm"))),
+    // ACCESS, workspaceKey-shaped: "team:<id>" for public, "restricted:<own id>"
+    // for private/dm. Stamped so the workspace redesign's predicate can adopt
+    // chat without a migration; chat's own gate is canAccessChannel.
+    workspace: v.optional(v.string()),
+    // Sorted member ids joined with ":" — the openDm idempotency key, so opening
+    // the same conversation twice finds the same room. Set only when kind="dm".
+    dm_key: v.optional(v.string()),
     topic: v.optional(v.string()),
     // The channel a new team member lands in. Team admins only.
     is_default: v.optional(v.boolean()),
@@ -3518,7 +3609,26 @@ export default defineSchema({
   })
     // Prefix-matches serve "every channel in this team", so no separate by_team.
     .index("by_team_name", ["team_id", "name"])
-    .index("by_client_id", ["client_id"]),
+    .index("by_client_id", ["client_id"])
+    .index("by_dm_key", ["dm_key"]),
+
+  // Who is inside a private channel or DM — the session_owners shape: one row
+  // per (channel, member), provenance on the row, membership checked on
+  // by_channel_user. Public channels have NO rows here; their audience is the
+  // team, and writing rows for them would create a second membership model that
+  // could disagree with the first.
+  chat_channel_members: defineTable({
+    channel_id: v.id("chat_channels"),
+    user_id: v.id("users"),
+    added_by: v.id("users"),
+    added_at: v.number(),
+  })
+    // "Which private rooms am I in" — the rail merge for private/dm channels.
+    .index("by_user", ["user_id"])
+    // Roster of one room (member list, DM name derivation, notification fan-out).
+    .index("by_channel", ["channel_id"])
+    // The membership check and the add/remove dedupe.
+    .index("by_channel_user", ["channel_id", "user_id"]),
 
   chat_messages: defineTable({
     // Denormalized from the channel so scope checks and the search index don't
@@ -3653,6 +3763,25 @@ export default defineSchema({
     // is deliberately no by_channel index: a query over everyone's read state in a
     // channel is a read-receipt surface nobody asked for.
     .index("by_user_channel", ["user_id", "channel_id"]),
+
+  // Who is typing where, right now. ONE row per (channel, user) — a person
+  // types in one box at a time, so the row's thread_key just moves with them,
+  // and the table stays bounded at members × channels rather than growing a
+  // row per thread ever touched. Rows are refreshed while typing and deleted
+  // on send/blur; readers treat anything older than a few seconds as gone, so
+  // a leaked row (tab closed mid-word) misleads for one TTL and never again.
+  // Deliberately NOT in the store/sync pipeline: this is presence, not state —
+  // nothing persists it, and the only reader is the open channel's surface.
+  chat_typing: defineTable({
+    channel_id: v.id("chat_channels"),
+    user_id: v.id("users"),
+    // "" = the channel's main composer; a thread root id scopes the signal to
+    // that thread's panel.
+    thread_key: v.string(),
+    updated_at: v.number(),
+  })
+    .index("by_channel_user", ["channel_id", "user_id"])
+    .index("by_channel_updated", ["channel_id", "updated_at"]),
 
 }, {
   // The `messages` table is in the millions of rows, and the default

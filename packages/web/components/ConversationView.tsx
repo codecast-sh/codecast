@@ -114,12 +114,16 @@ import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./browser/BrowserWatchSplit";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
+import { inActiveWorkspace } from "../lib/workspaceScope";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
+import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../lib/pollPayload";
+import { dropScrapedProseTwins } from "../lib/proseTwins";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
+import { SessionHuddleButton } from "./calls/OccupancyChip";
 import { FormattedSummary } from "./FormattedSummary";
 import { ThreadStatePanel } from "./ThreadStatePanel";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
@@ -165,7 +169,7 @@ import { BranchSelector } from "./BranchSelector";
 import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
-import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
+import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2 } from "lucide-react";
@@ -2165,7 +2169,7 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
     return { message: body || "The model could not complete this turn.", isClientError: true };
   }
 
-  // Banner detection (auth / limit / connection) shares the backend's
+  // Banner detection (auth / limit / connection / fatal) shares the backend's
   // classifier in @codecast/shared/contracts: anchored prefixes + a length cap
   // keep a long prose reply that merely opens like a banner from rendering as
   // a card. The generic "API Error:"-prefixed form keeps its original anchored
@@ -2176,7 +2180,7 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   const isConnection = bannerKind === "connection";
   const isFatal = bannerKind === "fatal";
   const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
-  if (!isAuth && !isLimit && !isConnection && !match) return null;
+  if (!isAuth && !isLimit && !isConnection && !isFatal && !match) return null;
 
   // The status code may be the leading "API Error: NNN" (generic form) or
   // embedded in an auth banner ("Please run /login · API Error: 401 …").
@@ -5539,12 +5543,8 @@ function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage 
 
 const _askUserSentState = new Map<string, Record<number, Array<{ key: string; label: string; text?: string }>>>();
 
-// Claude Code appends two synthetic affordance rows to every AskUserQuestion menu —
-// "Type something" (free text) and "Chat about this" (escape hatch). On a prompt scraped
-// from the terminal (no JSONL sidecar) they arrive as bare options; the web has its own
-// "Other" free-text affordance, so rendering them too is redundant clutter. Mirrors the
-// daemon's SYNTHETIC_OPTION so scraped polls render as clean as sidecar-sourced ones.
-const SYNTHETIC_POLL_OPTION = /^(?:type something\.?|chat about this)$/i;
+// The poll wire format (option keys, free-text decline, submit chords) lives in
+// lib/pollPayload so the decision queue answers polls the exact same way.
 
 // The check glyph shown in a selected poll option's index slot / pill.
 function PollCheckIcon({ className }: { className?: string }) {
@@ -5589,49 +5589,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   const isInteractive = !result && !!onSendMessage && !sent;
   const allAnswered = needsSubmit && questions.every((_, i) => (selections[i]?.length ?? 0) > 0);
 
-  const buildPayload = (sels: typeof selections) => {
-    const sorted = Object.keys(sels).sort((a, b) => Number(a) - Number(b));
-    const hasText = sorted.some(k => sels[Number(k)].some(s => s.text !== undefined));
-    const display = sorted.map(k => sels[Number(k)].map(s => s.label).join(", ")).join(", ");
-    if (hasText) {
-      // Claude Code's AskUserQuestion menu only accepts the listed options — there's no
-      // inline free-text slot. So a custom ("Other") answer can't be entered through the
-      // menu, and answering even one question with free text means the menu can't be used
-      // for the others either: the only way to enter free text is to decline the whole
-      // set (Escape) and type at the prompt, which discards every menu pick. Convert all
-      // answers to prose and send it as the daemon's decline-then-type `text` so the agent
-      // still gets every answer. (Driving a digit per question and Escaping for the text
-      // declined the poll mid-loop and spilled the leftover option digits into the
-      // reopened prompt box — the "211" bug, 2026-06-27.)
-      const text = sorted.map(k => {
-        const qSels = sels[Number(k)];
-        const ans = qSels.map(s => s.text ?? s.label).join(", ");
-        if (sorted.length === 1) return ans;
-        const q = questions[Number(k)];
-        const id = (q?.header?.trim()) || q?.question?.replace(/\s+/g, " ").trim().slice(0, 60) || `Q${Number(k) + 1}`;
-        return `${id}: ${ans}`;
-      }).join("\n\n");
-      return JSON.stringify({ __cc_poll: true, text, display });
-    }
-    // Key protocol (verified in tmux against Claude Code 2.1.201): on a multiSelect
-    // question a digit TOGGLES that option's checkbox and the menu stays up; Right
-    // advances to the next tab. Any multi-question or multiSelect form then parks on a
-    // "Review your answers" pane whose cursor sits on "1. Submit answers" — the trailing
-    // Enter confirms it. `multi` tells the daemon these digits are toggles, so its
-    // digit-didn't-advance heuristic must not "confirm" them with Enter (which would
-    // re-toggle the highlighted row).
-    const keys: string[] = [];
-    for (const k of sorted) {
-      const qSels = sels[Number(k)];
-      if (questions[Number(k)]?.multiSelect) {
-        keys.push(...qSels.map(s => s.key).sort((a, b) => Number(a) - Number(b)), "Right");
-      } else {
-        keys.push(qSels[0].key);
-      }
-    }
-    if (needsSubmit) keys.push("Enter");
-    return JSON.stringify({ __cc_poll: true, keys, display, ...(anyMultiSelect ? { multi: true } : {}) });
-  };
+  const buildPayload = (sels: typeof selections) => buildPollPayload(questions, sels);
 
   const handleSubmitAll = () => {
     if (!onSendMessage || !allAnswered) return;
@@ -5701,7 +5659,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 const on = isSelected || isLocalSelected;
                 const choose = () => {
                   setOtherOpen(prev => ({ ...prev, [i]: false }));
-                  const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
+                  const pollKey = pollKeyForOption(j, isConfirmation);
                   const sel = { key: pollKey, label: cleanLabel };
                   if (q.multiSelect) {
                     // Checkbox semantics: clicking toggles; Submit sends.
@@ -9164,7 +9122,7 @@ function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolL
   );
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -10166,6 +10124,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // user can refer to attachments in prose ("crop it like [Image 2]"). Numbers
   // follow attach order, which is the order the agent receives the images in.
   const addImagePlaceholder = useCallback((n: number) => {
+    // Gate mode (chat): attachments render as their own grid under the message,
+    // so the draft never carries an [Image N] token to point at them.
+    if (onGateSend) return;
     if (composeMode && composeRef.current) {
       composeRef.current.insertText(`${imagePlaceholderToken(n)} `);
       return;
@@ -10191,11 +10152,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         textareaRef.current.selectionStart = textareaRef.current.selectionEnd = next.caret;
       }
     }, 0);
-  }, [composeMode, setMessage]);
+  }, [composeMode, setMessage, onGateSend]);
 
   // The nth image is gone: drop its token and renumber the rest, so what's left
   // still points at the attachments the agent will actually receive.
   const removeImagePlaceholder = useCallback((n: number) => {
+    if (onGateSend) return;
     if (composeMode && composeRef.current) {
       const md = composeRef.current.getMarkdown();
       const next = dropImagePlaceholder(md, n);
@@ -10206,7 +10168,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (next === messageRef.current) return;
     setMessage(next);
     messageRef.current = next;
-  }, [composeMode, setMessage]);
+  }, [composeMode, setMessage, onGateSend]);
 
   const clearImage = useCallback((index: number) => {
     // Renumber first: persistDraftImages below snapshots messageRef, so the
@@ -10331,14 +10293,30 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       : messageRef.current;
     if (onGateSend) {
       const text = message.trim();
-      if (!text) return;
+      // Same reconcile as the main path: the durable draft is the record of
+      // pasted images, memory can lose rows across a remount (jx7byyk).
+      const gateDraftRows = restoreDraftImages(useInboxStore.getState().drafts[conversationId] ?? undefined);
+      const gateMemory = pastedImagesRef.current.filter(img => img.storageId || img.uploading);
+      const gateDraftOnly = gateDraftRows.filter(
+        row => row.storageId && !gateMemory.some(img => img.storageId === row.storageId)
+      ) as typeof gateMemory;
+      const gateImages = [...gateMemory, ...gateDraftOnly].map(img => ({
+        storageId: img.storageId as string | undefined,
+        previewUrl: img.previewUrl,
+        mime: img.file?.type ?? "image/png",
+        uploading: !!img.uploading,
+      }));
+      if (!text && gateImages.length === 0) return;
       sendingRef.current = true;
       if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
       setMessage("");
       messageRef.current = "";
+      // In-flight uploads keep their blobs alive in pendingImageUploads; the
+      // settled ones are done with theirs.
+      clearAllImages(true);
       useInboxStore.getState().clearDraftFinal(conversationId);
       sendingRef.current = false;
-      await onGateSend(text);
+      await onGateSend(text, gateImages);
       return;
     }
     if (onWorkflowLaunch) {
@@ -11979,15 +11957,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // /agents, …) are *only ever* synthetic and have no JSONL counterpart, so a
     // conversation-global "drop all synthetic polls" filter wrongly erases them.
     // Suppress a synthetic poll only when a real AUQ sits near it in time.
-    const realAskTimes = base
+    const withoutProseTwins = dropScrapedProseTwins(base);
+
+    const realAskTimes = withoutProseTwins
       .filter(m =>
         m.tool_calls?.some(tc => tc.name === "AskUserQuestion") &&
         !m.message_uuid?.startsWith("interactive-prompt-")
       )
       .map(m => m.timestamp);
-    if (realAskTimes.length === 0) return base;
+    if (realAskTimes.length === 0) return withoutProseTwins;
     const DUP_WINDOW_MS = 2 * 60_000;
-    return base.filter(m => {
+    return withoutProseTwins.filter(m => {
       if (!m.message_uuid?.startsWith("interactive-prompt-")) return true;
       return !realAskTimes.some(rt => Math.abs(rt - m.timestamp) <= DUP_WINDOW_MS);
     });
@@ -12780,11 +12760,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const buildMentionItems = useCallback(() => {
     const state = useInboxStore.getState();
     const byRecency = (a: { updatedAt?: number }, b: { updatedAt?: number }) => (b.updatedAt || 0) - (a.updatedAt || 0);
-    const inScope = (rec: any): boolean => {
-      const recTeam = rec.team_id ? String(rec.team_id) : null;
-      if (convTeamId) return recTeam === convTeamId;
-      return !recTeam;
-    };
+    const inScope = (rec: any): boolean => inActiveWorkspace(rec, convTeamId);
     const persons: MentionItem[] = (state.teamMembers || []).map((m: any) => ({ id: String(m._id || m.id), type: "person", label: m.name || m.github_username || "Unknown", sublabel: m.github_username ? `@${m.github_username}` : m.email, image: m.image || m.github_avatar_url }));
     const tasks: MentionItem[] = Object.values(state.mentionIndex?.tasks ?? {})
       .filter(inScope)
@@ -14455,6 +14431,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   });
 
   useWatchEffect(() => {
+    // A detached tab window's OS title is owned by DashboardLayout
+    // (useDetachedWindowTitle) — writing here would clobber its surface prefix.
+    if (isDetachedTabWindow()) return;
     if (conversation) {
       document.title = `codecast | ${truncatedTitle}`;
     }
@@ -14957,7 +14936,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
+      <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         <div>
           <div className="cc-panel__head cc-panel__head--flow gap-2 min-w-0">
             <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
@@ -15206,6 +15185,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 )}
 
                 {headerExtra}
+
+                {/* Huddle about this session: a live chip when occupied, a
+                    quiet start affordance otherwise (hidden when calling is
+                    unconfigured — SessionHuddleButton gates itself). */}
+                {conversation._id && !guest && (
+                  <SessionHuddleButton conversationId={String(conversation._id)} />
+                )}
 
                 {(highlightQuery || isLocalSearchOpen) && (
                   <div className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-amber-200/50 dark:bg-amber-800/30 text-amber-800 dark:text-amber-200">
