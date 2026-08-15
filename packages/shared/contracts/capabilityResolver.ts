@@ -28,7 +28,9 @@ import {
   type IgnoredBinding,
   type ResolvedCapability,
   type ScopeKind,
+  parseAnyCapabilitySlug,
 } from "./capabilities";
+import { AGENT_CLIENTS, capabilitySupport, type AgentClientId } from "./agentClients.js";
 
 /**
  * Where you are standing. Every field is the identity of a scope instance, and
@@ -64,6 +66,9 @@ export interface ScopeContext {
    * would silently hide bindings from a fleet-wide view.
    */
   client?: string;
+  /** The running client's version, dotted integers. Compared against a
+   *  binding's `minClientVersion` only when both are present. */
+  clientVersion?: string;
 }
 
 /** A binding that survived validation, plus what it takes to order it. */
@@ -358,6 +363,23 @@ export function resolveCapabilities(
   for (let index = 0; index < rows.length; index++) {
     const binding = rows[index]!;
 
+    // ── Pin gate ──
+    // The grammar refuses an unpinned git slug outright (a moving ref names no
+    // fixed bytes), so these rows would otherwise fall into malformed_binding.
+    // Named apart because the fix is specific and human-actionable: pin it.
+    const rawSlug = typeof binding?.capabilitySlug === "string" ? binding.capabilitySlug.trim() : "";
+    if (rawSlug.startsWith("git/") && !rawSlug.includes("@")) {
+      ignored.push({
+        bindingId: typeof binding?.id === "string" ? binding.id : "",
+        capabilitySlug: binding.capabilitySlug,
+        scopeKind: String(binding?.scopeKind ?? ""),
+        scopeKey: typeof binding?.scopeKey === "string" ? binding.scopeKey : "",
+        reason: "unpinned_source",
+        detail: "a git source must be pinned to a commit — a moving ref names no fixed bytes",
+      });
+      continue;
+    }
+
     const invalid = validationError(binding);
     if (invalid) {
       ignored.push({
@@ -369,6 +391,63 @@ export function resolveCapabilities(
         detail: invalid,
       });
       continue;
+    }
+
+    // ── Client version gate ──
+    if (
+      binding.minClientVersion !== undefined &&
+      context.clientVersion !== undefined &&
+      compareDottedVersions(context.clientVersion, binding.minClientVersion) < 0
+    ) {
+      ignored.push({
+        bindingId: binding.id,
+        capabilitySlug: binding.capabilitySlug,
+        scopeKind: binding.scopeKind,
+        scopeKey: binding.scopeKey,
+        reason: "client_too_old",
+        detail: `needs client ${binding.minClientVersion}, this machine runs ${context.clientVersion}`,
+      });
+      continue;
+    }
+
+    // ── Loadout seam ──
+    // Expansion (a loadout slug becoming its member bindings) is phase 6. The
+    // seam is HERE and only here: nothing else in this function branches on
+    // loadouts, so filling it in is one lookup replacing one `ignored` push.
+    const parsedSlug = parseAnyCapabilitySlug(binding.capabilitySlug.trim());
+    if (parsedSlug?.prefix === "loadout") {
+      ignored.push({
+        bindingId: binding.id,
+        capabilitySlug: binding.capabilitySlug,
+        scopeKind: binding.scopeKind,
+        scopeKey: binding.scopeKey,
+        reason: "loadout_not_expanded",
+        detail: "loadout expansion has not shipped; this binding is parked, not broken",
+      });
+      continue;
+    }
+
+    // ── Client capability support ──
+    // Only when we know BOTH the client and the kind: a fleet-wide resolve
+    // (no client) must not guess, and a kind the namespace cannot imply
+    // (git/authored sources ship any kind) is not evidence of anything.
+    if (context.client && context.client in AGENT_CLIENTS) {
+      const impliedKind =
+        parsedSlug?.source === "builtin" ? ("snippet" as const)
+        : parsedSlug?.source === "marketplace" ? ("plugin" as const)
+        : parsedSlug?.source === "mcp_registry" ? ("mcp" as const)
+        : undefined;
+      if (impliedKind && capabilitySupport(impliedKind, context.client as AgentClientId) === "unsupported") {
+        ignored.push({
+          bindingId: binding.id,
+          capabilitySlug: binding.capabilitySlug,
+          scopeKind: binding.scopeKind,
+          scopeKey: binding.scopeKey,
+          reason: "client_cannot_express",
+          detail: `${context.client} has no way to express a ${impliedKind}`,
+        });
+        continue;
+      }
     }
 
     const candidate: Candidate = {
@@ -468,4 +547,134 @@ export function explainCapability(
     resolved: findResolved(state, slug),
     ignored: state.ignored.filter((i) => i.capabilitySlug === slug),
   };
+}
+
+
+/** Dotted-integer version compare: negative when a < b. Non-numeric segments
+ *  compare as 0 rather than throwing — versions arrive from other machines. */
+export function compareDottedVersions(a: string, b: string): number {
+  const pa = a.split(".").map((x) => parseInt(x, 10) || 0);
+  const pb = b.split(".").map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/**
+ * Stamp availability onto a resolved state, from whatever probed the sources.
+ *
+ * Separate from `resolveCapabilities` on purpose: the resolve is pure over
+ * bindings, and availability is a fact about the network and the content
+ * store. Keeping the stamp in its own step means the browser can resolve
+ * without probing anything, and the daemon stamps before planning.
+ *
+ * The contract the stamp carries (and the planner tests pin): an unavailable
+ * entry stays desired, keeps `enabled`, and must never enter a removal plan —
+ * "the registry was down" must not delete a working install.
+ */
+export function withAvailability(
+  state: DesiredState,
+  probe: (slug: string) => { ok: boolean; lastOk?: number } | undefined,
+): DesiredState {
+  return {
+    ...state,
+    entries: state.entries.map((entry) => {
+      const result = probe(entry.slug);
+      if (result === undefined) return entry;
+      return result.ok
+        ? { ...entry, availability: "available" as const }
+        : { ...entry, availability: "unavailable" as const, lastOk: result.lastOk };
+    }),
+  };
+}
+
+/* ==========================================================================
+ * Rule 6 — the consent gate holds at the consented pin, never drops
+ * ========================================================================== */
+
+/** One consent as the device knows it: what the human approved, and where the
+ *  approved bytes live. */
+export interface CapabilityConsent {
+  /** The manifest hash the human said yes to. */
+  manifestHash: string;
+  /** The pin the approved bytes came from — the resolver holds HERE while a
+   *  newer version waits behind the gate. */
+  pin?: string;
+}
+
+/** What the capability looks like NOW, from the catalog or a fresh scan. */
+export interface CapabilityCurrent {
+  manifestHash: string;
+  pin?: string;
+  /** True for content that updates itself under us (a marketplace install the
+   *  client auto-updates). Holding at an old pin is impossible there — the
+   *  bytes on disk are already the new version. */
+  selfUpdating?: boolean;
+}
+
+export interface ConsentHold {
+  slug: string;
+  /** The hash the human approved. */
+  had: string;
+  /** The hash waiting behind the gate. */
+  now: string;
+  /** The pin being held at. Absent when holding was impossible and the entry
+   *  fell through to a real disable. */
+  holding?: string;
+}
+
+export interface ConsentedState extends DesiredState {
+  needsConsent: ConsentHold[];
+}
+
+/**
+ * Apply consent to a resolved state.
+ *
+ * Three-way rule, and each arm exists because the other two fail a real case:
+ * - Match: nothing to do.
+ * - Mismatch, holdable: the entry STAYS desired at the consented pin, and the
+ *   new version waits as `needsConsent`. Dropping the entry would let an
+ *   upstream author editing a description at 3am remove a working capability
+ *   from every machine with no human in the loop.
+ * - Mismatch, not holdable (self-updating content): the entry falls to
+ *   `enabled: false` — a REAL disable the driver materializes, because the
+ *   unconsented bytes are already on disk and still running; skipping the
+ *   write would leave them live.
+ *
+ * A capability with NO consent record and no requirement gate passes through:
+ * consent is demanded by `requiresExplicitConsent` at install time, and this
+ * function judges drift from a prior yes, not the initial grant.
+ */
+export function withConsent(
+  state: DesiredState,
+  consents: (slug: string) => CapabilityConsent | undefined,
+  current: (slug: string) => CapabilityCurrent | undefined,
+): ConsentedState {
+  const needsConsent: ConsentHold[] = [];
+  const entries = state.entries.map((entry) => {
+    if (!entry.enabled) return entry;
+    const consent = consents(entry.slug);
+    const now = current(entry.slug);
+    if (!consent || !now) return entry;
+    if (consent.manifestHash === now.manifestHash) return entry;
+
+    if (now.selfUpdating) {
+      // Holding is impossible: the new bytes are already where the old ones
+      // were. A real disable, not a skipped write.
+      needsConsent.push({ slug: entry.slug, had: consent.manifestHash, now: now.manifestHash });
+      return { ...entry, enabled: false as const };
+    }
+
+    needsConsent.push({
+      slug: entry.slug,
+      had: consent.manifestHash,
+      now: now.manifestHash,
+      holding: consent.pin,
+    });
+    // Held: still desired, still enabled, pinned to what the human approved.
+    return { ...entry, heldAtPin: consent.pin };
+  });
+  return { ...state, entries, needsConsent };
 }

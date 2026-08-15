@@ -1,0 +1,39 @@
+{
+  "input": {
+    "bindings": [
+      {
+        "id": "b1",
+        "userId": "u1",
+        "capabilitySlug": "../etc/passwd",
+        "scopeKind": "user",
+        "scopeKey": "",
+        "enabled": true,
+        "updatedAt": 1000
+      }
+    ],
+    "context": {
+      "userId": "u1",
+      "teamIds": [
+        "team1"
+      ],
+      "deviceId": "dev1",
+      "projectKeys": [
+        "git:github.com/o/r"
+      ],
+      "conversationId": "conv1"
+    }
+  },
+  "output": {
+    "entries": [],
+    "ignored": [
+      {
+        "bindingId": "b1",
+        "capabilitySlug": "../etc/passwd",
+        "scopeKind": "user",
+        "scopeKey": "",
+        "reason": "malformed_binding",
+        "detail": "capability slug \"../etc/passwd\" is not a valid reference"
+      }
+    ]
+  }
+}

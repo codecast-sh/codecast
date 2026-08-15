@@ -1,0 +1,60 @@
+{
+  "input": {
+    "bindings": [
+      {
+        "id": "b-zz",
+        "userId": "u1",
+        "capabilitySlug": "builtin/memory",
+        "scopeKind": "user",
+        "scopeKey": "",
+        "enabled": false,
+        "updatedAt": 2000
+      },
+      {
+        "id": "b-aa",
+        "userId": "u1",
+        "capabilitySlug": "builtin/memory",
+        "scopeKind": "user",
+        "scopeKey": "",
+        "enabled": true,
+        "updatedAt": 2000
+      }
+    ],
+    "context": {
+      "userId": "u1",
+      "teamIds": [
+        "team1"
+      ],
+      "deviceId": "dev1",
+      "projectKeys": [
+        "git:github.com/o/r"
+      ],
+      "conversationId": "conv1"
+    }
+  },
+  "output": {
+    "entries": [
+      {
+        "slug": "builtin/memory",
+        "enabled": true,
+        "decidedBy": {
+          "bindingId": "b-aa",
+          "scopeKind": "user",
+          "scopeKey": "u1",
+          "enabled": true,
+          "updatedAt": 2000
+        },
+        "overrode": [
+          {
+            "bindingId": "b-zz",
+            "scopeKind": "user",
+            "scopeKey": "u1",
+            "enabled": false,
+            "updatedAt": 2000
+          }
+        ]
+      }
+    ],
+    "ignored": []
+  }
+}

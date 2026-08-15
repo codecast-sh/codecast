@@ -1,0 +1,73 @@
+{
+  "input": {
+    "bindings": [
+      {
+        "id": "b1",
+        "userId": "u1",
+        "capabilitySlug": "builtin/memory",
+        "scopeKind": "user",
+        "scopeKey": "",
+        "enabled": true,
+        "updatedAt": 1000,
+        "config": {
+          "TOKEN_REF": "managed:linear"
+        }
+      },
+      {
+        "id": "b2",
+        "userId": "u1",
+        "capabilitySlug": "builtin/memory",
+        "scopeKind": "project",
+        "scopeKey": "git:github.com/o/r",
+        "enabled": true,
+        "updatedAt": 1000
+      }
+    ],
+    "context": {
+      "userId": "u1",
+      "teamIds": [
+        "team1"
+      ],
+      "deviceId": "dev1",
+      "projectKeys": [
+        "git:github.com/o/r"
+      ],
+      "conversationId": "conv1"
+    }
+  },
+  "output": {
+    "entries": [
+      {
+        "slug": "builtin/memory",
+        "enabled": true,
+        "decidedBy": {
+          "bindingId": "b2",
+          "scopeKind": "project",
+          "scopeKey": "git:github.com/o/r",
+          "enabled": true,
+          "updatedAt": 1000
+        },
+        "overrode": [
+          {
+            "bindingId": "b1",
+            "scopeKind": "user",
+            "scopeKey": "u1",
+            "enabled": true,
+            "updatedAt": 1000
+          }
+        ],
+        "config": {
+          "TOKEN_REF": "managed:linear"
+        },
+        "configFrom": {
+          "bindingId": "b1",
+          "scopeKind": "user",
+          "scopeKey": "u1",
+          "enabled": true,
+          "updatedAt": 1000
+        }
+      }
+    ],
+    "ignored": []
+  }
+}

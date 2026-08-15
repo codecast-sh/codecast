@@ -1,0 +1,40 @@
+{
+  "input": {
+    "bindings": [
+      {
+        "id": "b1",
+        "userId": "u1",
+        "capabilitySlug": "mkt/official/x",
+        "scopeKind": "user",
+        "scopeKey": "",
+        "enabled": true,
+        "updatedAt": 1000
+      }
+    ],
+    "context": {
+      "userId": "u1",
+      "teamIds": [
+        "team1"
+      ],
+      "deviceId": "dev1",
+      "projectKeys": [
+        "git:github.com/o/r"
+      ],
+      "conversationId": "conv1",
+      "client": "codex"
+    }
+  },
+  "output": {
+    "entries": [],
+    "ignored": [
+      {
+        "bindingId": "b1",
+        "capabilitySlug": "mkt/official/x",
+        "scopeKind": "user",
+        "scopeKey": "",
+        "reason": "client_cannot_express",
+        "detail": "codex has no way to express a plugin"
+      }
+    ]
+  }
+}

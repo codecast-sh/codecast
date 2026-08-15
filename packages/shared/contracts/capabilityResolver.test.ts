@@ -7,6 +7,9 @@ import {
   findResolved,
   resolveCapabilities,
   type ScopeContext,
+  withAvailability,
+  withConsent,
+  compareDottedVersions,
 } from "./capabilityResolver";
 import {
   GOLDEN_CASES,
@@ -520,15 +523,47 @@ describe("resolveCapabilities — bad rows", () => {
     expect(detail.length).toBeLessThan(120);
   });
 
-  it("accepts a loadout slug, which is a binding row phase 5 will write", () => {
+  it("parks a loadout slug under its own reason — legal, unexpanded, never malformed", () => {
     // A loadout has no source and is not a `CapabilityRef`, but it is a legal
-    // `capability_slug`. Validating against the sources alone would drop every
-    // loadout row as malformed the day they ship.
+    // `capability_slug`. Two wrong answers guard this test: treating it as
+    // malformed drops every loadout row the day they ship, and letting it
+    // through as a desired entry hands drivers a slug nothing can materialize.
+    // Until expansion lands (the one seam in resolveCapabilities), the row is
+    // parked with a reason the UI can render.
     const state = resolveCapabilities(
       [bind("b", "user", true, { capabilitySlug: "loadout/lo-12" })],
       FULL,
     );
-    expect(desiredCapabilitySlugs(state)).toEqual(["loadout/lo-12"]);
+    expect(desiredCapabilitySlugs(state)).toEqual([]);
+    expect(state.ignored).toHaveLength(1);
+    expect(state.ignored[0]!.reason).toBe("loadout_not_expanded");
+    expect(state.ignored[0]!.reason).not.toBe("malformed_binding");
+  });
+
+  it("names client_cannot_express when the client has no way to express the kind", () => {
+    // codex has no plugin manager, so a marketplace plugin binding resolved FOR
+    // codex must say so — a silent degrade reads as drift on the fleet page.
+    const state = resolveCapabilities(
+      [bind("b", "user", true, { capabilitySlug: "mkt/official/simplifier" })],
+      { ...FULL, client: "codex" },
+    );
+    expect(desiredCapabilitySlugs(state)).toEqual([]);
+    expect(state.ignored[0]!.reason).toBe("client_cannot_express");
+
+    // The same binding resolved for claude — which has a plugin manager — lands.
+    const forClaude = resolveCapabilities(
+      [bind("b", "user", true, { capabilitySlug: "mkt/official/simplifier" })],
+      { ...FULL, client: "claude" },
+    );
+    expect(desiredCapabilitySlugs(forClaude)).toEqual(["mkt/official/simplifier"]);
+  });
+
+  it("a fleet-wide resolve (no client) never guesses at support", () => {
+    const state = resolveCapabilities(
+      [bind("b", "user", true, { capabilitySlug: "mkt/official/simplifier" })],
+      FULL,
+    );
+    expect(desiredCapabilitySlugs(state)).toEqual(["mkt/official/simplifier"]);
   });
 
   it("survives a non-array and null rows without throwing", () => {
@@ -588,4 +623,238 @@ describe("golden precedence table", () => {
       expect(projected.ignored).toEqual(c.ignored);
     });
   }
+});
+
+// ------------------------------------------------------- the phase 2 gates
+
+describe("the pin gate", () => {
+  it("a git source with no pin resolves unpinned_source, not malformed", () => {
+    const state = resolveCapabilities(
+      [bind("b", "user", true, { capabilitySlug: "git/anthropics/skills" })],
+      FULL,
+    );
+    expect(desiredCapabilitySlugs(state)).toEqual([]);
+    expect(state.ignored[0]!.reason).toBe("unpinned_source");
+    expect(state.ignored[0]!.detail).toContain("pin");
+  });
+
+  it("a pinned git source passes the gate", () => {
+    const state = resolveCapabilities(
+      [bind("b", "user", true, { capabilitySlug: "git/anthropics/skills@30287f5" })],
+      FULL,
+    );
+    expect(desiredCapabilitySlugs(state)).toEqual(["git/anthropics/skills@30287f5"]);
+  });
+});
+
+describe("the client version gate", () => {
+  const needs2 = { capabilitySlug: SLUG, minClientVersion: "2.0.0" } as const;
+
+  it("an old client is told client_too_old, with both versions in the detail", () => {
+    const state = resolveCapabilities([bind("b", "user", true, { ...needs2 })], {
+      ...FULL,
+      clientVersion: "1.9.3",
+    });
+    expect(desiredCapabilitySlugs(state)).toEqual([]);
+    expect(state.ignored[0]!.reason).toBe("client_too_old");
+    expect(state.ignored[0]!.detail).toContain("2.0.0");
+    expect(state.ignored[0]!.detail).toContain("1.9.3");
+  });
+
+  it("a new-enough client passes; missing versions on either side never guess", () => {
+    const newEnough = resolveCapabilities([bind("b", "user", true, { ...needs2 })], {
+      ...FULL,
+      clientVersion: "2.1.0",
+    });
+    expect(desiredCapabilitySlugs(newEnough)).toEqual([SLUG]);
+
+    // No context version: the binding cannot be evaluated, so it applies.
+    const unstated = resolveCapabilities([bind("b", "user", true, { ...needs2 })], FULL);
+    expect(desiredCapabilitySlugs(unstated)).toEqual([SLUG]);
+
+    // No binding minimum: any client will do.
+    const unbounded = resolveCapabilities([bind("b", "user", true)], {
+      ...FULL,
+      clientVersion: "0.0.1",
+    });
+    expect(desiredCapabilitySlugs(unbounded)).toEqual([SLUG]);
+  });
+
+  it("version compare is numeric, not lexicographic", () => {
+    expect(compareDottedVersions("1.10.0", "1.9.0")).toBeGreaterThan(0);
+    expect(compareDottedVersions("1.9", "1.9.0")).toBe(0);
+    expect(compareDottedVersions("weird", "1.0")).toBeLessThan(0);
+  });
+});
+
+describe("availability is a third state", () => {
+  it("an unavailable entry stays desired and keeps enabled", () => {
+    const state = resolveCapabilities([bind("b", "user", true)], FULL);
+    const stamped = withAvailability(state, () => ({ ok: false, lastOk: 1234 }));
+    expect(stamped.entries).toHaveLength(1);
+    expect(stamped.entries[0]!.enabled).toBe(true);
+    expect(stamped.entries[0]!.availability).toBe("unavailable");
+    expect(stamped.entries[0]!.lastOk).toBe(1234);
+  });
+
+  it("an unprobed entry carries no availability at all", () => {
+    // Absent is the honest answer for "nothing looked" — a pure browser
+    // resolve must not claim the bytes are reachable.
+    const state = resolveCapabilities([bind("b", "user", true)], FULL);
+    const stamped = withAvailability(state, () => undefined);
+    expect(stamped.entries[0]!.availability).toBeUndefined();
+  });
+
+  it("stamping never mutates the input state", () => {
+    const state = resolveCapabilities([bind("b", "user", true)], FULL);
+    withAvailability(state, () => ({ ok: false }));
+    expect(state.entries[0]!.availability).toBeUndefined();
+  });
+});
+
+// --------------------------------------------------- rule 6: the consent hold
+
+describe("withConsent holds at the consented pin, never drops", () => {
+  const resolved = () => resolveCapabilities([bind("b", "user", true)], FULL);
+
+  it("a matching hash passes untouched", () => {
+    const out = withConsent(
+      resolved(),
+      () => ({ manifestHash: "aaaa", pin: "1111111" }),
+      () => ({ manifestHash: "aaaa", pin: "1111111" }),
+    );
+    expect(out.needsConsent).toEqual([]);
+    expect(out.entries[0]!.enabled).toBe(true);
+    expect(out.entries[0]!.heldAtPin).toBeUndefined();
+  });
+
+  it("a drifted hash holds the entry at the consented pin and queues consent", () => {
+    const out = withConsent(
+      resolved(),
+      () => ({ manifestHash: "aaaa", pin: "1111111" }),
+      () => ({ manifestHash: "bbbb", pin: "2222222" }),
+    );
+    // Still desired, still enabled — dropping it would let a 3am upstream edit
+    // remove a working capability with no human in the loop.
+    expect(out.entries[0]!.enabled).toBe(true);
+    expect(out.entries[0]!.heldAtPin).toBe("1111111");
+    expect(out.needsConsent).toEqual([
+      { slug: SLUG, had: "aaaa", now: "bbbb", holding: "1111111" },
+    ]);
+  });
+
+  it("self-updating content falls to a REAL disable, not a skipped write", () => {
+    const out = withConsent(
+      resolved(),
+      () => ({ manifestHash: "aaaa" }),
+      () => ({ manifestHash: "bbbb", selfUpdating: true }),
+    );
+    // The unconsented bytes are already on disk and running; only a
+    // materialized disable stops them.
+    expect(out.entries[0]!.enabled).toBe(false);
+    expect(out.needsConsent[0]!.holding).toBeUndefined();
+  });
+
+  it("no consent record means no drift judgment", () => {
+    const out = withConsent(resolved(), () => undefined, () => ({ manifestHash: "x" }));
+    expect(out.needsConsent).toEqual([]);
+    expect(out.entries[0]!.enabled).toBe(true);
+  });
+
+  it("a disabled entry is not consent's business", () => {
+    const state = resolveCapabilities([bind("b", "user", false)], FULL);
+    const out = withConsent(
+      state,
+      () => ({ manifestHash: "aaaa" }),
+      () => ({ manifestHash: "bbbb" }),
+    );
+    expect(out.needsConsent).toEqual([]);
+  });
+});
+
+// ------------------------------------------------ the precedence matrix (p2)
+
+// The five scopes × enabled/disabled × who wins. Not exhaustive prose — each
+// case is a row a support thread will one day hinge on.
+describe("precedence matrix", () => {
+  const CTX = FULL;
+  const at = (scope: ScopeKind, enabled: boolean, id: string, over: Partial<CapabilityBinding> = {}) =>
+    bind(id, scope, enabled, over);
+
+  const NARROWING: ScopeKind[] = ["team", "user", "device", "project", "session"];
+
+  it("every narrower scope beats every broader one, both directions", () => {
+    for (let broad = 0; broad < NARROWING.length; broad++) {
+      for (let narrow = broad + 1; narrow < NARROWING.length; narrow++) {
+        // narrower ON beats broader OFF…
+        const on = resolveCapabilities(
+          [at(NARROWING[broad]!, false, "b1"), at(NARROWING[narrow]!, true, "b2")],
+          CTX,
+        );
+        expect(on.entries[0]!.enabled).toBe(true);
+        // …and narrower OFF revokes broader ON.
+        const off = resolveCapabilities(
+          [at(NARROWING[broad]!, true, "b1"), at(NARROWING[narrow]!, false, "b2")],
+          CTX,
+        );
+        expect(off.entries[0]!.enabled).toBe(false);
+      }
+    }
+  });
+
+  it("a disable at the narrowest scope revokes everything above it", () => {
+    const state = resolveCapabilities(
+      [
+        at("team", true, "b1"),
+        at("user", true, "b2"),
+        at("device", true, "b3"),
+        at("project", true, "b4"),
+        at("session", false, "b5"),
+      ],
+      CTX,
+    );
+    expect(state.entries[0]!.enabled).toBe(false);
+    expect(state.entries[0]!.decidedBy.bindingId).toBe("b5");
+    expect(state.entries[0]!.overrode).toHaveLength(4);
+  });
+
+  it("ties break deterministically under shuffled input order", () => {
+    // Ten shuffles, one answer. The comparator ends at (id, index), so no
+    // engine sort quirk and no clock can make two machines disagree.
+    const rows = [
+      at("user", true, "b-newer", { updatedAt: 2000 }),
+      at("user", false, "b-older", { updatedAt: 1000 }),
+      at("device", true, "b-dev", { updatedAt: 500 }),
+      at("team", false, "b-team", { updatedAt: 9000 }),
+      at("user", true, "b-tie-a", { updatedAt: 2000 }),
+      at("user", false, "b-tie-b", { updatedAt: 2000 }),
+    ];
+    const outputs = new Set<string>();
+    for (let round = 0; round < 10; round++) {
+      const shuffled = [...rows];
+      // Deterministic pseudo-shuffle: rotate and interleave by round so the
+      // orders genuinely differ without Math.random (banned here).
+      for (let i = 0; i < round; i++) shuffled.push(shuffled.shift()!);
+      if (round % 2 === 1) shuffled.reverse();
+      outputs.add(JSON.stringify(resolveCapabilities(shuffled, CTX)));
+    }
+    expect(outputs.size).toBe(1);
+  });
+
+  it("every unsupported reason has a producing fixture", () => {
+    const cases: Array<[string, CapabilityBinding[], Partial<ScopeContext>]> = [
+      ["scope_not_in_context", [bind("b", "project", true, { scopeKey: "git:github.com/not/here" })], {}],
+      ["client_filtered", [bind("b", "user", true, { clientFilter: ["codex"] })], { client: "claude" }],
+      ["client_cannot_express", [bind("b", "user", true, { capabilitySlug: "mkt/official/x" })], { client: "codex" }],
+      ["loadout_not_expanded", [bind("b", "user", true, { capabilitySlug: "loadout/lo-1" })], {}],
+      ["unpinned_source", [bind("b", "user", true, { capabilitySlug: "git/o/r" })], {}],
+      ["client_too_old", [bind("b", "user", true, { minClientVersion: "9.0" })], { clientVersion: "1.0" }],
+      ["malformed_binding", [bind("b", "user", true, { capabilitySlug: "../etc/passwd" })], {}],
+    ];
+    for (const [reason, rows, ctxOver] of cases) {
+      const state = resolveCapabilities(rows, { ...FULL, ...ctxOver });
+      expect(state.ignored.map((i) => i.reason)).toContain(reason as never);
+      expect(state.entries).toHaveLength(0);
+    }
+  });
 });
