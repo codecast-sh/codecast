@@ -101,6 +101,15 @@
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
+  "decide": {
+    "config": {
+      "decide_enabled": true,
+      "decide_version": "1"
+    },
+    "stdout": "* Decision queue — installed in ~/.claude/CLAUDE.md\n",
+    "wroteClaudeMd": true,
+    "otherFiles": {}
+  },
   "orchestration": {
     "config": {
       "orch_enabled": true,
