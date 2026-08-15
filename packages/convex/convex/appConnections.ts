@@ -60,6 +60,56 @@ export const listConnections = query({
         continue;
       }
 
+      if (id === "linear" || id === "notion") {
+        // Team-scoped connectors from oauthConnectors.ts share one table.
+        const row = teamId
+          ? await ctx.db
+              .query("app_installations")
+              .withIndex("by_provider_team", (q: any) => q.eq("provider", id).eq("team_id", teamId))
+              .first()
+          : null;
+        if (!row || row.pending_confirm_hash) {
+          apps.push({ id, status: "not_connected" });
+        } else {
+          const connector = await ctx.db.get(row.connected_by);
+          apps.push({
+            id,
+            status: "connected",
+            scope: "team",
+            by: (connector as any)?.name ?? (connector as any)?.email ?? null,
+            by_me: String(row.connected_by) === String(userId),
+            at: row.created_at,
+            detail: row.account_label ?? undefined,
+            disconnect_id: String(row._id),
+          });
+        }
+        continue;
+      }
+
+      if (id === "gmail") {
+        // Personal by design: mail belongs to a person, not a workspace. The
+        // google_installations row is scoped to the caller alone.
+        const install = await ctx.db
+          .query("google_installations")
+          .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
+          .first();
+        if (!install) {
+          apps.push({ id, status: "not_connected" });
+        } else {
+          apps.push({
+            id,
+            status: "connected",
+            scope: "personal",
+            by: null,
+            by_me: true,
+            at: install.created_at,
+            detail: install.email ?? undefined,
+            disconnect_id: String(install._id),
+          });
+        }
+        continue;
+      }
+
       if (id === "slack") {
         // A workspace can hold a team install and a personal one; the team
         // install is the one the team's anchor speaks through, so it wins the
