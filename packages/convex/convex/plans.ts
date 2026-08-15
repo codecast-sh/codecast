@@ -26,6 +26,7 @@ import {
   workspacesMatch,
 } from "./lib/access";
 import { notFound } from "./lib/auth";
+import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 export { canAccessPlan };
@@ -950,31 +951,13 @@ export const getOrchestrationStatus = query({
       }
     }
 
-    const now = Date.now();
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
+    const activeConvIds = await liveConversationIdSet(ctx, auth.userId);
 
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
-      .collect();
-
-    const liveSessions = managedSessions.filter(
-      (s: any) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id
-    );
-
-    const activeConvIds = new Set<string>();
-    for (const s of liveSessions) {
-      if (s.conversation_id) activeConvIds.add(s.conversation_id.toString());
-    }
-
-    let activeAgentCount = 0;
     const taskDocIds = new Set(taskIds.map(id => id.toString()));
-    for (const convId of activeConvIds) {
-      const conv = await ctx.db.get(convId as any);
-      if (conv && (conv as any).active_task_id && taskDocIds.has((conv as any).active_task_id.toString())) {
-        activeAgentCount++;
-      }
-    }
+    const activeConvs = await Promise.all([...activeConvIds].map((convId) => ctx.db.get(convId as any)));
+    const activeAgentCount = activeConvs.filter(
+      (conv) => conv && (conv as any).active_task_id && taskDocIds.has((conv as any).active_task_id.toString())
+    ).length;
 
     const waveMap = new Map<number, { done: number; total: number }>();
     let blockedCount = 0;
@@ -1355,18 +1338,13 @@ export const webGet = query({
     if (!(await canAccessPlan(ctx, userId, plan))) return null;
 
     // Find live agent sessions for tasks
-    const now = Date.now();
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .collect();
-    const liveSessions = managedSessions.filter(
-      (s: any) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id
+    const liveSessions = (await listLiveManagedSessions(ctx, userId)).filter(
+      (s) => s.conversation_id
     );
     const activeTaskMap = new Map<string, { _id: string; session_id: string; title?: string; agent_status?: string; agent_type?: string }>();
-    for (const s of liveSessions) {
-      const conv = await ctx.db.get(s.conversation_id!);
+    const liveConvs = await Promise.all(liveSessions.map((s) => ctx.db.get(s.conversation_id!)));
+    liveSessions.forEach((s, i) => {
+      const conv = liveConvs[i];
       if (conv && (conv as any).active_task_id) {
         activeTaskMap.set((conv as any).active_task_id.toString(), {
           _id: conv._id.toString(),
@@ -1376,7 +1354,7 @@ export const webGet = query({
           agent_type: conv.agent_type || undefined,
         });
       }
-    }
+    });
 
     const tasks = [];
     if (plan.task_ids) {
@@ -1602,18 +1580,12 @@ export const webGetByIds = query({
 });
 
 async function enrichPlansWithLiveness(ctx: any, userId: any, plans: any[]) {
-  const now = Date.now();
-  const HEARTBEAT_ALIVE_MS = 90 * 1000;
-  const managedSessions = await ctx.db
-    .query("managed_sessions")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-    .collect();
-  const liveSessions = managedSessions.filter(
-    (s: any) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id,
+  const liveSessions = (await listLiveManagedSessions(ctx, userId)).filter(
+    (s) => s.conversation_id,
   );
   const activeTaskIds = new Set<string>();
-  for (const s of liveSessions) {
-    const conv = await ctx.db.get(s.conversation_id!);
+  const liveConvs = await Promise.all(liveSessions.map((s: any) => ctx.db.get(s.conversation_id!)));
+  for (const conv of liveConvs) {
     if (conv && (conv as any).active_task_id) {
       activeTaskIds.add((conv as any).active_task_id.toString());
     }
