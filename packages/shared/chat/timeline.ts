@@ -199,6 +199,9 @@ export type ToastDecisionInput = {
   /** The viewer has posted in this thread, so replies to it are addressed to
    *  them in every sense that matters. */
   viewerInThread?: boolean;
+  /** The channel is a direct message: every line in it is addressed to the
+   *  viewer by construction. */
+  isDm?: boolean;
   /** An agent's answer to a question the viewer asked. Always loud: they are
    *  waiting for it. */
   answersViewer?: boolean;
@@ -228,6 +231,7 @@ export function chatToastTier(input: ToastDecisionInput): ChatToastTier {
     activeThreadRootId,
     threadRootId,
     viewerInThread,
+    isDm,
     answersViewer,
     windowFocused,
     channelMuted,
@@ -249,10 +253,15 @@ export function chatToastTier(input: ToastDecisionInput): ChatToastTier {
     if (sameContext) return "silent";
   }
 
-  // Addressed to you: named, answered, or a reply on a thread you are part of.
-  const addressed = !!mentionsViewer || !!answersViewer || (!!threadRootId && !!viewerInThread);
+  // Addressed to you: named, answered, a reply on a thread you are part of —
+  // or any line of a DM, which is addressed by construction.
+  const addressed = !!mentionsViewer || !!answersViewer || (!!threadRootId && !!viewerInThread) || !!isDm;
   // A muted channel still surfaces these — muting a room is not the same as
-  // asking not to be spoken to.
+  // asking not to be spoken to. EXCEPT a muted DM: there is no "mentions only"
+  // reading of a room where everything mentions you, so its mute must actually
+  // mute (the server's notifyLevelAllows draws the same line; notifyLevel
+  // "none" already returned silent above).
+  if (isDm && channelMuted) return "silent";
   if (addressed) return "loud";
 
   if (channelMuted || notifyLevel === "mentions") return "silent";

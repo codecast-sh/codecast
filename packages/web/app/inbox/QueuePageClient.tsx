@@ -29,7 +29,7 @@ import { animatedHideSession } from "../../store/undoActions";
 import { cleanUserMessage } from "../../components/GlobalSessionPanel";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 
-const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetTimestamp, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void }) {
+export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetTimestamp, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void }) {
   // Non-blocking switch: the heavy work of a session switch is mounting the new
   // conversation's message tree (every block keyed by msg._id unmounts/remounts,
   // re-parsing markdown). Defer the id the BODY renders from so a switch stays
@@ -339,6 +339,19 @@ export function QueuePageClient() {
     }
   }, [paramSessionId, paramSessionLoaded, navigateToSession, clientStateInitialized, isActiveTab, setShowMySessions]);
 
+  // The activation handler's other half: a home tab (no ?s=) brought forward
+  // must restore the home surface. A sibling conversation tab's re-assert
+  // flips global showMySessions off, so without this the stale global
+  // currentSession renders inside the home tab. Transition-gated (background →
+  // active) so boot restore of the last conversation is untouched.
+  const wasActiveTabRef = useRef(isActiveTab);
+  useWatchEffect(() => {
+    const wasActive = wasActiveTabRef.current;
+    wasActiveTabRef.current = isActiveTab;
+    if (!isActiveTab || wasActive || paramSessionId) return;
+    if (!useInboxStore.getState().showMySessions) setShowMySessions(true);
+  }, [isActiveTab, paramSessionId, setShowMySessions]);
+
   // Once we have the conversation data, inject it into the queue
   useWatchEffect(() => {
     if (!pendingInjectId) return;
@@ -498,8 +511,15 @@ export function QueuePageClient() {
   useWatchEffect(() => {
     if (!isActiveTab) return;
     if (currentSessionId || currentSession || showMySessions || viewingDismissedId || pendingInjectId) return;
+    // Board home: an empty view means "show the fleet", never "adopt a
+    // conversation" — the board is the landing surface, drilling in is a
+    // gesture. Feed home keeps the old top-of-inbox adoption.
+    if (inboxHome === "board") {
+      setShowMySessions(true);
+      return;
+    }
     if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id, "adopt");
-  }, [currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab]);
+  }, [currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab, inboxHome, setShowMySessions]);
 
   // Sync URL when current session changes (but not before initial param is
   // resolved). Only the active tab owns the address bar — a background pane must

@@ -14,6 +14,11 @@ export const MAX_EMOJI_LENGTH = 32;
 // set forever — a message with 24 distinct emoji has already made its point.
 export const MAX_DISTINCT_EMOJI = 24;
 export const MAX_CHANNELS_PER_TEAM = 200;
+// Membership caps. A "private channel" with 300 people is a public channel
+// with extra steps; a group DM past a handful of faces is a channel that wants
+// a name.
+export const MAX_CHANNEL_MEMBERS = 100;
+export const MAX_DM_MEMBERS = 9;
 // Unread badges are capped and rendered as "50+". Convex has no count
 // aggregate, so an uncapped count would pull a channel's whole backlog for a
 // number nobody reads past two digits.
@@ -125,14 +130,18 @@ export function fenceSafe(text: string, max = MAX_CHAT_CONTENT): string {
 // The ONE place that says what a level means, so the server's gate and the
 // client's toast tier can never drift into two different mutes.
 //   all      — every chat event this channel produces
-//   mentions — only a direct @you
+//   mentions — only what is addressed to you: a direct @you, a DM line, an
+//              invite. (A DM at "mentions" still notifies — every DM line IS
+//              addressed to you; only "none" silences a DM room.)
 //   none     — nothing
 export function notifyLevelAllows(
   level: "all" | "mentions" | "none" | undefined,
-  eventType: "chat_mention" | "chat_reply" | "chat_here",
+  eventType: "chat_mention" | "chat_reply" | "chat_here" | "chat_dm" | "chat_added",
 ): boolean {
   if (level === "none") return false;
-  if (level === "mentions") return eventType === "chat_mention";
+  if (level === "mentions") {
+    return eventType === "chat_mention" || eventType === "chat_dm" || eventType === "chat_added";
+  }
   return true;
 }
 

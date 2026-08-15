@@ -13,11 +13,14 @@ import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, filterInboxScopeFromState, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
+import { inActiveWorkspace } from "../lib/workspaceScope";
 import { PageIcon } from "./RecentlyViewedMenu";
 import { isNonTabRoute } from "../src/compat/tabRouting";
-import { score } from "../hooks/useMentionQuery";
+import { score, matchScore } from "../hooks/useMentionQuery";
+import { dmOtherIds } from "@codecast/shared/chat";
+import { memberName } from "../lib/chatViews";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
@@ -61,6 +64,8 @@ import {
   Cpu,
   Filter,
   MessageSquare,
+  Hash,
+  Lock,
   Folder,
   Star,
   Link as LinkIcon,
@@ -450,7 +455,7 @@ function ActionSubmenu({
       return all
         .filter((t: any) =>
           !targetIds.has(String(t._id)) &&
-          (t.team_id ?? null) === teamKey &&
+          inActiveWorkspace(t, teamKey) &&
           t.status !== "done" && t.status !== "dropped" &&
           !String(t._id).startsWith("temp_") &&
           (q === "" || t.title?.toLowerCase().includes(q) || t.short_id?.toLowerCase().includes(q)))
@@ -1058,8 +1063,7 @@ function matchEntities(
   const ranked: Array<{ rec: MentionRecord; rank: number }> = [];
   for (const rec of Object.values(records)) {
     if (exclude?.(rec)) continue;
-    const team = rec.team_id ? String(rec.team_id) : null;
-    if (teamId ? team && team !== teamId : team) continue;
+    if (!inActiveWorkspace(rec, teamId)) continue;
     const titleRank = score(rec.title || "", q);
     const goalRank = rec.goal ? score(rec.goal, q) : Infinity;
     // File-synced docs are titled from their content heading, not their filename;
@@ -1151,8 +1155,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     () => (open ? useInboxStore.getState().mentionIndex : EMPTY_MENTION_INDEX),
     [open],
   );
+  // Workspace scoping uses the active-team pointer alone: an unset pointer IS
+  // the personal workspace, so falling back to the user's default team here
+  // would make personal rows unreachable from the palette.
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as string | undefined;
 
   // Merge locally-loaded inbox sessions (own, instant) with the server list (own +
   // team-visible). Shows local sessions immediately, re-merges once when the server
@@ -1164,7 +1170,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (recentFrozenRef.current) return;
     const byId = new Map<string, any>();
     for (const c of (recentConversations ?? [])) byId.set(c._id, c);
-    for (const s of Object.values(useInboxStore.getState().sessions)) {
+    // Scope the local cache like the inbox panel (and the chip counts above):
+    // the store caches sessions across scopes, so an unfiltered merge would
+    // resurface rows from a previously viewed scope as recents.
+    for (const s of Object.values(filterInboxScopeFromState(useInboxStore.getState()))) {
       if ((s as any).is_subagent) continue;
       byId.set(s._id, { ...byId.get(s._id), ...(s as any) });
     }
@@ -1275,16 +1284,16 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // query — the empty palette stays session-focused. Plan-type docs are excluded
   // from Documents so they don't double up with the Plans group.
   const taskMatches = useMemo(
-    () => matchEntities(mentionIndex.tasks as any, query, effectiveTeamId, ENTITY_RENDER_CAP, (t) => t.status === "dropped"),
-    [mentionIndex, query, effectiveTeamId],
+    () => matchEntities(mentionIndex.tasks as any, query, activeTeamId, ENTITY_RENDER_CAP, (t) => t.status === "dropped"),
+    [mentionIndex, query, activeTeamId],
   );
   const docMatches = useMemo(
-    () => matchEntities(mentionIndex.docs as any, query, effectiveTeamId, ENTITY_RENDER_CAP, (d) => d.doc_type === "plan"),
-    [mentionIndex, query, effectiveTeamId],
+    () => matchEntities(mentionIndex.docs as any, query, activeTeamId, ENTITY_RENDER_CAP, (d) => d.doc_type === "plan"),
+    [mentionIndex, query, activeTeamId],
   );
   const planMatches = useMemo(
-    () => matchEntities(mentionIndex.plans as any, query, effectiveTeamId, ENTITY_RENDER_CAP, (p) => p.status === "abandoned"),
-    [mentionIndex, query, effectiveTeamId],
+    () => matchEntities(mentionIndex.plans as any, query, activeTeamId, ENTITY_RENDER_CAP, (p) => p.status === "abandoned"),
+    [mentionIndex, query, activeTeamId],
   );
 
   // Debounced search for async conversation results
@@ -1321,6 +1330,53 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const seen = new Set(msgRows.map((r: any) => r.conversationId));
     return [...msgRows, ...titleRows.filter((r: any) => !seen.has(r.conversationId))];
   }, [searchData, titleData]);
+
+  // Chat rooms by name — a SNAPSHOT read (getState), not a subscription: the
+  // channel map churns with every unread tick and the palette must not
+  // re-render on team chatter while open (see the snapshot-memo rule above).
+  const chatChannelRows = useMemo(() => {
+    if (!open || query.trim().length < 1) return [] as Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string }>;
+    const state = useInboxStore.getState() as any;
+    const viewerId = state.currentUser?._id ? String(state.currentUser._id) : "";
+    const members = (state.teamMembers ?? []) as any[];
+    const byId = new Map(members.map((m) => [String(m._id), m]));
+    const q = query.trim().toLowerCase();
+    const rows: Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string; s: number }> = [];
+    for (const id in state.chatChannels) {
+      const c = state.chatChannels[id];
+      if (!c || c.archived_at) continue;
+      if (activeTeamId && c.team_id && String(c.team_id) !== String(activeTeamId)) continue;
+      let label = c.name;
+      let image: string | undefined;
+      if (c.kind === "dm") {
+        const others = dmOtherIds(c.dm_key, viewerId);
+        if (!others.length) continue;
+        label = others
+          .map((oid: string) => memberName(byId.get(String(oid))))
+          .map((full: string, _i: number) => (others.length > 1 ? full.split(/\s+/)[0] : full))
+          .join(", ");
+        const one = others.length === 1 ? byId.get(String(others[0])) : undefined;
+        image = one?.image || one?.github_avatar_url;
+      }
+      if (!label) continue;
+      const s = matchScore(label, q);
+      if (s === Infinity) continue;
+      rows.push({ id, label, kind: c.kind, isPrivate: c.kind === "private", image, s });
+    }
+    return rows.sort((a, b) => a.s - b.s).slice(0, 5);
+  }, [open, query, activeTeamId]);
+
+  // Chat message hits ride the same debounced non-throwing lane as
+  // conversation search — and the same access story: the server re-checks
+  // room membership per hit, so private rooms never leak through here.
+  const { data: chatSearchData } = useQueryNoThrow(
+    api.chat.searchMessages,
+    open && debouncedQuery.length >= 2 && activeTeamId
+      ? { team_id: activeTeamId, q: debouncedQuery, limit: 5 }
+      : "skip",
+    { breakAfterMs: 15_000 }
+  );
+  const chatHits = (chatSearchData?.results ?? []) as any[];
 
   const projects = useMemo(() => {
     const dirMap = new Map<string, number>();
@@ -1784,7 +1840,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
       filter={(value, search) => {
         // Async search results and compose are always relevant — bypass cmdk filter
-        if (value.startsWith("__search__") || value.startsWith("__compose__") || value.startsWith("__recent__") || value.startsWith("__entity__")) return 1;
+        if (value.startsWith("__search__") || value.startsWith("__compose__") || value.startsWith("__recent__") || value.startsWith("__entity__") || value.startsWith("__chat__")) return 1;
         const idx = value.indexOf("|||");
         const searchable = idx >= 0 ? value.slice(0, idx) : value;
         return searchable.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
@@ -1986,6 +2042,64 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               </CommandPrimitive.Item>
               );
             })}
+          </CommandPrimitive.Group>
+        )}
+
+        {(chatChannelRows.length > 0 || chatHits.length > 0) && (
+          <CommandPrimitive.Group heading="Chat" className={groupClass}>
+            {chatChannelRows.map((c) => (
+              <CommandPrimitive.Item
+                key={`chatc-${c.id}`}
+                value={`__chat__ ${c.label}|||${c.id}`}
+                onSelect={() => navigate(`/chat/${c.id}`)}
+                className={itemClass}
+              >
+                {c.kind === "dm" ? (
+                  c.image ? (
+                    <img src={c.image} alt="" className="w-4 h-4 rounded-full flex-shrink-0" />
+                  ) : (
+                    <User className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                  )
+                ) : c.isPrivate ? (
+                  <Lock className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                ) : (
+                  <Hash className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                )}
+                <span className="truncate flex-1">{c.label}</span>
+                <span className="text-[10px] text-sol-text-dim flex-shrink-0">
+                  {c.kind === "dm" ? "direct message" : "channel"}
+                </span>
+              </CommandPrimitive.Item>
+            ))}
+            {chatHits.map((h) => (
+              <CommandPrimitive.Item
+                key={`chatm-${h._id}`}
+                value={`__chat__ ${h.snippet?.slice(0, 80) ?? ""}|||${h._id}`}
+                onSelect={() => navigate(h.permalink)}
+                className={itemClass}
+              >
+                <MessageSquare className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <div className="flex-1 min-w-0">
+                  <div className="truncate text-sm">{h.snippet}</div>
+                  <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
+                    {h.channel_kind === "dm" ? "direct message" : `#${h.channel_name}`}
+                  </div>
+                </div>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(h.created_at)}</span>
+              </CommandPrimitive.Item>
+            ))}
+            {debouncedQuery.length >= 2 && (
+              <CommandPrimitive.Item
+                value="__chat__ open-chat-search"
+                onSelect={() => navigate(`/chat?search=${encodeURIComponent(debouncedQuery)}`)}
+                className={itemClass}
+              >
+                <Search className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <span className="truncate flex-1">
+                  Search chat for &ldquo;{debouncedQuery.length > 40 ? debouncedQuery.slice(0, 40) + "..." : debouncedQuery}&rdquo;
+                </span>
+              </CommandPrimitive.Item>
+            )}
           </CommandPrimitive.Group>
         )}
 

@@ -20,7 +20,7 @@ import { InboxConversation } from "./GlobalSessionPanel";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { animatedHideSession } from "../store/undoActions";
 import { getSessionRenderKey } from "../store/inboxStore";
-import { splitFleetBands, fleetTileMeta, fleetProgress, type FleetBand, type FleetBands } from "./fleetBands";
+import { splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, fleetProgress, type FleetBand, type FleetBands } from "./fleetBands";
 
 // The fleet board: the inbox home surface when clientState.ui.inbox_home is
 // "board" (the default). Every visible session as a dense two-line tile,
@@ -77,18 +77,28 @@ const FleetTile = memo(function FleetTile({
   onOpen: (id: string) => void;
 }) {
   const meta = fleetTileMeta(session, band, now);
+  const context = fleetTileContext(session);
+  // The blocker line already carries the substance on a needs-you tile; the
+  // summary only earns its rows where the state line is generic.
+  const summary = band === "needsYou" ? "" : fleetTileSummary(session, now);
   const title = cleanTitle(session.title ?? "") || "Untitled";
   return (
     <button
       onClick={() => onOpen(session._id)}
-      title={`${title}\n${meta.text}`}
-      className="relative text-left min-w-0 rounded-md border border-sol-border/40 bg-sol-card hover:border-sol-blue/50 hover:bg-sol-bg-highlight/40 transition-colors px-2 pt-1.5 pb-2 overflow-hidden"
+      title={`${title}\n${context}\n${meta.text}${summary ? `\n${summary}` : ""}`}
+      className="relative flex flex-col items-stretch text-left min-w-0 rounded-md border border-sol-border/40 bg-sol-card hover:border-sol-blue/50 hover:bg-sol-bg-highlight/40 transition-colors px-2 pt-1.5 pb-2 overflow-hidden"
     >
       <span className="flex items-center gap-1.5 min-w-0">
         <LivenessDot state={sessionLivenessState(session)} size="xs" className="flex-shrink-0" />
         <span className="truncate text-xs font-medium text-sol-text leading-4">{title}</span>
       </span>
-      <span className={`block truncate text-[10px] leading-4 ${TONE_CLASS[meta.tone]}`}>{meta.text}</span>
+      {context && <span className="block truncate text-[10px] leading-4 text-sol-text-dim/80">{context}</span>}
+      <span className={`block text-[10px] leading-4 ${TONE_CLASS[meta.tone]} ${band === "needsYou" ? "line-clamp-2" : "truncate"}`}>
+        {meta.text}
+      </span>
+      {summary && (
+        <span className="block text-[10px] leading-4 text-sol-text-muted/90 line-clamp-2">{summary}</span>
+      )}
       {band === "running" && (
         <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-sol-border/30">
           <span
@@ -122,7 +132,7 @@ function BandSection({
       {rows.length === 0 ? (
         <div className="px-1 pb-1 text-[11px] text-sol-text-dim">nothing needs you right now</div>
       ) : (
-        <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
+        <div className="grid items-stretch gap-1.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))" }}>
           {rows.map((s) => (
             <FleetTile key={s._id} session={s} band={band} now={now} onOpen={onOpen} />
           ))}
@@ -219,6 +229,12 @@ function FleetDrillIn() {
 }
 
 export function FleetBoard() {
+  // Dev probe: render count, inspectable as __fleetBoardRenders in the console.
+  // The perf contract above predicts ~1 render per coarse tick (15s) while
+  // idle; ~1 per heartbeat (1s × N live sessions) means the wake gating broke.
+  if (import.meta.env.DEV) {
+    (window as any).__fleetBoardRenders = ((window as any).__fleetBoardRenders ?? 0) + 1;
+  }
   const s = useTrackedStore([
     (st) => sessionsWakeSig(st.sessions),
     (st) => st.sessionsWithQueuedMessages,

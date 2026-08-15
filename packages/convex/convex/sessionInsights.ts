@@ -3,7 +3,8 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { isConversationTeamVisible } from "./privacy";
+import { isConversationTeamVisible, teamVisibleConvTeam } from "./privacy";
+import { canAccessConversation } from "./lib/access";
 
 type OutcomeType = "shipped" | "progress" | "blocked" | "unknown";
 type InsightGenStatus = {
@@ -15,6 +16,11 @@ type ConversationInsightContext = {
   conversation: {
     _id: Id<"conversations">;
     team_id?: Id<"teams">;
+    // Privacy fields carried so the visible-team stamp on the insight row (and
+    // its downstream mining call) is honest — team_id alone is routing.
+    is_private?: boolean;
+    auto_shared?: boolean;
+    team_visibility?: string;
     actor_user_id: Id<"users">;
     title?: string;
     subtitle?: string;
@@ -172,6 +178,9 @@ export const getConversationContextForInsight = internalQuery({
       conversation: {
         _id: conversation._id,
         team_id: conversation.team_id,
+        is_private: conversation.is_private,
+        auto_shared: conversation.auto_shared,
+        team_visibility: conversation.team_visibility,
         actor_user_id: conversation.user_id,
         title: conversation.title,
         subtitle: conversation.subtitle,
@@ -219,6 +228,11 @@ export const getSessionInsight = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
+    // An insight condenses the whole transcript (summary, turns, blockers), so
+    // it is exactly as sensitive as the conversation. Gate on real access —
+    // team_id on the conversation is routing, not a read grant.
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) return null;
     const insight = await ctx.db
       .query("session_insights")
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
@@ -594,9 +608,14 @@ ${sampledMessages}`;
         120
       );
 
+      // The insight and any mined task/doc inherit only the conversation's
+      // VISIBLE team. A private session's routing team_id is not a read grant,
+      // so it must not ride onto these downstream rows.
+      const visibleTeam = teamVisibleConvTeam(context.conversation);
+
       const insightId = (await ctx.runMutation(internal.sessionInsights.upsertSessionInsight, {
         conversation_id: context.conversation._id,
-        team_id: context.conversation.team_id,
+        team_id: visibleTeam,
         actor_user_id: context.conversation.actor_user_id,
         source,
         generated_at: now,
@@ -633,7 +652,7 @@ ${sampledMessages}`;
       if (context.conversation.actor_user_id) {
         await ctx.scheduler.runAfter(0, internal.taskMining.mineConversationAfterInsight, {
           user_id: context.conversation.actor_user_id,
-          team_id: context.conversation.team_id,
+          team_id: visibleTeam,
           insight_id: insightId,
           conversation_id: context.conversation._id,
         });
