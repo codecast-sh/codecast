@@ -1,6 +1,6 @@
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { UserRound, Filter, Link2, Headphones, MessageSquare } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -78,8 +78,28 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // Which member's hover card is open. State-driven (not pure CSS hover) so
   // the card — which subscribes to session data for its fleet line — is
   // MOUNTED only while pointed at; the always-visible bar itself never
-  // subscribes to session churn.
+  // subscribes to session churn. Two timers make the hover humane: a short
+  // dwell before opening (drive-by pointers don't flash cards) and a grace
+  // period before closing (crossing into the card, or between avatars, never
+  // drops it — the bug where the tooltip vanished on approach).
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverEnter = (id: string) => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+    if (hoveredId === id) return;
+    if (openTimer.current) clearTimeout(openTimer.current);
+    // Instant switch when a card is already open; dwell when opening cold.
+    if (hoveredId) setHoveredId(id);
+    else openTimer.current = setTimeout(() => setHoveredId(id), 120);
+  };
+  const hoverLeave = () => {
+    if (openTimer.current) clearTimeout(openTimer.current);
+    openTimer.current = null;
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setHoveredId(null), 200);
+  };
 
   if (!effectiveTeamId || !teamMembers || teamMembers.length === 0) {
     return <TeamMembersPump teamId={effectiveTeamId} />;
@@ -120,13 +140,16 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         const isSelected = memberFilter === member._id;
         const isSelf = String(member._id) === String((currentUser as any)?._id ?? "");
         return (
-          <button
+          <span
             key={member._id}
+            className="relative"
+            onMouseEnter={() => hoverEnter(member._id)}
+            onMouseLeave={hoverLeave}
+          >
+          <button
             onClick={() => router.push(`/team/${member.github_username || member._id}`)}
             onContextMenu={(e) => ctxMenu.open(e, { id: member._id, username: member.github_username, displayName })}
-            onMouseEnter={() => setHoveredId(member._id)}
-            onMouseLeave={() => setHoveredId((h) => (h === member._id ? null : h))}
-            className="relative"
+            className="relative block"
           >
             <div
               className={`h-8 w-8 overflow-hidden rounded-full transition-all duration-200 ${
@@ -157,18 +180,19 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
                 <Headphones className="h-2 w-2 text-sol-bg" />
               </span>
             )}
-            {hoveredId === member._id && (
-              <MemberHoverCard
-                member={member}
-                displayName={displayName}
-                isSelf={isSelf}
-                callsEnabled={callsEnabled}
-                currentUserId={String((currentUser as any)?._id ?? "")}
-                onOpenProfile={() => router.push(`/team/${member.github_username || member._id}`)}
-                onOpenChat={() => router.push("/chat")}
-              />
-            )}
           </button>
+          {hoveredId === member._id && (
+            <MemberHoverCard
+              member={member}
+              displayName={displayName}
+              isSelf={isSelf}
+              callsEnabled={callsEnabled}
+              currentUserId={String((currentUser as any)?._id ?? "")}
+              onOpenProfile={() => router.push(`/team/${member.github_username || member._id}`)}
+              onOpenChat={() => router.push("/chat")}
+            />
+          )}
+          </span>
         );
       })}
       {teamMembers.length > 6 && (
@@ -218,10 +242,10 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   );
 }
 
-// The rich hover card. Mounted only while its avatar is hovered, so its
-// session-data subscription (fleet line) is transient by construction — the
-// whole-collection read that is forbidden for always-mounted components is
-// fine for a card that lives for the duration of a pointer dwell.
+// The rich hover card. Mounted only while its avatar (or the card itself) is
+// hovered — the wrapper span owns one hover scope with a close-grace timer,
+// so crossing from avatar into card never drops it. Session data is read only
+// here (transient subscription), never by the always-mounted bar.
 function MemberHoverCard({
   member,
   displayName,
@@ -242,13 +266,20 @@ function MemberHoverCard({
   const now = useCoarseNow(15_000);
   const state = memberPresenceState(member);
   const meta = PRESENCE_META[state];
+  const updateProfile = useMutation(api.users.updateProfile);
   const s = useTrackedStore([
     (st: any) => st.sessions,
     (st: any) => st.sessionsWithQueuedMessages,
     (st: any) => st.pendingMessages,
   ]);
   const fleet = useMemo(() => {
-    const sessions = Object.values(s.sessions ?? {}) as any[];
+    // Honest counts: only sessions with a live agent or recent activity. The
+    // store's session cache is deliberately liberal (30 days of rows), and
+    // counting it raw produced absurdities like "608 need input".
+    const RECENT_MS = 6 * 3600_000;
+    const sessions = (Object.values(s.sessions ?? {}) as any[]).filter(
+      (x) => x && (x.is_live || now - (x.updated_at ?? 0) < RECENT_MS),
+    );
     return memberFleetSummary(sessions, String(member._id), {
       queued: s.sessionsWithQueuedMessages ?? new Set(),
       pendingSendIds: sessionsWithPendingSend(s.pendingMessages),
@@ -257,88 +288,152 @@ function MemberHoverCard({
   }, [s.sessions, s.sessionsWithQueuedMessages, s.pendingMessages, member._id, now]);
 
   const time = localTimeLine(member.timezone, now);
-  const huddle = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
+  const avatar = member.image || member.github_avatar_url;
+  // A quote is only worth quoting when it reads like a sentence the agent
+  // wrote, not a bare status token.
+  const quote =
+    fleet?.topStatus && fleet.topStatus.trim().split(/\s+/).length >= 3
+      ? fleet.topStatus.trim()
+      : null;
+  const cap = (n: number) => (n > 20 ? "20+" : String(n));
+
+  const huddle = () => {
     void startHuddle({
       roomKey: dmRoomKey(currentUserId, String(member._id)),
       toUserId: String(member._id),
     });
   };
+  const setStatus = (status: "available" | "busy" | "away") => {
+    void updateProfile({ status }).catch(() => {});
+  };
+
+  // Edge-aware anchoring: a 280px card anchored right-of-avatar clips off
+  // screen when the strip sits near the left edge (it did). Measure once on
+  // mount and flip.
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [alignLeft, setAlignLeft] = useState(false);
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.left < 8) setAlignLeft(true);
+    else if (r.right > window.innerWidth - 8) setAlignLeft(false);
+  }, []);
 
   return (
-    <div className="absolute top-full right-0 z-50 mt-2 w-[280px] cursor-default rounded-lg border border-sol-border bg-sol-bg-alt p-3 text-left shadow-xl">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <a
-            onClick={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              onOpenProfile();
-            }}
-            className="block cursor-pointer truncate text-sm font-medium text-sol-text transition-colors hover:text-sol-cyan"
-          >
-            {displayName}
-          </a>
-          <div className="mt-0.5 flex items-center gap-1.5 text-xs">
-            <span className={`inline-block h-1.5 w-1.5 rounded-full ${meta.dot || "bg-sol-base01"}`} />
-            <span className={state === "active" ? "text-emerald-400" : "text-sol-text-muted"}>
-              {presenceLine(member, now)}
-            </span>
-            {time && <span className="text-sol-text-dim">· {time} local</span>}
+    // pt-2 bridge, not mt-2 gap: the pointer never leaves the hover scope on
+    // the way from the avatar into the card.
+    <div
+      ref={cardRef}
+      className={`absolute top-full z-[80] cursor-default pt-2 ${alignLeft ? "left-0" : "right-0"}`}
+    >
+      <div className="w-[280px] rounded-lg border border-sol-border bg-sol-bg-alt p-3 text-left shadow-xl motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-150">
+        <div className="flex items-start gap-2.5">
+          <div className={`h-9 w-9 shrink-0 overflow-hidden rounded-full ${meta.ring}`}>
+            {avatar ? (
+              <img src={avatar} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center bg-sol-base02 text-sm text-sol-text-muted">
+                {displayName.charAt(0).toUpperCase()}
+              </div>
+            )}
           </div>
-          {member.status && member.status !== "available" && (
-            <div className="mt-0.5 text-xs capitalize text-sol-orange">{member.status}</div>
+          <div className="min-w-0 flex-1">
+            <button
+              onClick={onOpenProfile}
+              className="block max-w-full truncate text-sm font-semibold text-sol-text transition-colors hover:text-sol-cyan"
+              title="Open profile"
+            >
+              {displayName}
+              {isSelf && <span className="ml-1.5 text-[10px] font-normal text-sol-text-dim">you</span>}
+            </button>
+            <div className="mt-0.5 flex items-center gap-1.5 text-xs">
+              <span className={`inline-block h-1.5 w-1.5 rounded-full ${meta.dot || "bg-sol-base01"}`} />
+              <span className={state === "active" ? "text-sol-green" : "text-sol-text-muted"}>
+                {presenceLine(member, now)}
+              </span>
+              {time && <span className="text-sol-text-dim">· {time}</span>}
+            </div>
+            {member.status && member.status !== "available" && !isSelf && (
+              <div className="mt-0.5 text-[11px] capitalize text-sol-orange">{member.status}</div>
+            )}
+          </div>
+        </div>
+
+        {member.in_huddle && !isSelf && (
+          <div className="mt-2 flex items-center gap-1.5 text-[11px] text-sol-violet">
+            <Headphones className="h-3 w-3" />
+            in a huddle now
+          </div>
+        )}
+
+        {fleet && (fleet.working > 0 || fleet.needsYou > 0) && (
+          <div className="mt-2.5 border-t border-sol-border/60 pt-2">
+            <div className="flex items-center gap-3 text-[11px]">
+              {fleet.working > 0 && (
+                <span className="flex items-center gap-1 text-sol-text-muted">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-sol-green" />
+                  {cap(fleet.working)} working
+                </span>
+              )}
+              {fleet.needsYou > 0 && (
+                <span className="flex items-center gap-1 text-sol-yellow">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-sol-yellow" />
+                  {cap(fleet.needsYou)} need{fleet.needsYou === 1 ? "s" : ""} input
+                </span>
+              )}
+            </div>
+            {quote && (
+              <div className="mt-1 truncate text-[11px] italic text-sol-text-dim" title={quote}>
+                “{quote}”
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="mt-2.5 flex gap-1.5 border-t border-sol-border/60 pt-2">
+          {isSelf ? (
+            // Your own card is the status switch — the one action that makes
+            // sense on yourself.
+            (["available", "busy", "away"] as const).map((st) => (
+              <button
+                key={st}
+                onClick={() => setStatus(st)}
+                className={`flex-1 rounded px-1.5 py-1 text-[11px] capitalize transition-colors ${
+                  (member.status ?? "available") === st
+                    ? st === "busy"
+                      ? "bg-sol-red/15 text-sol-red"
+                      : st === "away"
+                        ? "bg-sol-base02 text-sol-text"
+                        : "bg-sol-green/15 text-sol-green"
+                    : "text-sol-text-dim hover:bg-sol-base02 hover:text-sol-text"
+                }`}
+              >
+                {st}
+              </button>
+            ))
+          ) : (
+            <>
+              {callsEnabled && (
+                <button
+                  onClick={huddle}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-sol-violet/15 px-2 py-1.5 text-[12px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
+                >
+                  <Headphones className="h-3.5 w-3.5" />
+                  Huddle
+                </button>
+              )}
+              <button
+                onClick={onOpenChat}
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-sol-base02 px-2 py-1.5 text-[12px] text-sol-text-muted transition-colors hover:text-sol-text"
+              >
+                <MessageSquare className="h-3.5 w-3.5" />
+                Message
+              </button>
+            </>
           )}
         </div>
       </div>
-
-      {fleet && (fleet.working > 0 || fleet.needsYou > 0) && (
-        <div className="mt-2 border-t border-sol-border/60 pt-2">
-          <div className="text-xs text-sol-text-muted">{fleetLine(fleet)}</div>
-          {fleet.topStatus && (
-            <div className="mt-0.5 truncate text-xs italic text-sol-text-dim" title={fleet.topStatus}>
-              "{fleet.topStatus}"
-            </div>
-          )}
-        </div>
-      )}
-      {!fleet && member.recent_session_title && (
-        <div className="mt-2 border-t border-sol-border/60 pt-2">
-          <div className="truncate text-xs text-sol-text-muted" title={member.recent_session_title}>
-            {member.recent_session_title}
-          </div>
-        </div>
-      )}
-
-      {!isSelf && (
-        <div className="mt-2 flex gap-1.5 border-t border-sol-border/60 pt-2">
-          {callsEnabled && (
-            <span
-              role="button"
-              onClick={huddle}
-              className="flex items-center gap-1 rounded bg-sol-violet/15 px-2 py-1 text-xs font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
-            >
-              <Headphones className="h-3 w-3" />
-              Huddle
-            </span>
-          )}
-          <span
-            role="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              // Chat has no DMs yet: land in team chat, where an @mention
-              // reaches them. (A prefilled mention is a chat-side follow-up.)
-              onOpenChat();
-            }}
-            className="flex items-center gap-1 rounded bg-sol-base02 px-2 py-1 text-xs text-sol-text-muted transition-colors hover:text-sol-text"
-          >
-            <MessageSquare className="h-3 w-3" />
-            Message
-          </span>
-        </div>
-      )}
     </div>
   );
 }
