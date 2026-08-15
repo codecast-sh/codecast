@@ -159,6 +159,10 @@ export default defineSchema({
     daemon_oldest_pending_ms: v.optional(v.number()),
     daemon_pending_sync_messages: v.optional(v.number()),
     daemon_pending_sync_conversations: v.optional(v.number()),
+    // Capability convergence: monotonic revision (bumped by any binding write)
+    // and the reconciler mode kill switch ("off" | "dry" | "on").
+    capability_revision: v.optional(v.number()),
+    capabilities_mode: v.optional(v.string()),
     agent_permission_modes: v.optional(v.object({
       claude: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
       codex: v.optional(v.union(v.literal("default"), v.literal("full_auto"), v.literal("bypass"))),
@@ -472,9 +476,9 @@ export default defineSchema({
     // supersedes it. Gates the banner-cleanup scan in addMessages so the common
     // (no-error) write path never pays for the extra read.
     pending_api_error: v.optional(v.boolean()),
-    // Which banner family parked the session ("auth" | "limit" | "error", see
-    // classifyApiErrorBanner) — drives the session-card pill label (login vs
-    // limit). Set/cleared in lockstep with pending_api_error.
+    // Which banner family parked the session ("auth" | "limit" | "error" |
+    // "connection" | "fatal", see classifyApiErrorBanner) — drives the
+    // session-card pill label. Set/cleared in lockstep with pending_api_error.
     pending_api_error_kind: v.optional(v.string()),
     session_error: v.optional(v.string()),
     active_plan_id: v.optional(v.id("plans")),
@@ -3116,6 +3120,65 @@ export default defineSchema({
   })
     .index("by_doc", ["doc_id"])
     .index("by_user_doc", ["user_id", "doc_id"]),
+
+  // Huddle roster: one row per (room, member), each member writing ONLY their
+  // own row — never a shared room document, so a full room has no hot-document
+  // writer pileup. A room is a KEY, not an entity: "dm:<a>:<b>" (sorted user
+  // ids), "channel:<chat_channel id>", "session:<conversation id>". It exists
+  // while occupied and vanishes when the last row goes stale. Lifetime is a
+  // lease (terminal-streaming philosophy): the client heartbeats last_seen
+  // in-call, readers filter rows older than CALL_MEMBER_STALE_MS, so a crashed
+  // client, killed tab and lost network all converge on "left" with no
+  // teardown message. Media itself never touches Convex — this table is the
+  // control-plane roster (who is in the room, muted/camera/sharing flags for
+  // occupancy chips); audio/video flows through LiveKit.
+  call_members: defineTable({
+    room_key: v.string(),
+    team_id: v.id("teams"),
+    user_id: v.id("users"),
+    // Denormalized for cheap occupancy-chip paint (no user join per row).
+    user_name: v.string(),
+    user_image: v.optional(v.string()),
+    joined_at: v.number(),
+    last_seen: v.number(),
+    muted: v.boolean(),
+    camera: v.boolean(),
+    sharing: v.boolean(),
+  })
+    .index("by_room", ["room_key"])
+    .index("by_user", ["user_id"])
+    .index("by_user_room", ["user_id", "room_key"]),
+
+  // A ring. Sync-driven, not push-driven: the recipient's client subscribes to
+  // its own ringing rows (calls.getMyCalls) and renders the toast/sound
+  // locally. TTL'd — a ring older than CALL_INVITE_TTL_MS reads as expired and
+  // is deleted opportunistically by the next mutation that touches the pair,
+  // so no cron and no zombie ringing. One active ring per (from,to) pair at a
+  // time; re-inviting refreshes the existing row.
+  call_invites: defineTable({
+    room_key: v.string(),
+    team_id: v.id("teams"),
+    from_user: v.id("users"),
+    to_user: v.id("users"),
+    status: v.union(
+      v.literal("ringing"),
+      v.literal("accepted"),
+      v.literal("declined"),
+      v.literal("cancelled"),
+      v.literal("expired"),
+    ),
+    // Ring-toast context ("about: <session title>") for anchored rooms,
+    // resolved at invite time under the CALLER's visibility so the toast
+    // never leaks a title the recipient couldn't otherwise see... the callee
+    // is being invited into it, which is exactly the sharing gesture.
+    anchor_title: v.optional(v.string()),
+    created_at: v.number(),
+    // Set when the recipient answers either way; lets the caller's UI settle.
+    responded_at: v.optional(v.number()),
+  })
+    .index("by_to_status", ["to_user", "status"])
+    .index("by_from_status", ["from_user", "status"])
+    .index("by_room", ["room_key"]),
 
   workflows: defineTable({
     user_id: v.id("users"),

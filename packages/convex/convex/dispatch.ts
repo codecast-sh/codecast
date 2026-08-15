@@ -2,6 +2,7 @@ import { mutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { enqueueStartSession } from "./devices";
+import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { resolveTeamForPath, buildShareUpdate } from "./privacy";
@@ -77,6 +78,18 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
     kind: "collection",
     ownerField: "user_id",
     immutable: new Set(["_id", "_creationTime", "user_id", "created_at"]),
+  },
+  // Decision-queue resolutions (answer / dismiss) ride the generic patch
+  // path. Creation comes only from the CLI (/cli/decide → sessionDecisions.ask),
+  // so everything but the resolution fields is immutable here.
+  session_decisions: {
+    kind: "collection",
+    ownerField: "user_id",
+    immutable: new Set([
+      "_id", "_creationTime", "user_id", "conversation_id", "session_id",
+      "question", "context_md", "options", "report_slug", "blocking",
+      "default_option", "created_at",
+    ]),
   },
   // Kept for backward compatibility with already-persisted generic edit
   // outbox rows. Current comment writes use named receipt-backed side effects;
@@ -527,6 +540,35 @@ async function linkConversationToObject(
 }
 
 const SIDE_EFFECTS: Record<string, HandlerFn> = {
+  // Capability bindings ride dispatch as NAMED side effects, never as generic
+  // table patches: applyPatches drops any table missing from TABLE_CONFIG with
+  // no error, so a generic patch to capability_bindings would silently not
+  // stick. Both call the one exported upsert, so the optimistic path and the
+  // CLI mutation cannot diverge on the upsert key.
+  setCapabilityBinding: async (ctx, userId, [opts]: [any]) => {
+    return await upsertBinding(ctx, userId as unknown as string, {
+      capability_slug: opts.capability_slug,
+      scope_kind: opts.scope_kind,
+      scope_key: opts.scope_key ?? "",
+      enabled: !!opts.enabled,
+      config: opts.config,
+      client_filter: opts.client_filter,
+      client_key: opts.client_key,
+      team_id: opts.team_id,
+    });
+  },
+  createCapabilityBinding: async (ctx, userId, [opts]: [any]) => {
+    return await upsertBinding(ctx, userId as unknown as string, {
+      capability_slug: opts.capability_slug,
+      scope_kind: opts.scope_kind,
+      scope_key: opts.scope_key ?? "",
+      enabled: opts.enabled !== false,
+      config: opts.config,
+      client_filter: opts.client_filter,
+      client_key: opts.client_key,
+      team_id: opts.team_id,
+    });
+  },
   flushResolvedSessionFields: async (
     ctx,
     userId,
