@@ -89,9 +89,10 @@ export const SuggestionPills = memo(function SuggestionPills({
     row.anchor_message_uuid === tailKey &&
     dismissedAnchor !== row.anchor_message_uuid;
 
-  // Option+1/2/3 sends the matching pill. Capture phase so a focused textarea
-  // doesn't swallow the chord first (on macOS Option+digit otherwise inserts
-  // a glyph), and scoped hard to the visible row so nothing leaks into the
+  // Ctrl+1/2/3 sends the matching pill (Alt+digit is taken by workbench
+  // switching — stealing it here would turn a navigation habit into an
+  // accidental send). Capture phase so a focused textarea doesn't swallow the
+  // chord, and armed only while the row is visible so nothing leaks into the
   // global shortcut layer when there are no pills.
   const suggestions = visible ? row!.suggestions : [];
   const suggestionsRef = useRef(suggestions);
@@ -100,7 +101,7 @@ export const SuggestionPills = memo(function SuggestionPills({
     "keydown",
     useCallback(
       (e: KeyboardEvent) => {
-        if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+        if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
         const idx = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
         if (idx === -1) return;
         const text = suggestionsRef.current[idx];
@@ -137,7 +138,7 @@ export const SuggestionPills = memo(function SuggestionPills({
             <span className="truncate">{text}</span>
             {i < 3 && (
               <span className="shrink-0 opacity-50">
-                <KeyCap size="xs">{isMac ? `⌥${i + 1}` : `Alt+${i + 1}`}</KeyCap>
+                <KeyCap size="xs">{isMac ? `⌃${i + 1}` : `Ctrl+${i + 1}`}</KeyCap>
               </span>
             )}
           </button>

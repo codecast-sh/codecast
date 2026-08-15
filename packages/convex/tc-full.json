@@ -1,0 +1,1 @@
+{ "extends": "./convex/tsconfig.json", "include": ["./convex/**/*"], "exclude": [] }

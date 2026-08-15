@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -273,6 +274,11 @@ export const webCreate = mutation({
     icon: v.optional(v.string()),
     target_date: v.optional(v.number()),
     labels: v.optional(v.array(v.string())),
+    // Explicit workspace stamp from the client (same contract as tasks/docs
+    // webCreate). The client-state fallback below is for legacy clients only —
+    // it lags the client's local pointer across a team switch.
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -281,12 +287,18 @@ export const webCreate = mutation({
     const now = Date.now();
     const short_id = `pj-${now.toString(36)}`;
 
-    // Inherit active team from user's client state
-    const clientState = await ctx.db
-      .query("client_state")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .first();
-    const team_id = clientState?.ui?.active_team_id;
+    let team_id: Id<"teams"> | undefined;
+    if (args.workspace === "team") {
+      if (!args.team_id) throw new Error("team_id is required for the team workspace");
+      team_id = args.team_id;
+    } else if (args.workspace !== "personal") {
+      // Legacy client: infer from the server copy of the active-team pointer.
+      const clientState = await ctx.db
+        .query("client_state")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .first();
+      team_id = clientState?.ui?.active_team_id;
+    }
     if (team_id) await requireTeamMembership(ctx, userId, team_id);
 
     const doc: any = {

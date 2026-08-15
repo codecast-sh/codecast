@@ -26,6 +26,7 @@ import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
 import { Plus, PanelLeft, PanelRight, MessageSquare, SquareTerminal } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
+import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { ConnectionBanner } from "./ConnectionBanner";
@@ -55,6 +56,9 @@ import { useSyncBuckets } from "../hooks/useSyncBuckets";
 import { useSyncSessionDecisions } from "../hooks/useSyncSessionDecisions";
 import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
 import { useChatToasts } from "../hooks/useChatToasts";
+import { useCallSync } from "../hooks/useCallSync";
+import { useCallRing } from "../hooks/useCallRing";
+import { CallDock } from "./calls/CallDock";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
@@ -213,6 +217,11 @@ function DashboardSyncEffects() {
   useChatChannelsSync();
   useChatToasts();
   useChatTitleBadge();
+  // Huddles: config/ring/occupancy sync + the incoming-ring pipeline, both
+  // app-wide for the same reason as chat toasts — a ring must reach someone
+  // who is NOT looking at the team strip.
+  useCallSync();
+  useCallRing();
   return null;
 }
 
@@ -1122,6 +1131,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <StorageHealthBanner />
         <DesktopAppBanner />
         <SetupPromptBanner />
+        <NewSnippetsBanner />
         <CliOfflineBanner />
         <TmuxMissingBanner />
       </ErrorBoundary>
@@ -1253,6 +1263,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       )}
       <ErrorBoundary name="CommandPalette" level="inline">
         <CommandPalette />
+      </ErrorBoundary>
+      <ErrorBoundary name="CallDock" level="inline">
+        <CallDock />
       </ErrorBoundary>
       <GlobalCloseGuardDialog />
       {s.compose.open && (

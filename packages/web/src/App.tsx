@@ -44,6 +44,7 @@ const Search = lazy(() => import("@/app/search/page"));
 const Explore = lazy(() => import("@/app/explore/page"));
 const Timeline = lazy(() => import("@/app/timeline/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
+const Questions = lazy(() => import("@/app/questions/page"));
 
 const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
@@ -171,6 +172,7 @@ export function App() {
               <Route path="chat/:channelId" element={<E name="Chat"><Chat /></E>} />
               <Route path="search" element={<E name="Search"><Search /></E>} />
               <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
+              <Route path="questions" element={<E name="Questions"><Questions /></E>} />
               <Route path="conversation/:id" element={<E name="Conversation"><Conversation /></E>} />
               <Route path="conversation/:id/diff" element={<E name="ConversationDiff"><ConversationDiff /></E>} />
               <Route path="docs" element={<E name="Docs"><Docs /></E>} />

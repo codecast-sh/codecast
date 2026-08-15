@@ -60,6 +60,30 @@ export const listConnections = query({
         continue;
       }
 
+      if (id === "gmail") {
+        // Personal by design: mail belongs to a person, not a workspace. The
+        // google_installations row is scoped to the caller alone.
+        const install = await ctx.db
+          .query("google_installations")
+          .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
+          .first();
+        if (!install) {
+          apps.push({ id, status: "not_connected" });
+        } else {
+          apps.push({
+            id,
+            status: "connected",
+            scope: "personal",
+            by: null,
+            by_me: true,
+            at: install.created_at,
+            detail: install.email ?? undefined,
+            disconnect_id: String(install._id),
+          });
+        }
+        continue;
+      }
+
       if (id === "slack") {
         // A workspace can hold a team install and a personal one; the team
         // install is the one the team's anchor speaks through, so it wins the

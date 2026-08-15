@@ -1,4 +1,4 @@
-import { action, internalAction, internalMutation, internalQuery, query } from "./functions";
+import { action, internalMutation, internalQuery, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { api, internal } from "./_generated/api";
@@ -162,6 +162,11 @@ export const storeSuggestionProfile = internalMutation({
     user_id: v.id("users"),
     frequent: v.array(v.object({ text: v.string(), count: v.number() })),
     phrases: v.optional(v.array(v.object({ text: v.string(), count: v.number() }))),
+    patterns: v.optional(v.array(v.object({
+      pattern: v.string(),
+      example: v.string(),
+      count: v.number(),
+    }))),
     recent: v.array(v.string()),
     generated_at: v.number(),
   },
@@ -174,6 +179,7 @@ export const storeSuggestionProfile = internalMutation({
       await ctx.db.patch(existing._id, {
         frequent: args.frequent,
         phrases: args.phrases,
+        patterns: args.patterns,
         recent: args.recent,
         generated_at: args.generated_at,
       });
@@ -322,13 +328,28 @@ const GENERIC_NUDGES = new Set([
   "next", "fix it", "try again", "ship it",
 ]);
 
+// Normalization used to compare a suggestion against historical messages.
+export function normalizeForMatch(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").replace(/[.!?…]+$/, "").trim();
+}
+
 // Output guards: press-send-ready strings only. Refusal/meta prose from the
-// model must never render as a pill.
-export function sanitizeSuggestions(parsed: unknown, lastUserText: string | null): string[] {
+// model must never render as a pill. Selectivity lives here too: candidates
+// carry a model-reported confidence, anything under 0.7 is dropped, and the
+// row shows at most TWO pills — a third only when the model is near-certain
+// (an explicit multi-choice moment). Legacy bare strings score 0.75.
+// `bannedVerbatim` holds the user's own historical messages and mined
+// examples (normalized): a suggestion equal to one is a replayed quote, the
+// exact failure the pattern mining exists to prevent — drop it.
+export function sanitizeSuggestions(
+  parsed: unknown,
+  lastUserText: string | null,
+  bannedVerbatim?: Set<string>,
+): string[] {
   const rawList: unknown[] = Array.isArray(parsed) ? parsed : [];
-  const out: string[] = [];
   const seen = new Set<string>();
-  const lastKey = lastUserText?.trim().toLowerCase() ?? null;
+  const lastKey = lastUserText ? normalizeForMatch(lastUserText) : null;
+  const scored: Array<{ text: string; conf: number }> = [];
   for (const item of rawList) {
     const text = (typeof item === "string" ? item : (item as any)?.text)
       ?.toString()
@@ -336,14 +357,104 @@ export function sanitizeSuggestions(parsed: unknown, lastUserText: string | null
       .replace(/^["'`]+|["'`]+$/g, "");
     if (!text || text.length > 120) continue;
     if (/^(i cannot|i can't|i'm sorry|sorry|as an ai|i don't have)/i.test(text)) continue;
-    const key = text.toLowerCase();
-    if (GENERIC_NUDGES.has(key.replace(/[.!?]+$/, "").trim())) continue;
+    const key = normalizeForMatch(text);
+    if (GENERIC_NUDGES.has(key)) continue;
     if (seen.has(key) || key === lastKey) continue;
+    if (bannedVerbatim?.has(key)) continue;
     seen.add(key);
-    out.push(text);
-    if (out.length >= MAX_SUGGESTIONS) break;
+    const rawConf = (item as any)?.confidence;
+    const conf = typeof rawConf === "number" && rawConf >= 0 && rawConf <= 1 ? rawConf : 0.75;
+    scored.push({ text, conf });
+  }
+  const kept = scored.filter((s) => s.conf >= 0.7).sort((a, b) => b.conf - a.conf);
+  const out = kept.slice(0, 2).map((s) => s.text);
+  if (kept.length > 2 && kept[2].conf >= 0.85 && out.length < MAX_SUGGESTIONS) {
+    out.push(kept[2].text);
   }
   return out;
+}
+
+// LLM pass over the mined corpus: learn the user's recurring BEHAVIOR
+// PATTERNS — what they habitually demand, abstracted from topic — each with
+// one real quote as voice evidence. The suggester then APPLIES a pattern to
+// the current conversation's specifics; it never replays the old message
+// (that was the verbatim-quote failure mode). Runs once per profile refresh
+// (12h TTL), so its cost is a rounding error. Returns null on any failure so
+// the caller can fall back to the n-gram phrases.
+export async function minePatternsWithLLM(
+  apiKey: string,
+  inputs: string[],
+): Promise<{
+  patterns: Array<{ pattern: string; example: string; count: number }>;
+  usage?: unknown;
+} | null> {
+  // Bare nudges dominate any raw corpus (a "go" for every agent turn) and
+  // would surface as the top "habit" — noise that biases the suggester
+  // toward exactly what it must never output. Mine only substantive inputs.
+  const corpus = inputs
+    .filter((t) => t.trim().split(/\s+/).length >= 3)
+    .slice(0, 250)
+    .map((t) => t.replace(/\s+/g, " ").slice(0, 200))
+    .join("\n");
+  const prompt = `You are analyzing one developer's messages to their coding agents, collected across many sessions. Learn their recurring BEHAVIOR PATTERNS — what they habitually ask for, demand, or decide — so another model can apply those habits to a brand-new conversation.
+
+Return ONLY a JSON array: [{"pattern": string, "example": string, "count": number}]
+
+- "pattern": a short, generalized description of the habit, freed from any specific topic, written so it could guide a reply in ANY conversation. Good: "after seeing a finished feature, asks for several concrete ways to make it better", "demands thorough end-to-end testing with visual proof before accepting work", "tells the agent to proceed autonomously and patch everything it found rather than asking". Bad (too topic-bound): "asks about screenshots rendering inline".
+- "example": ONE real quote from the messages that best shows the habit and the developer's voice.
+- "count": how many distinct messages express this habit.
+
+Rules:
+- A pattern must be expressed in at least 2 distinct messages; cluster different wordings of the same intent.
+- Generalize the INTENT and drop the topic: the topic belongs to old conversations, the habit transfers.
+- Exclude one-off requests, greetings, filler, and bare nudges ("continue", "go", "do it").
+- Sort by count descending. At most 15 entries. No markdown, no commentary.
+
+Messages (one per line):
+${corpus}`;
+
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1200,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const raw = data.content?.[0]?.text?.trim() ?? "";
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    const parsed = JSON.parse(cleaned);
+    if (!Array.isArray(parsed)) return null;
+    const out = parsed
+      .filter(
+        (p: any) =>
+          p &&
+          typeof p.pattern === "string" &&
+          typeof p.example === "string" &&
+          typeof p.count === "number" &&
+          p.count >= 2,
+      )
+      .map((p: any) => ({
+        pattern: String(p.pattern).trim().slice(0, 200),
+        example: String(p.example).trim().slice(0, 160),
+        count: Math.round(p.count),
+      }))
+      // A habit whose best example is itself a bare nudge is the nudge habit
+      // in disguise — the one pattern the suggester must not learn.
+      .filter((p: { example: string }) => !GENERIC_NUDGES.has(normalizeForMatch(p.example)))
+      .slice(0, 15);
+    return out.length ? { patterns: out, usage: data.usage } : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildPrompt(
@@ -361,6 +472,7 @@ function buildPrompt(
   profile: {
     frequent: Array<{ text: string; count: number }>;
     phrases: Array<{ text: string; count: number }>;
+    patterns: Array<{ pattern: string; example: string; count: number }>;
     recent: string[];
   },
 ): string {
@@ -380,12 +492,16 @@ function buildPrompt(
     ...tail.map((m, i) => renderTurn(m, i === tail.length - 1)),
   ].join("\n\n");
 
-  const phrasesText = profile.phrases.length
-    ? profile.phrases.map((f) => `- (×${f.count}) ${f.text}`).join("\n")
-    : "- none mined yet";
-  const frequentText = profile.frequent.length
-    ? profile.frequent.map((f) => `- (×${f.count}) ${f.text}`).join("\n")
-    : "- none";
+  // Patterns are the primary habit evidence. The n-gram phrases only appear
+  // when the LLM miner produced nothing (fallback), so the model is never
+  // handed a list of literal quotes when generalized habits are available.
+  const habitsText = profile.patterns.length
+    ? profile.patterns
+        .map((p) => `- (×${p.count}) ${p.pattern}\n    e.g. "${p.example}"`)
+        .join("\n")
+    : profile.phrases.length
+      ? profile.phrases.map((f) => `- (×${f.count}) says things like: "${f.text}"`).join("\n")
+      : "- none mined yet";
   const recentText = profile.recent.length
     ? profile.recent.map((t) => `- ${t}`).join("\n")
     : "- none";
@@ -401,9 +517,9 @@ function buildPrompt(
     .filter(Boolean)
     .join("\n");
 
-  return `You predict what a developer will type next into their coding-agent session. You see the session so far and evidence of how this developer actually writes. Suggest the exact next message they would send — or nothing.
+  return `You predict what a developer will type next into their coding-agent session. You see the session so far, plus a profile of this developer's HABITS — the things they recurrently ask for, learned across their history. Your job is to apply those habits to THIS conversation's specifics and produce the exact next message they would send — or nothing.
 
-Return ONLY a JSON array of 0 to 3 strings. No wrapper object, no markdown, no commentary.
+Return ONLY a JSON array: [{"text": string, "confidence": number}] — 0 to 2 entries (a third only for an explicit multi-choice moment where each option is near-certain). "confidence" is your probability (0..1) that the developer would actually send this text or a trivial variant of it; omit anything below 0.7. No wrapper object, no markdown, no commentary. [] is the expected answer for most moments.
 
 Read the moment first — the agent's final message decides everything:
 - The agent asked a question or offered options → suggest the most likely answers, phrased the way this developer would phrase them.
@@ -411,76 +527,31 @@ Read the moment first — the agent's final message decides everything:
 - The agent finished work → suggest the natural next directive, grounded in what this session shows is still undone (verify, test, commit, deploy, fix the thing it flagged).
 - The agent is mid-task, or the reply needs knowledge only the developer has (their opinion, product intent, something outside the session) → return [].
 
-Voice: copy the developer's register from their past messages below — casing, punctuation, brevity, bluntness. If they write terse lowercase commands, so do you. Weave in their own recurring phrases where they genuinely fit. Every suggestion must read like THEY typed it and be sendable exactly as written; each will be sent with one click.
+How to use the habits: each habit is a generalized tendency with one example quote for voice. Apply the TENDENCY to what is on the table right now, filling in this session's actual subject — the feature, file, bug, or decision in front of them. The example shows HOW they talk, not WHAT to say: a suggestion that repeats an example, or any past message, is wrong by definition, because it is about some other conversation.
+
+Voice: copy the developer's register from the examples and recent messages — casing, punctuation, brevity, bluntness. If they write terse lowercase commands, so do you. Every suggestion must read like THEY typed it, about THIS conversation, and be sendable exactly as written; each will be sent with one click.
 
 Hard rules:
-- Quality over count. One confident suggestion beats three guesses; [] is a good answer when the moment isn't predictable.
+- Quality over count. One suggestion the developer actually sends is the win; two mediocre ones teach them to ignore the feature. When you're not confident, return [].
 - Never suggest a bare continuation nudge — "continue", "go", "proceed", "do it", "yes", or anything the developer could type in one keystroke. A suggestion earns its place by carrying content: a concrete directive, answer, or decision specific to this moment.
+- Never output a past message or an example quote verbatim or near-verbatim. Only its habit transfers.
 - Suggestions must differ in intent, not phrasing.
 - Keep each under 60 characters unless the moment clearly requires a longer reply.
 - Never repeat what has already been said, asked, or done in the session; never contradict the developer's last instruction.
 - Never invent file paths, commands, names, or ids that do not appear in the session.
-- The past messages are voice and habit evidence, not a menu — reuse one only when it fits this exact moment.
 
 Session:
 ${meta || "- (no metadata)"}
 
-Recurring phrases this developer uses (×N = seen in N separate messages):
-${phrasesText}
+This developer's recurring habits (×N = seen in N separate messages across their history):
+${habitsText}
 
-Whole messages they've sent repeatedly:
-${frequentText}
-
-Their most recent messages (newest first):
+Their most recent messages, for voice only (newest first):
 ${recentText}
 
 Conversation:
 ${excerpt}`;
 }
-
-// TEMP: measurement harness for the cost comparison — remove after.
-export const debugGenerateWithUsage = internalAction({
-  args: { conversation_id: v.id("conversations"), user_id: v.id("users") },
-  handler: async (ctx, args): Promise<any> => {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return { error: "no key" };
-    const context = await ctx.runQuery(internal.composerSuggestions.getSuggestionContext, {
-      conversation_id: args.conversation_id,
-    });
-    const profile = await ctx.runQuery(internal.composerSuggestions.getSuggestionProfile, {
-      user_id: args.user_id,
-    });
-    if (!context || !profile) return { error: "missing context/profile" };
-    const prompt = buildPrompt(context, {
-      frequent: profile.frequent,
-      phrases: profile.phrases ?? [],
-      recent: profile.recent,
-    });
-    const t0 = Date.now();
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 300,
-        temperature: 0.3,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    const ms = Date.now() - t0;
-    const data = await response.json();
-    return {
-      ms,
-      usage: data.usage,
-      prompt_chars: prompt.length,
-      text: data.content?.[0]?.text?.trim(),
-    };
-  },
-});
 
 export const generateComposerSuggestions = action({
   args: { conversation_id: v.id("conversations") },
@@ -525,21 +596,35 @@ export const generateComposerSuggestions = action({
         user_id: user._id,
       });
       const ranked = rankInputs(inputs, now);
+      // Generalized habits beat literal quotes; the n-gram phrases are the
+      // fallback when the miner call fails, so a bad LLM day degrades, never
+      // blanks.
+      const mined = await minePatternsWithLLM(apiKey, inputs.map((r) => r.text));
       await ctx.runMutation(internal.composerSuggestions.storeSuggestionProfile, {
         user_id: user._id,
         frequent: ranked.frequent,
         phrases: ranked.phrases,
+        patterns: mined?.patterns,
         recent: ranked.recent,
         generated_at: now,
       });
-      profile = { ...ranked, generated_at: now } as any;
+      profile = { ...ranked, patterns: mined?.patterns, generated_at: now } as any;
     }
 
     const prompt = buildPrompt(context, {
       frequent: profile!.frequent,
       phrases: profile!.phrases ?? [],
+      patterns: profile!.patterns ?? [],
       recent: profile!.recent,
     });
+    // Anything the user has literally said before — recent messages, mined
+    // examples, repeated whole inputs — may not come back as a pill.
+    const bannedVerbatim = new Set<string>([
+      ...profile!.recent.map(normalizeForMatch),
+      ...profile!.frequent.map((f) => normalizeForMatch(f.text)),
+      ...(profile!.patterns ?? []).map((p) => normalizeForMatch(p.example)),
+      ...context.turns.filter((t) => t.role === "user").map((t) => normalizeForMatch(t.content)),
+    ]);
 
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -569,7 +654,7 @@ export const generateComposerSuggestions = action({
       }
 
       const lastUser = [...context.turns].reverse().find((t) => t.role === "user");
-      const suggestions = sanitizeSuggestions(parsed, lastUser?.content ?? null);
+      const suggestions = sanitizeSuggestions(parsed, lastUser?.content ?? null, bannedVerbatim);
 
       // Store even an empty result: it records "this anchor was evaluated",
       // which is what stops clients from re-asking every render.
