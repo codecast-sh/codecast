@@ -1,8 +1,8 @@
 import { useCallback } from "react";
-import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
 
 const api = _api as any;
@@ -21,7 +21,21 @@ const api = _api as any;
  */
 export function useSyncSavedViews() {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const result = useQuery(api.savedViews.webList, activeTeamId ? { team_id: activeTeamId } : {});
+  // Repair before the first push lands, so a client carrying tombstones from the
+  // short-lived pruning build gets its views back on this boot rather than
+  // staying mysteriously short one view forever. A no-op for everyone else.
+  useWatchEffect(() => {
+    useInboxStore.getState().clearSavedViewTombstones();
+  }, []);
+  // useQueryNoThrow, not useQuery: this hook mounts inside Sidebar, and saved
+  // views only enrich the rail. A terminal server error — the classic one being
+  // "Could not find public function" in the window between the web code going
+  // live and the convex deploy landing — must degrade to "no saved views", not
+  // unmount the whole sidebar into its ErrorBoundary.
+  const { data: result } = useQueryNoThrow(
+    api.savedViews.webList,
+    activeTeamId ? { team_id: activeTeamId } : {},
+  );
   const syncTable = useInboxStore((s) => s.syncTable);
 
   useConvexSync(result, useCallback((data: any) => {

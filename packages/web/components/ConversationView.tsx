@@ -2116,6 +2116,11 @@ type ParsedApiError = {
   // died mid-transmission; a plain "continue" resumes it. Rendered as a
   // distinct "connection dropped" card.
   isConnection?: boolean;
+  // True for a statusful failure the CLI won't retry (400 invalid request,
+  // 404, 413…) — the turn died at the prompt and stays dead until nudged.
+  // Rendered as the generic error card, but the footer hint says "send
+  // continue" instead of the self-retry copy.
+  isFatal?: boolean;
   // True for a marked opencode/pi provider error that is NOT auth (a provider 5xx
   // or other non-actionable failure). Rendered as the generic error card with the
   // provider's own message, so a failed turn is never a silently blank session.
@@ -2160,6 +2165,7 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   const isAuth = bannerKind === "auth";
   const isLimit = bannerKind === "limit";
   const isConnection = bannerKind === "connection";
+  const isFatal = bannerKind === "fatal";
   const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
   if (!isAuth && !isLimit && !isConnection && !match) return null;
 
@@ -2224,7 +2230,7 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
     }
   }
 
-  return { statusCode, message, errorType, requestId, isAuth, isLimit, isConnection };
+  return { statusCode, message, errorType, requestId, isAuth, isLimit, isConnection, isFatal };
 }
 
 // A copyable command chip — the command in a mono pill with a copy affordance, so
@@ -2381,7 +2387,15 @@ function ApiErrorCard({ error, agentType, conversationId, compact = false }: { e
       )}
       {!compact && (
         <p className="mt-1 text-xs text-sol-text-dim">
-          Provider-side failure. Retry the request; if it repeats, include the request ID.
+          {error.isFatal ? (
+            <>
+              The agent won&apos;t retry this on its own — send{" "}
+              <code className="px-1 py-0.5 rounded bg-sol-bg-alt/60 text-sol-text-secondary font-mono">continue</code>{" "}
+              (or any message) to retry the turn.
+            </>
+          ) : (
+            "Provider-side failure. Retry the request; if it repeats, include the request ID."
+          )}
         </p>
       )}
     </div>

@@ -12,7 +12,9 @@ import { notificationHref } from "../../components/NotificationBell";
 import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../components/ui/context-menu";
 import {
+  agentNames,
   notificationRoute,
+  sessionLabel,
   sessionTypes,
   socialTypes,
   taskTypes,
@@ -99,28 +101,7 @@ function AgentIcon({ agentType, className = "w-10 h-10" }: { agentType: string; 
   );
 }
 
-const agentNames: Record<string, string> = {
-  claude_code: "claude",
-  codex: "codex",
-  codex_cli: "codex",
-  cursor: "cursor",
-  gemini: "gemini",
-  opencode: "opencode",
-  pi: "pi",
-};
-
 type FilterTab = "all" | "unread" | "sessions" | "social" | "tasks";
-
-
-function sessionLabel(conversation: { title?: string; project_path?: string; agent_type?: string } | null): string | null {
-  if (!conversation) return null;
-  if (conversation.title) return conversation.title;
-  if (conversation.project_path) {
-    const parts = conversation.project_path.split("/");
-    return parts[parts.length - 1] || parts[parts.length - 2] || conversation.project_path;
-  }
-  return null;
-}
 
 export default function NotificationsPage() {
   const router = useRouter();

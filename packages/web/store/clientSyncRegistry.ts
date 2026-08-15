@@ -84,10 +84,35 @@ export const CLIENT_SYNC_REGISTRY = {
     // carry a session short id (jx…) or none.
     validRow: (row: any) => typeof row?.short_id === "string" && row.short_id.startsWith("ct-"),
   },
+  capabilityState: {
+    persistence: { kind: "collection", key: "capabilityState" },
+    hydration: { phase: "deferred" },
+    // NOT localFirst, and that is the design: the mirror is server truth about
+    // machines' disks — there is no optimistic write to protect, and pending
+    // machinery would only delay the honest answer. See store/capabilities.ts's
+    // header for the full argument.
+    localFirst: false,
+    validRow: (row: any) =>
+      typeof row?.device_id === "string" && typeof row?.client === "string",
+  },
   docs: {
     persistence: { kind: "collection", key: "docs" },
     hydration: { phase: "deferred" },
     localFirst: true,
+  },
+  // The decision queue (cast decide). Answering is local-first: the action
+  // flips status on the draft and the resolution fields ride the generic
+  // patch rail to the session_decisions table. Everything structural
+  // (question, options, context) is server-owned and stays undispatchable.
+  sessionDecisions: {
+    persistence: { kind: "collection", key: "sessionDecisions" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    dispatchTable: {
+      table: "session_decisions",
+      kind: "collection",
+      fields: ["status", "answer_index", "answer_text", "resolved_at"],
+    },
   },
   plans: {
     persistence: { kind: "collection", key: "plans" },

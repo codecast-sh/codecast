@@ -134,6 +134,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
   { label: "Files", path: "/files", icon: "folder", keywords: "notes markdown obsidian files vault code" },
   { label: "Triggers", path: "/triggers", icon: "clock", keywords: "schedules cron automation recurring followup reminders" },
+  { label: "Capabilities", path: "/capabilities", icon: "grid", keywords: "skills mcp plugins drift machines library apps connect" },
   { label: "Pages", path: "/pages", icon: "file", keywords: "published html artifacts share cast publish gallery" },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },

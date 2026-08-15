@@ -28,7 +28,7 @@ import { toast } from "sonner";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
 import { CreateChannelModal } from "./CreateChannelModal";
-import { Globe, Workflow, Zap, MessageSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff } from "lucide-react";
+import { Globe, Workflow, Zap, MessageSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks } from "lucide-react";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { filterToWorkspace } from "../lib/workspaceScope";
 
@@ -424,6 +424,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
+  const isCapabilities = pathname === "/capabilities";
   const isVault = pathname === "/files" || pathname?.startsWith("/files/") ||
     pathname === "/vault" || pathname?.startsWith("/vault/"); // /vault = pre-rename alias
   const isPages = pathname === "/pages" || pathname?.startsWith("/pages/") ||
@@ -535,6 +536,12 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     onMobileClose?.();
   }, [updateClientUI, router, onMobileClose]);
 
+  // "kind:id" keys of current pins — one subscription serves every section's
+  // pin/unpin affordance and keeps the memos honest about pin state. Declared
+  // before viewItems: its dep array reads `pinned` during render.
+  const pinnedKeys = useInboxStore((s) => readPins(s).map((x) => `${x.kind}:${x.id}`).join(","));
+  const pinned = useCallback((key: string) => pinnedKeys.split(",").includes(key), [pinnedKeys]);
+
   const viewItems = useCallback((views: any[], activeId?: string) => views.map((v: any) => ({
     id: v._id,
     name: v.name,
@@ -599,10 +606,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // Active work first, then alphabetical; finished projects sink but stay reachable.
   useSyncProjects();
   const projects = useInboxStore((s) => s.projects);
-  // "kind:id" keys of current pins — one subscription serves every section's
-  // pin/unpin affordance and keeps the memos honest about pin state.
-  const pinnedKeys = useInboxStore((s) => readPins(s).map((x) => `${x.kind}:${x.id}`).join(","));
-  const pinned = useCallback((key: string) => pinnedKeys.split(",").includes(key), [pinnedKeys]);
   const projectItems = useMemo(() => {
     const order: Record<string, number> = { active: 0, planning: 1, paused: 2, done: 3 };
     // store.projects is a cross-workspace cache (sync never prunes on team
@@ -851,6 +854,15 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
             }
+          />
+          <NavSection
+            label="Capabilities"
+            href="/capabilities"
+            icon={<Blocks className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+            isActive={isCapabilities}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            items={[]}
           />
           <NavSection
             label="Files"

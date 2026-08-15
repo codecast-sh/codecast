@@ -405,8 +405,9 @@ export type InboxSession = {
   // needs-input and shows a distinct "login" badge. Self-clears when a real
   // turn supersedes the banner.
   pending_api_error?: boolean;
-  // "auth" | "limit" | "error" — which banner family parked the session;
-  // picks the badge label ("login" vs "limit").
+  // "auth" | "limit" | "error" | "connection" | "fatal" — which banner family
+  // parked the session; picks the badge label ("login" / "limit" / "dropped" /
+  // "failed"; self-retrying "error" gets none).
   pending_api_error_kind?: string | null;
   implementation_session?: { _id: string; title?: string };
   is_subagent?: boolean;
@@ -784,6 +785,28 @@ export type BucketAssignmentItem = {
   updated_at: number;
 };
 
+// The decision queue: one explicit question an agent handed its human via
+// `cast decide` (session_decisions table). Answering is local-first — the
+// resolution fields flip on the draft and ride the generic patch rail; the
+// chosen option separately enters the session as a normal user message.
+export type SessionDecisionItem = {
+  _id: string;
+  conversation_id: string;
+  session_id: string;
+  user_id?: string;
+  question: string;
+  context_md?: string;
+  options: Array<{ label: string; description?: string }>;
+  report_slug?: string;
+  blocking: boolean;
+  default_option?: number;
+  status: "pending" | "answered" | "dismissed";
+  answer_index?: number;
+  answer_text?: string;
+  created_at: number;
+  resolved_at?: number;
+};
+
 // conversation_id → bucket_id lookup, derived at read time from the assignment
 // rows (never stored — see the liveEntities rule on derived snapshots).
 export function convBucketMap(assignments: Record<string, BucketAssignmentItem>): Record<string, string | undefined> {
@@ -1021,6 +1044,14 @@ export type ClientUI = {
   // than this count as "N new" on the collapsed header. Refreshed whenever the
   // user toggles the section (expanding IS reading the briefing).
   schedules_seen_at?: number;
+  // Read watermark for the REVIEW dock (open comment threads, page comments,
+  // workflow gates): items raised after this count as "new". Same close-marks-
+  // read contract as schedules_seen_at.
+  review_seen_at?: number;
+  // Sidebar subsection rows pinned to the top of the rail (lib/sidebarPins).
+  // Structural shape rather than the SidebarPin import: sidebarPins.ts imports
+  // this store, and a type import back the other way invites a require cycle.
+  sidebar_pins?: Array<{ kind: "project" | "view" | "channel"; id: string; label: string }>;
   // The workspace arrangement (see store/workspace.ts): which slots are open,
   // peek vs split, and their sizes. Subject-bearing panes are deliberately NOT
   // persisted — the arrangement is worth remembering, its contents are
@@ -3207,6 +3238,13 @@ interface InboxStoreState extends ChatSliceState {
   activeProjectFilter: string | null;
   setActiveProjectFilter: (name: string | null, path?: string | null) => void;
 
+  // -- Decision queue (cast decide) --
+  sessionDecisions: Record<string, SessionDecisionItem>;
+  // Resolve a decision locally (status flips instantly; patch rides the
+  // outbox) and, for answers, send the chosen option into the session as a
+  // normal user message. `text` is the free-form escape hatch.
+  answerDecision: (decisionId: string, answer: { index?: number; text?: string } | { dismiss: true }) => void;
+
   // -- Manual session buckets --
   buckets: Record<string, BucketItem>;
   bucketAssignments: Record<string, BucketAssignmentItem>;
@@ -3340,6 +3378,7 @@ interface InboxStoreState extends ChatSliceState {
   updateTaskStatus: (shortId: string, status: string, subtaskResolution?: "cascade" | "only_parent") => Promise<any>;
   updateTask: (shortId: string, fields: { status?: string; status_id?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string; parent?: string; sort_order?: number; duplicate_of?: string; subtask_resolution?: "cascade" | "only_parent" }) => Promise<any>;
   createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string; parent?: string; client_key?: string }) => Promise<any>;
+  clearSavedViewTombstones: () => void;
   removeTaskStub: (clientKey: string) => void;
   createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[]; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
@@ -3785,6 +3824,12 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   },
   docs: { isDelta: true },
   plans: { isDelta: true },
+  // The decision queue. NOT delta: listForUser returns the complete visible
+  // window (pending + 24h of resolved) on every push, so absence means the
+  // row aged out — delta mode would pin cleared decisions in the queue
+  // forever. localFirst pending-protection covers the answer flip until the
+  // server echo confirms it.
+  sessionDecisions: {},
   // Like the others: a liberal delta cache. useSyncProjects' call site passes no
   // opts, so without this projects synced as an authoritative snapshot — the one
   // remaining collection that still pruned the cache by absence.
@@ -3810,6 +3855,12 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // never prunes another's, and a thread's replies survive a channel sync. See
   // store/chatSlice.ts for why these collections carry no pending protection.
   ...CHAT_SYNC_REGISTRY,
+  // The fleet mirror. A COLLECTION keyed by server _id — the task draft said
+  // singleton-keyed-by-device, but rows are (device, client, scope) tuples and
+  // the slice reads them as a Record; a singleton would make every device's
+  // report clobber the fleet. No pending filter: nothing optimistic ever
+  // writes here (see store/capabilities.ts).
+  capabilityState: {},
   clientState: {
     kind: "singleton",
     merge: {
@@ -5021,6 +5072,38 @@ const inboxStoreConfig = (set: any, get: any) => ({
       recordVisitInDraft(this, { kind: "view", key: `project:${name}`, label: name, path: path ?? undefined });
     }
     pushInboxViewHistory(prev, snapshotInboxViewFromDraft(this));
+  }),
+
+  // -- Decision queue (cast decide) --
+  sessionDecisions: {},
+  answerDecision: action(function (this: Draft, decisionId: string, answer: { index?: number; text?: string } | { dismiss: true }) {
+    const row = this.sessionDecisions[decisionId];
+    if (!row || row.status !== "pending") return;
+    const now = Date.now();
+    if ("dismiss" in answer) {
+      row.status = "dismissed";
+      row.resolved_at = now;
+      return;
+    }
+    row.status = "answered";
+    row.answer_index = answer.index;
+    row.answer_text = answer.text;
+    row.resolved_at = now;
+    // The chosen option enters the session as a normal user message so the
+    // parked agent resumes with it — same rail as typing into the composer,
+    // reusing the standard optimistic-bubble + outbox send pair (the mobile
+    // AUQ answer path does the identical two-step). Deferred to after this
+    // draft commits because both are themselves decorated store functions.
+    const label = answer.index !== undefined ? row.options[answer.index]?.label : undefined;
+    const content = answer.text ?? (label ? `Decision: ${label}` : undefined);
+    const convId = row.conversation_id;
+    if (content) {
+      queueMicrotask(() => {
+        const s = useInboxStore.getState();
+        const clientId = s.addOptimisticMessage(convId, content);
+        s.sendMessage(convId, content, undefined, clientId);
+      });
+    }
   }),
 
   // -- Manual session buckets --
@@ -7277,6 +7360,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // cap, workspace/plan access) — no server row will ever sync back to
   // supersede it, so without this the stub strands as a durable ghost. Plants
   // the exclude tombstone so the IDB diff is authorised to delete the row.
+  // One-time repair. A short-lived build pruned savedViews with
+  // pruneAbsentScope, which writes a DURABLE exclude tombstone for every row
+  // absent from a push — and webList is legitimately empty for a beat while auth
+  // settles. Any client that ran it has views permanently hidden from its own
+  // rail while they sit healthy on the server. Nothing else ever tombstones this
+  // table (it syncs as a plain replace), so clearing them all is safe and this
+  // becomes a no-op for everyone else.
+  clearSavedViewTombstones: sync(function (this: Draft) {
+    for (const key of Object.keys(this.pending)) {
+      if (key.startsWith("savedViews:")) delete (this.pending as any)[key];
+    }
+  }),
+
   removeTaskStub: sync(function (this: Draft, clientKey: string) {
     const tempId = `temp_task_${clientKey}`;
     if (!this.tasks[tempId]) return;
