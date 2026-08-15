@@ -122,19 +122,28 @@ export const localChromeFocusEngine: FocusEngine = {
 /**
  * Activating a tab selects it inside its window, but a window behind other
  * apps stays behind them — so also bring that Chrome frontmost. By pid, not by
- * app name: `open -a "Google Chrome"` would raise the user's real Chrome, a
- * different process from the driven one. Best effort; tab selection already
- * happened if this fails.
+ * app name: `tell application "Google Chrome"` would reach the user's real
+ * Chrome, a different process from the driven one.
+ *
+ * How, matters on macOS 14+: a background process may not push another app to
+ * the front (`set frontmost`, `NSRunningApplication.activate` and Chrome's own
+ * `Page.bringToFront` all silently do nothing while the human's app has
+ * focus). What is allowed is an app activating ITSELF, which is what
+ * AppleScript's `activate` asks for — so send that Apple event (`misc`/`actv`)
+ * addressed to the pid, and Chrome raises its own window. Best effort; tab
+ * selection already happened if this fails.
  */
-export function raiseAppByPid(pid: number): void {
+export function raiseAppByPid(pid: number, log: (line: string) => void = () => {}): void {
   if (process.platform !== "darwin") return;
-  execFile(
-    "osascript",
-    ["-e", `tell application "System Events" to set frontmost of (first process whose unix id is ${pid}) to true`],
-    () => {
-      /* best effort */
-    },
-  );
+  const jxa =
+    'ObjC.import("Foundation");' +
+    `const target = $.NSAppleEventDescriptor.descriptorWithProcessIdentifier(${Math.floor(pid)});` +
+    "const evt = $.NSAppleEventDescriptor.appleEventWithEventClassEventIDTargetDescriptorReturnIDTransactionID(0x6d697363, 0x61637476, target, -1, 0);" +
+    "const err = Ref(); evt.sendEventWithOptionsTimeoutError(1, 10, err); err[0] ? String(err[0].localizedDescription) : 'ok';";
+  execFile("osascript", ["-l", "JavaScript", "-e", jxa], (error, stdout, stderr) => {
+    const out = `${stdout ?? ""}`.trim();
+    if (error || out !== "ok") log(`[BROWSER] raise pid ${pid}: ${error ? error.message : out} ${`${stderr ?? ""}`.trim()}`.trim());
+  });
 }
 
 /**
@@ -154,7 +163,8 @@ export function registerFocusEngine(engine: FocusEngine): () => void {
 
 export interface FocusDeps {
   engines: FocusEngine[];
-  raiseApp: (pid: number) => void;
+  raiseApp: (pid: number, log?: (line: string) => void) => void;
+  log?: (line: string) => void;
 }
 
 const defaultDeps = (): FocusDeps => ({ engines, raiseApp: raiseAppByPid });
@@ -193,7 +203,7 @@ export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDe
       worse("browser-unreachable");
       continue;
     }
-    if (tab.pid) deps.raiseApp(tab.pid);
+    if (tab.pid) deps.raiseApp(tab.pid, deps.log);
     return { ok: true };
   }
   return { ok: false, reason };
@@ -227,7 +237,7 @@ export function handleBrowserFocusHttp(
 
   if (req.method === "POST" && url.startsWith("/browser/focus")) {
     const tab = new URL(url, "http://localhost").searchParams.get("tab") ?? "";
-    void focusBrowserTab(tab, deps).then((result) => {
+    void focusBrowserTab(tab, { ...deps, log: deps.log ?? opts.log }).then((result) => {
       if (result.ok) opts.log(`[BROWSER] Focused tab ${tab}`);
       res.writeHead(result.ok ? 200 : 404, headers);
       res.end(JSON.stringify(result));

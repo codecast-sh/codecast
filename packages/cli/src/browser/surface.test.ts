@@ -44,6 +44,7 @@ import * as path from "node:path";
  */
 const KNOWN_GAPS: Record<string, { flags?: string[]; verb?: boolean; why: string }> = {
   "click-at": { verb: true, why: "engine restoration pending in jx76a64's rebase" },
+  do: { flags: ["--clone", "--real", "--tab"], why: "an engine session drives one tab of its own; real/clone are bridge modes" },
   close: { verb: true, why: "engine restoration pending in jx76a64's rebase" },
   target: { verb: true, why: "bridge sticky-target verb; engine equivalent not designed yet" },
   shot: {
@@ -51,12 +52,12 @@ const KNOWN_GAPS: Record<string, { flags?: string[]; verb?: boolean; why: string
     why: "engine's shot predates the fleet's flags; restoration pending in jx76a64's rebase",
   },
   start: {
-    flags: ["--channel", "--remote", "--resync", "--size"],
-    why: "engine owns its own browser lifecycle; these configure the built-in launcher",
+    flags: ["--channel"],
+    why: "the engine attaches to the managed browser; --channel picks which Chrome the built-in launcher starts",
   },
   stop: {
-    flags: ["--force", "--wipe"],
-    why: "engine stop maps --force onto `close --all` in engineStop.ts; --wipe is built-in profile removal",
+    flags: ["--force"],
+    why: "engine stop closes this session's tab; --force is the built-in driver's refcount override",
   },
   viewport: {
     flags: ["--clone", "--real", "--tab"],
