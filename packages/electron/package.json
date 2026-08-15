@@ -50,7 +50,11 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "entitlements.mac.plist",
-      "entitlementsInherit": "entitlements.mac.plist"
+      "entitlementsInherit": "entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Codecast uses the microphone for team huddles.",
+        "NSCameraUsageDescription": "Codecast uses the camera for team huddles."
+      }
     },
     "dmg": {
       "title": "Codecast",

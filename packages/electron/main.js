@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor } = require("electron");
+const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -1093,6 +1093,113 @@ app.whenReady().then(() => {
   // other host (production included) stays strict.
   session.defaultSession.setCertificateVerifyProc((request, callback) => {
     callback(request.hostname === LOCAL_DEV_HOST ? 0 : -3);
+  });
+
+  // ── Capability policy ────────────────────────────────────────────────────
+  // The shell is a HOST, not a feature: it grants its own trusted origins the
+  // browser capabilities a first-party web app expects, and exposes generic
+  // primitives (below, `desktop-sources`) that the web layer composes into
+  // features. Adding a media feature, a picker, or a permission-gated API on
+  // the web side must never require a shell release — that is the whole
+  // reason this list is a policy table and not per-feature branches.
+  const isTrustedOrigin = (webContents) => {
+    let host = "";
+    try {
+      host = new URL(webContents.getURL()).hostname;
+    } catch {}
+    return (
+      host === "codecast.sh" ||
+      host === LOCAL_DEV_HOST ||
+      // Loopback: a Vite port, a worktree's dev server — all this app's code.
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "[::1]"
+    );
+  };
+  // Capabilities a trusted first-party page may hold. Anything not listed is
+  // denied for everyone (a navigated-to third-party frame gets nothing).
+  // The BASELINE ships with the shell; the web layer may EXTEND it at runtime
+  // (`host-policy` below), persisted in settings.json, so a new permission-
+  // gated web feature never waits on a desktop release. Extension is
+  // additive only and gated on the caller being a trusted origin — the web
+  // cannot open the door for anyone but itself.
+  const BASELINE_PERMISSIONS = [
+    "media", "audioCapture", "videoCapture", // huddles: mic + camera
+    "display-capture",                       // screen share
+    "notifications",
+    "clipboard-read", "clipboard-sanitized-write",
+    "fullscreen",
+    "speaker-selection",                     // audio output picker
+  ];
+  const trustedPermissions = () =>
+    new Set([...BASELINE_PERMISSIONS, ...(loadFullSettings().hostPolicy?.permissions ?? [])]);
+  const extraTrustedHosts = () => new Set(loadFullSettings().hostPolicy?.hosts ?? []);
+  const isTrustedOriginOrExtended = (webContents) => {
+    if (isTrustedOrigin(webContents)) return true;
+    try {
+      return extraTrustedHosts().has(new URL(webContents.getURL()).hostname);
+    } catch {
+      return false;
+    }
+  };
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(trustedPermissions().has(permission) && isTrustedOriginOrExtended(webContents));
+  });
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    return trustedPermissions().has(permission) && (!webContents || isTrustedOriginOrExtended(webContents));
+  });
+  // The web layer extends host policy: {permissions?: string[], hosts?: string[]}.
+  // Reads back the effective policy so the web can gate on what the shell
+  // will actually grant.
+  ipcMain.handle("host-policy", (e, patch) => {
+    if (!isTrustedOrigin(e.sender)) return null;
+    if (patch && typeof patch === "object") {
+      const cur = loadFullSettings().hostPolicy ?? {};
+      const permissions = new Set([...(cur.permissions ?? []), ...((patch.permissions ?? []).filter((x) => typeof x === "string"))]);
+      const hosts = new Set([...(cur.hosts ?? []), ...((patch.hosts ?? []).filter((x) => typeof x === "string"))]);
+      updateSettings({ hostPolicy: { permissions: [...permissions], hosts: [...hosts] } });
+    }
+    return { permissions: [...trustedPermissions()], hosts: [...extraTrustedHosts()], version: app.getVersion() };
+  });
+
+  // Screen share. Chromium routes the renderer's getDisplayMedia here for a
+  // source. The renderer may PRE-SELECT one (web-built picker over the
+  // `desktop-sources` primitive, then `select-display-source`); absent a
+  // selection the primary screen is used, so the plain "share my screen"
+  // gesture works with zero UI. The selection is single-use — one call, one
+  // consent — never a standing grant.
+  let pendingDisplaySource = null;
+  ipcMain.handle("desktop-sources", async (e, opts) => {
+    if (!isTrustedOrigin(e.sender)) return [];
+    const types = Array.isArray(opts?.types) ? opts.types.filter((t) => t === "screen" || t === "window") : ["screen", "window"];
+    const sources = await desktopCapturer.getSources({
+      types,
+      thumbnailSize: { width: 320, height: 200 },
+      fetchWindowIcons: false,
+    });
+    return sources.map((src) => ({
+      id: src.id,
+      name: src.name,
+      kind: src.id.startsWith("screen:") ? "screen" : "window",
+      thumbnail: src.thumbnail.toDataURL(),
+    }));
+  });
+  ipcMain.handle("select-display-source", (e, id) => {
+    if (!isTrustedOrigin(e.sender)) return false;
+    pendingDisplaySource = typeof id === "string" ? id : null;
+    return true;
+  });
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    const wanted = pendingDisplaySource;
+    pendingDisplaySource = null;
+    desktopCapturer
+      .getSources({ types: ["screen", "window"] })
+      .then((sources) => {
+        const pick = (wanted && sources.find((s) => s.id === wanted)) || sources.find((s) => s.id.startsWith("screen:")) || sources[0];
+        if (pick) callback({ video: pick, audio: request.audioRequested ? "loopback" : undefined });
+        else callback({});
+      })
+      .catch(() => callback({}));
   });
 
   app.setAboutPanelOptions({

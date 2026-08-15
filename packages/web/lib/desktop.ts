@@ -31,10 +31,34 @@ declare global {
       detachTab: (path: string) => Promise<void>;
       attachTab: (path: string) => Promise<void>;
       onAdoptTab: (cb: (path: string) => void) => void;
+      // Screen-share primitives (huddles). The shell lists capturable
+      // screens/windows and lets the web pre-select one for the NEXT
+      // getDisplayMedia; the picker UI itself is web-owned. Absent on older
+      // builds — gate on them (a missing selectDisplaySource means the shell
+      // captures the primary screen on its own).
+      getDisplaySources?: (opts?: { types?: Array<"screen" | "window"> }) => Promise<DesktopDisplaySource[]>;
+      selectDisplaySource?: (id: string | null) => Promise<boolean>;
+      // Read (no arg) or additively extend (patch) the shell's capability
+      // grant table. Persisted in the shell's settings; lets the web layer
+      // light up a new permission-gated feature without a desktop release.
+      // Absent on older builds — gate on it.
+      hostPolicy?: (patch?: { permissions?: string[]; hosts?: string[] }) => Promise<{
+        permissions: string[];
+        hosts: string[];
+        version: string;
+      } | null>;
       platform: string;
     };
   }
 }
+
+export type DesktopDisplaySource = {
+  id: string;
+  name: string;
+  kind: "screen" | "window";
+  /** data: URL thumbnail, ~320px wide. */
+  thumbnail: string;
+};
 
 export function isElectron(): boolean {
   return typeof window !== "undefined" && !!window.__CODECAST_ELECTRON__;

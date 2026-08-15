@@ -87,6 +87,17 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   composeSubmit: (data) => ipcRenderer.send("compose-submit", data),
   openExternal: (url) => ipcRenderer.invoke("open-external", url),
   getSystemIdleSeconds: () => ipcRenderer.invoke("get-system-idle-seconds"),
+  // Screen-share primitives. The shell hands the web layer the list of
+  // capturable screens/windows (with thumbnails) and lets it pre-select one
+  // for the NEXT getDisplayMedia call — so the web builds whatever picker UI
+  // it wants, and the shell never needs a release for it. Absent a selection
+  // the primary screen is captured.
+  getDisplaySources: (opts) => ipcRenderer.invoke("desktop-sources", opts),
+  selectDisplaySource: (id) => ipcRenderer.invoke("select-display-source", id),
+  // Host capability policy: read the effective grant table, or extend it
+  // (additive; persisted). Lets the web enable a new permission-gated
+  // feature without a shell release. Absent on older builds — gate on it.
+  hostPolicy: (patch) => ipcRenderer.invoke("host-policy", patch ?? null),
   // Detached tab windows: this renderer IS one (flag set by createTabWindow's
   // additionalArguments), break a tab out, hand one back, adopt one returned.
   isTabWindow: process.argv.includes("--tab-window"),
