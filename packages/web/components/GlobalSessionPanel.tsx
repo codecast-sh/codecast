@@ -21,7 +21,7 @@ import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, filterInboxScope, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
-import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { isBlockedConversation, isSubagentConversation, nestParentIdOf, LOGIN_FLOW_STALE_MS } from "@codecast/convex/convex/ccAccountsShared";
 import { isLivenessStale, blockedContinueClientId, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
@@ -1842,7 +1842,23 @@ export const SessionCard = memo(function SessionCard({
   // structural signature), subscribe to a shared 30s clock so those stay fresh on
   // their own cadence instead of riding data churn. One timer total for all cards
   // (see useCoarseNow); 30s granularity is plenty for a minutes-scale idle counter.
-  const coarseNow = useCoarseNow(30_000);
+  // The amber blocked chip's revive stamp — read before the clock below so its
+  // TTL participates in the clock's re-render signature.
+  const reviveRequestedAtEarly = useInboxStore((st) => st.blockedReviveRequestedAt[session._id]);
+  const reviveRequestedAtRef = useRef(reviveRequestedAtEarly);
+  reviveRequestedAtRef.current = reviveRequestedAtEarly;
+  // Threshold clock, not a raw tick: every card on screen shares the 30s
+  // clock, so a plain useCoarseNow re-rendered the WHOLE list once per tick
+  // forever. Project the clock onto what this card actually draws from time —
+  // the idle-age label, liveness staleness, the blocked-badge TTL, and the
+  // pinned-state age line — and re-render only when one of those flips.
+  const coarseNow = useNowWhen(
+    (t) =>
+      `${formatIdleDuration(session.updated_at)}|${isLivenessStale(session, t) ? 1 : 0}|` +
+      `${showsBlockedBadge(session.pending_api_error, false, reviveRequestedAtRef.current, t) ? 1 : 0}|` +
+      `${threadStateView(session, session.message_count, t)?.cardLine ?? ""}`,
+    30_000,
+  );
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
   const isStashed = variant === "stashed";
@@ -1866,7 +1882,7 @@ export const SessionCard = memo(function SessionCard({
   // see showsBlockedBadge. Scalar per-card selector, so only this card
   // re-renders when its own revive stamp lands; coarseNow keeps the stamp's TTL
   // live so an expired one brings the chip back on its own.
-  const reviveRequestedAt = useInboxStore((st) => st.blockedReviveRequestedAt[session._id]);
+  const reviveRequestedAt = reviveRequestedAtEarly;
   const showBlockedBadge = showsBlockedBadge(
     session.pending_api_error,
     isPendingSend,
