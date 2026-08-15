@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Hash } from "lucide-react";
+import { Hash, Lock } from "lucide-react";
+import { MemberPicker } from "./chat/ChannelPeople";
 import { useInboxStore } from "../store/inboxStore";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
+import { inActiveWorkspace } from "../lib/workspaceScope";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 
 // New channel.
@@ -37,11 +39,16 @@ export function CreateChannelModal({
   const teamId = workspace !== "skip" && "team_id" in workspace ? String(workspace.team_id) : undefined;
   const [name, setName] = useState("");
   const [topic, setTopic] = useState("");
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [memberIds, setMemberIds] = useState<string[]>([]);
+  const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
 
   const slug = slugChannelName(name);
+  // Collision check scoped to the target workspace — the store caches channels
+  // across teams, and a name taken in another team is free in this one.
   const taken = useMemo(
-    () => Object.values(channels).some((c: any) => !c.archived_at && c.name === slug),
-    [channels, slug],
+    () => Object.values(channels).some((c: any) => !c.archived_at && c.name === slug && inActiveWorkspace(c, teamId)),
+    [channels, slug, teamId],
   );
   // A channel MUST land in the workspace the user is looking at. Omitting the
   // team would let the server default to users.active_team_id — a second
@@ -50,8 +57,12 @@ export function CreateChannelModal({
 
   const submit = () => {
     if (!valid || !teamId) return;
-    const id = createChatChannel(name, { topic: topic.trim() || undefined, teamId });
-    toast.success(`Created #${slug}`);
+    const id = createChatChannel(name, {
+      topic: topic.trim() || undefined,
+      teamId,
+      ...(isPrivate ? { kind: "private" as const, memberIds } : {}),
+    });
+    toast.success(isPrivate ? `Created private channel #${slug}` : `Created #${slug}`);
     onCreated?.(id);
     onClose();
   };
@@ -73,7 +84,9 @@ export function CreateChannelModal({
         }}
       >
         <div className="px-6 pt-6 pb-2 flex items-center gap-2">
-          <Hash className="w-4 h-4 text-sol-text-dim shrink-0" />
+          {isPrivate
+            ? <Lock className="w-4 h-4 text-sol-yellow shrink-0" />
+            : <Hash className="w-4 h-4 text-sol-text-dim shrink-0" />}
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -102,6 +115,30 @@ export function CreateChannelModal({
               Will be created as <span className="text-sol-text">#{slug}</span>
             </span>
           ) : null}
+        </div>
+
+        <div className="px-6 pb-3">
+          <label className="flex items-center gap-2.5 text-xs text-sol-text-muted cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={isPrivate}
+              onChange={(e) => setIsPrivate(e.target.checked)}
+              className="accent-[var(--sol-yellow)]"
+            />
+            <span>
+              <span className="text-sol-text font-medium">Private</span> — only invited people can
+              see it or find its messages
+            </span>
+          </label>
+          {isPrivate && (
+            <div className="mt-2">
+              <MemberPicker
+                exclude={[viewer]}
+                autoFocus={false}
+                onChange={(ids) => setMemberIds(ids)}
+              />
+            </div>
+          )}
         </div>
 
         <div className="px-6 py-3 border-t border-sol-border/50 flex items-center justify-end gap-2">

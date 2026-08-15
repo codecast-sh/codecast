@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
 import { formatRelativeTime } from '@/components/SessionItem';
+import { dmOtherIds } from '@codecast/shared/chat';
 
 // The channel list — the Chat segment of the Team tab.
 //
@@ -54,6 +55,21 @@ export function useChatRail(teamId: Id<'teams'> | undefined) {
 export function ChannelList({ teamId }: { teamId: Id<'teams'> | undefined }) {
   const rail = useChatRail(teamId);
   const router = useRouter();
+  // DM naming: the other side's names, resolved live from the roster — the
+  // same rule as every web surface (lib/chatViews.channelDisplayName).
+  const currentUser = useQuery(api.users.getCurrentUser);
+  const teamMembers = useQuery(api.teams.getTeamMembers, teamId ? { team_id: teamId } : 'skip');
+  const memberName = (id: string): string => {
+    const m = (teamMembers as any[] | undefined)?.find((x) => String(x._id) === id);
+    return m?.name || m?.github_username || 'Teammate';
+  };
+  const displayName = (channel: any): string => {
+    if (channel.kind !== 'dm') return channel.name;
+    const others = dmOtherIds(channel.dm_key, String(currentUser?._id ?? ''));
+    if (others.length === 0) return 'Direct message';
+    const names = others.map(memberName);
+    return others.length > 1 ? names.map((n) => n.split(/\s+/)[0]).join(', ') : names[0];
+  };
 
   if (rail === undefined) {
     return (
@@ -92,7 +108,7 @@ export function ChannelList({ teamId }: { teamId: Id<'teams'> | undefined }) {
           >
             <RNView style={styles.rowIcon}>
               <FontAwesome
-                name={channel.is_private ? 'lock' : 'hashtag'}
+                name={channel.kind === 'dm' ? 'user' : channel.kind === 'private' || channel.is_private ? 'lock' : 'hashtag'}
                 size={13}
                 color={unread ? Theme.textMuted : Theme.textMuted0}
               />
@@ -103,7 +119,7 @@ export function ChannelList({ teamId }: { teamId: Id<'teams'> | undefined }) {
                   style={[styles.name, unread && styles.nameUnread, muted && styles.nameMuted]}
                   numberOfLines={1}
                 >
-                  {channel.name}
+                  {displayName(channel)}
                 </RNText>
                 {r?.last_message && (
                   <RNText style={styles.time}>

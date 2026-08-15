@@ -27,6 +27,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { isTeamAdmin, isTeamMember } from "./privacy";
+import { dmKeyFor } from "@codecast/shared/chat";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 // `userCanAccessAnchor` is the WAKE permission (any member of a team anchor's
 // team may spend a turn on it). It is used on the wake path and NOT on
@@ -37,7 +38,9 @@ import {
   HERE_PRESENCE_MS,
   MAX_ATTACHMENTS,
   MAX_CHANNELS_PER_TEAM,
+  MAX_CHANNEL_MEMBERS,
   MAX_CHANNEL_TOPIC,
+  MAX_DM_MEMBERS,
   MAX_CHAT_CONTENT,
   MAX_DISTINCT_EMOJI,
   MAX_MENTIONS,
@@ -52,7 +55,8 @@ import {
   normalizeChannelName,
   notifyLevelAllows,
   oneLine,
-  plainPreview, emailLocalHandle } from "./chatText";
+  plainPreview,
+  searchSnippet, emailLocalHandle } from "./chatText";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 
@@ -125,7 +129,7 @@ const ANCHOR_REPLY_TIMEOUT_MS = 10 * 60_000;
 
 // ── Access ──────────────────────────────────────────────────────────────────
 
-async function requireCaller(
+export async function requireCaller(
   ctx: ReadCtx,
   apiToken: string | undefined,
 ): Promise<Id<"users">> {
@@ -134,16 +138,50 @@ async function requireCaller(
   return userId;
 }
 
-// The ONE access rule. A channel is readable and writable by the members of its
-// team; anything else is not a channel this caller may see. Returns null rather
-// than throwing so queries can degrade to an empty result.
+/** Private channels and DMs gate on their member rows; public gates on the
+ *  team. `team_id` stays ROUTING on every kind — access never reads it alone. */
+function isRestricted(channel: Doc<"chat_channels">): boolean {
+  return channel.kind === "private" || channel.kind === "dm";
+}
+
+async function isChannelMember(
+  ctx: ReadCtx,
+  channelId: Id<"chat_channels">,
+  userId: Id<"users">,
+): Promise<boolean> {
+  const row = await ctx.db
+    .query("chat_channel_members")
+    .withIndex("by_channel_user", (q: any) =>
+      q.eq("channel_id", channelId).eq("user_id", userId))
+    .first();
+  return !!row;
+}
+
+async function channelMemberIds(
+  ctx: ReadCtx,
+  channelId: Id<"chat_channels">,
+): Promise<Id<"users">[]> {
+  const rows = await ctx.db
+    .query("chat_channel_members")
+    .withIndex("by_channel", (q: any) => q.eq("channel_id", channelId))
+    .collect();
+  return rows.map((r) => r.user_id);
+}
+
+// The ONE access rule. A public channel is readable and writable by the members
+// of its team. A private channel or DM additionally requires a membership row —
+// the team check stays underneath so leaving the team closes every door at
+// once, even if a membership row lingers. Returns false rather than throwing so
+// queries can degrade to an empty result.
 async function canAccessChannel(
   ctx: ReadCtx,
   userId: Id<"users">,
   channel: Doc<"chat_channels"> | null,
 ): Promise<boolean> {
   if (!channel) return false;
-  return await isTeamMember(ctx as any, userId, channel.team_id);
+  if (!(await isTeamMember(ctx as any, userId, channel.team_id))) return false;
+  if (isRestricted(channel)) return await isChannelMember(ctx, channel._id, userId);
+  return true;
 }
 
 async function readChannel(
@@ -156,7 +194,7 @@ async function readChannel(
   return channel;
 }
 
-async function loadChannel(
+export async function loadChannel(
   ctx: ReadCtx,
   userId: Id<"users">,
   channelId: Id<"chat_channels">,
@@ -168,9 +206,29 @@ async function loadChannel(
   return channel;
 }
 
-// The team a channel-less call operates in: the named team, else the caller's
-// active team. Membership is always checked — a team id is not a secret.
-async function requireTeam(
+// The team a channel-less call operates in. ROUTING only — which team's rooms
+// the call addresses; who may read them is canAccessChannel's business.
+//
+// READS MAY DEFAULT, WRITES MUST BE EXPLICIT. Defaulting is fine for "list my
+// channels": guess wrong and the user sees the wrong list and re-runs it.
+// Guess wrong on a WRITE and the channel exists in a team the caller was not
+// even looking at — `cast chat new` put a channel in team Union while the
+// shell context said codecast, because the server resolved
+// users.active_team_id. So a write resolves the caller's explicit team or
+// fails with an instruction; only a read falls back to the pointer.
+async function resolveTeamMembership(
+  ctx: ReadCtx,
+  userId: Id<"users">,
+  teamId: Id<"teams">,
+): Promise<Id<"teams">> {
+  if (!(await isTeamMember(ctx as any, userId, teamId))) {
+    chatFail("FORBIDDEN", "Not a member of that team");
+  }
+  return teamId;
+}
+
+/** READ scope: the named team, else the caller's active team. */
+async function resolveTeamForRead(
   ctx: ReadCtx,
   userId: Id<"users">,
   teamId: Id<"teams"> | undefined,
@@ -181,10 +239,31 @@ async function requireTeam(
     resolved = (user?.active_team_id ?? user?.team_id) as Id<"teams"> | undefined;
   }
   if (!resolved) chatFail("FORBIDDEN", "No team: join or select a team first");
-  if (!(await isTeamMember(ctx as any, userId, resolved))) {
-    chatFail("FORBIDDEN", "Not a member of that team");
+  return resolveTeamMembership(ctx, userId, resolved);
+}
+
+/**
+ * WRITE scope: the caller's explicit team, or a failure that says how to name
+ * one. During the deprecation window an old client that omits team_id still
+ * resolves through the pointer, and the mutation reports `workspace_guessed`
+ * so the caller can warn; once shipped clients always send it, the fallback
+ * becomes a hard failure and this returns only the explicit branch.
+ */
+async function requireTeamForWrite(
+  ctx: ReadCtx,
+  userId: Id<"users">,
+  teamId: Id<"teams"> | undefined,
+): Promise<{ teamId: Id<"teams">; guessed: boolean }> {
+  if (teamId) return { teamId: await resolveTeamMembership(ctx, userId, teamId), guessed: false };
+  const user = await ctx.db.get(userId);
+  const fallback = (user?.active_team_id ?? user?.team_id) as Id<"teams"> | undefined;
+  if (!fallback) {
+    chatFail(
+      "FORBIDDEN",
+      "No team named and no active team: pass --team <id> (cast chat channels lists them)",
+    );
   }
-  return resolved;
+  return { teamId: await resolveTeamMembership(ctx, userId, fallback), guessed: true };
 }
 
 // EVERY chat patch goes through here. The store keeps the previous row identity
@@ -275,11 +354,11 @@ async function resolveMentions(
 async function notifyChat(
   ctx: MutationCtx,
   opts: {
-    eventType: "chat_mention" | "chat_reply" | "chat_here";
+    eventType: "chat_mention" | "chat_reply" | "chat_here" | "chat_dm" | "chat_added";
     actorUserId: Id<"users">;
     actorName: string;
     channel: Doc<"chat_channels">;
-    messageId: Id<"chat_messages">;
+    messageId?: Id<"chat_messages">;
     // The thread the message lives in, when it is a reply. Rides the push
     // payload so a phone tap can land IN the thread, where the words are.
     threadRootId?: Id<"chat_messages">;
@@ -291,7 +370,9 @@ async function notifyChat(
   const recipient = await ctx.db.get(opts.recipientId);
   // Bots have no bell and no phone; waking one is the anchor path, not this one.
   if (!recipient || recipient.is_bot) return;
-  if (!(await isTeamMember(ctx as any, opts.recipientId, opts.channel.team_id))) return;
+  // The full access check, not just team membership: a @mention of someone
+  // outside a private room must never deliver words they cannot read.
+  if (!(await canAccessChannel(ctx, opts.recipientId, opts.channel))) return;
   // The per-channel mute, applied where the notification is WRITTEN. Storing a
   // level and honouring it only in the client's toast would leave the bell and
   // the phone loud, which is the one place a mute has to work: a muted channel
@@ -345,12 +426,17 @@ async function threadParticipants(
 
 // The members who are actually AT a keyboard right now, for @here. Presence is
 // the same signal push routing uses, so "here" means the same thing everywhere.
+// In a private room "here" reaches the room's members, never the whole team.
 async function presentMembers(
   ctx: ReadCtx,
-  teamId: Id<"teams">,
+  channel: Doc<"chat_channels">,
   now: number,
 ): Promise<Id<"users">[]> {
-  const roster = await teamRoster(ctx, teamId);
+  let roster = await teamRoster(ctx, channel.team_id);
+  if (isRestricted(channel)) {
+    const members = new Set((await channelMemberIds(ctx, channel._id)).map(String));
+    roster = roster.filter((u) => members.has(u._id.toString()));
+  }
   const present: Id<"users">[] = [];
   for (const user of roster) {
     if (user.is_bot) continue;
@@ -394,15 +480,27 @@ export const listChannels = query({
     if (!userId) return { team_id: null, channels: [], reads: [], rail: [] };
     let teamId: Id<"teams">;
     try {
-      teamId = await requireTeam(ctx, userId, args.team_id);
+      teamId = await resolveTeamForRead(ctx, userId, args.team_id);
     } catch {
       return { team_id: null, channels: [], reads: [], rail: [] };
     }
 
-    const channels = await ctx.db
+    const teamChannels = await ctx.db
       .query("chat_channels")
       .withIndex("by_team_name", (q: any) => q.eq("team_id", teamId))
       .take(MAX_CHANNELS_PER_TEAM);
+    // One membership read serves every restricted room on the page: which
+    // private rooms and DMs the caller is inside.
+    const myMemberRows = await ctx.db
+      .query("chat_channel_members")
+      .withIndex("by_user", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const myRestricted = new Set(myMemberRows.map((r) => r.channel_id.toString()));
+    // A private room the caller is not in must not exist for them — not as a
+    // name in the rail, not as a row in the cache.
+    const channels = teamChannels.filter(
+      (c) => !isRestricted(c) || myRestricted.has(c._id.toString()),
+    );
 
     const allReads = await ctx.db
       .query("chat_reads")
@@ -447,16 +545,24 @@ export const listChannels = query({
       );
       // Two numbers, never one. A single count that includes ordinary chatter
       // teaches people to ignore counts, and then the one that matters — someone
-      // said your name — is invisible inside the noise.
+      // said your name — is invisible inside the noise. In a DM every line is
+      // addressed to you, so every unread row counts as a mention.
       const unreadMentions = unreadRows.filter((row) =>
         !row.deleted_at && !mine(row) && (
-          row.mention_scope === "here"
+          channel.kind === "dm"
+          || row.mention_scope === "here"
           || (row.mentions ?? []).some((id) => id.toString() === userId.toString())
         ),
       ).length;
 
       rail.push({
         channel_id: channel._id,
+        // Restricted rooms carry their roster on the DERIVED row (never on the
+        // channel document): the client names a DM from these ids against the
+        // team roster it already holds.
+        member_ids: isRestricted(channel)
+          ? (await channelMemberIds(ctx, channel._id)).map((id) => id.toString())
+          : undefined,
         last_message: lastMessage
           ? {
               _id: lastMessage._id,
@@ -748,6 +854,9 @@ export const searchMessages = query({
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
     channel_id: v.optional(v.id("chat_channels")),
+    // Sender filter ("from:"). A post-filter, not an index field: adding a
+    // filterField would force a full search-index rebuild for one narrow knob.
+    from_user_id: v.optional(v.id("users")),
     q: v.string(),
     limit: v.optional(v.number()),
   },
@@ -756,7 +865,7 @@ export const searchMessages = query({
     if (!userId || !args.q.trim()) return { results: [] };
     let teamId: Id<"teams">;
     try {
-      teamId = await requireTeam(ctx, userId, args.team_id);
+      teamId = await resolveTeamForRead(ctx, userId, args.team_id);
     } catch {
       return { results: [] };
     }
@@ -768,33 +877,56 @@ export const searchMessages = query({
     }
 
     const limit = Math.min(Math.max(args.limit ?? 30, 1), 50);
+    // The overfetch absorbs tombstone/ACL drops; a sender filter drops far more
+    // rows post-index, so it widens the pool rather than starving the page.
+    const take = limit * (args.from_user_id ? 6 : 2);
     const hits = await ctx.db
       .query("chat_messages")
       .withSearchIndex("search_content", (q: any) => {
         const scoped = q.search("content", args.q).eq("team_id", teamId);
         return args.channel_id ? scoped.eq("channel_id", args.channel_id) : scoped;
       })
-      .take(limit * 2);
+      .take(take);
 
     // The channel NAME travels with each hit: a result list is read far from the
-    // rail (a terminal, a notification), where a channel id names nothing.
-    const names = new Map<string, string>();
+    // rail (a terminal, a notification), where a channel id names nothing. A DM
+    // has no name at all — its kind and dm_key travel instead, so the client can
+    // derive "who" from the roster the way every other DM surface does.
+    // Access is re-checked per channel: the search index is team-wide, so
+    // without this a private room's words would leak through search to people
+    // who cannot open the room. Verdicts are cached per channel, not per hit.
+    const channels = new Map<
+      string,
+      { allowed: boolean; name: string; kind?: string; dm_key?: string }
+    >();
     const results = [];
-    for (const row of hits.filter((r) => !r.deleted_at).slice(0, limit)) {
+    for (const row of hits.filter((r) => !r.deleted_at)) {
+      if (results.length >= limit) break;
+      if (args.from_user_id && row.user_id.toString() !== args.from_user_id.toString()) continue;
       const key = row.channel_id.toString();
-      if (!names.has(key)) {
+      let meta = channels.get(key);
+      if (!meta) {
         const channel = await ctx.db.get(row.channel_id);
-        names.set(key, channel?.name ?? "unknown");
+        meta = {
+          allowed: await canAccessChannel(ctx, userId, channel),
+          name: channel?.name ?? "unknown",
+          kind: channel?.kind,
+          dm_key: channel?.dm_key,
+        };
+        channels.set(key, meta);
       }
+      if (!meta.allowed) continue;
       results.push({
         _id: row._id,
         channel_id: row.channel_id,
-        channel_name: names.get(key)!,
+        channel_name: meta.name,
+        channel_kind: meta.kind,
+        dm_key: meta.dm_key,
         thread_root_id: row.thread_root_id,
         user_id: row.user_id,
         author_kind: row.author_kind ?? "user",
         created_at: row.created_at,
-        snippet: plainPreview(row.content, 200),
+        snippet: searchSnippet(row.content, args.q, 200),
         permalink: chatPermalink(key, row._id.toString()),
       });
     }
@@ -811,11 +943,17 @@ export const createChannel = mutation({
     name: v.string(),
     topic: v.optional(v.string()),
     is_default: v.optional(v.boolean()),
+    // "private" gates the room on member rows. DMs are never created here —
+    // openDm owns that shape (no name, identity = member set).
+    kind: v.optional(v.literal("private")),
+    // Initial roster for a private room, besides the creator. Ignored for
+    // public: a public channel's audience is the team.
+    member_ids: v.optional(v.array(v.id("users"))),
     client_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
-    const teamId = await requireTeam(ctx, userId, args.team_id);
+    const { teamId, guessed: workspaceGuessed } = await requireTeamForWrite(ctx, userId, args.team_id);
     // Named in every return: when the caller omitted team_id the server GUESSED
     // (users.active_team_id), and a write must never be silent about where it
     // landed — a stale pointer here is exactly how a channel ends up in the
@@ -831,6 +969,30 @@ export const createChannel = mutation({
     if (args.is_default && !(await isTeamAdmin(ctx, userId, teamId))) {
       chatFail("FORBIDDEN", "Only a team admin can set the default channel");
     }
+    // A private room can't be the team's landing channel — new members can't
+    // see it.
+    if (args.is_default && args.kind === "private") {
+      chatFail("INVALID", "A private channel can't be the default channel");
+    }
+    // Validate the initial roster BEFORE any write: every member must be a
+    // human teammate. (Bots join rooms as anchors, not as members.)
+    const initialMembers: Id<"users">[] = [];
+    if (args.kind === "private") {
+      const seen = new Set<string>([userId.toString()]);
+      for (const id of args.member_ids ?? []) {
+        if (seen.has(id.toString())) continue;
+        seen.add(id.toString());
+        const member = await ctx.db.get(id);
+        if (!member || member.is_bot) chatFail("INVALID", "Members must be human teammates");
+        if (!(await isTeamMember(ctx as any, id, teamId))) {
+          chatFail("INVALID", `${displayName(member)} is not a member of this team`);
+        }
+        initialMembers.push(id);
+        if (initialMembers.length > MAX_CHANNEL_MEMBERS) {
+          chatFail("INVALID", `At most ${MAX_CHANNEL_MEMBERS} members per channel`);
+        }
+      }
+    }
 
     // Optimistic-create idempotency: a retried create returns the same row.
     if (args.client_id) {
@@ -842,7 +1004,7 @@ export const createChannel = mutation({
         if (existing.team_id.toString() !== teamId.toString()) {
           chatFail("CONFLICT", "This client id is already bound to another channel");
         }
-        return { channel_id: existing._id, client_id: args.client_id, created: false, team_id: teamId, team_name: teamName };
+        return { channel_id: existing._id, client_id: args.client_id, created: false, team_id: teamId, team_name: teamName, workspace_guessed: workspaceGuessed };
       }
     }
 
@@ -855,7 +1017,7 @@ export const createChannel = mutation({
     // Best effort only: two concurrent creates can both read no row. That is why
     // routing is by _id and a name is never resolved to a channel.
     if (existingName) {
-      return { channel_id: existingName._id, client_id: args.client_id, created: false, team_id: teamId, team_name: teamName };
+      return { channel_id: existingName._id, client_id: args.client_id, created: false, team_id: teamId, team_name: teamName, workspace_guessed: workspaceGuessed };
     }
 
     const count = await ctx.db
@@ -873,6 +1035,7 @@ export const createChannel = mutation({
     const channelId = await ctx.db.insert("chat_channels", {
       team_id: teamId,
       name,
+      kind: args.kind,
       topic: args.topic,
       is_default: args.is_default || undefined,
       created_by: userId,
@@ -880,9 +1043,244 @@ export const createChannel = mutation({
       updated_at: now,
       client_id: args.client_id,
     });
-    // Creating a channel joins it, loudly: you asked for this one.
-    await upsertRead(ctx, userId, teamId, channelId, now, undefined, "all");
-    return { channel_id: channelId, client_id: args.client_id, created: true, team_id: teamId, team_name: teamName };
+    // The access stamp, workspaceKey-shaped. Restricted rooms point at their
+    // own membership; public rooms are the team's. Patched after insert because
+    // a restricted key names the row's own id.
+    await patchChat(ctx, channelId, {
+      workspace: args.kind === "private" ? `restricted:${channelId}` : `team:${teamId}`,
+    });
+    if (args.kind === "private") {
+      await ctx.db.insert("chat_channel_members", {
+        channel_id: channelId, user_id: userId, added_by: userId, added_at: now,
+      });
+      const channel = await ctx.db.get(channelId);
+      const author = await ctx.db.get(userId);
+      const actorName = oneLine(displayName(author), 60);
+      for (const memberId of initialMembers) {
+        await ctx.db.insert("chat_channel_members", {
+          channel_id: channelId, user_id: memberId, added_by: userId, added_at: now,
+        });
+        if (channel) {
+          await notifyChat(ctx, {
+            eventType: "chat_added",
+            actorUserId: userId,
+            actorName,
+            channel,
+            recipientId: memberId,
+            message: `${actorName} added you to #${name}`,
+          });
+        }
+      }
+    }
+    // Creating a channel joins it at the default level, like Slack: asking for
+    // a room is not asking to be pinged for every line in it.
+    await upsertRead(ctx, userId, teamId, channelId, now, undefined, undefined);
+    return { channel_id: channelId, client_id: args.client_id, created: true, team_id: teamId, team_name: teamName, workspace_guessed: workspaceGuessed };
+  },
+});
+
+// Open (or find) a direct message. Identity is the member set: the sorted ids
+// joined into `dm_key` make the same conversation resolve to the same room no
+// matter who opens it or how many times. A 1:1 and a group message are the same
+// shape with different counts.
+export const openDm = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+    // The OTHER parties. The caller is always included.
+    member_ids: v.array(v.id("users")),
+    client_id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    const { teamId } = await requireTeamForWrite(ctx, userId, args.team_id);
+
+    const others: Id<"users">[] = [];
+    const seen = new Set<string>([userId.toString()]);
+    for (const id of args.member_ids) {
+      if (seen.has(id.toString())) continue;
+      seen.add(id.toString());
+      const member = await ctx.db.get(id);
+      if (!member || member.is_bot) chatFail("INVALID", "You can only message human teammates");
+      if (!(await isTeamMember(ctx as any, id, teamId))) {
+        chatFail("INVALID", `${displayName(member)} is not a member of this team`);
+      }
+      others.push(id);
+    }
+    if (others.length === 0) chatFail("INVALID", "Pick at least one person to message");
+    if (others.length + 1 > MAX_DM_MEMBERS) {
+      chatFail("INVALID", `A group message holds at most ${MAX_DM_MEMBERS} people`);
+    }
+
+    // Team-scoped on purpose: chat is team-scoped everywhere (the rail, the
+    // roster, the notifications), so the same pair in two shared teams gets one
+    // room per team rather than one room that leaks across workspaces.
+    const dmKey = dmKeyFor(String(teamId), [userId, ...others].map(String));
+    const existing = await ctx.db
+      .query("chat_channels")
+      .withIndex("by_dm_key", (q: any) => q.eq("dm_key", dmKey))
+      .first();
+    if (existing) {
+      // Adopt the caller's client_id so their optimistic stub supersedes onto
+      // this row exactly as it would onto a fresh one. Any older client_id
+      // finished its one-shot rekey long ago; last opener wins.
+      if (args.client_id && existing.client_id !== args.client_id) {
+        await patchChat(ctx, existing._id, { client_id: args.client_id });
+      }
+      // Re-opening is joining: the caller may have left the read row behind.
+      await upsertRead(ctx, userId, teamId, existing._id, Date.now(), undefined, undefined);
+      return { channel_id: existing._id, created: false, team_id: teamId };
+    }
+
+    await chatRateLimit(ctx, userId, "chat.channel_create", CHANNEL_CREATE_LIMIT);
+    const now = Date.now();
+    const channelId = await ctx.db.insert("chat_channels", {
+      team_id: teamId,
+      name: "",
+      kind: "dm",
+      dm_key: dmKey,
+      created_by: userId,
+      created_at: now,
+      updated_at: now,
+      client_id: args.client_id,
+    });
+    await patchChat(ctx, channelId, { workspace: `restricted:${channelId}` });
+    for (const id of [userId, ...others]) {
+      await ctx.db.insert("chat_channel_members", {
+        channel_id: channelId, user_id: id, added_by: userId, added_at: now,
+      });
+    }
+    // No chat_added here: an empty DM room is not an event. The first MESSAGE
+    // notifies (chat_dm), which is the moment something was actually said.
+    // Level is moot for a DM (every line is addressed); the default keeps one
+    // rule for what a fresh read row looks like.
+    await upsertRead(ctx, userId, teamId, channelId, now, undefined, undefined);
+    return { channel_id: channelId, created: true, team_id: teamId };
+  },
+});
+
+// The roster of a restricted room. Public channels return [] — their audience
+// is the team, and the team roster already has its own surface.
+export const listChannelMembers = query({
+  args: {
+    api_token: v.optional(v.string()),
+    channel_id: v.id("chat_channels"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
+    if (!userId) return { members: [] };
+    const channel = await readChannel(ctx, userId, args.channel_id);
+    if (!channel || !isRestricted(channel)) return { members: [] };
+    const rows = await ctx.db
+      .query("chat_channel_members")
+      .withIndex("by_channel", (q: any) => q.eq("channel_id", args.channel_id))
+      .collect();
+    return {
+      members: rows.map((r) => ({
+        user_id: r.user_id,
+        added_by: r.added_by,
+        added_at: r.added_at,
+      })),
+    };
+  },
+});
+
+// Add people to a private room. Any current member may add — a private channel
+// is a room you were trusted into, and trust extends by invitation, not by an
+// admin queue. DMs never grow: their member set is their identity, so "adding"
+// someone means opening the bigger group message.
+export const addChannelMembers = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    channel_id: v.id("chat_channels"),
+    member_ids: v.array(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    const channel = await loadChannel(ctx, userId, args.channel_id);
+    if (channel.kind === "dm") {
+      chatFail("INVALID", "A direct message's members are fixed — start a group message instead");
+    }
+    if (channel.kind !== "private") {
+      chatFail("INVALID", "Public channels don't have a member list — the whole team is in them");
+    }
+    const author = await ctx.db.get(userId);
+    const actorName = oneLine(displayName(author), 60);
+    const now = Date.now();
+    const added: Id<"users">[] = [];
+    const existingCount = (await channelMemberIds(ctx, channel._id)).length;
+    for (const id of args.member_ids) {
+      const member = await ctx.db.get(id);
+      if (!member || member.is_bot) chatFail("INVALID", "Members must be human teammates");
+      if (!(await isTeamMember(ctx as any, id, channel.team_id))) {
+        chatFail("INVALID", `${displayName(member)} is not a member of this team`);
+      }
+      if (await isChannelMember(ctx, channel._id, id)) continue;
+      if (existingCount + added.length >= MAX_CHANNEL_MEMBERS) {
+        chatFail("INVALID", `At most ${MAX_CHANNEL_MEMBERS} members per channel`);
+      }
+      await ctx.db.insert("chat_channel_members", {
+        channel_id: channel._id, user_id: id, added_by: userId, added_at: now,
+      });
+      added.push(id);
+      await notifyChat(ctx, {
+        eventType: "chat_added",
+        actorUserId: userId,
+        actorName,
+        channel,
+        recipientId: id,
+        message: `${actorName} added you to #${channel.name}`,
+      });
+    }
+    // Membership changed shape — bump the channel so every member's client
+    // refetches the roster (the rail carries member_ids as a derived field).
+    if (added.length > 0) await patchChat(ctx, channel._id, {});
+    return { channel_id: channel._id, added: added.length };
+  },
+});
+
+// Remove someone from a private room (creator or team admin), or yourself from
+// any private room (leaving). DMs can't be left: the room IS its member set,
+// and an unread DM you "left" would be a message someone sent you that can
+// never be seen again.
+export const removeChannelMember = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    channel_id: v.id("chat_channels"),
+    user_id: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    const channel = await loadChannel(ctx, userId, args.channel_id);
+    if (channel.kind !== "private") {
+      chatFail("INVALID", "Only private channels have a removable member list");
+    }
+    const removingSelf = args.user_id.toString() === userId.toString();
+    if (!removingSelf) {
+      const mayManage =
+        channel.created_by.toString() === userId.toString()
+        || (await isTeamAdmin(ctx, userId, channel.team_id));
+      if (!mayManage) {
+        chatFail("FORBIDDEN", "Only the channel's creator or a team admin can remove members");
+      }
+    }
+    const row = await ctx.db
+      .query("chat_channel_members")
+      .withIndex("by_channel_user", (q: any) =>
+        q.eq("channel_id", channel._id).eq("user_id", args.user_id))
+      .first();
+    if (!row) return { channel_id: channel._id, removed: false };
+    await ctx.db.delete(row._id);
+    // Their read state goes with them: a lingering row would keep the dead
+    // room in their rail and its notify level armed.
+    const read = await ctx.db
+      .query("chat_reads")
+      .withIndex("by_user_channel", (q: any) =>
+        q.eq("user_id", args.user_id).eq("channel_id", channel._id))
+      .first();
+    if (read) await ctx.db.delete(read._id);
+    await patchChat(ctx, channel._id, {});
+    return { channel_id: channel._id, removed: true };
   },
 });
 
@@ -898,6 +1296,9 @@ export const updateChannel = mutation({
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const channel = await loadChannel(ctx, userId, args.channel_id);
+    // A DM has no name to change and no topic to set: its identity is who is
+    // in it.
+    if (channel.kind === "dm") chatFail("INVALID", "A direct message can't be renamed");
     const mayEdit = channel.created_by.toString() === userId.toString()
       || (await isTeamAdmin(ctx, userId, channel.team_id));
     if (!mayEdit) chatFail("FORBIDDEN", "Only the channel's creator or a team admin can change it");
@@ -929,6 +1330,9 @@ export const archiveChannel = mutation({
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const channel = await loadChannel(ctx, userId, args.channel_id);
+    // Archiving a DM would hide a conversation someone else can still write
+    // to — the mute level is the tool for a DM you're done with.
+    if (channel.kind === "dm") chatFail("INVALID", "A direct message can't be archived — mute it instead");
     const mayEdit = channel.created_by.toString() === userId.toString()
       || (await isTeamAdmin(ctx, userId, channel.team_id));
     if (!mayEdit) chatFail("FORBIDDEN", "Only the channel's creator or a team admin can archive it");
@@ -967,7 +1371,10 @@ async function upsertRead(
       team_id: teamId,
       last_read_at: readAt,
       last_read_message_id: lastMessageId,
-      notify_level: notifyLevel ?? "all",
+      // Slack's default: a joined channel notifies for what is addressed to you
+      // (mentions, @here, your threads, DMs) and badges the rest. "all" is the
+      // per-channel opt-in, never the starting point.
+      notify_level: notifyLevel ?? "mentions",
       joined_at: now,
       updated_at: now,
     });
@@ -1082,6 +1489,20 @@ export async function purgeChatMembership(
     if (read.team_id.toString() !== teamId.toString()) continue;
     await ctx.db.delete(read._id);
     readCount++;
+  }
+
+  // Private rooms and DMs in this team: the member rows go too, so a former
+  // teammate holds no keys. (canAccessChannel would refuse them anyway via the
+  // team check — this keeps the membership table honest rather than relying on
+  // the belt to cover for the suspenders.)
+  const memberRows = await ctx.db
+    .query("chat_channel_members")
+    .withIndex("by_user", (q: any) => q.eq("user_id", userId))
+    .collect();
+  for (const row of memberRows) {
+    const channel = await ctx.db.get(row.channel_id);
+    if (channel && channel.team_id.toString() !== teamId.toString()) continue;
+    await ctx.db.delete(row._id);
   }
 
   const subs = await ctx.db
@@ -1369,7 +1790,7 @@ export const sendMessage = mutation({
 
     let hereCount = 0;
     if (here) {
-      for (const recipientId of await presentMembers(ctx, channel.team_id, now)) {
+      for (const recipientId of await presentMembers(ctx, channel, now)) {
         if (notified.has(recipientId.toString())) continue;
         notified.add(recipientId.toString());
         hereCount++;
@@ -1381,6 +1802,26 @@ export const sendMessage = mutation({
           messageId,
           recipientId,
           message: `${actorName} posted to everyone here in #${channel.name}: ${preview}`,
+        });
+      }
+    }
+
+    // A DM line is addressed to everyone in the room by construction — the
+    // exception to "plain chatter never notifies". Anyone already reached above
+    // (a mention outranks) is skipped, so one message is still one notification.
+    if (channel.kind === "dm") {
+      for (const recipientId of await channelMemberIds(ctx, channel._id)) {
+        if (notified.has(recipientId.toString())) continue;
+        notified.add(recipientId.toString());
+        await notifyChat(ctx, {
+          eventType: "chat_dm",
+          actorUserId: userId,
+          actorName,
+          channel,
+          messageId,
+          threadRootId: root?._id,
+          recipientId,
+          message: `${actorName}: ${preview}`,
         });
       }
     }

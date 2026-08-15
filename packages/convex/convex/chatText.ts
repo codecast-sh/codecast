@@ -14,6 +14,11 @@ export const MAX_EMOJI_LENGTH = 32;
 // set forever — a message with 24 distinct emoji has already made its point.
 export const MAX_DISTINCT_EMOJI = 24;
 export const MAX_CHANNELS_PER_TEAM = 200;
+// Membership caps. A "private channel" with 300 people is a public channel
+// with extra steps; a group DM past a handful of faces is a channel that wants
+// a name.
+export const MAX_CHANNEL_MEMBERS = 100;
+export const MAX_DM_MEMBERS = 9;
 // Unread badges are capped and rendered as "50+". Convex has no count
 // aggregate, so an uncapped count would pull a channel's whole backlog for a
 // number nobody reads past two digits.
@@ -86,6 +91,30 @@ export function plainPreview(content: string, max = 140): string {
   return flattened.slice(0, max - 1).trimEnd() + "…";
 }
 
+/** A search snippet: the plain text WINDOWED around the first term hit, so a
+ *  match deep in a long message still shows the words that matched — a head
+ *  slice would render such a hit with nothing highlighted, which reads as a
+ *  false positive. Falls back to the head when no term is found in the plain
+ *  text (the index may have matched a stemmed form). */
+export function searchSnippet(content: string, query: string, max = 200): string {
+  const plain = plainPreview(content, MAX_CHAT_CONTENT);
+  if (plain.length <= max) return plain;
+  const lower = plain.toLowerCase();
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  let first = -1;
+  for (const t of terms) {
+    const i = lower.indexOf(t);
+    if (i >= 0 && (first < 0 || i < first)) first = i;
+  }
+  if (first < 0 || first < max * 0.6) return plain.slice(0, max - 1).trimEnd() + "…";
+  // Lead with a little context, land the hit inside the window, cut on a space.
+  let start = Math.max(0, first - Math.floor(max * 0.3));
+  const spaceBefore = plain.lastIndexOf(" ", start);
+  if (spaceBefore > 0 && start - spaceBefore < 20) start = spaceBefore + 1;
+  const end = Math.min(plain.length, start + max - 2);
+  return "…" + plain.slice(start, end).trim() + (end < plain.length ? "…" : "");
+}
+
 // ── The fence around untrusted text in an agent prompt ──────────────────────
 //
 // The anchor's wake prompt quotes chat written by other people into a prompt
@@ -124,16 +153,23 @@ export function fenceSafe(text: string, max = MAX_CHAT_CONTENT): string {
 //
 // The ONE place that says what a level means, so the server's gate and the
 // client's toast tier can never drift into two different mutes.
-//   all      — every chat event this channel produces
-//   mentions — only a direct @you
+//   all      — every chat event this channel produces, AND (client-side) a
+//              toast for every ordinary line. Slack's "All new posts".
+//   mentions — what is addressed to you: a direct @you, @here, a reply on a
+//              thread you are in, a DM line, an invite. Slack's default
+//              ("direct messages, mentions & keywords" + thread replies).
+//              A DM at "mentions" still notifies — every DM line IS addressed
+//              to you; only "none" silences a DM room.
 //   none     — nothing
+//
+// The server produces no event for an ordinary channel line at all, so "all"
+// and "mentions" gate the same set here; where they differ is the client's
+// quiet toast (chatToastTier), which "mentions" withholds.
 export function notifyLevelAllows(
   level: "all" | "mentions" | "none" | undefined,
-  eventType: "chat_mention" | "chat_reply" | "chat_here",
+  eventType: "chat_mention" | "chat_reply" | "chat_here" | "chat_dm" | "chat_added",
 ): boolean {
-  if (level === "none") return false;
-  if (level === "mentions") return eventType === "chat_mention";
-  return true;
+  return level !== "none";
 }
 
 // ONE emoji, matched by shape rather than by a list of banned characters. A

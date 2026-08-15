@@ -29,11 +29,21 @@ export type ChatReaction = {
  *  surfaces behave the same way. */
 export type ChatAgentStatus = "thinking" | "streaming" | "done" | "error";
 
+export type ChatAttachmentView = {
+  storage_id: string;
+  name?: string;
+  mime?: string;
+  width?: number;
+  height?: number;
+};
+
 export type ChatMessageView = {
   id: string;
   author: ChatAuthor;
   /** Markdown. */
   content: string;
+  /** Uploaded images, rendered as a grid under the text. */
+  attachments?: ChatAttachmentView[];
   createdAt: number;
   editedAt?: number;
   deletedAt?: number;
@@ -55,6 +65,12 @@ export type ChatMessageView = {
 export type ChatChannelView = {
   id: string;
   name: string;
+  /** Absent = public. Shapes the icon, the naming, and what the menu offers. */
+  kind?: "public" | "private" | "dm";
+  /** The OTHER parties of a DM (viewer excluded) — the naming source. */
+  dmMemberIds?: string[];
+  /** Roster of a restricted room, viewer included (the members panel). */
+  memberIds?: string[];
   topic?: string;
   unreadCount?: number;
   /** Mentions of you specifically. This is the count allowed to shout. */

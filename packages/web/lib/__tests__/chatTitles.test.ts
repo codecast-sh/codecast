@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { resolveRecentVisits } from "../recentVisits";
 import { chatTabTitle } from "../../components/TabBar";
 
-// A channel is named by its name. pathLabel can only say "Chat", which turns
+// A channel is named by its bare name — the hash is the icon beside it. pathLabel can only say "Chat", which turns
 // three open channels into three identical tabs and fills the recently-visited
 // rail with identical rows — while the name sits in the store the whole time.
 
@@ -18,7 +18,7 @@ const state = {
 describe("chat page titles", () => {
   it("names a recently visited channel, not the surface", () => {
     const [visit] = resolveRecentVisits(state, 10);
-    expect(visit.title).toBe("#design");
+    expect(visit.title).toBe("design");
   });
 
   it("falls back to the stored label for a channel the store has not loaded", () => {
@@ -27,8 +27,8 @@ describe("chat page titles", () => {
   });
 
   it("names a channel tab", () => {
-    expect(chatTabTitle(`/chat/${CHANNEL}`, state.chatChannels)).toBe("#design");
-    expect(chatTabTitle(`/chat/${CHANNEL}?m=abc`, state.chatChannels)).toBe("#design");
+    expect(chatTabTitle(`/chat/${CHANNEL}`, state.chatChannels)).toBe("design");
+    expect(chatTabTitle(`/chat/${CHANNEL}?m=abc`, state.chatChannels)).toBe("design");
     expect(chatTabTitle("/chat", state.chatChannels)).toBeNull();
     expect(chatTabTitle("/inbox", state.chatChannels)).toBeNull();
   });

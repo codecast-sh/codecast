@@ -1,5 +1,7 @@
 import { memo } from 'react';
-import { StyleSheet, TouchableOpacity, View as RNView, Image } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView, Image, useWindowDimensions } from 'react-native';
+import { useQuery } from 'convex/react';
+import { api } from '@codecast/convex/convex/_generated/api';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
@@ -11,6 +13,22 @@ import { MarkdownContent } from '@/components/MarkdownRenderer';
 // a chip, the viewer's mention tinting the whole row, and the failure states
 // (agent error, unsent message) rendered loudly enough that nobody scrolls
 // past them unaware.
+
+/** One uploaded image. The URL comes from the same storage query the session
+ *  screen uses; a tile keeps a fixed footprint while it resolves so the
+ *  transcript doesn't jump when the bytes land. */
+function AttachmentImage({ storageId }: { storageId: string }) {
+  const { width } = useWindowDimensions();
+  const url = useQuery(api.images.getImageUrl, { storageId: storageId as any });
+  const side = Math.min(width - 96, 280);
+  return (
+    <RNView style={[styles.attachment, { width: side, height: side * 0.75 }]}>
+      {url ? (
+        <Image source={{ uri: url }} style={styles.attachmentImg} resizeMode="cover" />
+      ) : null}
+    </RNView>
+  );
+}
 
 export type ChatAuthorLite = {
   id: string;
@@ -32,6 +50,8 @@ export type MobileChatMessage = {
   pending?: boolean;
   failed?: boolean;
   reactions?: { emoji: string; count: number; mine: boolean }[];
+  /** Uploaded images, shown as tappable tiles under the text. */
+  attachments?: { storage_id: string; name?: string }[];
   thread?: {
     replyCount: number;
     replyCapped: boolean;
@@ -163,6 +183,14 @@ export const MessageRow = memo(function MessageRow({
           <MarkdownContent text={message.content} baseStyle={styles.mdBase} knownMentionHandles={knownMentionHandles} />
         )}
 
+        {!!message.attachments?.length && (
+          <RNView style={styles.attachments}>
+            {message.attachments.map((att) => (
+              <AttachmentImage key={att.storage_id} storageId={att.storage_id} />
+            ))}
+          </RNView>
+        )}
+
         {message.failed && (
           <RNView style={styles.failedRow}>
             <RNText style={styles.failedText}>Not sent</RNText>
@@ -275,6 +303,22 @@ const styles = StyleSheet.create({
   failedRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
   failedText: { fontSize: 11, color: Theme.red },
   retry: { fontSize: 11, fontWeight: '600', color: Theme.blue, textDecorationLine: 'underline' },
+  attachments: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+  },
+  attachment: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    // Scheme-agnostic translucent well behind a loading image.
+    backgroundColor: '#00000014',
+  },
+  attachmentImg: {
+    width: '100%',
+    height: '100%',
+  },
   reactions: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 },
   reaction: {
     borderWidth: 1,
