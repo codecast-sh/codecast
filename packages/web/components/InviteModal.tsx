@@ -32,9 +32,17 @@ export function InviteModal({ trigger, open: controlledOpen, onOpenChange }: Inv
     user?.team_id ? { team_id: user.team_id } : "skip"
   );
   const regenerateInviteCode = useMutation(api.teams.regenerateInviteCode);
+  const sendInviteEmail = useMutation(api.teams.sendInviteEmail);
 
   const [copied, setCopied] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [sendState, setSendState] = useState<
+    | { kind: "idle" }
+    | { kind: "sending" }
+    | { kind: "sent"; to: string }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
 
   const inviteUrl = team?.invite_code ? `https://codecast.sh/join/${team.invite_code}` : "";
 
@@ -59,10 +67,32 @@ export function InviteModal({ trigger, open: controlledOpen, onOpenChange }: Inv
     }
   };
 
+  const handleSendEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.team_id || !inviteEmail.trim()) return;
+    setSendState({ kind: "sending" });
+    try {
+      await sendInviteEmail({ team_id: user.team_id, email: inviteEmail.trim() });
+      setSendState({ kind: "sent", to: inviteEmail.trim() });
+      setInviteEmail("");
+    } catch (err) {
+      setSendState({
+        kind: "error",
+        message: err instanceof Error && err.message.includes("Invalid email")
+          ? "That doesn't look like an email address."
+          : err instanceof Error && err.message.includes("Too many")
+            ? "Too many invites sent this hour — try again later."
+            : "Couldn't send the invite. Try copying the link instead.",
+      });
+    }
+  };
+
   const handleClose = () => {
     setOpen(false);
     setTimeout(() => {
       setCopied(false);
+      setInviteEmail("");
+      setSendState({ kind: "idle" });
     }, 200);
   };
 
@@ -128,6 +158,37 @@ export function InviteModal({ trigger, open: controlledOpen, onOpenChange }: Inv
               <p className="text-sm text-sol-red">
                 This invite link has expired. {isAdmin ? "Generate a new one below." : "Ask an admin to regenerate it."}
               </p>
+            )}
+          </div>
+
+          <div className="pt-3 border-t border-sol-border space-y-2">
+            <Label className="text-sol-base1">Or email an invite</Label>
+            <form onSubmit={handleSendEmail} className="flex gap-2">
+              <Input
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => {
+                  setInviteEmail(e.target.value);
+                  if (sendState.kind !== "idle") setSendState({ kind: "idle" });
+                }}
+                placeholder="teammate@example.com"
+                disabled={isExpired || sendState.kind === "sending"}
+                className="text-sm bg-sol-bg-alt border-sol-border text-sol-text"
+              />
+              <Button
+                type="submit"
+                variant="outline"
+                disabled={isExpired || !inviteEmail.trim() || sendState.kind === "sending"}
+                className="border-sol-border text-sol-base1 hover:bg-sol-bg-alt"
+              >
+                {sendState.kind === "sending" ? "Sending..." : "Send"}
+              </Button>
+            </form>
+            {sendState.kind === "sent" && (
+              <p className="text-sm text-sol-cyan">Invite sent to {sendState.to}</p>
+            )}
+            {sendState.kind === "error" && (
+              <p className="text-sm text-sol-red">{sendState.message}</p>
             )}
           </div>
 

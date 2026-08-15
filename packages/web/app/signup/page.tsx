@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Logo } from "../../components/Logo";
 import { AppLoader } from "../../components/AppLoader";
 import { AuthProviderButtons } from "../../components/AuthProviderButtons";
+import { EmailVerificationForm } from "../../components/EmailVerificationForm";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
 
@@ -15,6 +16,7 @@ function SignUpForm() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pendingVerification, setPendingVerification] = useState(false);
 
   const { signIn } = useAuthActions();
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -48,7 +50,14 @@ function SignUpForm() {
     setError("");
 
     try {
-      await signIn("password", { email, password, flow: "signUp" });
+      const result = await signIn("password", { email, password, flow: "signUp" });
+      if (result && result.signingIn === false) {
+        // Email verification is enabled: the account exists but a code was
+        // emailed and must be entered before the session is granted.
+        setPendingVerification(true);
+        setLoading(false);
+        return;
+      }
       window.location.href = redirectTo;
     } catch (err) {
       if (err instanceof Error) {
@@ -69,6 +78,18 @@ function SignUpForm() {
       setLoading(false);
     }
   };
+
+  if (pendingVerification) {
+    return (
+      <EmailVerificationForm
+        email={email}
+        onVerified={() => {
+          window.location.href = redirectTo;
+        }}
+        onBack={() => setPendingVerification(false)}
+      />
+    );
+  }
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
