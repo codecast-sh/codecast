@@ -306,12 +306,13 @@ function parseSearchTerms(query: string): string[] {
 
 const HighlightContext = createContext<string | undefined>(undefined);
 
-// toolCallId → the page URL a `cast browser` row was on, carried forward from
-// earlier rows when the row's own output doesn't restate it (most action verbs
-// don't — see buildBrowserPageUrlMap). CastCommandBlock falls back to this for
-// its "open tab" link. Provided by the message feed with a content-stable
-// identity so an unrelated message sync doesn't re-render every cast row.
-const CastBrowserUrlContext = createContext<Record<string, string>>({});
+// toolCallId → the page URL and driven tab a `cast browser` row was on,
+// carried forward from earlier rows when the row's own output doesn't restate
+// them (most action verbs don't — see buildBrowserRowMap). CastCommandBlock
+// falls back to this for its "open tab" link. Provided by the message feed
+// with a content-stable identity so an unrelated message sync doesn't
+// re-render every cast row.
+const CastBrowserRowContext = createContext<Record<string, BrowserRowState>>({});
 
 type ReactMarkdownProps = ComponentProps<typeof ReactMarkdownBase>;
 
@@ -4867,35 +4868,6 @@ function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: st
   );
 }
 
-// The agent drives ONE stateful cast-browser page, so its mirror on the human
-// side is one tab: every "open tab" click lands in the same named tab and
-// focuses it, never a new one. The window name makes reuse survive reloads of
-// this app; the kept ref lets a same-URL re-click just focus without reloading
-// the page. Named reuse requires an opener relationship, so no noopener here.
-const CAST_BROWSER_TAB_NAME = "codecast-cast-browser";
-let castBrowserTab: Window | null = null;
-let castBrowserTabUrl: string | null = null;
-function openCastBrowserTab(url: string) {
-  const tab = castBrowserTab;
-  if (tab && !tab.closed) {
-    // Navigate through the kept ref, not window.open(url, name): Chrome resets
-    // a tab's window name once it navigates cross-origin, so a named reopen
-    // can miss the tab and mint a duplicate. Setting location and focus() are
-    // both allowed on a cross-origin WindowProxy.
-    try {
-      if (castBrowserTabUrl !== url) tab.location.href = url;
-      castBrowserTabUrl = url;
-      tab.focus();
-      return;
-    } catch {
-      // ref unusable — reopen below
-    }
-  }
-  castBrowserTab = window.open(url, CAST_BROWSER_TAB_NAME);
-  castBrowserTabUrl = url;
-  castBrowserTab?.focus();
-}
-
 function CastCommandBlock({ tool, result, images, globalImageMap, conversationId }: { tool: ToolCall; result?: ToolResult; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]>; conversationId?: Id<"conversations"> }) {
   const [expanded, setExpanded] = useState(false);
   const convex = useConvex();
@@ -5010,25 +4982,24 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
   }, [args]);
 
   // `cast browser …` drives a page in the cloned Chrome. The CLI prints the
-  // page URL on its own line (pageLine / "→ navigated to") only for some verbs,
-  // so the row's own output wins when it has one, and otherwise the
-  // conversation-level carry-forward map supplies the page the browser was
-  // already on (see CastBrowserUrlContext).
-  const carriedBrowserUrls = useContext(CastBrowserUrlContext);
+  // page URL and the tab id ("tab 4A2CDC7E") only after some verbs, so the
+  // row's own output wins when it has them, and otherwise the
+  // conversation-level carry-forward map supplies the page and tab the browser
+  // was already on (see CastBrowserRowContext).
+  const carriedBrowserRows = useContext(CastBrowserRowContext);
   const browserUrl = useMemo(() => {
     if (cat !== "browser") return null;
-    return extractBrowserPageUrl(subcommand, args, output) ?? carriedBrowserUrls[tool.id] ?? null;
-  }, [cat, subcommand, args, output, carriedBrowserUrls, tool.id]);
+    return extractBrowserPageUrl(subcommand, args, output) ?? carriedBrowserRows[tool.id]?.url ?? null;
+  }, [cat, subcommand, args, output, carriedBrowserRows, tool.id]);
 
-  // The tab this command acted on ("tab 4A2CDC7E — next: …"). When the viewer
-  // is on the session's machine, clicking "open tab" raises that real tab in
-  // the driven Chrome instead of opening a fresh copy of the page; anywhere
-  // else — other machine, daemon down, tab closed — the click quietly falls
-  // back to the URL. See lib/browserFocus.ts.
-  const browserTabId = useMemo(
-    () => (cat === "browser" ? extractBrowserTabId(output) : null),
-    [cat, output],
-  );
+  // "open tab" raises that real tab in the driven Chrome (lib/browserFocus.ts)
+  // and does nothing else: if the tab is gone, the browser stopped, or the
+  // viewer is on another machine, the click is a no-op — never a fresh copy
+  // of the page.
+  const browserTabId = useMemo(() => {
+    if (cat !== "browser") return null;
+    return extractBrowserTabId(output) ?? carriedBrowserRows[tool.id]?.tabId ?? null;
+  }, [cat, output, carriedBrowserRows, tool.id]);
   // Discovery of the daemon's loopback endpoint can outlast a click's
   // activation window, so start it as soon as a row that can focus a tab
   // renders — by the time the human clicks, the endpoint is cached.
@@ -5143,33 +5114,21 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
           <span className="group-hover:underline">{cat}{subLabel ? ` ${subLabel}` : ""}</span>
         </span>
         {renderSummary()}
-        {browserUrl && (
+        {browserTabId && (
           <a
-            href={browserUrl}
-            target={CAST_BROWSER_TAB_NAME}
+            href={browserUrl ?? undefined}
+            target="_blank"
+            rel="noopener noreferrer"
             className={BROWSER_ROW_PILL}
-            // Warm the endpoint cache on hover so the focus attempt on click
-            // resolves inside the popup-blocker's activation window.
-            onMouseEnter={browserTabId ? () => prefetchBrowserFocusEndpoint(convex) : undefined}
+            onMouseEnter={() => prefetchBrowserFocusEndpoint(convex)}
             onClick={(e) => {
               e.stopPropagation();
-              // Modified clicks keep their native new-tab/window behavior.
+              // Modified clicks keep their native open-the-URL behavior.
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
               e.preventDefault();
-              const url = browserUrl;
-              if (!browserTabId) {
-                // No driven tab to raise: reuse the one named mirror tab.
-                if (url) openCastBrowserTab(url);
-                return;
-              }
-              // Try to raise the REAL driven tab first; only a confirmed focus
-              // suppresses the navigation. Otherwise fall back to the named
-              // mirror tab so repeated clicks never pile up new tabs.
-              void focusBrowserTab(convex, browserTabId).then((focused) => {
-                if (!focused && url) openCastBrowserTab(url);
-              });
+              void focusBrowserTab(convex, browserTabId);
             }}
-            title={browserTabId ? `${browserUrl}\nfocuses the driven tab ${browserTabId} when it's on this machine` : browserUrl}
+            title={`focus tab ${browserTabId} in the agent's browser${browserUrl ? `\n${browserUrl}` : ""}`}
           >
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -14528,13 +14487,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [conversation?.messages]);
 
-  // toolCallId → page URL for every `cast browser` row, carrying the last
-  // known URL across rows whose output doesn't restate it. Identity is kept
-  // stable across recomputes with identical content (the common case: a
-  // message sync that added no browser rows), so the CastBrowserUrlContext
+  // toolCallId → page URL + tab id for every `cast browser` row, carrying the
+  // last known ones across rows whose output doesn't restate them. Identity is
+  // kept stable across recomputes with identical content (the common case: a
+  // message sync that added no browser rows), so the CastBrowserRowContext
   // consumers — every cast row — don't re-render on unrelated syncs.
-  const browserUrlMapRef = useRef<Record<string, string>>({});
-  const browserPageUrlMap = useMemo(() => {
+  const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
+  const browserRowMap = useMemo(() => {
     const rows: BrowserRowInput[] = [];
     for (const msg of conversation?.messages ?? []) {
       for (const tc of msg.tool_calls ?? []) {
@@ -14544,12 +14503,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         rows.push({ toolCallId: tc.id, subcommand: cast.subcommand, args: cast.args, output: result?.content || "" });
       }
     }
-    const next = buildBrowserPageUrlMap(rows);
-    const prev = browserUrlMapRef.current;
-    const prevKeys = Object.keys(prev);
-    const same = prevKeys.length === Object.keys(next).length && prevKeys.every((k) => prev[k] === next[k]);
-    if (!same) browserUrlMapRef.current = next;
-    return browserUrlMapRef.current;
+    const next = buildBrowserRowMap(rows);
+    if (!sameBrowserRowMap(browserRowMapRef.current, next)) browserRowMapRef.current = next;
+    return browserRowMapRef.current;
   }, [conversation?.messages, globalToolResultMap]);
 
   // Every image in the session, in transcript order — the header gallery's
@@ -14959,7 +14915,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   return (
     <HighlightContext.Provider value={highlightQuery}>
-    <CastBrowserUrlContext.Provider value={browserPageUrlMap}>
+    <CastBrowserRowContext.Provider value={browserRowMap}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
     <main className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
@@ -16228,7 +16184,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     </main>
     </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
-    </CastBrowserUrlContext.Provider>
+    </CastBrowserRowContext.Provider>
     </HighlightContext.Provider>
   );
 });
