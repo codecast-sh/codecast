@@ -4,9 +4,11 @@ import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { teamVisibleConvTeam } from "./privacy";
+import { canAccessDoc } from "./lib/access";
 import { nextShortId } from "./counters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { inboxVisibilityFields } from "./inboxProjection";
+import { liveConversationIdSet } from "./lib/liveSessions";
 
 // Called after generateSessionInsight saves a new insight — mines tasks + docs for that conversation
 export const mineConversationAfterInsight = internalAction({
@@ -1030,9 +1032,10 @@ export const webGetDocDetail = query({
     const doc = await ctx.db.get(docId);
     if (!doc) return null;
 
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id;
-    if (doc.user_id !== userId && doc.team_id !== team_id) return null;
+    // Owner or effective-team member. The hand-rolled raw-tag check leaked a doc
+    // linked to a private conversation to the team; canAccessDoc resolves the
+    // effective team instead.
+    if (!(await canAccessDoc(ctx, userId, doc))) return null;
 
     let conversation = null;
     if (doc.conversation_id) {
@@ -1207,16 +1210,7 @@ export const webGetTaskDetail = query({
 
     const now = Date.now();
     const fiveMinutesAgo = now - 5 * 60 * 1000;
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", task.user_id))
-      .collect();
-    const liveConvIds = new Set(
-      managedSessions
-        .filter((s: any) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
-        .map((s: any) => s.conversation_id!.toString())
-    );
+    const liveConvIds = await liveConversationIdSet(ctx, task.user_id, { now });
 
     const linkedConversations: any[] = [];
     const seenConvIds = new Set<string>();

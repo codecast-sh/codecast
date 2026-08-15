@@ -3,7 +3,6 @@ import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
 import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
-import { countOpenCommentThreads } from "./comments";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus } from "@codecast/shared/contracts";
@@ -50,6 +49,7 @@ import {
 } from "./searchCore";
 import { MIRROR_WINDOW_MS } from "./searchMirror";
 import { requireUser } from "./lib/auth";
+import { liveConversationIdSet } from "./lib/liveSessions";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import {
   FAVORITES_GRANT_KEY,
@@ -2282,17 +2282,8 @@ export const listConversations = query({
 
     const now = Date.now();
     const fiveMinutesAgo = now - 5 * 60 * 1000;
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
 
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-    const liveConvIds = new Set(
-      managedSessions
-        .filter((s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
-        .map((s) => s.conversation_id!.toString())
-    );
+    const liveConvIds = await liveConversationIdSet(ctx, userId, { now });
 
     const needsBatchScan = !!(args.subagentFilter || args.directoryFilter || args.timeFilter);
 
@@ -4697,7 +4688,9 @@ export const updateTitle = mutation({
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     let hasTeamAccess = false;
     if (!isOwner && conversation.team_id) {
-      hasTeamAccess = await isTeamMember(ctx, authUserId, conversation.team_id);
+      // Team WRITE access follows real visibility, not the routing team — a
+      // member of a private session's routing team must not rename it.
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
     }
 
     if (!isOwner && !hasTeamAccess) {
@@ -4840,7 +4833,9 @@ export const setSkipTitleGeneration = mutation({
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     let hasTeamAccess = false;
     if (!isOwner && conversation.team_id) {
-      hasTeamAccess = await isTeamMember(ctx, authUserId, conversation.team_id);
+      // Team WRITE access follows real visibility, not the routing team — a
+      // member of a private session's routing team must not rename it.
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
     }
 
     if (!isOwner && !hasTeamAccess) {
@@ -6767,7 +6762,16 @@ export const deleteByProjectHash = mutation({
 
     let convId: Id<"conversations"> | null = null;
     if (args.conv_id) {
-      convId = args.conv_id as Id<"conversations">;
+      // Continuation branch: the id is client-supplied, so prove ownership
+      // before deleting anything. Deletion is owner-only — team visibility
+      // never grants it.
+      const cid = ctx.db.normalizeId("conversations", args.conv_id);
+      const conv = cid ? await ctx.db.get(cid) : null;
+      if (!conv) return { deleted: 0, hasMore: false, conv_id: null };
+      if (conv.user_id.toString() !== authUserId.toString()) {
+        throw new Error("Not authorized");
+      }
+      convId = conv._id;
     } else {
       const convs = await ctx.db
         .query("conversations")
@@ -7073,6 +7077,16 @@ export const getConversationMeta = query({
       return null;
     }
 
+    // OG-unfurl meta. The caller (bot-meta middleware) is unauthenticated, so
+    // this resolves to "shared" only for a conversation carrying a share_token
+    // and "denied" for a private one — revealing nothing about private sessions
+    // while genuine shares still unfurl. An authed viewer (owner/team) also
+    // passes. Mirrors getSharedConversationMeta's shape (no project_path).
+    const viewerId = await getAuthUserId(ctx);
+    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+      return null;
+    }
+
     const user = await ctx.db.get(conversation.user_id);
 
     const messages = await ctx.db
@@ -7111,7 +7125,6 @@ export const getConversationMeta = query({
       description,
       author: user?.name || null,
       message_count: conversation.message_count || 0,
-      project_path: conversation.project_path || null,
     };
   },
 });
@@ -7121,6 +7134,12 @@ export const getConversationMention = query({
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return null;
+    // Mention-pill enrichment leaks idle_summary/model/status/project_path.
+    // Gate on real access — routing team_id is not a read grant.
+    const viewerId = await getAuthUserId(ctx);
+    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+      return null;
+    }
     return {
       _id: conversation._id,
       title: conversation.title || "Session",
@@ -7722,14 +7741,9 @@ async function enrichInboxSessionRow(
 
   // Open teammate-comment threads (message, code-line, or global anchors) so
   // the card can surface "someone flagged this" without the conversation being
-  // open. Comment writes are human-paced, so invalidating the inbox
-  // subscription on them is fine — this is nothing like the heartbeat churn
-  // the liveness overlay exists for.
-  const sessionComments = await ctx.db
-    .query("comments")
-    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
-    .collect();
-  const open_comment_threads = countOpenCommentThreads(sessionComments);
+  // open. Read off the denormalized signal comments.refreshCommentSignal
+  // maintains on the row — no per-row comments collect on this hot path.
+  const open_comment_threads = conv.unresolved_comment_count ?? 0;
 
   const row = {
     _id: conv._id,
@@ -7776,6 +7790,13 @@ async function enrichInboxSessionRow(
     // Presence doubles as "this session has images".
     image_preview_url: conv.image_preview_url ?? null,
     open_comment_threads,
+    // Who spoke last in the open threads and what they said — the chip's
+    // "Alice: typo in step 2" without any per-row query. author_id is a users
+    // id string or "agent"; the client mutes the chip when it's the viewer.
+    last_comment_author: conv.last_comment_author ?? null,
+    last_comment_author_id: conv.last_comment_author_id ?? null,
+    last_comment_excerpt: conv.last_comment_excerpt ?? null,
+    last_comment_at: conv.last_comment_at ?? null,
     session_error: conv.session_error,
     // True when the latest turn is an unresolved Claude Code auth/API-error
     // banner ("Please run /login · API Error: 401 …", "You've hit your session

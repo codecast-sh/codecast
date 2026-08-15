@@ -130,3 +130,72 @@ function ensureLink(contentDir: string, linkPath: string, files: SkillFile[]): "
     return "copy";
   }
 }
+
+/* ==========================================================================
+ * Frontmatter emission (ct-42864)
+ * ========================================================================== */
+
+import {
+  sanitizeForeignText,
+  type AgentClientId,
+} from "@codecast/shared/contracts";
+import { PORTABLE_SKILL_FIELDS, CLAUDE_ONLY_SKILL_FIELDS } from "./manifests.js";
+
+export interface EmitSkillInput {
+  /** Parsed frontmatter, portable and extended fields mixed. */
+  fields: Record<string, unknown>;
+  /** Where the skill came from — a slug, a marketplace, a git pin. */
+  provenance: string;
+}
+
+/**
+ * The frontmatter a target client actually accepts.
+ *
+ * Only the six portable fields go to every client: the Skills API rejects
+ * anything else with a hard error, not a warning, so an extended field emitted
+ * to codex is a skill that fails to load. Claude Code's documented extensions
+ * survive only when the target IS claude and the capability declared them.
+ *
+ * Provenance is stamped into `metadata` — the one field every client ignores —
+ * so a file on disk can always answer "where did this come from" without a
+ * field any loader would trip over.
+ *
+ * The description goes through the SHARED sanitizer: this is the driver's copy
+ * of the text, the only place it reaches a model on a machine we write, and a
+ * second implementation here is exactly how sanitizers diverge.
+ */
+export function emitSkillFrontmatter(input: EmitSkillInput, target: AgentClientId): string {
+  const out: Record<string, unknown> = {};
+
+  for (const field of PORTABLE_SKILL_FIELDS) {
+    const value = input.fields[field];
+    if (value === undefined) continue;
+    out[field] =
+      field === "description" ? (sanitizeForeignText(value) ?? "") : value;
+  }
+
+  if (target === "claude") {
+    for (const field of CLAUDE_ONLY_SKILL_FIELDS) {
+      const value = input.fields[field];
+      if (value !== undefined) out[field] = value;
+    }
+  }
+
+  const metadata =
+    typeof out.metadata === "object" && out.metadata !== null
+      ? { ...(out.metadata as Record<string, unknown>) }
+      : {};
+  metadata.codecast_provenance = input.provenance;
+  out.metadata = metadata;
+
+  const lines: string[] = ["---"];
+  for (const [key, value] of Object.entries(out)) {
+    if (typeof value === "string" && !value.includes("\n")) {
+      lines.push(`${key}: ${JSON.stringify(value)}`);
+    } else {
+      lines.push(`${key}: ${JSON.stringify(value)}`);
+    }
+  }
+  lines.push("---");
+  return lines.join("\n") + "\n";
+}

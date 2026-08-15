@@ -12,6 +12,7 @@ import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
+import { useDecisionQueue } from "../hooks/useDecisionQueue";
 import { useChatUnread, useChatRail } from "../hooks/useChatSync";
 import { ChannelContextMenu, useChannelMenu } from "./chat/ChannelMenu";
 import { readPins, isPinned, togglePin, type SidebarPin } from "../lib/sidebarPins";
@@ -30,7 +31,7 @@ import { CreateDocModal } from "./CreateDocModal";
 import { CreateChannelModal } from "./CreateChannelModal";
 import { Globe, Workflow, Zap, MessageSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks } from "lucide-react";
 import { WorkbenchSection } from "./WorkbenchSection";
-import { filterToWorkspace } from "../lib/workspaceScope";
+import { filterToWorkspace, inActiveWorkspace } from "../lib/workspaceScope";
 
 const api = _api as any;
 
@@ -225,6 +226,51 @@ const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
     <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-teal-600 text-white rounded-full">
       {needsInputCount}
     </span>
+  );
+});
+
+// The decision queue's row. Same isolation rule as the badge above: the count
+// changes whenever any agent asks or gets answered, and that must re-render one
+// row, not the rail. Hidden entirely at zero — an empty queue should take up no
+// attention, which is the whole premise of the feature.
+const QuestionsNavRow = memo(function QuestionsNavRow({
+  isActive,
+  isNarrow,
+  onMobileClose,
+}: {
+  isActive: boolean;
+  isNarrow: boolean;
+  onMobileClose?: () => void;
+}) {
+  // Count what the QUEUE holds, not just the authored `cast decide` rows: the
+  // queue also carries sessions parked on an AskUserQuestion or permission
+  // prompt. Counting only decisions hid this row at zero while the queue still
+  // had work — removing the only way in. One hook defines "pending" for both.
+  const pending = useDecisionQueue().length;
+  if (pending === 0) return null;
+  return (
+    <Link
+      href="/questions"
+      onClick={onMobileClose}
+      className={`w-full flex items-center ${isNarrow ? "justify-center" : "gap-3"} px-4 py-2.5 border-l-2 transition-colors motion-reduce:transition-none text-left ${
+        isActive
+          ? "bg-sol-bg-highlight text-sol-text border-sol-violet"
+          : "text-sol-text-muted border-transparent hover:text-sol-text hover:bg-sol-bg-highlight/60"
+      }`}
+      title="Decisions waiting on you"
+    >
+      <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      {!isNarrow && (
+        <>
+          <span>Questions</span>
+          <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-sol-violet text-white rounded-full">
+            {pending}
+          </span>
+        </>
+      )}
+    </Link>
   );
 });
 
@@ -491,7 +537,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const savedViewRows = useInboxStore((s) => s.savedViews);
   const savedViews = useMemo(
     () => Object.values(savedViewRows ?? {})
-      .filter((v: any) => !v.team_id || v.team_id === activeTeamId)
+      .filter((v: any) => inActiveWorkspace(v, activeTeamId))
       // Yours first, then teammates' shared ones; alphabetical within each, so
       // the rail is stable rather than reordering as people edit their views.
       .sort((a: any, b: any) =>
@@ -790,6 +836,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               )}
             </Link>
           )}
+          <QuestionsNavRow
+            isActive={pathname === "/questions"}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+          />
           <ChatNavRow
             isActive={!!isChat}
             isNarrow={isNarrow}

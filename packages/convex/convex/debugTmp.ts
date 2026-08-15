@@ -4,6 +4,7 @@ import { internalQuery, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
 import { advanceLocalViewRevision } from "./localFirstCommands";
+import { performWebActiveSessions } from "./tasks";
 
 // TEMPORARY: insert a switch_account daemon command scoped to ONE conversation
 // — exercises the daemon's swap+kill+continue handler end-to-end without
@@ -415,6 +416,27 @@ export const timeManagedScan = internalQuery({
       live_90s: rows.filter((s) => now - s.last_heartbeat < 90 * 1000).length,
       heartbeat_ages_s: ages.slice(0, 5).concat(ages.length > 10 ? [-1] : [], ages.slice(-5)),
     };
+  },
+});
+
+// TEMPORARY: run the real tasks.webActiveSessions body for a user and time it
+// (the query timed out in prod with "too many system operations"). Safe to delete.
+export const timeWebActiveSessions = internalQuery({
+  args: { who: v.string() },
+  handler: async (ctx, args) => {
+    const user =
+      (await ctx.db
+        .query("users")
+        .withIndex("email", (q) => q.eq("email", args.who))
+        .first()) ??
+      (await ctx.db
+        .query("users")
+        .withIndex("by_username", (q) => q.eq("username", args.who))
+        .first());
+    if (!user) return { error: "no user" };
+    const t0 = Date.now();
+    const map = await performWebActiveSessions(ctx, user._id);
+    return { ms: Date.now() - t0, tasks_with_live_sessions: Object.keys(map).length };
   },
 });
 

@@ -949,7 +949,11 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   const { hasMore, loadMore } = useSyncTasks();
   const currentUser = useQuery(api.users.getCurrentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as any;
+  // One workspace pointer for the whole page: rows are scoped by activeTeamId
+  // (filterToWorkspace below), so the roster must use the same source — a
+  // currentUser.team_id fallback here made the two disagree in the personal
+  // space (personal rows, default team's roster).
+  const effectiveTeamId = activeTeamId as any;
   // The workspace's status vocabulary: the active team's custom statuses, or
   // the defaults in the personal space. Everything visible is one workspace
   // (filterToWorkspace below), so one list serves columns, groups and drops.

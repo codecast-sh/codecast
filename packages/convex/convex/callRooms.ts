@@ -12,45 +12,25 @@
 // so this module is the entire security boundary for who can listen in.
 import type { Id } from "./_generated/dataModel";
 import { createTeamFeedFilter } from "./privacy";
+// Key shapes, builders and lease timings are the shared contract
+// (@codecast/shared/contracts/callRoomKeys) so the web client can build keys
+// and share staleness math without importing server code. This module adds
+// what only the server can: authorization.
+import {
+  parseRoomKey,
+  type ParsedRoomKey,
+} from "@codecast/shared/contracts";
 
-export type ParsedRoomKey =
-  | { kind: "dm"; users: [string, string] }
-  | { kind: "channel"; channelId: string }
-  | { kind: "session"; conversationId: string };
-
-// Convex ids are opaque strings; the parser only enforces shape, never
-// existence — the authorizer does the lookups.
-export function parseRoomKey(roomKey: string): ParsedRoomKey | null {
-  if (typeof roomKey !== "string" || roomKey.length > 200) return null;
-  const parts = roomKey.split(":");
-  if (parts[0] === "dm" && parts.length === 3) {
-    const [, a, b] = parts;
-    if (!a || !b || a === b) return null;
-    // Canonical order is part of the key's identity: reject the swapped form
-    // rather than normalizing it, or the same pair could occupy two rooms.
-    if (a > b) return null;
-    return { kind: "dm", users: [a, b] };
-  }
-  if (parts[0] === "channel" && parts.length === 2 && parts[1]) {
-    return { kind: "channel", channelId: parts[1] };
-  }
-  if (parts[0] === "session" && parts.length === 2 && parts[1]) {
-    return { kind: "session", conversationId: parts[1] };
-  }
-  return null;
-}
-
-export function dmRoomKey(a: string, b: string): string {
-  return a < b ? `dm:${a}:${b}` : `dm:${b}:${a}`;
-}
-
-export function channelRoomKey(channelId: string): string {
-  return `channel:${channelId}`;
-}
-
-export function sessionRoomKey(conversationId: string): string {
-  return `session:${conversationId}`;
-}
+export {
+  CALL_HEARTBEAT_MS,
+  CALL_INVITE_TTL_MS,
+  CALL_MEMBER_STALE_MS,
+  channelRoomKey,
+  dmRoomKey,
+  parseRoomKey,
+  sessionRoomKey,
+  type ParsedRoomKey,
+} from "@codecast/shared/contracts";
 
 async function sharedTeam(
   ctx: any,
