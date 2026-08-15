@@ -18,12 +18,21 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "your-agents-forget-your-team-does-not",
+    title: "Your agents forget. Your team doesn't have to.",
+    dek: "Every agent session is a problem being solved out loud, and then the terminal closes. Codecast keeps the record searchable — so the next agent, or the next person, starts from the answer.",
+    author: "the codecast team",
+    date: "2026-08-15",
+    dateLabel: "August 15, 2026",
+    readingMinutes: 5,
+  },
+  {
     slug: "an-inbox-for-your-agents",
     title: "An inbox for your agents",
     dek: "Agents don't fail loudly. They finish, or stall, and wait for you to notice. The inbox makes the waiting visible — every session, every machine, sorted by who needs you.",
     author: "the codecast team",
     date: "2026-08-08",
-    dateLabel: "August 2026",
+    dateLabel: "August 8, 2026",
     readingMinutes: 5,
   },
   {
@@ -32,7 +41,7 @@ export const POSTS: BlogPost[] = [
     dek: "When an agent writes the line, the author column goes blank. cast blame fills it back in — with the conversation that wrote it.",
     author: "the codecast team",
     date: "2026-07-20",
-    dateLabel: "July 2026",
+    dateLabel: "July 20, 2026",
     readingMinutes: 6,
   },
 ];

@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { BlogNav, BlogFooter, Terminal, Cmd, SOL } from "../blogChrome";
+import { BlogNav, BlogFooter, Terminal, Cmd, SOL, H2, P, Code } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 
@@ -49,26 +48,6 @@ codecast-url https://codecast.sh/conversation/jx76xy4kp0dngmd2vzbn3sjvqd8ahvsr
 codecast-message k171az4qwtbck5fnc3rmbvpy1s8agha1
 …  git trailers (previous, filename, content) trimmed  …
 `;
-
-function H2({ children }: { children: ReactNode }) {
-  return (
-    <h2 className="text-2xl font-bold font-mono tracking-tight mt-12 mb-4" style={{ color: SOL.base03 }}>
-      {children}
-    </h2>
-  );
-}
-
-function P({ children }: { children: ReactNode }) {
-  return <p className="text-[17px] leading-8 mb-5" style={{ color: SOL.base01 }}>{children}</p>;
-}
-
-function Code({ children }: { children: ReactNode }) {
-  return (
-    <code className="font-mono text-[14px] px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base02 }}>
-      {children}
-    </code>
-  );
-}
 
 export default function GitBlameForAiAgentsPost() {
   const post = getPost("git-blame-for-ai-agents");
