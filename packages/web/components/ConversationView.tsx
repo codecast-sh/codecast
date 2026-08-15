@@ -22,7 +22,7 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus, type ThreadStateFields } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import {
   describeSmallToolGroup,
@@ -714,7 +714,10 @@ export type ConversationData = {
   }>;
   main_message_counts_by_fork?: Record<string, number>;
   main_divergent_previews_by_fork?: Record<string, string>;
-};
+  // Pinned thread state (`cast state`) — the four fields the ThreadStatePanel
+  // reads. Typed via the shared contract so this can never drift from the
+  // reader in lib/threadState.ts.
+} & ThreadStateFields;
 
 type CommitFile = {
   filename: string;
