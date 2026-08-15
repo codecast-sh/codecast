@@ -113,6 +113,7 @@ export function fleetTileMeta(
       if (kind === "limit") return { text: "rate limited · usage limit", tone: "red" };
       if (kind === "auth") return { text: "needs sign-in", tone: "red" };
       if (kind === "connection") return { text: "connection dropped", tone: "red" };
+      if (kind === "fatal") return { text: "api error · send continue", tone: "red" };
       return { text: "api error · retrying", tone: "red" };
     }
     const ts = threadStateView(s, s.message_count ?? 0, now);
