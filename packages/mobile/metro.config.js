@@ -30,7 +30,16 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     const resolved = require.resolve(moduleName, { paths: [mobileModules] });
     return { type: 'sourceFile', filePath: resolved };
   }
-  return context.resolveRequest(context, moduleName, platform);
+  try {
+    return context.resolveRequest(context, moduleName, platform);
+  } catch (e) {
+    // Shared TS packages (NodeNext) import relative modules by their emitted
+    // .js name; Metro reads the .ts source, so retry without the extension.
+    if (/^\.\.?\//.test(moduleName) && moduleName.endsWith('.js')) {
+      return context.resolveRequest(context, moduleName.slice(0, -3), platform);
+    }
+    throw e;
+  }
 };
 
 module.exports = config;

@@ -23,7 +23,9 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
-  const { signInWithGitHub, signInWithApple, signInWithEmail, isAppleAuthAvailable } = useAuth();
+  const [pendingVerification, setPendingVerification] = useState(false);
+  const [code, setCode] = useState('');
+  const { signInWithGitHub, signInWithApple, signInWithEmail, verifyEmailCode, isAppleAuthAvailable } = useAuth();
 
   const handleAppleSignIn = async () => {
     setLoading(true);
@@ -66,7 +68,12 @@ export default function LoginScreen() {
 
     setLoading(true);
     try {
-      await signInWithEmail(email, password);
+      const { needsVerification } = await signInWithEmail(email, password);
+      if (needsVerification) {
+        // Email verification is enabled and this account is unverified — a
+        // code was emailed; collect it to finish signing in.
+        setPendingVerification(true);
+      }
     } catch (error: any) {
       const message = error?.message || 'Sign in failed';
       if (message.includes('Invalid') || message.includes('credentials')) {
@@ -76,6 +83,18 @@ export default function LoginScreen() {
       } else {
         Alert.alert('Error', 'Sign in failed. Please try again.');
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyCode = async () => {
+    if (code.trim().length < 6) return;
+    setLoading(true);
+    try {
+      await verifyEmailCode(email, code.trim());
+    } catch {
+      Alert.alert('Error', 'Invalid or expired code. Check the email and try again.');
     } finally {
       setLoading(false);
     }
@@ -103,6 +122,49 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.buttonsContainer}>
+          {pendingVerification ? (
+            <>
+              <Text style={styles.label}>
+                Enter the 6-character code we emailed to {email}
+              </Text>
+              <View style={styles.inputContainer}>
+                <TextInput
+                  style={[styles.input, styles.codeInput]}
+                  placeholder="XXXXXX"
+                  placeholderTextColor={Theme.inputPlaceholder}
+                  value={code}
+                  onChangeText={(v) => setCode(v.toUpperCase())}
+                  autoCapitalize="characters"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  editable={!loading}
+                />
+              </View>
+              <TouchableOpacity
+                style={[styles.signInButton, (loading || code.trim().length < 6) && styles.buttonDisabled]}
+                onPress={handleVerifyCode}
+                disabled={loading || code.trim().length < 6}
+                activeOpacity={0.8}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.signInButtonText}>Verify Email</Text>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.backButton}
+                onPress={() => {
+                  setPendingVerification(false);
+                  setCode('');
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.backButtonText}>Back</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+          <>
           {isAppleAuthAvailable && (
             <TouchableOpacity
               style={[styles.appleButton, loading && styles.buttonDisabled]}
@@ -205,6 +267,8 @@ export default function LoginScreen() {
                 <Text style={styles.backButtonText}>Back</Text>
               </TouchableOpacity>
             </>
+          )}
+          </>
           )}
         </View>
 
@@ -349,6 +413,11 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md + 2,
     fontSize: FontSize.lg,
     color: Theme.text,
+  },
+  codeInput: {
+    textAlign: 'center',
+    letterSpacing: 8,
+    fontSize: 20,
   },
   signInButton: {
     backgroundColor: Theme.accentAmber,

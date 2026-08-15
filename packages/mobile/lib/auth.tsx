@@ -22,8 +22,9 @@ export interface AuthContextType {
   isAppleAuthAvailable: boolean;
   signInWithGitHub: () => Promise<void>;
   signInWithApple: () => Promise<void>;
-  signInWithEmail: (email: string, password: string) => Promise<void>;
-  signUpWithEmail: (email: string, password: string) => Promise<void>;
+  signInWithEmail: (email: string, password: string) => Promise<{ needsVerification: boolean }>;
+  signUpWithEmail: (email: string, password: string) => Promise<{ needsVerification: boolean }>;
+  verifyEmailCode: (email: string, code: string) => Promise<void>;
   signOut: () => Promise<void>;
   enableBiometric: () => Promise<void>;
   disableBiometric: () => Promise<void>;
@@ -252,12 +253,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await signIn('apple-native', params);
   };
 
+  // When the backend has email verification enabled (Password provider
+  // `verify`), signUp/signIn resolve with signingIn:false after emailing an
+  // OTP; the caller must then collect the code and call verifyEmailCode.
   const signInWithEmail = async (email: string, password: string) => {
-    await signIn('password', { email, password, flow: 'signIn' });
+    const result = await signIn('password', { email, password, flow: 'signIn' });
+    return { needsVerification: result?.signingIn === false };
   };
 
   const signUpWithEmail = async (email: string, password: string) => {
-    await signIn('password', { email, password, flow: 'signUp' });
+    const result = await signIn('password', { email, password, flow: 'signUp' });
+    return { needsVerification: result?.signingIn === false };
+  };
+
+  const verifyEmailCode = async (email: string, code: string) => {
+    await signIn('password', { email, code, flow: 'email-verification' });
   };
 
   const signOut = async () => {
@@ -296,6 +306,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInWithApple,
         signInWithEmail,
         signUpWithEmail,
+        verifyEmailCode,
         signOut,
         enableBiometric,
         disableBiometric,
