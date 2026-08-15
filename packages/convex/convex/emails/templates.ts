@@ -6,7 +6,7 @@
 // email states in the footer why it was received; anything the user did NOT
 // initiate says clearly what to do if it wasn't them.
 
-import { BRAND, renderEmail, type RenderedEmail } from "./render";
+import { BRAND, renderEmail, type EmailBlock, type RenderedEmail } from "./render";
 
 const OTP_EXPIRY_MINUTES = 15;
 
@@ -182,6 +182,68 @@ export function teamInvite(args: {
       },
     ],
     reason: `You received this email because ${args.inviterName} invited you to a team at codecast.sh. Not expecting it? You can safely ignore it.`,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Notification digest ("while you were away")
+// ---------------------------------------------------------------------------
+
+/** One entry in the digest, fully materialized by emails/digest.ts. */
+export interface DigestEntry {
+  /** Bold-marked title line, e.g. "**Grace** mentioned you". */
+  title: string;
+  /** Muted excerpt under the title (comment text, question, preview). */
+  excerpt?: string;
+  /** Absolute URL into the app. */
+  url: string;
+  linkLabel?: string;
+}
+
+export interface DigestSection {
+  /** Section heading, e.g. "Decisions waiting on you". */
+  heading: string;
+  entries: DigestEntry[];
+}
+
+export function notificationDigest(args: {
+  subject: string;
+  preheader: string;
+  sections: DigestSection[];
+  /** Items beyond the render cap: "…and N more in the app". */
+  moreCount: number;
+  settingsUrl: string;
+  unsubscribeUrl: string;
+}): RenderedEmail {
+  const blocks: EmailBlock[] = [];
+  for (let i = 0; i < args.sections.length; i++) {
+    const section = args.sections[i];
+    if (i > 0) blocks.push({ kind: "divider" });
+    blocks.push({ kind: "subheading", value: section.heading });
+    for (const e of section.entries) {
+      blocks.push({
+        kind: "item",
+        title: e.title,
+        excerpt: e.excerpt,
+        url: e.url,
+        linkLabel: e.linkLabel,
+      });
+    }
+  }
+  if (args.moreCount > 0) {
+    blocks.push({
+      kind: "note",
+      value: `…and ${args.moreCount} more waiting in [your inbox](${BRAND.url}/notifications).`,
+    });
+  }
+  blocks.push({ kind: "button", label: "Open Codecast", url: `${BRAND.url}/inbox` });
+  return renderEmail({
+    subject: args.subject,
+    preheader: args.preheader,
+    eyebrow: "while you were away",
+    heading: "Since you've been gone",
+    blocks,
+    reason: `You received this because these were waiting unseen in your Codecast inbox. [Email settings](${args.settingsUrl}) · [Unsubscribe](${args.unsubscribeUrl})`,
   });
 }
 

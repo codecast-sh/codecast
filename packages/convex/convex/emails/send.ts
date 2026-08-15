@@ -23,9 +23,15 @@ export const EMAIL_FROM = `${BRAND.name} <${BRAND.supportEmail}>`;
 
 /**
  * Deliver a rendered email via Resend. `tag` labels the template in the
- * Resend dashboard so per-template deliverability is visible.
+ * Resend dashboard so per-template deliverability is visible. `opts.headers`
+ * carries per-message headers (List-Unsubscribe for the digest).
  */
-export async function deliver(to: string, email: RenderedEmail, tag: string): Promise<void> {
+export async function deliver(
+  to: string,
+  email: RenderedEmail,
+  tag: string,
+  opts?: { headers?: Record<string, string> },
+): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
     // Dev deployments without a key: log instead of throwing so auth and
@@ -42,6 +48,7 @@ export async function deliver(to: string, email: RenderedEmail, tag: string): Pr
     html: email.html,
     text: email.text,
     tags: [{ name: "template", value: tag }],
+    ...(opts?.headers ? { headers: opts.headers } : {}),
   });
   if (error) {
     throw new Error(`Resend ${tag} to ${to} failed: ${JSON.stringify(error)}`);
