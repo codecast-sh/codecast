@@ -51,6 +51,40 @@ export function withWindowsHide(args: unknown[]): unknown[] {
   return out;
 }
 
+// A synchronous child process blocks the whole event loop for its lifetime —
+// timers, delivery, heartbeats all freeze until it exits. Individually cheap
+// calls become a multi-second stall when a sweep runs hundreds back to back
+// under load, and nothing in a stack sample survives to name them afterwards.
+// So every sync spawn is timed and, past the threshold, reported through
+// whatever sink the host installs (the daemon points this at its log). Runs on
+// every platform: a blocked loop is a blocked loop.
+export const SLOW_SYNC_SPAWN_MS = 1_000;
+let slowSyncSink: ((message: string) => void) | null = null;
+export function setSlowSyncSpawnSink(sink: ((message: string) => void) | null): void {
+  slowSyncSink = sink;
+}
+function describeSpawnArgs(args: unknown[]): string {
+  const cmd = typeof args[0] === "string" ? args[0] : String(args[0]);
+  const list = Array.isArray(args[1]) ? ` ${(args[1] as unknown[]).join(" ")}` : "";
+  return `${cmd}${list}`.slice(0, 200);
+}
+function wrapSync<T extends (...args: never[]) => unknown>(name: string, fn: T): T {
+  const wrapped = (...args: unknown[]) => {
+    const startedAt = performance.now();
+    try {
+      return (fn as unknown as (...a: unknown[]) => unknown)(...withWindowsHide(args));
+    } finally {
+      const elapsedMs = performance.now() - startedAt;
+      if (elapsedMs >= SLOW_SYNC_SPAWN_MS && slowSyncSink) {
+        try {
+          slowSyncSink(`[SLOW-SYNC-SPAWN] ${name} blocked the event loop ${Math.round(elapsedMs)}ms: ${describeSpawnArgs(args)}`);
+        } catch {}
+      }
+    }
+  };
+  return wrapped as unknown as T;
+}
+
 function wrap<T extends (...args: never[]) => unknown>(fn: T): T {
   const wrapped = (...args: unknown[]) => (fn as unknown as (...a: unknown[]) => unknown)(...withWindowsHide(args));
   // promisify(execFile)/promisify(exec) resolve {stdout, stderr} only via the
@@ -67,8 +101,8 @@ function wrap<T extends (...args: never[]) => unknown>(fn: T): T {
 }
 
 export const spawn: typeof cp.spawn = wrap(cp.spawn);
-export const spawnSync: typeof cp.spawnSync = wrap(cp.spawnSync);
+export const spawnSync: typeof cp.spawnSync = wrapSync("spawnSync", cp.spawnSync);
 export const exec: typeof cp.exec = wrap(cp.exec);
-export const execSync: typeof cp.execSync = wrap(cp.execSync);
+export const execSync: typeof cp.execSync = wrapSync("execSync", cp.execSync);
 export const execFile: typeof cp.execFile = wrap(cp.execFile);
-export const execFileSync: typeof cp.execFileSync = wrap(cp.execFileSync);
+export const execFileSync: typeof cp.execFileSync = wrapSync("execFileSync", cp.execFileSync);

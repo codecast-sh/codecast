@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseInteractivePrompt, jsonlHasPendingAskUserQuestion, spendLimitDialogBanner, jsonlTailEndsWithLimitBanner } from "./daemon.js";
+import { parseInteractivePrompt, jsonlHasPendingAskUserQuestion, spendLimitDialogBanner, usageLimitMenuBanner, jsonlTailEndsWithLimitBanner } from "./daemon.js";
 import { classifyApiErrorBanner } from "@codecast/shared/contracts";
 
 // Regression coverage for dropped Q&A descriptions: Claude Code's AskUserQuestion
@@ -622,6 +622,28 @@ describe("spendLimitDialogBanner", () => {
     expect(classifyApiErrorBanner(banner)).toBe("limit");
   });
 
+  // The exact shape from the 2026-08-14 screenshot: two-column rows, the
+  // "Press ← or →" helper row between options and footer, and a dated reset.
+  test("screenshot shape: helper row + dated reset column", () => {
+    const pane = [
+      "⏺ Still nothing on Apple's side — dropped again.",
+      "",
+      "▔".repeat(100),
+      "   What do you want to do?                                  Usage credit balance: $0.00",
+      "",
+      "   ❯ Adjust monthly spend limit: $702.77                        ← or → to set a limit",
+      "     Wait for limit to reset                          Resets Sep 1, 12:00am (America/New_York)",
+      "",
+      "   Press ← or → to set a limit.",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)?.isConfirmation).toBe(true);
+    const banner = spendLimitDialogBanner(pane);
+    expect(banner).toBe("You've hit your monthly spend limit · Resets Sep 1, 12:00am (America/New_York)");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+  });
+
   test("no reset column still yields a limit-classified banner", () => {
     const pane = [
       "▔".repeat(80),
@@ -646,6 +668,54 @@ describe("spendLimitDialogBanner", () => {
       "❯ ",
     ].join("\n");
     expect(spendLimitDialogBanner(pane)).toBeNull();
+  });
+});
+
+// The NUMBERED sibling of the dialog above. It parses as an ordinary menu, so
+// the confirmation-only interception missed it and it shipped as a poll card
+// whose options are billing actions (observed 2026-08-15).
+describe("usageLimitMenuBanner", () => {
+  const labels = [
+    "Stop and wait for limit to reset",
+    "Switch to usage credits",
+    "Switch to Team plan",
+  ];
+
+  test("recognizes the usage-limit menu and emits a limit-classified banner", () => {
+    const pane = [
+      "⏺ Tokens minted and stashed.",
+      "",
+      "▔".repeat(80),
+      "   What do you want to do?",
+      "",
+      "   ❯ 1. Stop and wait for limit to reset      Resets 3:30am (America/New_York)",
+      "     2. Switch to usage credits",
+      "     3. Switch to Team plan",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    const banner = usageLimitMenuBanner(pane, labels);
+    expect(banner).toBe("You've hit your usage limit · Resets 3:30am (America/New_York)");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+  });
+
+  test("no reset column still yields a limit-classified banner", () => {
+    const banner = usageLimitMenuBanner("   What do you want to do?", labels);
+    expect(banner).toBe("You've hit your usage limit · parked at the usage limit dialog");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+  });
+
+  test("a real question with the same generic prompt is left alone", () => {
+    const pane = [
+      "▔".repeat(80),
+      "   What do you want to do?",
+      "",
+      "   ❯ 1. Rebase onto main",
+      "     2. Merge main in",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(usageLimitMenuBanner(pane, ["Rebase onto main", "Merge main in"])).toBeNull();
   });
 
   test("an unrelated confirmation dialog does not match", () => {

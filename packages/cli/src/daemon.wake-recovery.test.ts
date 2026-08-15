@@ -91,3 +91,26 @@ test("a failing sweep is logged but does not throw", async () => {
   expect(rec.order).toEqual(["restart", "sweep"]);
   expect(rec.errors.some(e => e.includes("unsynced sweep failed"))).toBe(true);
 });
+
+// classifyTickGap is the guard that keeps wake recovery from firing on event-loop
+// stalls. Root-caused 2026-08-14: a backlogged transcript sweep pinned the loop for
+// minutes, the gap was logged as "Sleep detected", and the fake wake triggered
+// ANOTHER sweep — a self-sustaining freeze loop. A truly suspended process accrues
+// ~zero CPU during the gap; a pinned one burns CPU the whole time. That asymmetry
+// is the whole classifier.
+import { classifyTickGap } from "./daemon.js";
+
+test("a gap with ~no CPU consumed is a real sleep", () => {
+  expect(classifyTickGap(300_000, 0)).toBe("sleep");
+  expect(classifyTickGap(300_000, 1_500)).toBe("sleep"); // stray timer wakeups stay under threshold
+});
+
+test("a gap where the process burned CPU is a stall, not a sleep", () => {
+  expect(classifyTickGap(189_000, 150_000)).toBe("stall"); // the observed 189s freeze
+  expect(classifyTickGap(60_000, 60_000)).toBe("stall");
+});
+
+test("threshold sits at 20% of wall time", () => {
+  expect(classifyTickGap(100_000, 20_000)).toBe("stall");
+  expect(classifyTickGap(100_000, 19_999)).toBe("sleep");
+});

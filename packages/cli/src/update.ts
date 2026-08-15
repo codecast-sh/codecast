@@ -21,7 +21,7 @@ const MESSAGING_VERSION = "7"; // bumped: target on evidence (cast diff/read bef
 const VISUAL_VERSION = "6"; // bumped: image captions from alt text + side-by-side rows for adjacent images
 const FORKS_VERSION = "4"; // bumped: fan-out is a handoff — one cast fork call, no orchestration; default anchor excludes the fork request so branches never know they are forks
 const PUBLISH_VERSION = "4"; // bumped: cast image cross-reference for single-image sharing; never link local paths
-const BROWSER_VERSION = "4"; // bumped: batched steps, viewport emulation, dialogs cannot block
+const BROWSER_VERSION = "5"; // bumped: reuse your tab by default, no reload when already there
 const CHAT_VERSION = "1"; // first release: channels, threads, search, anchor replies
 const DECIDE_VERSION = "1"; // first release: cast decide + the web decision queue
 const STATE_VERSION = "3"; // bumped: first line = what you're working on; --status working|blocked|done

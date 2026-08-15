@@ -6,18 +6,23 @@ const CONFIG_DIR = process.env.HOME + "/.codecast";
 const LEDGER_FILE = path.join(CONFIG_DIR, "sync-ledger.json");
 const POSITIONS_FILE = path.join(CONFIG_DIR, "positions.json");
 
-// Load legacy positions.json for backward compatibility. Read straight from disk:
-// this is only a one-time fallback for ledger entries that predate the ledger, so
-// staleness relative to the live position tracker doesn't matter.
+// Load legacy positions.json for backward compatibility — a one-time fallback for
+// ledger entries that predate the ledger. The file is never written anymore, so read
+// it once and cache: findUnsyncedFiles runs on every sweep and getSyncRecord on every
+// synced file, and re-parsing a legacy blob from disk each call is pure event-loop tax.
+let cachedPositions: Record<string, number> | null = null;
 function loadPositions(): Record<string, number> {
+  if (cachedPositions) return cachedPositions;
   try {
     if (fs.existsSync(POSITIONS_FILE)) {
-      return JSON.parse(fs.readFileSync(POSITIONS_FILE, "utf-8"));
+      cachedPositions = JSON.parse(fs.readFileSync(POSITIONS_FILE, "utf-8"));
+      return cachedPositions!;
     }
   } catch {
     /* ignore */
   }
-  return {};
+  cachedPositions = {};
+  return cachedPositions;
 }
 
 export interface SyncRecord {
@@ -164,6 +169,31 @@ export function getStaleFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): strin
   return stale;
 }
 
+// The one decision both walkers share: does this .jsonl file have unsynced content?
+// JSONL session files are append-only, so size > lastSyncedPosition is the only real
+// signal of unsynced content. We surface those regardless of age — otherwise a sync
+// that wedged 8+ days ago never recovers (the age filter, applied unconditionally,
+// used to hide them forever). An mtime newer than lastSyncedAt is NOT a reliable
+// proxy for new content (touch, compact-in-place, or just clock skew can update
+// mtime without appending bytes); using it here surfaces dozens of false-positive
+// "pending" files that the sync loop can't drain because size == position is a no-op.
+function isUnsynced(
+  fullPath: string,
+  stats: { size: number; mtimeMs: number },
+  now: number,
+  maxAgeMs: number,
+  ledger: SyncLedger,
+  positions: Record<string, number>,
+): boolean {
+  const record = ledger[fullPath];
+  if (record) return stats.size > record.lastSyncedPosition;
+
+  const legacyPosition = positions[fullPath];
+  if (legacyPosition !== undefined) return stats.size > legacyPosition;
+
+  return now - stats.mtimeMs <= maxAgeMs;
+}
+
 export function findUnsyncedFiles(
   baseDir: string,
   maxAgeMs: number = 7 * 24 * 60 * 60 * 1000,
@@ -187,30 +217,7 @@ export function findUnsyncedFiles(
           if (includeFile && !includeFile(fullPath)) continue;
           try {
             const stats = fs.statSync(fullPath);
-            const fileAge = now - stats.mtimeMs;
-
-            const record = ledger[fullPath];
-            const legacyPosition = positions[fullPath];
-
-            if (record) {
-              // JSONL session files are append-only, so size > lastSyncedPosition
-              // is the only real signal of unsynced content. We surface those
-              // regardless of age — otherwise a sync that wedged 8+ days ago
-              // never recovers (the age filter, applied unconditionally, used to
-              // hide them forever). An mtime newer than lastSyncedAt is NOT a
-              // reliable proxy for new content (touch, compact-in-place, or just
-              // clock skew can update mtime without appending bytes); using it
-              // here surfaces dozens of false-positive "pending" files that the
-              // sync loop can't drain because size == position is a no-op.
-              if (stats.size > record.lastSyncedPosition) {
-                unsynced.push(fullPath);
-              }
-            } else if (legacyPosition !== undefined) {
-              if (stats.size > legacyPosition) {
-                unsynced.push(fullPath);
-              }
-            } else {
-              if (fileAge > maxAgeMs) continue;
+            if (isUnsynced(fullPath, stats, now, maxAgeMs, ledger, positions)) {
               unsynced.push(fullPath);
             }
           } catch {
@@ -224,5 +231,59 @@ export function findUnsyncedFiles(
   };
 
   scanDir(baseDir);
+  return unsynced;
+}
+
+// Async twin of findUnsyncedFiles for the daemon's hot paths. The sync walk holds
+// the event loop for the whole ~3.5k-file scan of ~/.claude/projects (readdirSync +
+// statSync per file); at that scale it reads as a multi-second freeze that starves
+// heartbeats and message delivery. This version uses promise-based fs and yields to
+// the event loop between stat batches, so a sweep interleaves with live work.
+const ASYNC_SCAN_YIELD_EVERY = 50;
+export async function findUnsyncedFilesAsync(
+  baseDir: string,
+  maxAgeMs: number = 7 * 24 * 60 * 60 * 1000,
+  includeFile?: (filePath: string) => boolean,
+): Promise<string[]> {
+  const ledger = store.getAll();
+  const positions = loadPositions();
+  const now = Date.now();
+  const unsynced: string[] = [];
+  let sinceYield = 0;
+
+  const maybeYield = async () => {
+    if (++sinceYield >= ASYNC_SCAN_YIELD_EVERY) {
+      sinceYield = 0;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+
+  const scanDir = async (dir: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // Can't read directory, skip
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await scanDir(fullPath);
+      } else if (entry.name.endsWith(".jsonl")) {
+        if (includeFile && !includeFile(fullPath)) continue;
+        await maybeYield();
+        try {
+          const stats = await fs.promises.stat(fullPath);
+          if (isUnsynced(fullPath, stats, now, maxAgeMs, ledger, positions)) {
+            unsynced.push(fullPath);
+          }
+        } catch {
+          // Can't stat file, skip
+        }
+      }
+    }
+  };
+
+  await scanDir(baseDir);
   return unsynced;
 }
