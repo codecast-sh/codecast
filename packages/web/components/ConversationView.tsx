@@ -5556,12 +5556,9 @@ function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage 
 
 const _askUserSentState = new Map<string, Record<number, Array<{ key: string; label: string; text?: string }>>>();
 
-// Claude Code appends two synthetic affordance rows to every AskUserQuestion menu —
-// "Type something" (free text) and "Chat about this" (escape hatch). On a prompt scraped
-// from the terminal (no JSONL sidecar) they arrive as bare options; the web has its own
-// "Other" free-text affordance, so rendering them too is redundant clutter. Mirrors the
-// daemon's SYNTHETIC_OPTION so scraped polls render as clean as sidecar-sourced ones.
-const SYNTHETIC_POLL_OPTION = /^(?:type something\.?|chat about this)$/i;
+// SYNTHETIC_POLL_OPTION and the rest of the poll wire format live in
+// lib/pollPayload, imported above — the decision queue answers polls
+// through the same module, so the option filter can never drift.
 
 // The check glyph shown in a selected poll option's index slot / pill.
 function PollCheckIcon({ className }: { className?: string }) {
