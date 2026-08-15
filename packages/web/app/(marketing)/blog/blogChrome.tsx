@@ -155,8 +155,10 @@ export function BlogFooter() {
  * Terminal card matching the landing page's terminal styling (traffic-light dots,
  * dark Solarized body). `children` is rendered inside a horizontally scrollable
  * <pre> so captured CLI output never forces the page to scroll sideways on mobile.
+ * Pass `wrap` for prose-heavy captures (transcript excerpts) whose long lines
+ * should flow rather than scroll; leave it off for column-aligned output.
  */
-export function Terminal({ label, children }: { label: string; children: ReactNode }) {
+export function Terminal({ label, wrap = false, children }: { label: string; wrap?: boolean; children: ReactNode }) {
   return (
     <div className="rounded-xl border shadow-xl overflow-hidden my-6" style={{ backgroundColor: SOL.base03, borderColor: "#094959" }}>
       <div className="flex items-center gap-2 px-4 py-2.5" style={{ backgroundColor: SOL.base02, borderBottom: "1px solid #094959" }}>
@@ -168,7 +170,7 @@ export function Terminal({ label, children }: { label: string; children: ReactNo
         <span className="text-xs font-mono ml-2" style={{ color: SOL.base01 }}>{label}</span>
       </div>
       <div className="overflow-x-auto">
-        <pre className="p-4 font-mono text-[12px] leading-relaxed" style={{ color: SOL.base0 }}>{children}</pre>
+        <pre className={`p-4 font-mono text-[12px] leading-relaxed${wrap ? " whitespace-pre-wrap break-words" : ""}`} style={{ color: SOL.base0 }}>{children}</pre>
       </div>
     </div>
   );
@@ -182,5 +184,43 @@ export function Cmd({ children }: { children: ReactNode }) {
       <span style={{ color: SOL.base1 }}> {children}</span>
       {"\n"}
     </span>
+  );
+}
+
+/** Section heading inside a post body. */
+export function H2({ children }: { children: ReactNode }) {
+  return (
+    <h2 className="text-2xl font-bold font-mono tracking-tight mt-12 mb-4" style={{ color: SOL.base03 }}>
+      {children}
+    </h2>
+  );
+}
+
+/** Body paragraph inside a post. */
+export function P({ children }: { children: ReactNode }) {
+  return <p className="text-[17px] leading-8 mb-5" style={{ color: SOL.base01 }}>{children}</p>;
+}
+
+/** Inline code inside post prose. */
+export function Code({ children }: { children: ReactNode }) {
+  return (
+    <code className="font-mono text-[14px] px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base02 }}>
+      {children}
+    </code>
+  );
+}
+
+/** A framed screenshot with a mono caption; images live under public/blog/<slug>/. */
+export function Screenshot({ src, alt, caption }: { src: string; alt: string; caption: string }) {
+  return (
+    <figure className="my-8">
+      <div className="rounded-xl border shadow-xl overflow-hidden" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3 }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt={alt} className="w-full block" loading="lazy" />
+      </div>
+      <figcaption className="mt-3 text-sm font-mono text-center" style={{ color: SOL.base1 }}>
+        {caption}
+      </figcaption>
+    </figure>
   );
 }

@@ -36,6 +36,7 @@ import Download from "@/app/(marketing)/download/page";
 import BlogIndex from "@/app/(marketing)/blog/page";
 import BlogGitBlame from "@/app/(marketing)/blog/git-blame-for-ai-agents/page";
 import BlogAgentInbox from "@/app/(marketing)/blog/an-inbox-for-your-agents/page";
+import BlogTeamMemory from "@/app/(marketing)/blog/your-agents-forget-your-team-does-not/page";
 import CompareIndex from "@/app/(marketing)/compare/page";
 import Compare from "@/app/(marketing)/compare/ComparePage";
 
@@ -84,6 +85,7 @@ export function render(path: string): string {
             <Route path="blog" element={<BlogIndex />} />
             <Route path="blog/git-blame-for-ai-agents" element={<BlogGitBlame />} />
             <Route path="blog/an-inbox-for-your-agents" element={<BlogAgentInbox />} />
+            <Route path="blog/your-agents-forget-your-team-does-not" element={<BlogTeamMemory />} />
             <Route path="compare" element={<CompareIndex />} />
             <Route path="compare/:slug" element={<Compare />} />
           </Route>

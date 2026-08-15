@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { BlogNav, BlogFooter, Terminal, Cmd, SOL } from "../blogChrome";
+import { BlogNav, BlogFooter, Terminal, Cmd, SOL, H2, P, Code, Screenshot } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 
@@ -46,40 +45,6 @@ WORKING (5)
 
 …  4 more sessions
 `;
-
-function H2({ children }: { children: ReactNode }) {
-  return (
-    <h2 className="text-2xl font-bold font-mono tracking-tight mt-12 mb-4" style={{ color: SOL.base03 }}>
-      {children}
-    </h2>
-  );
-}
-
-function P({ children }: { children: ReactNode }) {
-  return <p className="text-[17px] leading-8 mb-5" style={{ color: SOL.base01 }}>{children}</p>;
-}
-
-function Code({ children }: { children: ReactNode }) {
-  return (
-    <code className="font-mono text-[14px] px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base02 }}>
-      {children}
-    </code>
-  );
-}
-
-function Screenshot({ src, alt, caption }: { src: string; alt: string; caption: string }) {
-  return (
-    <figure className="my-8">
-      <div className="rounded-xl border shadow-xl overflow-hidden" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3 }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} className="w-full block" loading="lazy" />
-      </div>
-      <figcaption className="mt-3 text-sm font-mono text-center" style={{ color: SOL.base1 }}>
-        {caption}
-      </figcaption>
-    </figure>
-  );
-}
 
 export default function AnInboxForYourAgentsPost() {
   const post = getPost("an-inbox-for-your-agents");
