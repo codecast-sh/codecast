@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "convex/react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { isUsageLimitDialog } from "@codecast/shared/contracts";
+import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { useInboxStore } from "../store/inboxStore";
 // The real conversation pane the inbox uses — same component, same data hooks,
 // so "scroll up into the thread" is literally the view you get when you open
@@ -120,6 +123,22 @@ function DecisionCard({
   const [otherText, setOtherText] = useState("");
   const otherRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const paneRef = useRef<HTMLDivElement>(null);
+
+  // Set imperatively rather than as a JSX prop: `inert` only became a real
+  // React attribute in 19, and a silently-dropped prop here would look exactly
+  // like the bug it fixes. Blur on the way in, because the composer may
+  // already hold focus by the time we mark the pane inert.
+  useEffect(() => {
+    const pane = paneRef.current;
+    if (!pane) return;
+    const shouldBlock = sheet === "full";
+    (pane as any).inert = shouldBlock;
+    if (shouldBlock) {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && pane.contains(active)) active.blur();
+    }
+  }, [sheet]);
 
   // A poll card has no authored payload, so its question and options come from
   // the conversation itself. The pane below already loads and syncs those
@@ -127,6 +146,29 @@ function DecisionCard({
   // rather than opening a second subscription to the same conversation.
   const needsMessages = item.source !== "decide";
   const messages = useInboxStore((s) => s.messages[item.conversationId]);
+
+  // A permission-blocked session is in the queue by choice, but its payload is
+  // a tool name and an argument preview — not a question with options. Render
+  // the real Approve/Deny card rather than an empty one: PermissionStack owns
+  // its own mutation and y/n keys, which is also the safety property here —
+  // approving a command must never be reachable from the digit that answers
+  // the card before it in the stack.
+  const permissionsRaw = useQuery(
+    (_api as any).permissions.getPendingPermissions,
+    item.source === "permission" ? { conversation_id: item.conversationId } : "skip"
+  );
+  const permissions = useMemo(
+    () => (permissionsRaw ?? []).filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name)),
+    [permissionsRaw]
+  );
+  const isPermissionCard = item.source === "permission" && permissions.length > 0;
+  // Answered elsewhere (the conversation footer, another device) — it is no
+  // longer waiting on you, so it should not hold a slot in the queue.
+  useEffect(() => {
+    if (item.source === "permission" && permissionsRaw !== undefined && permissions.length === 0) {
+      onNotADecision();
+    }
+  }, [item.source, permissionsRaw, permissions.length, onNotADecision]);
 
   const poll = useMemo(
     () => (needsMessages ? openQuestionFromMessages(messages as any[]) : null),
@@ -197,22 +239,30 @@ function DecisionCard({
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       const editing = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      // `take` claims a key for the queue: stop the default AND stop the
+      // global shortcut layer below from acting on it a second time.
+      const take = () => { e.preventDefault(); e.stopPropagation(); };
       if (editing) {
         // Enter commits the free-text answer; Escape closes the box.
-        if (e.key === "Escape") { e.preventDefault(); setOtherOpen(false); }
-        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); answerFreeText(otherText); }
+        if (e.key === "Escape") { take(); setOtherOpen(false); }
+        if (e.key === "Enter" && !e.shiftKey) { take(); answerFreeText(otherText); }
         return;
       }
-      if (e.key >= "1" && e.key <= "9") {
+      // Digits answer a QUESTION. A permission card is never answerable this
+      // way: it carries no options, and the whole hazard of putting approvals
+      // in a queue that advances on a keystroke is that the digit meant for the
+      // previous card lands on "approve this command". y/n (PermissionStack's
+      // own binding) is the only way in, and it requires reading the card.
+      if (!isPermissionCard && e.key >= "1" && e.key <= "9") {
         const n = Number(e.key) - 1;
         const opt = options[n];
-        if (opt) { e.preventDefault(); answer(opt.index); }
+        if (opt) { take(); answer(opt.index); }
         return;
       }
-      if (e.key === "o" || e.key === "O") { e.preventDefault(); openSession(); return; }
-      if (e.key === "s" || e.key === "S") { e.preventDefault(); onSkip(); return; }
+      if (e.key === "o" || e.key === "O") { take(); openSession(); return; }
+      if (e.key === "s" || e.key === "S") { take(); onSkip(); return; }
       if (e.key === "t" || e.key === "T") {
-        e.preventDefault();
+        take();
         setOtherOpen(true);
         setTimeout(() => otherRef.current?.focus(), 0);
         return;
@@ -220,17 +270,23 @@ function DecisionCard({
       // Up moves into the thread, down brings the question back. Escape leaves
       // the queue from full, but from peek it first restores the question —
       // otherwise the key that means "back" would skip a step.
-      if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); setSheet("peek"); return; }
-      if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); setSheet("full"); return; }
+      if (e.key === "ArrowUp" || e.key === "k") { take(); setSheet("peek"); return; }
+      if (e.key === "ArrowDown" || e.key === "j") { take(); setSheet("full"); return; }
       if (e.key === "Escape") {
-        e.preventDefault();
+        take();
         if (sheet === "peek") setSheet("full");
         else onExit?.();
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, onExit, sheet]);
+    // CAPTURE phase, deliberately. The app's global shortcut layer claims the
+    // arrows and digits for list navigation, and in bubble phase it consumed
+    // ArrowUp before the queue ever saw it — the sheet would only dock by
+    // click, which defeats a surface whose whole premise is the keyboard.
+    // Running first also means the keys the queue owns must not fall through
+    // and drive the inbox behind it, hence stopPropagation at each branch.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [options, answer, answerFreeText, otherText, openSession, onSkip, onExit, sheet, isPermissionCard]);
 
   const tier = queueTier(item);
   const session = item.session;
@@ -240,8 +296,15 @@ function DecisionCard({
     <div className="relative h-full overflow-hidden">
       {/* The session itself, behind the question — the same pane the inbox
           renders when you open the session, so "not enough context" is one
-          scroll away instead of a navigation. */}
-      <div className="absolute inset-0">
+          scroll away instead of a navigation.
+
+          Held INERT while the question owns the screen. That pane ships a
+          message composer, and it takes focus on mount: every queue keystroke
+          was landing in a textarea, so the card's own keys did nothing and an
+          answer digit would have been typed at the session instead. Inert
+          removes it from focus and pointer entirely; docking the sheet hands
+          it back, which is exactly when you mean to interact with it. */}
+      <div ref={paneRef} className="absolute inset-0">
         <InboxConversation
           sessionId={item.conversationId}
           isIdle={!!session?.is_idle}
@@ -360,7 +423,16 @@ function DecisionCard({
           </div>
         )}
 
-        {needsMessages && !poll && (
+        {isPermissionCard && (
+          <div className="mb-4">
+            <div className="text-[10px] uppercase tracking-wide text-sol-text-dim mb-1">
+              waiting on your approval
+            </div>
+            <PermissionStack permissions={permissions} />
+          </div>
+        )}
+
+        {needsMessages && !poll && !isPermissionCard && (
           <div className="text-sm text-sol-text-dim mb-4">
             This session is waiting on you, but its question has not reached the
             transcript yet. Open it to see what it is asking.
