@@ -202,6 +202,28 @@ describe("openBackgroundTaskIds (incremental)", () => {
     expect(openBackgroundTaskIds(p, SID)).toEqual(["b9"]);
   });
 
+  test("a transcript larger than one 4MB scan chunk gets the same verdict as a whole-file scan", () => {
+    const p = tmpTranscript();
+    // ~6MB of filler lines with opens/closes placed so state must carry across
+    // chunk boundaries: b1 opens early (chunk 1) and never closes; b2 opens in
+    // chunk 1 and closes in the last chunk; m1 opens near the end.
+    const filler = line({ type: "assistant", sessionId: SID, message: { role: "assistant", content: [{ type: "text", text: "x".repeat(4000) }] } });
+    const parts: string[] = [bgStart("b1"), bgStart("b2")];
+    for (let i = 0; i < 1500; i++) parts.push(filler);
+    parts.push(notification("b2", "completed"), monitorStart("m1"));
+    fs.writeFileSync(p, parts.join("\n") + "\n");
+    expect(fs.statSync(p).size).toBeGreaterThan(4 * 1024 * 1024);
+    expect(openBackgroundTaskIds(p, SID).sort()).toEqual(["b1", "m1"]);
+    expect(openBackgroundTaskIds(p, SID).sort()).toEqual(wholeFile(p));
+  });
+
+  test("a single line larger than the scan chunk does not wedge the scan", () => {
+    const p = tmpTranscript();
+    const huge = line({ type: "assistant", sessionId: SID, message: { role: "assistant", content: [{ type: "text", text: "y".repeat(5 * 1024 * 1024) }] } });
+    fs.writeFileSync(p, transcript(bgStart("b1"), huge, monitorStart("m1")) + "\n");
+    expect(openBackgroundTaskIds(p, SID).sort()).toEqual(["b1", "m1"]);
+  });
+
   test("a different sessionId filter invalidates the cached state", () => {
     const p = tmpTranscript();
     fs.writeFileSync(p, transcript(bgStart("mine", SID), bgStart("theirs", "other-session")) + "\n");

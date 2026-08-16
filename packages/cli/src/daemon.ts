@@ -646,6 +646,27 @@ export function classifyTickGap(elapsedMs: number, cpuMs: number): "sleep" | "st
   return cpuMs >= elapsedMs * 0.2 ? "stall" : "sleep";
 }
 
+// Backend outage clock behind the self-heal restart. It must count only time the
+// backend was unreachable while the machine was AWAKE. A closed lid on battery
+// yields short maintenance wakes with no network: each one fails the heartbeat
+// and starts the clock, and the first real wake then reads "recovered after
+// 1701s down" and restarts a healthy daemon (2026-08-16, mid-delivery). A
+// suspend therefore clears the clock; a still-dead backend after wake restarts
+// it from the wake, and the 3-minute threshold applies from there.
+export class BackendOutageClock {
+  private downSince = 0;
+  markFailure(now = Date.now()): void { if (this.downSince === 0) this.downSince = now; }
+  /** Length of the outage that just ended, in ms; 0 when there was none. */
+  markSuccess(now = Date.now()): number {
+    if (this.downSince === 0) return 0;
+    const downFor = now - this.downSince;
+    this.downSince = 0;
+    return downFor;
+  }
+  noteSuspend(): void { this.downSince = 0; }
+}
+const backendOutage = new BackendOutageClock();
+
 // Sleep/wake detection: if the last tick was more than 30s ago, we probably just woke from sleep.
 // During the wake grace period, skip polling to let tmux recover and avoid zombie accumulation.
 // The grace period applies to stalls too — after the loop unfreezes, a short polling
@@ -667,6 +688,7 @@ setInterval(() => {
       log(`Event-loop stall (${Math.round(elapsed / 1000)}s gap, ${Math.round(cpuMs / 1000)}s CPU), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
     } else {
       log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
+      backendOutage.noteSuspend();
     }
   }
   lastTickTime = now;
@@ -1748,7 +1770,7 @@ function isAutostartEnabled(): boolean {
 }
 
 const processedPollCommandIds = new Set<string>();
-let backendDownSince = 0;
+
 
 async function pollDaemonCommands(): Promise<void> {
   const config = readConfig();
@@ -1773,12 +1795,11 @@ async function pollDaemonCommands(): Promise<void> {
       }),
     });
     if (!response.ok) {
-      if (backendDownSince === 0) backendDownSince = Date.now();
+      backendOutage.markFailure();
       return;
     }
-    if (backendDownSince > 0) {
-      const downFor = Date.now() - backendDownSince;
-      backendDownSince = 0;
+    const downFor = backendOutage.markSuccess();
+    if (downFor > 0) {
       if (downFor > STUCK_CONNECTION_THRESHOLD_MS) {
         const state = readDaemonState();
         const lastHeal = state.lastSelfHealRestart || 0;
@@ -1804,7 +1825,7 @@ async function pollDaemonCommands(): Promise<void> {
       }
     }
   } catch {
-    if (backendDownSince === 0) backendDownSince = Date.now();
+    backendOutage.markFailure();
   }
 }
 

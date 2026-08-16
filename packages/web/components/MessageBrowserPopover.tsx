@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { AvatarImg } from "../lib/avatarCache";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -9,6 +10,7 @@ import { isCommandMessage, cleanContent } from "../lib/conversationProcessor";
 import { parseMachineDeliveredMessage, type MachineDeliveredKind } from "./sessionMessage";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
+import { shareTokenArg } from "../lib/shareTokenScope";
 
 function getCommandLabel(content: string): string | null {
   const m = content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
@@ -536,13 +538,16 @@ function NavDropdown({
                   }`}
                 >
                   <div className="flex items-center gap-1.5 mb-0.5">
-                    {c.user?.github_avatar_url ? (
-                      <img src={c.user.github_avatar_url} alt="" className="w-4 h-4 rounded-full" />
-                    ) : (
-                      <div className="w-4 h-4 rounded-full bg-sol-blue/30 flex items-center justify-center text-[8px] text-sol-blue">
-                        {displayName[0]?.toUpperCase()}
-                      </div>
-                    )}
+                    <AvatarImg
+                      src={c.user?.github_avatar_url}
+                      alt=""
+                      className="w-4 h-4 rounded-full"
+                      fallback={
+                        <div className="w-4 h-4 rounded-full bg-sol-blue/30 flex items-center justify-center text-[8px] text-sol-blue">
+                          {displayName[0]?.toUpperCase()}
+                        </div>
+                      }
+                    />
                     <span className="text-[11px] text-sol-text-secondary font-medium">{displayName}</span>
                     <span className="text-[10px] text-sol-text-dim/60 ml-auto">{formatTimeAgo(c.created_at)}</span>
                   </div>
@@ -596,7 +601,9 @@ export function MessageNavButton({
   // back to the truncated paginated set.
   const queryUserMessages = useQuery(
     api.conversations.getUserMessages,
-    canQuery && !cachedUserMessages ? { conversation_id: conversationId as Id<"conversations"> } : "skip"
+    canQuery && !cachedUserMessages
+      ? { conversation_id: conversationId as Id<"conversations">, ...shareTokenArg(conversationId) }
+      : "skip"
   );
   const messages = cachedUserMessages ?? queryUserMessages;
 

@@ -402,6 +402,7 @@ You can spin work off into your human's inbox as independent sessions — not hi
 \`\`\`bash
 cast fork "<direction>" ["<direction>" ...]   # branch THIS conversation N ways from here
 cast spawn "<task>" ["<task>" ...]            # start N fresh sessions, no shared history
+cast spawn --subagent --agent codex "<task>"  # subagent row nested under THIS session — yours to manage
 cast spawn - <<'EOF'                          # multi-line briefing via stdin (same as cast send)
 …goal, numbered steps, constraints — exact newlines preserved…
 EOF
@@ -422,6 +423,8 @@ EOF
 A fork fan-out is a handoff, not an orchestration. When the human asks to run work in N forks, issue ONE \`cast fork\` with all N directions, report the roster, and return to your own thread. A branch doesn't know it is a fork — its history ends before the fork request, and its seed arrives as its next instruction — so write each direction as a complete, self-contained instruction for that thread. The branches run independently and the human steers them from the inbox; do not stage launches, monitor branches, or build coordination between them.
 
 \`cast spawn\` starts fresh sessions with no shared history, in the current project (\`-C <dir>\` for elsewhere). Use it to hand off self-contained work — a parallel audit, a port, a spike — rather than research you'd fold back into your own answer.
+
+\`cast spawn --subagent\` inverts the ownership: the new session nests in the UI as a subagent row under this session instead of landing as a first-class inbox card, and it is YOURS to manage — brief it, watch it, \`cast send <id>\` it follow-ups, \`cast read <id>\` its results, and fold what it finds back into your own work. Unlike a Task-tool subagent it is a full session on any agent backend, so \`--subagent --agent codex\` runs a codex worker under a claude parent. Bare \`--subagent\` nests under the session running the command; pass a value (\`--subagent <session>\`) to nest under another of your sessions. Tell the human what you delegated, and report the results yourself — a subagent row is your worker, not a handoff to their inbox.
 
 Both start working immediately and appear in the inbox. A branch or session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human what you sent where.
 
@@ -500,7 +503,7 @@ export const PUBLISH_SNIPPET_END = "<!-- /codecast-publish -->";
 export const PUBLISH_SNIPPET = `
 ## Publishing pages (cast publish)
 
-When you produce a standalone deliverable — a report, dashboard, mockup, visualization — publish it and put the returned URL inline in your reply:
+When you produce a standalone deliverable — a report, dashboard, mockup, visualization — publish it and put the returned URL inline in your reply. A page URL on its own line renders the live page embedded in the conversation: a framed preview with the page title, the way an image renders with its caption. Write \`[caption](url)\` to put your own caption under the frame; a URL inside a sentence renders as a compact titled pill instead. Prefer the bare URL on its own line when the page is the deliverable.
 
 \`\`\`bash
 cast publish report.html          # → https://codecast.sh/a/<slug>  (stable per file)
@@ -537,59 +540,23 @@ export const BROWSER_SNIPPET_END = "<!-- /codecast-browser -->";
 export const BROWSER_SNIPPET = `
 ## Browser
 
-\`cast browser\` drives a real Chrome — the same browser you use, cloned so it keeps your logins. Use it whenever the work is on a web page: verifying a UI change you just made, reading a page behind a sign-in, filling a form, reproducing a bug with the console in hand.
+\`cast browser\` drives a real Chrome, cloned from the human's profile so their logins carry over. Use it whenever the work is on a web page: verifying a UI change, reading behind a sign-in, filling a form, reproducing a bug.
 
 \`\`\`bash
-cast browser start                 # clone the last-used Chrome profile and launch (once per machine)
-cast browser open <url>            # navigate, waiting for the page to finish rendering
-cast browser snapshot              # the page as text, with #eNN refs on everything actionable
-cast browser click #e42            # click a ref  (--force to click through an overlay)
-cast browser type #e7 "text" --submit
-cast browser find "Sign in"        # locate a ref by its visible name
+cast browser open <url>       # starts the browser if needed; reuses this session's tab
+cast browser snapshot -i -s "[role=main]"   # interactive elements with #eNN refs — scope first on big apps
+cast browser read             # the page as clean text (big apps: scope with get text "[role=main]")
+cast browser click #e42       # act on refs: click, type --submit, press, hover, select…
+cast browser do "find Sign in" click "wait --text Welcome"   # several steps, one invocation (\`do -\` reads steps from stdin)
 \`\`\`
 
-The loop is **snapshot, then act on a ref**. A snapshot prints the page's accessibility tree — every button, link and field with a \`#eNN\` handle — which is far cheaper and more precise than a screenshot. Refs stay valid as long as the element does, so you do not need a fresh snapshot after every click; take one when the page has changed shape. Actions report where they landed and whether the page navigated, so you rarely need a second call to find out what happened.
+The loop is snapshot, then act on a ref — and when you can already name the target, skip the snapshot: \`find "Sign in"\` then a bare \`click\`. Scope reads on big apps (\`snapshot -i -s\`, \`get text <sel>\`, \`text <sel>\`); \`diff snapshot\` prints only what changed since your last one. \`cast browser --help\` lists every verb and \`cast browser help <cmd>\` every flag — ask the CLI instead of guessing.
 
-**Several steps at once**: \`cast browser do\` runs a whole flow in one invocation, which is far faster — most of a single command is process startup, not browser work. A step with no ref uses whatever the last \`find\` matched.
+What cast adds to the usual pattern:
 
-\`\`\`bash
-cast browser do "open example.com" "find Sign in" click "wait --text Password" shot
-cast browser do - <<'EOF'          # one step per line, for longer flows
-open https://example.com
-find "Sign in"
-click
-type #e42 "hunter2" --submit
-EOF
-\`\`\`
-
-\`\`\`bash
-cast browser press Enter | Escape | "cmd+a" | "/"
-cast browser scroll 800            # negative scrolls up, or --up
-cast browser viewport mobile       # desktop|laptop|wide|tablet|mobile|mobile-small, or 1024x768
-cast browser select #e3 "Option"   # native <select>
-cast browser upload #e9 ./file.png # file input, no OS picker
-cast browser hover #e5             # reveal a menu
-cast browser wait --text "Saved"   # or --ref #e12, or plain settle
-cast browser eval "location.href"  # JavaScript in the page
-cast browser text                  # visible text, for reading rather than acting
-\`\`\`
-
-**Debugging a web app**: \`cast browser console\` and \`cast browser network --failed\` report what the page logged and requested, including errors thrown before you looked. Modal dialogs never block you — \`alert\`/\`confirm\`/\`prompt\` are answered automatically and listed by \`cast browser dialogs\`, so a page that asks something cannot freeze the tab. Capture is armed automatically; when it starts after the page has already run it says so, and \`cast browser reload\` catches the whole load.
-
-**Showing the human what you saw**: page-changing commands (open, click, submit, press, select, upload, reload) automatically put a small screenshot into the conversation when the page visibly changed, so a browsing thread documents itself — you do not need \`shot\` after every step. \`cast browser shot\` is still there for a deliberate full-size capture, under the command that took it. Add \`--share\` when you also want a link you can paste elsewhere, with \`--alt\` to caption it. Never link a local path — their browser cannot read files on this machine. \`--no-shot\` skips one automatic capture; \`cast browser shots off\` turns them off for good.
-
-**Running the browser on another machine.** \`cast browser start --remote linux\` drives a Chrome on a cloud host instead of this one, and \`cast browser hosts\` lists what is available. Your logins come with you: the cookies for a site are decrypted here and injected into the remote browser as you navigate to it, so there is no list to configure and nothing of yours is stored there — the remote profile starts empty and is wiped on stop.
-
-Two kinds of host, and the difference is mostly money:
-
-- \`--remote linux\` — an EC2 instance. It sleeps when idle and then costs only its disk, about a dollar a month, and wakes in about thirty seconds when a command needs it. **Use this for anything web.** Chrome on Linux is the same Chrome speaking the same protocol.
-- \`--remote mac\` — an Apple silicon Mac. It cannot sleep at all: Apple's licence imposes a 24-hour minimum lease, so it bills continuously (around EUR75/month) until deleted, and creating one per task is worse than leaving it up. **Only reach for it when the work genuinely needs macOS** — Xcode or an iOS build, the iOS simulator, or testing Safari specifically. A Mac is a shared pool, not a per-person machine.
-
-Put a host back to sleep with \`cast browser hosts sleep\` when you are done; nothing else stops the meter.
-
-**One browser, many agents.** Every agent on this machine drives the SAME Chrome window, and each session gets a tab of its own — \`cast browser open <url>\` reuses your tab, so just call it and keep working. \`cast browser tabs\` lists every tab and marks yours; you can see the others but you act only on your own. Reach for \`--new-tab\` only when you genuinely need a SECOND page open at once — opening one per step leaves a pile of tabs for everyone. In the conversation, each browser row carries an "open tab" pill that raises your live tab on the human's screen and a "watch live" pill that streams it, so the human can look whenever they like — nothing you do brings the browser to the front by itself.
-
-The browser keeps running between commands, so this is stateful: what you opened stays open until you close it or run \`cast browser stop\`. It starts from a COPY of the real Chrome profile and, on every \`open\`, brings over the cookies the real Chrome holds for that site right now — so it is signed in to what the human is signed in to, including logins made after it started — and nothing it does touches the real browser. Treat that access the way the human would — it is their logged-in accounts. \`cast browser start --fresh\` gives a signed-out browser when that is what you want, and \`cast browser stop --wipe\` removes the copy.
+- **Evidence flows to the thread.** A failing step automatically prints console errors, failed requests and a screenshot. \`shot\` puts a capture in the conversation — \`--annotate\` numbers elements with their refs, \`--share\` uploads a link you can paste. \`cast browser shots on\` adds an automatic small capture after commands that change the page (off by default for agents; a \`do\` flow then captures once, at the end). Never link local file paths — the human's browser cannot read them.
+- **One Chrome, many agents.** Each session owns one tab; \`tabs\` marks yours. Act only on yours, and \`--new-tab\` only for a genuine second page. State persists until \`cast browser stop\` (\`--wipe\` also removes the profile copy; \`start --fresh\` starts signed out). The clone holds the human's logins — treat that access as theirs. Modal dialogs are dismissed automatically and never block.
+- **Remote hosts.** \`start --remote linux\` runs Chrome on a cloud host that sleeps when idle (about a dollar a month); \`--remote mac\` cannot sleep and bills continuously (~EUR75/month, minimum lease 24 hours) — only for work that truly needs macOS. Cookies are injected per site as you navigate and wiped on stop. \`cast browser hosts sleep\` when done.
 ${BROWSER_SNIPPET_END}
 `;
 
@@ -673,6 +640,31 @@ export const CHAT_SECTION: SectionSpec = {
   endMarker: CHAT_SNIPPET_END,
 };
 
+export const CALLS_SNIPPET_END = "<!-- /codecast-calls -->";
+export const CALLS_SNIPPET = `
+## Calls
+
+The team's huddles are transcribed with exact speaker attribution, and every call gets an
+auto-generated title, summary and action items once it ends. \`cast calls\` is how you read
+what was said without having been on the call — the decisions, the asks, who owns what.
+
+\`\`\`bash
+cast calls                        # team call history, live calls first
+cast call <id>                    # one call: summary + action items
+cast call <id> --transcript       # full who-said-what transcript
+cast call <id> --json             # machine-readable (includes segments)
+\`\`\`
+
+Reach for a transcript when a task or thread refers to something "we discussed on the call",
+and quote the exact line rather than paraphrasing from memory.
+${CALLS_SNIPPET_END}
+`;
+
+export const CALLS_SECTION: SectionSpec = {
+  headings: ["## Calls"],
+  endMarker: CALLS_SNIPPET_END,
+};
+
 export const DECIDE_SNIPPET_END = "<!-- /codecast-decide -->";
 export const DECIDE_SNIPPET = `
 ## Asking for a decision
@@ -708,8 +700,8 @@ EOF
 The bar: a bare question is useless. The context carries your reasoning, the tradeoff, and the
 consequence of each option — the queue shows nothing else unless they open the session. For a
 decision that deserves evidence (a migration, an audit, a design), write an HTML report and
-attach it with \`--report report.html\`; it publishes like any artifact and renders with the
-question.
+attach it with \`--report report.html\`; it publishes like any page and renders embedded with
+the question.
 
 Blocking is the default: post it, then END YOUR TURN — the answer arrives as a user message.
 When you can safely proceed and only want oversight, pass \`--advisory --default <n>\`: keep
@@ -777,7 +769,8 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "Adds `cast fork` and `cast spawn` so a session can hand work to your inbox. `fork` " +
       "branches the current conversation N ways from a message point; `spawn` starts fresh " +
       "sessions. Both land in your inbox as independent threads — unlike subagents, which " +
-      "report back to the agent that launched them.",
+      "report back to the agent that launched them. `spawn --subagent` makes such a worker " +
+      "explicitly: the new session nests under its parent as a subagent row, on any agent backend.",
     writesTo: "CLAUDE.md — a ## Forks & Sessions section",
     shipped: "2026-06-18",
     enabledKey: "forks_enabled",
@@ -887,6 +880,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     detail:
       "Adds `cast publish <file.html>` so agents can publish HTML deliverables — reports, " +
       "dashboards, mockups — to a stable codecast.sh/a/<id> URL you can open and share. " +
+      "A page URL on its own line in a reply embeds the live page in the conversation. " +
       "Re-publishing the same file keeps the same link; links are unlisted but viewable " +
       "by anyone who has them.",
     writesTo: "CLAUDE.md — a ## Publishing pages section with the command",
@@ -932,6 +926,22 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     enabledKey: "chat_enabled",
     versionKey: "chat_version",
     section: { spec: CHAT_SECTION, body: CHAT_SNIPPET },
+  },
+  {
+    slug: "calls",
+    aliases: ["huddles", "call"],
+    name: "Calls",
+    desc: "Read transcribed team calls (cast calls)",
+    detail:
+      "Adds `cast calls` and `cast call <id>` so agents can read the team's huddles: the " +
+      "speaker-attributed transcript, the auto-generated summary and the action items. " +
+      "Nothing joins a call — this is read access to what was said, so a task that says " +
+      "\"as discussed on the call\" can be traced to the exact line.",
+    writesTo: "CLAUDE.md — a ## Calls section with the command reference",
+    shipped: "2026-08-16",
+    enabledKey: "calls_enabled",
+    versionKey: "calls_version",
+    section: { spec: CALLS_SECTION, body: CALLS_SNIPPET },
   },
   {
     slug: "browser",

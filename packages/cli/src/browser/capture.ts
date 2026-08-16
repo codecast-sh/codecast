@@ -77,6 +77,16 @@ export function classifyFailure(message: string): FailureKind {
   ) {
     return "usage";
   }
+  // The engine's own argument errors: the command was refused by its parser,
+  // so nothing touched the page. "Unknown ref"/"Unknown selector" stay
+  // capturable — those DID ask the page and a screenshot shows why they missed.
+  if (
+    /^(Unknown command:|Unknown option\b|Unknown \w+ subcommand:|Skill not found:|Missing arguments? for:|Unexpected [\w-]+ argument|Usage: (agent-browser|cast browser)|Invalid [\w ]{1,24}:)/.test(
+      message,
+    )
+  ) {
+    return "usage";
+  }
   return "capturable";
 }
 

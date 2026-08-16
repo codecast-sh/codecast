@@ -501,6 +501,27 @@ describe("isApiErrorBanner", () => {
     expect(classifyApiErrorBanner("API Error: 408 Request timeout")).toBe("error");
   });
 
+  test("a 429 carrying the subscription exceeded_limit payload is a limit park, not a transient", () => {
+    // 2026-08-15: the raw refusal for a pegged 5h window while 7d sat at 39% —
+    // longer than the prose cap, and retrying it until resets_at is pure waste.
+    const payload =
+      'API Error: 429 {"type":"exceeded_limit","resetsAt":1786814400,"remaining":null,"perModelLimit":false,' +
+      '"representativeClaim":"five_hour","overageDisabledReason":"org_level_disabled","overageInUse":false,' +
+      '"windows":{"5h":{"status":"exceeded_limit","resets_at":1786814400,"utilization":1.0,"surpassed_threshold":1.0},' +
+      '"7d":{"status":"within_limit","resets_at":1786852800,"utilization":0.39}},' +
+      '"resolved":{"status":"exceeded","limit":{"kind":"session","group":"session","percent":100,"severity":"critical",' +
+      '"resets_at":"2026-08-15T17:20:00+00:00","scope":null,"is_active":true},"spend":null,"disabled_reason":"org_level_disabled"}}';
+    expect(payload.length).toBeGreaterThan(400);
+    expect(classifyApiErrorBanner(payload)).toBe("limit");
+    // The marker must be the payload's own quoted key: a bare mention in a
+    // transient 429 body, another status, or multi-line prose about the
+    // payload never promotes to limit.
+    expect(classifyApiErrorBanner("API Error: 429 exceeded_limit rate limited, retry later")).toBe("error");
+    expect(classifyApiErrorBanner('API Error: 529 {"type":"exceeded_limit"}')).toBe("error");
+    expect(classifyApiErrorBanner('API Error: 429 {"type":"exceeded_limit"}\nSo the account is rationed — here is what I found:')).toBe("error");
+    expect(classifyApiErrorBanner('The tool failed with {"type":"exceeded_limit"} — the account hit its five-hour window.')).toBe(null);
+  });
+
   test("terminal statuses the CLI won't retry classify as fatal (blocked set), 401/403 as auth", () => {
     // A 400 kills the turn — the CLI gives up and the session sits parked at
     // the prompt exactly like a connection drop; continue retries it.

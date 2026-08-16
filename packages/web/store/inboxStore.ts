@@ -17,7 +17,14 @@ import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtoc
 import { isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, PERSISTENCE_AVAILABLE } from "./idbCache";
-import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrategy } from "./clientSyncRegistry";
+import {
+  HYDRATION_CRITICAL_KEYS,
+  HYDRATION_DEFERRED_KEYS,
+  REGISTRY_SYNC_OPTS,
+  collectionInitialState,
+  hydrationMergeStrategy,
+  type RegisteredCollectionSlots,
+} from "./clientSyncRegistry";
 import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
@@ -1029,6 +1036,11 @@ export type ClientUI = {
   plan_view?: PlanViewPrefs;
   saved_views?: SavedView[];
   show_subagents?: boolean;
+  // Trigger rows under inbox cards: expanded (full row per trigger — name,
+  // last report, countdown, verbs) or folded to a one-line strip that only says
+  // the card has triggers and when the next one fires. Absent = folded: the
+  // strip is the resting state; the pill toggle opens the detail.
+  show_triggers?: boolean;
   // The machine you last chose by hand in the new-session picker — the default
   // the picker opens on for NEW work (defaultMachineId rung 2). Deliberately
   // UNSTAMPED, i.e. per-device: "where should this run" is answered differently
@@ -2798,7 +2810,10 @@ export function findReusableBlankSession(
 
 // -- Store interface --
 
-interface InboxStoreState extends ChatSliceState {
+// RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
+// typed `Record<string, any>` slot here by registration alone; the explicit
+// fields below narrow the ones with a real row type.
+interface InboxStoreState extends ChatSliceState, RegisteredCollectionSlots {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -3064,6 +3079,7 @@ interface InboxStoreState extends ChatSliceState {
   setPrivacy: (id: string, isPrivate: boolean) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
   toggleBookmark: (conversationId: string, messageId: string) => void;
+  setMyStatus: (status: "available" | "busy" | "away") => void;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
@@ -3520,6 +3536,11 @@ interface InboxStoreState extends ChatSliceState {
   // revert a toggle before its own mutation has committed.
   bookmarkPending: Record<string, { bookmarked: boolean; conversationId: string }>;
 
+  // The viewer's in-flight manual status flip (setMyStatus). teamMembers is a
+  // wholesale-replaced list, so the teamMembers normalize re-applies this on
+  // top of each push until the server reflects it (or the TTL expires).
+  myStatusPending: { userId: string; status: string; at: number } | null;
+
   // -- Selectors --
   getSession: (id: string) => InboxSession | undefined;
 }
@@ -3744,7 +3765,11 @@ export type SyncOpts = {
   // per-push value changes defeat the JSON compare even though nothing the UI
   // shows has changed — teamMembers re-pushed ~every 2s on teammates' heartbeat
   // and message-count ticks, waking every subscriber of the roster ref.
-  normalize?: (incoming: any) => any;
+  // The second argument is the store draft, for entries that reconcile local
+  // pending state against the payload (teamMembers' status overlay) — running
+  // BEFORE the equality bail, unlike transform, so a protected no-op push
+  // still bails instead of waking every subscriber.
+  normalize?: (incoming: any, draft?: any) => any;
 };
 
 // Per-key last-writer-wins for a flat preference bag whose writes carry a
@@ -3780,7 +3805,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // (sidebar, zen mode, theme, active team) are naturally per-device, and
 // silently globalizing them would yank screens out from under people.
 export const STAMPED_UI_KEYS = new Set([
-  "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "inbox_show_old",
+  "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home",
 ]);
 
@@ -3849,6 +3874,10 @@ function quantizePresence<T>(rec: T): T {
 }
 
 const SYNC_REGISTRY: Record<string, SyncOpts> = {
+  // Data-only sync opts registered on the collection itself (clientSyncRegistry
+  // `sync`) land first; the entries below add or override the store-internal
+  // ones (transforms, merges, normalizers).
+  ...REGISTRY_SYNC_OPTS,
   sessions: {
     altKey: "session_id",
     keepSelected: "currentSessionId",
@@ -3932,18 +3961,12 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     // instantly from cache on the next open instead of reloading async.
     preserveFields: ["comments", "history"],
   },
-  docs: { isDelta: true },
-  plans: { isDelta: true },
   // The decision queue. NOT delta: listForUser returns the complete visible
   // window (pending + 24h of resolved) on every push, so absence means the
   // row aged out — delta mode would pin cleared decisions in the queue
   // forever. localFirst pending-protection covers the answer flip until the
   // server echo confirms it.
   sessionDecisions: {},
-  // Like the others: a liberal delta cache. useSyncProjects' call site passes no
-  // opts, so without this projects synced as an authoritative snapshot — the one
-  // remaining collection that still pruned the cache by absence.
-  projects: { isDelta: true },
   // NOT delta: savedViews.webList returns the complete visible set on every
   // push, so absence means removed. Delta mode would treat a deleted or
   // un-shared view as "unchanged" and leave it on the rail forever.
@@ -3965,18 +3988,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // never prunes another's, and a thread's replies survive a channel sync. See
   // store/chatSlice.ts for why these collections carry no pending protection.
   ...CHAT_SYNC_REGISTRY,
-  // The fleet mirror. A COLLECTION keyed by server _id — the task draft said
-  // singleton-keyed-by-device, but rows are (device, client, scope) tuples and
-  // the slice reads them as a Record; a singleton would make every device's
-  // report clobber the fleet. No pending filter: nothing optimistic ever
-  // writes here (see store/capabilities.ts).
-  capabilityState: {},
-  // The user's own bindings — the wishes behind the Installed tab and the
-  // equip control. localFirst: an optimistic toggle must render before the
-  // round trip; the setCapabilityBinding dispatch side effect confirms it.
-  // altKey: an optimistic stub keyed by client_key is superseded by the server
-  // row that comes back carrying the same client_key — the tasks convention.
-  capabilityBindings: { altKey: "client_key" },
+  // capabilityState / capabilityBindings: registered on the collection.
   clientState: {
     kind: "singleton",
     merge: {
@@ -4044,7 +4056,31 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   teams: { kind: "list" },
   teamMembers: {
     kind: "list",
-    normalize: (list: any) => (Array.isArray(list) ? list.map(quantizePresence) : list),
+    // Beyond presence quantization, overlay the viewer's in-flight manual
+    // status (setMyStatus): the roster is wholesale-replaced on every push,
+    // and a push computed before the updateProfile mutation committed would
+    // flap the optimistic pill back for a beat. Protection lives in normalize,
+    // not transform, so the equality bail still swallows no-op heartbeat
+    // pushes. Cleared once the server reflects the status; the TTL keeps a
+    // failed dispatch from pinning a status the server never accepted.
+    normalize: (list: any, draft?: any) => {
+      if (!Array.isArray(list)) return list;
+      const mapped = list.map(quantizePresence);
+      const pending = draft?.myStatusPending;
+      if (!pending) return mapped;
+      if (Date.now() - pending.at > 30_000) {
+        draft.myStatusPending = null;
+        return mapped;
+      }
+      const idx = mapped.findIndex((m: any) => m && String(m._id) === pending.userId);
+      if (idx === -1) return mapped;
+      if ((mapped[idx].status ?? "available") === pending.status) {
+        draft.myStatusPending = null; // server caught up — stop protecting
+      } else {
+        mapped[idx] = { ...mapped[idx], status: pending.status };
+      }
+      return mapped;
+    },
   },
   teamUnreadCount: { kind: "scalar" },
   favorites: { kind: "list" },
@@ -4949,6 +4985,9 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
 
 const inboxStoreConfig = (set: any, get: any) => ({
   // -- Initial state --
+  // Every registered collection starts as {} by registration alone; explicit
+  // slots below only add non-collection state and typed narrowings.
+  ...collectionInitialState(),
   sessions: {},
   pending: {},
   dispatchErrors: 0,
@@ -5832,6 +5871,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.bookmarkPending[messageId] = { bookmarked: nowBookmarked, conversationId };
   }),
 
+  // Manual presence status. Local-first: the roster row is the read path
+  // (TeamAvatarBar's bar + hover card), so patch it in the draft — the pill
+  // flips the instant it's clicked. teamMembers is wholesale-replaced on every
+  // push, so myStatusPending protects the flip until the server echoes it
+  // (see the teamMembers entry in SYNC_REGISTRY). The setMyStatus dispatch
+  // side-effect runs the authoritative users.updateProfile.
+  setMyStatus: action(function (this: Draft, status: "available" | "busy" | "away") {
+    const meId = String(this.currentUser?._id ?? "");
+    if (!meId) return;
+    if (this.currentUser) (this.currentUser as any).status = status;
+    const idx = (this.teamMembers as any[]).findIndex((m) => m && String(m._id) === meId);
+    if (idx !== -1) this.teamMembers[idx] = { ...(this.teamMembers[idx] as any), status };
+    this.myStatusPending = { userId: meId, status, at: Date.now() };
+  }),
+
   // Notifications are a protected collection: the optimistic `read` flip is
   // field-protected so the next list sync can't revert it (the badge + bold
   // state clear instantly). The named side-effects delegate to the existing
@@ -6255,7 +6309,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const kind = config.kind ?? "collection";
 
     if (kind === "scalar" || kind === "list") {
-      if (config.normalize) incoming = config.normalize(incoming);
+      if (config.normalize) incoming = config.normalize(incoming, this);
       // No-op re-pushes are common — a list-kind subscription re-emits on any
       // read-set change (teamMembers was measured re-pushing ~every 2s on
       // presence heartbeats) — and a wholesale assign registers as a change:
@@ -6277,7 +6331,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
 
     if (kind === "singleton") {
-      if (config.normalize) incoming = config.normalize(incoming);
+      if (config.normalize) incoming = config.normalize(incoming, this);
       const local = (this as any)[field];
       const initKey = `${field}Initialized`;
       const initialized = (this as any)[initKey] ?? false;
@@ -8264,6 +8318,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
       window.location.assign(opts.path);
       return "";
     }
+    // A pathless tab is unrenderable and PERSISTS — it crashed the TabBar on
+    // every boot until the store was hand-repaired. Refuse it at the door.
+    if (!opts?.path || typeof opts.path !== "string") return "";
     const id = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const tab: AppTab = {
       id,
@@ -8346,6 +8403,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   favorites: [],
   bookmarks: [],
   bookmarkPending: {},
+  myStatusPending: null,
 
   myCalls: { incoming: [], outgoing: [], membership: null },
   callOccupancy: {},

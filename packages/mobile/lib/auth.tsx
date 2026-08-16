@@ -10,9 +10,13 @@ import { useConvexAuth, useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { clearProtectedInboxMemory, useInboxStore } from '@codecast/web/store/inboxStore';
 import { openPrincipalDispatchOutbox } from './dispatchOutbox';
+import { authRenderDecision, localBootTrust, shouldClearMemoryFor } from './authTrust';
 
 const TOKEN_KEY = 'convex_auth_token';
 const BIOMETRIC_ENABLED_KEY = 'biometric_enabled';
+// The last principal this device verified with the server — the owner of the
+// SQLite cache. Local-first boot trust anchors on it (see lib/authTrust).
+const LAST_PRINCIPAL_KEY = 'last_verified_principal';
 
 export interface AuthContextType {
   isAuthenticated: boolean;
@@ -65,8 +69,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     verifiedSubject === accessIdentity.subject && currentUserId === accessIdentity.principalId
     ? accessIdentity.subject
     : null;
-  const lastVisibleSubject = useRef<string | null>(null);
+  // Local-first boot: the persisted trust anchor (last server-verified
+  // principal). undefined while the SecureStore read is in flight — a ms-long
+  // gate, unlike the network round-trip visibleSubject needs.
+  const [bootPrincipal, setBootPrincipal] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    SecureStore.getItemAsync(LAST_PRINCIPAL_KEY)
+      .then((v) => setBootPrincipal((cur) => (cur === undefined ? v : cur)))
+      .catch(() => setBootPrincipal((cur) => (cur === undefined ? null : cur)));
+  }, []);
+  // The subject this launch acts as. Server verification wins when present;
+  // before it lands (or offline, where it never lands) a token naming the
+  // cache-owner principal is trusted locally, so the hydrated cache renders
+  // and writes park durably without waiting on the network.
+  const trustedSubject = visibleSubject ?? localBootTrust({
+    accessIdentity,
+    bootPrincipal,
+    isAuthenticated,
+    currentUserLoaded: currentUser !== undefined,
+    currentUserId,
+  });
+  const trustedPrincipalId = trustedSubject && accessIdentity ? accessIdentity.principalId : null;
+  const lastTrustedSubject = useRef<string | null>(null);
   const outboxSubject = useRef<string | null>(null);
+  // Which principal's data occupies the shared store right now: seeded from
+  // the disk cache's owner once the anchor is read, replaced when a clear
+  // installs a new owner.
+  const memoryPrincipal = useRef<string | null | undefined>(undefined);
   const [outboxReadySubject, setOutboxReadySubject] = useState<string | null>(null);
   const [outboxFailure, setOutboxFailure] = useState<{
     subject: string;
@@ -74,23 +103,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const [outboxOpenAttempt, setOutboxOpenAttempt] = useState(0);
   const dispatchGeneration = useRef(0);
-  const durableSubject = visibleSubject &&
-    outboxReadySubject === visibleSubject
-    ? visibleSubject
-    : null;
 
-  // This gate runs during render: a token/account change cannot wait for an
+  // These gates run during render: a token/account change cannot wait for an
   // effect cleanup while an old retry is still in flight.
-  if (lastVisibleSubject.current !== visibleSubject) {
+  if (memoryPrincipal.current === undefined && bootPrincipal !== undefined) {
+    memoryPrincipal.current = bootPrincipal;
+  }
+  // Clear on PRINCIPAL change only. The old subject-keyed clear fired on every
+  // boot's null → subject transition and wiped the cache SQLite hydration had
+  // just loaded — the bug that made the phone boot server-first.
+  if (shouldClearMemoryFor(memoryPrincipal.current, trustedPrincipalId)) {
     clearProtectedInboxMemory();
-    lastVisibleSubject.current = visibleSubject;
+    memoryPrincipal.current = trustedPrincipalId;
+  }
+  if (lastTrustedSubject.current !== trustedSubject) {
+    lastTrustedSubject.current = trustedSubject;
     dispatchGeneration.current++;
   }
   // Close the old account's enqueue surface in the same render that closes
   // dispatch authorization. The native SQLite rows remain intact and
   // principal-keyed, but no click in the transition window can capture the old
   // principal's outbox closure.
-  if (outboxSubject.current !== visibleSubject) {
+  if (outboxSubject.current !== trustedSubject) {
     (useInboxStore.getState() as unknown as {
       _setOutbox(
         enqueue: ((entry: any) => void | Promise<void>) | null,
@@ -98,25 +132,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         load: (() => Promise<any[]>) | null,
       ): void;
     })._setOutbox(null, null, null);
-    outboxSubject.current = visibleSubject;
+    outboxSubject.current = trustedSubject;
   }
 
   useEffect(() => {
-    const subject = visibleSubject;
-    // A verified identity is necessary but not sufficient for writable UI:
-    // until its principal-keyed SQLite outbox is installed, a dispatch could
-    // reach the server without a durable replay record. Keep authorization and
-    // children closed through the entire open (and after an open failure).
+    const subject = trustedSubject;
+    const principalId = trustedPrincipalId;
+    // Until the trusted principal's SQLite outbox is installed, a dispatch
+    // could reach the server without a durable replay record. Keep the enqueue
+    // surface closed through the entire open (and after an open failure).
+    // Keyed on the LOCALLY trusted principal, not the verified user id, so the
+    // outbox opens at boot — offline included — instead of after a round-trip.
     setOutboxReadySubject(null);
     setOutboxFailure(null);
-    if (!subject || !currentUserId) return;
+    if (!subject || !principalId) return;
     let cancelled = false;
-    void openPrincipalDispatchOutbox(currentUserId)
+    void openPrincipalDispatchOutbox(principalId)
       .then((outbox) => {
         if (
           cancelled ||
           outboxSubject.current !== subject ||
-          lastVisibleSubject.current !== subject
+          lastTrustedSubject.current !== subject
         ) {
           return;
         }
@@ -138,7 +174,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (
           cancelled ||
           outboxSubject.current !== subject ||
-          lastVisibleSubject.current !== subject
+          lastTrustedSubject.current !== subject
         ) {
           return;
         }
@@ -165,16 +201,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         })._setOutbox(null, null, null);
       }
     };
-  }, [visibleSubject, currentUserId, outboxOpenAttempt]);
+  }, [trustedSubject, trustedPrincipalId, outboxOpenAttempt]);
 
   useEffect(() => {
     if (!isAuthenticated || !accessIdentity || currentUser === undefined) {
       if (!isAuthenticated) setVerifiedSubject(null);
       return;
     }
-    setVerifiedSubject(currentUserId === accessIdentity.principalId
-      ? accessIdentity.subject
-      : null);
+    const verified = currentUserId === accessIdentity.principalId;
+    setVerifiedSubject(verified ? accessIdentity.subject : null);
+    if (verified) {
+      // Persist the trust anchor so the NEXT boot renders the cache before any
+      // network. Also adopt it in-memory: the boot read may still be in flight
+      // (or have found nothing on a first login).
+      setBootPrincipal(accessIdentity.principalId);
+      void SecureStore.setItemAsync(LAST_PRINCIPAL_KEY, accessIdentity.principalId).catch(() => {});
+    }
   }, [isAuthenticated, accessIdentity?.principalId, accessIdentity?.subject, currentUser, currentUserId]);
   const [isBiometricAvailable, setIsBiometricAvailable] = useState(false);
   const [isBiometricEnabled, setIsBiometricEnabled] = useState(false);
@@ -272,6 +314,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     clearProtectedInboxMemory();
+    // Drop the local-first trust anchor with the session: a signed-out device
+    // must not render the old principal's (now cleared) cache on next boot.
+    memoryPrincipal.current = null;
+    setBootPrincipal(null);
+    await SecureStore.deleteItemAsync(LAST_PRINCIPAL_KEY);
     await convexSignOut();
     await SecureStore.deleteItemAsync(TOKEN_KEY);
   };
@@ -313,11 +360,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         authenticateWithBiometric,
       }}
     >
-      {isLoading || (isAuthenticated && !visibleSubject)
-        ? null
-        : isAuthenticated && !durableSubject
-          ? outboxFailure?.subject === visibleSubject
-            ? (
+      {(() => {
+        // Local-first render: a locally trusted boot shows the cached app
+        // immediately; "blank" covers only the ms-long anchor read and an
+        // untrusted token mid-verification (see authRenderDecision).
+        const decision = authRenderDecision({
+          bootPrincipalLoaded: bootPrincipal !== undefined,
+          trustedSubject,
+          outboxFailureSubject: outboxFailure?.subject ?? null,
+          isLoading,
+          isAuthenticated,
+        });
+        if (decision === "children") return children;
+        if (decision === "blank") return null;
+        return (
               <View
                 accessibilityRole="alert"
                 style={{
@@ -336,7 +392,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   style={{ color: '#d1d5db', textAlign: 'center', maxWidth: 420 }}
                 >
                   Codecast kept writing disabled so no work can be lost.
-                  {outboxFailure.message ? ` ${outboxFailure.message}` : ''}
+                  {outboxFailure?.message ? ` ${outboxFailure.message}` : ''}
                 </Text>
                 <Pressable
                   accessibilityRole="button"
@@ -351,9 +407,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   <Text style={{ color: '#ffffff', fontWeight: '600' }}>Retry</Text>
                 </Pressable>
               </View>
-            )
-            : null
-          : children}
+        );
+      })()}
     </AuthContext.Provider>
   );
 }

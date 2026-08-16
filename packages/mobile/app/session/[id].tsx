@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions, InteractionManager, type TextInput as NativeTextInput, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions, InteractionManager, type TextInput as NativeTextInput, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
@@ -22,9 +22,11 @@ import { PermissionCard } from '@/components/PermissionCard';
 import { SuggestionPills } from '@/components/SuggestionPills';
 import { PulsingDot } from '@/components/SessionItem';
 import { AssignmentChip } from '@/components/AssignmentChip';
+import { SessionHuddleButton } from '@/components/calls/SessionHuddleButton';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { agentSupportsFork, ACTIVE_AGENT_STATUSES } from '@codecast/shared/contracts';
-import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText } from '@/components/MarkdownRenderer';
+import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
+import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
@@ -917,7 +919,7 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
         )}
         <RNText style={[styles.specialToolMeta, { marginLeft: 'auto' }]}>{expanded ? 'collapse' : 'expand'}</RNText>
       </RNView>
-      <RNText style={styles.specialToolContent} selectable numberOfLines={expanded ? 50 : 3}>{truncatedPrompt}</RNText>
+      <RNText style={styles.specialToolContent} selectable numberOfLines={expanded ? 50 : 3}>{linkifyPlainText(truncatedPrompt, 'sp')}</RNText>
       {!expanded && prompt.length > 300 && (
         <RNText style={{ fontSize: 10, color: Theme.textDim, marginTop: 2 }}>show more</RNText>
       )}
@@ -925,7 +927,7 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
         <RNView style={styles.specialToolResult}>
           <RNText style={styles.specialToolResultLabel}>Result</RNText>
           <RNText style={[styles.specialToolResultText, result.is_error && { color: Theme.red }]} selectable numberOfLines={20}>
-            {result.content}
+            {linkifyPlainText(result.content, 'sr')}
           </RNText>
         </RNView>
       )}
@@ -2094,7 +2096,7 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
         )}
       </RNView>
       <CollapsibleBody fadeColor={blendOver(Theme.violet + '0d', Theme.bg)}>
-        <RNText style={styles.sessionMessageBody} selectable>{prompt}</RNText>
+        <RNText style={styles.sessionMessageBody} selectable>{linkifyPlainText(prompt, 'tp')}</RNText>
       </CollapsibleBody>
     </RNView>
   );
@@ -2415,12 +2417,12 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
             <RNView style={styles.bashCommandSection}>
               <RNText style={styles.bashPrompt} selectable>
                 <RNText>$ </RNText>
-                <RNText>{inputDisplay}</RNText>
+                <RNText>{linkifyPlainText(inputDisplay, 'bp')}</RNText>
               </RNText>
             </RNView>
           ) : !shouldHideInput && toolCall.input && toolCall.input.length > 2 ? (
             <RNView style={styles.toolInputSection}>
-              <RNText style={styles.toolCallInput} selectable>{inputDisplay}</RNText>
+              <RNText style={styles.toolCallInput} selectable>{linkifyPlainText(inputDisplay, 'ti')}</RNText>
             </RNView>
           ) : null}
           {isEdit && parsedInput.old_string && parsedInput.new_string ? (
@@ -2467,7 +2469,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
                 <MarkdownContent text={resultDisplay} baseStyle={styles.toolCallResult} isUser={false} />
               ) : (
                 <RNText style={[styles.toolCallResult, result.is_error && { color: Theme.red }]} selectable>
-                  {resultDisplay}
+                  {linkifyPlainText(resultDisplay, 'tr')}
                 </RNText>
               )}
             </RNView>
@@ -4591,6 +4593,7 @@ export default function SessionDetailScreen() {
             <FontAwesome name="chevron-left" size={18} color={Theme.text} />
           </TouchableOpacity>
           <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{conversation.title || 'Conversation'}</RNText>
+          {conversation?._id && <SessionHuddleButton conversationId={String(conversation._id)} />}
           {allSessionImages.length > 0 && (
             <TouchableOpacity
               onPress={() => { setGalleryIndex(Math.max(0, allSessionImages.length - 1)); setGalleryVisible(true); }}
@@ -4651,7 +4654,7 @@ export default function SessionDetailScreen() {
                       if (conversation.git_remote_url) {
                         const match = conversation.git_remote_url.match(/github\.com[:/](.+?)(?:\.git)?$/);
                         if (match) {
-                          Linking.openURL(`https://github.com/${match[1]}/tree/${conversation.git_branch}`);
+                          void openLink(`https://github.com/${match[1]}/tree/${conversation.git_branch}`);
                         }
                       }
                     }}
@@ -4688,7 +4691,7 @@ export default function SessionDetailScreen() {
                     onPress={() => {
                       const details = conversation.forked_from_details!;
                       if (details.share_token) {
-                        Linking.openURL(`https://codecast.sh/share/${details.share_token}`);
+                        void openLink(`https://codecast.sh/share/${details.share_token}`);
                       } else {
                         router.push(`/session/${details.conversation_id}`);
                       }
