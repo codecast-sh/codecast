@@ -1374,6 +1374,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
     <GenericListView<TaskItem>
           activeItemId={(projectId ? params?.taskId : params?.id) as string | undefined}
           paletteTargetType="task"
+          getComposeRef={(t) => t.short_id}
           title={projectId ? "Project tasks" : "Tasks"}
           tabs={[
             { key: "all", label: "All", count: taskCounts.all, icon: Layers },
