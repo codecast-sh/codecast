@@ -20,7 +20,7 @@
   "forks": {
     "config": {
       "forks_enabled": true,
-      "forks_version": "4"
+      "forks_version": "5"
     },
     "stdout": "* Forks & Sessions — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,

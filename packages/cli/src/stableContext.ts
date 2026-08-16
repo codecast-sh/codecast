@@ -19,6 +19,7 @@ import {
   type StableMode,
 } from "@codecast/shared/contracts";
 import { formatFeedResults } from "./formatter.js";
+import { loadLocalUsageProfiles, usagePressureLine } from "./usageCommand.js";
 
 const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
 
@@ -218,7 +219,17 @@ export async function runStableContextHook(
   });
   if (!built) return;
 
-  process.stdout.write(wrapForClient(client, built.text));
+  // Claude sessions only (this is the Claude account's meter): a session that
+  // starts on an already-pressured account learns it here, at the one moment
+  // the active login is provably its account. Silent when there is headroom.
+  let text = built.text;
+  if (client === "claude") {
+    try {
+      const line = usagePressureLine(loadLocalUsageProfiles(), Date.now());
+      if (line) text += `\n\n${line}`;
+    } catch {}
+  }
+  process.stdout.write(wrapForClient(client, text));
   // Record what was injected so the web renders it as cards at the top of
   // the conversation. Prefer the daemon-exported conversation id (no lookup
   // race); terminal-started sessions fall back to the agent session id,

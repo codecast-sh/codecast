@@ -517,6 +517,41 @@ describe("chat store slice", () => {
       expect(rail[0].mentionCount).toBe(2);
     });
 
+    it("attests emptiness only when a rail row says so", () => {
+      const unknown = serverId("chanunk");
+      useInboxStore.getState().syncTable("chatChannels", [
+        { _id: CHANNEL, name: "general", created_at: 1, updated_at: 1 },
+        { _id: unknown, name: "mystery", created_at: 2, updated_at: 2 },
+      ]);
+      // The server's summary: CHANNEL genuinely has no messages. `unknown`
+      // has no rail row at all — never synced, could hold anything.
+      useInboxStore.getState().syncTable("chatRail", [{
+        channel_id: CHANNEL, sort_at: 1, unread: 0, unread_mentions: 0,
+        notify_level: "all", joined: true, last_message: null,
+      }]);
+
+      _resetChatRailMemo();
+      const rail = selectChatRail(chatState(), ME);
+      expect(rail.find((c) => c.id === CHANNEL)?.knownEmpty).toBe(true);
+      // No attestation for the unsynced channel: it must show a skeleton,
+      // not an empty state that may be a lie.
+      expect(rail.find((c) => c.id === unknown)?.knownEmpty).toBe(false);
+    });
+
+    it("withdraws the emptiness attestation once the rail carries a message", () => {
+      useInboxStore.getState().syncTable("chatChannels", [
+        { _id: CHANNEL, name: "general", created_at: 1, updated_at: 1 },
+      ]);
+      useInboxStore.getState().syncTable("chatRail", [{
+        channel_id: CHANNEL, sort_at: 900, unread: 1, unread_mentions: 0,
+        notify_level: "all", joined: true,
+        last_message: { _id: serverId("mlast"), user_id: THEM, created_at: 900, preview: "hi" },
+      }]);
+
+      _resetChatRailMemo();
+      expect(selectChatRail(chatState(), ME)[0].knownEmpty).toBe(false);
+    });
+
     it("hides archived channels and marks a silenced one muted", () => {
       const dead = serverId("chandead");
       useInboxStore.getState().syncTable("chatChannels", [

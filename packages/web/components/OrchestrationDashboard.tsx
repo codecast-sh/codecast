@@ -3,6 +3,8 @@ import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
+import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
+import { useSyncPlansWithArgs } from "../hooks/useSyncPlans";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { LivenessDot } from "./LivenessDot";
 import {
@@ -124,10 +126,17 @@ interface OrchestrationDashboardProps {
 
 export function OrchestrationDashboard({ className }: OrchestrationDashboardProps) {
   const workspaceArgs = useWorkspaceArgs();
-  const plans = useQuery(
-    api.plans.webList,
-    workspaceArgs === "skip" ? "skip" : { ...workspaceArgs, include_all: true }
+  // Local-first: paint from the store's plans collection; the feeder hook
+  // keeps it fresh. The gate below only shows for a genuinely cold cache.
+  const { ready } = useSyncPlansWithArgs(workspaceArgs, undefined, true);
+  const wsPlans = useWorkspaceCollection<any>(
+    "plans",
+    (p) => `${p.status}|${p.updated_at ?? 0}|${p.progress?.done ?? 0}/${p.progress?.total ?? 0}`,
   );
+  const plans = useMemo(() => {
+    if (!ready && wsPlans.length === 0) return undefined;
+    return [...wsPlans].sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
+  }, [ready, wsPlans]);
 
   const activePlanIds = useMemo(() => {
     if (!plans) return [];

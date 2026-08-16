@@ -15,6 +15,7 @@ import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { getRelativePath } from "@codecast/shared/render";
+import { shareTokenArg } from "../lib/shareTokenScope";
 
 const MOBILE_BREAKPOINT = 768;
 const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
@@ -109,7 +110,9 @@ export function ConversationDiffLayout({
   // for conversations whose edits predate materialization (no backfill was run).
   const serverFileChanges = useQuery(
     api.messages.getConversationFileChanges,
-    conversation?._id && isConvexId(conversation._id) ? { conversation_id: conversation._id } : "skip",
+    conversation?._id && isConvexId(conversation._id)
+      ? { conversation_id: conversation._id, ...shareTokenArg(conversation._id) }
+      : "skip",
   );
 
   useWatchEffect(() => {

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useRef, memo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { AvatarImg } from "../lib/avatarCache";
 import { useQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -662,7 +663,12 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         {v.is_mine || !v.owner_image ? (
           <Users className="w-3 h-3 text-sol-text-dim" />
         ) : (
-          <img src={v.owner_image} alt={v.owner_name ?? ""} className="w-3.5 h-3.5 rounded-full" />
+          <AvatarImg
+            src={v.owner_image}
+            alt={v.owner_name ?? ""}
+            className="w-3.5 h-3.5 rounded-full"
+            fallback={<Users className="w-3 h-3 text-sol-text-dim" />}
+          />
         )}
       </span>
     ) : undefined,

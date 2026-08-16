@@ -7,6 +7,7 @@ import { resolveCreationPrivacy } from "./privacy";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
+import { findConversationByAnyRef } from "./conversationSessionLookup";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -45,15 +46,44 @@ export function resolveDeviceSelector(
   throw new Error(`Unknown device "${wanted}". Your devices: ${known}`);
 }
 
-// createSessionFromCli — start a fresh, inbox-visible session (NOT a subagent)
-// and optionally seed its first turn. The backend for `cast spawn`.
+/**
+ * Resolve a `cast spawn --subagent [parent]` ref to the parent conversation.
+ * The ref is whatever the calling session has on hand — its session UUID
+ * (detectCurrentSessionId), a short_id, or a full conversation id — resolved
+ * own-only: nesting a session under someone else's row would hide it from its
+ * own spawner and surface it in a teammate's inbox tree.
+ *
+ * Throws on an unresolved ref instead of falling back to a first-class spawn:
+ * the caller asked for a subagent, and silently landing a loose inbox card is
+ * exactly the failure the flag exists to prevent.
+ */
+export async function resolveSpawnParent(
+  ctx: { db: any },
+  userId: Id<"users">,
+  parentRef: string,
+): Promise<{ parent_conversation_id: Id<"conversations">; is_subagent: true }> {
+  const parent = await findConversationByAnyRef(ctx, parentRef, userId);
+  if (!parent) {
+    throw new Error(`Parent session "${parentRef}" not found among your sessions`);
+  }
+  // Presence of parent_conversation_id alone marks a row a subagent for the
+  // client (isSubagentConversation); is_subagent makes the row self-identify
+  // even before links resolve, same as the daemon's transcript-asserted flag.
+  return { parent_conversation_id: parent._id, is_subagent: true };
+}
+
+// createSessionFromCli — start a fresh, inbox-visible session and optionally
+// seed its first turn. The backend for `cast spawn`.
 //
 // This is the api_token-authenticated sibling of conversations.createQuickSession
 // (the UI's "New Session" path): same team/privacy resolution + start_session
 // enqueue, but it authenticates a CLI caller and delivers a first prompt so a
-// running session can hand fresh work to the human's inbox. It deliberately does
+// running session can hand fresh work to the human's inbox. By default it does
 // NOT set is_subagent / parent_conversation_id — that absence is what makes the
-// new session land in the inbox instead of nesting as a hidden helper.
+// new session land in the inbox as a first-class card. With `parent_session`
+// (`cast spawn --subagent`) it stamps both, so the new session nests in the UI
+// as a subagent row under its parent — a worker the parent session manages —
+// while still running on any agent backend (codex, gemini, …).
 export const createSessionFromCli = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -76,6 +106,10 @@ export const createSessionFromCli = mutation({
     // A device_id or label; routes start_session at that machine (see
     // resolveDeviceSelector).
     device: v.optional(v.string()),
+    // Any ref to one of the caller's own sessions (session UUID, short_id, or
+    // conversation id). When set, the new session is created as a subagent row
+    // nested under it (see resolveSpawnParent).
+    parent_session: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -98,6 +132,10 @@ export const createSessionFromCli = mutation({
 
     const privacy = await resolveCreationPrivacy(ctx, userId, args.git_root || args.project_path);
 
+    const subagentFields = args.parent_session
+      ? await resolveSpawnParent(ctx, userId, args.parent_session)
+      : null;
+
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
       agent_type: agentType,
@@ -108,6 +146,7 @@ export const createSessionFromCli = mutation({
       updated_at: now,
       message_count: 0,
       ...privacy,
+      ...(subagentFields ?? {}),
       status: "active",
     });
 
@@ -141,6 +180,9 @@ export const createSessionFromCli = mutation({
     return {
       conversation_id: conversationId,
       short_id: conversationId.toString().slice(0, 7),
+      parent_short_id: subagentFields
+        ? subagentFields.parent_conversation_id.toString().slice(0, 7)
+        : undefined,
     };
   },
 });

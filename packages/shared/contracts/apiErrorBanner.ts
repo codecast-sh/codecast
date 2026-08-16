@@ -71,6 +71,22 @@ const STATUSFUL_BANNER_RE = /^api error:?\s*\(?(\d{3})\b/i;
 const RETRYABLE_STATUS = (status: number): boolean =>
   status === 408 || status === 409 || status === 429 || status >= 500;
 
+// One 429 is not like another. A transient 429 (burst throttling) is retried
+// by the CLI and stays kind "error". A subscription-limit 429 carries the
+// usage payload — `"type":"exceeded_limit"` with the 5h/7d windows and a
+// resets_at — and retrying it is pure waste until the window rolls: it is a
+// limit park in JSON clothing, kind "limit". The marker must be the payload's
+// own quoted key, never a bare word, so prose that discusses the error type
+// can't match; and the body may run past the prose length cap (the payload is
+// ~600 chars), so this is judged before it, gated on the statusful prefix and
+// the single-line shape a raw dumped response has.
+const EXCEEDED_LIMIT_BODY_RE = /"type"\s*:\s*"exceeded_limit"/;
+
+function isExceededLimit429(trimmed: string): boolean {
+  const m = trimmed.match(STATUSFUL_BANNER_RE);
+  return !!m && Number(m[1]) === 429 && !trimmed.includes("\n") && EXCEEDED_LIMIT_BODY_RE.test(trimmed);
+}
+
 // Non-Claude clients surface a failed turn differently — not as a "Login expired"
 // banner the CLI rewinds, but as a real message carrying the provider's own error
 // text (opencode records it on the assistant message's `error` field; pi's daemon
@@ -101,6 +117,7 @@ export function classifyApiErrorBanner(
     const body = trimmed.slice(CLIENT_ERROR_BANNER_PREFIX.length);
     return CLIENT_AUTH_ERROR_RE.test(body) ? "auth" : "error";
   }
+  if (isExceededLimit429(trimmed)) return "limit";
   if (trimmed.length === 0 || trimmed.length > 400) return null;
   if (AUTH_BANNER_RE.test(trimmed)) return "auth";
   if (LIMIT_BANNER_RE.test(trimmed)) return "limit";

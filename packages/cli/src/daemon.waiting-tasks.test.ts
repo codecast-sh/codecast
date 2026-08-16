@@ -150,6 +150,48 @@ describe("reconciledStatusWithTasks", () => {
     expect(reconciledStatusWithTasks("idle", "active", true)).toBe("working");
     expect(reconciledStatusWithTasks("connected", "idle", true)).toBeNull();
   });
+
+  test("a declaration made this turn outranks the open-task waiting on any settle", () => {
+    expect(reconciledStatusWithTasks("working", "idle", true, "dormant")).toBe("dormant");
+    expect(reconciledStatusWithTasks("working", "idle", false, "done")).toBe("done");
+    // Stored waiting draining with a declaration lands on the declaration.
+    expect(reconciledStatusWithTasks("waiting", "idle", false, "dormant")).toBe("dormant");
+    // Still-open tasks keep a stored waiting put even with a stamp — no churn.
+    expect(reconciledStatusWithTasks("waiting", "idle", true, "done")).toBeNull();
+  });
+
+  test("a stored declared verdict holds until the transcript goes active", () => {
+    expect(reconciledStatusWithTasks("dormant", "idle", false)).toBeNull();
+    expect(reconciledStatusWithTasks("done", "idle", true)).toBeNull();
+    expect(reconciledStatusWithTasks("dormant", "unknown", false)).toBeNull();
+    // The wake: transcript active → working, whatever the stored verdict.
+    expect(reconciledStatusWithTasks("dormant", "active", false)).toBe("working");
+    expect(reconciledStatusWithTasks("done", "active", true)).toBe("working");
+  });
+});
+
+describe("declaredSettleVerdict", () => {
+  const NOW = 1_700_000_000_000;
+  test("a dormant/done stamp written after the turn began is the settle verdict", () => {
+    expect(declaredSettleVerdict(SID, NOW, NOW - 60_000, { at: NOW - 1_000, status: "dormant" })).toBe("dormant");
+    expect(declaredSettleVerdict(SID, NOW, NOW - 60_000, { at: NOW - 1_000, status: "done" })).toBe("done");
+  });
+  test("a stamp older than the current turn is spent — the next settle must earn its own", () => {
+    expect(declaredSettleVerdict(SID, NOW, NOW - 60_000, { at: NOW - 120_000, status: "dormant" })).toBeNull();
+  });
+  test("working / blocked / no status never produce a verdict", () => {
+    expect(declaredSettleVerdict(SID, NOW, NOW - 60_000, { at: NOW - 1_000, status: "working" })).toBeNull();
+    expect(declaredSettleVerdict(SID, NOW, NOW - 60_000, { at: NOW - 1_000, status: "blocked" })).toBeNull();
+    expect(declaredSettleVerdict(SID, NOW, NOW - 60_000, { at: NOW - 1_000 })).toBeNull();
+    expect(declaredSettleVerdict(SID, NOW, NOW - 60_000, null)).toBeNull();
+  });
+  test("with no known turn start, only a stamp newer than the daemon's boot is trusted", () => {
+    // turnStart undefined → the module's DAEMON_BOOTED_AT stands in, which is
+    // "now" for this test process: a stamp from before it is not trusted…
+    expect(declaredSettleVerdict(SID, Date.now(), undefined, { at: Date.now() - 24 * 3_600_000, status: "dormant" })).toBeNull();
+    // …a stamp written just now is.
+    expect(declaredSettleVerdict(SID, Date.now() + 5, undefined, { at: Date.now() + 1, status: "dormant" })).toBe("dormant");
+  });
 });
 
 // openBackgroundTaskIds is the on-disk, incremental form. It used to re-read the
@@ -200,6 +242,28 @@ describe("openBackgroundTaskIds (incremental)", () => {
     expect(openBackgroundTaskIds(p, SID)).toEqual(["b2"]);
     fs.writeFileSync(p, bgStart("b9") + "\n"); // shorter than the consumed offset
     expect(openBackgroundTaskIds(p, SID)).toEqual(["b9"]);
+  });
+
+  test("a transcript larger than one 4MB scan chunk gets the same verdict as a whole-file scan", () => {
+    const p = tmpTranscript();
+    // ~6MB of filler lines with opens/closes placed so state must carry across
+    // chunk boundaries: b1 opens early (chunk 1) and never closes; b2 opens in
+    // chunk 1 and closes in the last chunk; m1 opens near the end.
+    const filler = line({ type: "assistant", sessionId: SID, message: { role: "assistant", content: [{ type: "text", text: "x".repeat(4000) }] } });
+    const parts: string[] = [bgStart("b1"), bgStart("b2")];
+    for (let i = 0; i < 1500; i++) parts.push(filler);
+    parts.push(notification("b2", "completed"), monitorStart("m1"));
+    fs.writeFileSync(p, parts.join("\n") + "\n");
+    expect(fs.statSync(p).size).toBeGreaterThan(4 * 1024 * 1024);
+    expect(openBackgroundTaskIds(p, SID).sort()).toEqual(["b1", "m1"]);
+    expect(openBackgroundTaskIds(p, SID).sort()).toEqual(wholeFile(p));
+  });
+
+  test("a single line larger than the scan chunk does not wedge the scan", () => {
+    const p = tmpTranscript();
+    const huge = line({ type: "assistant", sessionId: SID, message: { role: "assistant", content: [{ type: "text", text: "y".repeat(5 * 1024 * 1024) }] } });
+    fs.writeFileSync(p, transcript(bgStart("b1"), huge, monitorStart("m1")) + "\n");
+    expect(openBackgroundTaskIds(p, SID).sort()).toEqual(["b1", "m1"]);
   });
 
   test("a different sessionId filter invalidates the cached state", () => {

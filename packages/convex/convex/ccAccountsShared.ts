@@ -2,7 +2,21 @@
 // the mutations (accountSwitch.ts), and tests. No server/_generated imports.
 
 import { v } from "convex/values";
-import { BLOCKED_BANNER_KINDS } from "@codecast/shared/contracts";
+import {
+  BLOCKED_BANNER_KINDS,
+  fallbackProfiles,
+  isUsageExhausted,
+  isWindowRolled,
+  livePercent,
+  worstUsagePercent,
+  type CcUsage,
+} from "@codecast/shared/contracts";
+
+// The usage snapshot type and its predicates live in @codecast/shared/contracts
+// (the CLI reads them too); re-exported here so existing web/convex imports keep
+// one path.
+export { isWindowRolled, livePercent, worstUsagePercent, isUsageExhausted };
+export type { CcUsage };
 
 // Per-account usage snapshot the daemon probes from the OAuth usage API
 // (percentages + reset times only — non-secret). Mirrors CcUsageSnapshot in
@@ -47,18 +61,6 @@ export const ccUsageValidator = v.object({
     ),
   ),
 });
-
-export type CcUsage = {
-  fetched_at: number;
-  session?: { percent: number; resets_at?: number; label?: string };
-  weekly?: { percent: number; resets_at?: number; label?: string };
-  weekly_scoped?: { percent: number; resets_at?: number; label?: string };
-  extra?: { percent: number; enabled: boolean };
-  scoped?: { label: string; percent: number; resets_at?: number }[];
-  credits?: { has_credits: boolean; unlimited?: boolean; balance?: string };
-  reset_credits?: { available: number };
-  models?: { model: string; label: string; tokens: number; share: number }[];
-};
 
 // Validator for the daemon-reported account inventory (names/emails/tiers
 // only — never tokens). Stored per device row; consumed by the web switcher.
@@ -111,46 +113,6 @@ export const ccLoginFlowValidator = v.object({
 // (allow a fresh start) treat it as no-flow.
 export const LOGIN_FLOW_STALE_MS = 6 * 60 * 1000;
 
-/** A limit window whose reset time has already passed has ROLLED: the snapshot
- * describes a window that no longer exists. `resets_at` is absolute, so this
- * stays true however old the snapshot is — a 5h window read 17h ago rolled
- * long ago, and its percent is history, not a reading. A window with no known
- * reset time can never be proven rolled. */
-export function isWindowRolled(w: { resets_at?: number } | undefined | null, now: number): boolean {
-  return !!w && w.resets_at != null && w.resets_at <= now;
-}
-
-/** A window's utilization AS OF `now`: 0 once it has rolled, since a fresh
- * window starts empty. The one place display and decision logic agree on what
- * a stale snapshot still means. */
-export function livePercent(w: { percent: number; resets_at?: number }, now: number): number {
-  return isWindowRolled(w, now) ? 0 : w.percent;
-}
-
-function limitWindows(usage: CcUsage): { percent: number; resets_at?: number }[] {
-  return [usage.session, usage.weekly, usage.weekly_scoped, ...(usage.scoped ?? [])].filter(
-    (w): w is NonNullable<typeof w> => !!w,
-  );
-}
-
-/** The worst (highest) utilization across an account's limit windows AS OF
- * `now` — what a single summary meter should show. Rolled windows count as 0,
- * so a dormant account stops reading "100%" forever. Null when no usage data
- * exists. */
-export function worstUsagePercent(usage: CcUsage | undefined | null, now: number): number | null {
-  if (!usage) return null;
-  const windows = limitWindows(usage);
-  return windows.length ? Math.max(...windows.map((w) => livePercent(w, now))) : null;
-}
-
-/** An account with no headroom RIGHT NOW: some window is pegged and its reset
- * is still in the future. A pegged window whose reset has passed doesn't count
- * — the snapshot is just stale, the window has rolled. */
-export function isUsageExhausted(usage: CcUsage | undefined | null, now: number): boolean {
-  if (!usage) return false;
-  return limitWindows(usage).some((w) => livePercent(w, now) >= 100);
-}
-
 // ---------------------------------------------------------------------------
 // Auto-switch decision — pure; accountSwitch.autoSwitchCheck supplies inputs
 // and executes the outcome
@@ -167,6 +129,20 @@ export const AUTO_SWITCH_SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
 export const AUTO_SWITCH_ATTEMPT_EVIDENCE_MS = 5 * 60 * 1000;
 // The attempt-history key for a same-account "continue" (no profile involved).
 export const AUTO_SWITCH_CONTINUE_KEY = "__continue__";
+// Continue-only mode (auto-switch off) acts on limit parks no older than this:
+// a full session window plus slack for the reset-plus-settle wake-up. Older
+// parks sat through a reset already — abandoned, not waiting.
+export const AUTO_CONTINUE_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+/** Auto-continue — resume limit-parked sessions on the SAME account once its
+ * window resets, no switch — is on unless the user turned it off. Default-on
+ * because a session parked by a rate limit is almost always waiting for
+ * exactly that reset; the toggle exists for the user who wants parked
+ * sessions to stay parked. (Auto-switch stays opt-in: it rotates the
+ * machine's login, which is a bigger decision.) */
+export function isAutoContinueEnabled(device: { cc_auto_continue?: boolean | null }): boolean {
+  return device.cc_auto_continue !== false;
+}
 
 /** Does the "every account is spent" stamp still describe NOW? Only a re-check
  * clears it, and that re-check may never run — auto-switch turned off, a lost
@@ -197,9 +173,16 @@ export type AutoSwitchDecision =
 
 /**
  * Pick the cheapest recovery for limit-parked sessions:
- *  1. no switch — the active account's 5h session window reset AFTER the newest
- *     park (resets_at is an absolute timestamp, so even a stale snapshot stays
- *     truthful) and we haven't already tried a continue for this park;
+ *  1. no switch — the active account has headroom again and we haven't already
+ *     tried a continue for this park. Two proofs, either suffices:
+ *     (a) its 5h session window reset AFTER the newest park (resets_at is an
+ *         absolute timestamp, so even a stale snapshot stays truthful);
+ *     (b) a usage snapshot fetched after the park SETTLED (the same margin the
+ *         attempt blackout uses — a probe seconds after the park can still be
+ *         mid-burn) shows no pegged window. Needed because a rolled session
+ *         window is re-probed as `{percent: 0}` with NO resets_at, so proof (a)
+ *         only holds while the snapshot is still pre-roll; once the daemon's
+ *         5-minute probe refreshes it, (b) is the only evidence left.
  *  2. switch — the saved profile with the most usage headroom, skipping the
  *     active account, accounts with a pegged un-reset window, and accounts
  *     already tried this window (an attempt OLDER than the newest park means
@@ -209,8 +192,12 @@ export type AutoSwitchDecision =
  *     park timestamps, and parks stamped by sessions still mid-recovery from
  *     the switch are indistinguishable from a real limit on the new account,
  *     so the account's own probe is the stronger signal. Unknown usage ranks
- *     after known headroom: eligible, just unproven.
+ *     after known headroom: eligible, just unproven. Skipped entirely when
+ *     `allowSwitch` is false (auto-switch off, auto-continue on): only the
+ *     active account's own recovery counts.
  *  3. exhausted — retry at the earliest known window reset (hourly fallback).
+ *     With switching off only the active account's windows are consulted —
+ *     another account's reset can't help a session that will never move.
  */
 export function decideAutoSwitch(input: {
   now: number;
@@ -218,8 +205,10 @@ export function decideAutoSwitch(input: {
   activeEmail?: string;
   profiles: AutoSwitchProfile[];
   attempts: Array<{ profile: string; at: number }>;
+  allowSwitch?: boolean; // default true
 }): AutoSwitchDecision {
   const { now, parkedAt, activeEmail, profiles, attempts } = input;
+  const allowSwitch = input.allowSwitch !== false;
   const lastAttemptAt = (profile: string): number | null =>
     attempts.reduce<number | null>(
       (max, a) => (a.profile === profile && a.at > (max ?? 0) ? a.at : max),
@@ -229,38 +218,36 @@ export function decideAutoSwitch(input: {
   const active = profiles.find((p) => p.email && p.email === activeEmail);
   const sessionResetAt = active?.usage?.session?.resets_at;
   const lastContinue = lastAttemptAt(AUTO_SWITCH_CONTINUE_KEY);
+  const windowRolledSincePark = !!sessionResetAt && sessionResetAt > parkedAt && sessionResetAt <= now;
+  const settledProbeShowsHeadroom =
+    (active?.usage?.fetched_at ?? 0) >= parkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS;
   if (
-    sessionResetAt &&
-    sessionResetAt > parkedAt &&
-    sessionResetAt <= now &&
+    (windowRolledSincePark || settledProbeShowsHeadroom) &&
     !isUsageExhausted(active?.usage, now) &&
     (!lastContinue || lastContinue < parkedAt)
   ) {
     return { action: "continue" };
   }
 
-  const candidates = profiles.filter((p) => {
-    if (!p.email || p.email === activeEmail) return false;
-    if (isUsageExhausted(p.usage, now)) return false;
-    const att = lastAttemptAt(p.name);
-    if (att && att >= parkedAt) return false; // switch in flight — wait
-    if (att && now - att < AUTO_SWITCH_SESSION_WINDOW_MS) {
-      // Spent this window — unless a usage snapshot fetched after the attempt
-      // settled proves otherwise (isUsageExhausted already cleared it above).
-      // Each failed retry records a fresh attempt, pushing the required
-      // evidence forward, so this can't flap faster than the probe cadence.
-      const evidenceAt = p.usage?.fetched_at ?? 0;
-      if (evidenceAt < att + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS) return false;
-    }
-    return true;
-  });
-  const score = (p: AutoSwitchProfile): number =>
-    p.usage ? worstUsagePercent(p.usage, now) ?? 0 : 101;
-  candidates.sort((a, b) => score(a) - score(b));
-  if (candidates[0]) return { action: "switch", profile: candidates[0].name };
+  if (allowSwitch) {
+    const candidates = fallbackProfiles(profiles, activeEmail, now).filter((p) => {
+      const att = lastAttemptAt(p.name);
+      if (att && att >= parkedAt) return false; // switch in flight — wait
+      if (att && now - att < AUTO_SWITCH_SESSION_WINDOW_MS) {
+        // Spent this window — unless a usage snapshot fetched after the attempt
+        // settled proves otherwise (isUsageExhausted already cleared it above).
+        // Each failed retry records a fresh attempt, pushing the required
+        // evidence forward, so this can't flap faster than the probe cadence.
+        const evidenceAt = p.usage?.fetched_at ?? 0;
+        if (evidenceAt < att + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS) return false;
+      }
+      return true;
+    });
+    if (candidates[0]) return { action: "switch", profile: candidates[0].name };
+  }
 
   const resets: number[] = [];
-  for (const p of profiles) {
+  for (const p of allowSwitch ? profiles : active ? [active] : []) {
     for (const w of [p.usage?.session, p.usage?.weekly, p.usage?.weekly_scoped]) {
       if (w?.resets_at && w.resets_at > now) resets.push(w.resets_at);
     }

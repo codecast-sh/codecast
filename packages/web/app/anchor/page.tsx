@@ -5,6 +5,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useEffect, useMemo, useState } from "react";
 import { Settings2 } from "lucide-react";
 import { AuthGuard } from "../../components/AuthGuard";
+import { AvatarImg } from "../../lib/avatarCache";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
@@ -480,12 +481,18 @@ function SettingsPopover({ anchor }: { anchor: any }) {
 // ── Small pieces ────────────────────────────────────────────────────────────
 
 function Avatar({ name, avatar }: { name: string; avatar: string | null }) {
-  if (avatar) return <img src={avatar} alt={name} className="w-9 h-9 rounded-lg object-cover" />;
   const initial = (name || "A").trim().charAt(0).toUpperCase();
   return (
-    <div className="w-9 h-9 rounded-lg bg-sol-cyan/20 text-sol-cyan flex items-center justify-center font-semibold">
-      {initial}
-    </div>
+    <AvatarImg
+      src={avatar}
+      alt={name}
+      className="w-9 h-9 rounded-lg object-cover"
+      fallback={
+        <div className="w-9 h-9 rounded-lg bg-sol-cyan/20 text-sol-cyan flex items-center justify-center font-semibold">
+          {initial}
+        </div>
+      }
+    />
   );
 }
 

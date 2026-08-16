@@ -1149,6 +1149,35 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
+  // Manual presence status from the avatar-bar hover card. The client already
+  // flipped its local roster row (store setMyStatus); this is the
+  // authoritative write.
+  setMyStatus: async (ctx, userId, [status]: ["available" | "busy" | "away"]) => {
+    await (ctx as any).runMutation(api.users.updateProfile, { status });
+  },
+
+  // Trigger verbs (store triggerAction / deleteTrigger). The client flipped
+  // the agent_tasks row on its draft; these run the real mutations, which own
+  // leases, rescheduling and the run-now kick.
+  triggerAction: async (
+    ctx,
+    userId,
+    [taskId, verb]: [string, "pause" | "resume" | "runNow" | "cancel" | "reactivate"],
+  ) => {
+    const fn = {
+      pause: api.agentTasks.webPause,
+      resume: api.agentTasks.webResume,
+      runNow: api.agentTasks.webRunNow,
+      cancel: api.agentTasks.webCancel,
+      reactivate: api.agentTasks.webReactivate,
+    }[verb];
+    if (!fn) throw new Error(`Unknown trigger verb: ${verb}`);
+    return await (ctx as any).runMutation(fn, { task_id: taskId });
+  },
+  deleteTrigger: async (ctx, userId, [taskId]: [string]) => {
+    await (ctx as any).runMutation(api.agentTasks.webDelete, { task_id: taskId });
+  },
+
   markNotificationRead: async (ctx, userId, [id]: [string]) => {
     return await (ctx as any).runMutation(api.notifications.markAsRead, { notificationId: id });
   },

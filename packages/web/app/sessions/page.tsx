@@ -9,8 +9,7 @@ import { toast } from "sonner";
 // Reuse the inbox's canonical state predicates so /sessions and /inbox never
 // disagree about what "needs input" / "idle" means.
 import {
-  isSessionWaitingForInput,
-  isSessionEffectivelyIdle,
+  classifySession,
   type InboxSession,
 } from "../../store/inboxStore";
 import { deriveTriageFlags } from "./triageFlags";
@@ -25,7 +24,7 @@ type Bucket = "active" | "idle" | "dead";
 // The agent's relationship to YOU — a separate axis from process liveness above.
 // "needs input" = blocked on you (open poll / permission); "working" = busy;
 // "idle" = at rest. Pinned/dismissed are orthogonal flags layered on top.
-type WorkState = "needs_input" | "working" | "idle";
+type WorkState = "needs_input" | "done" | "working" | "dormant" | "idle";
 type ClassifiedSession = Session & {
   isAlive: boolean;
   bucket: Bucket;
@@ -59,7 +58,9 @@ const BUCKET_STYLES: Record<Bucket, { label: string; text: string; dot: string }
 
 const WORK_STATE_STYLES: Record<WorkState, { label: string; cls: string }> = {
   needs_input: { label: "needs input", cls: "text-rose-300 bg-rose-950/40 border-rose-900/50" },
+  done:        { label: "done",        cls: "text-cyan-300 bg-cyan-950/30 border-cyan-900/40" },
   working:     { label: "working",     cls: "text-emerald-300 bg-emerald-950/30 border-emerald-900/40" },
+  dormant:     { label: "dormant",     cls: "text-sky-300 bg-sky-950/30 border-sky-900/40" },
   idle:        { label: "idle",        cls: "text-zinc-400 bg-zinc-800/50 border-zinc-700/40" },
 };
 
@@ -362,9 +363,12 @@ function SessionsView() {
       let needsInput = false;
       let workState: WorkState | null = null;
       if (inbox) {
-        // Authoritative: reuse the inbox's own predicates verbatim.
-        needsInput = isSessionWaitingForInput(inbox);
-        workState = needsInput ? "needs_input" : isSessionEffectivelyIdle(inbox) ? "idle" : "working";
+        // Authoritative: reuse the inbox's own predicates verbatim. A settled
+        // row's `rest` verdict picks needs_input / done / dormant, exactly as
+        // the inbox sections do.
+        const c = classifySession(inbox);
+        needsInput = c.waiting && c.rest === "needs_input";
+        workState = c.waiting ? c.rest : c.idle ? "idle" : "working";
       } else if (s.agent_status) {
         // Fallback for rows with no inbox join (tmux-only / not in recent set).
         needsInput = s.agent_status === "permission_blocked";

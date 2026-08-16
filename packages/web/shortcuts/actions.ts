@@ -7,7 +7,7 @@ import { isInboxSessionView } from "../lib/inboxRouting";
 import { focusComposer } from "../lib/composerControl";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
-import { animatedHideSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
+import { animatedHideSession, undoableDeferSession, undoableDormantSession, undoablePinSession } from "../store/undoActions";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { checkMilestone } from "../tips/useTips";
 import { switchToWorkbench, sortedWorkbenches } from "../lib/workbenchSwitch";
@@ -120,19 +120,24 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('session.kill', useCallback(() => hideCurrent("kill"), [hideCurrent]));
 
-  useShortcutAction('session.deferAdvance', useCallback(() => {
+  // Defer and dormant share one shape: stamp the focused row, then advance the
+  // selection to the next row in visual order.
+  const stampAndAdvance = useCallback((stamp: (id: string) => void) => {
     const store = useInboxStore.getState();
     const currentId = focusedActionSessionId(store, isOnInboxPage);
     if (!currentId) return;
     const ordered = store.visualOrder();
     const idx = ordered.findIndex(s => s._id === currentId);
     const next = ordered[idx + 1] ?? ordered.find(s => s._id !== currentId);
-    undoableDeferSession(currentId);
+    stamp(currentId);
     if (next) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
       else store.selectPanelSession(next._id);
     }
-  }, [isOnInboxPage]));
+  }, [isOnInboxPage]);
+
+  useShortcutAction('session.deferAdvance', useCallback(() => stampAndAdvance(undoableDeferSession), [stampAndAdvance]));
+  useShortcutAction('session.dormantAdvance', useCallback(() => stampAndAdvance(undoableDormantSession), [stampAndAdvance]));
 
   useShortcutAction('session.rename', useCallback(() => {
     const store = useInboxStore.getState();

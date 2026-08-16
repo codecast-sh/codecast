@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { X, UserCheck } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useOwners, type OwnersApi } from "../hooks/useOwners";
+import { AvatarImg } from "../lib/avatarCache";
 import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -24,12 +25,18 @@ import {
 export type { OwnersApi };
 
 export function OwnerAvatar({ name, image, size = "w-4 h-4" }: { name: string; image?: string; size?: string }) {
-  if (image) return <img src={image} alt={name} className={`${size} rounded-full object-cover`} />;
   const initials = name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
   return (
-    <div className={`${size} rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted`}>
-      {initials || "?"}
-    </div>
+    <AvatarImg
+      src={image}
+      alt={name}
+      className={`${size} rounded-full object-cover`}
+      fallback={
+        <div className={`${size} rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted`}>
+          {initials || "?"}
+        </div>
+      }
+    />
   );
 }
 

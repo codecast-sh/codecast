@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { MessageSquare, MapPin, Github, ArrowUpRight, Pin, Activity } from "lucide-react";
 import { AgentTypeIcon, formatAgentType } from "../../../components/AgentTypeIcon";
+import { AvatarImg } from "../../../lib/avatarCache";
 import { ActivityHeatmap } from "../../../components/ActivityHeatmap";
 import { TimelineCharts, fmtDayLabel, fmtK, type PunchRow } from "../../../components/ActivityCharts";
 import { LogoMark } from "../../../components/Logo";
@@ -81,17 +82,16 @@ export default function PublicProfilePage() {
         {/* Identity */}
         <header className="reveal pt-10 sm:pt-14 flex flex-col sm:flex-row sm:items-end gap-5">
           <div className="shrink-0">
-            {profile.avatar_url ? (
-              <img
-                src={profile.avatar_url}
-                alt={profile.name ?? profile.username ?? "avatar"}
-                className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl object-cover ring-1 ring-sol-border/30 shadow-xl shadow-black/10"
-              />
-            ) : (
-              <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl bg-sol-bg-alt ring-1 ring-sol-border/30 grid place-items-center text-4xl font-semibold text-sol-text-secondary">
-                {initial}
-              </div>
-            )}
+            <AvatarImg
+              src={profile.avatar_url}
+              alt={profile.name ?? profile.username ?? "avatar"}
+              className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl object-cover ring-1 ring-sol-border/30 shadow-xl shadow-black/10"
+              fallback={
+                <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl bg-sol-bg-alt ring-1 ring-sol-border/30 grid place-items-center text-4xl font-semibold text-sol-text-secondary">
+                  {initial}
+                </div>
+              }
+            />
           </div>
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-sol-text leading-tight">

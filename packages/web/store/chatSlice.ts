@@ -858,6 +858,11 @@ export type ChatRailChannel = ChatChannelView & {
   lastReadAt?: number;
   lastMessagePreview?: string;
   unreadCapped?: boolean;
+  /** The server's rail summary attests this room has NO messages. Distinct
+   *  from "no rail row" (channel the client has never synced — genuinely
+   *  unknown): a known-empty room renders its empty state instantly instead
+   *  of a skeleton while the messages subscription answers. */
+  knownEmpty?: boolean;
 };
 
 type ChatRailState = ChatSliceData;
@@ -1002,6 +1007,10 @@ export function selectChatRail(
       lastReadAt: read?.last_read_at,
       lastMessagePreview: rail?.last_message?.preview,
       unreadCapped: loaded && loaded.length > 0 && reachesTip ? false : rail?.unread_capped,
+      // The rail row and the channel row arrive in the same listChannels
+      // payload, so a freshly created DM is attested empty in the same sync
+      // batch that supersedes its stub — no gap for a skeleton to flash in.
+      knownEmpty: !!rail && !rail.last_message,
     });
   }
 

@@ -48,8 +48,11 @@ function ctx(userId: string | null, t: Record<string, any[]>) {
   } as any;
 }
 
-const meta = (uid: string | null, t: Record<string, any[]>) =>
-  (getConversationMeta as any)._handler(ctx(uid, t), { conversation_id: "conv" });
+const meta = (uid: string | null, t: Record<string, any[]>, shareToken?: string) =>
+  (getConversationMeta as any)._handler(ctx(uid, t), {
+    conversation_id: "conv",
+    ...(shareToken ? { share_token: shareToken } : {}),
+  });
 const mention = (uid: string | null, t: Record<string, any[]>) =>
   (getConversationMention as any)._handler(ctx(uid, t), { conversation_id: "conv" });
 
@@ -58,9 +61,17 @@ describe("getConversationMeta unfurl gate", () => {
     expect(await meta(null, tables())).toBeNull();
   });
 
-  test("an anonymous bot gets meta for a genuinely shared session", async () => {
-    const r = await meta(null, tables({ share_token: "tok" }));
+  test("an anonymous bot PRESENTING the share token gets meta", async () => {
+    const r = await meta(null, tables({ share_token: "tok" }), "tok");
     expect(r?.title).toBe("Secret refactor");
+  });
+
+  test("issue #27: a bare conversation id unfurls NOTHING even when a share token exists", async () => {
+    expect(await meta(null, tables({ share_token: "tok" }))).toBeNull();
+  });
+
+  test("presenting a wrong token unfurls nothing", async () => {
+    expect(await meta(null, tables({ share_token: "tok" }), "guess")).toBeNull();
   });
 
   test("the owner always gets their own meta", async () => {
@@ -69,7 +80,7 @@ describe("getConversationMeta unfurl gate", () => {
   });
 
   test("does not leak the full project_path field", async () => {
-    const r = await meta(null, tables({ share_token: "tok" }));
+    const r = await meta(null, tables({ share_token: "tok" }), "tok");
     expect(r).not.toHaveProperty("project_path");
   });
 });
