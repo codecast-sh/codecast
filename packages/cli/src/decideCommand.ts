@@ -172,6 +172,32 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         console.log(fmt.muted(`  ${i + 1}. ${opt.label}${opt.description ? ` — ${opt.description}` : ""}${marker}`));
       }
       if (reportUrl) console.log(fmt.muted(`  report: ${reportUrl}`));
+
+      // Show the agent what the HUMAN will see. The queue renders the question,
+      // this context, and the options — nothing else unless they open the
+      // session. Printing it back is the cheapest way to make a thin payload
+      // obvious to the one party that can still fix it.
+      if (contextMd) {
+        const preview = contextMd.length > 400 ? `${contextMd.slice(0, 400)}…` : contextMd;
+        console.log(fmt.muted("\n  ── what they will see ──"));
+        for (const line of preview.split("\n")) console.log(fmt.muted(`  ${line}`));
+      }
+      // A decision they cannot resolve from the card costs them a session open,
+      // which is the whole thing the queue exists to avoid.
+      const contextChars = (contextMd ?? "").trim().length;
+      if (!reportSlug && contextChars < 200) {
+        console.log(
+          fmt.muted(
+            `\n  Note: ${contextChars} characters of context. They will probably have to open the session to answer this.\n  Say what you found, what each option costs, and why you cannot pick — or attach --report.`
+          )
+        );
+      }
+      if (optionList.every((o) => !o.description)) {
+        console.log(
+          fmt.muted("  Note: no option carries a consequence. \"Label :: what happens if chosen\" is what makes a choice decidable at a glance.")
+        );
+      }
+
       if (options.advisory) {
         console.log(fmt.muted("Advisory: continue with your default. The human's answer arrives as a message and may override you."));
       } else {

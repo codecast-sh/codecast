@@ -113,7 +113,7 @@ import { AssignedToYouBanner } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./browser/BrowserWatchSplit";
-import { PermissionStack } from "./PermissionCard";
+import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
@@ -12153,7 +12153,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     api.permissions.getPendingPermissions,
     deferredQueriesEnabled && conversation?._id && isConvexId(conversation._id) ? { conversation_id: conversation._id } : "skip"
   );
-  const PERMISSION_SKIP_TOOLS = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
   const pendingPermissions = pendingPermissionsRaw?.filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name));
   const hasAskUserQuestion = pendingPermissionsRaw?.some((p: any) => p.tool_name === "AskUserQuestion") ?? false;
 

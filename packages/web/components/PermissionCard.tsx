@@ -5,6 +5,21 @@ import { useEventListener } from "../hooks/useEventListener";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 
+// Tools whose "permission" row is really a UI affordance, not a request to run
+// something: the agent is asking a question or moving a task, and the prompt is
+// answered by its own card. Surfacing them as Approve/Deny would double-ask.
+// Shared by the conversation footer and the decision queue so the two surfaces
+// can never disagree about what counts as a real permission request.
+export const PERMISSION_SKIP_TOOLS: ReadonlySet<string> = new Set([
+  "AskUserQuestion",
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "TaskCreate",
+  "TaskUpdate",
+  "TaskList",
+  "TaskGet",
+]);
+
 type Permission = {
   _id: Id<"pending_permissions">;
   tool_name: string;
