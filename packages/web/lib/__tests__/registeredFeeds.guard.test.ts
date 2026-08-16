@@ -1,0 +1,62 @@
+import { describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { REGISTERED_FEEDS } from "../../store/clientSyncRegistry";
+
+// LOCAL-FIRST LEAKAGE GUARD.
+//
+// A store collection registers the Convex queries that feed it
+// (clientSyncRegistry `feeds`). From then on, a component or page that
+// subscribes to that query directly is a regression: it renders from a
+// round-trip a surface the store could have painted synchronously, and it
+// re-creates exactly the "loading state on a page whose data we already had"
+// bug this rule exists to prevent. Feeders live in hooks/ (useSyncCollection
+// or a bespoke useSync* hook); everything under app/ and components/ reads the
+// store.
+//
+// If this fails on new code, the fix is to read the store (useTrackedStore /
+// useWorkspaceCollection / a selector) and mount the feeder hook — not to
+// widen the allowlist. The allowlist is for the feeder machinery itself.
+
+const ROOT = join(import.meta.dir, "..", "..");
+const DIRS = ["app", "components"];
+
+const ALLOWED = new Map<string, string>([
+  ["components/DashboardSyncEffects.tsx", "mounts the app-wide feeders"],
+]);
+
+function walk(dir: string, out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    if (name === "node_modules" || name === "__tests__" || name === ".next") continue;
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) walk(full, out);
+    else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) out.push(full);
+  }
+  return out;
+}
+
+describe("registered feeds are subscribed only by feeder hooks", () => {
+  test("no component or page subscribes directly to a query registered as a store feed", () => {
+    const feeds = Object.keys(REGISTERED_FEEDS);
+    expect(feeds.length).toBeGreaterThan(0);
+    // `api.plans.webList` / `(api as any).plans.webList` / `api["plans"].webList`
+    const patterns = feeds.map((f) => ({
+      feed: f,
+      re: new RegExp(String.raw`\bapi\)?(?:\.|\[["'])` + f.replace(".", String.raw`(?:["']\])?\.`) + String.raw`\b`),
+    }));
+    const offenders: string[] = [];
+    for (const dir of DIRS) {
+      for (const file of walk(join(ROOT, dir))) {
+        const rel = file.slice(ROOT.length + 1);
+        if (ALLOWED.has(rel)) continue;
+        const src = readFileSync(file, "utf8");
+        src.split("\n").forEach((line, i) => {
+          for (const { feed, re } of patterns) {
+            if (re.test(line)) offenders.push(`${rel}:${i + 1} subscribes to ${feed} (feeds store.${REGISTERED_FEEDS[feed]})`);
+          }
+        });
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});

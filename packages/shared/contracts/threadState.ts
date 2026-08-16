@@ -28,10 +28,16 @@ export const THREAD_STATE_STALE_MS = 48 * 60 * 60 * 1000;
 
 export type ThreadStateFreshness = "fresh" | "aging" | "stale";
 
-/** The declared tri-state of the work, set by the agent alongside the text:
- * still moving, waiting on the human, or finished. Declared rather than parsed
- * from the prose — "Blocked: nothing" would defeat any keyword heuristic. */
-export type ThreadStateStatus = "working" | "blocked" | "done";
+/** The declared state of the work, set by the agent alongside the text — the
+ * agent's answer to "who acts next?": still moving, waiting on the human,
+ * finished, or parked on a machine wake. Declared rather than parsed from the
+ * prose — "Blocked: nothing" would defeat any keyword heuristic.
+ *
+ * "done" and "dormant" are SETTLE VERDICTS: when the turn that declared them
+ * ends, the daemon settles the agent's status to the same word (instead of
+ * plain idle), and the inbox files the session under Done / Dormant instead of
+ * Needs Input. The verdict covers exactly that one settle. */
+export type ThreadStateStatus = "working" | "blocked" | "done" | "dormant";
 
 /** Human label for each status, shared so the panel chip, the inbox card and
  * the CLI print the same words. */
@@ -39,6 +45,7 @@ export const THREAD_STATE_STATUS_LABEL: Record<ThreadStateStatus, string> = {
   working: "In progress",
   blocked: "Needs input",
   done: "Complete",
+  dormant: "Dormant",
 };
 
 /** Map loose spellings (CLI flag input, older rows) onto the enum. Returns null
@@ -47,7 +54,8 @@ export function parseThreadStateStatus(input: string | null | undefined): Thread
   const word = (input ?? "").trim().toLowerCase().replace(/[_\s]+/g, "-");
   if (["working", "in-progress", "progress", "wip", "active"].includes(word)) return "working";
   if (["blocked", "needs-input", "input", "waiting", "stuck"].includes(word)) return "blocked";
-  if (["done", "complete", "completed", "finished"].includes(word)) return "done";
+  if (["done", "complete", "completed", "finished", "delivered"].includes(word)) return "done";
+  if (["dormant", "parked", "asleep", "sleeping", "waiting-on"].includes(word)) return "dormant";
   return null;
 }
 

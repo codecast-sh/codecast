@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { autoShotsEnabled, isMutatingStep, maybeAutoShot, pruneHashes, recordIfChanged, setAutoShots } from "./autoShot.js";
+import { autoShotsEnabled, clearAutoShots, isMutatingStep, maybeAutoShot, pruneHashes, recordIfChanged, setAutoShots } from "./autoShot.js";
 import { readSharedConfig } from "../config/sharedConfig.js";
 import { runBatch, type BatchContext } from "./batch.js";
 import type { PageSession } from "./instance.js";
@@ -84,16 +84,25 @@ describe("recordIfChanged", () => {
 });
 
 describe("auto-shots setting", () => {
-  test("on by default when no config exists", () => {
-    expect(autoShotsEnabled(tmp())).toBe(true);
+  test("unset defaults by audience: on at a terminal, off for agent sessions", () => {
+    expect(autoShotsEnabled(tmp(), false)).toBe(true);
+    expect(autoShotsEnabled(tmp(), true)).toBe(false);
   });
 
-  test("off/on round-trips through the shared config", () => {
+  test("explicit config overrides the audience default in both directions", () => {
     const dir = tmp();
     setAutoShots(false, dir);
-    expect(autoShotsEnabled(dir)).toBe(false);
+    expect(autoShotsEnabled(dir, false)).toBe(false);
     setAutoShots(true, dir);
-    expect(autoShotsEnabled(dir)).toBe(true);
+    expect(autoShotsEnabled(dir, true)).toBe(true);
+  });
+
+  test("clearing the override returns to the audience default", () => {
+    const dir = tmp();
+    setAutoShots(true, dir);
+    clearAutoShots(dir);
+    expect(autoShotsEnabled(dir, true)).toBe(false);
+    expect(autoShotsEnabled(dir, false)).toBe(true);
   });
 
   test("toggling preserves every other field of the shared config", () => {
@@ -117,7 +126,10 @@ describe("maybeAutoShot (engine-agnostic seam)", () => {
   const jpeg = (n: number) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(16, n)]);
 
   test("writes a file on the first capture and suppresses an identical one", async () => {
+    // Pin the setting on: the test process runs under an agent env, where the
+    // audience default is off (autoShotsEnabled).
     process.env.CODECAST_DIR = tmp();
+    setAutoShots(true, process.env.CODECAST_DIR);
     const src = { tabKey: `engine-tab-${Date.now()}`, capture: async () => jpeg(1) };
     const first = await maybeAutoShot(src);
     expect(first && fs.existsSync(first)).toBe(true);
@@ -135,6 +147,7 @@ describe("maybeAutoShot (engine-agnostic seam)", () => {
 
   test("a failing capture is silent, never a thrown error", async () => {
     process.env.CODECAST_DIR = tmp();
+    setAutoShots(true, process.env.CODECAST_DIR);
     const out = await maybeAutoShot({ tabKey: "t", capture: async () => { throw new Error("engine gone"); } });
     expect(out).toBeNull();
     delete process.env.CODECAST_DIR;

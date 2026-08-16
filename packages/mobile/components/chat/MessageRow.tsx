@@ -17,16 +17,21 @@ import { MarkdownContent } from '@/components/MarkdownRenderer';
 /** One uploaded image. The URL comes from the same storage query the session
  *  screen uses; a tile keeps a fixed footprint while it resolves so the
  *  transcript doesn't jump when the bytes land. */
-function AttachmentImage({ storageId }: { storageId: string }) {
+function AttachmentImage({ storageId, onOpen }: { storageId: string; onOpen?: (url: string) => void }) {
   const { width } = useWindowDimensions();
   const url = useQuery(api.images.getImageUrl, { storageId: storageId as any });
   const side = Math.min(width - 96, 280);
   return (
-    <RNView style={[styles.attachment, { width: side, height: side * 0.75 }]}>
+    <TouchableOpacity
+      activeOpacity={0.85}
+      disabled={!url || !onOpen}
+      onPress={() => url && onOpen?.(url)}
+      style={[styles.attachment, { width: side, height: side * 0.75 }]}
+    >
       {url ? (
         <Image source={{ uri: url }} style={styles.attachmentImg} resizeMode="cover" />
       ) : null}
-    </RNView>
+    </TouchableOpacity>
   );
 }
 
@@ -107,6 +112,7 @@ export const MessageRow = memo(function MessageRow({
   onToggleReaction,
   onStopAgent,
   onRetrySend,
+  onOpenImage,
   inThread,
   knownMentionHandles,
 }: {
@@ -118,6 +124,8 @@ export const MessageRow = memo(function MessageRow({
   onToggleReaction?: (id: string, emoji: string) => void;
   onStopAgent?: (id: string) => void;
   onRetrySend?: (id: string) => void;
+  /** Tap on an attachment tile — the parent opens the full-screen viewer. */
+  onOpenImage?: (url: string) => void;
   inThread?: boolean;
   /** Handles the server actually resolves (the shared vocabulary). With it, an
    *  unknown @word stays plain text instead of wearing a chip that notifies
@@ -180,13 +188,23 @@ export const MessageRow = memo(function MessageRow({
             </RNText>
           </RNView>
         ) : (
-          <MarkdownContent text={message.content} baseStyle={styles.mdBase} knownMentionHandles={knownMentionHandles} />
+          <RNView>
+            <MarkdownContent
+              text={message.content}
+              baseStyle={styles.mdBase}
+              knownMentionHandles={knownMentionHandles}
+              // Long-press is the actions gesture in chat; the OS selection
+              // callout would float over the sheet. Copy lives in the sheet.
+              selectable={false}
+            />
+            {!!message.editedAt && <RNText style={styles.edited}>(edited)</RNText>}
+          </RNView>
         )}
 
         {!!message.attachments?.length && (
           <RNView style={styles.attachments}>
             {message.attachments.map((att) => (
-              <AttachmentImage key={att.storage_id} storageId={att.storage_id} />
+              <AttachmentImage key={att.storage_id} storageId={att.storage_id} onOpen={onOpenImage} />
             ))}
           </RNView>
         )}
@@ -295,6 +313,7 @@ const styles = StyleSheet.create({
   agentChipText: { fontSize: 7.5, fontWeight: '700', color: Theme.violet, letterSpacing: 0.8 },
   time: { fontSize: 10, color: Theme.textMuted0 },
   deleted: { fontSize: 12.5, fontStyle: 'italic', color: Theme.textMuted0 },
+  edited: { fontSize: 10, color: Theme.textMuted0, marginTop: -4, marginBottom: 2 },
   thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   thinking: { fontSize: 12.5, color: Theme.textMuted },
   stop: { fontSize: 11.5, color: Theme.blue, textDecorationLine: 'underline' },

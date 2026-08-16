@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import Link from "next/link";
+import { AvatarImg } from "../lib/avatarCache";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
@@ -1010,11 +1011,34 @@ type PlanTab = "overview" | "orchestration" | "board" | "graph";
 
 export function PlanDetailPanel({ planId }: { planId: string }) {
   const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
-  const plan = useQuery(api.plans.webGet, queryArgs);
+  const queryPlan = useQuery(api.plans.webGet, queryArgs);
   const storeTasks = useInboxStore((s) => s.tasks);
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const currentUser = useInboxStore((s) => s.currentUser);
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");
+
+  // Local-first first paint: while webGet's joins are in flight, the synced
+  // plan row plus the live task collection already carry the header, goal,
+  // criteria and task list — render those now; the query result replaces the
+  // composite wholesale when it lands (author, sessions, doc_content,
+  // comments pop in). A NULL answer is an access verdict and never falls
+  // back to cache. Selector returns the row ref (stable), not a built object.
+  const cachedRow = useInboxStore((s) => {
+    if (queryPlan !== undefined) return null;
+    const rows = Object.values(s.plans ?? {}) as any[];
+    return rows.find((p) => (planId.startsWith("pl-") ? p.short_id === planId : String(p._id) === planId)) ?? null;
+  });
+  const plan = useMemo(() => {
+    if (queryPlan !== undefined) return queryPlan;
+    if (!cachedRow) return undefined;
+    // Mirror webGet's task join from the store: the plan's units, subtasks
+    // excluded (a decomposition never renders as flat peers of its parent).
+    const tasks = (cachedRow.task_ids ?? [])
+      .map((tid: any) => storeTasks[String(tid)])
+      .filter((t: any) => t && !t.parent_id)
+      .map((t: any) => ({ ...t, activeSession: null }));
+    return { ...cachedRow, tasks };
+  }, [queryPlan, cachedRow, storeTasks]);
 
   // plan.tasks / plan.progress are a server-query snapshot, so optimistic edits
   // (updateTask status/assignee/…) wouldn't show here until the query re-runs.
@@ -1058,7 +1082,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
         </div>
         <div className="flex items-center gap-3 text-xs text-sol-text-dim flex-wrap">
           {plan.author?.image && (
-            <img src={plan.author.image} className="w-4 h-4 rounded-full" alt="" />
+            <AvatarImg src={plan.author.image} className="w-4 h-4 rounded-full" alt="" />
           )}
           {plan.author?.name && <span>{plan.author.name}</span>}
           <span className="font-mono">{plan.short_id}</span>

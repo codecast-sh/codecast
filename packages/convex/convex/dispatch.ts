@@ -1149,6 +1149,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
+  // Manual presence status from the avatar-bar hover card. The client already
+  // flipped its local roster row (store setMyStatus); this is the
+  // authoritative write.
+  setMyStatus: async (ctx, userId, [status]: ["available" | "busy" | "away"]) => {
+    await (ctx as any).runMutation(api.users.updateProfile, { status });
+  },
+
   markNotificationRead: async (ctx, userId, [id]: [string]) => {
     return await (ctx as any).runMutation(api.notifications.markAsRead, { notificationId: id });
   },

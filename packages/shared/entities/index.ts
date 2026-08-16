@@ -313,3 +313,33 @@ export function parseEntityUrl(
   if (!id) return null;
   return { type, id };
 }
+
+/**
+ * If `href` points at a published page (`cast publish` output), return its
+ * slug; otherwise null. Accepts the canonical share URL
+ * (https://codecast.sh/a/<slug>), the raw serving origin
+ * (https://convex.codecast.sh/cli/a/<slug>), dev/local hosts, and path-only
+ * hrefs. Slugs are alphanumeric secrets, so anything with other characters —
+ * or a deeper path, which addresses an asset inside a directory bundle — is
+ * not a page link.
+ */
+export function parsePublishedPageUrl(href: string | undefined | null): { slug: string } | null {
+  if (!href || typeof href !== "string") return null;
+  let path = href.trim();
+  if (/^https?:\/\//i.test(path)) {
+    let u: URL;
+    try {
+      u = new URL(path);
+    } catch {
+      return null;
+    }
+    if (!isAppHost(u.host)) return null;
+    path = u.pathname;
+  } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) {
+    return null;
+  } else {
+    path = path.split(/[?#]/)[0];
+  }
+  const m = /^\/(?:cli\/)?a\/([A-Za-z0-9]{8,24})$/.exec(path);
+  return m ? { slug: m[1] } : null;
+}

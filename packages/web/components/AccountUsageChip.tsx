@@ -13,10 +13,11 @@ import { useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { KeyRound, Zap, ZapOff } from "lucide-react";
+import { KeyRound, TimerReset, Zap, ZapOff } from "lucide-react";
 import { ClaudeIcon, OpenAIIcon } from "./BrandIcons";
 import { Switch } from "./ui/switch";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useAccountRecoveryToggles } from "../hooks/useAccountRecoveryToggles";
 import { useTrackedStore } from "../store/inboxStore";
 import { isExhaustionCurrent } from "@codecast/convex/convex/ccAccountsShared";
 import {
@@ -87,7 +88,6 @@ function ProviderSegment({
 
 export function AccountUsageChip() {
   const data = useQuery(api.accountSwitch.listAccountProfiles, {});
-  const setAutoSwitch = useMutation(api.accountSwitch.setAutoSwitchAccounts);
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const router = useRouter();
   const now = useCoarseNow(30_000);
@@ -107,9 +107,6 @@ export function AccountUsageChip() {
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = setTimeout(() => setOpen(false), 160);
   };
-  // Local echo while the toggle round-trips (the flag lives on the device row,
-  // so the query refresh is the source of truth once it lands).
-  const [pendingToggle, setPendingToggle] = useState<boolean | null>(null);
   const [switching, setSwitching] = useState<string | null>(null);
   // The chip shows ONE provider: the one backing the session you're viewing.
   // Sticky across selections that map to neither provider (other agent types,
@@ -132,6 +129,11 @@ export function AccountUsageChip() {
   // Online only: the query also carries a recently-offline primary (for the
   // settings page's auto-switch toggle), whose meters would render stale here.
   const device = data?.devices.find((d) => !d.is_remote && d.online !== false);
+  // Hooks run unconditionally; the placeholder device is never flipped because
+  // the panel (and its switches) only render once a real device exists.
+  const recovery = useAccountRecoveryToggles(
+    device ?? { device_id: "", auto_switch: false, auto_continue: undefined },
+  );
   const profiles: ProfileRow[] = device?.profiles ?? [];
   const active = profiles.find((p) => p.email && p.email === device?.active_email);
   // Codex accounts arrive in the same inventory shape as Claude's; the active
@@ -202,7 +204,7 @@ export function AccountUsageChip() {
   };
   const activeGroups = buildGroups(allEntries.filter((e) => e.isActive));
   const otherGroups = buildGroups(allEntries.filter((e) => !e.isActive));
-  const autoOn = pendingToggle ?? device.auto_switch;
+  const autoOn = recovery.autoSwitch.on;
   const state = device.auto_switch_state;
   // Only a re-check clears the stamp, so an old one keeps claiming "everything
   // is spent" after the windows rolled — read it against the clock.
@@ -220,22 +222,6 @@ export function AccountUsageChip() {
       toast.error(err instanceof Error ? err.message : "Switch failed");
     } finally {
       setSwitching(null);
-    }
-  };
-
-  const handleToggle = async (enabled: boolean) => {
-    setPendingToggle(enabled);
-    try {
-      await setAutoSwitch({ device_id: device.device_id, enabled });
-      toast.success(
-        enabled
-          ? "Auto-switch on — limit-parked sessions will hop accounts and continue"
-          : "Auto-switch off",
-      );
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Toggle failed");
-    } finally {
-      setPendingToggle(null);
     }
   };
 
@@ -409,19 +395,43 @@ export function AccountUsageChip() {
                 unblocked or every account is spent.
               </div>
             </div>
-            <Switch checked={autoOn} onCheckedChange={handleToggle} disabled={pendingToggle !== null} />
+            <Switch
+              checked={autoOn}
+              onCheckedChange={recovery.autoSwitch.set}
+              disabled={recovery.autoSwitch.pending}
+            />
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <TimerReset
+              className={`h-3.5 w-3.5 ${recovery.autoContinue.on ? "text-sol-cyan" : "text-sol-text-dim"}`}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-medium text-sol-text">Resume at window reset</div>
+              <div className="text-[10px] leading-snug text-sol-text-dim">
+                Sessions parked on this account&apos;s limit continue on their own once the window
+                resets — no account change.
+              </div>
+            </div>
+            <Switch
+              checked={recovery.autoContinue.on}
+              onCheckedChange={recovery.autoContinue.set}
+              disabled={recovery.autoContinue.pending}
+            />
           </div>
           {autoOn && exhausted && (
             <div className="mt-1.5 rounded bg-sol-red/10 px-2 py-1 text-[10px] text-sol-red">
               All accounts are at their limits — will retry at the next window reset.
             </div>
           )}
-          {autoOn && !exhausted && state?.last_action && state.last_action_at && (
-            <div className="mt-1.5 text-[10px] text-sol-text-dim">
-              Last action: {state.last_action.replace("switch:", "switched to ")}{" "}
-              {formatAgo(now - state.last_action_at)}
-            </div>
-          )}
+          {(autoOn || recovery.autoContinue.on) &&
+            !exhausted &&
+            state?.last_action &&
+            state.last_action_at && (
+              <div className="mt-1.5 text-[10px] text-sol-text-dim">
+                Last action: {state.last_action.replace("switch:", "switched to ")}{" "}
+                {formatAgo(now - state.last_action_at)}
+              </div>
+            )}
           <button
             onClick={() => {
               setOpen(false);

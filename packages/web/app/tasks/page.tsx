@@ -9,6 +9,7 @@ import { useInboxStore, TaskItem, TaskViewPrefs, ProjectItem, resolveAssigneeInf
 import { useSyncTasks } from "../../hooks/useSyncTasks";
 import { TaskDetailContent } from "./[id]/page";
 import { DetailSplitLayout } from "../../components/DetailSplitLayout";
+import { AvatarImg } from "../../lib/avatarCache";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
@@ -302,12 +303,17 @@ export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenD
         <LabelChips labels={task.labels} className="cq-hide-compact" />
       )}
       {task.assignee_info && (() => {
-        const avatar = task.assignee_info.image ? (
-          <img src={task.assignee_info.image} alt={task.assignee_info.name} className="w-5 h-5 rounded-full ring-1 ring-sol-cyan/30" />
-        ) : (
-          <div className="w-5 h-5 rounded-full bg-sol-cyan/10 border border-sol-cyan/30 flex items-center justify-center text-[8px] font-medium text-sol-cyan">
-            {task.assignee_info.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
-          </div>
+        const avatar = (
+          <AvatarImg
+            src={task.assignee_info.image}
+            alt={task.assignee_info.name}
+            className="w-5 h-5 rounded-full ring-1 ring-sol-cyan/30"
+            fallback={
+              <div className="w-5 h-5 rounded-full bg-sol-cyan/10 border border-sol-cyan/30 flex items-center justify-center text-[8px] font-medium text-sol-cyan">
+                {task.assignee_info.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
+              </div>
+            }
+          />
         );
         return (
           <div className="flex items-center gap-1 flex-shrink-0 cq-hide-compact" title={`Assigned: ${task.assignee_info.name}`}>
@@ -522,12 +528,18 @@ function KanbanCard({
             />
           ) : null}
           {assignee ? (() => {
-            const av = assignee.image ? (
-              <img src={assignee.image} alt={assignee.name} className="w-4 h-4 rounded-full" title={assignee.name} />
-            ) : (
-              <div className="w-4 h-4 rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[7px] font-medium text-sol-text-muted" title={assignee.name}>
-                {assignee.name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-              </div>
+            const av = (
+              <AvatarImg
+                src={assignee.image}
+                alt={assignee.name}
+                className="w-4 h-4 rounded-full"
+                title={assignee.name}
+                fallback={
+                  <div className="w-4 h-4 rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[7px] font-medium text-sol-text-muted" title={assignee.name}>
+                    {assignee.name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                  </div>
+                }
+              />
             );
             return (assignee as any).github_username
               ? <Link href={`/team/${(assignee as any).github_username}`} onClick={e => e.stopPropagation()} className="hover:opacity-80">{av}</Link>

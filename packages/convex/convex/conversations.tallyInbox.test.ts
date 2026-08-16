@@ -116,6 +116,22 @@ describe("tallyInboxRows — retirement figures are tallies, not a partition", (
     expect(rows).toHaveLength(0);
   });
 
+  // `cast sessions <id>` names a row on purpose. A subagent (cast spawn
+  // --subagent, a Task-tool helper) is hidden from the top-level monitor, but an
+  // explicitly requested id must still answer — it is the wait signal an
+  // orchestrator watches for its worker. Other subagents stay hidden.
+  test("an explicitly requested subagent row is listed; unrequested ones stay hidden", () => {
+    const { counts, rows } = tallyInboxRows(
+      [
+        session({ _id: "conversations_sub", session_id: "sess-sub", is_subagent: true }),
+        session({ _id: "conversations_other", session_id: "sess-other", is_subagent: true }),
+      ],
+      { showAll: false, stateFilter: null, labelByConv, requestedIds: new Set(["conversations_sub"]) },
+    );
+    expect(rows.map((r) => r.id)).toEqual(["conversations_sub"]);
+    expect(counts.total).toBe(1);
+  });
+
   // The same class as F1/F4, one figure over: pinned/live tally RENDERED rows
   // (they sit after the collapse), so a collapsed dismissed+pinned row must not
   // inflate `pinned` — that would claim a pinned card the inbox doesn't show.
