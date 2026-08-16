@@ -2058,6 +2058,9 @@ export default defineSchema({
     notification_id: v.optional(v.id("notifications")),
     type: v.optional(v.string()),
     title: v.string(),
+    // iOS second line ("#team", "thread · #team"). Only a single-row flush
+    // shows it — a batch collapses to counts where a subtitle would lie.
+    subtitle: v.optional(v.string()),
     body: v.string(),
     data: v.optional(v.any()),
     created_at: v.number(),
@@ -2146,6 +2149,19 @@ export default defineSchema({
   // told, means running commands on the owner's machine. The owner approves once
   // per session; the grant then lets performSessionSend accept that user's sends.
   // Co-writing the draft needs no grant — only firing it into the session does.
+  // A signed-in viewer who presented a conversation's share link. Access via a
+  // share link requires PRESENTING the token — id knowledge is not a grant
+  // (issue #27). Anonymous guests carry the token on every query; signed-in
+  // viewers redeem it once here and checkConversationAccess honors the row
+  // only while its stored token still matches the conversation's current one,
+  // so rotating or revoking the token cuts every past redeemer off.
+  share_redemptions: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    token: v.string(),
+    created_at: v.number(),
+  }).index("by_conversation_user", ["conversation_id", "user_id"]),
+
   collab_grants: defineTable({
     conversation_id: v.id("conversations"),
     grantee_user_id: v.id("users"),

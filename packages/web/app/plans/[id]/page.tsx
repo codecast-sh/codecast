@@ -114,7 +114,7 @@ export default function PlanDetailPage() {
   // id can be transiently undefined while a tab pane mounts; skip until it
   // resolves (same guard as projects/[id]).
   const queryArgs = id ? (id.startsWith("pl-") ? { short_id: id } : { id }) : "skip";
-  const plan = useQuery(api.plans.webGet, queryArgs);
+  const queryPlan = useQuery(api.plans.webGet, queryArgs);
   const webUpdate = useInboxStore((s) => s.updatePlan);
   const generateShareLink = useMutation(api.plans.generateShareLink);
 
@@ -129,6 +129,23 @@ export default function PlanDetailPage() {
   const storePlans = useInboxStore((s) => s.plans);
 
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");
+
+  // Local-first first paint, same composite as PlanDetailPanel: while
+  // webGet's joins are in flight, the synced plan row + the live task
+  // collection render the page; the query replaces it when it lands. A NULL
+  // answer is an access verdict — never masked by cache.
+  const plan = useMemo(() => {
+    if (queryPlan !== undefined || !id) return queryPlan;
+    const cachedRow = (Object.values(storePlans ?? {}) as any[]).find(
+      (p) => (id.startsWith("pl-") ? p.short_id === id : String(p._id) === id),
+    );
+    if (!cachedRow) return undefined;
+    const tasks = (cachedRow.task_ids ?? [])
+      .map((tid: any) => storeTasks[String(tid)])
+      .filter((t: any) => t && !t.parent_id)
+      .map((t: any) => ({ ...t, activeSession: null }));
+    return { ...cachedRow, tasks };
+  }, [queryPlan, id, storePlans, storeTasks]);
 
   const liveTasks = useMemo(
     () => mergeLiveTasks((plan as any)?.tasks, storeTasks, teamMembers as any[], currentUser as any),

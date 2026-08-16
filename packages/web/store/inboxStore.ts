@@ -3064,6 +3064,7 @@ interface InboxStoreState extends ChatSliceState {
   setPrivacy: (id: string, isPrivate: boolean) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
   toggleBookmark: (conversationId: string, messageId: string) => void;
+  setMyStatus: (status: "available" | "busy" | "away") => void;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
@@ -3520,6 +3521,11 @@ interface InboxStoreState extends ChatSliceState {
   // revert a toggle before its own mutation has committed.
   bookmarkPending: Record<string, { bookmarked: boolean; conversationId: string }>;
 
+  // The viewer's in-flight manual status flip (setMyStatus). teamMembers is a
+  // wholesale-replaced list, so the teamMembers normalize re-applies this on
+  // top of each push until the server reflects it (or the TTL expires).
+  myStatusPending: { userId: string; status: string; at: number } | null;
+
   // -- Selectors --
   getSession: (id: string) => InboxSession | undefined;
 }
@@ -3744,7 +3750,11 @@ export type SyncOpts = {
   // per-push value changes defeat the JSON compare even though nothing the UI
   // shows has changed — teamMembers re-pushed ~every 2s on teammates' heartbeat
   // and message-count ticks, waking every subscriber of the roster ref.
-  normalize?: (incoming: any) => any;
+  // The second argument is the store draft, for entries that reconcile local
+  // pending state against the payload (teamMembers' status overlay) — running
+  // BEFORE the equality bail, unlike transform, so a protected no-op push
+  // still bails instead of waking every subscriber.
+  normalize?: (incoming: any, draft?: any) => any;
 };
 
 // Per-key last-writer-wins for a flat preference bag whose writes carry a
@@ -4044,7 +4054,31 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   teams: { kind: "list" },
   teamMembers: {
     kind: "list",
-    normalize: (list: any) => (Array.isArray(list) ? list.map(quantizePresence) : list),
+    // Beyond presence quantization, overlay the viewer's in-flight manual
+    // status (setMyStatus): the roster is wholesale-replaced on every push,
+    // and a push computed before the updateProfile mutation committed would
+    // flap the optimistic pill back for a beat. Protection lives in normalize,
+    // not transform, so the equality bail still swallows no-op heartbeat
+    // pushes. Cleared once the server reflects the status; the TTL keeps a
+    // failed dispatch from pinning a status the server never accepted.
+    normalize: (list: any, draft?: any) => {
+      if (!Array.isArray(list)) return list;
+      const mapped = list.map(quantizePresence);
+      const pending = draft?.myStatusPending;
+      if (!pending) return mapped;
+      if (Date.now() - pending.at > 30_000) {
+        draft.myStatusPending = null;
+        return mapped;
+      }
+      const idx = mapped.findIndex((m: any) => m && String(m._id) === pending.userId);
+      if (idx === -1) return mapped;
+      if ((mapped[idx].status ?? "available") === pending.status) {
+        draft.myStatusPending = null; // server caught up — stop protecting
+      } else {
+        mapped[idx] = { ...mapped[idx], status: pending.status };
+      }
+      return mapped;
+    },
   },
   teamUnreadCount: { kind: "scalar" },
   favorites: { kind: "list" },
@@ -5832,6 +5866,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.bookmarkPending[messageId] = { bookmarked: nowBookmarked, conversationId };
   }),
 
+  // Manual presence status. Local-first: the roster row is the read path
+  // (TeamAvatarBar's bar + hover card), so patch it in the draft — the pill
+  // flips the instant it's clicked. teamMembers is wholesale-replaced on every
+  // push, so myStatusPending protects the flip until the server echoes it
+  // (see the teamMembers entry in SYNC_REGISTRY). The setMyStatus dispatch
+  // side-effect runs the authoritative users.updateProfile.
+  setMyStatus: action(function (this: Draft, status: "available" | "busy" | "away") {
+    const meId = String(this.currentUser?._id ?? "");
+    if (!meId) return;
+    if (this.currentUser) (this.currentUser as any).status = status;
+    const idx = (this.teamMembers as any[]).findIndex((m) => m && String(m._id) === meId);
+    if (idx !== -1) this.teamMembers[idx] = { ...(this.teamMembers[idx] as any), status };
+    this.myStatusPending = { userId: meId, status, at: Date.now() };
+  }),
+
   // Notifications are a protected collection: the optimistic `read` flip is
   // field-protected so the next list sync can't revert it (the badge + bold
   // state clear instantly). The named side-effects delegate to the existing
@@ -6255,7 +6304,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const kind = config.kind ?? "collection";
 
     if (kind === "scalar" || kind === "list") {
-      if (config.normalize) incoming = config.normalize(incoming);
+      if (config.normalize) incoming = config.normalize(incoming, this);
       // No-op re-pushes are common — a list-kind subscription re-emits on any
       // read-set change (teamMembers was measured re-pushing ~every 2s on
       // presence heartbeats) — and a wholesale assign registers as a change:
@@ -6277,7 +6326,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
 
     if (kind === "singleton") {
-      if (config.normalize) incoming = config.normalize(incoming);
+      if (config.normalize) incoming = config.normalize(incoming, this);
       const local = (this as any)[field];
       const initKey = `${field}Initialized`;
       const initialized = (this as any)[initKey] ?? false;
@@ -8346,6 +8395,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   favorites: [],
   bookmarks: [],
   bookmarkPending: {},
+  myStatusPending: null,
 
   myCalls: { incoming: [], outgoing: [], membership: null },
   callOccupancy: {},

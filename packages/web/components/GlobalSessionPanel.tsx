@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { AvatarImg } from "../lib/avatarCache";
 import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -2408,13 +2409,16 @@ export const SessionCard = memo(function SessionCard({
         <div className="flex items-center gap-1.5 mt-1">
           {author && (
             <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
-              {author.avatar ? (
-                <img src={author.avatar} alt={author.name} className="w-3.5 h-3.5 rounded-full object-cover" />
-              ) : (
-                <span className="w-3.5 h-3.5 rounded-full bg-sol-violet/20 text-sol-violet flex items-center justify-center text-[8px] font-semibold leading-none">
-                  {author.name.charAt(0).toUpperCase()}
-                </span>
-              )}
+              <AvatarImg
+                src={author.avatar}
+                alt={author.name}
+                className="w-3.5 h-3.5 rounded-full object-cover"
+                fallback={
+                  <span className="w-3.5 h-3.5 rounded-full bg-sol-violet/20 text-sol-violet flex items-center justify-center text-[8px] font-semibold leading-none">
+                    {author.name.charAt(0).toUpperCase()}
+                  </span>
+                }
+              />
               <span className="text-[10px] font-medium text-sol-violet/80 truncate">{author.name.split(" ")[0]}</span>
             </span>
           )}

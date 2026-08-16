@@ -2,6 +2,7 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
+import { AvatarImg } from "../../../../lib/avatarCache";
 import { MarkdownRenderer } from "../../../../components/tools/MarkdownRenderer";
 import { AppLoader } from "../../../../components/AppLoader";
 
@@ -72,7 +73,7 @@ export default function SharedDocClient() {
           <h1 className="text-2xl font-semibold text-sol-text mb-3">{doc.title}</h1>
           <div className="flex items-center gap-3 text-xs text-sol-text-dim">
             {doc.user?.image && (
-              <img src={doc.user.image} alt="" className="w-5 h-5 rounded-full" />
+              <AvatarImg src={doc.user.image} alt="" className="w-5 h-5 rounded-full" />
             )}
             {doc.user?.name && <span className="text-sol-text-muted">{doc.user.name}</span>}
             <span>{formatDate(doc.created_at)}</span>

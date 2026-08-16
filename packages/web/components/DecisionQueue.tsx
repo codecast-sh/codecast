@@ -15,7 +15,7 @@ import { queueTier, type QueueItem } from "../lib/decisionQueue";
 import { buildSingleAnswerPayload, buildFreeTextPayload } from "../lib/pollPayload";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
-import { CONVEX_URL } from "../lib/localAuth";
+import { PublishedPageEmbed } from "./PublishedPageEmbed";
 import { getProjectName } from "../store/inboxStore";
 
 
@@ -398,28 +398,11 @@ function DecisionCard({
           </div>
         )}
 
-        {/* the full report, when the agent published one */}
+        {/* the full report, when the agent published one — same embed card
+            conversations use for a publish URL on its own line */}
         {item.reportSlug && (
-          <div className="mb-4 border border-sol-border rounded overflow-hidden">
-            <div className="flex items-center justify-between px-2 py-1 bg-sol-bg-alt text-[11px] text-sol-text-dim">
-              <span>report</span>
-              <a
-                href={`${CONVEX_URL}/cli/a/${item.reportSlug}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-sol-blue transition-colors"
-              >
-                open full page
-              </a>
-            </div>
-            {/* The artifact origin serves its own sandbox CSP, so the frame is
-                already isolated — no second sanitizer needed here. */}
-            <iframe
-              src={`${CONVEX_URL}/cli/a/${item.reportSlug}`}
-              className="w-full h-[420px] bg-sol-card"
-              sandbox="allow-scripts allow-popups"
-              title="decision report"
-            />
+          <div className="mb-4">
+            <PublishedPageEmbed slug={item.reportSlug} />
           </div>
         )}
 

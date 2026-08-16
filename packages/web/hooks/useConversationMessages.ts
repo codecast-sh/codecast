@@ -6,6 +6,7 @@ import { useInboxStore, useTrackedStore, isConvexId, ensureHydrated } from "../s
 import { useConvexSync } from "./useConvexSync";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
 import { rowSigExcluding } from "../store/wakeSig";
+import { shareTokenArg } from "../lib/shareTokenScope";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_PENDING: Message[] = [];
@@ -105,6 +106,10 @@ export function useConversationMessages(
   const conversationId = useInboxStore((s) => s.resolveLiveSessionId(requestedConversationId));
   const canQuery = isConvexId(conversationId);
   const convId = conversationId as Id<"conversations">;
+  // Share-link viewers must PRESENT the token on every read — the server no
+  // longer grants "shared" on the token's mere existence (issue #27). Empty
+  // for owner/team viewers.
+  const shareArg = shareTokenArg(conversationId);
 
   // Deep-link fallback: when the URL is /conversation/{conversationId}#msg-X and no
   // explicit targetMessageId was supplied, derive it from the hash. This makes deep
@@ -123,7 +128,7 @@ export function useConversationMessages(
   const targetMessageTimestamp = useQuery(
     api.messages.getMessageTimestamp,
     canQuery && effectiveTargetMessageId
-      ? { conversation_id: convId, message_id: effectiveTargetMessageId as Id<"messages"> }
+      ? { conversation_id: convId, message_id: effectiveTargetMessageId as Id<"messages">, ...shareArg }
       : "skip"
   );
 
@@ -131,7 +136,7 @@ export function useConversationMessages(
   const highlightMessageResult = useQuery(
     api.messages.findMessageByContent,
     canQuery && cleanedHighlightQuery
-      ? { conversation_id: convId, search_term: cleanedHighlightQuery }
+      ? { conversation_id: convId, search_term: cleanedHighlightQuery, ...shareArg }
       : "skip"
   );
 
@@ -196,7 +201,7 @@ export function useConversationMessages(
 
   const { results: descResults, status: paginationStatus, loadMore } = usePaginatedQuery(
     api.conversations.listMessages,
-    useNormalMode ? { conversation_id: convId } : "skip",
+    useNormalMode ? { conversation_id: convId, ...shareArg } : "skip",
     // 200 (was 40): measured fetch cost is round-trip dominated — p50 ~370ms
     // at 40 vs ~410-630ms at 200 on real conversations — while client cost is
     // flat in window size (store write ~4ms, render virtualized). 40 gave
@@ -248,7 +253,7 @@ export function useConversationMessages(
   // =============================================
   const remoteMeta = useQuery(
     api.conversations.getConversationWithMeta,
-    canQuery ? { conversation_id: convId } : "skip"
+    canQuery ? { conversation_id: convId, ...shareArg } : "skip"
   );
 
   useConvexSync(remoteMeta, useCallback((meta: any) => {
@@ -269,7 +274,7 @@ export function useConversationMessages(
   // means those features never depend on which message window is paginated in.
   const userMessages = useQuery(
     api.conversations.getUserMessages,
-    canQuery ? { conversation_id: convId } : "skip"
+    canQuery ? { conversation_id: convId, ...shareArg } : "skip"
   );
   useConvexSync(userMessages, useCallback((msgs: any) => {
     useInboxStore.getState().setUserMessages(conversationId, msgs);
@@ -430,6 +435,7 @@ export function useConversationMessages(
           center_timestamp: jumpTimestamp ?? effectiveTargetTimestamp!,
           limit_before: jumpMode === "start" ? 0 : 50,
           limit_after: jumpMode === "start" ? 100 : 50,
+          ...shareArg,
         }
       : "skip"
   );
@@ -452,14 +458,14 @@ export function useConversationMessages(
   const olderInTarget = useQuery(
     api.conversations.getAllMessages,
     canQuery && targetMode && targetLoadOlderTs !== undefined
-      ? { conversation_id: convId, limit: 50, before_timestamp: targetLoadOlderTs }
+      ? { conversation_id: convId, limit: 50, before_timestamp: targetLoadOlderTs, ...shareArg }
       : "skip"
   );
 
   const newerInTarget = useQuery(
     api.conversations.getMessagesAroundTimestamp,
     canQuery && targetMode && targetLoadNewerTs !== undefined
-      ? { conversation_id: convId, center_timestamp: targetLoadNewerTs, limit_before: 0, limit_after: 50 }
+      ? { conversation_id: convId, center_timestamp: targetLoadNewerTs, limit_before: 0, limit_after: 50, ...shareArg }
       : "skip"
   );
 

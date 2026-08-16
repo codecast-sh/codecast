@@ -1268,6 +1268,7 @@ export const getConversation = query({
   args: {
     conversation_id: v.id("conversations"),
     limit: v.optional(v.number()),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1275,20 +1276,10 @@ export const getConversation = query({
     if (!conversation) {
       return null;
     }
-    const isOwner = !!authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
+    if (accessLevel === "denied") {
       return null;
     }
-    const accessLevel: AccessLevel = isOwner
-      ? "owner"
-      : hasTeamAccess
-        ? "team"
-        : "shared";
 
     const limit = args.limit ?? 100;
     // Fetch most recent messages (descending), then reverse for display
@@ -1359,6 +1350,7 @@ export const getAllMessages = query({
     conversation_id: v.id("conversations"),
     limit: v.optional(v.number()),
     before_timestamp: v.optional(v.number()),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1367,7 +1359,7 @@ export const getAllMessages = query({
       return null;
     }
 
-    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
     if (accessLevel === "denied") {
       return null;
     }
@@ -1576,6 +1568,7 @@ export const getMessagesAroundTimestamp = query({
     center_timestamp: v.number(),
     limit_before: v.optional(v.number()),
     limit_after: v.optional(v.number()),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1584,22 +1577,10 @@ export const getMessagesAroundTimestamp = query({
       return null;
     }
 
-    const isOwner = !!authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
+    if (accessLevel === "denied") {
       return null;
     }
-    const accessLevel: AccessLevel = isOwner
-      ? "owner"
-      : hasTeamAccess
-        ? "team"
-        : "shared";
 
     const limitBefore = Math.min(args.limit_before ?? 50, 100);
     const limitAfter = Math.min(args.limit_after ?? 50, 100);
@@ -1744,19 +1725,16 @@ export const copyAllMessages = query({
   args: {
     conversation_id: v.id("conversations"),
     paginationOpts: v.optional(paginationOptsValidator),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return null;
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") {
+      return null;
     }
-    if (!isOwner && !hasTeamAccess && !isShared) return null;
 
     const mapMsg = (m: any) => ({
       role: m.role,
@@ -1828,6 +1806,7 @@ export const listMessages = query({
   args: {
     conversation_id: v.id("conversations"),
     paginationOpts: paginationOptsValidator,
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1841,13 +1820,7 @@ export const listMessages = query({
       return { page: [], isDone: true, continueCursor: "" };
     }
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") {
       return { page: [], isDone: true, continueCursor: "" };
     }
 
@@ -1866,6 +1839,7 @@ export const listMessages = query({
 export const getConversationWithMeta = query({
   args: {
     conversation_id: v.id("conversations"),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1874,7 +1848,7 @@ export const getConversationWithMeta = query({
       return null;
     }
 
-    const access = await checkConversationAccess(ctx, authUserId, conversation);
+    const access = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
     if (access === "denied") {
       return null;
     }
@@ -1987,19 +1961,14 @@ export const getConversationWithMeta = query({
 export const getConversationGitDiff = query({
   args: {
     conversation_id: v.id("conversations"),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return null;
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-    if (!isOwner && !hasTeamAccess && !isShared) return null;
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") return null;
 
     return await getConvGitDiff(ctx, args.conversation_id);
   },
@@ -2008,18 +1977,14 @@ export const getConversationGitDiff = query({
 export const getConversationToolStats = query({
   args: {
     conversation_id: v.id("conversations"),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return null;
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    if (!isOwner) {
-      const isShared = !!conversation.share_token;
-      const hasTeamAccess = authUserId ? await canTeamMemberAccess(ctx, authUserId, conversation) : false;
-      if (!hasTeamAccess && !isShared) return null;
-    }
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") return null;
 
     let latestTodos: any[] | null = null;
     // Collect creates and updates separately since we iterate newest-first
@@ -2881,6 +2846,44 @@ export const getSharedConversation = query({
   },
 });
 
+// A signed-in viewer presenting a share link trades the token for a durable
+// per-user redemption row. From then on every id-keyed query (the whole inbox
+// surface) resolves them to "shared" through checkConversationAccess without
+// carrying the token — and rotating the token invalidates the redemption,
+// because access requires the stored token to still match. Anonymous guests
+// don't redeem; they present the token on each query instead.
+export const redeemShareToken = mutation({
+  args: { share_token: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const conversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_share_token", (q) => q.eq("share_token", args.share_token))
+      .first();
+    if (!conversation) return null;
+    const existing = await ctx.db
+      .query("share_redemptions")
+      .withIndex("by_conversation_user", (q) =>
+        q.eq("conversation_id", conversation._id).eq("user_id", userId)
+      )
+      .first();
+    if (existing) {
+      if (existing.token !== args.share_token) {
+        await ctx.db.patch(existing._id, { token: args.share_token, created_at: Date.now() });
+      }
+    } else {
+      await ctx.db.insert("share_redemptions", {
+        conversation_id: conversation._id,
+        user_id: userId,
+        token: args.share_token,
+        created_at: Date.now(),
+      });
+    }
+    return { conversation_id: conversation._id };
+  },
+});
+
 export const getSharedConversationMeta = query({
   args: {
     share_token: v.string(),
@@ -2941,6 +2944,7 @@ export const getConversationPublic = query({
     conversation_id: v.id("conversations"),
     limit: v.optional(v.number()),
     before_timestamp: v.optional(v.number()),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
@@ -2949,7 +2953,7 @@ export const getConversationPublic = query({
     }
 
     const authUserId = await getAuthUserId(ctx);
-    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
 
     if (accessLevel === "denied") {
       return { access_level: "denied" as const, conversation: null };
@@ -3764,6 +3768,7 @@ export async function resolveConversationForViewer(
   ctx: any,
   id: string,
   authUserId: Id<"users"> | null,
+  presentedShareToken?: string | null,
 ): Promise<{ access_level: "not_found" | "denied" | "owner" | "team" | "shared"; conversation_id: string | null }> {
   let conversation = null;
 
@@ -3805,7 +3810,7 @@ export async function resolveConversationForViewer(
       ctx,
       id.toLowerCase(),
       authUserId ?? "",
-      async (c) => (await checkConversationAccess(ctx, authUserId, c)) !== "denied",
+      async (c) => (await checkConversationAccess(ctx, authUserId, c, presentedShareToken)) !== "denied",
     );
   }
 
@@ -3813,7 +3818,7 @@ export async function resolveConversationForViewer(
     return { access_level: "not_found" as const, conversation_id: null };
   }
 
-  const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
+  const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, presentedShareToken);
 
   if (accessLevel === "denied") {
     return { access_level: "denied" as const, conversation_id: null };
@@ -3826,10 +3831,10 @@ export async function resolveConversationForViewer(
 }
 
 export const resolveConversation = query({
-  args: { id: v.string() },
+  args: { id: v.string(), share_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    return resolveConversationForViewer(ctx, args.id, authUserId);
+    return resolveConversationForViewer(ctx, args.id, authUserId, args.share_token);
   },
 });
 
@@ -7102,6 +7107,7 @@ export const debugConversationVisibility = query({
 export const getConversationMeta = query({
   args: {
     conversation_id: v.id("conversations"),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
@@ -7110,12 +7116,14 @@ export const getConversationMeta = query({
     }
 
     // OG-unfurl meta. The caller (bot-meta middleware) is unauthenticated, so
-    // this resolves to "shared" only for a conversation carrying a share_token
-    // and "denied" for a private one — revealing nothing about private sessions
-    // while genuine shares still unfurl. An authed viewer (owner/team) also
-    // passes. Mirrors getSharedConversationMeta's shape (no project_path).
+    // this resolves to "shared" only when the unfurled URL PRESENTED the share
+    // token (?share=) — a bare conversation id reveals nothing, shared link or
+    // not, because ids circulate far more freely than links (issue #27).
+    // /share/<token> URLs unfurl via getSharedConversationMeta instead. An
+    // authed viewer (owner/team) also passes. Mirrors that query's shape (no
+    // project_path).
     const viewerId = await getAuthUserId(ctx);
-    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+    if ((await checkConversationAccess(ctx, viewerId, conversation, args.share_token)) === "denied") {
       return null;
     }
 
@@ -11204,15 +11212,15 @@ export async function collectNavigableUserMessages(
 }
 
 export const getUserMessages = query({
-  args: { conversation_id: v.id("conversations") },
+  args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) return [];
     // Same admission as listMessages: owner, team, or share link. The message
     // browser must serve every viewer the transcript itself serves — including
-    // unauthenticated visitors on a public share token.
-    if ((await checkConversationAccess(ctx, userId, conv)) === "denied") return [];
+    // unauthenticated visitors presenting a public share token.
+    if ((await checkConversationAccess(ctx, userId, conv, args.share_token)) === "denied") return [];
     return collectNavigableUserMessages(ctx.db, args.conversation_id);
   },
 });

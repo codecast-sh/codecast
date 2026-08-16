@@ -7,6 +7,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   action,
+  internalMutation,
   internalQuery,
   mutation,
   query,
@@ -336,7 +337,7 @@ export const invite = mutation({
       });
       return { busy: target?.status === "busy", cooldown: false };
     }
-    await ctx.db.insert("call_invites", {
+    const inviteId = await ctx.db.insert("call_invites", {
       room_key: args.room_key,
       team_id: callerAuth.teamId,
       from_user: userId,
@@ -345,9 +346,60 @@ export const invite = mutation({
       anchor_title: args.anchor_title,
       created_at: now,
     });
+    // Ring the phone DIRECTLY — never through the pushRouter outbox: its
+    // presence holds and away-debounce outlive the 45s invite TTL, and a call
+    // is precisely the "reach them wherever they are" event the hold policy
+    // exists to suppress. Manual "busy" is the closed door here too: no push.
+    // Fresh inserts only — a re-ring refreshes the row above and the phone
+    // already rang for it.
+    const from = await ctx.db.get(userId);
+    if (target?.push_token && target.notifications_enabled && target.status !== "busy") {
+      await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
+        push_token: target.push_token,
+        title: `${from?.name || from?.email || "A teammate"} wants to huddle`,
+        body: args.anchor_title ? `about: ${args.anchor_title}` : "Tap to join the huddle",
+        sound: "huddle-ring.caf",
+        category_id: "huddle_ring",
+        interruption_level: "time-sensitive",
+        data: { type: "huddle_ring", invite_id: inviteId, room_key: args.room_key },
+        user_id: args.to_user,
+      });
+    }
+    // The ring's afterlife: at TTL, an unanswered invite becomes a missed-call
+    // push (quiet, default sound) so a closed app learns someone tried.
+    await ctx.scheduler.runAfter(
+      CALL_INVITE_TTL_MS + 2_000,
+      internal.calls.sweepMissedInvite,
+      { invite_id: inviteId },
+    );
     // Manual "busy" rings quietly on the recipient's side; tell the caller so
     // their dock can say "rang quietly" instead of implying a normal ring.
     return { busy: target?.status === "busy" };
+  },
+});
+
+// Runs once per fresh invite, TTL+2s after creation. An invite still "ringing"
+// past its TTL was never answered anywhere — settle it and tell the recipient
+// they were wanted. Answered/declined invites make this a no-op.
+export const sweepMissedInvite = internalMutation({
+  args: { invite_id: v.id("call_invites") },
+  handler: async (ctx, args) => {
+    const inv = await ctx.db.get(args.invite_id);
+    if (!inv || inv.status !== "ringing") return;
+    const now = Date.now();
+    if (inviteAlive(inv, now)) return; // refreshed rings keep their clock; be safe
+    await ctx.db.patch(inv._id, { status: "expired", responded_at: now });
+    const target = await ctx.db.get(inv.to_user);
+    const from = await ctx.db.get(inv.from_user);
+    if (target?.push_token && target.notifications_enabled) {
+      await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
+        push_token: target.push_token,
+        title: `Missed huddle from ${from?.name || from?.email || "a teammate"}`,
+        body: inv.anchor_title ? `about: ${inv.anchor_title}` : "They rang while you were away",
+        data: { type: "huddle_missed", room_key: inv.room_key },
+        user_id: inv.to_user,
+      });
+    }
   },
 });
 

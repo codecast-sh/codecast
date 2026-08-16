@@ -18,6 +18,7 @@ import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, 
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import type { PendingComment } from "../lib/quoteFormat";
+import { AvatarImg } from "../lib/avatarCache";
 import { getQuoteUnits, quoteUnitAt, unitTop } from "../lib/quoteUnits";
 import { createReviewComment, exitReviewMode } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
@@ -519,11 +520,18 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
 function CommentAvatar({ author }: { author: any }) {
   const name: string = author?.name || author?.email?.split("@")[0] || "You";
   const src: string | undefined = author?.avatar_url || author?.image || undefined;
-  if (src) return <img className="cc-comment-avatar" src={src} alt={name} title={name} />;
   return (
-    <span className="cc-comment-avatar cc-comment-avatar-fallback" title={name}>
-      {name.slice(0, 1).toUpperCase()}
-    </span>
+    <AvatarImg
+      className="cc-comment-avatar"
+      src={src}
+      alt={name}
+      title={name}
+      fallback={
+        <span className="cc-comment-avatar cc-comment-avatar-fallback" title={name}>
+          {name.slice(0, 1).toUpperCase()}
+        </span>
+      }
+    />
   );
 }
 

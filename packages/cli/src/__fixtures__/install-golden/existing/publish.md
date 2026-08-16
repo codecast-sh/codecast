@@ -28,7 +28,7 @@ block by "everything to end of file" destroys this paragraph.
 
 ## Publishing pages (cast publish)
 
-When you produce a standalone deliverable — a report, dashboard, mockup, visualization — publish it and put the returned URL inline in your reply:
+When you produce a standalone deliverable — a report, dashboard, mockup, visualization — publish it and put the returned URL inline in your reply. A page URL on its own line renders the live page embedded in the conversation: a framed preview with the page title, the way an image renders with its caption. Write `[caption](url)` to put your own caption under the frame; a URL inside a sentence renders as a compact titled pill instead. Prefer the bare URL on its own line when the page is the deliverable.
 
 ```bash
 cast publish report.html          # → https://codecast.sh/a/<slug>  (stable per file)

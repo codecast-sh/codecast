@@ -140,6 +140,11 @@ export const emit = internalMutation({
     chat_message_id: v.optional(v.id("chat_messages")),
     chat_thread_root_id: v.optional(v.id("chat_messages")),
     direct_recipient_id: v.optional(v.id("users")),
+    // The push banner's parts, when they differ from the bell row. The bell
+    // keeps `message` (one full sentence); a phone banner reads like a
+    // messaging app: title = who, subtitle = where, body = the words alone.
+    push_subtitle: v.optional(v.string()),
+    push_body: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -237,7 +242,8 @@ export const emit = internalMutation({
           notification_id: notifId,
           type: args.event_type,
           title: actorName,
-          body: args.message,
+          subtitle: args.push_subtitle,
+          body: args.push_body ?? args.message,
           data: {
             entity_type: args.entity_type,
             entity_id: args.entity_id,

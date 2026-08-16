@@ -2,6 +2,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter } from "next/navigation";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { setShareTokenScope } from "../../../lib/shareTokenScope";
 
 export default function SharedConversationClient() {
   const params = useParams();
@@ -14,9 +15,16 @@ export default function SharedConversationClient() {
 
   useWatchEffect(() => {
     if (conversation?._id) {
-      router.replace(`/conversation/${conversation._id}`);
+      // Carry the token through the redirect: the conversation page (and every
+      // id-keyed query under it) must PRESENT it — the server no longer grants
+      // "shared" access on the token's mere existence (issue #27).
+      setShareTokenScope(conversation._id, token);
+      // Keep the #msg- anchor (bookmark deep links) alongside the token.
+      router.replace(
+        `/conversation/${conversation._id}?share=${encodeURIComponent(token)}${window.location.hash}`
+      );
     }
-  }, [conversation, router]);
+  }, [conversation, router, token]);
 
   if (conversation === null) {
     return (

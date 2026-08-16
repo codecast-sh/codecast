@@ -8,6 +8,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { AvatarImg } from "../lib/avatarCache";
 import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
 import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
@@ -946,13 +947,16 @@ function ActionSubmenu({
               {item.type === "agent" ? (
                 <Bot className={`w-4 h-4 flex-shrink-0 ${AGENT_COLORS[item.key] || "text-sol-violet"}`} />
               ) : mode === "assign" ? (
-                item.image ? (
-                  <img src={item.image} alt={item.label} className="w-4 h-4 rounded-full flex-shrink-0" />
-                ) : (
-                  <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
-                    {item.label.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-                  </div>
-                )
+                <AvatarImg
+                  src={item.image}
+                  alt={item.label}
+                  className="w-4 h-4 rounded-full flex-shrink-0"
+                  fallback={
+                    <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                      {item.label.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                    </div>
+                  }
+                />
               ) : mode === "labels" ? (
                 <span className={`w-3 h-3 rounded-full flex-shrink-0 ${item.dot || "bg-neutral-400"}`} />
               ) : mode === "bucket" && item.dot ? (
@@ -2000,12 +2004,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 onSelect={() => navigateToSession(conv)}
                 className={`${itemClass} group`}
               >
-                {isTeam && conv.authorAvatar ? (
-                  <img src={conv.authorAvatar} alt={conv.authorName} className="w-4 h-4 rounded-full flex-shrink-0" />
-                ) : isTeam && conv.authorName ? (
-                  <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
-                    {conv.authorName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-                  </div>
+                {isTeam && (conv.authorAvatar || conv.authorName) ? (
+                  <AvatarImg
+                    src={conv.authorAvatar}
+                    alt={conv.authorName}
+                    className="w-4 h-4 rounded-full flex-shrink-0"
+                    fallback={
+                      <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                        {(conv.authorName || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                      </div>
+                    }
+                  />
                 ) : (
                   <span className="text-sol-text-dim flex-shrink-0">
                     <NavIcon type="session" />
@@ -2055,11 +2064,12 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 className={itemClass}
               >
                 {c.kind === "dm" ? (
-                  c.image ? (
-                    <img src={c.image} alt="" className="w-4 h-4 rounded-full flex-shrink-0" />
-                  ) : (
-                    <User className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                  )
+                  <AvatarImg
+                    src={c.image}
+                    alt=""
+                    className="w-4 h-4 rounded-full flex-shrink-0"
+                    fallback={<User className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />}
+                  />
                 ) : c.isPrivate ? (
                   <Lock className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
                 ) : (
@@ -2521,12 +2531,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 )}
                 className={itemClass}
               >
-                {!result.isOwn && result.authorAvatar ? (
-                  <img src={result.authorAvatar} alt={result.authorName} className="w-4 h-4 rounded-full flex-shrink-0" />
-                ) : !result.isOwn && result.authorName ? (
-                  <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
-                    {result.authorName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-                  </div>
+                {!result.isOwn && (result.authorAvatar || result.authorName) ? (
+                  <AvatarImg
+                    src={result.authorAvatar}
+                    alt={result.authorName}
+                    className="w-4 h-4 rounded-full flex-shrink-0"
+                    fallback={
+                      <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                        {(result.authorName || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                      </div>
+                    }
+                  />
                 ) : (
                   <span className="text-sol-text-dim flex-shrink-0">
                     <NavIcon type="session" />

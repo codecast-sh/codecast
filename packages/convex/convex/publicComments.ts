@@ -2,12 +2,14 @@ import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
+import { checkConversationAccess } from "./privacy";
 
 export const addPublicComment = mutation({
   args: {
     conversation_id: v.id("conversations"),
     content: v.string(),
     parent_comment_id: v.optional(v.id("public_comments")),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -20,7 +22,9 @@ export const addPublicComment = mutation({
       throw new Error("Conversation not found");
     }
 
-    if (!conversation.share_token) {
+    // Real access, not token existence: owner/team, a presented share token,
+    // or a prior redemption of it. A conversation id alone grants nothing.
+    if ((await checkConversationAccess(ctx, userId, conversation, args.share_token)) === "denied") {
       throw new Error("Cannot comment on non-public conversations");
     }
 
@@ -39,10 +43,15 @@ export const addPublicComment = mutation({
 export const getPublicComments = query({
   args: {
     conversation_id: v.id("conversations"),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation || !conversation.share_token) {
+    if (!conversation) {
+      return [];
+    }
+    const userId = await getAuthUserId(ctx);
+    if ((await checkConversationAccess(ctx, userId, conversation, args.share_token)) === "denied") {
       return [];
     }
 
