@@ -196,6 +196,16 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
     // Restore bubbles and crash bubbles overlay the page and eat clicks.
     "--disable-session-crashed-bubble",
     "--hide-crash-restore-bubble",
+    // This window lives BEHIND the human's work by design (focusGuard.ts), and
+    // a window another app fully covers reports visibilityState "hidden" —
+    // Chrome then freezes requestAnimationFrame, so WebGL surfaces (maplibre,
+    // three.js) never paint and screenshots of them come back blank. These
+    // three keep occluded windows and background tabs rendering and their
+    // timers honest; a MINIMIZED window still freezes regardless (macOS treats
+    // minimize as stronger than occlusion), which /json/activate can undo.
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-background-timer-throttling",
     ...(opts.headless ? ["--headless=new"] : []),
     "about:blank",
   ];

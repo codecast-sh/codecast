@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { useQuery, useMutation } from "convex/react";
+import { AvatarImg } from "../../../lib/avatarCache";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../components/ui/card";
 import { Switch } from "../../../components/ui/switch";
@@ -240,19 +241,18 @@ export default function NotificationsSettingsPage() {
                   return (
                     <div key={member._id} className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
                       <div className="flex items-center gap-3">
-                        {member.github_avatar_url ? (
-                          <img
-                            src={member.github_avatar_url}
-                            alt=""
-                            className="w-8 h-8 rounded-full"
-                          />
-                        ) : (
-                          <div className="w-8 h-8 rounded-full bg-sol-base02 flex items-center justify-center">
-                            <span className="text-sm font-medium text-sol-text">
-                              {member.name?.[0]?.toUpperCase() || "?"}
-                            </span>
-                          </div>
-                        )}
+                        <AvatarImg
+                          src={member.github_avatar_url}
+                          alt=""
+                          className="w-8 h-8 rounded-full"
+                          fallback={
+                            <div className="w-8 h-8 rounded-full bg-sol-base02 flex items-center justify-center">
+                              <span className="text-sm font-medium text-sol-text">
+                                {member.name?.[0]?.toUpperCase() || "?"}
+                              </span>
+                            </div>
+                          }
+                        />
                         <div>
                           <span className="text-sm font-medium text-sol-text">
                             {member.name || member.email}

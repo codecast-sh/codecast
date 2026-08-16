@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { AvatarImg } from "../lib/avatarCache";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import {
@@ -25,6 +26,7 @@ import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { stripMarkdown, docContentPreview } from "../lib/notificationText";
 import {
   parseEntityUrl,
+  parsePublishedPageUrl,
   entityRoute,
   isConvexId,
   isEntityId,
@@ -36,6 +38,7 @@ import {
 import { findEntityInStore } from "../lib/liveEntities";
 import { useInboxStore } from "../store/inboxStore";
 import { DocEmbed } from "./DocEmbed";
+import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
@@ -248,23 +251,21 @@ function AuthorAvatar({
   size?: number;
 }) {
   const dim = { width: size, height: size };
-  if (avatar) {
-    return (
-      <img
-        src={avatar}
-        alt={name ?? "author"}
-        className="rounded-full object-cover ring-1 ring-sol-border/60"
-        style={dim}
-      />
-    );
-  }
   return (
-    <span
-      className="inline-flex items-center justify-center rounded-full bg-sol-blue/20 text-sol-blue font-semibold leading-none ring-1 ring-sol-border/60"
-      style={{ ...dim, fontSize: Math.round(size * 0.55) }}
-    >
-      {(name?.charAt(0) || "?").toUpperCase()}
-    </span>
+    <AvatarImg
+      src={avatar}
+      alt={name ?? "author"}
+      className="rounded-full object-cover ring-1 ring-sol-border/60"
+      style={dim}
+      fallback={
+        <span
+          className="inline-flex items-center justify-center rounded-full bg-sol-blue/20 text-sol-blue font-semibold leading-none ring-1 ring-sol-border/60"
+          style={{ ...dim, fontSize: Math.round(size * 0.55) }}
+        >
+          {(name?.charAt(0) || "?").toUpperCase()}
+        </span>
+      }
+    />
   );
 }
 
@@ -515,6 +516,15 @@ export function EntityAwareLink({ href, children, ...props }: any) {
     if (embedText.startsWith("embed:doc:") && embedText.length > 10) {
       return <DocEmbed id={embedText.slice(10)} />;
     }
+    // A publish URL alone on its own line, hoisted by remarkEntityIds into
+    // "embed:artifact:<slug>|<caption>" — the page renders inline.
+    if (embedText.startsWith("embed:artifact:")) {
+      const payload = embedText.slice("embed:artifact:".length);
+      const sep = payload.indexOf("|");
+      const slug = sep === -1 ? payload : payload.slice(0, sep);
+      const caption = sep === -1 ? undefined : payload.slice(sep + 1);
+      if (slug) return <PublishedPageEmbed slug={slug} caption={caption} />;
+    }
   }
   if (href?.startsWith("entity://")) {
     const ref = href.slice(9);
@@ -552,6 +562,13 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   const entityRef = parseEntityUrl(href);
   if (entityRef) {
     return <EntityIdPill type={entityRef.type} id={entityRef.id} />;
+  }
+  // A publish URL inside a sentence: a compact titled pill. The block-embed
+  // case (URL alone on its line) never reaches here — remarkEntityIds hoists
+  // it into an embed:// link first.
+  const page = parsePublishedPageUrl(href);
+  if (page) {
+    return <PublishedPagePill slug={page.slug} href={href} label={text && text !== href ? text : undefined} />;
   }
   return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
 }

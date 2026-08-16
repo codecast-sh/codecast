@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image, ActionSheetIOS, Switch } from 'react-native';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, ActionSheetIOS, Switch } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -28,6 +28,7 @@ import { labelHexColor } from '@/lib/labelColors';
 import { type Device, deviceColor, deviceDisplayName } from '@/components/DevicesSection';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { TriggerDock } from '@/components/TriggerDock';
+import { AgentLogoSvg } from '@/components/AgentLogo';
 import { useQuery } from 'convex/react';
 import { mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 
@@ -92,39 +93,17 @@ function HiddenSessionRow({ session, variant, onPress, onRestore, onKill }: {
   );
 }
 
-// Logos are binary assets baked into the build, so an OTA update can never add
-// one — a client that ships later renders a letter avatar in its accent instead
-// of blocking the agent row on a native release.
-const agentLogoSources: Partial<Record<AgentClientId, number>> = {
-  claude: require('@/assets/images/agents/claude.png'),
-  codex: require('@/assets/images/agents/codex.png'),
-  gemini: require('@/assets/images/agents/gemini.png'),
+// Per-client accents, matching web's AGENT_COLORS (CommandPalette) where it
+// has one. Tints the selected pill's border/background/label; the logo tile
+// itself is the shared AgentLogoSvg (same marks as web's AgentTypeIcon).
+const agentAccents: Record<AgentClientId, string> = {
+  claude: Theme.orange,
+  codex: Theme.green,
+  cursor: Theme.violet,
+  gemini: Theme.blue,
+  opencode: Theme.accentAmber,
+  pi: Theme.cyan,
 };
-
-// Per-client accents, matching web's AGENT_COLORS (CommandPalette) where it has
-// one. `logoBg` is the tile behind the mark; `color` tints the selected button.
-const agentAccents: Record<AgentClientId, { color: string; logoBg: string }> = {
-  claude: { color: Theme.orange, logoBg: '#b58900' },
-  codex: { color: Theme.green, logoBg: '#0f0f0f' },
-  cursor: { color: Theme.violet, logoBg: '#6c71c4' },
-  gemini: { color: Theme.blue, logoBg: '#1a73e8' },
-  opencode: { color: Theme.accentAmber, logoBg: '#d97706' },
-  pi: { color: Theme.cyan, logoBg: '#2aa198' },
-};
-
-function AgentLogo({ id, label, size = 20, bgColor }: { id: AgentClientId; label: string; size?: number; bgColor: string }) {
-  const source = agentLogoSources[id];
-  const iconSize = size * 0.85;
-  return (
-    <RNView style={{ width: size, height: size, borderRadius: size * 0.2, backgroundColor: bgColor, alignItems: 'center', justifyContent: 'center' }}>
-      {source ? (
-        <Image source={source} style={{ width: iconSize, height: iconSize }} resizeMode="contain" />
-      ) : (
-        <RNText style={{ fontSize: size * 0.55, fontWeight: '700', color: '#fff' }}>{label.charAt(0).toUpperCase()}</RNText>
-      )}
-    </RNView>
-  );
-}
 
 // Web's MODE_ITEMS (StableContextCards), verbatim: same four stops, same
 // wording, so the phone and desktop describe the injection identically. "auto"
@@ -191,16 +170,12 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   // What auto-routing would choose, so the highlighted chip matches where the
   // session actually lands. One ladder with the web picker (machinePicker), fed
   // the folder being typed so a machine holding that checkout wins — the same
-  // rung routing uses. Feeding the previous answer back in pins the highlight
-  // against heartbeat reordering; writing the ref during render is safe because
-  // it only caches the value just computed.
-  const stickyDefaultRef = useRef<string | null>(null);
+  // rung routing uses. The ladder is deterministic (stable tie-breaks), so no
+  // feedback loop is needed to pin the highlight against heartbeats.
   const defaultDeviceId = defaultMachineId(rawDevices, {
     ownerDeviceId: null,
     projectPath: projectPath.trim() || null,
-    sticky: stickyDefaultRef.current,
   });
-  stickyDefaultRef.current = defaultDeviceId;
   const selectedDeviceId = deviceId ?? defaultDeviceId;
   const recentProjects = useQuery(
     api.users.getRecentProjectPaths,
@@ -455,7 +430,8 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
         <ScrollView style={modalStyles.body} contentContainerStyle={modalStyles.bodyContent} keyboardShouldPersistTaps="handled">
           <RNText style={modalStyles.label}>Agent</RNText>
           {/* Registry-derived (AGENT_LAUNCH_OPTIONS): adding a client descriptor
-              is all it takes to appear here. Six won't fit one row, so it wraps. */}
+              is all it takes to appear here. Compact pills, wrapping — the same
+              visual language as web's AgentSwitcher row. */}
           <RNView style={modalStyles.agentRow}>
             {AGENT_LAUNCH_OPTIONS.map((a) => {
               const active = agentId === a.id;
@@ -463,7 +439,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               return (
                 <TouchableOpacity
                   key={a.id}
-                  style={[modalStyles.agentBtn, active && { borderColor: accent.color, backgroundColor: accent.color + "20" }]}
+                  style={[modalStyles.agentPill, active && { borderColor: accent + "66", backgroundColor: accent + "1c" }]}
                   onPress={() => {
                     setSubmitError(null);
                     // Re-tapping the active agent must not wipe a model/effort
@@ -477,8 +453,10 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                   disabled={submitting}
                   activeOpacity={0.7}
                 >
-                  <AgentLogo id={a.id} label={a.label} size={20} bgColor={active ? accent.logoBg : Theme.textMuted0} />
-                  <RNText style={[modalStyles.agentBtnText, active && { color: accent.color }]} numberOfLines={1}>
+                  <RNView style={{ opacity: active ? 1 : 0.45 }}>
+                    <AgentLogoSvg agentType={a.id} size={18} />
+                  </RNView>
+                  <RNText style={[modalStyles.agentPillText, active && { color: accent, fontWeight: "700" }]} numberOfLines={1}>
                     {a.label}
                   </RNText>
                 </TouchableOpacity>
@@ -555,7 +533,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                   style={[
                     modalStyles.recentChip,
                     p.suggested && modalStyles.recentChipSuggested,
-                    projectPath === p.path && { borderColor: Theme.accent, backgroundColor: Theme.accent + "20" },
+                    projectPath === p.path && { borderColor: Theme.cyan, backgroundColor: Theme.cyan + "18" },
                   ]}
                   onPress={() => {
                     setProjectPath(p.path);
@@ -564,7 +542,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                   disabled={submitting}
                   activeOpacity={0.7}
                 >
-                  <RNText style={[modalStyles.recentChipText, projectPath === p.path && { color: Theme.accent }]} numberOfLines={1}>
+                  <RNText style={[modalStyles.recentChipText, projectPath === p.path && { color: Theme.cyan }]} numberOfLines={1}>
                     {p.path.split("/").pop()}
                   </RNText>
                 </TouchableOpacity>
@@ -576,7 +554,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                   disabled={submitting}
                   activeOpacity={0.7}
                 >
-                  <RNText style={[modalStyles.recentChipText, showAllRecents && { color: Theme.accent }]}>
+                  <RNText style={[modalStyles.recentChipText, showAllRecents && { color: Theme.cyan }]}>
                     {showAllRecents ? "Less" : `More… (${allRecents.length - 6})`}
                   </RNText>
                 </TouchableOpacity>
@@ -598,7 +576,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                   disabled={submitting}
                   activeOpacity={0.7}
                 >
-                  <RNText style={[modalStyles.recentListText, projectPath === p.path && { color: Theme.accent }]} numberOfLines={1}>
+                  <RNText style={[modalStyles.recentListText, projectPath === p.path && { color: Theme.cyan }]} numberOfLines={1}>
                     {displayPath(p.path)}
                   </RNText>
                 </TouchableOpacity>
@@ -696,7 +674,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             activeOpacity={0.7}
           >
             <RNView style={modalStyles.submitContent}>
-              {submitting ? <ActivityIndicator size="small" color={Theme.bg} /> : null}
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : null}
               <RNText style={modalStyles.submitBtnText}>
                 {submitting ? "Saving…" : retryStubId.current ? "Retry" : "Start Session"}
               </RNText>
@@ -738,22 +716,29 @@ const modalStyles = StyleSheet.create({
   title: { fontSize: 18, fontWeight: "600", color: Theme.text },
   body: { flex: 1, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
   bodyContent: { paddingBottom: Spacing.lg },
-  label: { fontSize: 13, fontWeight: "600", color: Theme.textMuted, marginBottom: 6, marginTop: Spacing.md },
-  agentRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  agentBtn: {
-    flexGrow: 1,
-    flexBasis: "30%",
-    flexDirection: "row",
-    gap: 6,
-    justifyContent: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 6,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: Theme.borderLight,
-    alignItems: "center",
+  // Web's muted micro-headers: small caps, letterspaced, quiet.
+  label: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: Theme.textMuted0,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    marginBottom: 8,
+    marginTop: Spacing.lg,
   },
-  agentBtnText: { fontSize: 14, fontWeight: "600", color: Theme.textMuted },
+  agentRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  agentPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+    backgroundColor: Theme.bgAlt + "55",
+  },
+  agentPillText: { fontSize: 13, fontWeight: "500", color: Theme.textMuted },
   input: {
     backgroundColor: Theme.bgAlt,
     borderRadius: 10,
@@ -868,10 +853,10 @@ const modalStyles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 10,
-    backgroundColor: Theme.accent,
+    backgroundColor: Theme.blue,
   },
   submitContent: { flexDirection: "row", alignItems: "center", gap: 8 },
-  submitBtnText: { fontSize: 15, fontWeight: "600", color: Theme.bg },
+  submitBtnText: { fontSize: 15, fontWeight: "600", color: "#fff" },
   disabledBtn: { opacity: 0.55 },
 });
 
@@ -1911,7 +1896,7 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: Theme.accent,
+    backgroundColor: Theme.blue,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',

@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { AvatarImg } from "../lib/avatarCache";
 import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -33,7 +34,6 @@ import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
-import { SlotActions } from "./workspace/Slot";
 import { partitionTriggerInbox, groupSessionsByTrigger, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
@@ -1012,6 +1012,64 @@ function schedBadgeTone(task: { status: string; run_at?: number }, now: number):
   return "bg-sol-amber/[0.08] text-sol-amber/90 border-sol-amber/25";
 }
 
+// The ↳ corner arrow an attached schedule row/strip wears — the SAME glyph the
+// subagent rows carry (in schedule-amber, not subagent violet), so the child
+// connectors line up under a card and the amber alone says "schedule".
+function SchedChildArrow({ label }: { label: string }) {
+  return (
+    <span className="flex items-center mt-[2px] shrink-0 text-sol-amber/70" role="img" aria-label={label}>
+      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <title>{label}</title>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+      </svg>
+    </span>
+  );
+}
+
+// The health dot beside a schedule's name: green pulse while a run is live,
+// red when the last run failed or flagged itself; nothing at rest. Shared by
+// the full row and the folded strip so the two never disagree on "look here".
+function SchedHealthDot({ accent, task }: { accent: SchedAccent; task: { last_run_failed?: boolean } }) {
+  if (accent === "running") {
+    return (
+      <ShortcutTooltip label="Running now">
+        <span className="relative flex h-2 w-2 shrink-0 items-center justify-center">
+          <span className="absolute inline-flex h-2 w-2 rounded-full bg-sol-green/40 animate-ping motion-reduce:animate-none" />
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sol-green" />
+        </span>
+      </ShortcutTooltip>
+    );
+  }
+  if (accent === "attention") {
+    return (
+      <ShortcutTooltip label={task.last_run_failed ? "Last run failed" : "Flagged for attention"}>
+        <span className="w-1.5 h-1.5 rounded-full bg-sol-red shrink-0" />
+      </ShortcutTooltip>
+    );
+  }
+  return null;
+}
+
+// The next-fire badge — one tone function, one label function, so the strip and
+// the row show the same countdown for the same schedule.
+function SchedFireBadge({ task, now, className = "" }: { task: TaskRow; now: number; className?: string }) {
+  const badge = (
+    <span className={`${className} shrink-0 inline-flex items-center justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border transition-colors ${schedBadgeTone(task, now)}`}>
+      {taskStateLabel(task, now)}
+    </span>
+  );
+  if (task.status !== "scheduled") return badge;
+  // Cadence lives here, not on the row: "in 5h 57m" already says the schedule
+  // is armed; how often it repeats is detail you hover for.
+  const cadence = describeTaskCadence(task);
+  return (
+    <ShortcutTooltip label={task.run_at !== undefined ? `Fires at ${fmtClock(task.run_at)}` : `Fires ${cadence}`} hint={task.run_at !== undefined ? cadence : undefined}>
+      {badge}
+    </ShortcutTooltip>
+  );
+}
+
 // One schedule row, used EVERYWHERE a schedule renders as a row: the dock
 // roster and the bars stacked under a session card (attached). One anatomy so
 // the surfaces can't drift: readable name, one-sentence gist of what each run
@@ -1063,7 +1121,6 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
   );
   const taskId = task._id as Id<"agent_tasks">;
   const paused = task.status === "paused";
-  const stateLabel = taskStateLabel(task, now);
   const isActive = !!row.openId && row.openId === activeSessionId;
   const accent = schedAccent(task);
   const gist = task.display_summary?.trim() || task.prompt;
@@ -1121,30 +1178,10 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
             child instead of a glyph floating in indented space. The orange
             alone marks it as a schedule — no extra identity icon. */}
         <div className="flex gap-1.5 min-w-0">
-        {attached && (
-          <span className="flex items-center mt-[2px] shrink-0 text-sol-amber/70" role="img" aria-label={row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"}>
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <title>{row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"}</title>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
-            </svg>
-          </span>
-        )}
+        {attached && <SchedChildArrow label={row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"} />}
         <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 min-w-0">
-          {accent === "running" && (
-            <ShortcutTooltip label="Running now">
-              <span className="relative flex h-2 w-2 shrink-0 items-center justify-center">
-                <span className="absolute inline-flex h-2 w-2 rounded-full bg-sol-green/40 animate-ping motion-reduce:animate-none" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sol-green" />
-              </span>
-            </ShortcutTooltip>
-          )}
-          {accent === "attention" && (
-            <ShortcutTooltip label={task.last_run_failed ? "Last run failed" : "Flagged for attention"}>
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-red shrink-0" />
-            </ShortcutTooltip>
-          )}
+          <SchedHealthDot accent={accent} task={task} />
           {/* Attached rows recede to the SAME muted title treatment the subagent
               child rows below use (text-gray-400, normal weight) so the parent
               card stays the primary read and the two child idioms match in both
@@ -1158,28 +1195,23 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
             </ShortcutTooltip>
           )}
           {/* Same pill as the dock bar's "N new" count, so opening the roster
-              shows exactly which rows that number pointed at. */}
-          {unread && (
+              shows exactly which rows that number pointed at. Roster only: a
+              bar under a card is always in view, so "since you last opened the
+              roster" means nothing there. */}
+          {unread && !attached && (
             <ShortcutTooltip label="Outcome landed since you last opened this list">
               <span className="shrink-0 px-1 rounded-full bg-sol-amber/15 text-sol-amber text-[9px] font-medium">new</span>
             </ShortcutTooltip>
           )}
-          <span className="ml-auto shrink-0 text-[10px] font-medium text-sol-text-muted">
-            {row.kind === "loop" ? "loop" : describeTaskCadence(task)}
-          </span>
-          {(() => {
-            const badge = (
-              <span className={`shrink-0 inline-flex items-center justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border transition-colors ${schedBadgeTone(task, now)}`}>
-                {stateLabel}
-              </span>
-            );
-            if (task.status !== "scheduled") return badge;
-            return (
-              <ShortcutTooltip label={task.run_at !== undefined ? `Fires at ${fmtClock(task.run_at)}` : `Fires ${describeTaskCadence(task)}`}>
-                {badge}
-              </ShortcutTooltip>
-            );
-          })()}
+          {/* Cadence text stays on roster rows (the roster is the place to scan
+              "what runs how often"); attached rows keep only the countdown and
+              tuck the cadence into its tooltip. */}
+          {(row.kind === "loop" || !attached) && (
+            <span className="ml-auto shrink-0 text-[10px] font-medium text-sol-text-muted">
+              {row.kind === "loop" ? "loop" : describeTaskCadence(task)}
+            </span>
+          )}
+          <SchedFireBadge task={task} now={now} className={attached && row.kind !== "loop" ? "ml-auto" : ""} />
         </div>
         {/* Attached rows are TWO lines, always: the gist shares its line with
             the last-outcome meta (retrying, recency) so a bar under a card
@@ -1414,6 +1446,54 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
     </div>
   );
 })
+
+// The folded form of the bars under a card — the resting state (show_triggers
+// off, the default). One line: the card has triggers, how many, whether one
+// needs a look, and when the next fires. It speaks for the most urgent row
+// (running > flagged > next to fire > paused) and clicking opens that row the
+// same way its full row would. The pill's ⚡ toggle unfolds every strip into
+// full rows; nothing here is a second way to expand.
+const SCHED_ACCENT_RANK: Record<SchedAccent, number> = { running: 0, attention: 1, normal: 2, paused: 3 };
+export function primaryTriggerRow(rows: TriggerRow[]): TriggerRow {
+  return rows.reduce((best, r) => {
+    const d = SCHED_ACCENT_RANK[schedAccent(r.task)] - SCHED_ACCENT_RANK[schedAccent(best.task)];
+    if (d !== 0) return d < 0 ? r : best;
+    return (r.task.run_at ?? Infinity) < (best.task.run_at ?? Infinity) ? r : best;
+  });
+}
+const TriggerStrip = memo(function TriggerStrip({ rows, activeSessionId, onOpen }: {
+  rows: TriggerRow[];
+  activeSessionId?: string | null;
+  onOpen: (row: TriggerRow) => void;
+}) {
+  const now = useCoarseNow(30_000);
+  const primary = primaryTriggerRow(rows);
+  const isActive = !!primary.openId && primary.openId === activeSessionId;
+  const accent = schedAccent(primary.task);
+  const paused = rows.every((r) => r.task.status === "paused");
+  return (
+    <button
+      data-schedstrip={primary.openId}
+      onClick={() => onOpen(primary)}
+      className={`w-full flex items-center gap-1.5 text-left cursor-pointer pl-2 pr-3 py-[3px] transition-[background-color,opacity] hover:bg-sol-amber/[0.05] ${
+        isActive ? "bg-sol-cyan/[0.10]" : ""
+      } ${paused ? "opacity-55 hover:opacity-90" : ""}`}
+    >
+      <SchedChildArrow label={rows.length === 1 ? "Trigger — fires into this session" : `${rows.length} triggers fire into this session`} />
+      <Zap className="w-2.5 h-2.5 shrink-0 text-sol-amber/70" fill="currentColor" strokeWidth={0} />
+      <SchedHealthDot accent={accent} task={primary.task} />
+      <span className="text-[11px] text-gray-400 truncate min-w-0">
+        {rows.length === 1 ? taskDisplayTitle(primary.task) : `${rows.length} triggers`}
+      </span>
+      {rows.length > 1 && (
+        <span className="text-[10px] text-sol-text-dim truncate min-w-0">
+          {rows.map((r) => taskDisplayTitle(r.task)).join(" · ")}
+        </span>
+      )}
+      <SchedFireBadge task={primary.task} now={now} className="ml-auto" />
+    </button>
+  );
+});
 
 // -- Monitor bars (live background watches) --
 // A live Monitor (the harness background-watch tool) stacks under its session
@@ -2408,13 +2488,16 @@ export const SessionCard = memo(function SessionCard({
         <div className="flex items-center gap-1.5 mt-1">
           {author && (
             <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
-              {author.avatar ? (
-                <img src={author.avatar} alt={author.name} className="w-3.5 h-3.5 rounded-full object-cover" />
-              ) : (
-                <span className="w-3.5 h-3.5 rounded-full bg-sol-violet/20 text-sol-violet flex items-center justify-center text-[8px] font-semibold leading-none">
-                  {author.name.charAt(0).toUpperCase()}
-                </span>
-              )}
+              <AvatarImg
+                src={author.avatar}
+                alt={author.name}
+                className="w-3.5 h-3.5 rounded-full object-cover"
+                fallback={
+                  <span className="w-3.5 h-3.5 rounded-full bg-sol-violet/20 text-sol-violet flex items-center justify-center text-[8px] font-semibold leading-none">
+                    {author.name.charAt(0).toUpperCase()}
+                  </span>
+                }
+              />
               <span className="text-[10px] font-medium text-sol-violet/80 truncate">{author.name.split(" ")[0]}</span>
             </span>
           )}
@@ -2905,11 +2988,9 @@ function scrollRowIntoView(container: HTMLElement, el: Element) {
 export function SessionListPanel({
   onSessionSelect,
   activeSessionId,
-  onCollapse,
 }: {
   onSessionSelect?: (id: string) => void;
   activeSessionId?: string | null;
-  onCollapse?: () => void;
 }) {
   const s = useTrackedStore([
     s => s.clientState.ui,
@@ -3277,6 +3358,20 @@ export function SessionListPanel({
     return filtered.sort((a, b) => (b.inbox_stashed_at || b.updated_at || 0) - (a.inbox_stashed_at || a.updated_at || 0));
   }, [filterByChip, stashedList]);
 
+  // The bars under a card, in whichever form the ⚡ pill toggle asks for:
+  // folded to one strip (default) or one full row per schedule.
+  const showTriggers = s.clientState.ui?.show_triggers ?? false;
+  const renderScheduleBars = useCallback((sess: InboxSession) => {
+    const rows = scheduleBarRowsFor(sess);
+    if (rows.length === 0) return null;
+    const bound = rows.map((r) => ({ ...r, openId: sess._id }));
+    if (!showTriggers) {
+      return <TriggerStrip rows={bound} activeSessionId={activeSessionId} onOpen={openScheduleTarget} />;
+    }
+    return bound.map((r) => (
+      <TriggerRowItem key={r.task._id} row={r} activeSessionId={activeSessionId} onOpen={openScheduleTarget} attached />
+    ));
+  }, [scheduleBarRowsFor, showTriggers, activeSessionId, openScheduleTarget]);
   // "By trigger" lens — the roster's rows promoted to first-class rows, each
   // with the sessions it drives as sub rows beneath (home conversation /
   // runs), the rest falling to project groups. Grouped over the UNabsorbed
@@ -3838,15 +3933,7 @@ export function SessionListPanel({
                     here while its schedule keeps firing — so the stashed/killed
                     buckets carry the same schedule bars as the live sections;
                     without them an expanded bucket hides that a card is a loop. */}
-                {scheduleBarRowsFor(session).map((r) => (
-                  <TriggerRowItem
-                    key={r.task._id}
-                    row={{ ...r, openId: session._id }}
-                    activeSessionId={activeSessionId}
-                    onOpen={openScheduleTarget}
-                    attached
-                  />
-                ))}
+                {renderScheduleBars(session)}
                 <WorkflowBar session={session} isActive={session._id === activeSessionId} />
                 <MonitorBars session={session} isActive={session._id === activeSessionId} onOpen={handleSelect} />
                 {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
@@ -4049,15 +4136,7 @@ export function SessionListPanel({
                     active). The trigger view skips them: there every armed
                     trigger is already a first-class group header, so a bar
                     under a card would repeat the header just above it. */}
-                {viewMode !== "trigger" && scheduleBarRowsFor(session).map((r) => (
-                  <TriggerRowItem
-                    key={r.task._id}
-                    row={{ ...r, openId: session._id }}
-                    activeSessionId={activeSessionId}
-                    onOpen={openScheduleTarget}
-                    attached
-                  />
-                ))}
+                {viewMode !== "trigger" && renderScheduleBars(session)}
                 <WorkflowBar session={session} isActive={session._id === activeSessionId} />
                 <MonitorBars session={session} isActive={session._id === activeSessionId} onOpen={handleSelect} />
                 {visibleSubs.map((sub) => (
@@ -4206,7 +4285,7 @@ export function SessionListPanel({
               </div>
             );
           })()}
-          {(totalSubagentCount > 0 || oldCount > 0) && (
+          {(totalSubagentCount > 0 || oldCount > 0 || scheduleRowsView.length > 0) && (
             <div className="w-px h-3 bg-sol-border/40" />
           )}
           {totalSubagentCount > 0 && (
@@ -4220,6 +4299,22 @@ export function SessionListPanel({
               }`}
             >
               <GitFork className="w-3 h-3" />
+            </button>
+          )}
+          {/* Trigger detail under cards: off = one folded strip per card (the
+              default), on = a full row per schedule. Same idiom as the
+              subagent toggle beside it, in schedule-amber. */}
+          {scheduleRowsView.length > 0 && (
+            <button
+              onClick={() => s.updateClientUI({ show_triggers: !showTriggers })}
+              title={showTriggers ? "Fold triggers under cards to a strip" : "Show trigger details under cards"}
+              className={`cc-panel__btn ${
+                showTriggers
+                  ? "bg-sol-amber/15 text-sol-amber"
+                  : "text-sol-text-dim/70 hover:text-sol-text"
+              }`}
+            >
+              <Zap className="w-3 h-3" />
             </button>
           )}
           {oldCount > 0 && (
@@ -4250,9 +4345,6 @@ export function SessionListPanel({
           >
             <Star className="w-3 h-3" fill={favoritesView ? "currentColor" : "none"} />
           </button>
-          {/* Buttons only — this rail draws its own header, so it takes the
-              shared CONTROLS, not a second header bar. */}
-          <SlotActions slot="context" onClose={onCollapse} />
         </div>
         </div>
       </div>

@@ -9109,6 +9109,130 @@ program
     }
   });
 
+// ── Calls (huddle transcripts as first-class objects) ─────────────────────
+// A call = a transcribed huddle: exact speaker attribution (one audio track =
+// one speaker), auto-generated title/summary/action items on stop, durable.
+
+function fmtCallWhen(ms: number): string {
+  const d = new Date(ms);
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return sameDay ? time : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
+}
+
+function fmtCallDuration(row: { started_at: number; ended_at: number | null }): string {
+  if (!row.ended_at) return "live";
+  const min = Math.max(1, Math.round((row.ended_at - row.started_at) / 60_000));
+  return `${min}m`;
+}
+
+async function resolveCallId(ref: string): Promise<string> {
+  // Full convex id or a unique prefix of a recent call's id.
+  const rows: any[] = await cliPost("/cli/calls/list", { limit: 200 });
+  const exact = rows.find((r) => r._id === ref);
+  if (exact) return exact._id;
+  const matches = rows.filter((r) => r._id.startsWith(ref));
+  if (matches.length === 1) return matches[0]._id;
+  if (matches.length > 1) {
+    console.error(`Ambiguous call id prefix "${ref}" (${matches.length} matches) — use more characters`);
+    process.exit(1);
+  }
+  console.error(`No call found for "${ref}" — see \`cast calls\``);
+  process.exit(1);
+}
+
+program
+  .command("calls")
+  .description(
+    "List team calls (transcribed huddles) — live first, then history\n\n" +
+    "Each call carries an exact speaker-attributed transcript and, once it\n" +
+    "ends, an auto-generated title, summary and action items.\n\n" +
+    "Examples:\n" +
+    "  cast calls                   # Recent calls across your teams\n" +
+    "  cast calls -n 50             # More history\n" +
+    "  cast call <id>               # One call: summary + action items\n" +
+    "  cast call <id> --transcript  # Full attributed transcript"
+  )
+  .option("-n, --limit <n>", "How many calls to list", "20")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const rows: any[] = await cliPost("/cli/calls/list", {
+      limit: Number(options.limit) || 20,
+    });
+    if (options.json) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    if (rows.length === 0) {
+      console.log("No calls yet. Start a huddle and toggle Transcribe.");
+      return;
+    }
+    for (const r of rows) {
+      const live = r.status === "live";
+      const dot = live ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
+      const who = (r.participants || []).map((p: any) => p.name.split("@")[0]).join(", ") || "—";
+      const title = r.title || r.room_key;
+      const sum = r.summary ? "" : live ? "" : ` ${c.dim}(no summary)${c.reset}`;
+      console.log(
+        `${dot} ${c.cyan}${r._id.slice(0, 8)}${c.reset} ${fmtCallWhen(r.started_at)} ${c.dim}${fmtCallDuration(r)}${c.reset}  ${c.bold}${title}${c.reset}${sum}`,
+      );
+      console.log(`   ${c.dim}${who}${c.reset}`);
+    }
+    console.log(`\n${c.dim}cast call <id> for summary + transcript${c.reset}`);
+  });
+
+program
+  .command("call")
+  .description(
+    "Show one call: title, participants, summary, action items — and the\n" +
+    "full speaker-attributed transcript with --transcript"
+  )
+  .argument("<id>", "Call id (or unique prefix) from `cast calls`")
+  .option("--transcript", "Print the full attributed transcript")
+  .option("--json", "Machine-readable output (always includes segments)")
+  .action(async (ref: string, options: any) => {
+    const id = await resolveCallId(ref);
+    const call: any = await cliPost("/cli/calls/get", { transcript_id: id });
+    if (!call) {
+      console.error("Call not found or not accessible");
+      process.exit(1);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(call, null, 2));
+      return;
+    }
+    const live = call.status === "live";
+    console.log(`${c.bold}${call.title || call.room_key}${c.reset} ${live ? `${c.green}LIVE${c.reset}` : c.dim + fmtCallDuration(call) + c.reset}`);
+    console.log(`${c.dim}${fmtCallWhen(call.started_at)} · ${call.room_key}${c.reset}`);
+    const who = (call.participants || []).map((p: any) => p.name).join(", ");
+    if (who) console.log(`${c.dim}speakers:${c.reset} ${who}`);
+    if (call.summary) {
+      console.log(`\n${call.summary}`);
+    } else if (!live) {
+      const why = call.summary_status === "skipped" ? "too short to summarize" :
+        call.summary_status === "failed" ? "summary generation failed" : "summary pending";
+      console.log(`\n${c.dim}(${why})${c.reset}`);
+    }
+    if ((call.action_items || []).length > 0) {
+      console.log(`\n${c.bold}Action items${c.reset}`);
+      for (const a of call.action_items) console.log(`  - ${a}`);
+    }
+    if (options.transcript) {
+      console.log(`\n${c.bold}Transcript${c.reset}`);
+      let lastSpeaker = "";
+      for (const s of call.segments || []) {
+        if (s.speaker_name !== lastSpeaker) {
+          console.log(`${c.cyan}${s.speaker_name}${c.reset}`);
+          lastSpeaker = s.speaker_name;
+        }
+        console.log(`  ${s.text}`);
+      }
+    } else if ((call.segments || []).length > 0) {
+      console.log(`\n${c.dim}${call.segments.length} transcript lines — add --transcript to print them${c.reset}`);
+    }
+  });
+
 program
   .command("summary")
   .description(
@@ -10426,11 +10550,16 @@ program
     "Each session is a new agent with no shared history. It runs on its own and\n" +
     "reports to your inbox — unlike a subagent, which is a hidden helper that\n" +
     "reports back to whoever launched it.\n\n" +
+    "With --subagent the new session nests under a parent instead: the UI shows\n" +
+    "it as a subagent row of that session, not a first-class inbox card. The\n" +
+    "parent manages it (cast send / cast read) and folds results back. Combine\n" +
+    "with --agent to run the subagent on a different backend than the parent.\n\n" +
     "Examples:\n" +
     "  cast spawn \"audit the auth flow\" \"audit the billing flow\"\n" +
     "  cast spawn -C ~/src/api \"port the v1 routes to v2\"\n" +
     "  cast spawn --isolated \"refactor the store\" \"rewrite the router\"   # parallel worktrees\n" +
     "  cast spawn --device nose \"run the nightly backfill\"   # start it on a specific machine\n" +
+    "  cast spawn --subagent --agent codex \"review the diff\"   # codex subagent under THIS session\n" +
     "  cast spawn - <<'EOF'\n" +
     "  Multi-line briefing with headings and code blocks,\n" +
     "  delivered exactly as written.\n" +
@@ -10439,6 +10568,7 @@ program
   .argument("<prompts...>", "One task per session; '-' reads a prompt from stdin (several '-' split stdin on lines containing only ---)")
   .option("-C, --dir <path>", "Working directory (default: current project)")
     .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi", "claude")
+  .option("--subagent [parent]", "Nest under a parent session as a subagent row (default parent: the session running this command)")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
   .option("--isolated", "Give each session its own git worktree")
   .option("--device <name>", "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline")
@@ -10473,7 +10603,25 @@ program
     // automatically — no literal map to keep in sync.
     const agentType = toConvexAgentType(fromConvexAgentType(String(options.agent).toLowerCase()));
 
-    const roster: { short_id: string; conversation_id: string; prompt: string }[] = [];
+    // --subagent nests the new session under a parent. Bare flag = the session
+    // running this command; a value names any of the caller's sessions. Failing
+    // to detect the parent is a hard error, not a fallback to a first-class
+    // spawn — the caller asked for a nested row, and a loose inbox card is the
+    // failure the flag exists to prevent.
+    let parentSession: string | undefined;
+    if (options.subagent) {
+      parentSession =
+        typeof options.subagent === "string" ? options.subagent : detectCurrentSessionId() || undefined;
+      if (!parentSession) {
+        console.error(
+          "Couldn't detect the current session to use as the parent.\n" +
+          "Name it explicitly: cast spawn --subagent <session> \"<task>\""
+        );
+        process.exit(1);
+      }
+    }
+
+    const roster: { short_id: string; conversation_id: string; prompt: string; parent_short_id?: string }[] = [];
     for (const prompt of prompts) {
       const resp = await cliFetch(`${siteUrl}/cli/spawn`, {
         method: "POST",
@@ -10487,6 +10635,7 @@ program
           model: options.model,
           isolated: options.isolated || undefined,
           device: options.device,
+          parent_session: parentSession,
         }),
       });
       if (!resp.ok) {
@@ -10495,7 +10644,7 @@ program
         process.exit(1);
       }
       const result = await resp.json() as any;
-      roster.push({ short_id: result.short_id, conversation_id: result.conversation_id, prompt });
+      roster.push({ short_id: result.short_id, conversation_id: result.conversation_id, prompt, parent_short_id: result.parent_short_id });
     }
 
     let labelResult: { createdLabel: boolean; failures: number } | null = null;
@@ -10504,7 +10653,7 @@ program
     }
 
     if (options.json) {
-      console.log(JSON.stringify({ dir, agent: agentType, label: options.label ?? null, sessions: roster }, null, 2));
+      console.log(JSON.stringify({ dir, agent: agentType, label: options.label ?? null, parent: roster[0]?.parent_short_id ?? null, sessions: roster }, null, 2));
       return;
     }
 
@@ -10512,9 +10661,12 @@ program
     const labelNote = options.label
       ? ` ${c.dim}·${c.reset} filed under ${c.yellow}${options.label}${c.reset}${labelResult?.createdLabel ? ` ${c.dim}(new label)${c.reset}` : ""}`
       : "";
+    const placement = roster[0]?.parent_short_id
+      ? `nested under ${c.cyan}${roster[0].parent_short_id}${c.reset} as subagent row${roster.length === 1 ? "" : "s"}:`
+      : "all in your inbox:";
     console.log(
       `${c.green}✓${c.reset} spawned ${c.bold}${roster.length}${c.reset} session${roster.length === 1 ? "" : "s"} in ` +
-      `${c.dim}${dirNote}${c.reset} — all in your inbox:${labelNote}`
+      `${c.dim}${dirNote}${c.reset} — ${placement}${labelNote}`
     );
     for (const s of roster) {
       console.log(`  ${c.cyan}${s.short_id}${c.reset}  ${promptGist(s.prompt)}`);

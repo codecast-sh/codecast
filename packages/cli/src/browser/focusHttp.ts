@@ -18,8 +18,8 @@
  */
 
 import type http from "http";
-import { execFile } from "node:child_process";
 import { CdpConnection, listTargets } from "./cdp.js";
+import { raiseAppByPid } from "./raiseApp.js";
 import { readState } from "./instance.js";
 import { listChromeDebugPorts } from "./localChrome.js";
 import { isPidAlive } from "../workspace/chrome.js";
@@ -119,32 +119,10 @@ export const localChromeFocusEngine: FocusEngine = {
   activate: activateViaCdp,
 };
 
-/**
- * Activating a tab selects it inside its window, but a window behind other
- * apps stays behind them — so also bring that Chrome frontmost. By pid, not by
- * app name: `tell application "Google Chrome"` would reach the user's real
- * Chrome, a different process from the driven one.
- *
- * How, matters on macOS 14+: a background process may not push another app to
- * the front (`set frontmost`, `NSRunningApplication.activate` and Chrome's own
- * `Page.bringToFront` all silently do nothing while the human's app has
- * focus). What is allowed is an app activating ITSELF, which is what
- * AppleScript's `activate` asks for — so send that Apple event (`misc`/`actv`)
- * addressed to the pid, and Chrome raises its own window. Best effort; tab
- * selection already happened if this fails.
- */
-export function raiseAppByPid(pid: number, log: (line: string) => void = () => {}): void {
-  if (process.platform !== "darwin") return;
-  const jxa =
-    'ObjC.import("Foundation");' +
-    `const target = $.NSAppleEventDescriptor.descriptorWithProcessIdentifier(${Math.floor(pid)});` +
-    "const evt = $.NSAppleEventDescriptor.appleEventWithEventClassEventIDTargetDescriptorReturnIDTransactionID(0x6d697363, 0x61637476, target, -1, 0);" +
-    "const err = Ref(); evt.sendEventWithOptionsTimeoutError(1, 10, err); err[0] ? String(err[0].localizedDescription) : 'ok';";
-  execFile("osascript", ["-l", "JavaScript", "-e", jxa], (error, stdout, stderr) => {
-    const out = `${stdout ?? ""}`.trim();
-    if (error || out !== "ok") log(`[BROWSER] raise pid ${pid}: ${error ? error.message : out} ${`${stderr ?? ""}`.trim()}`.trim());
-  });
-}
+// Activating a tab selects it inside its window, but a window behind other
+// apps stays behind them — so the route also brings that Chrome frontmost,
+// via the pid-addressed Apple event in raiseApp.ts. Best effort; tab
+// selection already happened if it fails.
 
 /**
  * Engines the route consults, in order. An engine adapter registers itself

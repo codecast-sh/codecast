@@ -2,7 +2,10 @@
   "expo": {
     "name": "Codecast",
     "slug": "codecast",
-    "platforms": ["ios", "android"],
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "version": "1.0.3",
     "runtimeVersion": {
       "policy": "appVersion"
@@ -22,11 +25,19 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.ashotp.codecast",
       "usesAppleSignIn": true,
-      "associatedDomains": ["applinks:codecast.sh", "applinks:www.codecast.sh"],
+      "associatedDomains": [
+        "applinks:codecast.sh",
+        "applinks:www.codecast.sh"
+      ],
       "infoPlist": {
-        "UIBackgroundModes": ["remote-notification"],
+        "UIBackgroundModes": [
+          "audio",
+          "remote-notification"
+        ],
         "NSFaceIDUsageDescription": "Use Face ID to securely access your account",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Codecast uses the camera for team huddles.",
+        "NSMicrophoneUsageDescription": "Codecast uses the microphone for team huddles."
       }
     },
     "android": {
@@ -62,7 +73,10 @@
         {
           "icon": "./assets/images/icon.png",
           "color": "#d97706",
-          "sounds": []
+          "sounds": [
+            "./assets/sounds/chat.caf",
+            "./assets/sounds/huddle-ring.caf"
+          ]
         }
       ],
       [
@@ -72,7 +86,9 @@
           "project": "react-native"
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-audio",
+      "expo-callkit-telecom"
     ],
     "experiments": {
       "typedRoutes": true

@@ -19,6 +19,7 @@
 import { useConvex } from "convex/react";
 import { useEffect, useReducer } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { shareTokenArg } from "../lib/shareTokenScope";
 
 const api = _api as any;
 
@@ -109,7 +110,9 @@ function scheduleFlush(convex: ReturnType<typeof useConvex>, delayMs = 0) {
     try {
       const urls: Record<string, string | null> | null = await convex.query(api.images.getImageUrls, {
         storageIds: ids,
-        ...(guestImageScope ? { conversation_id: guestImageScope } : {}),
+        ...(guestImageScope
+          ? { conversation_id: guestImageScope, ...shareTokenArg(guestImageScope) }
+          : {}),
       });
       const unresolved: string[] = [];
       for (const id of ids) {

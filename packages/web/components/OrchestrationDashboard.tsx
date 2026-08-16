@@ -1,8 +1,11 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
+import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
+import { useConvexSync } from "../hooks/useConvexSync";
+import { useInboxStore } from "../store/inboxStore";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { LivenessDot } from "./LivenessDot";
 import {
@@ -124,10 +127,26 @@ interface OrchestrationDashboardProps {
 
 export function OrchestrationDashboard({ className }: OrchestrationDashboardProps) {
   const workspaceArgs = useWorkspaceArgs();
-  const plans = useQuery(
+  // Local-first: paint from the store's plans collection, let the live query
+  // feed it (isDelta overlay) and take over once it answers. The gate below
+  // only shows for a genuinely cold cache.
+  const livePlans = useQuery(
     api.plans.webList,
     workspaceArgs === "skip" ? "skip" : { ...workspaceArgs, include_all: true }
   );
+  const syncTable = useInboxStore((s) => s.syncTable);
+  useConvexSync(livePlans, useCallback((data: any) => {
+    syncTable("plans", data, { isDelta: true });
+  }, [syncTable]));
+  const wsPlans = useWorkspaceCollection<any>(
+    "plans",
+    (p) => `${p.status}|${p.updated_at ?? 0}|${p.progress?.done ?? 0}/${p.progress?.total ?? 0}`,
+  );
+  const plans = useMemo(() => {
+    if (livePlans !== undefined) return livePlans;
+    if (wsPlans.length === 0) return undefined;
+    return [...wsPlans].sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
+  }, [livePlans, wsPlans]);
 
   const activePlanIds = useMemo(() => {
     if (!plans) return [];

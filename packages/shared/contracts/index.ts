@@ -19,6 +19,8 @@ export * from "./vaultProtocol";
 export * from "./vaultMirror";
 export * from "./terminalStream";
 export * from "./callRoomKeys";
+export * from "./callPush";
+export * from "./convexErrors";
 // Without these two lines every consumer reinvents the capability vocabulary:
 // convex copied the constants, the web store reached in by relative path, and
 // the web UI and the CLI each declared their own scope and kind unions. Four
@@ -32,6 +34,7 @@ export * from "./fleetDiff";
 export * from "./capabilityScopes";
 export * from "./sanitizeText";
 export * from "./mcpRegistry";
+export * from "./usageLimits";
 // The connectable-apps catalog (the /capabilities Apps tab): Convex answers
 // connection state in this vocabulary and the web renders it, so both need the
 // one definition. Deep paths do not resolve past the exports map — barrel only.

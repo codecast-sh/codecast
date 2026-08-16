@@ -20,6 +20,8 @@ import {
   ccAccountsValidator,
   decideAutoSwitch,
   AUTO_SWITCH_CONTINUE_KEY,
+  AUTO_CONTINUE_WINDOW_MS,
+  isAutoContinueEnabled,
   isBlockedConversation,
   isRemoteAuthBlocked,
   isSubagentConversation,
@@ -768,13 +770,23 @@ export const autoSwitchCheck = internalMutation({
   handler: async (ctx, args) => {
     const now = Date.now();
     const { online, primary } = await listOnlineDevices(ctx, args.user_id, now);
-    if (!primary || primary.cc_auto_switch !== true) return { acted: "off" };
+    if (!primary) return { acted: "off" };
+    const allowSwitch = primary.cc_auto_switch === true;
+    if (!allowSwitch && !isAutoContinueEnabled(primary)) return { acted: "off" };
 
     const state = primary.cc_auto_switch_state ?? {};
     const { blocked } = await listBlockedConversations(ctx, args.user_id, false);
     // Limit-kind only: an auth park means a login expired — switching accounts
     // behind the user's back is an identity change, not a recovery.
-    const limitBlocked = blocked.filter((c) => c.pending_api_error_kind === "limit");
+    // Continue-only mode acts on the current incident alone: a park older than
+    // a full session window has already sat through a reset the user could
+    // have used — resuming it now spends the fresh window on abandoned work.
+    // (With auto-switch on the user opted into the wider 48h revive.)
+    const limitBlocked = blocked.filter(
+      (c) =>
+        c.pending_api_error_kind === "limit" &&
+        (allowSwitch || (c.updated_at ?? 0) >= now - AUTO_CONTINUE_WINDOW_MS),
+    );
     if (limitBlocked.length === 0) {
       if (state.exhausted_at) {
         await ctx.db.patch(primary._id, {
@@ -820,6 +832,7 @@ export const autoSwitchCheck = internalMutation({
       activeEmail: primary.cc_accounts?.active_email,
       profiles: primary.cc_accounts?.profiles ?? [],
       attempts,
+      allowSwitch,
     });
 
     if (decision.action === "continue") {
@@ -853,10 +866,12 @@ export const autoSwitchCheck = internalMutation({
     // Every account is spent. Mark it for the UI and wake up at the earliest
     // limit reset the decision found. Dedupe self-scheduling: only book a
     // wake-up if none is pending or ours lands earlier (a window reset we just
-    // learned about).
+    // learned about). Continue-only mode never looked at the other accounts,
+    // so it must not stamp "every account is spent" — it is merely waiting
+    // for the active window to reset.
     const nextState = {
       ...state,
-      exhausted_at: state.exhausted_at ?? now,
+      exhausted_at: allowSwitch ? state.exhausted_at ?? now : state.exhausted_at,
       next_check_at: state.next_check_at,
     };
     if (

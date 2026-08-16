@@ -570,6 +570,16 @@ describe("brandArtifactHtml", () => {
     expect(out).toContain('id="__cc_pill"');
   });
 
+  test("a framed page starts minimized unless the viewer restored the bar", () => {
+    // Embeds (conversation, decision queue) frame the page and supply their
+    // own chrome; the bar collapses into the corner pill by default there.
+    const out = brandArtifactHtml("<body></body>", opts);
+    expect(out).toContain("framed=window.self!==window.top");
+    expect(out).toContain('(framed&&minPref!=="0"))setMin(true,false)');
+    // The framed default is not persisted; only a click is remembered.
+    expect(out).toContain("setMin(false,true)");
+  });
+
   test("session chip renders only when a session is exposed", () => {
     const shown = brandArtifactHtml("<body></body>", { ...opts, sessionShortId: "jx1abcd", sessionTitle: "My session" });
     expect(shown).toContain('class="__cc_sess"');

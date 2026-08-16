@@ -37,6 +37,7 @@ export function pathLabel(path: string): string {
     "/pages": "Pages",
     "/artifacts": "Pages", // pre-rename alias — old saved tabs keep this path
     "/plans": "Plans",
+    "/calls": "Calls",
     "/projects": "Projects",
     "/inbox": "Inbox",
     "/feed": "Feed",
@@ -50,7 +51,9 @@ export function pathLabel(path: string): string {
 
 /** The session an /inbox?s=<id> tab is pinned to, if any. */
 export function inboxTabSessionId(path: string): string | null {
-  if (!path.split("?")[0].startsWith("/inbox")) return null;
+  // Null-safe: a tab row with a missing path (bad caller, corrupted persist)
+  // must degrade to "no session", not crash the whole TabBar.
+  if (!path || !path.split("?")[0].startsWith("/inbox")) return null;
   try {
     return new URLSearchParams(path.split("?")[1] ?? "").get("s");
   } catch {

@@ -24,6 +24,7 @@ import {
 import { showBrowserHandoffToast } from "./BrowserHandoffToast";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { notificationRoute } from "../lib/notificationTypes";
+import { soundChatMessage } from "../lib/sounds";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { usePresenceReporter } from "../hooks/usePresenceReporter";
@@ -121,6 +122,13 @@ export function DesktopProvider() {
         // message, a task banner on the task — not just "the app, focused".
         const route = notificationRoute(n.entity_type, n.entity_id, n.chat_message_id) ?? undefined;
         notifyNative(title, body, { conversationId: n.conversation_id, route });
+        // Browser/Electron OS banners are silent by default; the page supplies
+        // the same marimba the focused toast plays, so a chat message sounds
+        // identical whether the window has focus or not. notifyNative already
+        // no-ops when focused (the toast layer owns that case).
+        if (typeof n.type === "string" && n.type.startsWith("chat_") && !document.hasFocus()) {
+          soundChatMessage();
+        }
       }
     }
     seenIdsRef.current = new Set(notifications.map((n) => n._id));

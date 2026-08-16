@@ -76,6 +76,12 @@ function world(grantStatus?: "requested" | "granted" | "denied" | "revoked") {
       { _id: "convShared", user_id: "uBob", short_id: "jxshare", session_id: "sess-shared", is_private: true, share_token: "tok-123", status: "active" },
       { _id: "convCarol", user_id: "uCarol", short_id: "jxcarol", session_id: "sess-carol", is_private: true, status: "active" },
     ],
+    // Carol opened Bob's share link signed in, so she holds a redemption of the
+    // CURRENT token. "shared" requires presenting the token (issue #27) — a
+    // grant row alone no longer implies she can even read the session.
+    share_redemptions: [
+      { _id: "redeem1", conversation_id: "convShared", user_id: "uCarol", token: "tok-123", created_at: 1 },
+    ],
     managed_sessions: [
       { _id: "msShared", user_id: "uBob", conversation_id: "convShared", session_id: "sess-shared", last_heartbeat: Date.now() - 5_000, agent_status: "idle" },
     ],

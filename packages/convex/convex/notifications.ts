@@ -21,16 +21,48 @@ export const sendPushNotification = internalAction({
   args: {
     push_token: v.string(),
     title: v.string(),
+    // iOS second line — "#team", "thread · #team". Android folds it into the
+    // title since it has no subtitle slot.
+    subtitle: v.optional(v.string()),
     body: v.string(),
     data: v.optional(v.any()),
+    // Android notification channel ("chat" gets its own sound/importance).
+    channel_id: v.optional(v.string()),
+    // iOS: "time-sensitive" for messages addressed to the person, so they
+    // banner through Focus summaries the way a message should.
+    interruption_level: v.optional(v.string()),
+    // App icon badge — the bell's own unread count, so phone and app agree.
+    badge: v.optional(v.number()),
+    // For receipt hygiene: whose token this is, so a DeviceNotRegistered
+    // ticket can clear it instead of eating every future push silently.
+    user_id: v.optional(v.id('users')),
+    // Bundled iOS sound file ("huddle-ring.caf" rings a closed app) — the
+    // file must ship in the app binary's Resources for the name to resolve.
+    sound: v.optional(v.string()),
+    // iOS actionable-notification category (the app registers matching
+    // actions, e.g. Join/Decline on "huddle_ring").
+    category_id: v.optional(v.string()),
+    // Expo push TTL in seconds: undeliverable pushes are dropped after this
+    // (a ring for a 45s call must not land minutes later).
+    ttl: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const message = {
       to: args.push_token,
-      sound: 'default',
+      // 'default' until a native build ships the bundled chat sound; then the
+      // chat channel flips to 'chat.caf' (asset + plugin config already in the
+      // mobile app — see packages/mobile/app.json).
+      sound: args.sound ?? 'default',
+      ...(args.category_id ? { categoryId: args.category_id } : {}),
+      ...(args.ttl !== undefined ? { ttl: args.ttl } : {}),
       title: args.title,
+      ...(args.subtitle ? { subtitle: args.subtitle } : {}),
       body: args.body,
       data: args.data || {},
+      priority: 'high',
+      ...(args.channel_id ? { channelId: args.channel_id } : {}),
+      ...(args.interruption_level ? { interruptionLevel: args.interruption_level } : {}),
+      ...(args.badge !== undefined ? { badge: args.badge } : {}),
     };
 
     try {
@@ -44,10 +76,38 @@ export const sendPushNotification = internalAction({
       });
 
       const responseData = await response.json();
+      // Deliverability hygiene: a DeviceNotRegistered ticket means this token
+      // is dead (app removed, token rotated). Clearing it stops the outbox
+      // from queueing pushes nobody can receive — and lets the next app launch
+      // register a fresh one cleanly.
+      const ticket = responseData?.data;
+      const single = Array.isArray(ticket) ? ticket[0] : ticket;
+      if (
+        args.user_id &&
+        single?.status === 'error' &&
+        single?.details?.error === 'DeviceNotRegistered'
+      ) {
+        await ctx.runMutation(internal.notifications.clearDeadPushToken, {
+          user_id: args.user_id,
+          push_token: args.push_token,
+        });
+      }
       return responseData;
     } catch (error) {
       console.error('Error sending push notification:', error);
       throw error;
+    }
+  },
+});
+
+// The token the ticket declared dead — cleared only if the user still carries
+// THAT token, so a re-registration that raced the ticket is never wiped.
+export const clearDeadPushToken = internalMutation({
+  args: { user_id: v.id('users'), push_token: v.string() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.user_id);
+    if (user?.push_token === args.push_token) {
+      await ctx.db.patch(args.user_id, { push_token: undefined });
     }
   },
 });

@@ -59,8 +59,8 @@ EOF
 The bar: a bare question is useless. The context carries your reasoning, the tradeoff, and the
 consequence of each option — the queue shows nothing else unless they open the session. For a
 decision that deserves evidence (a migration, an audit, a design), write an HTML report and
-attach it with `--report report.html`; it publishes like any artifact and renders with the
-question.
+attach it with `--report report.html`; it publishes like any page and renders embedded with
+the question.
 
 Blocking is the default: post it, then END YOUR TURN — the answer arrives as a user message.
 When you can safely proceed and only want oversight, pass `--advisory --default <n>`: keep

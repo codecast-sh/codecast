@@ -7,6 +7,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   action,
+  internalMutation,
   internalQuery,
   mutation,
   query,
@@ -19,6 +20,12 @@ import {
   authorizeRoom,
 } from "./callRooms";
 import { bucketTs } from "./presenceState";
+import {
+  CALL_PUSH_CATEGORY,
+  CALL_PUSH_SOUND,
+  CALL_PUSH_TYPE_MISSED,
+  CALL_PUSH_TYPE_RING,
+} from "@codecast/shared/contracts";
 
 export { CALL_HEARTBEAT_MS, CALL_INVITE_TTL_MS, CALL_MEMBER_STALE_MS } from "./callRooms";
 
@@ -125,16 +132,25 @@ export const getMyCalls = query({
         q.eq("from_user", userId).eq("status", "declined"),
       )
       .collect();
-    const outgoing = [
-      ...myRings.filter((i) => inviteAlive(i, now)),
-      ...answered.filter((i) => (i.responded_at ?? 0) > now - 30_000),
-    ].map((i) => ({
-      _id: i._id,
-      room_key: i.room_key,
-      to_user: i.to_user,
-      status: i.status,
-      created_at: bucketTs(i.created_at),
-    }));
+    const outgoing = await Promise.all(
+      [
+        ...myRings.filter((i) => inviteAlive(i, now)),
+        ...answered.filter((i) => (i.responded_at ?? 0) > now - 30_000),
+      ].map(async (i) => {
+        // Enriched with the callee's name so the caller's stage can say
+        // "ringing Sam…" / "Sam declined" without a second lookup (mirrors the
+        // incoming projection above).
+        const to = await ctx.db.get(i.to_user);
+        return {
+          _id: i._id,
+          room_key: i.room_key,
+          to_user: i.to_user,
+          to_name: to?.name ?? to?.email ?? "Teammate",
+          status: i.status,
+          created_at: bucketTs(i.created_at),
+        };
+      }),
+    );
 
     const myRooms = await ctx.db
       .query("call_members")
@@ -249,10 +265,33 @@ export const heartbeat = mutation({
   },
 });
 
+// Hanging up settles every ring the caller left outstanding for that room:
+// otherwise the callee's phone rings the full TTL for a call that no longer
+// exists — and then gets a "missed huddle" push for it.
+async function settleOutboundRings(
+  ctx: any,
+  userId: Id<"users">,
+  roomKey: string | undefined,
+  now: number,
+) {
+  const ringing = await ctx.db
+    .query("call_invites")
+    .withIndex("by_from_status", (q: any) =>
+      q.eq("from_user", userId).eq("status", "ringing"),
+    )
+    .collect();
+  for (const inv of ringing) {
+    if (!roomKey || inv.room_key === roomKey) {
+      await ctx.db.patch(inv._id, { status: "cancelled", responded_at: now });
+    }
+  }
+}
+
 export const leaveRoom = mutation({
   args: { room_key: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
+    const now = Date.now();
     const mine = await ctx.db
       .query("call_members")
       .withIndex("by_user", (q) => q.eq("user_id", userId))
@@ -260,6 +299,7 @@ export const leaveRoom = mutation({
     for (const m of mine) {
       if (!args.room_key || m.room_key === args.room_key) await ctx.db.delete(m._id);
     }
+    await settleOutboundRings(ctx, userId, args.room_key, now);
   },
 });
 
@@ -336,7 +376,7 @@ export const invite = mutation({
       });
       return { busy: target?.status === "busy", cooldown: false };
     }
-    await ctx.db.insert("call_invites", {
+    const inviteId = await ctx.db.insert("call_invites", {
       room_key: args.room_key,
       team_id: callerAuth.teamId,
       from_user: userId,
@@ -345,9 +385,63 @@ export const invite = mutation({
       anchor_title: args.anchor_title,
       created_at: now,
     });
+    // Ring the phone DIRECTLY — never through the pushRouter outbox: its
+    // presence holds and away-debounce outlive the 45s invite TTL, and a call
+    // is precisely the "reach them wherever they are" event the hold policy
+    // exists to suppress. Manual "busy" is the closed door here too: no push.
+    // Fresh inserts only — a re-ring refreshes the row above and the phone
+    // already rang for it.
+    const from = await ctx.db.get(userId);
+    if (target?.push_token && target.notifications_enabled && target.status !== "busy") {
+      await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
+        push_token: target.push_token,
+        title: `${from?.name || from?.email || "A teammate"} wants to huddle`,
+        body: args.anchor_title ? `about: ${args.anchor_title}` : "Tap to join the huddle",
+        sound: CALL_PUSH_SOUND,
+        category_id: CALL_PUSH_CATEGORY,
+        interruption_level: "time-sensitive",
+        // APNs drops the ring if the phone is unreachable past the invite TTL —
+        // a phone coming back online must not ring for a call that died.
+        ttl: Math.ceil(CALL_INVITE_TTL_MS / 1000),
+        data: { type: CALL_PUSH_TYPE_RING, invite_id: inviteId, room_key: args.room_key },
+        user_id: args.to_user,
+      });
+    }
+    // The ring's afterlife: at TTL, an unanswered invite becomes a missed-call
+    // push (quiet, default sound) so a closed app learns someone tried.
+    await ctx.scheduler.runAfter(
+      CALL_INVITE_TTL_MS + 2_000,
+      internal.calls.sweepMissedInvite,
+      { invite_id: inviteId },
+    );
     // Manual "busy" rings quietly on the recipient's side; tell the caller so
     // their dock can say "rang quietly" instead of implying a normal ring.
     return { busy: target?.status === "busy" };
+  },
+});
+
+// Runs once per fresh invite, TTL+2s after creation. An invite still "ringing"
+// past its TTL was never answered anywhere — settle it and tell the recipient
+// they were wanted. Answered/declined invites make this a no-op.
+export const sweepMissedInvite = internalMutation({
+  args: { invite_id: v.id("call_invites") },
+  handler: async (ctx, args) => {
+    const inv = await ctx.db.get(args.invite_id);
+    if (!inv || inv.status !== "ringing") return;
+    const now = Date.now();
+    if (inviteAlive(inv, now)) return; // refreshed rings keep their clock; be safe
+    await ctx.db.patch(inv._id, { status: "expired", responded_at: now });
+    const target = await ctx.db.get(inv.to_user);
+    const from = await ctx.db.get(inv.from_user);
+    if (target?.push_token && target.notifications_enabled) {
+      await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
+        push_token: target.push_token,
+        title: `Missed huddle from ${from?.name || from?.email || "a teammate"}`,
+        body: inv.anchor_title ? `about: ${inv.anchor_title}` : "They rang while you were away",
+        data: { type: CALL_PUSH_TYPE_MISSED, room_key: inv.room_key },
+        user_id: inv.to_user,
+      });
+    }
   },
 });
 
@@ -363,6 +457,11 @@ export const respondInvite = mutation({
       throw new Error("Invite not found");
     }
     const now = Date.now();
+    // Already answered on another device: let the second device join too —
+    // stomping the row to "expired" showed "That ring expired" to someone who
+    // just accepted on their laptop.
+    if (inv.status === "accepted") return { room_key: inv.room_key, expired: false };
+    if (inv.status !== "ringing") return { room_key: inv.room_key, expired: true };
     if (!inviteAlive(inv, now)) {
       await ctx.db.patch(inv._id, { status: "expired", responded_at: now });
       return { room_key: inv.room_key, expired: true };

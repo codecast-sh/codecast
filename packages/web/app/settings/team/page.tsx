@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../components/ui/card";
+import { AvatarImg } from "../../../lib/avatarCache";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { InviteModal } from "../../../components/InviteModal";
@@ -353,17 +354,16 @@ export default function TeamPage() {
                 <div key={member._id} className="flex items-center justify-between py-3 px-3 rounded-lg bg-sol-bg-alt">
                   <div className="flex items-center gap-3">
                     <div className="relative">
-                      {member.github_avatar_url ? (
-                        <img
-                          src={member.github_avatar_url}
-                          alt={member.name || "User avatar"}
-                          className="w-10 h-10 rounded-full"
-                        />
-                      ) : (
-                        <div className="w-10 h-10 rounded-full bg-sol-base02 flex items-center justify-center text-sol-text text-sm font-semibold">
-                          {member.name?.[0]?.toUpperCase() || member.email?.[0]?.toUpperCase() || "?"}
-                        </div>
-                      )}
+                      <AvatarImg
+                        src={member.github_avatar_url}
+                        alt={member.name || "User avatar"}
+                        className="w-10 h-10 rounded-full"
+                        fallback={
+                          <div className="w-10 h-10 rounded-full bg-sol-base02 flex items-center justify-center text-sol-text text-sm font-semibold">
+                            {member.name?.[0]?.toUpperCase() || member.email?.[0]?.toUpperCase() || "?"}
+                          </div>
+                        }
+                      />
                       <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-sol-bg-alt ${
                         daemonStatus.status === "online" ? "bg-sol-green" :
                         daemonStatus.status === "recent" ? "bg-sol-yellow" : "bg-sol-base01"

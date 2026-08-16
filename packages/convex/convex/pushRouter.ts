@@ -194,6 +194,7 @@ export async function enqueuePush(
     notification_id?: any;
     type?: string;
     title: string;
+    subtitle?: string;
     body: string;
     data?: any;
   },
@@ -207,6 +208,7 @@ export async function enqueuePush(
     notification_id: opts.notification_id,
     type: opts.type,
     title: opts.title,
+    subtitle: opts.subtitle,
     body: opts.body,
     data: opts.data,
     created_at: now,
@@ -301,12 +303,33 @@ export async function performPushFlush(ctx: any, userId: any): Promise<void> {
   if (sendable.length === 0) return;
 
   const { title, body, data } = summarizePushBatch(sendable);
+  // A single row keeps its subtitle ("#team"); a batch has no one "where".
+  const subtitle = sendable.length === 1 ? sendable[0].subtitle : undefined;
+  // Chat banners ride their own Android channel and, when addressed to the
+  // person (a mention, a DM line, @here), the time-sensitive interruption
+  // level — a message TO you should raise a Focus-respecting banner, not sit
+  // in the summary tray.
+  const CHAT_TYPES = new Set(["chat_mention", "chat_reply", "chat_here", "chat_dm", "chat_added"]);
+  const ADDRESSED = new Set(["chat_mention", "chat_dm", "chat_here"]);
+  const isChat = sendable.some((r: any) => CHAT_TYPES.has(r.type));
+  const addressed = sendable.some((r: any) => ADDRESSED.has(r.type));
+  // The icon badge is the bell's own number, so the phone and the app agree.
+  const unread = await ctx.db
+    .query("notifications")
+    .withIndex("by_recipient_read", (q: any) =>
+      q.eq("recipient_user_id", userId).eq("read", false))
+    .take(100);
   for (const row of sendable) await ctx.db.delete(row._id);
   await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
     push_token: user!.push_token!,
     title,
+    subtitle,
     body,
     data,
+    channel_id: isChat ? "chat" : undefined,
+    interruption_level: addressed ? "time-sensitive" : undefined,
+    badge: Math.min(unread.length, 99),
+    user_id: userId,
   });
 }
 

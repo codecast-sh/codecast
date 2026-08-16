@@ -78,6 +78,10 @@ export default defineSchema({
     github_avatar_url: v.optional(v.string()),
     github_access_token: v.optional(v.string()),
     push_token: v.optional(v.string()),
+    // PushKit VoIP token (hex device token, iOS only). Rings the phone through
+    // CallKit even when the app is killed; sent DIRECTLY to APNs (the Expo push
+    // service has no VoIP channel). Cleared when APNs reports it unregistered.
+    voip_push_token: v.optional(v.string()),
     notifications_enabled: v.optional(v.boolean()),
     // Opt-in: widen push presence from "active in Codecast" to "active anywhere
     // on this Mac". Off, only the web/Electron client reports presence, so
@@ -2058,6 +2062,9 @@ export default defineSchema({
     notification_id: v.optional(v.id("notifications")),
     type: v.optional(v.string()),
     title: v.string(),
+    // iOS second line ("#team", "thread · #team"). Only a single-row flush
+    // shows it — a batch collapses to counts where a subtitle would lie.
+    subtitle: v.optional(v.string()),
     body: v.string(),
     data: v.optional(v.any()),
     created_at: v.number(),
@@ -2146,6 +2153,19 @@ export default defineSchema({
   // told, means running commands on the owner's machine. The owner approves once
   // per session; the grant then lets performSessionSend accept that user's sends.
   // Co-writing the draft needs no grant — only firing it into the session does.
+  // A signed-in viewer who presented a conversation's share link. Access via a
+  // share link requires PRESENTING the token — id knowledge is not a grant
+  // (issue #27). Anonymous guests carry the token on every query; signed-in
+  // viewers redeem it once here and checkConversationAccess honors the row
+  // only while its stored token still matches the conversation's current one,
+  // so rotating or revoking the token cuts every past redeemer off.
+  share_redemptions: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    token: v.string(),
+    created_at: v.number(),
+  }).index("by_conversation_user", ["conversation_id", "user_id"]),
+
   collab_grants: defineTable({
     conversation_id: v.id("conversations"),
     grantee_user_id: v.id("users"),
@@ -3281,6 +3301,25 @@ export default defineSchema({
     started_at: v.number(),
     ended_at: v.optional(v.number()),
     title: v.optional(v.string()),
+    // A transcript IS the durable call object (the calls page, cast calls).
+    // Who spoke — accumulated from segment speaker ids as they append, so it
+    // reflects actual voices, not seat leases.
+    participants: v.optional(
+      v.array(v.object({ id: v.string(), name: v.string() })),
+    ),
+    // Generated when the transcript ends (internal.transcripts.generateSummary):
+    // a few sentences of what happened, plus extracted action items.
+    summary: v.optional(v.string()),
+    action_items: v.optional(v.array(v.string())),
+    summary_status: v.optional(
+      v.union(
+        v.literal("pending"),
+        v.literal("done"),
+        v.literal("failed"),
+        // Too little was said to summarize.
+        v.literal("skipped"),
+      ),
+    ),
     routes: v.array(
       v.object({
         kind: v.union(v.literal("session"), v.literal("doc"), v.literal("slack")),
@@ -3297,7 +3336,9 @@ export default defineSchema({
     last_seq: v.number(),
   })
     .index("by_room", ["room_key"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    // The calls page / cast calls: a team's call history, newest first.
+    .index("by_team_started", ["team_id", "started_at"]),
 
   transcript_segments: defineTable({
     transcript_id: v.id("transcripts"),

@@ -868,6 +868,15 @@ export const getPendingCommands = query({
   },
 });
 
+export const storeVoipPushToken = mutation({
+  args: { voip_push_token: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    await ctx.db.patch(userId, { voip_push_token: args.voip_push_token ?? undefined });
+  },
+});
+
 export const storePushToken = mutation({
   args: {
     push_token: v.string(),
