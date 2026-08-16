@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { WORKSPACE_SCOPED_KEYS } from "../../store/clientSyncRegistry";
 
 // THE CLIENT CHOKEPOINT.
 //
@@ -22,7 +23,9 @@ import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const DIRS = ["app", "components", "hooks", "lib", "store"];
-const SCOPED = ["tasks", "plans", "docs", "projects"];
+// Derived from the registry: a collection declares `workspaceScoped: true`
+// and this guard covers it — no second list to keep in step.
+const SCOPED = WORKSPACE_SCOPED_KEYS;
 
 // Files that legitimately touch the raw collections. Each needs a REASON, and
 // none of them renders a workspace-scoped LIST.

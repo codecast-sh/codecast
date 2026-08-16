@@ -64,6 +64,8 @@ const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
 const Plans = lazy(() => import("@/app/plans/page"));
+const Calls = lazy(() => import("@/app/calls/page"));
+const CallDetailEntry = lazy(() => import("@/app/calls/[id]/page"));
 const PlanDetail = lazy(() => import("@/app/plans/[id]/page"));
 const Tasks = lazy(() => import("@/app/tasks/page"));
 const TaskDetail = lazy(() => import("@/app/tasks/[id]/page"));
@@ -188,6 +190,8 @@ export function App() {
               {/* /artifacts = pre-rename alias for /pages */}
               <Route path="artifacts" element={<E name="Pages"><Artifacts /></E>} />
               <Route path="docs/:id" element={<E name="DocDetail"><DocDetail /></E>} />
+              <Route path="calls" element={<E name="Calls"><Calls /></E>} />
+              <Route path="calls/:id" element={<E name="CallDetailEntry"><CallDetailEntry /></E>} />
               <Route path="plans" element={<E name="Plans"><Plans /></E>} />
               <Route path="plans/:id" element={<E name="PlanDetail"><PlanDetail /></E>} />
               <Route path="tasks" element={<E name="Tasks"><Tasks /></E>} />

@@ -17,7 +17,14 @@ import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtoc
 import { isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, PERSISTENCE_AVAILABLE } from "./idbCache";
-import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrategy } from "./clientSyncRegistry";
+import {
+  HYDRATION_CRITICAL_KEYS,
+  HYDRATION_DEFERRED_KEYS,
+  REGISTRY_SYNC_OPTS,
+  collectionInitialState,
+  hydrationMergeStrategy,
+  type RegisteredCollectionSlots,
+} from "./clientSyncRegistry";
 import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
@@ -379,6 +386,14 @@ export type InboxSession = {
   // they are dead however alive the session is (see monitorRows).
   agent_started_at?: number | null;
   is_deferred?: boolean;
+  // The user's park gesture ("a machine owns this"), current per the server's
+  // inbox_dormant_at >= updated_at rule — same contract as is_deferred. The raw
+  // stamp rides along so the optimistic write can set both.
+  is_dormant?: boolean;
+  inbox_dormant_at?: number | null;
+  // The settle classifier's verdict for the CURRENT settle (server nulls a
+  // stale one), consulted only when the agent made no declaration of its own.
+  settle_verdict?: "done" | "needs_input" | "dormant" | null;
   is_pinned?: boolean;
   // When the user pinned this session (Date.now() ms). Drives a stable order in
   // the Pinned group so cards don't reshuffle on agent status churn.
@@ -1029,6 +1044,11 @@ export type ClientUI = {
   plan_view?: PlanViewPrefs;
   saved_views?: SavedView[];
   show_subagents?: boolean;
+  // Trigger rows under inbox cards: expanded (full row per trigger — name,
+  // last report, countdown, verbs) or folded to a one-line strip that only says
+  // the card has triggers and when the next one fires. Absent = folded: the
+  // strip is the resting state; the pill toggle opens the detail.
+  show_triggers?: boolean;
   // The machine you last chose by hand in the new-session picker — the default
   // the picker opens on for NEW work (defaultMachineId rung 2). Deliberately
   // UNSTAMPED, i.e. per-device: "where should this run" is answered differently
@@ -1373,7 +1393,8 @@ export const DISMISS_RECONCILE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 // classification on every comparison. Each entry mirrors a tier of the old
 // short-circuit comparator exactly (pinned → not-deferred → stub-id →
 // new → waiting-for-input → idle), so the resulting order is identical.
-function sessionSortRank(s: InboxSession): [number, number, number, number, number, number] {
+const REST_RANK: Record<SessionRestState, number> = { needs_input: 0, done: 1, dormant: 2 };
+function sessionSortRank(s: InboxSession): [number, number, number, number, number, number, number] {
   const c = classifySession(s);
   return [
     s.is_pinned ? 0 : 1,                              // pinned first
@@ -1381,6 +1402,10 @@ function sessionSortRank(s: InboxSession): [number, number, number, number, numb
     isConvexId(s._id) ? 1 : 0,                        // optimistic stub ids first
     (s.message_count ?? 0) === 0 ? 0 : 1,            // brand-new (no messages) first
     c.waiting ? 0 : 1,                                // needs-input first
+    // Among settled rows: blocked → delivered → parked. Also what wakes the
+    // sidebar when a row moves between the three rest sections (the wake
+    // signature folds this rank in).
+    c.waiting ? REST_RANK[c.rest] : 0,
     c.idle ? 0 : 1,                                   // idle before active
   ];
 }
@@ -1681,6 +1706,50 @@ export function isSessionWaitingForInput(
     !session.is_pinned;
 }
 
+// Where a settled-with-content session rests — the client mirror of the
+// restState arm inside classifyWorkState (convex/inboxFilters.ts), field for
+// field. Only meaningful for a row isSessionWaitingForInput already said yes
+// to; the hard blocks that predicate resolves first (open poll, API error,
+// permission prompt, dead agent) are always needs_input and never reach here.
+//   dormant — a machine wake owns the next move: the agent declared it
+//             (agent_status "dormant"), open background work implies it
+//             ("waiting"), or the user parked the row (is_dormant, current per
+//             the server's inbox_dormant_at >= updated_at rule).
+//   done    — the agent declared the task delivered (agent_status "done").
+//   The settle classifier's verdict (settle_verdict, current per the server)
+//   speaks only when the agent made no declaration — plain idle / no status.
+//   Everything else: needs_input — the ball is in the human's court.
+// Dormant beats done: a session that both delivered and parked is parked.
+export type SessionRestState = "needs_input" | "done" | "dormant";
+
+export function sessionRestState(
+  session: Pick<InboxSession, "agent_status" | "is_dormant" | "settle_verdict">,
+): SessionRestState {
+  const status = session.agent_status;
+  if (status === "dormant" || status === "waiting" || session.is_dormant) return "dormant";
+  if (status === "done") return "done";
+  if (!status || status === "idle") {
+    if (session.settle_verdict === "dormant") return "dormant";
+    if (session.settle_verdict === "done") return "done";
+  }
+  return "needs_input";
+}
+
+// The hard-block subset of isSessionWaitingForInput: true when the row is
+// waiting on the human for a reason no rest verdict may soften. Used by
+// categorizeSessions to keep a hard-blocked row out of Done / Dormant even
+// when it carries a stale declaration or a park stamp.
+function isSessionHardWaiting(
+  session: Pick<InboxSession, "agent_status" | "message_count" | "awaiting_input" | "is_unresponsive" | "pending_api_error">,
+): boolean {
+  if (session.awaiting_input) return true;
+  if (session.pending_api_error && session.message_count > 0) return true;
+  if (session.agent_status === "permission_blocked") return true;
+  const dead = !!session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status);
+  if (dead || session.is_unresponsive) return true;
+  return false;
+}
+
 // A concrete blocker that must escalate even for a STANDING session (one with a
 // recurring schedule injecting into it) or a scheduled run collapsed under its
 // schedule's group row: an open poll, an unresolved auth/API error, a permission
@@ -1725,11 +1794,15 @@ export function isSessionHardBlocked(
 // entries vanish with their session (eviction / replacement) — no leak, no stale
 // key. `waiting` here is the no-in-flight verdict; categorize layers the tiny
 // in-flight set on top (an in-flight send forces a session OUT of needs-input).
-const _classifyCache = new WeakMap<object, { idle: boolean; waiting: boolean }>();
-export function classifySession(s: InboxSession): { idle: boolean; waiting: boolean } {
+const _classifyCache = new WeakMap<object, { idle: boolean; waiting: boolean; rest: SessionRestState }>();
+export function classifySession(s: InboxSession): { idle: boolean; waiting: boolean; rest: SessionRestState } {
   let c = _classifyCache.get(s);
   if (!c) {
-    c = { idle: isSessionEffectivelyIdle(s), waiting: isSessionWaitingForInput(s) };
+    const waiting = isSessionWaitingForInput(s);
+    // `rest` refines a `waiting` verdict into its section; a hard block is
+    // always needs_input, whatever verdict the row also carries.
+    const rest: SessionRestState = waiting && !isSessionHardWaiting(s) ? sessionRestState(s) : "needs_input";
+    c = { idle: isSessionEffectivelyIdle(s), waiting, rest };
     _classifyCache.set(s, c);
   }
   return c;
@@ -2055,15 +2128,27 @@ export function categorizeSessions(
     s._id === opts.currentSessionId || !!opts.pendingCreateIds?.has(s._id) || !!s._hasDraft;
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && !hasPendingSend(s) && isFlat(s) && isEngagedBlank(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
-  const needsInput = sorted.filter((s) => waitingForInput.get(s._id) && isFlat(s))
+  // The settled rows split by who acts next (classifySession's `rest`): blocked
+  // → Needs Input, delivered → Done, parked on a machine wake → Dormant. The
+  // staleness net above only says "settled"; a row it caught still carries its
+  // own rest verdict, so a declared-dormant home quiet for a day stays Dormant.
+  const settled = sorted.filter((s) => waitingForInput.get(s._id) && isFlat(s));
+  const restOf = (s: InboxSession): SessionRestState => classifySession(s).rest;
+  const needsInput = settled.filter((s) => restOf(s) === "needs_input")
     .sort((a, b) => {
       // Deferred sessions sink to the bottom of the group; otherwise earliest-updated first.
       if (!!a.is_deferred !== !!b.is_deferred) return a.is_deferred ? 1 : -1;
       return (a.updated_at || 0) - (b.updated_at || 0);
     });
+  // Newest delivery first: the thing that just finished is the one to read.
+  const done = settled.filter((s) => restOf(s) === "done")
+    .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  // Most recently parked first.
+  const dormant = settled.filter((s) => restOf(s) === "dormant")
+    .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   const working = sorted.filter((s) => (!waitingForInput.get(s._id) && (s.message_count > 0 || hasPendingSend(s)) && !s.is_pinned) && isFlat(s));
 
-  return { sorted, pinned, newSessions, needsInput, working, stashed, dismissed, subsByParent, forksByParent, oldCount };
+  return { sorted, pinned, newSessions, needsInput, done, dormant, working, stashed, dismissed, subsByParent, forksByParent, oldCount };
 }
 
 export function visualOrderSessions(
@@ -2798,7 +2883,10 @@ export function findReusableBlankSession(
 
 // -- Store interface --
 
-interface InboxStoreState extends ChatSliceState {
+// RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
+// typed `Record<string, any>` slot here by registration alone; the explicit
+// fields below narrow the ones with a real row type.
+interface InboxStoreState extends ChatSliceState, RegisteredCollectionSlots {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -3064,6 +3152,7 @@ interface InboxStoreState extends ChatSliceState {
   setPrivacy: (id: string, isPrivate: boolean) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
   toggleBookmark: (conversationId: string, messageId: string) => void;
+  setMyStatus: (status: "available" | "busy" | "away") => void;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
@@ -3520,6 +3609,11 @@ interface InboxStoreState extends ChatSliceState {
   // revert a toggle before its own mutation has committed.
   bookmarkPending: Record<string, { bookmarked: boolean; conversationId: string }>;
 
+  // The viewer's in-flight manual status flip (setMyStatus). teamMembers is a
+  // wholesale-replaced list, so the teamMembers normalize re-applies this on
+  // top of each push until the server reflects it (or the TTL expires).
+  myStatusPending: { userId: string; status: string; at: number } | null;
+
   // -- Selectors --
   getSession: (id: string) => InboxSession | undefined;
 }
@@ -3744,7 +3838,11 @@ export type SyncOpts = {
   // per-push value changes defeat the JSON compare even though nothing the UI
   // shows has changed — teamMembers re-pushed ~every 2s on teammates' heartbeat
   // and message-count ticks, waking every subscriber of the roster ref.
-  normalize?: (incoming: any) => any;
+  // The second argument is the store draft, for entries that reconcile local
+  // pending state against the payload (teamMembers' status overlay) — running
+  // BEFORE the equality bail, unlike transform, so a protected no-op push
+  // still bails instead of waking every subscriber.
+  normalize?: (incoming: any, draft?: any) => any;
 };
 
 // Per-key last-writer-wins for a flat preference bag whose writes carry a
@@ -3780,7 +3878,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // (sidebar, zen mode, theme, active team) are naturally per-device, and
 // silently globalizing them would yank screens out from under people.
 export const STAMPED_UI_KEYS = new Set([
-  "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "inbox_show_old",
+  "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home",
 ]);
 
@@ -3849,6 +3947,10 @@ function quantizePresence<T>(rec: T): T {
 }
 
 const SYNC_REGISTRY: Record<string, SyncOpts> = {
+  // Data-only sync opts registered on the collection itself (clientSyncRegistry
+  // `sync`) land first; the entries below add or override the store-internal
+  // ones (transforms, merges, normalizers).
+  ...REGISTRY_SYNC_OPTS,
   sessions: {
     altKey: "session_id",
     keepSelected: "currentSessionId",
@@ -3932,18 +4034,12 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     // instantly from cache on the next open instead of reloading async.
     preserveFields: ["comments", "history"],
   },
-  docs: { isDelta: true },
-  plans: { isDelta: true },
   // The decision queue. NOT delta: listForUser returns the complete visible
   // window (pending + 24h of resolved) on every push, so absence means the
   // row aged out — delta mode would pin cleared decisions in the queue
   // forever. localFirst pending-protection covers the answer flip until the
   // server echo confirms it.
   sessionDecisions: {},
-  // Like the others: a liberal delta cache. useSyncProjects' call site passes no
-  // opts, so without this projects synced as an authoritative snapshot — the one
-  // remaining collection that still pruned the cache by absence.
-  projects: { isDelta: true },
   // NOT delta: savedViews.webList returns the complete visible set on every
   // push, so absence means removed. Delta mode would treat a deleted or
   // un-shared view as "unchanged" and leave it on the rail forever.
@@ -3965,18 +4061,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // never prunes another's, and a thread's replies survive a channel sync. See
   // store/chatSlice.ts for why these collections carry no pending protection.
   ...CHAT_SYNC_REGISTRY,
-  // The fleet mirror. A COLLECTION keyed by server _id — the task draft said
-  // singleton-keyed-by-device, but rows are (device, client, scope) tuples and
-  // the slice reads them as a Record; a singleton would make every device's
-  // report clobber the fleet. No pending filter: nothing optimistic ever
-  // writes here (see store/capabilities.ts).
-  capabilityState: {},
-  // The user's own bindings — the wishes behind the Installed tab and the
-  // equip control. localFirst: an optimistic toggle must render before the
-  // round trip; the setCapabilityBinding dispatch side effect confirms it.
-  // altKey: an optimistic stub keyed by client_key is superseded by the server
-  // row that comes back carrying the same client_key — the tasks convention.
-  capabilityBindings: { altKey: "client_key" },
+  // capabilityState / capabilityBindings: registered on the collection.
   clientState: {
     kind: "singleton",
     merge: {
@@ -4044,7 +4129,31 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   teams: { kind: "list" },
   teamMembers: {
     kind: "list",
-    normalize: (list: any) => (Array.isArray(list) ? list.map(quantizePresence) : list),
+    // Beyond presence quantization, overlay the viewer's in-flight manual
+    // status (setMyStatus): the roster is wholesale-replaced on every push,
+    // and a push computed before the updateProfile mutation committed would
+    // flap the optimistic pill back for a beat. Protection lives in normalize,
+    // not transform, so the equality bail still swallows no-op heartbeat
+    // pushes. Cleared once the server reflects the status; the TTL keeps a
+    // failed dispatch from pinning a status the server never accepted.
+    normalize: (list: any, draft?: any) => {
+      if (!Array.isArray(list)) return list;
+      const mapped = list.map(quantizePresence);
+      const pending = draft?.myStatusPending;
+      if (!pending) return mapped;
+      if (Date.now() - pending.at > 30_000) {
+        draft.myStatusPending = null;
+        return mapped;
+      }
+      const idx = mapped.findIndex((m: any) => m && String(m._id) === pending.userId);
+      if (idx === -1) return mapped;
+      if ((mapped[idx].status ?? "available") === pending.status) {
+        draft.myStatusPending = null; // server caught up — stop protecting
+      } else {
+        mapped[idx] = { ...mapped[idx], status: pending.status };
+      }
+      return mapped;
+    },
   },
   teamUnreadCount: { kind: "scalar" },
   favorites: { kind: "list" },
@@ -4949,6 +5058,9 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
 
 const inboxStoreConfig = (set: any, get: any) => ({
   // -- Initial state --
+  // Every registered collection starts as {} by registration alone; explicit
+  // slots below only add non-collection state and typed narrowings.
+  ...collectionInitialState(),
   sessions: {},
   pending: {},
   dispatchErrors: 0,
@@ -5832,6 +5944,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.bookmarkPending[messageId] = { bookmarked: nowBookmarked, conversationId };
   }),
 
+  // Manual presence status. Local-first: the roster row is the read path
+  // (TeamAvatarBar's bar + hover card), so patch it in the draft — the pill
+  // flips the instant it's clicked. teamMembers is wholesale-replaced on every
+  // push, so myStatusPending protects the flip until the server echoes it
+  // (see the teamMembers entry in SYNC_REGISTRY). The setMyStatus dispatch
+  // side-effect runs the authoritative users.updateProfile.
+  setMyStatus: action(function (this: Draft, status: "available" | "busy" | "away") {
+    const meId = String(this.currentUser?._id ?? "");
+    if (!meId) return;
+    if (this.currentUser) (this.currentUser as any).status = status;
+    const idx = (this.teamMembers as any[]).findIndex((m) => m && String(m._id) === meId);
+    if (idx !== -1) this.teamMembers[idx] = { ...(this.teamMembers[idx] as any), status };
+    this.myStatusPending = { userId: meId, status, at: Date.now() };
+  }),
+
   // Notifications are a protected collection: the optimistic `read` flip is
   // field-protected so the next list sync can't revert it (the badge + bold
   // state clear instantly). The named side-effects delegate to the existing
@@ -6255,7 +6382,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const kind = config.kind ?? "collection";
 
     if (kind === "scalar" || kind === "list") {
-      if (config.normalize) incoming = config.normalize(incoming);
+      if (config.normalize) incoming = config.normalize(incoming, this);
       // No-op re-pushes are common — a list-kind subscription re-emits on any
       // read-set change (teamMembers was measured re-pushing ~every 2s on
       // presence heartbeats) — and a wholesale assign registers as a change:
@@ -6277,7 +6404,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
 
     if (kind === "singleton") {
-      if (config.normalize) incoming = config.normalize(incoming);
+      if (config.normalize) incoming = config.normalize(incoming, this);
       const local = (this as any)[field];
       const initKey = `${field}Initialized`;
       const initialized = (this as any)[initKey] ?? false;
@@ -8264,6 +8391,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
       window.location.assign(opts.path);
       return "";
     }
+    // A pathless tab is unrenderable and PERSISTS — it crashed the TabBar on
+    // every boot until the store was hand-repaired. Refuse it at the door.
+    if (!opts?.path || typeof opts.path !== "string") return "";
     const id = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const tab: AppTab = {
       id,
@@ -8346,6 +8476,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   favorites: [],
   bookmarks: [],
   bookmarkPending: {},
+  myStatusPending: null,
 
   myCalls: { incoming: [], outgoing: [], membership: null },
   callOccupancy: {},

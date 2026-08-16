@@ -25,6 +25,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { authorizeRoom } from "./callRooms";
 import { performSessionSend } from "./pendingMessages";
 import { requireAccessibleDoc } from "./lib/access";
+import { verifyApiToken } from "./apiTokens";
 
 const ROUTE_VALIDATOR = v.object({
   kind: v.union(v.literal("session"), v.literal("doc"), v.literal("slack")),
@@ -129,7 +130,26 @@ export const appendSegments = mutation({
         t1: s.t1,
       });
     }
-    if (seq !== t.last_seq) await ctx.db.patch(t._id, { last_seq: seq });
+    if (seq !== t.last_seq) {
+      // Accumulate the speaker roster on the call object as voices appear —
+      // actual speakers, not seat leases (a lurker who never talks is in the
+      // room but not in the transcript's cast).
+      const known = new Set((t.participants ?? []).map((p) => p.id));
+      const newcomers = args.segments
+        .filter((s) => s.text.trim() && !known.has(s.speaker_id))
+        .reduce((acc: { id: string; name: string }[], s) => {
+          if (!acc.some((p) => p.id === s.speaker_id)) {
+            acc.push({ id: s.speaker_id, name: s.speaker_name });
+          }
+          return acc;
+        }, []);
+      await ctx.db.patch(t._id, {
+        last_seq: seq,
+        ...(newcomers.length
+          ? { participants: [...(t.participants ?? []), ...newcomers] }
+          : {}),
+      });
+    }
     return { last_seq: seq };
   },
 });
@@ -162,11 +182,159 @@ export const stop = mutation({
       throw new Error("Transcript not found");
     }
     if (t.status === "ended") return;
-    await ctx.db.patch(t._id, { status: "ended", ended_at: Date.now() });
+    await ctx.db.patch(t._id, {
+      status: "ended",
+      ended_at: Date.now(),
+      summary_status: "pending",
+    });
     await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
       transcript_id: t._id,
       include_after_routes: true,
     });
+    await ctx.scheduler.runAfter(0, internal.transcripts.generateSummary, {
+      transcript_id: t._id,
+    });
+  },
+});
+
+// ── The call object: summary + list/detail surfaces ───────────────────────
+// Otter's post-meeting artifact, minus the guesswork: attribution here is
+// structural (one audio track = one speaker), so "who said what" is exact,
+// and the summary/action items generate within seconds of stop.
+
+// Below this many words there is nothing worth summarizing.
+const SUMMARY_MIN_WORDS = 40;
+// Transcript text sent to the model is capped; long calls get the tail
+// (decisions and action items live at the end far more often than the start).
+const SUMMARY_MAX_CHARS = 60_000;
+
+export const getForSummary = internalQuery({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args) => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t) return null;
+    const segs = await ctx.db
+      .query("transcript_segments")
+      .withIndex("by_transcript_seq", (q) => q.eq("transcript_id", t._id))
+      .collect();
+    return {
+      title: t.title,
+      started_at: t.started_at,
+      ended_at: t.ended_at,
+      participants: t.participants ?? [],
+      lines: segs.map((s) => ({ speaker: s.speaker_name, text: s.text })),
+    };
+  },
+});
+
+export const setSummary = internalMutation({
+  args: {
+    transcript_id: v.id("transcripts"),
+    summary_status: v.union(
+      v.literal("done"),
+      v.literal("failed"),
+      v.literal("skipped"),
+    ),
+    title: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    action_items: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t) return;
+    await ctx.db.patch(t._id, {
+      summary_status: args.summary_status,
+      ...(args.title && !t.title ? { title: args.title } : {}),
+      ...(args.summary ? { summary: args.summary } : {}),
+      ...(args.action_items ? { action_items: args.action_items } : {}),
+    });
+  },
+});
+
+export const generateSummary = internalAction({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args) => {
+    const t = await ctx.runQuery(internal.transcripts.getForSummary, {
+      transcript_id: args.transcript_id,
+    });
+    if (!t) return;
+    const wordCount = t.lines.reduce(
+      (n: number, l: { text: string }) => n + l.text.split(/\s+/).length,
+      0,
+    );
+    if (wordCount < SUMMARY_MIN_WORDS) {
+      await ctx.runMutation(internal.transcripts.setSummary, {
+        transcript_id: args.transcript_id,
+        summary_status: "skipped",
+      });
+      return;
+    }
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      await ctx.runMutation(internal.transcripts.setSummary, {
+        transcript_id: args.transcript_id,
+        summary_status: "failed",
+      });
+      return;
+    }
+    let text = t.lines
+      .map((l: { speaker: string; text: string }) => `${l.speaker}: ${l.text}`)
+      .join("\n");
+    if (text.length > SUMMARY_MAX_CHARS) text = text.slice(-SUMMARY_MAX_CHARS);
+    const durationMin = t.ended_at
+      ? Math.max(1, Math.round((t.ended_at - t.started_at) / 60_000))
+      : null;
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 700,
+          messages: [
+            {
+              role: "user",
+              content: `This is the transcript of a team huddle (voice call)${durationMin ? `, about ${durationMin} min` : ""}. Speakers are exactly attributed.
+
+Write JSON only, this shape:
+{"title": "3-7 word title of what the call was about", "summary": "2-5 sentences: what was discussed, what was decided. Name people for decisions and disagreements. Plain words.", "action_items": ["each concrete follow-up someone committed to, with the owner's name first, e.g. 'Sam: ship the fix behind a flag'"]}
+
+Empty action_items array if there were none — never invent any.
+
+Transcript:
+${text}`,
+            },
+          ],
+        }),
+      });
+      if (!response.ok) throw new Error(`Anthropic ${response.status}`);
+      const data = await response.json();
+      const raw: string = data?.content?.[0]?.text ?? "";
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("No JSON in response");
+      const parsed = JSON.parse(match[0]);
+      await ctx.runMutation(internal.transcripts.setSummary, {
+        transcript_id: args.transcript_id,
+        summary_status: "done",
+        title: typeof parsed.title === "string" ? parsed.title.slice(0, 120) : undefined,
+        summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 2000) : undefined,
+        action_items: Array.isArray(parsed.action_items)
+          ? parsed.action_items
+              .filter((a: unknown) => typeof a === "string")
+              .slice(0, 20)
+          : undefined,
+      });
+    } catch (err) {
+      console.error("Call summary generation failed:", err);
+      await ctx.runMutation(internal.transcripts.setSummary, {
+        transcript_id: args.transcript_id,
+        summary_status: "failed",
+      });
+    }
   },
 });
 
@@ -200,8 +368,126 @@ export const getLive = query({
         seq: s.seq,
         speaker_name: s.speaker_name,
         text: s.text,
+        // Wall-clock arrival, so clients can age captions out — someone who
+        // joins an hour into a lulled transcript must not see stale lines.
+        // (Age-filtering lives client-side: a Date.now() cutoff inside a
+        // reactive query only re-evaluates on data changes, not as time
+        // passes, so it could never HIDE a caption on its own.)
+        at: s._creationTime,
       })),
     };
+  },
+});
+
+// ── Call list/detail (web page + cast CLI) ────────────────────────────────
+// One core, two doors: the web queries authenticate via getAuthUserId, the
+// CLI twins via verifyApiToken. Authorization per row is authorizeRoom — the
+// same boundary the media path enforces, so a dm call is readable by exactly
+// its two people and nothing leaks through team listing.
+
+function shapeCallRow(t: Doc<"transcripts">) {
+  return {
+    _id: t._id,
+    room_key: t.room_key,
+    status: t.status,
+    started_at: t.started_at,
+    ended_at: t.ended_at ?? null,
+    title: t.title ?? null,
+    participants: t.participants ?? [],
+    summary: t.summary ?? null,
+    action_items: t.action_items ?? [],
+    summary_status: t.summary_status ?? null,
+    last_seq: t.last_seq,
+  };
+}
+
+async function listCallsCore(ctx: any, userId: Id<"users">, limit: number) {
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  const rows: Doc<"transcripts">[] = [];
+  for (const m of memberships) {
+    const ts = await ctx.db
+      .query("transcripts")
+      .withIndex("by_team_started", (q: any) => q.eq("team_id", m.team_id))
+      .order("desc")
+      .take(limit);
+    rows.push(...ts);
+  }
+  rows.sort((a, b) => b.started_at - a.started_at);
+  const out = [];
+  for (const t of rows) {
+    if (out.length >= limit) break;
+    const auth = await authorizeRoom(ctx, userId, t.room_key);
+    if (auth.ok) out.push(shapeCallRow(t));
+  }
+  return out;
+}
+
+async function getCallCore(
+  ctx: any,
+  userId: Id<"users">,
+  transcriptId: Id<"transcripts">,
+) {
+  const t = await ctx.db.get(transcriptId);
+  if (!t) return null;
+  const auth = await authorizeRoom(ctx, userId, t.room_key);
+  if (!auth.ok) return null;
+  const segs = await ctx.db
+    .query("transcript_segments")
+    .withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id))
+    .collect();
+  return {
+    ...shapeCallRow(t),
+    routes: (t.routes as { kind: string; target: string; mode: string }[]).map(
+      (r) => ({ kind: r.kind, target: r.target, mode: r.mode }),
+    ),
+    segments: segs.map((s: Doc<"transcript_segments">) => ({
+      seq: s.seq,
+      speaker_id: s.speaker_id,
+      speaker_name: s.speaker_name,
+      text: s.text,
+      t0: s.t0,
+      t1: s.t1,
+      at: s._creationTime,
+    })),
+  };
+}
+
+export const webListCalls = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    return listCallsCore(ctx, userId, Math.min(args.limit ?? 50, 200));
+  },
+});
+
+export const webGetCall = query({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    return getCallCore(ctx, userId, args.transcript_id);
+  },
+});
+
+export const cliListCalls = query({
+  args: { api_token: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new Error("Unauthorized");
+    return listCallsCore(ctx, auth.userId, Math.min(args.limit ?? 30, 200));
+  },
+});
+
+export const cliGetCall = query({
+  args: { api_token: v.string(), transcript_id: v.id("transcripts") },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new Error("Unauthorized");
+    return getCallCore(ctx, auth.userId, args.transcript_id);
   },
 });
 

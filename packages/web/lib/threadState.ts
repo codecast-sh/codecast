@@ -69,6 +69,15 @@ export const THREAD_STATE_STATUS_META: Record<
     bar: "border-l-sol-green/70",
     row: "border-l-2 border-l-sol-green/45 bg-sol-green/[0.03]",
   },
+  // Blue matches the Dormant section: parked on a machine wake, nothing for
+  // the human until it lands.
+  dormant: {
+    label: THREAD_STATE_STATUS_LABEL.dormant,
+    dot: "text-sol-blue/80",
+    chip: "bg-sol-blue/10 text-sol-blue/90 border-sol-blue/30",
+    bar: "border-l-sol-blue/60",
+    row: "border-l-2 border-l-sol-blue/40 bg-sol-blue/[0.03]",
+  },
 };
 
 /** "4m" / "2h" / "3d" — the compact age used across the inbox chrome. */

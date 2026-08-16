@@ -134,6 +134,8 @@ export interface Config {
   browser_capture?: string;
   chat_enabled?: boolean;
   chat_version?: string;
+  calls_enabled?: boolean;
+  calls_version?: string;
 
   // --- Cross-machine project-path resolution (daemon.ts) ---
   // Explicit project-path overrides for resuming sessions/forks recorded on another

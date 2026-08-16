@@ -18,6 +18,7 @@ import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettin
 import { normalizeProjectPath, pathWithinLocalRoots } from "./projectPaths";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
 import { deleteCommentWithRevision } from "./commentViewWrites";
+import { gatedSnippetAvailability } from "./teamFeatures";
 import { deleteBookmarkWithRevision } from "./bookmarkViewWrites";
 import { readLocalViewRevision } from "./localFirstCommands";
 import {
@@ -504,6 +505,11 @@ export const daemonHeartbeat = mutation({
       min_cli_version: minVersionConfig?.value ?? undefined,
       agent_permission_modes: user?.agent_permission_modes ?? undefined,
       agent_default_params: user?.agent_default_params ?? undefined,
+      // Feature-gated agent snippets this user's teams make available (chat,
+      // calls). The daemon reconciles its installed snippets to this on every
+      // beat, so a team flipping a feature reaches offline machines when they
+      // wake — no pushed command to miss.
+      snippet_availability: await gatedSnippetAvailability(ctx, auth.userId),
       capability_desired_revision: (user as any)?.capability_revision ?? 0,
       capabilities_mode: (globalCapMode?.value as string | undefined) ?? (user as any)?.capabilities_mode ?? "dry",
     };
@@ -865,6 +871,15 @@ export const getPendingCommands = query({
     const commands = await query.order("desc").take(100);
 
     return commands;
+  },
+});
+
+export const storeVoipPushToken = mutation({
+  args: { voip_push_token: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    await ctx.db.patch(userId, { voip_push_token: args.voip_push_token ?? undefined });
   },
 });
 
@@ -3421,6 +3436,7 @@ export const getTeamsForCLI = query({
           name: team.name,
           icon: team.icon,
           icon_color: team.icon_color,
+          features: team.features,
           role: m.role,
           visibility: m.visibility || "summary",
         };

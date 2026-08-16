@@ -368,9 +368,17 @@ export default function ChatPage() {
   }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
-  const showEmpty = messages.length === 0 && !feed.loading && !feed.error;
+  // Local-first: the store may already know this room is empty (the rail
+  // summary attests it — knownEmpty), and then the empty state renders
+  // immediately. The skeleton is reserved for the one honest unknown: a
+  // channel with no cached rows AND no rail attestation, where "empty" and
+  // "not loaded yet" are genuinely indistinguishable until the first page
+  // lands. Without this, opening a fresh DM flashed empty → skeleton → empty
+  // across the stub-to-server-id handoff.
+  const knownEmpty = !!activeChannel?.knownEmpty;
+  const showEmpty = messages.length === 0 && !feed.error && (knownEmpty || !feed.loading);
   const showError = messages.length === 0 && !!feed.error;
-  const showSkeleton = messages.length === 0 && feed.loading;
+  const showSkeleton = messages.length === 0 && feed.loading && !knownEmpty;
 
   return (
     <div className="ch-shell">

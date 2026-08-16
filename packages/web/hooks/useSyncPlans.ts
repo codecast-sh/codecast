@@ -7,10 +7,13 @@ import { useConvexSync } from "./useConvexSync";
 
 const api = _api as any;
 
-export function useSyncPlansWithArgs(wsArgs: WorkspaceArgs, statusFilter?: string) {
+export function useSyncPlansWithArgs(wsArgs: WorkspaceArgs, statusFilter?: string, includeAll?: boolean) {
   const plans = useQuery(api.plans.webList,
     wsArgs === "skip" ? "skip" : {
       status: statusFilter || undefined,
+      // include_all lifts webList's default done/abandoned filter — for
+      // surfaces that read the whole workspace (orchestration).
+      include_all: includeAll || undefined,
       ...wsArgs,
     }
   );

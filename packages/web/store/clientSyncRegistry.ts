@@ -3,11 +3,45 @@ export type DispatchTableKind = "collection" | "singleton";
 export type HydrationPhase = "critical" | "deferred";
 export type HydrationMerge = "shape" | "fill";
 
+// The data-only subset of inboxStore's SyncOpts. Registered here so ONE entry
+// is the whole registration of a synced collection: how it syncs, how it
+// persists, how it hydrates, how it's indexed on disk. Store-internal opts
+// (transforms, merge functions, normalize) stay in inboxStore's SYNC_REGISTRY,
+// which spreads these defaults first and overrides per key.
+export type RegistrySyncOpts = {
+  kind?: "collection" | "singleton" | "list" | "scalar";
+  // Delta overlay: absence in a payload means "unchanged", never "deleted".
+  // Right for every windowed/paged list channel; wrong for a query that
+  // returns the COMPLETE visible set (there, absence means removed).
+  isDelta?: boolean;
+  // Optimistic stubs carry this field with their own stub id; the server row
+  // that arrives with the same value supersedes the stub.
+  altKey?: string;
+  keepSelected?: string;
+  ignoreFields?: string[];
+  preserveFields?: string[];
+};
+
 export type ClientSyncRegistryEntry = {
   persistence?: {
     kind: PersistenceKind;
     key: string;
   };
+  // How the collection syncs (see RegistrySyncOpts). Omit for meta keys.
+  sync?: RegistrySyncOpts;
+  // Dexie index spec for a persisted collection. Default "_id". Secondary
+  // indexes ("_id, channel_id") let a slice be read off disk without a scan.
+  // The on-disk schema is DERIVED from these — adding a collection or an index
+  // here is the whole schema change (then bump CACHE_SCHEMA_VERSION).
+  indexes?: string;
+  // Rows carry a `workspace` access key and enumerate only through the
+  // useWorkspaceCollection chokepoint (a strict-boundary table).
+  workspaceScoped?: boolean;
+  // The Convex queries that FEED this key ("agentTasks.webList"). Registering
+  // one is a promise that components render from the store, not from the
+  // query: a source-level test fails any component/app file that subscribes
+  // to a registered feed directly. Only the sync hook may.
+  feeds?: readonly string[];
   // Boot hydration is automatic for every persisted key — registering a
   // persistence entry IS the permission to load AND save. This field only
   // tunes it, never gates it:
@@ -71,6 +105,7 @@ export const CLIENT_SYNC_REGISTRY = {
         "inbox_stashed_at",
         "inbox_pinned_at",
         "inbox_deferred_at",
+        "inbox_dormant_at",
         "title",
         "is_favorite",
       ],
@@ -85,6 +120,7 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "tasks" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    workspaceScoped: true,
     // Real tasks always carry a ct- short_id (required by schema, asserted by
     // webGetTaskDetail's lookup guard). Conversations masquerading as tasks
     // carry a session short id (jx…) or none.
@@ -96,6 +132,9 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     validRow: (row: any) =>
       typeof row?.capability_slug === "string" && typeof row?.scope_kind === "string",
+    // An optimistic stub keyed by client_key is superseded by the server row
+    // carrying the same client_key — the tasks convention.
+    sync: { altKey: "client_key" },
   },
   capabilityState: {
     persistence: { kind: "collection", key: "capabilityState" },
@@ -107,11 +146,16 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: false,
     validRow: (row: any) =>
       typeof row?.device_id === "string" && typeof row?.client === "string",
+    // A COLLECTION keyed by server _id: rows are (device, client, scope)
+    // tuples; a singleton would make every device's report clobber the fleet.
+    sync: {},
   },
   docs: {
     persistence: { kind: "collection", key: "docs" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    workspaceScoped: true,
+    sync: { isDelta: true },
     // `docs` is the THIN list: bodies live in docDetails (the doc page) and in
     // live webGet queries (embeds, pills). Drop a body a past channel cached —
     // unless it is an unsynced local edit still under a pending field lock.
@@ -140,11 +184,18 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "plans" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    workspaceScoped: true,
+    sync: { isDelta: true },
+    feeds: ["plans.webList"],
   },
   projects: {
     persistence: { kind: "collection", key: "projects" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    workspaceScoped: true,
+    // Liberal delta cache like the others; a snapshot here was the one
+    // remaining collection that pruned by absence.
+    sync: { isDelta: true },
   },
   buckets: {
     persistence: { kind: "collection", key: "buckets" },
@@ -185,6 +236,9 @@ export const CLIENT_SYNC_REGISTRY = {
   chatMessages: {
     persistence: { kind: "collection", key: "chatMessages" },
     hydration: { phase: "deferred" },
+    // A channel (or a thread) reads off disk without scanning every message
+    // the client ever cached.
+    indexes: "_id, channel_id, thread_root_id",
     // A row must know which channel it belongs to; anything else is a foreign
     // document that would render as a message with no home.
     validRow: (row: any) => typeof row?.channel_id === "string" && typeof row?.content === "string",
@@ -192,10 +246,12 @@ export const CLIENT_SYNC_REGISTRY = {
   chatReactions: {
     persistence: { kind: "collection", key: "chatReactions" },
     hydration: { phase: "deferred" },
+    indexes: "_id, message_id",
   },
   chatReads: {
     persistence: { kind: "collection", key: "chatReads" },
     hydration: { phase: "deferred" },
+    indexes: "_id, channel_id",
   },
   // The server's own per-channel unread numbers (chat.listChannels' rail). A
   // small array, so a meta blob: it is the only honest count for a channel whose
@@ -391,6 +447,51 @@ export function hydrationMergeStrategy(key: string): HydrationMerge {
   if (hydration && hydration !== "manual" && hydration.merge) return hydration.merge;
   return "shape";
 }
+
+// ── Derived from the registry: the things a new collection used to need a
+// hand-written line for in some other file. Register once; these follow.
+
+/** Sync-time defaults per key (inboxStore spreads these under SYNC_REGISTRY). */
+export const REGISTRY_SYNC_OPTS: Record<string, RegistrySyncOpts> = Object.fromEntries(
+  registryEntries.flatMap(([key, entry]) => (entry.sync ? [[key, entry.sync]] : [])),
+);
+
+/** Dexie `stores()` spec for every persisted collection: `{ key: indexes }`. */
+export const COLLECTION_INDEXES: Record<string, string> = Object.fromEntries(
+  COLLECTION_STORE_KEYS.map((key) => [
+    key,
+    (CLIENT_SYNC_REGISTRY[key] as ClientSyncRegistryEntry).indexes ?? "_id",
+  ]),
+);
+
+/** Tables whose rows enumerate only through useWorkspaceCollection. */
+export const WORKSPACE_SCOPED_KEYS = registryEntries
+  .filter(([, entry]) => entry.workspaceScoped)
+  .map(([key]) => key);
+export type WorkspaceScopedStoreKey = {
+  [K in ClientSyncStoreKey]: (typeof CLIENT_SYNC_REGISTRY)[K] extends { readonly workspaceScoped: true } ? K : never
+}[ClientSyncStoreKey];
+
+/** Every registered feed query → the store key it feeds. */
+export const REGISTERED_FEEDS: Record<string, string> = Object.fromEntries(
+  registryEntries.flatMap(([key, entry]) => (entry.feeds ?? []).map((f) => [f, key])),
+);
+
+/**
+ * The in-memory floor for every persisted collection: an empty Record. Spread
+ * at the base of the store config so a registered collection can never be
+ * `undefined` at boot (Object.values(undefined) was the crash class).
+ */
+export function collectionInitialState(): Record<ClientSyncCollectionStoreKey, Record<string, any>> {
+  return Object.fromEntries(COLLECTION_STORE_KEYS.map((key) => [key, {}])) as any;
+}
+
+/** Typed slots for every registered collection, mixed into InboxStoreState so
+ *  a registration alone gives `s.<key>` a type. Narrow it further on the
+ *  interface when a collection has a real row type. */
+export type RegisteredCollectionSlots = {
+  [K in ClientSyncCollectionStoreKey]: Record<string, any>;
+};
 
 export const DISPATCH_TABLE_MAP: Record<string, { table: string; kind: DispatchTableKind; fields?: readonly string[] }> = Object.fromEntries(
   registryEntries.flatMap(([key, entry]) =>

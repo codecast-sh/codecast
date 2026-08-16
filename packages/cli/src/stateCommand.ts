@@ -46,14 +46,38 @@ export function threadStateCounterPath(sessionId: string): string {
   return path.join(threadStateDir(), "counters", sessionId);
 }
 
-/** Stamp "this session has a pinned state" and reset the turn counter. */
-export function writeThreadStatePulse(sessionId: string): void {
+/** What the stamp holds. `status` is the agent's declared answer to "who acts
+ * next" — the daemon reads it at turn end (daemon.ts declaredSettleVerdict)
+ * and settles the agent's status to "dormant" / "done" instead of plain idle
+ * when the stamp was written during the turn that just ended. */
+export interface ThreadStateStamp {
+  at: number;
+  status?: ThreadStateStatus;
+}
+
+/** Stamp "this session has a pinned state" (with the declared status) and
+ * reset the turn counter. */
+export function writeThreadStatePulse(sessionId: string, status?: ThreadStateStatus): void {
   try {
     fs.mkdirSync(threadStateDir(), { recursive: true });
-    fs.writeFileSync(threadStateStampPath(sessionId), JSON.stringify({ at: Date.now() }));
+    const stamp: ThreadStateStamp = { at: Date.now(), ...(status ? { status } : {}) };
+    fs.writeFileSync(threadStateStampPath(sessionId), JSON.stringify(stamp));
     const counter = threadStateCounterPath(sessionId);
     if (fs.existsSync(counter)) fs.unlinkSync(counter);
   } catch {}
+}
+
+/** The stamp for a session, or null when it has none / is unreadable. */
+export function readThreadStateStamp(sessionId: string): ThreadStateStamp | null {
+  try {
+    const raw = fs.readFileSync(threadStateStampPath(sessionId), "utf8");
+    const parsed = JSON.parse(raw) as { at?: unknown; status?: unknown };
+    if (typeof parsed.at !== "number") return null;
+    const status = parseThreadStateStatus(typeof parsed.status === "string" ? parsed.status : null);
+    return { at: parsed.at, ...(status ? { status } : {}) };
+  } catch {
+    return null;
+  }
 }
 
 /** Drop the stamp — a session with no pinned state is never nudged. */
@@ -207,8 +231,16 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       "  cast state \"<text>\"            Pin (or replace) the state\n" +
       "  cast state clear               Remove it\n" +
       "  cast state show <session>      Print another session's state\n\n" +
+      "--status is your answer to WHO ACTS NEXT, and it decides where the session\n" +
+      "files in the inbox when your turn ends:\n" +
+      "  working   still moving (default)\n" +
+      "  blocked   a human must act to unblock you            → Needs Input\n" +
+      "  done      delivered; nothing stalled, review at leisure → Done\n" +
+      "  dormant   a machine wakes you — name the wake in the text → Dormant\n" +
+      "done and dormant cover exactly the turn that declares them: after the next\n" +
+      "wake, declare again or the session returns to Needs Input.\n\n" +
       "Examples:\n" +
-      "  cast state \"Waiting on CI for the auth fix — nothing to decide yet\"\n" +
+      "  cast state --status dormant \"Waiting on CI run 8841 — tr-42 re-checks at 3pm\"\n" +
       "  cast state --status blocked - <<'EOF'\n" +
       "  Migrating the sync layer to wake signatures\n" +
       "  Status: rewrite done, tests green\n" +
@@ -219,7 +251,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
     )
     .option(
       "--status <status>",
-      "The work's tri-state: working (default) | blocked | done — the dashboard marks the session with it",
+      "Who acts next: working (default) | blocked | done | dormant — files the session under Needs Input / Done / Dormant when the turn ends",
     )
     .option("--for <session>", "Target another session (default: the current one)")
     .option("--json", "Machine-readable output")
@@ -268,7 +300,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       const status = intent.mode === "set" ? parseThreadStateStatus(options.status ?? "working") : null;
       if (intent.mode === "set" && !status) {
         console.error(
-          `Unknown --status "${options.status}" — use working, blocked, or done`,
+          `Unknown --status "${options.status}" — use working, blocked, done, or dormant`,
         );
         process.exit(1);
       }
@@ -280,7 +312,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       const own = !intent.session ? session : null;
       if (own) {
         if (result.cleared) clearThreadStatePulse(own);
-        else writeThreadStatePulse(own);
+        else writeThreadStatePulse(own, status ?? undefined);
       }
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));

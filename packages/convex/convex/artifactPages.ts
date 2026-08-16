@@ -495,17 +495,23 @@ function barHtml(o: BrandOpts): string {
   var flashLabel=function(btn,label,back){btn.textContent=label;setTimeout(function(){btn.textContent=back;},1400);};
   // Minimize: bar slides away, the corner pill brings it back. Per-page
   // persistence (best effort — the opaque origin usually has no storage).
+  // A framed page (embedded in a conversation, the decision queue, another
+  // site) starts minimized: the embedder supplies its own chrome, and a 40px
+  // bar inside a 420px frame is mostly bar. The pill still restores it, and
+  // an explicit restore ("0") wins over the framed default where storage holds.
   var minKey="__cc_min:"+(CC.slug||location.pathname);
-  var setMin=function(on){
+  var framed=false;try{framed=window.self!==window.top;}catch(e){framed=true;}
+  var setMin=function(on,remember){
     document.documentElement.classList.toggle("__cc_min",on);
-    sSet(minKey,on?"1":"");
+    if(remember)sSet(minKey,on?"1":"0");
     if(on&&typeof closeAll==="function")closeAll();
   };
   var hideB=document.getElementById("__cc_hide");
   var pillB=document.getElementById("__cc_pill");
-  if(hideB)hideB.addEventListener("click",function(e){e.stopPropagation();setMin(true);});
-  if(pillB)pillB.addEventListener("click",function(e){e.stopPropagation();setMin(false);});
-  if(sGet(minKey)==="1")setMin(true);
+  if(hideB)hideB.addEventListener("click",function(e){e.stopPropagation();setMin(true,true);});
+  if(pillB)pillB.addEventListener("click",function(e){e.stopPropagation();setMin(false,true);});
+  var minPref=sGet(minKey);
+  if(minPref==="1"||(framed&&minPref!=="0"))setMin(true,false);
   if(!CC.metaUrl)return;
   var api=function(path,body){return fetch(CC.apiBase+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});};
   // View beacon — one per page load; carries the gate email when present.

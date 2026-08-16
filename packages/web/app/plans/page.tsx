@@ -5,9 +5,9 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useQuery } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
+import { useSyncPlansWithArgs } from "../../hooks/useSyncPlans";
+import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { useInboxStore } from "../../store/inboxStore";
 import { AuthGuard } from "../../components/AuthGuard";
 import { AppLoader } from "../../components/AppLoader";
@@ -34,8 +34,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { LivenessDot, planLivenessState } from "../../components/LivenessDot";
-
-const api = _api as any;
 
 type PlanStatus = "draft" | "active" | "paused" | "done" | "abandoned";
 
@@ -237,19 +235,29 @@ export default function PlansPage() {
     }
   }, [planSource, selectedPlan]);
 
+  // Local-first: the board renders from the store's plans collection
+  // synchronously (workspace-scoped through the one chokepoint); these
+  // subscriptions only FEED it — the same split the tasks board uses. The
+  // done-plans sync arms on demand, since webList excludes done/abandoned by
+  // default and those rows may not be cached yet.
   const workspaceArgs = useWorkspaceArgs();
-  const activePlans = useQuery(api.plans.webList,
-    workspaceArgs === "skip" ? "skip" : { ...workspaceArgs }
-  );
-  const donePlans = useQuery(api.plans.webList,
-    workspaceArgs === "skip" ? "skip"
-      : showDone ? { status: "done", ...workspaceArgs } : "skip"
+  const { ready } = useSyncPlansWithArgs(workspaceArgs);
+  useSyncPlansWithArgs(showDone ? workspaceArgs : "skip", "done");
+  const wsPlans = useWorkspaceCollection<any>(
+    "plans",
+    (p) => `${p.status}|${p.source ?? ""}|${p.updated_at ?? 0}|${p.title ?? ""}|${p.progress?.done ?? 0}/${p.progress?.total ?? 0}`,
   );
 
-  const rawPlans = useMemo(() => [
-    ...(activePlans || []),
-    ...(donePlans || []),
-  ], [activePlans, donePlans]);
+  const rawPlans = useMemo(() => {
+    // Mirror the server's read-time filter: done/abandoned stay hidden until
+    // asked for. The store may hold them from an earlier toggle or another
+    // surface's sync; the filter, not the fetch, is what hides them.
+    const rows = showDone ? wsPlans : wsPlans.filter((p: any) => p.status !== "done" && p.status !== "abandoned");
+    return [...rows].sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
+  }, [wsPlans, showDone]);
+  // Skeleton only for a genuinely cold cache: no cached rows AND the first
+  // answer still in flight. A populated store paints instantly.
+  const plansLoading = !ready && rawPlans.length === 0;
 
   const allPlans = useMemo(() => {
     if (planSource === "human") return rawPlans.filter((p: any) => p.source === "human" || !p.source);
@@ -291,8 +299,8 @@ export default function PlansPage() {
             grouped={grouped}
             showDone={showDone}
             setShowDone={setShowDone}
-            loading={!activePlans}
-            empty={activePlans?.length === 0}
+            loading={plansLoading}
+            empty={!plansLoading && rawPlans.length === 0}
             planSource={planSource}
             setPlanSource={setPlanSource}
             hiddenAgentCount={hiddenAgentCount}
@@ -356,7 +364,7 @@ export default function PlansPage() {
             )}
 
             <div className="flex-1 overflow-y-auto">
-              {!activePlans ? (
+              {plansLoading ? (
                 <AppLoader className="min-h-[16rem] h-full" />
               ) : allPlans.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-sol-text-dim px-4">

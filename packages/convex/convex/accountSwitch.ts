@@ -20,6 +20,8 @@ import {
   ccAccountsValidator,
   decideAutoSwitch,
   AUTO_SWITCH_CONTINUE_KEY,
+  AUTO_CONTINUE_WINDOW_MS,
+  isAutoContinueEnabled,
   isBlockedConversation,
   isRemoteAuthBlocked,
   isSubagentConversation,
@@ -717,8 +719,45 @@ export async function scheduleAutoSwitchCheck(
   });
 }
 
-// The web toggle. Lives on the device row because the switch itself is
-// machine-global — it's this machine's login that rotates through profiles.
+// The recovery toggles live on the device row because both behaviors are
+// machine-global — it's this machine's login that rotates through profiles
+// (auto-switch) or waits for its own window to reset (auto-continue). Remotes
+// mirror the primary's account, so neither applies to them.
+async function loadPrimaryForToggle(
+  ctx: { db: any },
+  userId: Id<"users">,
+  deviceId: string,
+): Promise<Doc<"devices">> {
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
+    .first();
+  if (!device) throw new Error("Unknown device");
+  if (device.is_remote) {
+    throw new Error("Auto-switch runs on the primary machine — remotes mirror its account");
+  }
+  return device;
+}
+
+// The primary machine's recovery flags, for the CLI (`cast usage`): what
+// happens to a session on this machine when its account hits a limit. Token
+// auth so a daemon-side caller can ask without a browser session.
+export const recoveryStatus = query({
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const { primary } = await listOnlineDevices(ctx, userId, Date.now());
+    if (!primary) return null;
+    return {
+      device_id: primary.device_id,
+      auto_switch: primary.cc_auto_switch === true,
+      auto_continue: isAutoContinueEnabled(primary),
+    };
+  },
+});
+
+// The web toggle for account rotation.
 export const setAutoSwitchAccounts = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -728,14 +767,7 @@ export const setAutoSwitchAccounts = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
-    const device = await ctx.db
-      .query("devices")
-      .withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", args.device_id))
-      .first();
-    if (!device) throw new Error("Unknown device");
-    if (device.is_remote) {
-      throw new Error("Auto-switch runs on the primary machine — remotes mirror its account");
-    }
+    const device = await loadPrimaryForToggle(ctx, userId, args.device_id);
     await ctx.db.patch(device._id, {
       cc_auto_switch: args.enabled,
       // A fresh toggle starts a fresh incident history either way.
@@ -743,6 +775,29 @@ export const setAutoSwitchAccounts = mutation({
     });
     // Turning it on while sessions are already parked should act now, not on
     // the next limit event.
+    if (args.enabled) {
+      await scheduleAutoSwitchCheck(ctx, userId);
+    }
+    return { enabled: args.enabled };
+  },
+});
+
+// The web toggle for same-account resume at window reset (default on — see
+// isAutoContinueEnabled). Shares the auto-switch bookkeeping and check.
+export const setAutoContinueAccounts = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+    enabled: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const device = await loadPrimaryForToggle(ctx, userId, args.device_id);
+    await ctx.db.patch(device._id, {
+      cc_auto_continue: args.enabled,
+      cc_auto_switch_state: undefined,
+    });
     if (args.enabled) {
       await scheduleAutoSwitchCheck(ctx, userId);
     }
@@ -768,13 +823,23 @@ export const autoSwitchCheck = internalMutation({
   handler: async (ctx, args) => {
     const now = Date.now();
     const { online, primary } = await listOnlineDevices(ctx, args.user_id, now);
-    if (!primary || primary.cc_auto_switch !== true) return { acted: "off" };
+    if (!primary) return { acted: "off" };
+    const allowSwitch = primary.cc_auto_switch === true;
+    if (!allowSwitch && !isAutoContinueEnabled(primary)) return { acted: "off" };
 
     const state = primary.cc_auto_switch_state ?? {};
     const { blocked } = await listBlockedConversations(ctx, args.user_id, false);
     // Limit-kind only: an auth park means a login expired — switching accounts
     // behind the user's back is an identity change, not a recovery.
-    const limitBlocked = blocked.filter((c) => c.pending_api_error_kind === "limit");
+    // Continue-only mode acts on the current incident alone: a park older than
+    // a full session window has already sat through a reset the user could
+    // have used — resuming it now spends the fresh window on abandoned work.
+    // (With auto-switch on the user opted into the wider 48h revive.)
+    const limitBlocked = blocked.filter(
+      (c) =>
+        c.pending_api_error_kind === "limit" &&
+        (allowSwitch || (c.updated_at ?? 0) >= now - AUTO_CONTINUE_WINDOW_MS),
+    );
     if (limitBlocked.length === 0) {
       if (state.exhausted_at) {
         await ctx.db.patch(primary._id, {
@@ -820,6 +885,7 @@ export const autoSwitchCheck = internalMutation({
       activeEmail: primary.cc_accounts?.active_email,
       profiles: primary.cc_accounts?.profiles ?? [],
       attempts,
+      allowSwitch,
     });
 
     if (decision.action === "continue") {
@@ -853,10 +919,12 @@ export const autoSwitchCheck = internalMutation({
     // Every account is spent. Mark it for the UI and wake up at the earliest
     // limit reset the decision found. Dedupe self-scheduling: only book a
     // wake-up if none is pending or ours lands earlier (a window reset we just
-    // learned about).
+    // learned about). Continue-only mode never looked at the other accounts,
+    // so it must not stamp "every account is spent" — it is merely waiting
+    // for the active window to reset.
     const nextState = {
       ...state,
-      exhausted_at: state.exhausted_at ?? now,
+      exhausted_at: allowSwitch ? state.exhausted_at ?? now : state.exhausted_at,
       next_check_at: state.next_check_at,
     };
     if (
@@ -1026,6 +1094,7 @@ export const listAccountProfiles = query({
           profiles: d.cc_accounts?.profiles ?? [],
           codex_accounts: d.codex_accounts ?? legacyCodexAccounts(d.codex_usage),
           auto_switch: d.cc_auto_switch === true,
+          auto_continue: isAutoContinueEnabled(d),
           auto_switch_state: d.cc_auto_switch_state
             ? {
                 last_action_at: d.cc_auto_switch_state.last_action_at,

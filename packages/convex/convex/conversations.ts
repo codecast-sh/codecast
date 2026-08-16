@@ -17,7 +17,8 @@ import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from ".
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, findModelOption, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, ACTIVE_AGENT_STATUSES, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, isUserDormant, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, type WorkState } from "./inboxFilters";
+import { armedTriggerHomeLoader, loadArmedTriggerHomes } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
@@ -1268,6 +1269,7 @@ export const getConversation = query({
   args: {
     conversation_id: v.id("conversations"),
     limit: v.optional(v.number()),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1275,20 +1277,10 @@ export const getConversation = query({
     if (!conversation) {
       return null;
     }
-    const isOwner = !!authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
+    if (accessLevel === "denied") {
       return null;
     }
-    const accessLevel: AccessLevel = isOwner
-      ? "owner"
-      : hasTeamAccess
-        ? "team"
-        : "shared";
 
     const limit = args.limit ?? 100;
     // Fetch most recent messages (descending), then reverse for display
@@ -1359,6 +1351,7 @@ export const getAllMessages = query({
     conversation_id: v.id("conversations"),
     limit: v.optional(v.number()),
     before_timestamp: v.optional(v.number()),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1367,7 +1360,7 @@ export const getAllMessages = query({
       return null;
     }
 
-    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
     if (accessLevel === "denied") {
       return null;
     }
@@ -1576,6 +1569,7 @@ export const getMessagesAroundTimestamp = query({
     center_timestamp: v.number(),
     limit_before: v.optional(v.number()),
     limit_after: v.optional(v.number()),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1584,22 +1578,10 @@ export const getMessagesAroundTimestamp = query({
       return null;
     }
 
-    const isOwner = !!authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
+    if (accessLevel === "denied") {
       return null;
     }
-    const accessLevel: AccessLevel = isOwner
-      ? "owner"
-      : hasTeamAccess
-        ? "team"
-        : "shared";
 
     const limitBefore = Math.min(args.limit_before ?? 50, 100);
     const limitAfter = Math.min(args.limit_after ?? 50, 100);
@@ -1744,19 +1726,16 @@ export const copyAllMessages = query({
   args: {
     conversation_id: v.id("conversations"),
     paginationOpts: v.optional(paginationOptsValidator),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return null;
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") {
+      return null;
     }
-    if (!isOwner && !hasTeamAccess && !isShared) return null;
 
     const mapMsg = (m: any) => ({
       role: m.role,
@@ -1828,6 +1807,7 @@ export const listMessages = query({
   args: {
     conversation_id: v.id("conversations"),
     paginationOpts: paginationOptsValidator,
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1841,13 +1821,7 @@ export const listMessages = query({
       return { page: [], isDone: true, continueCursor: "" };
     }
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") {
       return { page: [], isDone: true, continueCursor: "" };
     }
 
@@ -1866,6 +1840,7 @@ export const listMessages = query({
 export const getConversationWithMeta = query({
   args: {
     conversation_id: v.id("conversations"),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1874,7 +1849,7 @@ export const getConversationWithMeta = query({
       return null;
     }
 
-    const access = await checkConversationAccess(ctx, authUserId, conversation);
+    const access = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
     if (access === "denied") {
       return null;
     }
@@ -1987,19 +1962,14 @@ export const getConversationWithMeta = query({
 export const getConversationGitDiff = query({
   args: {
     conversation_id: v.id("conversations"),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return null;
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-    if (!isOwner && !hasTeamAccess && !isShared) return null;
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") return null;
 
     return await getConvGitDiff(ctx, args.conversation_id);
   },
@@ -2008,18 +1978,14 @@ export const getConversationGitDiff = query({
 export const getConversationToolStats = query({
   args: {
     conversation_id: v.id("conversations"),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return null;
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    if (!isOwner) {
-      const isShared = !!conversation.share_token;
-      const hasTeamAccess = authUserId ? await canTeamMemberAccess(ctx, authUserId, conversation) : false;
-      if (!hasTeamAccess && !isShared) return null;
-    }
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") return null;
 
     let latestTodos: any[] | null = null;
     // Collect creates and updates separately since we iterate newest-first
@@ -2881,6 +2847,44 @@ export const getSharedConversation = query({
   },
 });
 
+// A signed-in viewer presenting a share link trades the token for a durable
+// per-user redemption row. From then on every id-keyed query (the whole inbox
+// surface) resolves them to "shared" through checkConversationAccess without
+// carrying the token — and rotating the token invalidates the redemption,
+// because access requires the stored token to still match. Anonymous guests
+// don't redeem; they present the token on each query instead.
+export const redeemShareToken = mutation({
+  args: { share_token: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const conversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_share_token", (q) => q.eq("share_token", args.share_token))
+      .first();
+    if (!conversation) return null;
+    const existing = await ctx.db
+      .query("share_redemptions")
+      .withIndex("by_conversation_user", (q) =>
+        q.eq("conversation_id", conversation._id).eq("user_id", userId)
+      )
+      .first();
+    if (existing) {
+      if (existing.token !== args.share_token) {
+        await ctx.db.patch(existing._id, { token: args.share_token, created_at: Date.now() });
+      }
+    } else {
+      await ctx.db.insert("share_redemptions", {
+        conversation_id: conversation._id,
+        user_id: userId,
+        token: args.share_token,
+        created_at: Date.now(),
+      });
+    }
+    return { conversation_id: conversation._id };
+  },
+});
+
 export const getSharedConversationMeta = query({
   args: {
     share_token: v.string(),
@@ -2941,6 +2945,7 @@ export const getConversationPublic = query({
     conversation_id: v.id("conversations"),
     limit: v.optional(v.number()),
     before_timestamp: v.optional(v.number()),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
@@ -2949,7 +2954,7 @@ export const getConversationPublic = query({
     }
 
     const authUserId = await getAuthUserId(ctx);
-    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
 
     if (accessLevel === "denied") {
       return { access_level: "denied" as const, conversation: null };
@@ -3764,6 +3769,7 @@ export async function resolveConversationForViewer(
   ctx: any,
   id: string,
   authUserId: Id<"users"> | null,
+  presentedShareToken?: string | null,
 ): Promise<{ access_level: "not_found" | "denied" | "owner" | "team" | "shared"; conversation_id: string | null }> {
   let conversation = null;
 
@@ -3805,7 +3811,7 @@ export async function resolveConversationForViewer(
       ctx,
       id.toLowerCase(),
       authUserId ?? "",
-      async (c) => (await checkConversationAccess(ctx, authUserId, c)) !== "denied",
+      async (c) => (await checkConversationAccess(ctx, authUserId, c, presentedShareToken)) !== "denied",
     );
   }
 
@@ -3813,7 +3819,7 @@ export async function resolveConversationForViewer(
     return { access_level: "not_found" as const, conversation_id: null };
   }
 
-  const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
+  const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, presentedShareToken);
 
   if (accessLevel === "denied") {
     return { access_level: "denied" as const, conversation_id: null };
@@ -3826,10 +3832,10 @@ export async function resolveConversationForViewer(
 }
 
 export const resolveConversation = query({
-  args: { id: v.string() },
+  args: { id: v.string(), share_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    return resolveConversationForViewer(ctx, args.id, authUserId);
+    return resolveConversationForViewer(ctx, args.id, authUserId, args.share_token);
   },
 });
 
@@ -6475,11 +6481,13 @@ export const feedForCLI = query({
     // field agrees with the bucketed work_state (a stale "working" shows as the
     // coerced "idle", never contradicting a needs_input row).
     const coercedStatusMap = new Map<string, string | undefined>();
+    const armedHomesFor = armedTriggerHomeLoader(ctx);
     const classifyConv = async (conv: typeof filteredConversations[number]): Promise<WorkState> => {
       const cached = workStateMap.get(conv._id.toString());
       if (cached) return cached;
       const managed = managedMap.get(conv._id.toString());
       const isLive = liveStatusMap.has(conv._id.toString());
+      const armedHomes = await armedHomesFor(conv.user_id);
       // Stop trusting a frozen "active" status once the conversation has gone
       // quiet past the trust TTL — the SAME coercion enrichInboxSessionRow does
       // at its enrichment boundary (see trustedAgentStatus). A live daemon that
@@ -6526,6 +6534,9 @@ export const feedForCLI = query({
         isUnresponsive: activity.isUnresponsive,
         messageCount: conv.message_count || 0,
         killed: !!conv.inbox_killed_at,
+        userDormant: isUserDormant(conv),
+        armedTriggerHome: armedHomes.has(conv._id.toString()),
+        settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
       });
       workStateMap.set(conv._id.toString(), ws);
       return ws;
@@ -7102,6 +7113,7 @@ export const debugConversationVisibility = query({
 export const getConversationMeta = query({
   args: {
     conversation_id: v.id("conversations"),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
@@ -7110,12 +7122,14 @@ export const getConversationMeta = query({
     }
 
     // OG-unfurl meta. The caller (bot-meta middleware) is unauthenticated, so
-    // this resolves to "shared" only for a conversation carrying a share_token
-    // and "denied" for a private one — revealing nothing about private sessions
-    // while genuine shares still unfurl. An authed viewer (owner/team) also
-    // passes. Mirrors getSharedConversationMeta's shape (no project_path).
+    // this resolves to "shared" only when the unfurled URL PRESENTED the share
+    // token (?share=) — a bare conversation id reveals nothing, shared link or
+    // not, because ids circulate far more freely than links (issue #27).
+    // /share/<token> URLs unfurl via getSharedConversationMeta instead. An
+    // authed viewer (owner/team) also passes. Mirrors that query's shape (no
+    // project_path).
     const viewerId = await getAuthUserId(ctx);
-    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+    if ((await checkConversationAccess(ctx, viewerId, conversation, args.share_token)) === "denied") {
       return null;
     }
 
@@ -7806,6 +7820,13 @@ async function enrichInboxSessionRow(
     is_connected: !!daemonAlive,
     has_pending: hasPending,
     is_deferred: !!deferred,
+    // The user's park gesture, current per isUserDormant, and the settle
+    // classifier's verdict, current per isSettleVerdictCurrent — the client's
+    // sessionRestState reads these next to agent_status to place a settled row
+    // in Needs Input / Done / Dormant exactly as classifyWorkState does.
+    is_dormant: isUserDormant(conv),
+    inbox_dormant_at: conv.inbox_dormant_at ?? null,
+    settle_verdict: isSettleVerdictCurrent(conv) ? (conv.settle_verdict ?? null) : null,
     is_pinned: pinned,
     inbox_pinned_at: conv.inbox_pinned_at ?? null,
     inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
@@ -8648,9 +8669,22 @@ export const teamSessionsLiveness = query({
 // caught it, so it gets a seam rather than living inside a db-heavy query.
 export function tallyInboxRows(
   sessions: any[],
-  opts: { showAll?: boolean; stateFilter?: string | null; labelByConv: Map<string, string> },
+  opts: {
+    showAll?: boolean;
+    stateFilter?: string | null;
+    labelByConv: Map<string, string>;
+    /** Homes of armed inject triggers (dormancy.loadArmedTriggerHomes) — the structural dormancy source. */
+    armedTriggerHomes?: Set<string>;
+    /**
+     * Conversation ids the caller named explicitly (`cast sessions <id>`).
+     * Subagent rows are hidden from the top-level monitor, but a row you ask
+     * for by id must answer — it is the wait signal an orchestrator watches
+     * for a `cast spawn --subagent` worker.
+     */
+    requestedIds?: Set<string>;
+  },
 ) {
-  const counts = { working: 0, needs_input: 0, idle: 0, pinned: 0, live: 0, stashed: 0, dismissed: 0, killed: 0, total: 0 };
+  const counts = { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0, pinned: 0, live: 0, stashed: 0, dismissed: 0, killed: 0, total: 0 };
   const rows: Array<{
     id: string;
     session_id: string;
@@ -8681,8 +8715,17 @@ export function tallyInboxRows(
     owned_by_me: boolean;
   }> = [];
 
+  // A subagent row can arrive twice — the top-level recency scan and its
+  // parent's child enumeration both emit it (the web dedups by _id; this
+  // tally must too, or a requested subagent lists and counts double).
+  const seenSubagents = new Set<string>();
   for (const s of sessions) {
-    if (s.is_subagent) continue; // keep the monitor to top-level sessions
+    // Keep the monitor to top-level sessions — unless this row was named.
+    if (s.is_subagent) {
+      const id = s._id.toString();
+      if (!opts.requestedIds?.has(id) || seenSubagents.has(id)) continue;
+      seenSubagents.add(id);
+    }
     // The three retirement states are TALLIES, not buckets — the same shape as
     // `pinned` and `live`, and deliberately NOT mutually exclusive with the
     // work-state counts. A rendered row lands in both its work_state figure
@@ -8710,6 +8753,9 @@ export function tallyInboxRows(
       isUnresponsive: s.is_unresponsive,
       messageCount: s.message_count || 0,
       killed: !!s.inbox_killed_at,
+      userDormant: !!s.is_dormant,
+      armedTriggerHome: opts.armedTriggerHomes?.has(s._id.toString()) ?? false,
+      settleVerdict: s.settle_verdict ?? null,
     });
     const is_live = !!s.is_connected;
 
@@ -8770,10 +8816,20 @@ export const inboxForCLI = query({
     limit: v.optional(v.number()),
     label: v.optional(v.string()),
     project_path: v.optional(v.string()),
+    // Explicit session refs from `cast sessions <id> …` (short id, session UUID,
+    // or conversation id). Resolved own-only; the rows are hydrated past the
+    // recency window and a subagent row among them is listed instead of hidden.
+    session_ids: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return { error: "Unauthorized" };
+
+    const requestedIds = new Set<string>();
+    for (const ref of args.session_ids ?? []) {
+      const conv = await findConversationByAnyRef(ctx, ref, userId);
+      if (conv) requestedIds.add(conv._id.toString());
+    }
 
     // Labels (buckets) are the user's personal filing, fetched BEFORE the inbox
     // so a --label query can hydrate its full filed set below. One fetch serves
@@ -8816,9 +8872,10 @@ export const inboxForCLI = query({
       );
     }
 
+    const extraConvIds = [...(labelConvIds ?? []), ...requestedIds];
     let { sessions, hidden_count } = await computeInboxSessions(ctx, userId, {
       show_all: !!args.show_all,
-      extraConvIds: labelConvIds ? [...labelConvIds] : undefined,
+      extraConvIds: extraConvIds.length ? extraConvIds : undefined,
     });
 
     // Project bounding (label views): scope the inbox to one project so labels
@@ -8836,15 +8893,17 @@ export const inboxForCLI = query({
       sessions = sessions.filter((s) => lci.has(s._id.toString()));
     }
     const stateFilter = normalizeWorkStateFilter(args.state);
-    const ORDER: Record<WorkState, number> = { needs_input: 0, working: 1, idle: 2 };
+    const ORDER: Record<WorkState, number> = { needs_input: 0, done: 1, working: 2, dormant: 3, idle: 4 };
 
     const { counts, rows } = tallyInboxRows(sessions, {
       showAll: args.show_all,
       stateFilter,
       labelByConv,
+      armedTriggerHomes: await loadArmedTriggerHomes(ctx, userId),
+      requestedIds,
     });
 
-    // Most-actionable first: pinned, then needs_input → working → idle, recent first.
+    // Most-actionable first: pinned, then needs_input → done → working → dormant → idle, recent first.
     rows.sort((a, b) => {
       if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
       if (ORDER[a.work_state] !== ORDER[b.work_state]) return ORDER[a.work_state] - ORDER[b.work_state];
@@ -9742,6 +9801,7 @@ export const drainStaleDismiss = internalMutation({
 const PATCHABLE_FIELDS = new Set([
   "inbox_dismissed_at",
   "inbox_deferred_at",
+  "inbox_dormant_at",
   "inbox_pinned_at",
   "draft_message",
   "project_path",
@@ -11204,15 +11264,15 @@ export async function collectNavigableUserMessages(
 }
 
 export const getUserMessages = query({
-  args: { conversation_id: v.id("conversations") },
+  args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) return [];
     // Same admission as listMessages: owner, team, or share link. The message
     // browser must serve every viewer the transcript itself serves — including
-    // unauthenticated visitors on a public share token.
-    if ((await checkConversationAccess(ctx, userId, conv)) === "denied") return [];
+    // unauthenticated visitors presenting a public share token.
+    if ((await checkConversationAccess(ctx, userId, conv, args.share_token)) === "denied") return [];
     return collectNavigableUserMessages(ctx.db, args.conversation_id);
   },
 });

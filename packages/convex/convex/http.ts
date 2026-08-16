@@ -943,7 +943,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, show_all, state, limit, label, project_path } = body;
+      const { api_token, show_all, state, limit, label, project_path, session_ids } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -959,6 +959,7 @@ http.route({
         limit,
         label,
         project_path,
+        session_ids: Array.isArray(session_ids) ? session_ids : undefined,
       });
 
       if (result.error) {
@@ -3711,6 +3712,12 @@ cliRoute("/cli/chat/archive", async (ctx, body) => {
 cliRoute("/cli/work/create", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.create, body);
 });
+cliRoute("/cli/calls/list", async (ctx, body) => {
+  return await ctx.runQuery(api.transcripts.cliListCalls, body);
+});
+cliRoute("/cli/calls/get", async (ctx, body) => {
+  return await ctx.runQuery(api.transcripts.cliGetCall, body);
+});
 cliRoute("/cli/work/list", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.list, body);
 });
@@ -3974,6 +3981,7 @@ cliRoute("/cli/accounts/switch", async (ctx, body) => ctx.runMutation(api.accoun
 cliRoute("/cli/accounts/continue-blocked", async (ctx, body) => ctx.runMutation(api.accountSwitch.continueAllBlocked, body));
 cliRoute("/cli/accounts/save", async (ctx, body) => ctx.runMutation(api.accountSwitch.saveAccountProfile, body));
 cliRoute("/cli/accounts/publish", async (ctx, body) => ctx.runMutation(api.accountSwitch.publishDeviceAccounts, body));
+cliRoute("/cli/accounts/recovery-status", async (ctx, body) => ctx.runQuery(api.accountSwitch.recoveryStatus, body));
 
 // --- Published HTML artifacts (cast publish → codecast.sh/a/<slug>) ---
 // All handlers live in artifactsHttp.ts (they need Web Crypto + storage.store,

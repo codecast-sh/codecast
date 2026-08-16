@@ -18,8 +18,10 @@ import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { compressImage } from "../lib/compressImage";
 import { textareaCaretRect } from "../lib/textareaCaret";
 import { useStorageImageUrl, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
+import { AvatarImg } from "../lib/avatarCache";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
+import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
@@ -115,6 +117,7 @@ import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./browser/BrowserWatchSplit";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
+import { findEntityInStore } from "../lib/liveEntities";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
@@ -3043,7 +3046,9 @@ function useConversationTaskStats(conversationId: string | undefined) {
   const enabled = useDeferUntilSettled(conversationId);
   const toolStats = useQuery(
     api.conversations.getConversationToolStats,
-    enabled && conversationId && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip"
+    enabled && conversationId && isConvexId(conversationId)
+      ? { conversation_id: conversationId, ...shareTokenArg(conversationId) }
+      : "skip"
   );
   return toolStats?.taskStats ?? null;
 }
@@ -4648,7 +4653,12 @@ const CAST_STATUS_COLORS: Record<string, { bg: string; text: string }> = {
 
 function DocTitleLink({ convexId }: { convexId: string }) {
   const router = useRouter();
-  const doc = useQuery(api.docs.webGet, { id: convexId });
+  // Local-first seed (same pattern as EntityIdPill): the store usually holds
+  // the doc row already — paint the title on the first frame instead of
+  // flashing a truncated raw id. Non-reactive read; the query keeps it fresh.
+  const seed = useMemo(() => findEntityInStore(useInboxStore.getState(), "doc", convexId), [convexId]);
+  const queryDoc = useQuery(api.docs.webGet, { id: convexId });
+  const doc = queryDoc ?? seed;
   if (!doc) return <span className="text-sol-text-dim font-mono">{convexId.slice(0, 12)}...</span>;
   return (
     <button
@@ -4666,9 +4676,15 @@ function DocTitleLink({ convexId }: { convexId: string }) {
 // queries go through useQueryNoThrow and an unresolved title renders nothing.
 function InlineEntityTitle({ shortId, struck }: { shortId: string; struck?: boolean }) {
   const isPlan = shortId.startsWith("pl-");
+  // Local-first seed: paint the resolved title on the first frame when the
+  // store already holds the row (it usually does — same rule as EntityIdPill).
+  const seed = useMemo(
+    () => findEntityInStore(useInboxStore.getState(), isPlan ? "plan" : "task", shortId),
+    [isPlan, shortId],
+  );
   const { data: task } = useQueryNoThrow(api.tasks.webGet, !isPlan ? { short_id: shortId } : "skip");
   const { data: plan } = useQueryNoThrow(api.plans.webGet, isPlan ? { short_id: shortId } : "skip");
-  const entity: any = isPlan ? plan : task;
+  const entity: any = (isPlan ? plan : task) ?? seed;
   const title = entity?.display_title || entity?.title;
   if (!title) return null;
   return (
@@ -4680,10 +4696,18 @@ function InlineEntityTitle({ shortId, struck }: { shortId: string; struck?: bool
 
 function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "doc"; shortId?: string; convexId?: string }) {
   const router = useRouter();
+  // Local-first seed: the card paints from the store's row on the first
+  // frame; the query refreshes it. Every `cast task/plan/doc` row in a
+  // transcript renders this, so the flash was everywhere.
+  const rawId = convexId ?? shortId ?? "";
+  const seed = useMemo(
+    () => (rawId ? findEntityInStore(useInboxStore.getState(), type, rawId) : undefined),
+    [type, rawId],
+  );
   const task = useQuery(api.tasks.webGet, type === "task" && shortId ? { short_id: shortId } : "skip");
   const plan = useQuery(api.plans.webGet, type === "plan" && shortId ? { short_id: shortId } : "skip");
   const doc = useQuery(api.docs.webGet, type === "doc" && convexId ? { id: convexId } : "skip");
-  const entity = type === "task" ? task : type === "plan" ? plan : doc;
+  const entity = (type === "task" ? task : type === "plan" ? plan : doc) ?? seed;
 
   if (!entity) {
     if (shortId) return <EntityIdPill shortId={shortId} />;
@@ -6040,16 +6064,20 @@ function ImageBlock({ image }: { image: ImageData }) {
 }
 
 function UserIcon({ avatarUrl }: { avatarUrl?: string | null }) {
-  if (avatarUrl) {
-    return <img src={avatarUrl} alt="" className="w-6 h-6 rounded shrink-0 object-cover shadow-[0_0_0_0.5px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)]" />;
-  }
   return (
-    <div className="w-6 h-6 rounded bg-sol-blue flex items-center justify-center shrink-0">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-        <circle cx="12" cy="7" r="4" />
-      </svg>
-    </div>
+    <AvatarImg
+      src={avatarUrl}
+      alt=""
+      className="w-6 h-6 rounded shrink-0 object-cover shadow-[0_0_0_0.5px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)]"
+      fallback={
+        <div className="w-6 h-6 rounded bg-sol-blue flex items-center justify-center shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
+        </div>
+      }
+    />
   );
 }
 
@@ -7634,9 +7662,12 @@ const BeatRow = memo(function BeatRow({ beat, userName, avatarUrl, showPrompt, a
       )}
       {showPrompt && prompt && (
         <div className="mb-3 flex items-start gap-2 rounded-lg border-l-2 border-sol-blue/70 bg-sol-blue/[0.07] pl-3 pr-3 py-2">
-          {avatarUrl
-            ? <img src={avatarUrl} alt="" className="w-4 h-4 rounded-full shrink-0 mt-px" />
-            : <span className="text-[10px] font-bold uppercase tracking-wider text-sol-blue shrink-0 mt-0.5">{(userName || "You").slice(0, 1)}</span>}
+          <AvatarImg
+            src={avatarUrl}
+            alt=""
+            className="w-4 h-4 rounded-full shrink-0 mt-px"
+            fallback={<span className="text-[10px] font-bold uppercase tracking-wider text-sol-blue shrink-0 mt-0.5">{(userName || "You").slice(0, 1)}</span>}
+          />
           <span className="text-[12.5px] text-sol-text-secondary whitespace-pre-wrap break-words leading-snug">{prompt}</span>
         </div>
       )}
@@ -11121,7 +11152,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                               className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 transition-colors ${isSelected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"}`}
                             >
                               {item.image ? (
-                                <img src={item.image} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
+                                <AvatarImg src={item.image} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
                               ) : item.isBot ? (
                                 <Bot className="w-3.5 h-3.5 flex-shrink-0 text-sol-violet" />
                               ) : (
@@ -11597,7 +11628,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const deferredQueriesEnabled = useDeferUntilSettled(conversation?._id);
   const gitDiffData = useQuery(
     api.conversations.getConversationGitDiff,
-    deferredQueriesEnabled && diffExpanded && convexConvId ? { conversation_id: convexConvId } : "skip"
+    deferredQueriesEnabled && diffExpanded && convexConvId
+      ? { conversation_id: convexConvId, ...shareTokenArg(convexConvId) }
+      : "skip"
   );
   const renamingSessionId = useInboxStore((s) => s.renamingSessionId);
   const isRenaming = renamingSessionId === conversation?._id;
@@ -12960,7 +12993,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const globalMatches = useQuery(
     api.messages.findAllMessagesByContent,
     convexConvId && cleanedHighlight
-      ? { conversation_id: convexConvId, search_term: cleanedHighlight }
+      ? { conversation_id: convexConvId, search_term: cleanedHighlight, ...shareTokenArg(convexConvId) }
       : "skip"
   );
 
@@ -13114,6 +13147,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         const result: any = await convex.query(api.conversations.copyAllMessages, {
           conversation_id: convexConvId,
           paginationOpts: { numItems: 200, cursor },
+          ...shareTokenArg(convexConvId),
         });
         if (!result) break;
         if (result.page?.length) allMessages.push(...result.page);
@@ -14539,7 +14573,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const { data: serverSessionImages } = useQueryNoThrow(
     api.messages.getConversationImages,
     deferredQueriesEnabled && conversation?._id && isConvexId(conversation._id)
-      ? { conversation_id: conversation._id as Id<"conversations"> }
+      ? { conversation_id: conversation._id as Id<"conversations">, ...shareTokenArg(conversation._id) }
       : "skip"
   );
   const windowImageEntries = useMemo(
@@ -15283,17 +15317,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
                 {!isOwner && conversation.user && (
                   <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/30">
-                    {conversation.user.avatar_url ? (
-                      <img
-                        src={conversation.user.avatar_url}
-                        alt={conversation.user.name || "User"}
-                        className="w-4 h-4 rounded-full"
-                      />
-                    ) : (
-                      <span className="w-4 h-4 rounded-full bg-sol-violet/20 flex items-center justify-center text-[8px]">
-                        {(conversation.user.name || conversation.user.email || "?").charAt(0).toUpperCase()}
-                      </span>
-                    )}
+                    <AvatarImg
+                      src={conversation.user.avatar_url}
+                      alt={conversation.user.name || "User"}
+                      className="w-4 h-4 rounded-full"
+                      fallback={
+                        <span className="w-4 h-4 rounded-full bg-sol-violet/20 flex items-center justify-center text-[8px]">
+                          {(conversation.user.name || conversation.user.email || "?").charAt(0).toUpperCase()}
+                        </span>
+                      }
+                    />
                     {conversation.user.name || conversation.user.email?.split("@")[0] || "Teammate"}
                   </span>
                 )}
