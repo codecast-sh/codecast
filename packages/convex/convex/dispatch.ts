@@ -13,7 +13,7 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
 import { applyHideTransition } from "./cleanup";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
-import { enqueuePendingMessage } from "./pendingMessages";
+import { canSendProductMessage, enqueuePendingMessage } from "./pendingMessages";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import {
   BUCKETS_VIEW_CONTRACT_ID,
@@ -858,14 +858,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // ghost (never-prune cache) and needs to surface "restore session", not a
     // baffling auth failure.
     if (!conversation) throw new Error("conversation_deleted");
-    // The runner, or the session's second-party owner (a Mr-Bot-run session
-    // assigned to this user steers exactly like their own — that's the point
-    // of ownership). Delivery routing is unaffected: enqueuePendingMessage
-    // stamps the RUNNER's id for the daemon poll either way.
-    if (
-      conversation.user_id.toString() !== userId.toString() &&
-      conversation.owner_user_id?.toString() !== userId.toString()
-    ) throw new Error("Unauthorized");
+    // One send rule for every surface. The web poll card and inline composer land
+    // here; CollabComposer and `cast send` land in performSessionSend; the receipt
+    // path above lands in sendMessageV2 — all three admit exactly the same senders
+    // (runner, owner set, team member of a team-visible session, or a collab
+    // grant). Delivery routing is unaffected: enqueuePendingMessage stamps the
+    // RUNNER's id for the daemon poll either way.
+    if (!(await canSendProductMessage(ctx, userId, conversation))) throw new Error("Unauthorized");
 
     // Single canonical writer: dedups on client_id, stamps owner_user_id for the daemon's
     // delivery poll, and wakes the conversation (un-dismiss, completed→active).
@@ -1147,6 +1146,35 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       conversation_id: conversationId,
       message_id: messageId,
     });
+  },
+
+  // Manual presence status from the avatar-bar hover card. The client already
+  // flipped its local roster row (store setMyStatus); this is the
+  // authoritative write.
+  setMyStatus: async (ctx, userId, [status]: ["available" | "busy" | "away"]) => {
+    await (ctx as any).runMutation(api.users.updateProfile, { status });
+  },
+
+  // Trigger verbs (store triggerAction / deleteTrigger). The client flipped
+  // the agent_tasks row on its draft; these run the real mutations, which own
+  // leases, rescheduling and the run-now kick.
+  triggerAction: async (
+    ctx,
+    userId,
+    [taskId, verb]: [string, "pause" | "resume" | "runNow" | "cancel" | "reactivate"],
+  ) => {
+    const fn = {
+      pause: api.agentTasks.webPause,
+      resume: api.agentTasks.webResume,
+      runNow: api.agentTasks.webRunNow,
+      cancel: api.agentTasks.webCancel,
+      reactivate: api.agentTasks.webReactivate,
+    }[verb];
+    if (!fn) throw new Error(`Unknown trigger verb: ${verb}`);
+    return await (ctx as any).runMutation(fn, { task_id: taskId });
+  },
+  deleteTrigger: async (ctx, userId, [taskId]: [string]) => {
+    await (ctx as any).runMutation(api.agentTasks.webDelete, { task_id: taskId });
   },
 
   markNotificationRead: async (ctx, userId, [id]: [string]) => {
