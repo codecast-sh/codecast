@@ -62,6 +62,22 @@ export function isHumanOrigin(task: { source?: string | null }): boolean {
 }
 
 /**
+ * The human's board: what a person expects to see without asking for agent
+ * work. A task is on it when a person filed it (human/meeting origin), when
+ * an agent deliberately promoted it (`cast task create --human`, a triage
+ * accept), or when it is assigned to someone — an agent handing a task to a
+ * person is the clearest signal it is theirs to see, whatever its source.
+ * Web and mobile both filter with this, so the two boards cannot disagree.
+ */
+export function isOnHumanBoard(task: {
+  source?: string | null;
+  promoted?: boolean | null;
+  assignee?: string | null;
+}): boolean {
+  return isHumanOrigin(task) || !!task.promoted || !!task.assignee;
+}
+
+/**
  * A task that exists as real work: not a mined suggestion awaiting triage and
  * not dismissed. This is the ONE activity predicate — the web board, mobile,
  * subtask counts, and progress all call it, so their numbers can never

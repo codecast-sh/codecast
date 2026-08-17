@@ -35,23 +35,60 @@ export interface ListTab {
   /** Optional leading icon (lucide component). When present, the compact
    *  dropdown can shed its text label and collapse to icon-only at tight widths. */
   icon?: any;
+  /** A member of a multi-select set (needs `onTabToggle`). A plain click still
+   *  selects it alone; shift/meta-click on its pill, or its checkbox in the
+   *  compact dropdown, adds it to / removes it from the current set. */
+  toggle?: boolean;
+  /** Preset: the toggle keys this tab stands for. While it is active those tabs
+   *  render as included (checked), so a reader can see what the preset means
+   *  instead of guessing from its name. */
+  implies?: string[];
+  /** Tooltip. */
+  title?: string;
+}
+
+/** `activeTab` may name several tabs at once ("open,in_progress"). `active` is
+ *  what was picked; `included` adds every key an active preset stands for. */
+function tabSelection(tabs: ListTab[], activeTab: string) {
+  const active = new Set(activeTab.split(","));
+  const included = new Set(active);
+  for (const t of tabs) if (active.has(t.key)) t.implies?.forEach((k) => included.add(k));
+  return { active, included };
+}
+
+/** The pill/row label for the current selection: the single active tab, or the
+ *  active toggles joined ("Open, In Progress") once several are on. */
+function tabSelectionSummary(tabs: ListTab[], activeTab: string): { label: string; count?: number; icons: any[] } {
+  const { active } = tabSelection(tabs, activeTab);
+  const picked = tabs.filter((t) => active.has(t.key));
+  if (picked.length <= 1) {
+    const t = picked[0] ?? tabs[0];
+    return { label: t?.label ?? "", count: t?.count, icons: t?.icon ? [t.icon] : [] };
+  }
+  const count = picked.reduce((n, t) => n + (t.count ?? 0), 0);
+  return { label: picked.map((t) => t.label).join(", "), count, icons: picked.map((t) => t.icon).filter(Boolean) };
 }
 
 /** Compact stand-in for the status pill row, shown when the header is too narrow
  *  to fit every pill (see .cq-tabs-compact). Surfaces the active tab + count and
- *  drops the full list into a popover so no status is ever scrolled out of reach. */
+ *  drops the full list into a popover so no status is ever scrolled out of reach.
+ *  Toggle tabs get a checkbox: the box adds/removes, the label picks it alone. */
 function TabDropdown({
   tabs,
   activeTab,
   onChange,
+  onToggle,
 }: {
   tabs: ListTab[];
   activeTab: string;
   onChange: (key: string) => void;
+  onToggle?: (key: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const active = tabs.find((t) => t.key === activeTab) ?? tabs[0];
+  const { active: activeKeys, included } = tabSelection(tabs, activeTab);
+  const summary = tabSelectionSummary(tabs, activeTab);
+  const firstToggleIdx = tabs.findIndex((t) => t.toggle);
 
   useWatchEffect(() => {
     if (!open) return;
@@ -62,44 +99,70 @@ function TabDropdown({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  const ActiveIcon = active?.icon;
   // The label/count only collapse when there's an icon to stand in for them, so
-  // icon-less consumers (e.g. Docs) keep their text at every width.
-  const labelCollapse = ActiveIcon ? "cq-tab-label" : "";
+  // icon-less consumers (e.g. Docs) keep their text at every width. With several
+  // toggles on, their icons stand in together — the button still says which.
+  const labelCollapse = summary.icons.length ? "cq-tab-label" : "";
 
   return (
     <div ref={ref} className="relative flex-shrink-0">
       <button
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-1.5 h-7 px-2 rounded-md bg-sol-bg-alt border border-sol-border/40 text-xs text-sol-text hover:border-sol-border transition-colors"
-        title={active?.label}
+        title={summary.label}
       >
-        {ActiveIcon && <ActiveIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-muted" />}
-        <span className={`font-medium whitespace-nowrap ${labelCollapse}`}>{active?.label}</span>
-        {active?.count != null && active.count > 0 && (
-          <span className={`text-[10px] tabular-nums text-sol-text-dim ${labelCollapse}`}>{active.count}</span>
+        {summary.icons.length > 0 && (
+          <span className="flex items-center -space-x-0.5 flex-shrink-0">
+            {summary.icons.slice(0, 4).map((I, i) => <I key={i} className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-muted" />)}
+          </span>
+        )}
+        <span className={`font-medium whitespace-nowrap max-w-[14rem] truncate ${labelCollapse}`}>{summary.label}</span>
+        {summary.count != null && summary.count > 0 && (
+          <span className={`text-[10px] tabular-nums text-sol-text-dim ${labelCollapse}`}>{summary.count}</span>
         )}
         <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
-          {tabs.map((t) => {
+        <div className="absolute top-full left-0 mt-1 w-52 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
+          {tabs.map((t, i) => {
             const TIcon = t.icon;
+            const isActive = activeKeys.has(t.key);
+            const isIncluded = included.has(t.key);
+            const canToggle = !!(t.toggle && onToggle);
             return (
-              <button
-                key={t.key}
-                onClick={() => { onChange(t.key); setOpen(false); }}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                  t.key === activeTab ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                }`}
-              >
-                {TIcon && <TIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
-                <span className="flex-1 text-left whitespace-nowrap">{t.label}</span>
-                {t.count != null && t.count > 0 && (
-                  <span className="text-[10px] tabular-nums text-sol-text-dim">{t.count}</span>
-                )}
-                {t.key === activeTab && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
-              </button>
+              <div key={t.key}>
+                {/* Presets above, the set they compose from below. */}
+                {canToggle && i === firstToggleIdx && i > 0 && <div className="my-1 border-t border-sol-border/40" />}
+                <div
+                  className={`w-full flex items-center gap-2 pr-3 text-xs transition-colors ${
+                    isActive ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+                  } ${canToggle ? "pl-2" : "pl-3"}`}
+                >
+                  {canToggle && (
+                    <button
+                      onClick={() => onToggle!(t.key)}
+                      title={isIncluded ? `Remove ${t.label}` : `Add ${t.label}`}
+                      className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${
+                        isIncluded ? "bg-sol-cyan border-sol-cyan" : "border-sol-border/60 hover:border-sol-text-dim"
+                      }`}
+                    >
+                      {isIncluded && <Check className="w-2.5 h-2.5 text-sol-bg" />}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { onChange(t.key); setOpen(false); }}
+                    title={t.title ?? (canToggle ? `Only ${t.label}` : t.label)}
+                    className="flex-1 min-w-0 flex items-center gap-2 py-1.5"
+                  >
+                    {TIcon && <TIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
+                    <span className="flex-1 text-left whitespace-nowrap">{t.label}</span>
+                    {t.count != null && t.count > 0 && (
+                      <span className="text-[10px] tabular-nums text-sol-text-dim">{t.count}</span>
+                    )}
+                    {isActive && !canToggle && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
+                  </button>
+                </div>
+              </div>
             );
           })}
         </div>
@@ -419,8 +482,14 @@ export interface ItemRowState {
 export interface GenericListViewProps<T> {
   title: string;
   tabs: ListTab[];
+  /** The active tab key, or several joined by commas when the consumer
+   *  supports multi-select through onTabToggle. */
   activeTab: string;
   onTabChange: (tab: string) => void;
+  /** Add/remove one `toggle` tab from the current selection (shift/meta-click on
+   *  a pill, or the checkbox in the compact dropdown). The consumer owns the set
+   *  arithmetic — it knows its own presets and normalisation. */
+  onTabToggle?: (tab: string) => void;
 
   /** Grouping axis — independent of sort. Omit all three to render a sort-only
    *  Display popover (no Grouping section). Convention: a `"none"` option value
@@ -534,6 +603,7 @@ export function GenericListView<T>({
   tabs,
   activeTab,
   onTabChange,
+  onTabToggle,
   groupBy,
   groupOptions,
   onGroupChange,
@@ -1105,6 +1175,8 @@ export function GenericListView<T>({
   // clearing a view's only filter is a change you must be able to save or undo,
   // and hiding the bar would take both actions away at exactly that moment.
   const filterBarShown = !!filters && (filters.defs.some((d) => d.value) || !!filters.dirtyView);
+  const tabSel = useMemo(() => tabSelection(tabs, activeTab), [tabs, activeTab]);
+  const firstToggleTab = tabs.findIndex((t) => t.toggle);
 
   return (
     <div className="h-full flex flex-col">
@@ -1119,26 +1191,41 @@ export function GenericListView<T>({
           {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
               see .cq-tabs-compact in globals.css): a single compact dropdown. */}
           <div className="cq-tabs-pills flex items-center gap-0.5 p-0.5 rounded-lg bg-sol-bg-alt/40 border border-sol-border/30 flex-wrap">
-            {tabs.map((tab) => (
+            {tabs.map((tab, i) => {
+              const isActive = tabSel.active.has(tab.key);
+              // Included but not picked: a preset stands for this tab. Same
+              // fill as active, quieter text — "on", but not what you clicked.
+              const isIncluded = tabSel.included.has(tab.key);
+              const canToggle = !!(tab.toggle && onTabToggle);
+              return (
               <button
                 key={tab.key}
-                onClick={() => { onTabChange(tab.key); setFocusIndex(0); }}
+                onClick={(e) => {
+                  if (canToggle && (e.shiftKey || e.metaKey || e.ctrlKey)) onTabToggle!(tab.key);
+                  else onTabChange(tab.key);
+                  setFocusIndex(0);
+                }}
+                title={tab.title ?? (canToggle ? `${tab.label} — shift-click to add or remove` : undefined)}
                 className={`text-xs px-2.5 h-6 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
-                  activeTab === tab.key
+                  isActive
                     ? "bg-sol-bg-highlight text-sol-text shadow-sm"
-                    : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60"
-                }`}
+                    : isIncluded
+                      ? "bg-[color-mix(in_srgb,var(--sol-bg-highlight)_60%,transparent)] text-sol-text-muted"
+                      : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60"
+                } ${canToggle && i === firstToggleTab && i > 0 ? "ml-1.5 pl-2.5 border-l border-sol-border/40 rounded-l-none" : ""}`}
               >
                 {tab.label}
                 {tab.count != null && tab.count > 0 && <span className="text-[10px] tabular-nums opacity-60">{tab.count}</span>}
               </button>
-            ))}
+              );
+            })}
           </div>
           <div className="cq-tabs-compact">
             <TabDropdown
               tabs={tabs}
               activeTab={activeTab}
               onChange={(key) => { onTabChange(key); setFocusIndex(0); }}
+              onToggle={onTabToggle ? (key) => { onTabToggle(key); setFocusIndex(0); } : undefined}
             />
           </div>
         </div>

@@ -74,6 +74,8 @@ describe("buildTaskGroups", () => {
     expect(groups("status", [task()], "open")).toBeNull();
     // …but a second axis still differentiates the rows, so the grouping stands.
     expect(groups("status+assignee", [task()], "open")).not.toBeNull();
+    // Several selected statuses can still split the rows, so it stands too.
+    expect(groups("status", [task(), task({ status: "in_progress" })], "open,in_progress")).not.toBeNull();
   });
 
   it("orders status buckets by the work-first status order, not by name", () => {

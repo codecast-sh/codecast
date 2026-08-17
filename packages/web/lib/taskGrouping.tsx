@@ -303,8 +303,8 @@ export function taskGroupDropUpdates(
  * nests subtasks under parents), so grouping never changes row order.
  *
  * Returns null when the grouping shouldn't apply — no axes (flat list), or a
- * pure status grouping while a single-status tab is active, where every row
- * would share one header.
+ * pure status grouping while exactly one status is selected, where every row
+ * would share one header. (Several selected statuses still group usefully.)
  */
 export function buildTaskGroups({
   group,
@@ -321,7 +321,7 @@ export function buildTaskGroups({
 }): ListGroup<TaskItem>[] | null {
   const axisKeys = parseTaskGroup(group);
   if (axisKeys.length === 0) return null;
-  if (axisKeys.length === 1 && axisKeys[0] === "status" && statusFilter && statusFilter !== "all") {
+  if (axisKeys.length === 1 && axisKeys[0] === "status" && statusFilter && statusFilter !== "all" && !statusFilter.includes(",")) {
     return null;
   }
 
