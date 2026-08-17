@@ -4,6 +4,7 @@
 // packages/convex/convex/artifacts.ts toCliRow + listForWeb extras).
 
 import { useState } from "react";
+import { AvatarImg } from "../../lib/avatarCache";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -263,7 +264,7 @@ export function ArtifactCard({
             {a.author && (
               <span className="inline-flex items-center gap-1.5 text-[11px] text-sol-text-muted min-w-0">
                 {a.author.image ? (
-                  <img src={a.author.image} alt="" className="w-3.5 h-3.5 rounded-full" />
+                  <AvatarImg src={a.author.image} alt="" className="w-3.5 h-3.5 rounded-full" />
                 ) : null}
                 <span className="truncate">{a.author.name ?? "teammate"}</span>
               </span>

@@ -1,5 +1,6 @@
 import { forwardRef, useImperativeHandle, useState, useCallback, useRef, useMemo } from "react";
 import { useMentionServerSearch, useActiveMentionScope, SERVER_MENTION_TYPES } from "../../hooks/useMentionQuery";
+import { AvatarImg } from "../../lib/avatarCache";
 import {
   User,
   FileText,
@@ -110,7 +111,7 @@ function abbrevModel(model?: string | null): string | null {
 
 function ItemIcon({ item, config }: { item: MentionItem; config: typeof TYPE_CONFIG[string] }) {
   if (item.image) {
-    return <img src={item.image} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" />;
+    return <AvatarImg src={item.image} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" />;
   }
 
   if (item.type === "task" && item.status) {

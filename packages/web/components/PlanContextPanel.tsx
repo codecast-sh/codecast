@@ -2,7 +2,9 @@ import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useInboxStore } from "../store/inboxStore";
+import { computePlanProgress } from "../lib/liveEntities";
 import {
   ChevronDown,
   ChevronRight,
@@ -53,8 +55,24 @@ const PRIORITY_COLOR: Record<string, string> = {
 };
 
 export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
-  const plan = useQuery(api.plans.webPlanContext, { plan_id: planId });
+  const queryPlan = useQuery(api.plans.webPlanContext, { plan_id: planId });
   const [expanded, setExpanded] = useState(false);
+
+  // Local-first first paint: the strip used to pop in a round-trip after the
+  // conversation rendered, on every open. The store's plan row + task rows
+  // compose the same shape; the query replaces it when it answers. Read
+  // non-reactively — this panel sits in the always-mounted header, and the
+  // query is what keeps it fresh.
+  const plan = useMemo(() => {
+    if (queryPlan !== undefined) return queryPlan;
+    const s = useInboxStore.getState();
+    const row = (s.plans as any)[String(planId)];
+    if (!row) return undefined;
+    const tasks = (row.task_ids ?? [])
+      .map((tid: any) => (s.tasks as any)[String(tid)])
+      .filter((t: any) => t && !t.parent_id);
+    return { ...row, tasks, progress: computePlanProgress(tasks) };
+  }, [queryPlan, planId]);
 
   if (!plan) return null;
 

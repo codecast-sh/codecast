@@ -1,5 +1,6 @@
 import { useMemo, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { AvatarImg } from "../lib/avatarCache";
 import { useQuery, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { LoadingSkeleton } from "./LoadingSkeleton";
@@ -140,9 +141,12 @@ function Avatar({ name, image, size = 18 }: { name: string; image?: string | nul
   const initial = (name || "?")[0].toUpperCase();
   return (
     <span className="shrink-0 rounded-full overflow-hidden flex items-center justify-center" style={{ width: size, height: size }}>
-      {image
-        ? <img src={image} alt={name} className="w-full h-full object-cover" />
-        : <span className={`w-full h-full flex items-center justify-center font-semibold ${AVATAR_BG[hashIndex(name, AVATAR_BG.length)]}`} style={{ fontSize: size * 0.5 }}>{initial}</span>}
+      <AvatarImg
+        src={image}
+        alt={name}
+        className="w-full h-full object-cover"
+        fallback={<span className={`w-full h-full flex items-center justify-center font-semibold ${AVATAR_BG[hashIndex(name, AVATAR_BG.length)]}`} style={{ fontSize: size * 0.5 }}>{initial}</span>}
+      />
     </span>
   );
 }
