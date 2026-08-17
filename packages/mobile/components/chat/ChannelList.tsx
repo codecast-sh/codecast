@@ -9,6 +9,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
 import { formatRelativeTime } from '@/components/SessionItem';
 import { dmOtherIds } from '@codecast/shared/chat';
+import { ChatAvatar } from './MessageRow';
 
 // The channel list — the Chat segment of the Team tab.
 //
@@ -52,6 +53,32 @@ export function useChatRail(teamId: Id<'teams'> | undefined) {
   }, [data]);
 }
 
+/** A 1:1 DM row wears the person's face with their presence dot pinned to its
+ *  corner — who it is and whether they're there, in one glance. Group DMs keep
+ *  a neutral glyph (three faces at 15pt read as noise). */
+function DmFace({ channel, viewerId, members }: { channel: any; viewerId: string; members?: any[] }) {
+  const others = dmOtherIds(channel.dm_key, viewerId);
+  const one = others.length === 1
+    ? (members ?? []).find((m) => String(m._id) === others[0])
+    : undefined;
+  if (!one) return <FontAwesome name={others.length > 1 ? 'users' : 'user'} size={13} color={Theme.textMuted0} />;
+  const presence = one.presence_state as string | undefined;
+  const dotColor = presence === 'active' ? Theme.green : presence === 'idle' ? Theme.accent : null;
+  return (
+    <RNView>
+      <ChatAvatar
+        author={{ id: String(one._id), name: one.name || 'Teammate', avatarUrl: one.github_avatar_url || one.image, isAgent: one.is_bot }}
+        size={20}
+      />
+      {dotColor && <RNView style={[styles.presenceDot, { backgroundColor: dotColor }]} />}
+    </RNView>
+  );
+}
+
+type ListItem =
+  | { kind: 'header'; key: string; label: string; newMessage?: boolean }
+  | { kind: 'channel'; key: string; channel: any; rail?: ChannelRailRow };
+
 export function ChannelList({ teamId }: { teamId: Id<'teams'> | undefined }) {
   const rail = useChatRail(teamId);
   const router = useRouter();
@@ -71,6 +98,20 @@ export function ChannelList({ teamId }: { teamId: Id<'teams'> | undefined }) {
     return others.length > 1 ? names.map((n) => n.split(/\s+/)[0]).join(', ') : names[0];
   };
 
+  // Channels and direct messages are one list with two headers — a FlatList
+  // keeps the scroll simple and the row shape identical across sections.
+  const items = useMemo<ListItem[]>(() => {
+    if (!rail) return [];
+    const channels = rail.rows.filter((r) => r.channel.kind !== 'dm');
+    const dms = rail.rows.filter((r) => r.channel.kind === 'dm');
+    const out: ListItem[] = [];
+    if (channels.length) out.push({ kind: 'header', key: 'h-ch', label: 'Channels' });
+    for (const r of channels) out.push({ kind: 'channel', key: String(r.channel._id), channel: r.channel, rail: r.rail });
+    out.push({ kind: 'header', key: 'h-dm', label: 'Direct messages', newMessage: true });
+    for (const r of dms) out.push({ kind: 'channel', key: String(r.channel._id), channel: r.channel, rail: r.rail });
+    return out;
+  }, [rail]);
+
   if (rail === undefined) {
     return (
       <RNView style={styles.empty}>
@@ -79,23 +120,27 @@ export function ChannelList({ teamId }: { teamId: Id<'teams'> | undefined }) {
     );
   }
 
-  if (rail.rows.length === 0) {
-    return (
-      <RNView style={styles.empty}>
-        <FontAwesome name="comments-o" size={26} color={Theme.textMuted0} />
-        <RNText style={styles.emptyTitle}>No channels yet</RNText>
-        <RNText style={styles.emptySub}>
-          Create the first one from the web app, or ask a teammate for an invite.
-        </RNText>
-      </RNView>
-    );
-  }
-
   return (
     <FlatList
-      data={rail.rows}
-      keyExtractor={(item) => String(item.channel._id)}
+      data={items}
+      keyExtractor={(item) => item.key}
       renderItem={({ item }) => {
+        if (item.kind === 'header') {
+          return (
+            <RNView style={styles.sectionHead}>
+              <RNText style={styles.sectionLabel}>{item.label}</RNText>
+              {item.newMessage && (
+                <TouchableOpacity
+                  hitSlop={8}
+                  onPress={() => router.push('/chat/new' as never)}
+                  style={styles.sectionAction}
+                >
+                  <FontAwesome name="pencil-square-o" size={15} color={Theme.blue} />
+                </TouchableOpacity>
+              )}
+            </RNView>
+          );
+        }
         const { channel, rail: r } = item;
         const unread = (r?.unread ?? 0) > 0;
         const mentions = r?.unread_mentions ?? 0;
@@ -107,11 +152,15 @@ export function ChannelList({ teamId }: { teamId: Id<'teams'> | undefined }) {
             onPress={() => router.push({ pathname: '/chat/[id]', params: { id: String(channel._id) } } as never)}
           >
             <RNView style={styles.rowIcon}>
-              <FontAwesome
-                name={channel.kind === 'dm' ? 'user' : channel.kind === 'private' || channel.is_private ? 'lock' : 'hashtag'}
-                size={13}
-                color={unread ? Theme.textMuted : Theme.textMuted0}
-              />
+              {channel.kind === 'dm' ? (
+                <DmFace channel={channel} viewerId={String(currentUser?._id ?? '')} members={teamMembers as any[] | undefined} />
+              ) : (
+                <FontAwesome
+                  name={channel.kind === 'private' || channel.is_private ? 'lock' : 'hashtag'}
+                  size={13}
+                  color={unread ? Theme.textMuted : Theme.textMuted0}
+                />
+              )}
             </RNView>
             <RNView style={styles.rowMain}>
               <RNView style={styles.rowHead}>
@@ -178,6 +227,32 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 10, fontWeight: '700', color: Theme.bg },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Theme.textMuted0 },
+  sectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.md,
+    paddingTop: 14,
+    paddingBottom: 4,
+  },
+  sectionLabel: {
+    flex: 1,
+    fontSize: 10.5,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: Theme.textMuted0,
+  },
+  sectionAction: { padding: 2 },
+  presenceDot: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: Theme.bg,
+  },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, padding: 32 },
   emptyTitle: { fontSize: 14, fontWeight: '600', color: Theme.textSecondary },
   emptySub: { fontSize: 12, color: Theme.textMuted0, textAlign: 'center', lineHeight: 18 },

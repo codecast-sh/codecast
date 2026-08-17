@@ -6,6 +6,10 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { dmRoomKey } from '@codecast/shared/contracts';
+import { startHuddle } from '@/lib/calls/callManager';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Theme, Spacing } from '@/constants/Theme';
 import { SessionData, SessionItem, formatRelativeTime } from '@/components/SessionItem';
@@ -65,6 +69,8 @@ export default function TeamScreen() {
   // Mentions of you across all channels put a number on the Chat segment — the
   // same rule as everywhere: unread is quiet, being named is not.
   const chatRail = useChatRail(activeTeamId);
+  // Calling affordances only exist when the deployment has LiveKit configured.
+  const callsEnabled = useQuery(api.calls.getCallConfig)?.enabled === true;
   const chatMentions = chatRail?.mentionTotal ?? 0;
 
   const filteredMembers = useMemo(() => {
@@ -255,6 +261,22 @@ export default function TeamScreen() {
                     </RNText>
                   )}
                 </RNView>
+                {callsEnabled && currentUser && String(member._id) !== String(currentUser._id) && (
+                  <TouchableOpacity
+                    style={styles.huddleBtn}
+                    accessibilityLabel={`Huddle with ${member.name || 'teammate'}`}
+                    onPress={() => {
+                      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      void startHuddle({
+                        roomKey: dmRoomKey(String(currentUser._id), String(member._id)),
+                        toUserId: String(member._id),
+                      });
+                      router.push('/call');
+                    }}
+                  >
+                    <Ionicons name="headset" size={17} color={Theme.violet ?? '#6c71c4'} />
+                  </TouchableOpacity>
+                )}
               </RNView>
             );
           }}
@@ -282,6 +304,15 @@ export default function TeamScreen() {
 }
 
 const styles = StyleSheet.create({
+  huddleBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#6c71c418',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+  },
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
