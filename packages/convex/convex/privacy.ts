@@ -112,7 +112,8 @@ export async function canTeamMemberAccess(
 export async function checkConversationAccess(
   ctx: DbCtx,
   viewerId: Id<"users"> | null,
-  conversation: ConversationForAccess
+  conversation: ConversationForAccess,
+  presentedShareToken?: string | null
 ): Promise<AccessLevel> {
   if (viewerId) {
     if (conversation.user_id.toString() === viewerId.toString()) return "owner";
@@ -126,7 +127,25 @@ export async function checkConversationAccess(
     if (conversation._id && (await isSessionOwner(ctx, conversation._id, viewerId))) return "owner";
     if (await canTeamMemberAccess(ctx, viewerId, conversation)) return "team";
   }
-  if (conversation.share_token) return "shared";
+  // "shared" means the viewer PRESENTED the share link — the token itself on
+  // this call, or (signed in) a prior redemption of it recorded when they
+  // opened /share/<token>. The token's mere existence grants nothing: a
+  // conversation id circulates far more freely than its share link, and this
+  // branch once made every conversation that ever minted a link readable to
+  // anyone holding its id (issue #27). A redemption counts only while its
+  // stored token matches the current one, so rotation revokes past redeemers.
+  if (conversation.share_token) {
+    if (presentedShareToken && presentedShareToken === conversation.share_token) return "shared";
+    if (viewerId && conversation._id) {
+      const redemption = await ctx.db
+        .query("share_redemptions")
+        .withIndex("by_conversation_user", (q: any) =>
+          q.eq("conversation_id", conversation._id).eq("user_id", viewerId)
+        )
+        .first();
+      if (redemption?.token === conversation.share_token) return "shared";
+    }
+  }
   return "denied";
 }
 

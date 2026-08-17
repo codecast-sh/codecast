@@ -492,6 +492,7 @@ export const getMessageTimestamp = query({
   args: {
     conversation_id: v.id("conversations"),
     message_id: v.id("messages"),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -499,13 +500,7 @@ export const getMessageTimestamp = query({
     if (!conversation) {
       return null;
     }
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") {
       return null;
     }
 
@@ -689,7 +684,7 @@ async function materializeFileChanges(
  * predate materialization (no backfill was run).
  */
 export const getConversationFileChanges = query({
-  args: { conversation_id: v.id("conversations") },
+  args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
   handler: async (ctx, args): Promise<FileChange[]> => {
     // Access gate: this returns the full before/after source of every file the
     // session edited — including private (owner-only) conversations. Match the
@@ -697,7 +692,7 @@ export const getConversationFileChanges = query({
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return [];
     const viewerId = await getAuthUserId(ctx);
-    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+    if ((await checkConversationAccess(ctx, viewerId, conversation, args.share_token)) === "denied") {
       return [];
     }
     const rows = await ctx.db
@@ -844,14 +839,14 @@ const SESSION_GALLERY_ROW_LIMIT = 2000;
  * cost one storage call per image on every re-run of a reactive query.
  */
 export const getConversationImages = query({
-  args: { conversation_id: v.id("conversations") },
+  args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
   handler: async (ctx, args): Promise<SessionImageEntry[]> => {
     // Same access gate as the other message readers: owner, team member, or
     // share-token holder. The list names images in a possibly-private thread.
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return [];
     const viewerId = await getAuthUserId(ctx);
-    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+    if ((await checkConversationAccess(ctx, viewerId, conversation, args.share_token)) === "denied") {
       return [];
     }
     // Newest-first, so a session past the cap keeps its RECENT images (the
@@ -2168,6 +2163,7 @@ export const findMessageByContent = query({
   args: {
     conversation_id: v.id("conversations"),
     search_term: v.string(),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -2175,13 +2171,7 @@ export const findMessageByContent = query({
     if (!conversation) {
       return null;
     }
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") {
       return null;
     }
 
@@ -2234,18 +2224,13 @@ export const findAllMessagesByContent = query({
   args: {
     conversation_id: v.id("conversations"),
     search_term: v.string(),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return [];
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-    if (!isOwner && !hasTeamAccess && !isShared) return [];
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") return [];
 
     const terms = parseSearchTermsServer(args.search_term);
     if (terms.length === 0) return [];

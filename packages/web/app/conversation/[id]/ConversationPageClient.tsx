@@ -1,4 +1,4 @@
-import { useConvexAuth, useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
@@ -12,6 +12,7 @@ import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useInboxStore } from "../../../store/inboxStore";
 import { PREFILL_PARAM, buildPrefillText } from "../../../lib/composerPrefill";
+import { setShareTokenScope } from "../../../lib/shareTokenScope";
 
 /**
  * Every accessible conversation renders through the inbox — single codepath —
@@ -264,6 +265,10 @@ export default function ConversationPage() {
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
   const prefill = searchParams.get(PREFILL_PARAM) || undefined;
+  // A share-link visit carries its token (`?share=`, set by the /share/<token>
+  // redirect). Access via a link requires PRESENTING the token — the server
+  // denies id-only reads of link-shared conversations (issue #27).
+  const shareToken = searchParams.get("share") || undefined;
   const [targetMessageId] = useState<string | undefined>(() => {
     if (typeof window === "undefined") return undefined;
     const hash = window.location.hash;
@@ -273,7 +278,10 @@ export default function ConversationPage() {
     return undefined;
   });
 
-  const resolved = useQuery(api.conversations.resolveConversation, id ? { id } : "skip");
+  const resolved = useQuery(
+    api.conversations.resolveConversation,
+    id ? { id, ...(shareToken ? { share_token: shareToken } : {}) } : "skip"
+  );
   // Cached presence is not access evidence. This public/shared route waits for
   // the server's explicit access result until it has its own offline-capable
   // view contract.
@@ -283,13 +291,17 @@ export default function ConversationPage() {
   if (effective === undefined) return <ConversationLoadingSkeleton />;
   if (effective.access_level === "denied") {
     if (!isAuthLoading && !treatAsAuthed) {
-      const returnTo = `/conversation/${id}${window.location.hash}`;
+      const returnTo = `/conversation/${id}${window.location.search}${window.location.hash}`;
       router.replace(`/login?return_to=${encodeURIComponent(returnTo)}`);
       return <ConversationLoadingSkeleton />;
     }
     return <DeniedView />;
   }
   if (effective.access_level === "not_found" || !effective.conversation_id) return <NotFoundView />;
+
+  // Register the presented token under the RESOLVED id before any child
+  // mounts, so every id-keyed query in the tree re-presents it.
+  if (shareToken) setShareTokenScope(effective.conversation_id, shareToken);
 
   // Wait for auth to settle before committing to a render path: while loading,
   // resolveConversation may have answered with the anonymous identity, and we
@@ -308,11 +320,66 @@ export default function ConversationPage() {
     );
   }
 
+  // A signed-in share-link viewer redeems the token BEFORE entering the inbox:
+  // the redemption row is what lets every id-keyed inbox query (which carries
+  // no token) resolve them to "shared". Owner/team viewers skip it — their
+  // access never depended on the token.
+  if (shareToken && effective.access_level === "shared") {
+    return (
+      <RedeemThenRedirect
+        id={effective.conversation_id}
+        shareToken={shareToken}
+        targetMessageId={targetMessageId}
+        highlightQuery={highlightQuery}
+        prefill={prefill}
+      />
+    );
+  }
+
   // Every accessible session (owner, team, shared) renders through the inbox — single codepath.
   return (
     <RedirectToInbox
       id={effective.conversation_id}
       isOwn={effective.access_level === "owner"}
+      targetMessageId={targetMessageId}
+      highlightQuery={highlightQuery}
+      prefill={prefill}
+    />
+  );
+}
+
+/**
+ * Signed-in viewer arriving via a share link: trade the presented token for a
+ * durable server-side redemption (redeemShareToken), then continue into the
+ * inbox. Without the redemption the inbox's id-keyed queries — which never
+ * carry the token — would all deny. The redirect waits for the mutation so the
+ * inbox mounts with the grant already in place.
+ */
+function RedeemThenRedirect({
+  id,
+  shareToken,
+  targetMessageId,
+  highlightQuery,
+  prefill,
+}: {
+  id: string;
+  shareToken: string;
+  targetMessageId?: string;
+  highlightQuery?: string;
+  prefill?: string;
+}) {
+  const redeem = useMutation(api.conversations.redeemShareToken);
+  const [redeemed, setRedeemed] = useState(false);
+  useMountEffect(() => {
+    // Best-effort: an invalid/rotated token redeems nothing and the inbox
+    // shows denied, which is the honest outcome.
+    redeem({ share_token: shareToken }).catch(() => {}).finally(() => setRedeemed(true));
+  });
+  if (!redeemed) return <ConversationLoadingSkeleton />;
+  return (
+    <RedirectToInbox
+      id={id}
+      isOwn={false}
       targetMessageId={targetMessageId}
       highlightQuery={highlightQuery}
       prefill={prefill}

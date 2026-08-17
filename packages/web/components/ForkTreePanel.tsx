@@ -8,6 +8,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { relativeTime } from "./BranchSelector";
+import { shareTokenArg } from "../lib/shareTokenScope";
 import {
   useForkTree,
   branchDisplayCount,
@@ -265,11 +266,18 @@ function ForkTreeContent({
   const selectedBranch: FlatForkNode | undefined = visibleBranches[branchIdx];
   const drillBranch = useMemo(() => flat.find((n) => n.id === drillId), [flat, drillId]);
 
-  // Message-level list for the drilled branch.
-  const drillMsgsRaw = useQuery(
+  // Message-level list for the drilled branch. Local-first: the shared
+  // user-message cache (kept warm by useConversationMessages, same source
+  // MessageBrowserPopover reads) answers instantly for any branch the viewer
+  // has opened; the query fires only when that cache is cold.
+  const cachedDrillMsgs = useInboxStore((s) => (drillId ? s.userMessages[drillId] : undefined));
+  const drillMsgsQuery = useQuery(
     api.conversations.getUserMessages,
-    mode === "messages" && drillId && isConvexId(drillId) ? { conversation_id: drillId as any } : "skip",
+    mode === "messages" && drillId && isConvexId(drillId) && !cachedDrillMsgs
+      ? { conversation_id: drillId as any, ...shareTokenArg(drillId) }
+      : "skip",
   );
+  const drillMsgsRaw = cachedDrillMsgs ?? drillMsgsQuery;
   const drillMsgs: NavMsg[] = useMemo(() => {
     const arr = Array.isArray(drillMsgsRaw) ? (drillMsgsRaw as NavMsg[]).slice() : [];
     arr.sort((a, b) => a.timestamp - b.timestamp); // oldest → newest
