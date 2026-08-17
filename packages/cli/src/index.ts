@@ -32,6 +32,9 @@ import {
   snippetSection,
   type SnippetSection,
   allSnippetSlugs,
+  teamFeaturesForSnippet,
+  TEAM_FEATURES,
+  type TeamFeatureKey,
   fromConvexAgentType,
   toConvexAgentType,
   PROVIDER_KEYS,
@@ -47,12 +50,14 @@ import {
   resolveWorkspaceForWrite,
   workspaceArgs,
   workspaceLabel,
+  workspaceHasFeature,
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
 import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
+import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
@@ -941,36 +946,8 @@ function installSessionRegisterHook(): void {
   installHookScript("session-register.sh", SESSION_REGISTER_HOOK, ["SessionStart", "UserPromptSubmit"]);
 }
 
-const THREAD_STATE_HOOK = `#!/bin/bash
-# Pinned thread-state reminder — ONE short nudge when a state has gone quiet.
-set -uo pipefail
-
-INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
-[ -z "$SESSION_ID" ] && exit 0
-
-DIR="$HOME/.codecast/thread-state"
-# No stamp = no pinned state. A session that never ran \`cast state\` is never
-# nudged about it — the reminder maintains what exists, it doesn't recruit.
-[ -f "$DIR/$SESSION_ID.json" ] || exit 0
-
-mkdir -p "$DIR/counters"
-COUNTER="$DIR/counters/$SESSION_ID"
-COUNT=0
-[ -f "$COUNTER" ] && COUNT=$(cat "$COUNTER" 2>/dev/null || echo 0)
-COUNT=$((COUNT + 1))
-echo "$COUNT" > "$COUNTER"
-
-# Fires on the crossing only, never after. \`cast state\` deletes the counter on
-# every write, so an agent that keeps its state current is reminded again later,
-# and one that ignores this is not nagged a second time.
-[ "$COUNT" -eq 10 ] || exit 0
-
-echo "<thread-state>Your pinned state is 10 turns old. Update it with cast state if it no longer says where this stands, or clear it.</thread-state>"
-`;
-
 function installThreadStateHook(): void {
-  installHookScript("thread-state.sh", THREAD_STATE_HOOK, ["UserPromptSubmit"]);
+  installHookScript("thread-state.sh", THREAD_STATE_HOOK, ["UserPromptSubmit", "Stop"]);
 }
 
 function installTaskPulseHook(): void {
@@ -9533,6 +9510,14 @@ program
       const enabled = (config as any)[s.enabledKey];
       const status = enabled === true ? fmt.success("enabled") : enabled === false ? fmt.muted("disabled") : fmt.muted("not set up");
 
+      // Team-gated snippets (chat, calls) are only offered while some team of
+      // yours has the feature on — the daemon records that on each heartbeat.
+      // Unknown (no daemon yet) still offers; only a known "off" skips.
+      if (teamFeaturesForSnippet(s.slug).length > 0 && (config as any).snippet_availability?.[s.slug] === false) {
+        console.log(`\n  ${c.bold}${s.name}${c.reset} — ${fmt.muted("off for your teams; a team admin can turn it on under Settings → Team")}`);
+        continue;
+      }
+
       if (options.all) {
         const result = s.install(true);
         (config as any)[s.enabledKey] = true;
@@ -11807,6 +11792,7 @@ chat
     // A read may default: resolved here rather than server-side so the CLI and
     // the web app answer "which workspace" from the same canonical pointer.
     const ws = await readWorkspace(options.team);
+    await requireWorkspaceFeature(ws, "chat");
     const result = await cliPost("/cli/chat/channels", workspaceArgs(ws));
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
@@ -12003,6 +11989,7 @@ chat
     // Scoped by the same canonical pointer as every other read, rather than by
     // whatever the server happens to think your active team is.
     const ws = await readWorkspace(options.team);
+    await requireWorkspaceFeature(ws, "chat");
     const result = await cliPost("/cli/chat/search", {
       q: query,
       channel_id: options.channel,
@@ -12609,6 +12596,20 @@ async function readWorkspace(explicitTeam?: string): Promise<Workspace> {
   return resolveWorkspaceForRead(await workspaceRoster(), explicitTeam);
 }
 
+/** Team features (chat, calls) are opt-in per team. A command for an off
+ *  feature stops here with the same words the server would use, instead of
+ *  answering with an empty list that reads as "nothing happened yet". */
+async function requireWorkspaceFeature(ws: Workspace, key: TeamFeatureKey): Promise<void> {
+  if (workspaceHasFeature(await workspaceRoster(), ws, key)) return;
+  const name = TEAM_FEATURES.find((f) => f.key === key)?.name ?? key;
+  console.error(
+    ws.kind === "team"
+      ? `${name} is not enabled for this team. A team admin can turn it on under Settings → Team.`
+      : `${name} is a team feature — pick a team with --team <name|id> (cast chat channels --team lists yours).`,
+  );
+  process.exit(1);
+}
+
 /** Workspace for a WRITE. Exits with the list of real teams rather than
  *  letting the server guess where a created row belongs. */
 async function writeWorkspace(
@@ -12781,6 +12782,25 @@ const STATUS_ICONS: Record<string, string> = {
   done: "●",
   dropped: "✕",
 };
+
+// Machine-readable output goes to fd 1 synchronously. Something in the CLI's
+// startup leaves fd 1 non-blocking, so a large payload written through
+// console.log into a pipe is queued and cut at a 64K boundary when the process
+// ends before the pipe drains (seen on `cast task ready --json`). Writing here
+// in a loop that waits out EAGAIN cannot end early.
+function printJson(value: unknown): void {
+  const buf = Buffer.from(JSON.stringify(value, null, 2) + "\n");
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  let off = 0;
+  while (off < buf.length) {
+    try {
+      off += fs.writeSync(1, buf, off, buf.length - off);
+    } catch (e: any) {
+      if (e?.code !== "EAGAIN") throw e;
+      Atomics.wait(pause, 0, 0, 2);
+    }
+  }
+}
 
 function formatWorkItem(t: any, verbose = false, indent = 0): string {
   const icon = STATUS_ICONS[t.status] || "?";
@@ -13116,7 +13136,10 @@ work
   .option("-n, --limit <n>", "Max results", "50")
   .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
   .option("--assignee <name>", "Filter by assignee (username, 'me', or user ID)")
+  .option("--label <label>", "Filter by label (case-insensitive)")
+  .option("--plan <plan_id>", "Filter by plan")
   .option("-v, --verbose", "Show descriptions")
+  .option("--json", "Output as JSON (an array of task rows; every field, no colours)")
   .action(async (options: any) => {
     const body: Record<string, any> = { limit: parseInt(options.limit) };
     if (options.project) body.project_id = await resolveProjectId(options.project);
@@ -13126,9 +13149,15 @@ work
     if (options.derived || options.all) body.include_derived = true;
     if (options.query) body.query = options.query;
     if (options.assignee) body.assignee = options.assignee;
+    if (options.label) body.label = options.label;
+    if (options.plan) body.plan_id = options.plan;
     body.project_path = getRealCwd();
 
     const tasks = await cliPost("/cli/work/list", body);
+    if (options.json) {
+      printJson(Array.isArray(tasks) ? tasks : []);
+      return;
+    }
     if (!Array.isArray(tasks) || tasks.length === 0) {
       console.log(fmt.muted("No tasks found."));
       return;
@@ -13145,77 +13174,98 @@ work
 
 work
   .command("show")
-  .description("Show task details")
-  .argument("<short_id>", "Task short ID (e.g., ct-a1b2)")
+  .description("Show task details (several ids at once is fine)")
+  .argument("<short_ids...>", "Task short IDs (e.g., ct-a1b2 ct-c3d4)")
   .option("-c, --comments", "Show all comments")
-  .action(async (shortId: string, options: any) => {
-    const result = await cliPost("/cli/work/get", { short_id: shortId });
-    if (!result) {
-      console.error("Task not found");
-      process.exit(1);
-    }
-    const t = result;
-    const icon = STATUS_ICONS[t.status] || "?";
-    const pcolor = PRIORITY_COLORS[t.priority] || "";
-    const pri = pcolor ? `${pcolor}${t.priority}${c.reset}` : t.priority;
-    console.log(`\n  ${icon} ${c.bold}${t.title}${c.reset}`);
-    console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status} | ${pri} | ${t.task_type}`);
-    if (t.parent) {
-      console.log(`  ${c.dim}Subtask of ${c.reset}${c.cyan}${t.parent.short_id}${c.reset} ${c.dim}${t.parent.title}${c.reset}`);
-    }
-    if (t.execution_status && t.execution_status !== t.status) {
-      console.log(`  ${c.dim}Execution: ${t.execution_status}${c.reset}`);
-    }
-    if (t.project_id) {
-      const proj = await tryCliPost("/cli/projects/get", { id: t.project_id });
-      const projLabel = proj?.title ? `${proj.title} ${c.dim}(${t.project_id})${c.reset}` : t.project_id;
-      console.log(`  ${c.dim}Project:${c.reset} ${projLabel}`);
-    }
-    if (t.description) console.log(`\n  ${t.description}`);
-    if (t.acceptance_criteria?.length) {
-      console.log(`\n  ${c.bold}Acceptance Criteria${c.reset}`);
-      for (const ac of t.acceptance_criteria) {
-        console.log(`  ${c.dim}-${c.reset} ${ac}`);
+  .option("--json", "Output as JSON (one object for a single id, an array for several)")
+  .action(async (shortIds: string[], options: any) => {
+    const rows: any[] = [];
+    for (const shortId of shortIds) {
+      const result = await cliPost("/cli/work/get", { short_id: shortId });
+      if (!result) {
+        console.error(`Task not found: ${shortId}`);
+        process.exit(1);
       }
+      rows.push(result);
     }
-    if (t.steps?.length) {
-      console.log(`\n  ${c.bold}Steps${c.reset}`);
-      for (const s of t.steps) {
-        const check = s.done ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
-        console.log(`  ${check} ${s.title}`);
-      }
+    if (options.json) {
+      printJson(rows.length === 1 ? rows[0] : rows);
+      return;
     }
-    if (t.subtasks?.length) {
-      console.log(`\n  ${c.bold}Subtasks (${t.subtasks.length})${c.reset}`);
-      for (const st of t.subtasks) {
-        const sIcon = STATUS_ICONS[st.status] || "?";
-        console.log(`  ${sIcon} ${c.cyan}${st.short_id}${c.reset} ${st.title}`);
-      }
-    }
-    if (t.labels?.length) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
-    if (t.assignee) console.log(`  ${c.dim}Assignee: ${t.assignee}${c.reset}`);
-    if (t.blocked_by?.length) console.log(`  ${c.red}Blocked by: ${t.blocked_by.join(", ")}${c.reset}`);
-    if (t.blocks?.length) console.log(`  ${c.dim}Blocks: ${t.blocks.join(", ")}${c.reset}`);
-    if (t.execution_concerns) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
-    if (t.comments?.length) {
-      const COMMENT_TYPE_ICONS: Record<string, string> = {
-        progress: `${c.blue}↳${c.reset}`,
-        blocker: `${c.red}!${c.reset}`,
-        review: `${c.magenta}◇${c.reset}`,
-        note: `${c.dim}·${c.reset}`,
-      };
-      const showAll = options.comments;
-      const comments = showAll ? t.comments : t.comments.slice(-5);
-      const truncated = !showAll && t.comments.length > 5;
-      console.log(`\n  ${c.bold}Comments (${t.comments.length})${c.reset}${truncated ? ` ${c.dim}showing last 5, use -c for all${c.reset}` : ""}`);
-      for (const cm of comments) {
-        const ago = formatMs(Date.now() - cm.created_at);
-        const typeIcon = COMMENT_TYPE_ICONS[cm.comment_type] || COMMENT_TYPE_ICONS.note;
-        console.log(`  ${typeIcon} ${c.dim}${cm.author} (${ago} ago):${c.reset} ${cm.text}`);
-      }
-    }
-    console.log();
+    for (const t of rows) await printTaskShow(t, options);
   });
+
+async function printTaskShow(t: any, options: any) {
+  const icon = STATUS_ICONS[t.status] || "?";
+  const pcolor = PRIORITY_COLORS[t.priority] || "";
+  const pri = pcolor ? `${pcolor}${t.priority}${c.reset}` : t.priority;
+  console.log(`\n  ${icon} ${c.bold}${t.title}${c.reset}`);
+  console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status} | ${pri} | ${t.task_type}`);
+  if (t.parent) {
+    console.log(`  ${c.dim}Subtask of ${c.reset}${c.cyan}${t.parent.short_id}${c.reset} ${c.dim}${t.parent.title}${c.reset}`);
+  }
+  if (t.execution_status && t.execution_status !== t.status) {
+    console.log(`  ${c.dim}Execution: ${t.execution_status}${c.reset}`);
+  }
+  if (t.project_id) {
+    const proj = await tryCliPost("/cli/projects/get", { id: t.project_id });
+    const projLabel = proj?.title ? `${proj.title} ${c.dim}(${t.project_id})${c.reset}` : t.project_id;
+    console.log(`  ${c.dim}Project:${c.reset} ${projLabel}`);
+  }
+  if (t.plan) console.log(`  ${c.dim}Plan:${c.reset} ${c.cyan}${t.plan.short_id}${c.reset} ${c.dim}${t.plan.title}${c.reset}`);
+  if (t.description) console.log(`\n  ${t.description}`);
+  if (t.acceptance_criteria?.length) {
+    console.log(`\n  ${c.bold}Acceptance Criteria${c.reset}`);
+    for (const ac of t.acceptance_criteria) {
+      console.log(`  ${c.dim}-${c.reset} ${ac}`);
+    }
+  }
+  if (t.steps?.length) {
+    console.log(`\n  ${c.bold}Steps${c.reset}`);
+    for (const s of t.steps) {
+      const check = s.done ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
+      console.log(`  ${check} ${s.title}`);
+    }
+  }
+  if (t.subtasks?.length) {
+    console.log(`\n  ${c.bold}Subtasks (${t.subtasks.length})${c.reset}`);
+    for (const st of t.subtasks) {
+      const sIcon = STATUS_ICONS[st.status] || "?";
+      console.log(`  ${sIcon} ${c.cyan}${st.short_id}${c.reset} ${st.title}`);
+    }
+  }
+  if (t.labels?.length) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
+  if (t.assignee) console.log(`  ${c.dim}Assignee: ${t.assignee_name || t.assignee}${c.reset}`);
+  if (t.blocked_by?.length) console.log(`  ${c.red}Blocked by: ${t.blocked_by.join(", ")}${c.reset}`);
+  if (t.blocks?.length) console.log(`  ${c.dim}Blocks: ${t.blocks.join(", ")}${c.reset}`);
+  if (t.execution_concerns) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
+  // Linked sessions by short id — the handle `cast read` / `cast diff` take —
+  // so a task's working session is one line away, not a regex over comments.
+  if (t.sessions?.length) {
+    console.log(`\n  ${c.bold}Sessions (${t.sessions.length})${c.reset} ${c.dim}newest last · cast read <id>${c.reset}`);
+    for (const sess of t.sessions) {
+      console.log(`  ${c.cyan}${sess.short_id}${c.reset}  ${sess.title || c.dim + "(untitled)" + c.reset}`);
+    }
+  }
+  if (t.comments?.length) {
+    const COMMENT_TYPE_ICONS: Record<string, string> = {
+      progress: `${c.blue}↳${c.reset}`,
+      blocker: `${c.red}!${c.reset}`,
+      review: `${c.magenta}◇${c.reset}`,
+      note: `${c.dim}·${c.reset}`,
+    };
+    const showAll = options.comments;
+    const comments = showAll ? t.comments : t.comments.slice(-5);
+    const truncated = !showAll && t.comments.length > 5;
+    console.log(`\n  ${c.bold}Comments (${t.comments.length})${c.reset}${truncated ? ` ${c.dim}showing last 5, use -c for all${c.reset}` : ""}`);
+    for (const cm of comments) {
+      const ago = formatMs(Date.now() - cm.created_at);
+      const typeIcon = COMMENT_TYPE_ICONS[cm.comment_type] || COMMENT_TYPE_ICONS.note;
+      console.log(`  ${typeIcon} ${c.dim}${cm.author} (${ago} ago):${c.reset} ${cm.text}`);
+    }
+  }
+  console.log();
+}
 
 work
   .command("start")
@@ -13390,6 +13440,7 @@ work
   .description("Get full context for a task (for agents)")
   .argument("[short_id]", "Task short ID (omit with --current)")
   .option("--current", "Use the task bound to the current session")
+  .option("--json", "Output as JSON (task, parent, subtasks, comments, sessions, project, relatedDocs)")
   .action(async (shortId: string | undefined, options: any) => {
     if (options.current || !shortId) {
       const pulse = readTaskPulse();
@@ -13404,9 +13455,15 @@ work
       console.error("Task not found");
       process.exit(1);
     }
+    if (options.json) {
+      printJson(result);
+      return;
+    }
     const t = result.task;
     console.log(`\n# ${t.title}`);
     console.log(`ID: ${t.short_id} | Status: ${t.status} | Priority: ${t.priority} | Type: ${t.task_type}`);
+    if (t.assignee) console.log(`Assignee: ${result.assignee_name || t.assignee}`);
+    if (t.labels?.length) console.log(`Labels: ${t.labels.join(", ")}`);
     if (result.parent) {
       console.log(`Subtask of: ${result.parent.short_id} ${result.parent.title} [${result.parent.status}]`);
     }
@@ -13440,7 +13497,16 @@ work
         if (d.content) console.log(`  ${d.content.slice(0, 200)}`);
       }
     }
-    if (result.sessionSummaries?.length) {
+    // Linked sessions by short id (newest last), each with its summary when
+    // one exists. Older backends only send `sessionSummaries`.
+    if (result.sessions?.length) {
+      console.log(`\n## Sessions (newest last · cast read <id>)`);
+      for (const sess of result.sessions) {
+        const title = sess.title ? ` ${sess.title}` : "";
+        const summary = sess.summary ? ` — ${sess.summary}` : "";
+        console.log(`- ${sess.short_id}:${title}${summary}`);
+      }
+    } else if (result.sessionSummaries?.length) {
       console.log(`\n## Session History`);
       for (const s of result.sessionSummaries) {
         console.log(`- ${s}`);
@@ -13456,6 +13522,7 @@ work
   .option("--plan <plan_id>", "Filter by plan")
   .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
   .option("--subtasks", "Include open subtasks of in-progress parents (rescue an abandoned tree)")
+  .option("--json", "Output as JSON (an array of task rows)")
   .action(async (options: any) => {
     const body: Record<string, any> = { ready: true };
     if (options.project) body.project_id = await resolveProjectId(options.project);
@@ -13464,6 +13531,10 @@ work
     if (options.subtasks) body.include_subtasks = true;
     body.project_path = getRealCwd();
     const tasks = await cliPost("/cli/work/list", body);
+    if (options.json) {
+      printJson(Array.isArray(tasks) ? tasks : []);
+      return;
+    }
     if (!Array.isArray(tasks) || tasks.length === 0) {
       console.log(fmt.muted("No ready tasks."));
       return;

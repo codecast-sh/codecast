@@ -1021,19 +1021,31 @@ async function assigneeNamesFor(ctx: any, assignees: (string | undefined)[]): Pr
 }
 
 // The sessions linked to a task, named the way every other CLI surface names
-// a session (short id + title), newest last, limited to what the caller can
-// see. `cast task show/context` print these so an agent that wants a task's
-// working session reads it off the task instead of regexing `jx…` ids out of
-// comment text.
-async function linkedSessionsFor(
+// a session (short id + title), oldest first, limited to what the caller can
+// see. Two sources, unioned: the task's own `conversation_ids` (sessions that
+// claimed it) and the `conversation_id` on each comment (sessions that only
+// reported on it — a task filed from the web and worked by agents has an
+// empty `conversation_ids` and a comment trail full of sessions). `cast task
+// show/context` print these so an agent that wants a task's working session
+// reads it off the task instead of regexing `jx…` ids out of comment text.
+export async function linkedSessionsFor(
   ctx: any,
   userId: Id<"users">,
   task: any,
+  comments: { conversation_id?: Id<"conversations"> | null; created_at: number }[],
   limit: number,
 ): Promise<{ short_id: string; title: string | null; conversation_id: Id<"conversations"> }[]> {
+  const ordered = [
+    ...(task.conversation_ids || []),
+    ...[...comments]
+      .sort((a, b) => a.created_at - b.created_at)
+      .map((cm) => cm.conversation_id)
+      .filter((id): id is Id<"conversations"> => !!id),
+  ];
+  const convIds = [...new Set(ordered.map(String))].slice(-limit);
   const out: { short_id: string; title: string | null; conversation_id: Id<"conversations"> }[] = [];
-  for (const convId of (task.conversation_ids || []).slice(-limit)) {
-    const conversation = await ctx.db.get(convId);
+  for (const convId of convIds) {
+    const conversation = await ctx.db.get(convId as Id<"conversations">);
     if (
       !conversation
       || !workspacesMatch(workspaceForConversation(conversation), workspaceForResource(task))
@@ -1264,10 +1276,14 @@ export const get = query({
     const children = allChildren.filter((c: any) => isActiveTask(c));
 
     const assigneeNames = await assigneeNamesFor(ctx, [task.assignee]);
+    const plan = task.plan_id ? await ctx.db.get(task.plan_id) : null;
     return {
       ...task,
       assignee_name: task.assignee ? (assigneeNames[task.assignee] || task.assignee) : undefined,
-      sessions: await linkedSessionsFor(ctx, auth.userId, task, 10),
+      plan: plan && (await canAccessPlan(ctx, auth.userId, plan))
+        ? { short_id: plan.short_id, title: plan.title, status: plan.status }
+        : null,
+      sessions: await linkedSessionsFor(ctx, auth.userId, task, comments, 10),
       comments,
       parent: parent ? { short_id: parent.short_id, title: parent.title, status: parent.status } : null,
       subtask_progress: subtaskProgressOf(children as any[]),
@@ -1759,7 +1775,7 @@ export const context = query({
     // one exists. `sessionSummaries` stays as the flat list of summaries for
     // callers that predate `sessions`.
     const sessions: { short_id: string; title: string | null; summary: string | null }[] = [];
-    for (const s of await linkedSessionsFor(ctx, auth.userId, task, 5)) {
+    for (const s of await linkedSessionsFor(ctx, auth.userId, task, comments, 5)) {
       const insight = await ctx.db
         .query("session_insights")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", s.conversation_id))
