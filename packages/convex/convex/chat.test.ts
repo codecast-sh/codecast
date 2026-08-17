@@ -433,6 +433,9 @@ describe("the notification fan-out", () => {
     const recipients = ctx._emitted.map((e: any) => e.args.direct_recipient_id);
     expect(recipients).toEqual([BOB]);
     expect(ctx._emitted[0].args.event_type).toBe("chat_mention");
+    // Banner parts: where + the words alone (the reply is IN a thread).
+    expect(ctx._emitted[0].args.push_subtitle).toBe("thread · #general");
+    expect(ctx._emitted[0].args.push_body).toBe("answer @bob");
   });
 
   test("a tombstoned reply drops its author from the thread's audience", async () => {
@@ -1827,11 +1830,16 @@ describe("direct messages", () => {
     await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "plain line, no mention" });
     expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_dm"]);
     expect(ctx._emitted[0].args.direct_recipient_id).toBe(BOB);
+    // The phone banner: no subtitle on a 1:1 (the title names the person),
+    // and the body is the words alone — never "Alice: …" under Alice's name.
+    expect(ctx._emitted[0].args.push_subtitle).toBeUndefined();
+    expect(ctx._emitted[0].args.push_body).toBe("plain line, no mention");
 
     // A mention outranks: still exactly one notification.
     ctx._emitted.length = 0;
     await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "hey @bob" });
     expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_mention"]);
+    expect(ctx._emitted[0].args.push_body).toBe("hey @bob");
 
     // The rail counts every unread DM line as addressed.
     const rail = await call(listChannels, as(ctx, BOB), { team_id: TEAM });

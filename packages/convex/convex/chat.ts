@@ -27,6 +27,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { isTeamAdmin, isTeamMember } from "./privacy";
+import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
 import { dmKeyFor } from "@codecast/shared/chat";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 // `userCanAccessAnchor` is the WAKE permission (any member of a team anchor's
@@ -180,6 +181,9 @@ async function canAccessChannel(
 ): Promise<boolean> {
   if (!channel) return false;
   if (!(await isTeamMember(ctx as any, userId, channel.team_id))) return false;
+  // Chat is a per-team opt-in: a team that turned it off (or never turned it
+  // on) has no readable channels, member or not.
+  if (!(await teamHasFeature(ctx as any, channel.team_id, "chat"))) return false;
   if (isRestricted(channel)) return await isChannelMember(ctx, channel._id, userId);
   return true;
 }
@@ -224,6 +228,7 @@ async function resolveTeamMembership(
   if (!(await isTeamMember(ctx as any, userId, teamId))) {
     chatFail("FORBIDDEN", "Not a member of that team");
   }
+  await requireTeamFeature(ctx as any, teamId, "chat", (m) => chatFail("FORBIDDEN", m));
   return teamId;
 }
 
@@ -364,6 +369,11 @@ async function notifyChat(
     threadRootId?: Id<"chat_messages">;
     recipientId: Id<"users">;
     message: string;
+    // The phone banner's parts. `message` stays the bell's full sentence;
+    // the banner reads like a messaging app — title (actor) is added by the
+    // router, subtitle says where, body is the words alone.
+    pushSubtitle?: string;
+    pushBody?: string;
   },
 ): Promise<void> {
   if (opts.recipientId.toString() === opts.actorUserId.toString()) return;
@@ -394,6 +404,8 @@ async function notifyChat(
     chat_message_id: opts.messageId,
     chat_thread_root_id: opts.threadRootId,
     direct_recipient_id: opts.recipientId,
+    push_subtitle: opts.pushSubtitle,
+    push_body: opts.pushBody,
   });
 }
 
@@ -1068,6 +1080,8 @@ export const createChannel = mutation({
             channel,
             recipientId: memberId,
             message: `${actorName} added you to #${name}`,
+            pushSubtitle: `#${name}`,
+            pushBody: "added you to this channel",
           });
         }
       }
@@ -1230,6 +1244,8 @@ export const addChannelMembers = mutation({
         channel,
         recipientId: id,
         message: `${actorName} added you to #${channel.name}`,
+        pushSubtitle: `#${channel.name}`,
+        pushBody: "added you to this channel",
       });
     }
     // Membership changed shape — bump the channel so every member's client
@@ -1755,6 +1771,14 @@ export const sendMessage = mutation({
     // makes the banner read as if someone else sent it.
     const actorName = oneLine(displayName(author), 60);
     const preview = plainPreview(content);
+    // The banner's "where" line. A 1:1 DM gets none — the title already names
+    // the person, and "Direct message" under their name is noise.
+    const inThread = !!root;
+    const channelWhere = inThread ? `thread · #${channel.name}` : `#${channel.name}`;
+    // The words alone; an image-only message says what it carries.
+    const pushBody = preview || (attachments.length > 0
+      ? (attachments.length === 1 ? "📷 Photo" : `📷 ${attachments.length} photos`)
+      : preview);
     const notified = new Set<string>([userId.toString()]);
 
     for (const recipientId of mentions) {
@@ -1768,6 +1792,8 @@ export const sendMessage = mutation({
         threadRootId: root?._id,
         recipientId,
         message: `${actorName} mentioned you in #${channel.name}: ${preview}`,
+        pushSubtitle: channelWhere,
+        pushBody,
       });
     }
 
@@ -1784,6 +1810,8 @@ export const sendMessage = mutation({
           threadRootId: root._id,
           recipientId,
           message: `${actorName} replied in a thread in #${channel.name}: ${preview}`,
+          pushSubtitle: channelWhere,
+          pushBody,
         });
       }
     }
@@ -1802,6 +1830,8 @@ export const sendMessage = mutation({
           messageId,
           recipientId,
           message: `${actorName} posted to everyone here in #${channel.name}: ${preview}`,
+          pushSubtitle: `#${channel.name} · @here`,
+          pushBody,
         });
       }
     }
@@ -1810,7 +1840,11 @@ export const sendMessage = mutation({
     // exception to "plain chatter never notifies". Anyone already reached above
     // (a mention outranks) is skipped, so one message is still one notification.
     if (channel.kind === "dm") {
-      for (const recipientId of await channelMemberIds(ctx, channel._id)) {
+      const dmMembers = await channelMemberIds(ctx, channel._id);
+      const dmWhere = inThread
+        ? "thread"
+        : dmMembers.length > 2 ? "Group message" : undefined;
+      for (const recipientId of dmMembers) {
         if (notified.has(recipientId.toString())) continue;
         notified.add(recipientId.toString());
         await notifyChat(ctx, {
@@ -1822,6 +1856,8 @@ export const sendMessage = mutation({
           threadRootId: root?._id,
           recipientId,
           message: `${actorName}: ${preview}`,
+          pushSubtitle: dmWhere,
+          pushBody,
         });
       }
     }
@@ -2575,6 +2611,8 @@ export const replyAsAnchor = mutation({
           messageId: message._id,
           recipientId,
           message: `${anchorName} answered in #${channel.name}: ${preview}`,
+          pushSubtitle: `thread · #${channel.name}`,
+          pushBody: preview,
         });
       }
     }
