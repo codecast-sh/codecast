@@ -19,8 +19,8 @@ import {
   waitForStraysGone, writeState, type InstanceState,
 } from "./instance.js";
 import {
-  chromeUserDataRoot, clonePath, cloneProfile, detachSharedIdentity, formatBytes, identityDetached, listRealProfiles,
-  type ChromeChannel, type DetachReport,
+  chromeUserDataRoot, clonePath, cloneProfile, formatBytes, googleSessionSeparated, listRealProfiles, separateGoogleSession,
+  type ChromeChannel, type SeparateReport,
 } from "./profile.js";
 import { sharesGoogleSession } from "./credentials.js";
 import { startRemoteBrowser } from "./remote.js";
@@ -54,18 +54,15 @@ function die(msg: string, hint?: string): never {
   process.exit(1);
 }
 
-/** One line on what the clone no longer shares with the human's Chrome.
+/** One line on the clone's Google session being its own, not the human's.
  *  `kept` counts own-login cookies carried across a resync; -1 says the
  *  clone's existing Google login was its own and was left in place. */
-function reportDetach(d: DetachReport, kept: number, quiet?: boolean): void {
+function reportSeparation(d: SeparateReport, kept: number, quiet?: boolean): void {
   if (!quiet) {
-    const parts = [
-      d.cookies !== null ? `${d.cookies} Google cookie${d.cookies === 1 ? "" : "s"}` : null,
-      d.tokens !== null ? `${d.tokens} Chrome account token${d.tokens === 1 ? "" : "s"}` : null,
-    ].filter(Boolean);
-    const keptNote = kept > 0 ? ` — kept the agent browser's own Google login (${kept} cookies)` : kept < 0 ? " — its Google login was its own and stays" : "";
-    console.log(`${OK} detached from your Chrome account (${parts.join(", ") || "identity only"})${keptNote}`);
-    if (!kept) console.log(fmt.muted("  Google is signed out here on purpose; `cast browser login <url>` signs it in once"));
+    const dropped = d.cookies !== null ? `dropped ${d.cookies} shared Google cookie${d.cookies === 1 ? "" : "s"}` : "no shared cookies";
+    const keptNote = kept > 0 ? `; kept the agent browser's own Google login (${kept} cookies)` : kept < 0 ? "; its Google login was its own and stays" : "";
+    console.log(`${OK} Google session is the agent browser's own (${dropped}${keptNote})`);
+    if (!kept) console.log(fmt.muted("  Chrome signs it in from your account on launch; if a Google page still lands on sign-in, `cast browser login`"));
   }
   for (const n of d.notes) console.log(`${WARN} ${n}`);
 }
@@ -124,7 +121,7 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
         if (!o.quiet) console.log(`  cloning ${fmt.highlight(known?.name ?? pick)}${known?.email ? fmt.muted(` <${known.email}>`) : ""}…`);
         const res = cloneProfile({ sourceDir: pick, destRoot: userDataDir, channel: o.channel });
         if (!o.quiet) console.log(`${OK} cloned ${res.files} items, ${formatBytes(res.bytes)}`);
-        reportDetach(res.detach, res.ownLoginsKept, o.quiet);
+        reportSeparation(res.separate, res.ownLoginsKept, o.quiet);
         if (!res.cookiesFound) {
           console.log(
             `${WARN} no cookie store was copied — the browser will start logged out.\n` +
@@ -147,13 +144,13 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
       await waitForStraysGone(userDataDir);
     }
 
-    // A clone made before the rule still holds copies of the human's Google
-    // session and Chrome account. Strip them once, now that nothing has the
-    // profile open; the stamp keeps this from touching a later, own login.
-    if (sourceProfile && !identityDetached(userDataDir)) {
+    // A clone made before the rule may still hold copies of the human's Google
+    // session. Drop them once, now that nothing has the profile open; the
+    // stamp keeps this from touching a later, own login.
+    if (sourceProfile && !googleSessionSeparated(userDataDir)) {
       const realRoot = chromeUserDataRoot(o.channel);
       const shared = !realRoot || sharesGoogleSession(realRoot, userDataDir, sourceProfile);
-      reportDetach(detachSharedIdentity(userDataDir, { cookies: shared }), shared ? 0 : -1, o.quiet);
+      reportSeparation(separateGoogleSession(userDataDir, { dropCookies: shared }), shared ? 0 : -1, o.quiet);
     }
 
     const [w, h] = o.size.split("x").map((n) => parseInt(n, 10));

@@ -17,12 +17,14 @@
 // The pointer is fetched once per process (short TTL, so a long-lived daemon
 // notices a team switch) and shared by every subcommand.
 
+import { teamFeatureEnabled, type TeamFeatureKey, type TeamFeatures } from "@codecast/shared/contracts";
+
 export type Workspace =
   | { kind: "team"; teamId: string; name?: string }
   | { kind: "personal" };
 
 export type WorkspaceRoster = {
-  teams: Array<{ _id: string; name: string; role?: string }>;
+  teams: Array<{ _id: string; name: string; role?: string; features?: TeamFeatures }>;
   activeTeamId: string | null;
   userId?: string;
 };
@@ -52,7 +54,7 @@ export async function loadWorkspaceRoster(
   const raw = await fetchRoster();
   const roster: WorkspaceRoster = {
     teams: (raw?.teams ?? []).filter(Boolean).map((t: any) => ({
-      _id: String(t._id), name: String(t.name ?? ""), role: t.role,
+      _id: String(t._id), name: String(t.name ?? ""), role: t.role, features: t.features,
     })),
     activeTeamId: raw?.active_team_id ? String(raw.active_team_id) : null,
     userId: raw?.user_id ? String(raw.user_id) : undefined,
@@ -153,4 +155,14 @@ export function workspaceArgs(ws: Workspace): { team_id?: string } {
 /** How to name the resolved workspace in output. */
 export function workspaceLabel(ws: Workspace): string {
   return ws.kind === "team" ? (ws.name || ws.teamId) : "personal";
+}
+
+/**
+ * Is `key` on for the workspace's team? Personal = off (team features have
+ * no meaning there). Unknown team in the roster = off, never everything.
+ */
+export function workspaceHasFeature(roster: WorkspaceRoster, ws: Workspace, key: TeamFeatureKey): boolean {
+  if (ws.kind !== "team") return false;
+  const team = roster.teams.find((t) => t._id === ws.teamId);
+  return teamFeatureEnabled(team, key);
 }
