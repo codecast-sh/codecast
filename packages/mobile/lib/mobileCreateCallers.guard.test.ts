@@ -154,8 +154,8 @@ describe("mobile new-session launch options", () => {
 });
 
 describe("mobile principal outbox binding", () => {
-  test("binds verified-principal storage and immediately replays it", () => {
-    expect(authSource).toContain("openPrincipalDispatchOutbox(currentUserId)");
+  test("binds trusted-principal storage and immediately replays it", () => {
+    expect(authSource).toContain("openPrincipalDispatchOutbox(principalId)");
     expect(authSource).toContain(
       "store._setOutbox(outbox.enqueue, outbox.remove, outbox.load)",
     );
@@ -167,17 +167,27 @@ describe("mobile principal outbox binding", () => {
     expect(authSource).toContain("store._drainOutbox()");
   });
 
-  test("keeps dispatch authorization and writable children closed until storage opens", () => {
-    expect(authSource).toContain(
-      "outboxReadySubject === visibleSubject",
-    );
-    expect(authSource).toContain(
-      "durableSubject ? dispatchGeneration.current : null",
-    );
-    expect(authSource).toContain(
-      "isAuthenticated && !durableSubject",
-    );
-    expect(authSource).toContain(": children}");
+  // Local-first boot: rendering gates on the LOCAL token + persisted anchor
+  // (authTrust), never on server-confirmed auth — the server round-trip only
+  // verifies and revokes. The anchor is written strictly inside the verified
+  // branch, so a token the server never confirmed can't earn next-boot trust.
+  test("render trust is local; the anchor persists only after verification", () => {
+    expect(authSource).toContain("localBootTrust({");
+    expect(authSource).toContain("authRenderDecision({");
+    const verified = authSource.indexOf("setVerifiedSubject(verified ? accessIdentity.subject : null)");
+    const persist = authSource.indexOf("SecureStore.setItemAsync(LAST_PRINCIPAL_KEY", verified);
+    const guard = authSource.indexOf("if (verified) {", verified);
+    expect(verified).toBeGreaterThanOrEqual(0);
+    expect(guard).toBeGreaterThan(verified);
+    expect(persist).toBeGreaterThan(guard);
+  });
+
+  // The store clears on a PRINCIPAL change only. Clearing on every subject
+  // change wiped the just-hydrated SQLite cache on each boot the moment
+  // verification landed — the bug that made the phone boot server-first.
+  test("memory clears on principal change, never on the boot subject transition", () => {
+    expect(authSource).toContain("shouldClearMemoryFor(memoryPrincipal.current, trustedPrincipalId)");
+    expect(authSource).not.toMatch(/lastTrustedSubject\.current !== trustedSubject\) \{\s*\n\s*clearProtectedInboxMemory/);
   });
 
   test("surfaces an outbox-open failure with an in-place retry while writes stay gated", () => {
@@ -185,9 +195,7 @@ describe("mobile principal outbox binding", () => {
     expect(authSource).toContain(
       "setOutboxOpenAttempt((attempt) => attempt + 1)",
     );
-    expect(authSource).toContain(
-      "outboxFailure?.subject === visibleSubject",
-    );
+    expect(authSource).toContain("outboxFailureSubject: outboxFailure?.subject ?? null");
     expect(authSource).toContain(
       "Codecast kept writing disabled so no work can be lost.",
     );
@@ -195,11 +203,11 @@ describe("mobile principal outbox binding", () => {
 
   test("closes the old enqueue surface during the auth transition render", () => {
     const transition = authSource.indexOf(
-      "if (outboxSubject.current !== visibleSubject)",
+      "if (outboxSubject.current !== trustedSubject)",
     );
     const clear = authSource.indexOf("_setOutbox(null, null, null)", transition);
     const open = authSource.indexOf(
-      "openPrincipalDispatchOutbox(currentUserId)",
+      "openPrincipalDispatchOutbox(principalId)",
     );
 
     expect(transition).toBeGreaterThanOrEqual(0);

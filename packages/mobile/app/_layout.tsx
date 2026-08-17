@@ -1,3 +1,4 @@
+import '@/lib/polyfills';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
@@ -15,11 +16,15 @@ import { useQuery } from 'convex/react';
 
 import { Theme } from '@/constants/Theme';
 import { Mono } from '@/constants/fonts';
-import { convex } from '@/lib/convex';
+import { convex, CONVEX_URL } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
+import { mobileRouteForUrl } from '@/lib/linkRoutes';
 import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@/lib/analytics';
 import { api } from '@codecast/convex/convex/_generated/api';
+import { CallOverlay } from '@/components/calls/CallOverlay';
+import { startCallKitBridge, republishVoipToken } from '@/lib/calls/callKit';
+
 
 // Keychain failures must degrade to "signed out", never hang auth: a rejected
 // getItem propagates into @convex-dev/auth's boot read, which is fired as
@@ -45,6 +50,19 @@ const secureStorage = {
     } catch {}
   },
 };
+
+// Dev-only auth injection for simulator e2e harnesses (driven over the Hermes
+// inspector): writes a minted token pair into the SAME storage the auth
+// provider reads, using its exact key derivation (`<key>_<escaped CONVEX_URL>`).
+// Reload after calling; the provider boots signed in. Never bundled in release.
+if (__DEV__) {
+  const ns = CONVEX_URL.replace(/[^a-zA-Z0-9]/g, "");
+  (global as any).__devAuth = async (jwt: string, refresh: string) => {
+    await secureStorage.setItem(`__convexAuthJWT_${ns}`, jwt);
+    await secureStorage.setItem(`__convexAuthRefreshToken_${ns}`, refresh);
+    return "ok";
+  };
+}
 
 export {
   ErrorBoundary,
@@ -91,6 +109,13 @@ function RootLayout() {
   useEffect(() => {
     if (error) throw error;
   }, [error]);
+
+  // CallKit + PushKit bridge — mounts once, before any call surface. Safe on
+
+  // binaries without the native module (guarded require → no-op).
+
+  useEffect(() => { startCallKitBridge(); }, []);
+
 
   useEffect(() => {
     if (loaded) {
@@ -188,7 +213,12 @@ function RootLayoutNav() {
                   <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
                   <Stack.Screen name="doc/[id]" options={{ title: 'Doc' }} />
                   <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+                  <Stack.Screen
+                    name="call"
+                    options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'slide_from_bottom' }}
+                  />
                 </Stack>
+                <CallOverlay />
               </AuthGate>
             </ThemeProvider>
           </AuthProvider>
@@ -218,34 +248,6 @@ function AnalyticsIdentify() {
   return null;
 }
 
-function mapWebUrlToRoute(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname !== 'codecast.sh' && parsed.hostname !== 'www.codecast.sh') return null;
-    const path = parsed.pathname;
-    // Web /conversation/xxx -> mobile /session/xxx
-    const convMatch = path.match(/^\/conversation\/([a-z0-9]+)/);
-    if (convMatch) return `/session/${convMatch[1]}`;
-    // /share/xxx -> /session/xxx (share tokens resolve to conversations)
-    const shareMatch = path.match(/^\/share\/([a-zA-Z0-9]+)/);
-    if (shareMatch) return `/session/${shareMatch[1]}`;
-    // /tasks/xxx -> /task/xxx
-    const taskMatch = path.match(/^\/tasks?\/([a-z0-9-]+)/);
-    if (taskMatch) return `/task/${taskMatch[1]}`;
-    // /plans/xxx -> /plan/xxx
-    const planMatch = path.match(/^\/plans?\/([a-z0-9-]+)/);
-    if (planMatch) return `/plan/${planMatch[1]}`;
-    // /docs/xxx -> /doc/xxx
-    const docMatch = path.match(/^\/docs?\/([a-z0-9-]+)/);
-    if (docMatch) return `/doc/${docMatch[1]}`;
-    // /join/xxx -> handled by web, but open team tab
-    if (path.startsWith('/join/')) return '/(tabs)/team';
-    return null;
-  } catch (_e) {
-    return null;
-  }
-}
-
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
   const segments = useSegments();
@@ -253,12 +255,18 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
   usePushNotifications();
 
+  // The PushKit token often arrives before sign-in on a cold start; publish
+  // it once auth is up so invites route through APNs VoIP.
+  useEffect(() => {
+    if (isAuthenticated) republishVoipToken();
+  }, [isAuthenticated]);
+
   // Handle deep links from web URLs
   useEffect(() => {
     if (!isAuthenticated) return;
 
     function handleUrl(event: { url: string }) {
-      const route = mapWebUrlToRoute(event.url);
+      const route = mobileRouteForUrl(event.url);
       if (route) router.push(route as any);
     }
 
@@ -267,7 +275,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     // Handle initial URL (app opened via link)
     Linking.getInitialURL().then((url) => {
       if (url) {
-        const route = mapWebUrlToRoute(url);
+        const route = mobileRouteForUrl(url);
         if (route) {
           setTimeout(() => router.push(route as any), 500);
         }

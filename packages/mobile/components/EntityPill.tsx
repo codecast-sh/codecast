@@ -9,6 +9,7 @@ import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme } from '@/constants/Theme';
 import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, type EntityType } from '@codecast/shared/entities';
+import { mobileEntityRoute } from '@/lib/linkRoutes';
 
 const api = _api as any;
 
@@ -120,13 +121,9 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
     ? entity?._id ?? (looksConvex ? rawId : null)
     : entity?.short_id ?? rawId;
   // No trigger screen on mobile yet — that pill still names the trigger and
-  // reads inline, it just isn't tappable.
-  const route = !targetId ? null
-    : type === 'session' ? `/session/${targetId}`
-    : type === 'task' ? `/task/${targetId}`
-    : type === 'plan' ? `/plan/${targetId}`
-    : type === 'doc' ? `/doc/${targetId}`
-    : null;
+  // reads inline, it just isn't tappable. The type → screen table is shared
+  // with the link opener and the deep-link handler (lib/links).
+  const route = targetId ? mobileEntityRoute(type, targetId) : null;
 
   return (
     <RNText

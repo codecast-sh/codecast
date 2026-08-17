@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Linking,
   Modal,
   StyleSheet,
   TouchableOpacity,
@@ -11,6 +10,7 @@ import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { copyToClipboard } from '@/lib/clipboard';
+import { openLink } from '@/lib/links';
 import { Theme, CHROME_FONT_CAP } from '@/constants/Theme';
 import { DOMPURIFY_SOURCE } from '@/lib/vendor/dompurifySource';
 import { CONVEX_ORIGIN } from '@/lib/convex';
@@ -292,7 +292,7 @@ export function CastCanvas({ code }: { code: string }) {
   const onShouldStart = (req: any) => {
     const url: string = req?.url ?? '';
     if (url === 'about:blank' || url.startsWith('data:') || url.startsWith('about:')) return true;
-    if (/^https?:/i.test(url)) Linking.openURL(url).catch(() => {});
+    if (/^https?:/i.test(url)) void openLink(url);
     return false;
   };
 

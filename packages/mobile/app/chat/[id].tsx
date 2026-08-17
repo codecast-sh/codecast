@@ -1,40 +1,50 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   StyleSheet, FlatList, TouchableOpacity, View as RNView,
-  KeyboardAvoidingView, Platform, ActionSheetIOS, Clipboard,
+  KeyboardAvoidingView, Platform, AppState, Alert, Animated,
 } from 'react-native';
-import { Text as RNText, TextInput as ThemedTextInput } from '@/components/Themed';
+import { Text as RNText } from '@/components/Themed';
+import * as Haptics from 'expo-haptics';
+import { copyToClipboard } from '@/lib/clipboard';
+import { setChatFocus, clearChatFocus } from '@/lib/chatFocus';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
+import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
-import { buildChatTimeline } from '@codecast/shared/chat';
-import { MessageRow, DayDivider, NewDivider, type MobileChatMessage } from '@/components/chat/MessageRow';
-import { dmOtherIds } from '@codecast/shared/chat';
-import { MentionStrip, type MentionCandidate } from '@/components/chat/MentionStrip';
-import { memberHandle } from '@codecast/shared/chat';
+import { buildChatTimeline, dmOtherIds, memberHandle } from '@codecast/shared/chat';
+import { MessageRow, DayDivider, NewDivider, ChatAvatar, type MobileChatMessage } from '@/components/chat/MessageRow';
+import { type MentionCandidate } from '@/components/chat/MentionStrip';
+import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
+import { MessageActionsSheet, type MessageAction } from '@/components/chat/MessageActionsSheet';
+import { ImageViewer } from '@/components/chat/ImageViewer';
+import { TypingRow } from '@/components/chat/TypingRow';
+import type { ChatAttachmentArg } from '@/components/chat/chatUpload';
 
 // One channel. An inverted FlatList (the only scroll model that keeps a chat
 // pinned to the newest message on mobile without fighting the keyboard), the
 // shared timeline rules for grouping and the unread rule, and a composer with
 // optimistic sends: the row appears the moment you tap send, dims while in
 // flight, and turns loudly red if the server refuses it.
-
-const QUICK_REACTIONS = ['👍', '🎉', '👀', '❤️', '😂', '🚀'];
+//
+// READS ARE HONEST. The read mark advances only while this screen is focused
+// AND the app is foregrounded — the same presence rule the web page enforces.
+// A push that merely mounts this screen in the background must never eat the
+// unread state the person came to see.
 
 type PendingSend = {
   clientId: string;
   content: string;
   createdAt: number;
   threadRootId?: string;
+  attachments?: ChatAttachmentArg[];
   failed?: boolean;
 };
 
 export default function ChatChannelScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, m: targetParam } = useLocalSearchParams<{ id: string; m?: string }>();
   const channelId = id as Id<'chat_channels'>;
   const router = useRouter();
   const convex = useConvex();
@@ -86,7 +96,7 @@ export default function ChatChannelScreen() {
 
   // Head page stays live via the subscription; older pages accumulate below it.
   const head = useQuery(api.chat.listMessages, { channel_id: channelId, limit: 60 });
-// Names for authors the roster no longer carries (departed members): the
+  // Names for authors the roster no longer carries (departed members): the
   // query's own authors map, so old messages never degrade to "Teammate".
   const authorById = useMemo(() => {
     const map = new Map<string, any>();
@@ -99,9 +109,13 @@ export default function ChatChannelScreen() {
   const [loadingOlder, setLoadingOlder] = useState(false);
 
   const [pending, setPending] = useState<PendingSend[]>([]);
-  const [draft, setDraft] = useState('');
+  const [sheetTarget, setSheetTarget] = useState<MobileChatMessage | null>(null);
+  const [editing, setEditing] = useState<{ messageId: string; content: string } | null>(null);
+  const [viewerUri, setViewerUri] = useState<string | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
   const sendMessage = useMutation(api.chat.sendMessage);
+  const editMessage = useMutation(api.chat.editMessage);
   const markRead = useMutation(api.chat.markRead);
   const toggleReaction = useMutation(api.chat.toggleReaction);
   const stopAnchor = useMutation(api.chat.stopAnchorReply);
@@ -133,13 +147,37 @@ export default function ChatChannelScreen() {
     return () => clearInterval(timer);
   }, [anyThinking]);
 
-  // Reading the channel: mark on open and again whenever the newest message
-  // changes while the screen is up (the inverted list keeps it in view).
+  // ── Honest reading ────────────────────────────────────────────────────────
+  // Focused screen + foregrounded app = the person is looking. Only then does
+  // the newest message advance their mark (and silence their phone).
+  const focusedRef = useRef(false);
+  const appActiveRef = useRef(AppState.currentState === 'active');
   const newestId = (head?.messages as any[] | undefined)?.at(-1)?._id;
+  const newestIdRef = useRef<string | undefined>(undefined);
+  newestIdRef.current = newestId ? String(newestId) : undefined;
+  const markIfPresent = useCallback(() => {
+    if (!focusedRef.current || !appActiveRef.current || !newestIdRef.current) return;
+    markRead({ channel_id: channelId, last_read_message_id: newestIdRef.current as any }).catch(() => {});
+  }, [channelId, markRead]);
+  useFocusEffect(
+    useCallback(() => {
+      focusedRef.current = true;
+      setChatFocus({ channelId: String(channelId) });
+      markIfPresent();
+      return () => {
+        focusedRef.current = false;
+        clearChatFocus();
+      };
+    }, [markIfPresent, channelId]),
+  );
   useEffect(() => {
-    if (!newestId) return;
-    markRead({ channel_id: channelId, last_read_message_id: newestId }).catch(() => {});
-  }, [channelId, newestId, markRead]);
+    const sub = AppState.addEventListener('change', (s) => {
+      appActiveRef.current = s === 'active';
+      if (s === 'active') markIfPresent();
+    });
+    return () => sub.remove();
+  }, [markIfPresent]);
+  useEffect(() => { markIfPresent(); }, [newestId, markIfPresent]);
 
   // Sends that echoed back from the server leave the pending list.
   const echoedClientIds = useMemo(() => {
@@ -158,6 +196,7 @@ export default function ChatChannelScreen() {
         channel_id: channelId,
         content: entry.content,
         client_id: entry.clientId,
+        ...(entry.attachments?.length ? { attachments: entry.attachments as any } : {}),
         ...(entry.threadRootId ? { thread_root_id: entry.threadRootId as any } : {}),
       });
     } catch {
@@ -167,18 +206,22 @@ export default function ChatChannelScreen() {
     }
   }, [channelId, sendMessage]);
 
-  const onSend = useCallback(() => {
-    const content = draft.trim();
-    if (!content) return;
+  const onSend = useCallback((content: string, attachments: ChatAttachmentArg[]) => {
     const entry: PendingSend = {
       clientId: `mob-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       content,
       createdAt: Date.now(),
+      attachments: attachments.length ? attachments : undefined,
     };
-    setDraft('');
     setPending((prev) => [...prev, entry]);
     void doSend(entry);
-  }, [draft, doSend]);
+  }, [doSend]);
+
+  const onSubmitEdit = useCallback((messageId: string, content: string) => {
+    void editMessage({ message_id: messageId as any, content }).catch(() => {
+      Alert.alert('Edit failed', 'The message kept its previous text.');
+    });
+  }, [editMessage]);
 
   const onRetrySend = useCallback((id: string) => {
     setPending((prev) => prev.map((p) => (`pend-${p.clientId}` === id ? { ...p, failed: false } : p)));
@@ -226,27 +269,27 @@ export default function ChatChannelScreen() {
     return map;
   }, [head?.threads]);
 
-  const toView = useCallback((m: any): MobileChatMessage => {
-    const member = memberById.get(String(m.user_id));
-    const thread = threadByRoot.get(String(m._id));
+  const toView = useCallback((msg: any): MobileChatMessage => {
+    const member = memberById.get(String(msg.user_id));
+    const thread = threadByRoot.get(String(msg._id));
     return {
-      id: String(m._id),
+      id: String(msg._id),
       author: {
-        id: String(m.user_id),
-        name: member?.name || authorById.get(String(m.user_id))?.name
-          || (m.author_kind === 'agent' ? 'Anchor' : 'Teammate'),
+        id: String(msg.user_id),
+        name: member?.name || authorById.get(String(msg.user_id))?.name
+          || (msg.author_kind === 'agent' ? 'Anchor' : 'Teammate'),
         avatarUrl: member?.github_avatar_url || member?.image || undefined,
-        isAgent: m.author_kind === 'agent' || member?.is_bot,
+        isAgent: msg.author_kind === 'agent' || member?.is_bot,
       },
-      content: m.content,
-      createdAt: m.created_at,
-      editedAt: m.edited_at,
-      deletedAt: m.deleted_at,
-      mentionsMe: (m.mentions ?? []).some((id: any) => String(id) === viewerId) || m.mention_scope === 'here',
-      agentStatus: m.agent_status,
-      agentDeadlineAt: m.agent_deadline_at,
-      attachments: m.attachments?.length ? m.attachments : undefined,
-      reactions: reactionsByMessage.get(String(m._id)),
+      content: msg.content,
+      createdAt: msg.created_at,
+      editedAt: msg.edited_at,
+      deletedAt: msg.deleted_at,
+      mentionsMe: (msg.mentions ?? []).some((x: any) => String(x) === viewerId) || msg.mention_scope === 'here',
+      agentStatus: msg.agent_status,
+      agentDeadlineAt: msg.agent_deadline_at,
+      attachments: msg.attachments?.length ? msg.attachments : undefined,
+      reactions: reactionsByMessage.get(String(msg._id)),
       thread: thread
         ? {
             replyCount: thread.reply_count,
@@ -271,18 +314,19 @@ export default function ChatChannelScreen() {
       },
       content: p.content,
       createdAt: p.createdAt,
+      attachments: p.attachments?.map((a) => ({ storage_id: a.storage_id })),
       pending: !p.failed,
       failed: p.failed,
     }));
     const all = [...serverRows, ...pendingRows];
     return buildChatTimeline(
-      all.map((m) => ({
-        id: m.id,
-        authorId: m.author.id,
-        createdAt: m.createdAt,
-        pendingAgent: m.agentStatus === 'thinking' || m.agentStatus === 'streaming',
-        deleted: !!m.deletedAt,
-        view: m,
+      all.map((msg) => ({
+        id: msg.id,
+        authorId: msg.author.id,
+        createdAt: msg.createdAt,
+        pendingAgent: msg.agentStatus === 'thinking' || msg.agentStatus === 'streaming',
+        deleted: !!msg.deletedAt,
+        view: msg,
       })),
       { now, lastReadAt: entryReadAtRef.current, viewerId },
     );
@@ -290,6 +334,71 @@ export default function ChatChannelScreen() {
 
   // Inverted list: index 0 renders at the bottom, so the rows reverse.
   const inverted = useMemo(() => [...rows].reverse(), [rows]);
+
+  // ── Deep-link target (?m=<messageId>) ─────────────────────────────────────
+  // A push or a web permalink names a message. A reply forwards to its thread;
+  // a channel row scrolls into view and flashes. Bounded search: the head page
+  // plus up to three older pages — past that the link degrades to "the channel".
+  const listRef = useRef<FlatList>(null);
+  const targetTriesRef = useRef(0);
+  const doneTargetRef = useRef<string | null>(null);
+  useEffect(() => {
+    const target = typeof targetParam === 'string' ? targetParam : undefined;
+    if (!target || doneTargetRef.current === target || !head) return;
+    const inHead = [...older, ...((head.messages as any[]) ?? [])].find((r) => String(r._id) === target);
+    if (inHead?.thread_root_id) {
+      doneTargetRef.current = target;
+      router.replace({
+        pathname: '/chat/thread/[id]',
+        params: { id: String(inHead.thread_root_id), channel: String(channelId), m: target },
+      } as never);
+      return;
+    }
+    if (inHead) {
+      doneTargetRef.current = target;
+      const index = inverted.findIndex((it: any) => it.kind === 'message' && it.message?.id === target);
+      if (index >= 0) {
+        setHighlightId(target);
+        setTimeout(() => listRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true }), 250);
+        setTimeout(() => setHighlightId(null), 3200);
+      }
+      return;
+    }
+    if (targetTriesRef.current < 3 && head.has_more && !loadingOlder) {
+      targetTriesRef.current += 1;
+      void loadOlder();
+    } else {
+      // Give up quietly: the person is in the right room, which is the point.
+      doneTargetRef.current = target;
+    }
+  }, [targetParam, head, older, inverted, loadOlder, loadingOlder, router, channelId]);
+
+  // ── Scroll pill ───────────────────────────────────────────────────────────
+  // Away from the newest message, a pill offers the way back — and counts what
+  // arrived while you were up in history.
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const missedBaseRef = useRef<string | undefined>(undefined);
+  const [missed, setMissed] = useState(0);
+  useEffect(() => {
+    if (!awayFromBottom) { setMissed(0); missedBaseRef.current = newestId ? String(newestId) : undefined; return; }
+    if (!newestId) return;
+    if (missedBaseRef.current !== String(newestId)) setMissed((n) => n + 1);
+    missedBaseRef.current = String(newestId);
+  }, [awayFromBottom, newestId]);
+  const onScroll = useCallback((e: any) => {
+    const y = e.nativeEvent.contentOffset.y;
+    setAwayFromBottom(y > 480);
+  }, []);
+  const jumpToNow = useCallback(() => {
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
+
+  // ── Long-press sheet ──────────────────────────────────────────────────────
+  const onLongPress = useCallback((message: MobileChatMessage) => {
+    if (message.pending || message.failed || message.deletedAt) return;
+    if (Platform.OS === 'ios') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setSheetTarget(message);
+  }, []);
 
   // Object form + cast: the typed-route union regenerates only when Metro runs.
   const pushThread = useCallback((rootId: string) => {
@@ -299,60 +408,74 @@ export default function ChatChannelScreen() {
     } as never);
   }, [router, channelId]);
 
-  const onLongPress = useCallback((message: MobileChatMessage) => {
-    if (message.pending || message.failed || message.deletedAt) return;
-    const own = message.author.id === viewerId;
-    const options = [...QUICK_REACTIONS, 'Reply in thread', 'Copy text', ...(own ? ['Delete'] : []), 'Cancel'];
-    ActionSheetIOS.showActionSheetWithOptions(
-      {
-        options,
-        cancelButtonIndex: options.length - 1,
-        destructiveButtonIndex: own ? options.length - 2 : undefined,
-      },
-      (index) => {
-        if (index < QUICK_REACTIONS.length) {
-          void toggleReaction({ message_id: message.id as any, emoji: QUICK_REACTIONS[index] });
-        } else if (options[index] === 'Reply in thread') {
-          pushThread(message.id);
-        } else if (options[index] === 'Copy text') {
-          Clipboard.setString(message.content);
-        } else if (options[index] === 'Delete') {
-          void deleteMessage({ message_id: message.id as any });
-        }
-      },
-    );
-  }, [viewerId, toggleReaction, router, channelId, deleteMessage]);
+  const onSheetAction = useCallback((action: MessageAction) => {
+    const message = sheetTarget;
+    if (!message) return;
+    if (action.kind === 'react') {
+      void toggleReaction({ message_id: message.id as any, emoji: action.emoji });
+    } else if (action.kind === 'reply') {
+      pushThread(message.id);
+    } else if (action.kind === 'copy') {
+      copyToClipboard(message.content);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } else if (action.kind === 'edit') {
+      setEditing({ messageId: message.id, content: message.content });
+    } else if (action.kind === 'delete') {
+      Alert.alert('Delete message?', 'It will show as deleted for everyone.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => void deleteMessage({ message_id: message.id as any }) },
+      ]);
+    }
+  }, [sheetTarget, toggleReaction, pushThread, deleteMessage]);
 
   const renderItem = useCallback(({ item }: { item: (typeof rows)[number] }) => {
     if (item.kind === 'day') return <DayDivider label={item.label} />;
     if (item.kind === 'new') return <NewDivider />;
     const view = (item.message as any).view as MobileChatMessage;
     return (
-      <MessageRow
-        message={view}
-        grouped={item.grouped}
-        now={now}
-        knownMentionHandles={knownHandles}
-        onOpenThread={pushThread}
-        onLongPress={onLongPress}
-        onToggleReaction={(id, emoji) => void toggleReaction({ message_id: id as any, emoji })}
-        onStopAgent={(id) => void stopAnchor({ message_id: id as any })}
-        onRetrySend={onRetrySend}
-      />
+      <RNView style={view.id === highlightId ? styles.highlight : undefined}>
+        <MessageRow
+          message={view}
+          grouped={item.grouped}
+          now={now}
+          knownMentionHandles={knownHandles}
+          onOpenThread={pushThread}
+          onLongPress={onLongPress}
+          onToggleReaction={(mid, emoji) => void toggleReaction({ message_id: mid as any, emoji })}
+          onStopAgent={(mid) => void stopAnchor({ message_id: mid as any })}
+          onRetrySend={onRetrySend}
+          onOpenImage={setViewerUri}
+        />
+      </RNView>
     );
-  }, [now, router, channelId, onLongPress, toggleReaction, stopAnchor, onRetrySend]);
+  }, [now, highlightId, knownHandles, pushThread, onLongPress, toggleReaction, stopAnchor, onRetrySend]);
 
+  // ── Header identity ───────────────────────────────────────────────────────
   const isDm = channel?.kind === 'dm';
+  const dmOthers = useMemo(
+    () => (isDm ? dmOtherIds(channel?.dm_key, viewerId) : []),
+    [isDm, channel?.dm_key, viewerId],
+  );
+  const counterpart = dmOthers.length === 1 ? memberById.get(dmOthers[0]) : undefined;
   const roomName = (() => {
     if (!isDm) return channel?.name ?? 'channel';
-    const others = dmOtherIds(channel?.dm_key, viewerId);
-    if (others.length === 0) return 'Direct message';
-    const names = others.map((id) => {
-      const m = memberById.get(id);
+    if (dmOthers.length === 0) return 'Direct message';
+    const names = dmOthers.map((uid) => {
+      const m = memberById.get(uid);
       return m?.name || m?.github_username || 'Teammate';
     });
-    return others.length > 1 ? names.map((n) => n.split(/\s+/)[0]).join(', ') : names[0];
+    return dmOthers.length > 1 ? names.map((n) => n.split(/\s+/)[0]).join(', ') : names[0];
   })();
+  const presence = counterpart?.presence_state as string | undefined;
+  const presenceColor =
+    presence === 'active' ? Theme.green : presence === 'idle' ? Theme.accent : Theme.textMuted0;
+  const presenceLabel =
+    presence === 'active' ? 'Active now' : presence === 'idle' ? 'Idle' : presence === 'away' ? 'Away' : 'Offline';
+
+  const nameOf = useCallback((uid: string) => {
+    const m = memberById.get(uid);
+    return m?.name?.split(/\s+/)[0] || m?.github_username || '';
+  }, [memberById]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -361,15 +484,34 @@ export default function ChatChannelScreen() {
         <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={styles.back}>
           <FontAwesome name="chevron-left" size={16} color={Theme.textMuted} />
         </TouchableOpacity>
-        <FontAwesome
-          name={isDm ? 'user' : channel?.is_private || channel?.kind === 'private' ? 'lock' : 'hashtag'}
-          size={13}
-          color={Theme.textMuted0}
-        />
-        <RNText style={styles.title} numberOfLines={1}>{roomName}</RNText>
-        {!!channel?.topic && (
-          <RNText style={styles.topic} numberOfLines={1}>{channel.topic}</RNText>
+        {isDm && counterpart ? (
+          <ChatAvatar
+            author={{
+              id: String(counterpart._id),
+              name: roomName,
+              avatarUrl: counterpart.github_avatar_url || counterpart.image,
+              isAgent: counterpart.is_bot,
+            }}
+            size={22}
+          />
+        ) : (
+          <FontAwesome
+            name={isDm ? 'user' : channel?.is_private || channel?.kind === 'private' ? 'lock' : 'hashtag'}
+            size={13}
+            color={Theme.textMuted0}
+          />
         )}
+        <RNView style={styles.headMain}>
+          <RNText style={styles.title} numberOfLines={1}>{roomName}</RNText>
+          {isDm && counterpart ? (
+            <RNView style={styles.presenceRow}>
+              <RNView style={[styles.presenceDot, { backgroundColor: presenceColor }]} />
+              <RNText style={styles.presenceText}>{presenceLabel}</RNText>
+            </RNView>
+          ) : channel?.topic ? (
+            <RNText style={styles.topic} numberOfLines={1}>{channel.topic}</RNText>
+          ) : null}
+        </RNView>
       </RNView>
 
       <KeyboardAvoidingView
@@ -377,54 +519,66 @@ export default function ChatChannelScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
-        <FlatList
-          inverted
-          data={inverted}
-          keyExtractor={(item) => item.key}
-          renderItem={renderItem}
-          onEndReached={loadOlder}
-          onEndReachedThreshold={0.4}
-          ListFooterComponent={
-            loadingOlder ? (
-              <RNText style={styles.loadingOlder}>Loading earlier messages…</RNText>
-            ) : null
-          }
-          ListEmptyComponent={
-            head === undefined ? null : (
-              <RNView style={styles.emptyWrap}>
-                {/* The list is inverted, so un-invert the empty state. */}
-                <RNView style={{ transform: [{ scaleY: -1 }] }}>
-                  <RNText style={styles.emptyTitle}>{isDm ? roomName : `#${channel?.name ?? 'channel'}`} is quiet</RNText>
-                  <RNText style={styles.emptySub}>Say something to start it off.</RNText>
+        <RNView style={styles.listWrap}>
+          <FlatList
+            ref={listRef}
+            inverted
+            data={inverted}
+            keyExtractor={(item) => item.key}
+            renderItem={renderItem}
+            onEndReached={loadOlder}
+            onEndReachedThreshold={0.4}
+            onScroll={onScroll}
+            scrollEventThrottle={120}
+            onScrollToIndexFailed={() => {}}
+            ListFooterComponent={
+              loadingOlder ? (
+                <RNText style={styles.loadingOlder}>Loading earlier messages…</RNText>
+              ) : null
+            }
+            ListEmptyComponent={
+              head === undefined ? null : (
+                <RNView style={styles.emptyWrap}>
+                  {/* Fabric's inverted list leaves empty/footer components
+                      untransformed — no counter-flip (verified on device). */}
+                  <RNView>
+                    <RNText style={styles.emptyTitle}>{isDm ? roomName : `#${channel?.name ?? 'channel'}`} is quiet</RNText>
+                    <RNText style={styles.emptySub}>Say something to start it off.</RNText>
+                  </RNView>
                 </RNView>
-              </RNView>
-            )
-          }
-          contentContainerStyle={inverted.length === 0 ? styles.emptyList : undefined}
-          keyboardDismissMode="interactive"
-        />
-
-        <MentionStrip draft={draft} members={mentionCandidates} onPick={setDraft} />
-        <RNView style={styles.composer}>
-          <ThemedTextInput
-            style={styles.input}
-            placeholder={isDm ? `Message ${roomName}` : `Message #${channel?.name ?? ''}`}
-            placeholderTextColor={Theme.textMuted0}
-            value={draft}
-            onChangeText={setDraft}
-            multiline
-            submitBehavior="newline"
+              )
+            }
+            contentContainerStyle={inverted.length === 0 ? styles.emptyList : undefined}
+            keyboardDismissMode="interactive"
           />
-          <TouchableOpacity
-            style={[styles.send, !draft.trim() && styles.sendDisabled]}
-            onPress={onSend}
-            disabled={!draft.trim()}
-            hitSlop={8}
-          >
-            <FontAwesome name="arrow-up" size={14} color={draft.trim() ? Theme.bg : Theme.textMuted0} />
-          </TouchableOpacity>
+          {awayFromBottom && (
+            <TouchableOpacity style={styles.jumpPill} onPress={jumpToNow} activeOpacity={0.85}>
+              <FontAwesome name="chevron-down" size={11} color={Theme.bg} />
+              {missed > 0 && <RNText style={styles.jumpCount}>{missed > 99 ? '99+' : missed}</RNText>}
+            </TouchableOpacity>
+          )}
         </RNView>
+
+        <TypingRow channelId={String(channelId)} viewerId={viewerId} nameOf={nameOf} />
+        <ChatComposerBar
+          channelId={String(channelId)}
+          placeholder={isDm ? `Message ${roomName}` : `Message #${channel?.name ?? ''}`}
+          mentionCandidates={mentionCandidates}
+          editing={editing}
+          onCancelEdit={() => setEditing(null)}
+          onSubmitEdit={onSubmitEdit}
+          onSend={onSend}
+        />
       </KeyboardAvoidingView>
+
+      <MessageActionsSheet
+        message={sheetTarget}
+        own={sheetTarget?.author.id === viewerId}
+        canReply
+        onAction={onSheetAction}
+        onClose={() => setSheetTarget(null)}
+      />
+      <ImageViewer uri={viewerUri} onClose={() => setViewerUri(null)} />
     </SafeAreaView>
   );
 }
@@ -432,59 +586,52 @@ export default function ChatChannelScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   flex: { flex: 1 },
+  listWrap: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
     paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
+    paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.border + '55',
   },
-  back: { paddingRight: 6 },
-  title: { fontSize: 15, fontWeight: '600', color: Theme.text, flexShrink: 1 },
-  topic: { flex: 1, fontSize: 11, color: Theme.textMuted0, marginLeft: 6 },
+  back: { paddingRight: 4 },
+  headMain: { flex: 1, minWidth: 0 },
+  title: { fontSize: 15, fontWeight: '600', color: Theme.text },
+  topic: { fontSize: 11, color: Theme.textMuted0 },
+  presenceRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 },
+  presenceDot: { width: 6, height: 6, borderRadius: 3 },
+  presenceText: { fontSize: 10.5, color: Theme.textMuted0 },
   loadingOlder: {
     textAlign: 'center',
     fontSize: 11,
     color: Theme.textMuted0,
     paddingVertical: 8,
-    transform: [{ scaleY: -1 }],
   },
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyList: { flexGrow: 1 },
   emptyTitle: { fontSize: 14, fontWeight: '600', color: Theme.textSecondary, textAlign: 'center' },
   emptySub: { fontSize: 12, color: Theme.textMuted0, textAlign: 'center', marginTop: 4 },
-  composer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Theme.border + '55',
-  },
-  input: {
-    flex: 1,
-    minHeight: 36,
-    maxHeight: 120,
-    borderWidth: 1,
-    borderColor: Theme.border + '66',
-    borderRadius: 9,
+  highlight: { backgroundColor: Theme.accent + '1E' },
+  jumpPill: {
+    position: 'absolute',
+    right: 14,
+    bottom: 12,
+    minWidth: 34,
+    height: 34,
+    borderRadius: 17,
     paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 13.5,
-    color: Theme.text,
-    backgroundColor: Theme.bgAlt + '55',
-  },
-  send: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
     backgroundColor: Theme.blue,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 2,
+    gap: 5,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
   },
-  sendDisabled: { backgroundColor: Theme.bgHighlight },
+  jumpCount: { fontSize: 11, fontWeight: '700', color: Theme.bg },
 });

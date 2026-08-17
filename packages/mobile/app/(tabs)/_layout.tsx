@@ -8,7 +8,7 @@ import { View as RNView,
   StyleSheet,
 } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
-import { Theme } from '@/constants/Theme';
+import { Theme, TAB_BAR_HEIGHT } from '@/constants/Theme';
 import { Mono } from '@/constants/fonts';
 import { StoreSyncBridge } from '@/components/StoreSyncBridge';
 
@@ -67,7 +67,7 @@ export default function TabLayout() {
           backgroundColor: Theme.bgAlt,
           borderTopColor: Theme.borderLight,
           borderTopWidth: 1,
-          height: 84,
+          height: TAB_BAR_HEIGHT,
           paddingTop: 8,
           paddingBottom: 28,
         },

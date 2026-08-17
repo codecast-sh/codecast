@@ -1,4 +1,4 @@
-import { StyleSheet, SectionList, RefreshControl, TouchableOpacity, View as RNView, Image, Linking, ScrollView } from 'react-native';
+import { StyleSheet, SectionList, RefreshControl, TouchableOpacity, View as RNView, Image, ScrollView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
@@ -10,6 +10,7 @@ import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Theme, Spacing } from '@/constants/Theme';
 import { NotificationListSkeleton } from '@/components/SkeletonLoader';
 import { AgentLogoSvg } from '@/components/AgentLogo';
+import { openLink } from '@/lib/links';
 import { cleanNotificationBody } from '@codecast/web/lib/notificationText';
 import {
   agentNames,
@@ -260,14 +261,18 @@ export default function NotificationsScreen() {
     }
     // A deep link wins (artifact comments open the published page).
     if (notification.link) {
-      Linking.openURL(notification.link).catch(() => {});
+      void openLink(notification.link);
       return;
     }
     if (notification.entity_type && notification.entity_id && notification.entity_type !== "conversation") {
       const routes: Record<string, string> = { task: "/task/", doc: "/doc/", plan: "/plan/", chat_channel: "/chat/" };
       const base = routes[notification.entity_type];
       if (base) {
-        router.push(`${base}${notification.entity_id}` as any);
+        // A chat notification names the exact message; the screen scrolls to it.
+        const suffix = notification.entity_type === "chat_channel" && notification.chat_message_id
+          ? `?m=${notification.chat_message_id}`
+          : "";
+        router.push(`${base}${notification.entity_id}${suffix}` as any);
         return;
       }
     }

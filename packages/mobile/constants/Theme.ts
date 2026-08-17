@@ -108,6 +108,11 @@ export const SolarizedDark = {
 
 export const Theme = SolarizedLight;
 
+// The tab bar's fixed height (its own paddingBottom absorbs the home
+// indicator, so this is the full box). Overlays that float above the tab bar
+// (the in-call pill) offset by THIS, not by insets.bottom + a guess.
+export const TAB_BAR_HEIGHT = 84;
+
 export const Spacing = {
   xs: 4,
   sm: 8,
