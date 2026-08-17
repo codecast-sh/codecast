@@ -32,7 +32,7 @@ import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
 import {
-  extractCodexExecActions,
+  extractNestedActions,
   structuredPayloadSummary,
   toolSummary as sharedToolSummary,
 } from '@codecast/shared/render';
@@ -2194,13 +2194,16 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   globalImageMap?: Record<string, ImageData>;
   openGallery?: (image: ImageData) => void;
 }) {
-  const codexExecActions = extractCodexExecActions(toolCall);
-  const displayToolName = toolCall.name === 'exec' && codexExecActions.length === 1
-    ? codexExecActions[0].name
+  // A wrapper call (Codex `exec`, the extension's `browser_batch`) is named
+  // after its one inner step when there is one, and summarised by its steps
+  // otherwise — the same rule as the web ToolBlock.
+  const nestedActions = extractNestedActions(toolCall);
+  const displayToolName = nestedActions.length === 1
+    ? nestedActions[0].name
     : toolCall.name;
   const { color } = toolIcon(displayToolName);
-  const summary = toolCall.name === 'exec'
-    ? sharedToolSummary(codexExecActions.length === 1 ? codexExecActions[0] : toolCall)
+  const summary = nestedActions.length > 0
+    ? sharedToolSummary(nestedActions.length === 1 ? nestedActions[0] : toolCall)
     : toolSummary(toolCall);
   const [viewMode, setViewMode] = useState<'raw' | 'rendered'>('rendered');
 
@@ -4593,7 +4596,7 @@ export default function SessionDetailScreen() {
             <FontAwesome name="chevron-left" size={18} color={Theme.text} />
           </TouchableOpacity>
           <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{conversation.title || 'Conversation'}</RNText>
-          {conversation?._id && <SessionHuddleButton conversationId={String(conversation._id)} />}
+          {conversation?._id && <SessionHuddleButton conversationId={String(conversation._id)} teamId={conversation.team_id ? String(conversation.team_id) : null} />}
           {allSessionImages.length > 0 && (
             <TouchableOpacity
               onPress={() => { setGalleryIndex(Math.max(0, allSessionImages.length - 1)); setGalleryVisible(true); }}

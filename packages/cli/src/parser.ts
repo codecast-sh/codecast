@@ -221,10 +221,14 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
             let toolResultContent = block.content;
             if (Array.isArray(block.content)) {
               const contentArray = block.content as Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
+              // One text block per step is how the browser extension reports a
+              // batch ("[computer:click] …", "[computer:wait] …"); gluing them
+              // with "" ran the steps into one line. Join on a newline unless
+              // the seam already has one.
               toolResultContent = contentArray
                 .filter((c) => c.type === "text" && c.text)
-                .map((c) => c.text)
-                .join("");
+                .map((c) => c.text as string)
+                .reduce((acc, text) => (acc === "" || acc.endsWith("\n") || text.startsWith("\n") ? acc + text : `${acc}\n${text}`), "");
               for (const item of contentArray) {
                 if (item.type === "image" && item.source) {
                   images.push({

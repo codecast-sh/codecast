@@ -428,3 +428,112 @@ export function sameBrowserRowMap(a: Record<string, BrowserRowState>, b: Record<
   const keys = Object.keys(a);
   return keys.length === Object.keys(b).length && keys.every((k) => b[k] && a[k].url === b[k].url && a[k].tabId === b[k].tabId);
 }
+
+// ── cast browser do — the CLI's batch ───────────────────────────────────────
+// `cast browser do "open x" "find Sign in" click` (or `do -` with one step per
+// heredoc line) is the CLI's answer to the extension's browser_batch, so the
+// row renders the same way: one line per step with what that step reported.
+// Steps come from the recorded argv; outcomes come from the CLI's own output.
+
+/** A batch step as it renders: the verb, the rest of the step, and its outcome. */
+export interface BrowserDoStep {
+  verb: string;
+  args: string;
+}
+
+const BROWSER_DO_VALUE_FLAGS = new Set(["--tab"]);
+
+export function extractBrowserDoSteps(args: string): BrowserDoStep[] {
+  const t = args.trim();
+  let raw: string[];
+  if (/^-(?:\s|$)/.test(t)) {
+    const { body, kind } = extractSendBody(t);
+    if (kind !== "heredoc") return [];
+    raw = body.split("\n");
+  } else {
+    const tokens = tokenizeShellArgs(t);
+    raw = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const v = tokens[i].value;
+      if (!tokens[i].quoted && v.startsWith("--")) {
+        if (BROWSER_DO_VALUE_FLAGS.has(v)) i++;
+        continue;
+      }
+      raw.push(v);
+    }
+  }
+  return raw
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((step) => {
+      const m = step.match(/^(\S+)\s*([\s\S]*)$/);
+      return { verb: m ? m[1] : step, args: m ? m[2] : "" };
+    });
+}
+
+/**
+ * Per-step outcomes from a `cast browser do` output, aligned by index with
+ * extractBrowserDoSteps. Two CLI generations print a flow:
+ *
+ *   engine (current)            legacy
+ *   › open example.com          ● open example.com
+ *   ✓ Example Domain                Example Domain — https://example.com/
+ *     https://example.com/      ○ click
+ *   › click                         element is covered
+ *   x element is covered
+ *
+ * The engine names each step on a `›` line and gives the verdict on the next
+ * glyph line; legacy carries the verdict in the header glyph. Both end with a
+ * footer (page URL, `tab …`, "N steps in …") that belongs to no step. Steps
+ * the CLI never reached (it stops at the first failure) stay without a verdict.
+ */
+const DO_OK_GLYPH = /^[●*✓✔]\s?(.*)$/;
+const DO_BAD_GLYPH = /^[○x✗✘×]\s(.*)$/;
+const DO_FOOTER_LINE = /^\s*(?:\d+\/?\d* steps? in .*|tab [0-9A-Za-z:_-]+|https?:\/\/\S+|! .*)$/;
+
+export function splitBrowserDoOutput(output: string, stepCount: number): Array<{ output: string; ok?: boolean }> {
+  const outcomes: Array<{ output: string; ok?: boolean }> = Array.from({ length: stepCount }, () => ({ output: "" }));
+  const lines = output.replace(ANSI_RE, "").replace(/\r/g, "").split("\n");
+  // Drop the trailing footer: everything after the last step's own lines that
+  // is a URL, tab id, warning, or the timing line.
+  let end = lines.length;
+  while (end > 0 && (!lines[end - 1].trim() || DO_FOOTER_LINE.test(lines[end - 1]))) end--;
+  const body = lines.slice(0, end);
+  const engine = body.some((l) => /^›\s/.test(l));
+  const append = (i: number, text: string) => {
+    const t = text.trim();
+    if (!t) return;
+    const o = outcomes[i];
+    o.output = o.output ? `${o.output}\n${t}` : t;
+  };
+  let current = -1;
+  for (const line of body) {
+    if (engine) {
+      const head = line.match(/^›\s(.*)$/);
+      if (head) {
+        current++;
+        if (current >= stepCount) break;
+        outcomes[current] = { output: "", ok: true };
+        continue;
+      }
+      if (current < 0 || current >= stepCount) continue;
+      const bad = line.match(DO_BAD_GLYPH);
+      const good = bad ? null : line.match(DO_OK_GLYPH);
+      if (bad) { outcomes[current].ok = false; append(current, bad[1]); }
+      else if (good) append(current, good[1]);
+      else append(current, line);
+      continue;
+    }
+    const good = line.match(DO_OK_GLYPH);
+    const bad = good ? null : line.match(DO_BAD_GLYPH);
+    if (good || bad) {
+      current++;
+      if (current >= stepCount) break;
+      outcomes[current] = { output: "", ok: !!good };
+      continue;
+    }
+    if (current < 0 || current >= stepCount) continue;
+    if (/^\s/.test(line)) append(current, line);
+  }
+  return outcomes;
+}

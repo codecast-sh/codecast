@@ -15,6 +15,9 @@ import {
   structuredPayloadKeysFromRaw,
   extractCodexExecActions,
   summarizeCodexExecActions,
+  extractNestedActions,
+  summarizeNestedActions,
+  splitBrowserBatchResult,
   describeToolGroup,
   describeSmallToolGroup,
 } from "./index";
@@ -372,5 +375,76 @@ describe("describeSmallToolGroup", () => {
     expect(describeSmallToolGroup([tc("Bash", { command: "" })])).toBe("");
     expect(describeSmallToolGroup([tc("Task", { description: "audit the feed" })])).toBe("");
     expect(describeSmallToolGroup([])).toBe("");
+  });
+});
+
+describe("browser_batch envelopes", () => {
+  const batch = tc("mcp__claude-in-chrome__browser_batch", {
+    actions: [
+      { name: "computer", input: { action: "left_click", coordinate: [660, 178], tabId: 5 } },
+      { name: "computer", input: { action: "wait", duration: 3, tabId: 5 } },
+      { name: "computer", input: { action: "screenshot", tabId: 5 } },
+    ],
+  });
+
+  it("recovers the inner tools under their standalone MCP names", () => {
+    const actions = extractNestedActions(batch);
+    expect(actions.map(a => a.name)).toEqual([
+      "mcp__claude-in-chrome__computer",
+      "mcp__claude-in-chrome__computer",
+      "mcp__claude-in-chrome__computer",
+    ]);
+    expect(actions.map(a => toolSummary(a))).toEqual(["Click (660, 178)", "Wait 3s", "Screenshot"]);
+  });
+
+  it("summarises a browser batch by its steps (labelled when the tool is not the pointer)", () => {
+    expect(toolSummary(batch)).toBe("3 steps · Click (660, 178) · Wait 3s · Screenshot");
+    const mixed = tc("mcp__claude-in-chrome__browser_batch", {
+      actions: [
+        { name: "navigate", input: { url: "https://example.com/x" } },
+        { name: "computer", input: { action: "wait", duration: 6 } },
+        { name: "get_page_text", input: {} },
+      ],
+    });
+    expect(summarizeNestedActions(extractNestedActions(mixed))).toBe("3 steps · Navigate example.com/x · Wait 6s · Page Text Extract text");
+    expect(formatToolName("mcp__claude-in-chrome__browser_batch")).toBe("Browser");
+  });
+
+  it("is empty for a non-wrapper and for unparseable input", () => {
+    expect(extractNestedActions(tc("Bash", { command: "ls" }))).toEqual([]);
+    expect(extractNestedActions({ name: "mcp__claude-in-chrome__browser_batch", input: "{\"actions\": [" })).toEqual([]);
+  });
+
+  it("splits a per-step result whether the extension sent lines or one glued string", () => {
+    const lines = "[computer:left_click] Clicked at (660, 178)\n[computer:wait] Waited for 3 seconds\n[computer:screenshot] Successfully captured screenshot (1568x762, jpeg) - ID: ss_1\n\nTab Context:\n- Executed on tabId: 5";
+    const glued = "[computer:left_click] Clicked at (660, 178)[computer:wait] Waited for 3 seconds[computer:screenshot] Successfully captured screenshot (1568x762, jpeg) - ID: ss_1\n\nTab Context:\n- Executed on tabId: 5";
+    for (const content of [lines, glued]) {
+      expect(splitBrowserBatchResult(content, 3)).toEqual([
+        { output: "Clicked at (660, 178)", ok: true },
+        { output: "Waited for 3 seconds", ok: true },
+        { output: "Successfully captured screenshot (1568x762, jpeg) - ID: ss_1", ok: true },
+      ]);
+    }
+  });
+
+  it("marks the failing step, keeps earlier steps ok, and leaves later ones unrun", () => {
+    const content = "[navigate] Navigated to https://x.test/a\n[computer:wait] Waited for 6 seconds\n\nactions[2] (get_page_text) failed: Permission denied for reading page content on this domain (2 completed, 0 remaining)";
+    expect(splitBrowserBatchResult(content, 4)).toEqual([
+      { output: "Navigated to https://x.test/a", ok: true },
+      { output: "Waited for 6 seconds", ok: true },
+      { output: "Permission denied for reading page content on this domain", ok: false },
+      { output: "" },
+    ]);
+  });
+
+  it("binds a first-step failure with no tagged output to step 0", () => {
+    const content = "actions[0] (find) failed: There is no \"Fix\" element visible (0 completed, 0 remaining)";
+    expect(splitBrowserBatchResult(content, 1)).toEqual([
+      { output: "There is no \"Fix\" element visible", ok: false },
+    ]);
+  });
+
+  it("returns blank outcomes for a result that has not arrived", () => {
+    expect(splitBrowserBatchResult("", 2)).toEqual([{ output: "" }, { output: "" }]);
   });
 });

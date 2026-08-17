@@ -7,7 +7,7 @@ import { CodeBlock } from "@/components/CodeBlock";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "@/components/tools/MarkdownRenderer";
 import { tryRenderHtmlMessage } from "@/components/HtmlSnippet";
 import {
-  extractCodexExecActions,
+  extractNestedActions,
   formatToolName,
   structuredPayloadSummary,
   toolSummary as sharedToolSummary,
@@ -53,8 +53,8 @@ function ClaudeIcon() {
 }
 
 function getToolSummary(tool: any): string | null {
-  if (tool.name === "exec") {
-    const nested = extractCodexExecActions(tool);
+  const nested = extractNestedActions(tool);
+  if (nested.length > 0) {
     return sharedToolSummary(nested.length === 1 ? nested[0] : tool) || null;
   }
 
@@ -193,8 +193,8 @@ function MarkdownContentBlock({ content, label, timestamp }: { content: string; 
 
 function ToolCallBlock({ tool }: { tool: any }) {
   const summary = getToolSummary(tool);
-  const nested = extractCodexExecActions(tool);
-  const displayName = tool.name === "exec" && nested.length === 1 ? nested[0].name : tool.name;
+  const nested = extractNestedActions(tool);
+  const displayName = nested.length === 1 ? nested[0].name : tool.name;
   const color = toolColors[displayName] || (
     displayName === "exec_command" || displayName === "shell_command" || displayName === "commandExecution"
       ? "text-sol-green/80"

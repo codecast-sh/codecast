@@ -127,6 +127,7 @@ export const TOOL_VISUALS: Record<string, ToolVisual> = {
 // substring of its id (the same dispatch the mobile fork used).
 function mcpBrowserVisual(name: string): ToolVisual {
   if (name.includes("tabs_context") || name.includes("tabs_create")) return { icon: "chrome", color: "textDim" };
+  if (name.includes("browser_batch")) return { icon: "chrome", color: "orange" };
   if (name.includes("computer") || name.includes("screenshot")) return { icon: "desktop", color: "orange" };
   if (name.includes("navigate")) return { icon: "chrome", color: "blue" };
   if (name.includes("read_page") || name.includes("get_page_text")) return { icon: "chrome", color: "blue" };
