@@ -18,8 +18,10 @@ import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { compressImage } from "../lib/compressImage";
 import { textareaCaretRect } from "../lib/textareaCaret";
 import { useStorageImageUrl, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
+import { AvatarImg } from "../lib/avatarCache";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
+import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
@@ -115,6 +117,7 @@ import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./browser/BrowserWatchSplit";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
+import { findEntityInStore } from "../lib/liveEntities";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
@@ -3043,7 +3046,9 @@ function useConversationTaskStats(conversationId: string | undefined) {
   const enabled = useDeferUntilSettled(conversationId);
   const toolStats = useQuery(
     api.conversations.getConversationToolStats,
-    enabled && conversationId && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip"
+    enabled && conversationId && isConvexId(conversationId)
+      ? { conversation_id: conversationId, ...shareTokenArg(conversationId) }
+      : "skip"
   );
   return toolStats?.taskStats ?? null;
 }
@@ -4648,7 +4653,12 @@ const CAST_STATUS_COLORS: Record<string, { bg: string; text: string }> = {
 
 function DocTitleLink({ convexId }: { convexId: string }) {
   const router = useRouter();
-  const doc = useQuery(api.docs.webGet, { id: convexId });
+  // Local-first seed (same pattern as EntityIdPill): the store usually holds
+  // the doc row already — paint the title on the first frame instead of
+  // flashing a truncated raw id. Non-reactive read; the query keeps it fresh.
+  const seed = useMemo(() => findEntityInStore(useInboxStore.getState(), "doc", convexId), [convexId]);
+  const queryDoc = useQuery(api.docs.webGet, { id: convexId });
+  const doc = queryDoc ?? seed;
   if (!doc) return <span className="text-sol-text-dim font-mono">{convexId.slice(0, 12)}...</span>;
   return (
     <button
@@ -4666,9 +4676,15 @@ function DocTitleLink({ convexId }: { convexId: string }) {
 // queries go through useQueryNoThrow and an unresolved title renders nothing.
 function InlineEntityTitle({ shortId, struck }: { shortId: string; struck?: boolean }) {
   const isPlan = shortId.startsWith("pl-");
+  // Local-first seed: paint the resolved title on the first frame when the
+  // store already holds the row (it usually does — same rule as EntityIdPill).
+  const seed = useMemo(
+    () => findEntityInStore(useInboxStore.getState(), isPlan ? "plan" : "task", shortId),
+    [isPlan, shortId],
+  );
   const { data: task } = useQueryNoThrow(api.tasks.webGet, !isPlan ? { short_id: shortId } : "skip");
   const { data: plan } = useQueryNoThrow(api.plans.webGet, isPlan ? { short_id: shortId } : "skip");
-  const entity: any = isPlan ? plan : task;
+  const entity: any = (isPlan ? plan : task) ?? seed;
   const title = entity?.display_title || entity?.title;
   if (!title) return null;
   return (
@@ -4680,10 +4696,18 @@ function InlineEntityTitle({ shortId, struck }: { shortId: string; struck?: bool
 
 function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "doc"; shortId?: string; convexId?: string }) {
   const router = useRouter();
+  // Local-first seed: the card paints from the store's row on the first
+  // frame; the query refreshes it. Every `cast task/plan/doc` row in a
+  // transcript renders this, so the flash was everywhere.
+  const rawId = convexId ?? shortId ?? "";
+  const seed = useMemo(
+    () => (rawId ? findEntityInStore(useInboxStore.getState(), type, rawId) : undefined),
+    [type, rawId],
+  );
   const task = useQuery(api.tasks.webGet, type === "task" && shortId ? { short_id: shortId } : "skip");
   const plan = useQuery(api.plans.webGet, type === "plan" && shortId ? { short_id: shortId } : "skip");
   const doc = useQuery(api.docs.webGet, type === "doc" && convexId ? { id: convexId } : "skip");
-  const entity = type === "task" ? task : type === "plan" ? plan : doc;
+  const entity = (type === "task" ? task : type === "plan" ? plan : doc) ?? seed;
 
   if (!entity) {
     if (shortId) return <EntityIdPill shortId={shortId} />;
@@ -6040,16 +6064,20 @@ function ImageBlock({ image }: { image: ImageData }) {
 }
 
 function UserIcon({ avatarUrl }: { avatarUrl?: string | null }) {
-  if (avatarUrl) {
-    return <img src={avatarUrl} alt="" className="w-6 h-6 rounded shrink-0 object-cover shadow-[0_0_0_0.5px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)]" />;
-  }
   return (
-    <div className="w-6 h-6 rounded bg-sol-blue flex items-center justify-center shrink-0">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-        <circle cx="12" cy="7" r="4" />
-      </svg>
-    </div>
+    <AvatarImg
+      src={avatarUrl}
+      alt=""
+      className="w-6 h-6 rounded shrink-0 object-cover shadow-[0_0_0_0.5px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)]"
+      fallback={
+        <div className="w-6 h-6 rounded bg-sol-blue flex items-center justify-center shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
+        </div>
+      }
+    />
   );
 }
 
@@ -7634,9 +7662,12 @@ const BeatRow = memo(function BeatRow({ beat, userName, avatarUrl, showPrompt, a
       )}
       {showPrompt && prompt && (
         <div className="mb-3 flex items-start gap-2 rounded-lg border-l-2 border-sol-blue/70 bg-sol-blue/[0.07] pl-3 pr-3 py-2">
-          {avatarUrl
-            ? <img src={avatarUrl} alt="" className="w-4 h-4 rounded-full shrink-0 mt-px" />
-            : <span className="text-[10px] font-bold uppercase tracking-wider text-sol-blue shrink-0 mt-0.5">{(userName || "You").slice(0, 1)}</span>}
+          <AvatarImg
+            src={avatarUrl}
+            alt=""
+            className="w-4 h-4 rounded-full shrink-0 mt-px"
+            fallback={<span className="text-[10px] font-bold uppercase tracking-wider text-sol-blue shrink-0 mt-0.5">{(userName || "You").slice(0, 1)}</span>}
+          />
           <span className="text-[12.5px] text-sol-text-secondary whitespace-pre-wrap break-words leading-snug">{prompt}</span>
         </div>
       )}
@@ -7726,50 +7757,89 @@ function CondensedImageThumb({ image }: { image: ImageData }) {
   );
 }
 
-// One distinct receipt row standing in for a whole turn's tool activity in the
-// condensed feed: a faint inset chip, clearly NOT prose. A busy turn counts
-// ("⚙ read 3 files · ran 2 commands · 1 search"); one or two tools fit their
-// real subject in the same space, so they say it ("⚙ ran npm test"). Click to
-// reveal the real tool
-// blocks inline (the chip then reads as a hide toggle). Screenshots taken by
-// the collapsed tools ride along as clickable thumbnails, so images stay
-// reachable without expanding the group — which is why the root is a div, not
-// a button (thumbnails are interactive, and buttons can't nest).
-const CondensedToolsLine = memo(function CondensedToolsLine({ tools, expanded, onToggle, images, globalImageMap }: { tools: ToolCall[]; expanded: boolean; onToggle: () => void; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]> }) {
-  const { summary, screenshots } = useMemo(() => {
+// One source message's share of a condensed receipt: the hideable tools it
+// ran, under its own identity (results, comments and share selection stay
+// attributed to the message that ran them when the group opens).
+type ReceiptEntry = { messageId: string; messageUuid?: string; timestamp: number; tools: ToolCall[] };
+type CondensedReceipt = { entries: ReceiptEntry[]; expanded: boolean; onToggle: () => void };
+
+// One distinct receipt standing in for a segment's tool activity in the
+// condensed feed. Closed, it is a faint inset chip, clearly NOT prose: a busy
+// segment counts ("read 3 files · ran 2 commands · 1 search"); one or two
+// tools fit their real subject in the same space, so they say it ("ran npm
+// test"). Screenshots taken by the folded tools ride along as clickable
+// thumbnails, so images stay reachable without opening the group — which is
+// why the root is a div, not a button (thumbnails are interactive, and
+// buttons can't nest).
+//
+// Open, the chip becomes the HEADER of a bordered group and the real tool
+// blocks nest under it, in this same row: a disclosure, not a second copy.
+// The header switches to the counting phrase (the blocks below carry each
+// tool's subject, so restating them would read as duplication) and shows a
+// hide hint; thumbnails step aside since the blocks show their images inline.
+// The disclosure triangle leads in both states so the open/closed change is
+// unmistakable, and the header keeps its position and size across the toggle
+// so the click target never moves under the pointer.
+const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expanded, onToggle, images, globalImageMap, renderTool }: {
+  entries: ReceiptEntry[];
+  expanded: boolean;
+  onToggle: () => void;
+  images?: ImageData[];
+  globalImageMap?: Record<string, ImageData[]>;
+  renderTool: (tc: ToolCall, entry: ReceiptEntry) => React.ReactNode;
+}) {
+  const { summary, counted, screenshots } = useMemo(() => {
     const counts = new Map<string, number>();
     const actions: { name: string; input: string }[] = [];
     const shots: { id: string; image: ImageData }[] = [];
-    for (const tc of tools) {
-      const nested = extractCodexExecActions(tc);
-      const represented = nested.length > 0 ? nested : [tc];
-      for (const action of represented) {
-        counts.set(action.name, (counts.get(action.name) ?? 0) + 1);
-        actions.push(action);
+    for (const entry of entries) {
+      for (const tc of entry.tools) {
+        const nested = extractCodexExecActions(tc);
+        const represented = nested.length > 0 ? nested : [tc];
+        for (const action of represented) {
+          counts.set(action.name, (counts.get(action.name) ?? 0) + 1);
+          actions.push(action);
+        }
+        let toolImages = images?.filter(img => img.tool_use_id === tc.id) ?? [];
+        if (!toolImages.length) toolImages = globalImageMap?.[tc.id] ?? [];
+        toolImages.forEach((image, i) => shots.push({ id: `${tc.id}:${i}`, image }));
       }
-      let toolImages = images?.filter(img => img.tool_use_id === tc.id) ?? [];
-      if (!toolImages.length) toolImages = globalImageMap?.[tc.id] ?? [];
-      toolImages.forEach((image, i) => shots.push({ id: `${tc.id}:${i}`, image }));
     }
     const counted = [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
     return {
       summary: (actions.length <= 2 && describeSmallToolGroup(actions)) || counted,
+      counted,
       screenshots: shots,
     };
-  }, [tools, images, globalImageMap]);
-  return (
+  }, [entries, images, globalImageMap]);
+  const header = (
     <div
       role="button"
       tabIndex={0}
+      aria-expanded={expanded}
       onClick={onToggle}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
-      className="not-prose mt-1 flex items-center flex-wrap gap-x-2 gap-y-1 max-w-full w-fit cursor-pointer rounded-md border border-dashed border-sol-border/60 bg-sol-bg-alt/40 pl-2 pr-2.5 py-0.5 text-[11px] text-sol-text-dim hover:border-sol-cyan/40 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70 transition-colors"
+      className={`flex items-center flex-wrap gap-x-2 gap-y-1 max-w-full cursor-pointer pl-2 pr-2.5 py-0.5 text-[11px] transition-colors ${
+        expanded
+          ? "w-full text-sol-text-secondary bg-sol-bg-alt/70 hover:bg-sol-bg-alt border-b border-sol-border/50"
+          : "w-fit rounded-md border border-dashed border-sol-border/60 bg-sol-bg-alt/40 text-sol-text-dim hover:border-sol-cyan/40 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70"
+      }`}
       title={expanded ? "Hide tool activity" : "Show tool activity"}
     >
+      <ChevronRight className={`w-3 h-3 shrink-0 opacity-70 transition-transform ${expanded ? "rotate-90 text-sol-cyan" : ""}`} />
       <Wrench className="w-3 h-3 shrink-0 opacity-70" />
-      <span className="truncate font-medium tracking-tight">{summary}</span>
-      {screenshots.map(({ id, image }) => <CondensedImageThumb key={id} image={image} />)}
-      <ChevronRight className={`w-3 h-3 shrink-0 opacity-60 transition-transform ${expanded ? "rotate-90" : ""}`} />
+      <span className="truncate font-medium tracking-tight">{expanded ? counted : summary}</span>
+      {!expanded && screenshots.map(({ id, image }) => <CondensedImageThumb key={id} image={image} />)}
+      {expanded && <span className="ml-auto pl-3 shrink-0 text-[10px] uppercase tracking-wider text-sol-text-dim/80">hide</span>}
+    </div>
+  );
+  if (!expanded) return <div className="not-prose mt-1 flex">{header}</div>;
+  return (
+    <div className="not-prose mt-1 rounded-md border border-sol-border/70 border-l-2 border-l-sol-cyan/50 bg-sol-bg-alt/20 overflow-hidden">
+      {header}
+      <div className="px-2 pt-0.5 pb-1.5">
+        {entries.map((entry) => entry.tools.map((tc) => renderTool(tc, entry)))}
+      </div>
     </div>
   );
 });
@@ -7824,7 +7894,7 @@ const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content, onExp
   );
 });
 
-const EMPTY_RECEIPT_TOOLS: ToolCall[] = [];
+const EMPTY_RECEIPT_ENTRIES: ReceiptEntry[] = [];
 const EMPTY_CHILD_CONVERSATIONS: any[] = [];
 
 function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
@@ -7845,8 +7915,8 @@ function AssistantBlockImpl({
   messageUuid,
   conversationId,
   density = "full",
-  turnExpanded = false,
   condensedReceipt,
+  globalToolResultMap,
   onCollapseTurn,
   childConversationMap,
   childConversations,
@@ -7886,8 +7956,9 @@ function AssistantBlockImpl({
   messageUuid?: string;
   conversationId?: Id<"conversations">;
   density?: MessageFeedDensity;
-  turnExpanded?: boolean;
-  condensedReceipt?: { tools: ToolCall[]; expanded: boolean; onToggle: () => void };
+  condensedReceipt?: CondensedReceipt;
+  /** Results for tools folded into this row's receipt from OTHER messages (the owner's own come via toolResults). */
+  globalToolResultMap?: Record<string, ToolResult>;
   onCollapseTurn?: () => void;
   childConversationMap?: Record<string, string>;
   childConversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>;
@@ -7920,10 +7991,9 @@ function AssistantBlockImpl({
 
   // Condensed feed: this message's segment tools fold into one receipt row
   // (condensedReceipt), rendered inline right after the content where the
-  // activity happened. turnExpanded reveals the real tool blocks inline.
-  // Compact-expanded turns arrive as density "full".
+  // activity happened. Opening it reveals the real tool blocks nested under
+  // the chip, inside this row. Compact-expanded turns arrive as density "full".
   const condensed = density === "condensed";
-  const effectiveCondensed = condensed && !turnExpanded;
   const [contentExpanded, setContentExpanded] = useState(true);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -7953,6 +8023,63 @@ function AssistantBlockImpl({
     }
     return map;
   }, [toolResults]);
+
+  // One switch for every tool block this row can render, whether the tool is
+  // this message's own or folded into this row's condensed receipt from a
+  // later tool-only message. `src` is the message that actually ran it, so
+  // comments, share selection and subagent links attribute correctly.
+  const renderToolBlock = (tc: ToolCall, result: ToolResult | undefined, src: { messageId: string; messageUuid?: string; timestamp: number }) => (
+    (tc.name === "Task" || tc.name === "Agent") ? (
+      <TaskToolBlock
+        key={tc.id}
+        tool={tc}
+        result={result}
+        childConversationId={src.messageUuid && childConversationMap ? childConversationMap[src.messageUuid] : undefined}
+        childConversations={childConversations}
+      />
+    ) : tc.name === "TodoWrite" ? (
+      <TodoWriteBlock key={tc.id} tool={tc} />
+    ) : tc.name === "AskUserQuestion" ? (
+      <AskUserQuestionBlock key={tc.id} tool={tc} result={result} onSendMessage={onSendInlineMessage} />
+    ) : tc.name === "TaskList" ? (
+      <TaskListBlock key={tc.id} tool={tc} result={result} taskRecordMap={taskRecordMap} />
+    ) : tc.name === "TaskCreate" || tc.name === "TaskUpdate" || tc.name === "TaskGet" ? (
+      <TaskCreateUpdateBlock key={tc.id} tool={tc} result={result} taskSubjectMap={taskSubjectMap} taskRecordMap={taskRecordMap} />
+    ) : tc.name === "SendMessage" ? (
+      <SendMessageBlock key={tc.id} tool={tc} agentNameToChildMap={agentNameToChildMap} />
+    ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
+      <TeamCreateBlock key={tc.id} tool={tc} />
+    ) : tc.name === "Workflow" ? (
+      <WorkflowToolBlock key={tc.id} tool={tc} result={result} />
+    ) : tc.name === "Skill" ? (
+      <SkillBlock key={tc.id} tool={tc} />
+    ) : tc.name === "Monitor" || isBackgroundBashToolCall(tc) ? (
+      <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
+    ) : tc.name === "ScheduleWakeup" ? (
+      <ScheduleWakeupBlock key={tc.id} tool={tc} result={result} timestamp={src.timestamp} />
+    ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
+      <PlanModeBlock key={tc.id} tool={tc} result={result} conversationId={conversationId} messageId={src.messageId} onSendMessage={onSendInlineMessage} />
+    ) : parseCastCommand(tc) ? (
+      <CastCommandBlock key={tc.id} tool={tc} result={result} images={images} globalImageMap={globalImageMap} conversationId={conversationId} />
+    ) : (
+      <ToolBlock
+        key={tc.id}
+        tool={tc}
+        result={result}
+        changeIndex={toolCallChangeSelectionMap?.[tc.id]?.index}
+        changeRange={toolCallChangeSelectionMap?.[tc.id]?.range}
+        shareSelectionMode={shareSelectionMode}
+        messageId={src.messageId}
+        conversationId={conversationId}
+        onStartShareSelection={onStartShareSelection}
+        onOpenComments={onOpenComments ? () => onOpenComments(src.messageId) : undefined}
+        collapsed={density === "compact"}
+        timestamp={src.timestamp}
+        images={images}
+        globalImageMap={globalImageMap}
+      />
+    )
+  );
 
   useWatchEffect(() => {
     if (!contentRef.current) return;
@@ -8118,60 +8245,14 @@ function AssistantBlockImpl({
             otherwise. Condensed feed hides it too, EXCEPT a pure-reasoning
             turn, where thinking is the only content and hiding it leaves an
             empty bubble. */}
-        {visibleThinking && (!effectiveCondensed || (!hasContent && !hasToolCalls && !hasImages)) && <ThinkingBlock content={thinking!} />}
+        {visibleThinking && (!condensed || (!hasContent && !hasToolCalls && !hasImages)) && <ThinkingBlock content={thinking!} />}
 
+        {/* Condensed hides every hideable tool here: they render inside the
+            receipt group below the content instead (own tools and the folded
+            tools of absorbed messages alike). Always-visible blocks stay. */}
         {hasToolCalls && toolCalls?.map((tc) => {
-          if (effectiveCondensed && !isAlwaysVisibleToolCall(tc)) return null;
-          return (tc.name === "Task" || tc.name === "Agent") ? (
-            <TaskToolBlock
-              key={tc.id}
-              tool={tc}
-              result={toolResultMap[tc.id]}
-              childConversationId={messageUuid && childConversationMap ? childConversationMap[messageUuid] : undefined}
-              childConversations={childConversations}
-            />
-          ) : tc.name === "TodoWrite" ? (
-            <TodoWriteBlock key={tc.id} tool={tc} />
-          ) : tc.name === "AskUserQuestion" ? (
-            <AskUserQuestionBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} onSendMessage={onSendInlineMessage} />
-          ) : tc.name === "TaskList" ? (
-            <TaskListBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} taskRecordMap={taskRecordMap} />
-          ) : tc.name === "TaskCreate" || tc.name === "TaskUpdate" || tc.name === "TaskGet" ? (
-            <TaskCreateUpdateBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} taskSubjectMap={taskSubjectMap} taskRecordMap={taskRecordMap} />
-          ) : tc.name === "SendMessage" ? (
-            <SendMessageBlock key={tc.id} tool={tc} agentNameToChildMap={agentNameToChildMap} />
-          ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
-            <TeamCreateBlock key={tc.id} tool={tc} />
-          ) : tc.name === "Workflow" ? (
-            <WorkflowToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
-          ) : tc.name === "Skill" ? (
-            <SkillBlock key={tc.id} tool={tc} />
-          ) : tc.name === "Monitor" || isBackgroundBashToolCall(tc) ? (
-            <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
-          ) : tc.name === "ScheduleWakeup" ? (
-            <ScheduleWakeupBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} timestamp={timestamp} />
-          ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
-            <PlanModeBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} conversationId={conversationId} messageId={messageId} onSendMessage={onSendInlineMessage} />
-          ) : parseCastCommand(tc) ? (
-            <CastCommandBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} images={images} globalImageMap={globalImageMap} conversationId={conversationId} />
-          ) : (
-            <ToolBlock
-              key={tc.id}
-              tool={tc}
-              result={toolResultMap[tc.id]}
-              changeIndex={toolCallChangeSelectionMap?.[tc.id]?.index}
-              changeRange={toolCallChangeSelectionMap?.[tc.id]?.range}
-              shareSelectionMode={shareSelectionMode}
-              messageId={messageId}
-              conversationId={conversationId}
-              onStartShareSelection={onStartShareSelection}
-              onOpenComments={onOpenComments ? () => onOpenComments(messageId) : undefined}
-              collapsed={density === "compact"}
-              timestamp={timestamp}
-              images={images}
-              globalImageMap={globalImageMap}
-            />
-          );
+          if (condensed && !isAlwaysVisibleToolCall(tc)) return null;
+          return renderToolBlock(tc, toolResultMap[tc.id], { messageId, messageUuid, timestamp });
         })}
 
         {hasContent && (
@@ -8234,7 +8315,14 @@ function AssistantBlockImpl({
         )}
 
         {condensedReceipt && (
-          <CondensedToolsLine tools={condensedReceipt.tools} expanded={condensedReceipt.expanded} onToggle={condensedReceipt.onToggle} images={images} globalImageMap={globalImageMap} />
+          <CondensedToolsGroup
+            entries={condensedReceipt.entries}
+            expanded={condensedReceipt.expanded}
+            onToggle={condensedReceipt.onToggle}
+            images={images}
+            globalImageMap={globalImageMap}
+            renderTool={(tc, entry) => renderToolBlock(tc, toolResultMap[tc.id] ?? globalToolResultMap?.[tc.id], entry)}
+          />
         )}
 
         {fullscreen && createPortal(
@@ -11121,7 +11209,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                               className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 transition-colors ${isSelected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"}`}
                             >
                               {item.image ? (
-                                <img src={item.image} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
+                                <AvatarImg src={item.image} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
                               ) : item.isBot ? (
                                 <Bot className="w-3.5 h-3.5 flex-shrink-0 text-sol-violet" />
                               ) : (
@@ -11567,22 +11655,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // virtualizer (and its height cache keys) only ever sees the first three.
   const feedDensity: MessageFeedDensity = density === "condensed" || density === "compact" ? density : "full";
   const condensedFeed = feedDensity !== "full";
-  // Per-turn expansion for the condensed/compact feeds. In condensed it reveals
-  // a turn's hidden tool blocks; in compact it expands a collapsed turn to full.
-  // Keyed by the turn's first-assistant message id. Cleared when the feed
-  // density changes (below) and on conversation switch.
-  const [expandedTurns, setExpandedTurns] = useState<Set<string>>(new Set());
-  const toggleTurn = useCallback((turnKey: string) => {
-    setExpandedTurns(prev => {
+  // Disclosure state for the condensed/compact feeds. Compact keys by TURN (the
+  // first-assistant message id): opening expands the collapsed turn to full.
+  // Condensed keys by RECEIPT OWNER (the message whose row carries the chip):
+  // opening reveals just that segment's tools, nested under the chip inside the
+  // owner's row — nothing above the click changes, so the reader's spot holds.
+  // Cleared when the feed density changes (below) and on conversation switch.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const toggleGroup = useCallback((key: string) => {
+    setExpandedGroups(prev => {
       const next = new Set(prev);
-      if (next.has(turnKey)) next.delete(turnKey); else next.add(turnKey);
+      if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
   }, []);
   const prevFeedDensityRef = useRef(feedDensity);
   if (prevFeedDensityRef.current !== feedDensity) {
     prevFeedDensityRef.current = feedDensity;
-    if (expandedTurns.size) setExpandedTurns(new Set());
+    if (expandedGroups.size) setExpandedGroups(new Set());
   }
   const [diffExpanded, setDiffExpanded] = useState(false);
   // Global thinking visibility, off by default — opencode/pi carry real
@@ -11597,7 +11687,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const deferredQueriesEnabled = useDeferUntilSettled(conversation?._id);
   const gitDiffData = useQuery(
     api.conversations.getConversationGitDiff,
-    deferredQueriesEnabled && diffExpanded && convexConvId ? { conversation_id: convexConvId } : "skip"
+    deferredQueriesEnabled && diffExpanded && convexConvId
+      ? { conversation_id: convexConvId, ...shareTokenArg(convexConvId) }
+      : "skip"
   );
   const renamingSessionId = useInboxStore((s) => s.renamingSessionId);
   const isRenaming = renamingSessionId === conversation?._id;
@@ -11719,7 +11811,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setIsNearTop(true);
     setIsNearBottom(true);
     setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || resolveDefaultDensity());
-    setExpandedTurns(new Set());
+    setExpandedGroups(new Set());
     setDiffExpanded(false);
     setShowThinking(false);
     setHighlightedMessageId(null);
@@ -12649,6 +12741,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // between two pieces of assistant text folds into ONE receipt rendered inline
   // where it happened. The run's tools attach to its "owner" (the text message
   // that opens the run, or the first tool-only message); the rest are "absorbed".
+  // A receipt keeps one entry per source message (owner first) so an opened
+  // group can render each tool under its real message identity — results,
+  // comments and share selection stay attributed to the message that ran it.
   //
   // COMPACT works at TURN granularity (one collapsed card per assistant run), so
   // we also track each message's turn key, first/last message, and stats.
@@ -12658,7 +12753,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
     const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId
     const statsOf = new Map<string, { messages: number; tools: number; preview: string }>();
-    const receiptOf = new Map<string, ToolCall[]>();   // owner msgId -> folded hideable tools
+    const receiptOf = new Map<string, ReceiptEntry[]>(); // owner msgId -> folded hideable tools, per source message
     const absorbed = new Set<string>();                // msgId folded into an earlier receipt
     let curKey: string | null = null;
     let ownerId: string | null = null;                 // current segment's receipt owner
@@ -12694,20 +12789,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         stats.preview = stripSystemTags(msg.content || "").trim().split("\n")[0].slice(0, 140);
       }
       const hideable = tools.filter(tc => !isAlwaysVisibleToolCall(tc));
+      const entry: ReceiptEntry = { messageId: msg._id, messageUuid: msg.message_uuid, timestamp: msg.timestamp, tools: hideable };
       // Segment ownership: a text message opens a new segment and owns its own
       // tools; a tool-only message folds into the current owner (or becomes one).
       if (hasText) {
         ownerId = msg._id;
-        receiptOf.set(msg._id, [...hideable]);
+        receiptOf.set(msg._id, hideable.length ? [entry] : []);
       } else if (ownerId) {
-        if (hideable.length) receiptOf.get(ownerId)!.push(...hideable);
+        if (hideable.length) receiptOf.get(ownerId)!.push(entry);
         // A message carrying an always-visible block (poll, plan write) must
         // still render that block — fold its hideable tools into the receipt but
         // don't absorb the message itself.
         if (!tools.some(isAlwaysVisibleToolCall)) absorbed.add(msg._id);
       } else {
         ownerId = msg._id;
-        receiptOf.set(msg._id, [...hideable]);
+        receiptOf.set(msg._id, hideable.length ? [entry] : []);
       }
     }
     return { turnKeyOf, firstAssistOf, lastTextOf, statsOf, receiptOf, absorbed };
@@ -12960,7 +13056,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const globalMatches = useQuery(
     api.messages.findAllMessagesByContent,
     convexConvId && cleanedHighlight
-      ? { conversation_id: convexConvId, search_term: cleanedHighlight }
+      ? { conversation_id: convexConvId, search_term: cleanedHighlight, ...shareTokenArg(convexConvId) }
       : "skip"
   );
 
@@ -13114,6 +13210,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         const result: any = await convex.query(api.conversations.copyAllMessages, {
           conversation_id: convexConvId,
           paginationOpts: { numItems: 200, cursor },
+          ...shareTokenArg(convexConvId),
         });
         if (!result) break;
         if (result.page?.length) allMessages.push(...result.page);
@@ -13233,18 +13330,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const getItemKey = useCallback((index: number) => rowKeys[index] ?? index, [rowKeys]);
 
   // Height-cache discriminator. In compact and condensed a row's height depends
-  // on whether its turn is expanded (compact: card vs full; condensed: absorbed
-  // tool-only rows go 0 → full), so the key must flip with that — otherwise a
-  // toggled turn reads a stale cached height and the virtualizer mis-lays the list.
+  // on its disclosure state (compact: card vs full turn; condensed: the owner
+  // row grows by its opened tool group), so the key must flip with that —
+  // otherwise a toggled row reads a stale cached height and the virtualizer
+  // mis-lays the list.
   const rowDensityKey = useCallback((index: number): string => {
     if (feedDensity === "full") return feedDensity;
     const item = timeline[index];
     if (item?.type !== "message") return feedDensity;
     const msg = item.data as Message;
-    const turnKey = turnAggregates.turnKeyOf.get(msg._id);
-    const expanded = turnKey ? expandedTurns.has(turnKey) : false;
+    const groupKey = feedDensity === "compact" ? turnAggregates.turnKeyOf.get(msg._id) : msg._id;
+    const expanded = groupKey ? expandedGroups.has(groupKey) : false;
     return `${feedDensity}:${expanded ? "e" : "c"}`;
-  }, [feedDensity, timeline, turnAggregates, expandedTurns]);
+  }, [feedDensity, timeline, turnAggregates, expandedGroups]);
 
   const estimateSize = useCallback((index: number) => {
     const item = timeline[index];
@@ -13264,23 +13362,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // rest of the turn is height 0 until expanded.
     if (feedDensity === "compact" && msg.role === "assistant") {
       const turnKey = turnAggregates.turnKeyOf.get(msg._id);
-      if (turnKey && !expandedTurns.has(turnKey)) {
+      if (turnKey && !expandedGroups.has(turnKey)) {
         const lastText = turnAggregates.lastTextOf.get(turnKey);
         if (lastText) return msg._id === lastText ? COMPACT_TAIL_HEIGHT : 0;
         return turnAggregates.firstAssistOf.get(turnKey) === msg._id ? 64 : 0;
       }
     }
     if (feedDensity === "condensed" && msg.role === "assistant") {
-      const turnKey = turnAggregates.turnKeyOf.get(msg._id);
-      const expanded = turnKey ? expandedTurns.has(turnKey) : false;
-      if (!expanded) {
-        // Tool-only messages folded into an earlier segment's receipt vanish.
-        if (turnAggregates.absorbed.has(msg._id)) return 0;
-        const hasTextContent = msg.content && msg.content.trim().length > 0;
-        if (msg.tool_calls?.some(isAlwaysVisibleToolCall)) return 200;
-        // A tool-only receipt owner is just the one receipt row.
-        if (!hasTextContent && (turnAggregates.receiptOf.get(msg._id)?.length ?? 0) > 0) return 28;
-      }
+      // Tool-only messages folded into an earlier segment's receipt never
+      // render: their tools show inside the owner's opened group.
+      if (turnAggregates.absorbed.has(msg._id)) return 0;
+      const hasTextContent = msg.content && msg.content.trim().length > 0;
+      const receiptToolCount = turnAggregates.receiptOf.get(msg._id)?.reduce((n, e) => n + e.tools.length, 0) ?? 0;
+      const groupHeight = receiptToolCount > 0 && expandedGroups.has(msg._id) ? Math.min(receiptToolCount * 36, 400) : 0;
+      if (msg.tool_calls?.some(isAlwaysVisibleToolCall)) return 200 + groupHeight;
+      // A tool-only receipt owner is just the one receipt row (plus its open group).
+      if (!hasTextContent && receiptToolCount > 0) return 28 + groupHeight;
+      if (groupHeight) return 200 + groupHeight;
     }
 
     if (msg.role === "system") return 8;
@@ -13315,7 +13413,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return 200;
     }
     return 40;
-  }, [timeline, feedDensity, condensedFeed, userMsgKindMap, commandExpansionMap, getItemKey, rowDensityKey, turnAggregates, expandedTurns]);
+  }, [timeline, feedDensity, condensedFeed, userMsgKindMap, commandExpansionMap, getItemKey, rowDensityKey, turnAggregates, expandedGroups]);
 
   // Mirror @tanstack/virtual-core's default measureElement, but persist every
   // measured height into VIRT_HEIGHT_CACHE keyed by the stable item key so a
@@ -13393,6 +13491,35 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   scrollToBottomFnRef.current = () => {
     virtualizer.scrollToEnd({ behavior: "auto" });
   };
+
+  // Opening or closing a condensed tool group resizes the CLICKED row at its
+  // bottom (the group nests under the chip). Two things would otherwise move
+  // the reader's spot: (1) the virtualizer's default rule treats a resize of
+  // any row that starts above the viewport top as growth ABOVE the viewport
+  // and shifts scrollTop by the delta — for a long, half-scrolled message that
+  // throws the chip just clicked off the top; (2) with the reader parked at
+  // the tail, anchorTo:'end' re-pins to the bottom on any size change, so the
+  // opened tools push the chip up and away. So a toggle latches userScrolled
+  // (the reader took the view; the tail-follow re-arms the moment they scroll
+  // back down) and names its row for a short window during which that row's
+  // resize leaves scrollTop alone. Every other row keeps the default rule.
+  const scrollHoldRef = useRef<{ key: string | number; until: number } | null>(null);
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+    const hold = scrollHoldRef.current;
+    if (hold && item.key === hold.key && Date.now() < hold.until) return false;
+    // The library default, restated (getScrollOffset/scrollAdjustments are not on the public type).
+    const v = instance as unknown as { getScrollOffset: () => number; scrollAdjustments: number };
+    return item.start < v.getScrollOffset() + (v.scrollAdjustments ?? 0) && instance.scrollDirection !== "backward";
+  };
+  const rowLookupRef = useRef({ timeline, getItemKey });
+  rowLookupRef.current = { timeline, getItemKey };
+  const toggleReceipt = useCallback((ownerId: string) => {
+    const { timeline: tl, getItemKey: keyOf } = rowLookupRef.current;
+    const index = tl.findIndex((it) => it.type === "message" && (it.data as Message)._id === ownerId);
+    if (index >= 0) scrollHoldRef.current = { key: keyOf(index), until: Date.now() + 800 };
+    setUserScrolled(true);
+    toggleGroup(ownerId);
+  }, [toggleGroup, setUserScrolled]);
 
   // Size-drift self-heal. If a measurement ever landed under the wrong key
   // (see the attribution guard in measureElement) — or a row changed height
@@ -14539,7 +14666,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const { data: serverSessionImages } = useQueryNoThrow(
     api.messages.getConversationImages,
     deferredQueriesEnabled && conversation?._id && isConvexId(conversation._id)
-      ? { conversation_id: conversation._id as Id<"conversations"> }
+      ? { conversation_id: conversation._id as Id<"conversations">, ...shareTokenArg(conversation._id) }
       : "skip"
   );
   const windowImageEntries = useMemo(
@@ -14743,25 +14870,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   };
 
   // Same identity discipline for the condensed/compact per-row objects: a fresh
-  // `{tools, expanded, onToggle}` per render re-rendered every visible row on
+  // `{entries, expanded, onToggle}` per render re-rendered every visible row on
   // every virtualizer pass in condensed view.
-  const receiptCacheRef = useRef(new WeakMap<Message, { tools: ToolCall[]; expanded: boolean; toggleTurn: typeof toggleTurn; value: { tools: ToolCall[]; expanded: boolean; onToggle: () => void } | undefined }>());
-  const condensedReceiptFor = (msg: Message, tools: ToolCall[], expanded: boolean, turnKey: string | undefined) => {
-    if (!tools.length) return undefined;
+  const receiptCacheRef = useRef(new WeakMap<Message, { entries: ReceiptEntry[]; expanded: boolean; toggleReceipt: typeof toggleReceipt; value: CondensedReceipt | undefined }>());
+  const condensedReceiptFor = (msg: Message, entries: ReceiptEntry[], expanded: boolean): CondensedReceipt | undefined => {
+    if (!entries.length) return undefined;
     const cache = receiptCacheRef.current;
     const hit = cache.get(msg);
-    if (hit && hit.tools === tools && hit.expanded === expanded && hit.toggleTurn === toggleTurn) return hit.value;
-    const value = { tools, expanded, onToggle: () => toggleTurn(turnKey!) };
-    cache.set(msg, { tools, expanded, toggleTurn, value });
+    if (hit && hit.entries === entries && hit.expanded === expanded && hit.toggleReceipt === toggleReceipt) return hit.value;
+    const value = { entries, expanded, onToggle: () => toggleReceipt(msg._id) };
+    cache.set(msg, { entries, expanded, toggleReceipt, value });
     return value;
   };
-  const collapseHandlerCacheRef = useRef(new WeakMap<Message, { turnKey: string; toggleTurn: typeof toggleTurn; fn: () => void }>());
+  const collapseHandlerCacheRef = useRef(new WeakMap<Message, { turnKey: string; toggleGroup: typeof toggleGroup; fn: () => void }>());
   const collapseTurnHandlerFor = (msg: Message, turnKey: string) => {
     const cache = collapseHandlerCacheRef.current;
     const hit = cache.get(msg);
-    if (hit && hit.turnKey === turnKey && hit.toggleTurn === toggleTurn) return hit.fn;
-    const fn = () => toggleTurn(turnKey);
-    cache.set(msg, { turnKey, toggleTurn, fn });
+    if (hit && hit.turnKey === turnKey && hit.toggleGroup === toggleGroup) return hit.fn;
+    const fn = () => toggleGroup(turnKey);
+    cache.set(msg, { turnKey, toggleGroup, fn });
     return fn;
   };
 
@@ -14898,9 +15025,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       // change re-rendered every visible row (fresh arrays each pass).
       const { isFirstInSequence, runMessageIds } = assistantRowDerived(msg, index);
 
-      // Turn-level behavior for the condensed/compact feeds.
+      // Turn-level behavior for the compact feed.
       const turnKey = turnAggregates.turnKeyOf.get(msg._id);
-      const turnExpanded = turnKey ? expandedTurns.has(turnKey) : false;
+      const turnExpanded = turnKey ? expandedGroups.has(turnKey) : false;
       // Compact: a collapsed turn shows the bottom ~300px of its final reply with
       // the top faded out; the rest of the turn renders nothing until expanded. A
       // turn with no text (tool-only) falls back to a one-line card.
@@ -14908,7 +15035,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         const lastText = turnAggregates.lastTextOf.get(turnKey);
         if (lastText) {
           if (msg._id !== lastText) return null;
-          return <CompactCollapsedTurn key={msg._id} content={msg.content || ""} onExpand={() => toggleTurn(turnKey)} />;
+          return <CompactCollapsedTurn key={msg._id} content={msg.content || ""} onExpand={() => toggleGroup(turnKey)} />;
         }
         if (turnAggregates.firstAssistOf.get(turnKey) !== msg._id) return null;
         const stats = turnAggregates.statsOf.get(turnKey);
@@ -14918,21 +15045,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             preview={stats?.preview || ""}
             messageCount={stats?.messages || 0}
             toolCount={stats?.tools || 0}
-            onExpand={() => toggleTurn(turnKey)}
+            onExpand={() => toggleGroup(turnKey)}
           />
         );
       }
       // Condensed: a tool-only message folded into an earlier segment's receipt
-      // renders nothing until the turn is expanded.
-      if (feedDensity === "condensed" && !turnExpanded && turnAggregates.absorbed.has(msg._id)) return null;
+      // never renders on its own — its tools show inside the owner's group.
+      if (feedDensity === "condensed" && turnAggregates.absorbed.has(msg._id)) return null;
       // An expanded compact turn renders at full density (nothing clipped); the
       // collapse control sits on its first message.
       const effectiveDensity: MessageFeedDensity = feedDensity === "compact" ? "full" : feedDensity;
       const isTurnFirst = turnKey ? turnAggregates.firstAssistOf.get(turnKey) === msg._id : false;
       // Condensed: this message's segment tools fold into one receipt rendered
-      // inline right after its text — where the activity happened.
-      const receiptTools = feedDensity === "condensed" ? (turnAggregates.receiptOf.get(msg._id) ?? EMPTY_RECEIPT_TOOLS) : EMPTY_RECEIPT_TOOLS;
-      const condensedReceipt = condensedReceiptFor(msg, receiptTools, turnExpanded, turnKey);
+      // inline right after its text — where the activity happened. Opening it
+      // reveals the group under the chip, inside this same row.
+      const receiptEntries = feedDensity === "condensed" ? (turnAggregates.receiptOf.get(msg._id) ?? EMPTY_RECEIPT_ENTRIES) : EMPTY_RECEIPT_ENTRIES;
+      const condensedReceipt = condensedReceiptFor(msg, receiptEntries, expandedGroups.has(msg._id));
       const onCollapseTurn = feedDensity === "compact" && turnKey && isTurnFirst ? collapseTurnHandlerFor(msg, turnKey) : undefined;
 
       const relevantToolResults = relevantToolResultsFor(msg);
@@ -14951,8 +15079,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           messageUuid={msg.message_uuid}
           conversationId={conversation?._id}
           density={effectiveDensity}
-          turnExpanded={turnExpanded}
           condensedReceipt={condensedReceipt}
+          globalToolResultMap={condensedReceipt ? globalToolResultMap : undefined}
           onCollapseTurn={onCollapseTurn}
           childConversationMap={conversation?.child_conversation_map}
           childConversations={conversation?.child_conversations}
@@ -15283,17 +15411,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
                 {!isOwner && conversation.user && (
                   <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/30">
-                    {conversation.user.avatar_url ? (
-                      <img
-                        src={conversation.user.avatar_url}
-                        alt={conversation.user.name || "User"}
-                        className="w-4 h-4 rounded-full"
-                      />
-                    ) : (
-                      <span className="w-4 h-4 rounded-full bg-sol-violet/20 flex items-center justify-center text-[8px]">
-                        {(conversation.user.name || conversation.user.email || "?").charAt(0).toUpperCase()}
-                      </span>
-                    )}
+                    <AvatarImg
+                      src={conversation.user.avatar_url}
+                      alt={conversation.user.name || "User"}
+                      className="w-4 h-4 rounded-full"
+                      fallback={
+                        <span className="w-4 h-4 rounded-full bg-sol-violet/20 flex items-center justify-center text-[8px]">
+                          {(conversation.user.name || conversation.user.email || "?").charAt(0).toUpperCase()}
+                        </span>
+                      }
+                    />
                     {conversation.user.name || conversation.user.email?.split("@")[0] || "Teammate"}
                   </span>
                 )}

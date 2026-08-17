@@ -119,11 +119,15 @@ function esc(s: string): string {
 
 const CONVEX_ID_REGEX = /^[a-z0-9]{32}$/;
 
-async function getConversationMeta(id: string) {
+async function getConversationMeta(id: string, shareToken?: string) {
   if (!CONVEX_ID_REGEX.test(id)) return null;
   try {
+    // A bare conversation id unfurls nothing for link-shared sessions — the
+    // server requires the token to be PRESENTED (?share=, carried over from
+    // the /share redirect). /share/<token> URLs unfurl via getShareMeta.
     const meta = await convex.query(api.conversations.getConversationMeta, {
       conversation_id: id as Id<"conversations">,
+      ...(shareToken ? { share_token: shareToken } : {}),
     });
     if (!meta) return null;
     const title = meta.title || "Coding Session";
@@ -166,8 +170,8 @@ async function getShareMessageMeta(token: string) {
 
 // /a/<slug> (published artifacts) is absent on purpose: that page is
 // server-rendered by artifactPage.ts and carries its own og tags.
-const ROUTES: Array<{ pattern: RegExp; handler: (match: RegExpMatchArray) => Promise<{ title: string; description: string; url: string; type?: string } | null> }> = [
-  { pattern: /^\/conversation\/([a-z0-9]{32})$/, handler: (m) => getConversationMeta(m[1]) },
+const ROUTES: Array<{ pattern: RegExp; handler: (match: RegExpMatchArray, search: URLSearchParams) => Promise<{ title: string; description: string; url: string; type?: string } | null> }> = [
+  { pattern: /^\/conversation\/([a-z0-9]{32})$/, handler: (m, search) => getConversationMeta(m[1], search.get("share") ?? undefined) },
   { pattern: /^\/share\/message\/(.+)$/, handler: (m) => getShareMessageMeta(m[1]) },
   { pattern: /^\/share\/(.+)$/, handler: (m) => getShareMeta(m[1]) },
 ];
@@ -178,7 +182,8 @@ export async function botMetaMiddleware(c: Context, next: Next) {
   const crawler = matches(ua, CRAWLER_PATTERNS);
   if (!social && !crawler) return next();
 
-  const path = new URL(c.req.url).pathname;
+  const reqUrl = new URL(c.req.url);
+  const path = reqUrl.pathname;
 
   // Marketing routes: full prerendered documents for every kind of bot. The
   // snapshot carries real body content AND the og tags, so it satisfies both.
@@ -189,7 +194,7 @@ export async function botMetaMiddleware(c: Context, next: Next) {
     for (const route of ROUTES) {
       const match = path.match(route.pattern);
       if (match) {
-        const meta = await route.handler(match);
+        const meta = await route.handler(match, reqUrl.searchParams);
         if (meta) return c.html(ogHtml(meta));
         break;
       }
