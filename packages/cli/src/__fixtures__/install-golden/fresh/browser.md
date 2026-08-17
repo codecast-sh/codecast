@@ -1,7 +1,7 @@
 
 ## Browser
 
-`cast browser` drives a real Chrome, cloned from the human's profile so their logins carry over. Use it whenever the work is on a web page: verifying a UI change, reading behind a sign-in, filling a form, reproducing a bug.
+`cast browser` drives a real Chrome, cloned from the human's profile so their logins carry over — except Google, which the agent browser signs into on its own (below). Use it whenever the work is on a web page: verifying a UI change, reading behind a sign-in, filling a form, reproducing a bug.
 
 ```bash
 cast browser open <url>       # starts the browser if needed; reuses this session's tab
@@ -17,5 +17,6 @@ What cast adds to the usual pattern:
 
 - **Evidence flows to the thread.** A failing step automatically prints console errors, failed requests and a screenshot. `shot` puts a capture in the conversation — `--annotate` numbers elements with their refs, `--share` uploads a link you can paste. `cast browser shots on` adds an automatic small capture after commands that change the page (off by default for agents; a `do` flow then captures once, at the end). Never link local file paths — the human's browser cannot read them.
 - **One Chrome, many agents.** Each session owns one tab; `tabs` marks yours. Act only on yours, and `--new-tab` only for a genuine second page. State persists until `cast browser stop` (`--wipe` also removes the profile copy; `start --fresh` starts signed out). The clone holds the human's logins — treat that access as theirs. Modal dialogs are dismissed automatically and never block.
+- **Sign-in pages.** When `open` reports it landed on a sign-in page, the fix is a person signing in once in the agent browser: run `cast browser login <url>` (raises its window, waits) and tell the human — a `cast decide` or a push, not a restart. Google is never carried from the human's Chrome (a shared Google session signs both browsers out), so the agent browser's Google login is always this one-time sign-in; it survives restarts and `--resync`. Never `--resync` or `stop --all` to fix a sign-out — it drops nothing useful and kills other sessions' tabs.
 - **Remote hosts.** `start --remote linux` runs Chrome on a cloud host that sleeps when idle (about a dollar a month); `--remote mac` cannot sleep and bills continuously (~EUR75/month, minimum lease 24 hours) — only for work that truly needs macOS. Cookies are injected per site as you navigate and wiped on stop. `cast browser hosts sleep` when done.
 <!-- /codecast-browser -->
