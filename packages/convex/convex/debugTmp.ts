@@ -626,3 +626,34 @@ export const e2eSeedConversation = internalMutation({
     return id;
   },
 });
+
+// TEMPORARY (e2e): seat `from` in the room and ring `to`, exactly as
+// calls.invite would (fresh row, TTL sweep scheduled). Lets the CallKit
+// simulator pass run without the headless web rig.
+export const e2eRing = internalMutation({
+  args: { from: v.id("users"), to: v.id("users"), room_key: v.string() },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const from = await ctx.db.get(args.from);
+    await ctx.db.insert("call_members", {
+      room_key: args.room_key,
+      team_id: "k9737ctz1grqeghvbwdevxp69d8cks7s" as any,
+      user_id: args.from,
+      user_name: from?.name ?? from?.email ?? "Teammate",
+      joined_at: now,
+      last_seen: now,
+      muted: true,
+      camera: false,
+      sharing: false,
+    } as any);
+    const inviteId = await ctx.db.insert("call_invites", {
+      room_key: args.room_key,
+      team_id: "k9737ctz1grqeghvbwdevxp69d8cks7s" as any,
+      from_user: args.from,
+      to_user: args.to,
+      status: "ringing",
+      created_at: now,
+    } as any);
+    return String(inviteId);
+  },
+});
