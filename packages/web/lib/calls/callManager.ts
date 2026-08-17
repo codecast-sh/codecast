@@ -21,7 +21,7 @@ import {
 } from "livekit-client";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
-import { CALL_HEARTBEAT_MS } from "@codecast/shared/contracts";
+import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
 import {
   soundCallJoin,
   soundCallLeave,
@@ -267,10 +267,13 @@ export async function joinCall(roomKey: string): Promise<void> {
   if (!convex) return;
   const prior = useInboxStore.getState().call;
   // Already in (or genuinely joining) this room: idempotent. "connecting" only
-  // counts when a Room object exists — acceptInvite paints connecting before
-  // any media work, and that optimistic paint must not swallow the real join.
+  // counts when a Room object exists AND belongs to this key — accepting a
+  // ring while connected elsewhere paints {connecting, roomKey:B} while
+  // `room` is still call A's Room; without the currentRoomKey check this
+  // guard would return and wedge "connecting…" forever.
   if (
     prior.roomKey === roomKey &&
+    currentRoomKey === roomKey &&
     (prior.phase === "connected" || (prior.phase === "connecting" && room))
   ) {
     return;
@@ -386,7 +389,7 @@ export async function joinCall(roomKey: string): Promise<void> {
     const message =
       err?.name === "NotAllowedError"
         ? "Microphone permission denied"
-        : err?.message || "Could not join the huddle";
+        : humanizeConvexError(err, "Could not join the huddle");
     setCall({ phase: "error", error: message });
     // Free the control-plane row so occupancy doesn't show a ghost.
     convex?.mutation(api.calls.leaveRoom, { room_key: roomKey }).catch(() => {});
@@ -551,14 +554,21 @@ export async function startHuddle(opts: {
       anchor_title: opts.anchorTitle,
     });
   } catch (err: any) {
-    setCall({ phase: "error", error: err?.message || "Could not start the huddle" });
+    setCall({ phase: "error", error: humanizeConvexError(err, "Could not start the huddle") });
   }
 }
 
 export async function acceptInvite(inviteId: string, roomKey: string): Promise<void> {
   if (!convex) return;
   // Local-first: the dock paints "connecting" the instant Join is clicked;
-  // the accept round-trip and the media join settle after.
+  // the accept round-trip and the media join settle after. Accepting while in
+  // ANOTHER live call must not destroy that call on failure — remember it and
+  // restore it if the ring is expired, instead of painting an error over a
+  // still-flowing call (which also kills its heartbeat gate).
+  const prior = useInboxStore.getState().call;
+  const switching =
+    prior.roomKey !== roomKey &&
+    (prior.phase === "connected" || prior.phase === "connecting");
   setCall({ phase: "connecting", roomKey, error: null, speaking: [] });
   try {
     const res = await convex.mutation(api.calls.respondInvite, {
@@ -566,12 +576,19 @@ export async function acceptInvite(inviteId: string, roomKey: string): Promise<v
       accept: true,
     });
     if (res?.expired) {
-      setCall({ phase: "error", error: "That ring expired" });
+      if (switching) setCall({ ...prior });
+      else setCall({ phase: "error", error: "That ring expired" });
       return;
+    }
+    // Release the old seat immediately — joinCall tears down its media, but
+    // only leaveRoom frees the lease before the 45s sweep.
+    if (switching && prior.roomKey) {
+      convex.mutation(api.calls.leaveRoom, { room_key: prior.roomKey }).catch(() => {});
     }
     await joinCall(roomKey);
   } catch (err: any) {
-    setCall({ phase: "error", error: err?.message || "Could not join the huddle" });
+    if (switching) setCall({ ...prior });
+    else setCall({ phase: "error", error: humanizeConvexError(err, "Could not join the huddle") });
   }
 }
 

@@ -4,7 +4,7 @@ import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { soundCallRing, soundCallDeclined } from "../lib/sounds";
 import { notifyNative } from "../lib/desktop";
 import { acceptInvite, declineInvite } from "../lib/calls/callManager";
-import { CALL_INVITE_TTL_MS } from "@codecast/shared/contracts";
+import { CALL_INVITE_TTL_MS, CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
 
 // Incoming huddle rings → toast + sound + native banner; outgoing declines →
 // a quiet settle. Mounted once app-wide beside useChatToasts — a ring must
@@ -15,7 +15,6 @@ import { CALL_INVITE_TTL_MS } from "@codecast/shared/contracts";
 // ring SOUND loops here (one cycle per interval) so dismissing the invite —
 // answered anywhere, cancelled by the caller, or expired server-side — stops
 // it on the next sync with no teardown protocol.
-const RING_PERIOD_MS = 3_000;
 
 export function useCallRing(): void {
   const s = useTrackedStore([
@@ -113,7 +112,7 @@ export function useCallRing(): void {
     const shouldRing = incoming.length > 0 && !quiet && !inCall;
     if (shouldRing && !ringTimer.current) {
       soundCallRing();
-      ringTimer.current = setInterval(soundCallRing, RING_PERIOD_MS);
+      ringTimer.current = setInterval(soundCallRing, CALL_RING_PERIOD_MS);
     } else if (!shouldRing && ringTimer.current) {
       clearInterval(ringTimer.current);
       ringTimer.current = null;
