@@ -20,7 +20,7 @@
 import type { PageSession } from "./instance.js";
 import { settle } from "./instance.js";
 import { isMutatingStep } from "./autoShot.js";
-import { snapshotPage, matchRefs, type Snapshot } from "./snapshot.js";
+import { snapshotPage, matchRefs, nearMatches, type Snapshot } from "./snapshot.js";
 import {
   clearViewport, click, clickAt, DEVICES, evaluate, focus, hover, locate, pressKey,
   scroll, selectOption, setViewport, type, type DeviceProfile,
@@ -130,12 +130,21 @@ export async function runStep(ctx: BatchContext, args: string[], raw?: string): 
     }
 
     case "find": {
-      const query = positional[0];
+      // The whole positional tail is the query: `find Sign in` and
+      // `find "Sign in"` must mean the same thing.
+      const query = positional.join(" ");
       if (!query) throw new Error("find needs some text to look for");
       const snap = ctx.lastSnapshot ?? (await snapshotPage(page));
       ctx.lastSnapshot = snap;
       const hits = matchRefs(snap.refs, query);
-      if (!hits.length) throw new Error(`no element matching ${JSON.stringify(query)}`);
+      if (!hits.length) {
+        const near = nearMatches(snap.refs, query, 3)
+          .map((h) => `${h.role} ${JSON.stringify(h.name)} #e${h.ref}`)
+          .join(", ");
+        throw new Error(
+          `no element matching ${JSON.stringify(query)}${near ? `; closest: ${near}` : ""}`,
+        );
+      }
       // Remember the best hit so a bare `click` can use it.
       ctx.lastFound = hits[0].ref;
       return hits.map((h) => `${h.role} ${JSON.stringify(h.name)} #e${h.ref}`).slice(0, 10).join("\n");
