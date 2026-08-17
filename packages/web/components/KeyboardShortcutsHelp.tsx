@@ -207,8 +207,11 @@ export function ShortcutTooltip({ label, action, hint, side = "bottom", children
     <TooltipProvider delayDuration={300}>
       <Tooltip open={open} onOpenChange={(v) => { cancelFirstShow(); setOpen(v); }}>
         <TooltipTrigger asChild onPointerLeave={cancelFirstShow} onBlur={cancelFirstShow}>{children}</TooltipTrigger>
-        <TooltipContent side={side} className="flex items-center gap-1.5 bg-sol-bg text-sol-text border border-sol-border shadow-md">
-          <span>{label}</span>
+        {/* Bounded width + wrap: a label that carries a sentence (a trigger's
+            standing prompt, a long path) folds into lines instead of running
+            one unbroken row across the viewport and clipping. */}
+        <TooltipContent side={side} className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 max-w-[min(360px,calc(100vw-16px))] bg-sol-bg text-sol-text border border-sol-border shadow-md">
+          <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
           {parts && (
             <span className="flex items-center gap-[2px]">
               {parts.map((part, i) => (
