@@ -121,7 +121,7 @@ export function signInLandingNote(url: string, keepsOwn: (host: string) => boole
   const host = signInHost(url);
   if (!host) return null;
   const why = keepsOwn(host)
-    ? "the agent browser keeps its own login for this site (never copied from your Chrome — a shared one signs both out)"
+    ? "the agent browser keeps its own login for this site (never copied from your Chrome — a shared one signs both out; Chrome normally signs it in from your account on launch)"
     : "your Chrome's cookies for it were carried, so this site keeps its session elsewhere or you are signed out there too";
   return `landed on a sign-in page (${host}) — ${why}. A person signs in once: \`cast browser login\` raises the agent browser on this tab and waits`;
 }
