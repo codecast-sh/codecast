@@ -71,10 +71,23 @@ const TYPE_OF_CONVEX_ID: Record<string, string> = {
   [PLAN_CONVEX_ID]: "plan",
 };
 
+// A published page (`cast publish` output) the fake server knows about.
+const PAGE_SLUG = "Ab3xYz9Qw12k";
+const FAKE_PAGE = {
+  slug: PAGE_SLUG,
+  title: "Q3 growth report",
+  size: 4096,
+  version: 3,
+  kind: "html",
+  gated: false,
+  user: { name: "Ashot", image: null },
+};
+
 function fakeQuery(fn: unknown, args: any) {
   if (args === "skip") return undefined;
   const name = getFunctionName(fn as any);
   if (name === "entities:resolveIdType") return TYPE_OF_CONVEX_ID[args?.id] ?? null;
+  if (name === "artifacts:getShared") return args?.slug === PAGE_SLUG ? FAKE_PAGE : null;
   const rows = ROWS[name];
   if (!rows) return undefined;
   return rows.find((r) => r.short_id === args?.short_id || r._id === args?.id) ?? null;
@@ -219,6 +232,46 @@ describe("inline task and plan references", () => {
     // must not go blank or claim a title it never got — it falls back to the id.
     const html = render("Ask them about ct-99999.");
     expect(html).toContain("ct-99999");
+  });
+});
+
+describe("published page links", () => {
+  const PAGE_URL = `https://codecast.sh/a/${PAGE_SLUG}`;
+
+  test("a publish URL alone on its line embeds the live page", () => {
+    const html = render(`Here is the report:\n\n${PAGE_URL}\n\nTell me what to change.`);
+    expect(html).toContain("<iframe");
+    expect(html).toContain(`/cli/a/${PAGE_SLUG}`);
+    // The header carries the page's live title.
+    expect(html).toContain("Q3 growth report");
+    // The surrounding prose is untouched.
+    expect(html).toContain("Tell me what to change.");
+  });
+
+  test("[caption](url) on its own line renders the caption under the frame", () => {
+    const html = render(`[Funnel by market, last 30 days](${PAGE_URL})`);
+    expect(html).toContain("<iframe");
+    expect(html).toContain("Funnel by market, last 30 days");
+  });
+
+  test("a publish URL inside a sentence renders a titled pill, not a frame", () => {
+    const html = render(`The numbers are in ${PAGE_URL} if you want detail.`);
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain("Q3 growth report");
+    expect(html).toContain(`href="${PAGE_URL}"`);
+  });
+
+  test("a deleted page degrades to a note with the link, not a framed 404", () => {
+    const html = render("https://codecast.sh/a/Gone12345678");
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain("Published page unavailable");
+    expect(html).toContain("https://codecast.sh/a/Gone12345678");
+  });
+
+  test("a non-page /a/ lookalike on another host stays an ordinary link", () => {
+    const html = render("see https://example.com/a/Ab3xYz9Qw12k for theirs");
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain('href="https://example.com/a/Ab3xYz9Qw12k"');
   });
 });
 

@@ -1,7 +1,7 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
-import { isConvexId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId } from "./entityLinks";
+import { isConvexId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parsePublishedPageUrl } from "./entityLinks";
 
 // Both shapes come from the shared mention vocabulary (@codecast/shared/
 // entities), so registering a new object type there lights it up in prose
@@ -16,6 +16,34 @@ const EMBED_RE = /!\[\[(doc:[a-z0-9]{32})\]\]/g;
 
 function isEmbedLink(node: any): boolean {
   return node?.type === "link" && typeof node.url === "string" && node.url.startsWith("embed://");
+}
+
+function mdastText(node: any): string {
+  if (!node) return "";
+  if (node.type === "text") return node.value ?? "";
+  if (Array.isArray(node.children)) return node.children.map(mdastText).join("");
+  return "";
+}
+
+/**
+ * A publish URL (codecast.sh/a/<slug>) standing alone on its own line becomes
+ * a block-level page embed — the page renders inline in the conversation, the
+ * way the decision queue frames an attached report. Link text the author wrote
+ * (`[caption](url)`) rides along as the caption, image-style; a bare autolink
+ * has none. Same text-node payload trick as doc embeds: react-markdown's url
+ * sanitizer drops the embed:// href, so the text carries `artifact:<slug>|<caption>`.
+ */
+function toPageEmbedLink(link: any): any | null {
+  const page = parsePublishedPageUrl(link?.type === "link" ? link.url : null);
+  if (!page) return null;
+  const text = mdastText(link).trim();
+  const caption = text && text !== link.url ? text : "";
+  const payload = `artifact:${page.slug}${caption ? `|${caption}` : ""}`;
+  return {
+    type: "link",
+    url: `embed://${payload}`,
+    children: [{ type: "text", value: `embed:${payload}` }],
+  };
 }
 
 /**
@@ -33,6 +61,10 @@ function hoistEmbeds(node: any) {
         (c: any) => !(c.type === "text" && !c.value?.trim()),
       );
       if (meaningful.length === 1 && isEmbedLink(meaningful[0])) return meaningful[0];
+      if (meaningful.length === 1) {
+        const pageEmbed = toPageEmbedLink(meaningful[0]);
+        if (pageEmbed) return pageEmbed;
+      }
       child.children = child.children.map((c: any) =>
         isEmbedLink(c)
           ? {

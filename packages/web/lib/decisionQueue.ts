@@ -86,6 +86,72 @@ export function queueTier(item: QueueItem): 1 | 2 | 3 {
   return isReachable(item.session) ? 1 : 2;
 }
 
+// Keyboard routing for the decision card. Pure so the claim/stand-down rules
+// are testable: the card's listener runs on window in CAPTURE phase (it must
+// beat the global shortcut layer), which means every key in the app passes
+// through it first — the rules about which keys it may claim are the actual
+// safety surface. A non-null action means the card claims the key
+// (preventDefault + stopPropagation); null means the key was never ours.
+export type QueueKeyAction =
+  | { kind: "commit-free-text" }
+  | { kind: "close-free-text" }
+  | { kind: "answer"; option: number }
+  | { kind: "open-session" }
+  | { kind: "skip" }
+  | { kind: "open-free-text" }
+  | { kind: "peek" }
+  | { kind: "full" }
+  | { kind: "restore-question" }
+  | { kind: "exit-queue" };
+
+export function routeQueueKey(
+  e: { key: string; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; altKey: boolean },
+  ctx: {
+    /** An aria-modal layer (new-session compose, settings) sits above the queue. */
+    modalOpen: boolean;
+    /** Focus is in an input/textarea/contenteditable. */
+    editing: boolean;
+    /** …specifically the card's own free-text "Other" box. */
+    inOwnFreeTextBox: boolean;
+    isPermissionCard: boolean;
+    optionCount: number;
+    sheet: "full" | "peek";
+  }
+): QueueKeyAction | null {
+  if (e.metaKey || e.ctrlKey || e.altKey) return null;
+  // A modal owns the keyboard entirely; the queue behind it must not answer,
+  // skip, or swallow anything (a capture listener eating the compose dialog's
+  // Enter is exactly how "enter stopped working" presents).
+  if (ctx.modalOpen) return null;
+  if (ctx.editing) {
+    // Only the card's own box is the queue's to claim. Typing in any other
+    // input — search, a composer in the thread behind — belongs to that surface.
+    if (!ctx.inOwnFreeTextBox) return null;
+    if (e.key === "Escape") return { kind: "close-free-text" };
+    if (e.key === "Enter" && !e.shiftKey) return { kind: "commit-free-text" };
+    return null;
+  }
+  // Digits answer a QUESTION. A permission card is never answerable this way:
+  // it carries no options, and the whole hazard of putting approvals in a
+  // queue that advances on a keystroke is that the digit meant for the
+  // previous card lands on "approve this command". y/n (PermissionStack's own
+  // binding) is the only way in, and it requires reading the card.
+  if (!ctx.isPermissionCard && e.key >= "1" && e.key <= "9") {
+    const n = Number(e.key) - 1;
+    return n < ctx.optionCount ? { kind: "answer", option: n } : null;
+  }
+  if (e.key === "o" || e.key === "O") return { kind: "open-session" };
+  if (e.key === "s" || e.key === "S") return { kind: "skip" };
+  if (e.key === "t" || e.key === "T") return { kind: "open-free-text" };
+  // Up moves into the thread, down brings the question back. Escape leaves the
+  // queue from full, but from peek it first restores the question — otherwise
+  // the key that means "back" would skip a step.
+  if (e.key === "ArrowUp" || e.key === "k") return { kind: "peek" };
+  if (e.key === "ArrowDown" || e.key === "j") return { kind: "full" };
+  if (e.key === "Escape") return ctx.sheet === "peek" ? { kind: "restore-question" } : { kind: "exit-queue" };
+  return null;
+}
+
 export function sortQueue(items: QueueItem[]): QueueItem[] {
   return [...items].sort((a, b) => {
     const t = queueTier(a) - queueTier(b);

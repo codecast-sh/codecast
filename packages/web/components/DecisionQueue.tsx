@@ -11,11 +11,12 @@ import { useInboxStore } from "../store/inboxStore";
 // the session, not a second rendering of it.
 import { InboxConversation } from "../app/inbox/QueuePageClient";
 import { useDecisionQueue, openQuestionFromMessages, lastAssistantText, visibleOptions } from "../hooks/useDecisionQueue";
-import { queueTier, type QueueItem } from "../lib/decisionQueue";
+import { queueTier, routeQueueKey, type QueueItem } from "../lib/decisionQueue";
 import { buildSingleAnswerPayload, buildFreeTextPayload } from "../lib/pollPayload";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
-import { CONVEX_URL } from "../lib/localAuth";
+import { hasOpenModal } from "../shortcuts";
+import { PublishedPageEmbed } from "./PublishedPageEmbed";
 import { getProjectName } from "../store/inboxStore";
 
 
@@ -236,46 +237,39 @@ function DecisionCard({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
-      const editing = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
-      // `take` claims a key for the queue: stop the default AND stop the
-      // global shortcut layer below from acting on it a second time.
-      const take = () => { e.preventDefault(); e.stopPropagation(); };
-      if (editing) {
-        // Enter commits the free-text answer; Escape closes the box.
-        if (e.key === "Escape") { take(); setOtherOpen(false); }
-        if (e.key === "Enter" && !e.shiftKey) { take(); answerFreeText(otherText); }
-        return;
-      }
-      // Digits answer a QUESTION. A permission card is never answerable this
-      // way: it carries no options, and the whole hazard of putting approvals
-      // in a queue that advances on a keystroke is that the digit meant for the
-      // previous card lands on "approve this command". y/n (PermissionStack's
-      // own binding) is the only way in, and it requires reading the card.
-      if (!isPermissionCard && e.key >= "1" && e.key <= "9") {
-        const n = Number(e.key) - 1;
-        const opt = options[n];
-        if (opt) { take(); answer(opt.index); }
-        return;
-      }
-      if (e.key === "o" || e.key === "O") { take(); openSession(); return; }
-      if (e.key === "s" || e.key === "S") { take(); onSkip(); return; }
-      if (e.key === "t" || e.key === "T") {
-        take();
-        setOtherOpen(true);
-        setTimeout(() => otherRef.current?.focus(), 0);
-        return;
-      }
-      // Up moves into the thread, down brings the question back. Escape leaves
-      // the queue from full, but from peek it first restores the question —
-      // otherwise the key that means "back" would skip a step.
-      if (e.key === "ArrowUp" || e.key === "k") { take(); setSheet("peek"); return; }
-      if (e.key === "ArrowDown" || e.key === "j") { take(); setSheet("full"); return; }
-      if (e.key === "Escape") {
-        take();
-        if (sheet === "peek") setSheet("full");
-        else onExit?.();
+      // The claim/stand-down rules live in routeQueueKey (lib/decisionQueue) so
+      // they are pinned by tests: a modal above the queue owns the keyboard,
+      // and Enter typed in any input that is not the card's own box is that
+      // surface's key — this listener eating the compose dialog's Enter is
+      // exactly how "enter stopped working" presented.
+      const action = routeQueueKey(e, {
+        modalOpen: hasOpenModal(),
+        editing: !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable),
+        inOwnFreeTextBox: !!target && target === otherRef.current,
+        isPermissionCard,
+        optionCount: options.length,
+        sheet,
+      });
+      if (!action) return;
+      // Claim the key for the queue: stop the default AND stop the global
+      // shortcut layer below from acting on it a second time.
+      e.preventDefault();
+      e.stopPropagation();
+      switch (action.kind) {
+        case "commit-free-text": answerFreeText(otherText); break;
+        case "close-free-text": setOtherOpen(false); break;
+        case "answer": { const opt = options[action.option]; if (opt) answer(opt.index); break; }
+        case "open-session": openSession(); break;
+        case "skip": onSkip(); break;
+        case "open-free-text":
+          setOtherOpen(true);
+          setTimeout(() => otherRef.current?.focus(), 0);
+          break;
+        case "peek": setSheet("peek"); break;
+        case "full": setSheet("full"); break;
+        case "restore-question": setSheet("full"); break;
+        case "exit-queue": onExit?.(); break;
       }
     };
     // CAPTURE phase, deliberately. The app's global shortcut layer claims the
@@ -398,28 +392,11 @@ function DecisionCard({
           </div>
         )}
 
-        {/* the full report, when the agent published one */}
+        {/* the full report, when the agent published one — same embed card
+            conversations use for a publish URL on its own line */}
         {item.reportSlug && (
-          <div className="mb-4 border border-sol-border rounded overflow-hidden">
-            <div className="flex items-center justify-between px-2 py-1 bg-sol-bg-alt text-[11px] text-sol-text-dim">
-              <span>report</span>
-              <a
-                href={`${CONVEX_URL}/cli/a/${item.reportSlug}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-sol-blue transition-colors"
-              >
-                open full page
-              </a>
-            </div>
-            {/* The artifact origin serves its own sandbox CSP, so the frame is
-                already isolated — no second sanitizer needed here. */}
-            <iframe
-              src={`${CONVEX_URL}/cli/a/${item.reportSlug}`}
-              className="w-full h-[420px] bg-sol-card"
-              sandbox="allow-scripts allow-popups"
-              title="decision report"
-            />
+          <div className="mb-4">
+            <PublishedPageEmbed slug={item.reportSlug} />
           </div>
         )}
 
