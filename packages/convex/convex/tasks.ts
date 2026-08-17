@@ -1003,6 +1003,51 @@ export const snippet = query({
   },
 });
 
+// Display names for a set of assignee values. `agent:*` assignees are already
+// names; user ids resolve to name → github handle. Unknown values fall through
+// so callers can print the raw value rather than nothing.
+async function assigneeNamesFor(ctx: any, assignees: (string | undefined)[]): Promise<Record<string, string>> {
+  const names: Record<string, string> = {};
+  for (const id of new Set(assignees.filter(Boolean) as string[])) {
+    if (id.startsWith("agent:")) {
+      names[id] = id;
+      continue;
+    }
+    const user = /^[a-z0-9]{32}$/.test(id) ? await ctx.db.get(id as any).catch(() => null) as any : null;
+    if (user?.name) names[id] = user.name;
+    else if (user?.github_username) names[id] = user.github_username;
+  }
+  return names;
+}
+
+// The sessions linked to a task, named the way every other CLI surface names
+// a session (short id + title), newest last, limited to what the caller can
+// see. `cast task show/context` print these so an agent that wants a task's
+// working session reads it off the task instead of regexing `jx…` ids out of
+// comment text.
+async function linkedSessionsFor(
+  ctx: any,
+  userId: Id<"users">,
+  task: any,
+  limit: number,
+): Promise<{ short_id: string; title: string | null; conversation_id: Id<"conversations"> }[]> {
+  const out: { short_id: string; title: string | null; conversation_id: Id<"conversations"> }[] = [];
+  for (const convId of (task.conversation_ids || []).slice(-limit)) {
+    const conversation = await ctx.db.get(convId);
+    if (
+      !conversation
+      || !workspacesMatch(workspaceForConversation(conversation), workspaceForResource(task))
+      || !(await canAccessConversation(ctx, userId, conversation))
+    ) continue;
+    out.push({
+      short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7),
+      title: conversation.title ?? null,
+      conversation_id: conversation._id,
+    });
+  }
+  return out;
+}
+
 export const list = query({
   args: {
     api_token: v.string(),
@@ -1020,6 +1065,8 @@ export const list = query({
     query: v.optional(v.string()),
     assignee: v.optional(v.string()),
     plan_id: v.optional(v.string()),
+    // Case-insensitive match against the task's labels (CLI --label).
+    label: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -1117,6 +1164,13 @@ export const list = query({
       );
     }
 
+    if (args.label) {
+      const wanted = args.label.toLowerCase();
+      tasks = tasks.filter((t: any) =>
+        (t.labels || []).some((l: string) => l.toLowerCase() === wanted),
+      );
+    }
+
     // Ready = open + no blockers. Subtasks of a parent that is actively being
     // worked are NOT ready by default: that decomposition belongs to the
     // session driving the parent, and a second agent claiming one mid-flight
@@ -1156,17 +1210,7 @@ export const list = query({
     const limit = args.limit || 300;
     const result = tasks.slice(0, limit);
 
-    const assigneeIds = [...new Set(result.map((t: any) => t.assignee).filter(Boolean))];
-    const assigneeNames: Record<string, string> = {};
-    for (const id of assigneeIds) {
-      if (id.startsWith("agent:")) {
-        assigneeNames[id] = id;
-      } else {
-        const user = await ctx.db.get(id as any) as any;
-        if (user?.name) assigneeNames[id] = user.name;
-        else if (user?.github_username) assigneeNames[id] = user.github_username;
-      }
-    }
+    const assigneeNames = await assigneeNamesFor(ctx, result.map((t: any) => t.assignee));
     return result.map((t: any) => ({
       ...t,
       assignee_name: t.assignee ? (assigneeNames[t.assignee] || t.assignee) : undefined,
@@ -1219,8 +1263,11 @@ export const get = query({
     // so the count `cast task show` prints matches them all.
     const children = allChildren.filter((c: any) => isActiveTask(c));
 
+    const assigneeNames = await assigneeNamesFor(ctx, [task.assignee]);
     return {
       ...task,
+      assignee_name: task.assignee ? (assigneeNames[task.assignee] || task.assignee) : undefined,
+      sessions: await linkedSessionsFor(ctx, auth.userId, task, 10),
       comments,
       parent: parent ? { short_id: parent.short_id, title: parent.title, status: parent.status } : null,
       subtask_progress: subtaskProgressOf(children as any[]),
@@ -1708,25 +1755,18 @@ export const context = query({
       .withIndex("by_task_id", (q) => q.eq("task_id", task._id))
       .collect();
 
-    // Get session summaries from linked conversations
-    const sessionSummaries: string[] = [];
-    if (task.conversation_ids) {
-      for (const convId of task.conversation_ids.slice(-5)) {
-        const conversation = await ctx.db.get(convId);
-        if (
-          !conversation
-          || !workspacesMatch(workspaceForConversation(conversation), workspaceForResource(task))
-          || !(await canAccessConversation(ctx, auth.userId, conversation))
-        ) continue;
-        const insight = await ctx.db
-          .query("session_insights")
-          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", convId))
-          .first();
-        if (insight) {
-          sessionSummaries.push(insight.summary);
-        }
-      }
+    // Linked sessions (short id + title), each with its insight summary when
+    // one exists. `sessionSummaries` stays as the flat list of summaries for
+    // callers that predate `sessions`.
+    const sessions: { short_id: string; title: string | null; summary: string | null }[] = [];
+    for (const s of await linkedSessionsFor(ctx, auth.userId, task, 5)) {
+      const insight = await ctx.db
+        .query("session_insights")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", s.conversation_id))
+        .first();
+      sessions.push({ short_id: s.short_id, title: s.title, summary: insight?.summary ?? null });
     }
+    const sessionSummaries = sessions.map((s) => s.summary).filter((x): x is string => !!x);
 
     // Get project info
     let project = null;
@@ -1818,7 +1858,9 @@ export const context = query({
       subtasks,
       subtaskProgress,
       comments,
+      sessions,
       sessionSummaries,
+      assignee_name: task.assignee ? ((await assigneeNamesFor(ctx, [task.assignee]))[task.assignee] || task.assignee) : undefined,
       project: project ? { title: project.title, description: project.description } : null,
       relatedDocs,
     };
