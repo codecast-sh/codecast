@@ -1,5 +1,6 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { useQuery, useMutation } from "convex/react";
+import { useInboxStore } from "../store/inboxStore";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
@@ -444,23 +445,33 @@ export function ConfigEditor() {
 
   const [deskClass, setDeskClass] = useState("");
   useMountEffect(() => { setDeskClass(desktopHeaderClass()); });
+  const sentPathsRef = useRef<string | null>(null);
 
   const listCmd = useConfigCommand();
   const projects = useQuery(api.projects.webList, {});
+  // Local-first: the persisted projects collection usually already holds the
+  // roster, so the config_list command goes out immediately instead of
+  // waiting a round-trip. Keyed on the PATH SET, not a sent-once flag: if the
+  // live answer later carries a different set (a project added since the
+  // cache), the command re-runs and the listing self-corrects.
+  const cachedProjects = useInboxStore((s) => s.projects);
+  const projectRows = useMemo(() => {
+    if (projects !== undefined) return projects;
+    const rows = Object.values(cachedProjects ?? {});
+    return rows.length > 0 ? rows : undefined;
+  }, [projects, cachedProjects]);
 
-  // Send config_list when projects are loaded
-  const sentRef = useRef(false);
-  const prevProjects = useRef<typeof projects>(undefined);
   useWatchEffect(() => {
-    if (projects === undefined) return;
-    if (sentRef.current && prevProjects.current !== undefined) return;
-    sentRef.current = true;
-    prevProjects.current = projects;
-    const projectPaths = (projects ?? [])
+    if (projectRows === undefined) return;
+    const projectPaths = (projectRows as any[])
       .map((p: any) => p.project_path)
-      .filter(Boolean) as string[];
+      .filter(Boolean)
+      .sort() as string[];
+    const sig = projectPaths.join("|");
+    if (sentPathsRef.current === sig) return;
+    sentPathsRef.current = sig;
     listCmd.send("config_list", { project_paths: projectPaths });
-  }, [projects]);
+  }, [projectRows]);
 
   // Handle list result
   useWatchEffect(() => {
@@ -487,9 +498,9 @@ export function ConfigEditor() {
   };
 
   const handleFileCreated = (path: string) => {
-    // Refresh the file list
-    sentRef.current = false;
-    const projectPaths = (projects ?? [])
+    // Refresh the file list (sent directly, so the path-set guard on the
+    // initial send doesn't apply).
+    const projectPaths = ((projectRows ?? []) as any[])
       .map((p: any) => p.project_path)
       .filter(Boolean) as string[];
     listCmd.send("config_list", { project_paths: projectPaths });

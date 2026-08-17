@@ -1,6 +1,7 @@
 import Dexie from "dexie";
 import type { Patch } from "mutative";
 import {
+  COLLECTION_INDEXES,
   COLLECTION_STORE_KEYS,
   META_STORE_KEYS,
   collectionRowValidator,
@@ -28,222 +29,64 @@ export type OutboxEntry = {
 
 export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 
+// The on-disk schema is DERIVED from the client sync registry: every persisted
+// collection becomes a table keyed by its registered `indexes` (default "_id"),
+// beside the three system tables below. Registering a collection IS the schema
+// change; the only hand step left is bumping CACHE_SCHEMA_VERSION so IndexedDB
+// runs the upgrade (a test pins CACHE_SCHEMA_SIGNATURE to the derived schema,
+// so a schema change without a bump fails at test time, not at a user's boot).
+//
+// One version declaration is enough for every installed DB: Dexie diffs the
+// declared schema against what is actually on disk (adds tables and indexes,
+// drops removed tables) rather than replaying a version ladder — so the old
+// twelve-step ladder that restated the whole schema per step is gone.
+export const CACHE_SCHEMA_VERSION = 14;
+export const CACHE_SCHEMA_SIGNATURE =
+  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|comments:_id|commits:_id|docs:_id|managedSessions:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|sessionDecisions:_id|sessions:_id|tasks:_id|workflowRuns:_id, workflow_id|workflows:_id";
+
+const SYSTEM_TABLES = {
+  meta: "key",
+  // Indexed by latestTimestamp so the on-disk store can be pruned (LRU + TTL)
+  // instead of growing forever — one row per conversation ever opened.
+  conversationMessages: "convId, latestTimestamp",
+  dispatchOutbox: "id, ts",
+} as const;
+
+/** Stable serialization of the derived collection schema (sorted). */
+export function cacheSchemaSignature(): string {
+  return Object.keys(COLLECTION_INDEXES)
+    .sort()
+    .map((k) => `${k}:${COLLECTION_INDEXES[k]}`)
+    .join("|");
+}
+
 class CacheDB extends Dexie {
-  sessions!: Dexie.Table<any, string>;
-  tasks!: Dexie.Table<any, string>;
-  capabilityState!: Dexie.Table<any, string>;
-  capabilityBindings!: Dexie.Table<any, string>;
-  sessionDecisions!: Dexie.Table<any, string>;
-  docs!: Dexie.Table<any, string>;
-  plans!: Dexie.Table<any, string>;
-  projects!: Dexie.Table<any, string>;
-  buckets!: Dexie.Table<any, string>;
-  bucketAssignments!: Dexie.Table<any, string>;
-  comments!: Dexie.Table<any, string>;
-  chatChannels!: Dexie.Table<any, string>;
-  chatMessages!: Dexie.Table<any, string>;
-  chatReactions!: Dexie.Table<any, string>;
-  chatReads!: Dexie.Table<any, string>;
   meta!: Dexie.Table<{ key: string; value: any }, string>;
   conversationMessages!: Dexie.Table<{ convId: string; messages: any[]; latestTimestamp: number; pagination: any }, string>;
   dispatchOutbox!: Dexie.Table<OutboxEntry, string>;
 
   constructor() {
     super("codecast-store");
-    this.version(1).stores({
-      sessions: "_id",
-      dismissedSessions: "_id",
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      meta: "key",
-    });
-    this.version(2).stores({
-      sessions: "_id",
-      dismissedSessions: "_id",
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      meta: "key",
-      conversationMessages: "convId",
-    });
-    this.version(3).stores({
-      sessions: "_id",
-      dismissedSessions: "_id",
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      projects: "_id",
-      meta: "key",
-      conversationMessages: "convId",
-    });
-    this.version(4).stores({
-      sessions: "_id",
-      dismissedSessions: "_id",
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      projects: "_id",
-      meta: "key",
-      conversationMessages: "convId",
-      dispatchOutbox: "id, ts",
-    });
-    // v5: dismissedSessions table dropped — dismissal is now a field on sessions.
-    this.version(5).stores({
-      sessions: "_id",
-      dismissedSessions: null,
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      projects: "_id",
-      meta: "key",
-      conversationMessages: "convId",
-      dispatchOutbox: "id, ts",
-    });
-    // v6: manual session buckets + per-conversation assignments.
-    this.version(6).stores({
-      sessions: "_id",
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      projects: "_id",
-      buckets: "_id",
-      bucketAssignments: "_id",
-      meta: "key",
-      conversationMessages: "convId",
-      dispatchOutbox: "id, ts",
-    });
-    // v7: teammate comments collection.
-    this.version(7).stores({
-      sessions: "_id",
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      projects: "_id",
-      buckets: "_id",
-      bucketAssignments: "_id",
-      comments: "_id",
-      meta: "key",
-      conversationMessages: "convId",
-      dispatchOutbox: "id, ts",
-    });
-    // v8: index conversationMessages by latestTimestamp so the on-disk store can
-    // be pruned (LRU + TTL) instead of growing forever — one row per conversation
-    // ever opened, each up to several MB of inline-image message bodies.
-    this.version(8).stores({
-      sessions: "_id",
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      projects: "_id",
-      buckets: "_id",
-      bucketAssignments: "_id",
-      comments: "_id",
-      meta: "key",
-      conversationMessages: "convId, latestTimestamp",
-      dispatchOutbox: "id, ts",
-    });
-    // v9: team chat. Messages and reactions carry a secondary index on the id
-    // they hang off, so a channel (or a thread) can be read off disk without
-    // scanning every message the client has ever cached.
-    this.version(9).stores({
-      sessions: "_id",
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      projects: "_id",
-      buckets: "_id",
-      bucketAssignments: "_id",
-      comments: "_id",
-      chatChannels: "_id",
-      chatMessages: "_id, channel_id, thread_root_id",
-      chatReactions: "_id, message_id",
-      chatReads: "_id, channel_id",
-      meta: "key",
-      conversationMessages: "convId, latestTimestamp",
-      dispatchOutbox: "id, ts",
-    });
-    this.version(10).stores({
-      sessions: "_id",
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      projects: "_id",
-      buckets: "_id",
-      bucketAssignments: "_id",
-      comments: "_id",
-      chatChannels: "_id",
-      chatMessages: "_id, channel_id, thread_root_id",
-      chatReactions: "_id, message_id",
-      chatReads: "_id, channel_id",
-      // The fleet mirror: one row per (device, client, scope), keyed by the
-      // server _id like every other synced collection.
-      capabilityState: "_id",
-      meta: "key",
-      conversationMessages: "convId, latestTimestamp",
-      dispatchOutbox: "id, ts",
-    });
-    this.version(11).stores({
-      sessions: "_id",
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      projects: "_id",
-      buckets: "_id",
-      bucketAssignments: "_id",
-      comments: "_id",
-      chatChannels: "_id",
-      chatMessages: "_id, channel_id, thread_root_id",
-      chatReactions: "_id, message_id",
-      chatReads: "_id, channel_id",
-      capabilityState: "_id",
-      // The decision queue: explicit questions agents hand to their human
-      // (cast decide). One row per open or recently resolved decision.
-      sessionDecisions: "_id",
-      meta: "key",
-      conversationMessages: "convId, latestTimestamp",
-      dispatchOutbox: "id, ts",
-    });
-    this.version(12).stores({
-      sessions: "_id",
-      tasks: "_id",
-      docs: "_id",
-      plans: "_id",
-      projects: "_id",
-      buckets: "_id",
-      bucketAssignments: "_id",
-      comments: "_id",
-      chatChannels: "_id",
-      chatMessages: "_id, channel_id, thread_root_id",
-      chatReactions: "_id, message_id",
-      chatReads: "_id, channel_id",
-      capabilityState: "_id",
-      // The user's binding wishes: what to enable where (Installed tab, equip).
-      capabilityBindings: "_id",
-      sessionDecisions: "_id",
-      meta: "key",
-      conversationMessages: "convId, latestTimestamp",
-      dispatchOutbox: "id, ts",
-    });
+    this.version(CACHE_SCHEMA_VERSION).stores({ ...COLLECTION_INDEXES, ...SYSTEM_TABLES });
   }
 }
 
 const db = new CacheDB();
 
 const COLLECTION_TABLES: Record<string, Dexie.Table<any, string>> = Object.fromEntries(
-  COLLECTION_STORE_KEYS.filter((key) => (db as any)[key]).map((key) => [key, db[key]])
+  COLLECTION_STORE_KEYS.filter((key) => (db as any)[key]).map((key) => [key, (db as any)[key]])
 );
 
-// A registered collection with no Dexie table (schema version not bumped) would
-// reject loadCache's Promise.all and silently disable the ENTIRE cache. Degrade
-// to skipping just that key, and surface the gap loudly — the registry coverage
-// test asserts this list is empty.
+// The schema is derived from the registry, so every registered collection has
+// a table by construction; this list should always be empty. Kept as a loud
+// runtime guard (a registered collection with no table would reject
+// loadCache's Promise.all and silently disable the ENTIRE cache).
 export const MISSING_COLLECTION_TABLES: string[] = COLLECTION_STORE_KEYS.filter(
   (key) => !(db as any)[key]
 );
 if (MISSING_COLLECTION_TABLES.length > 0) {
   console.error(
-    `[idbCache] registry collections missing Dexie tables: ${MISSING_COLLECTION_TABLES.join(", ")} — add a CacheDB schema version`
+    `[idbCache] registry collections missing Dexie tables: ${MISSING_COLLECTION_TABLES.join(", ")}`
   );
 }
 

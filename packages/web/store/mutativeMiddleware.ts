@@ -921,8 +921,13 @@ export function mutativeMiddleware(config: any, opts?: {
           }
           tripped = true;
           overdueEnqueues++;
+          // The usual cause is not a broken disk: the database is waiting to
+          // reopen for a schema upgrade (or delete) that another tab on this
+          // origin has not released yet, and every write queues behind that
+          // open. Dexie logs the block itself ("Upgrade ... blocked by other
+          // connection") — point there so the storm below reads as one cause.
           console.error(
-            `[store] durable enqueue for "${entry.action}" still uncommitted after ${Math.round(elapsed())}ms — IndexedDB is unhealthy; delivery continues, durability is degraded`,
+            `[store] durable enqueue for "${entry.action}" still uncommitted after ${Math.round(elapsed())}ms — IndexedDB is unhealthy; delivery continues, durability is degraded (usually another Codecast tab holding the database open across a schema upgrade — look for a Dexie "blocked" warning above)`,
           );
           storageHealthFn?.(false, elapsed());
         }, delayMs);
@@ -931,7 +936,14 @@ export function mutativeMiddleware(config: any, opts?: {
       try {
         await enqueue(entry);
         settled = true;
-        if (tripped) overdueEnqueues--;
+        if (tripped) {
+          overdueEnqueues--;
+          // Say so out loud: the trip above was an error line, and without a
+          // matching commit line a 12s stall reads as a permanent wedge.
+          console.warn(
+            `[store] durable enqueue for "${entry.action}" committed after ${Math.round(elapsed())}ms — storage recovered`,
+          );
+        }
         // Committed — durability is intact, however long it took. Clear the
         // banner unless another write is still stuck past its deadline.
         if (overdueEnqueues === 0) storageHealthFn?.(true, elapsed());

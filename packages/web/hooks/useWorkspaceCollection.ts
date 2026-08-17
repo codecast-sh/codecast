@@ -20,8 +20,11 @@
 import { useMemo } from "react";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { activeWorkspaceKey, filterByWorkspace, inWorkspace, type WorkspaceKey } from "../lib/workspaceScope";
+import type { WorkspaceScopedStoreKey } from "../store/clientSyncRegistry";
 
-export type WorkspaceScopedTable = "tasks" | "plans" | "docs" | "projects";
+// Derived from the registry: a collection declares `workspaceScoped: true`
+// and this hook accepts it — no second list to keep in step.
+export type WorkspaceScopedTable = WorkspaceScopedStoreKey;
 
 /** The viewer's active workspace key, from the canonical pointers. Null while
  *  the viewer is unknown — everything reads empty (fail closed), never all. */
