@@ -167,6 +167,7 @@ import {
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
+import { planGatedSnippets } from "./gatedSnippets";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES } from "@codecast/shared/contracts";
 import { readThreadStateStamp } from "./stateCommand.js";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, countModelSetEchoes, countEffortSetEchoes, isSwitchConfirmDialog, isStrandedSlashCommand } from "./modelPicker";
@@ -2391,6 +2392,12 @@ async function sendHeartbeat(): Promise<void> {
     // waits for the next beat. The kill switch works the moment the server
     // flips capabilities_mode, no CLI ship needed.
     recordConvergenceSignals(data);
+    // Team-gated agent snippets follow the team feature flags: install when a
+    // team turns chat/calls on, disable when the last team turns it off.
+    if (data.snippet_availability && typeof data.snippet_availability === "object") {
+      void reconcileGatedSnippets(data.snippet_availability as Record<string, boolean>)
+        .catch((err) => log(`[SNIPPET] gated reconcile failed: ${String(err).slice(0, 160)}`));
+    }
     if (config.user_id) {
       void reconcileFromHeartbeat({
         siteUrl,
@@ -2497,6 +2504,44 @@ function resolveCastInvocation(): { cmd: string; prefixArgs: string[] } {
  * daemon mid-operation. Awaiting the child's 'exit' event yields to the loop so
  * heartbeats keep flowing. A hard timeout guards against a truly hung child.
  */
+// Team-gated snippets (chat, calls) follow their team feature flag. The
+// heartbeat carries, per gated slug, whether ANY of the user's teams has the
+// feature on; planGatedSnippets (gatedSnippets.ts) decides what changed and
+// this runs each change through the same `cast install` the web toggle and a
+// human use — install on the way up, disable on the way down.
+let gatedReconcileInFlight = false;
+async function reconcileGatedSnippets(avail: Record<string, boolean>): Promise<void> {
+  if (gatedReconcileInFlight) return;
+  const cfg = readConfig();
+  if (!cfg) return;
+  const prev = cfg.snippet_availability ?? {};
+  const plan = planGatedSnippets(prev, avail, cfg as any);
+  const nothingNew = Object.keys(plan.next).every((k) => prev[k] === plan.next[k]);
+  if (nothingNew && plan.actions.length === 0) return;
+  gatedReconcileInFlight = true;
+  try {
+    let touched = false;
+    const next = { ...plan.next };
+    for (const { slug, enable } of plan.actions) {
+      const cliArgs = enable ? ["install", slug] : ["install", slug, "--disable"];
+      log(`[SNIPPET] ${enable ? "installing" : "disabling"} ${slug} (team feature ${enable ? "on" : "off"})`);
+      const res = await runCastCommand(cliArgs, { timeoutMs: 60 * 1000 });
+      if (res.code !== 0) {
+        // Left unrecorded on purpose: the next beat retries it.
+        log(`[SNIPPET] cast ${cliArgs.join(" ")} failed (exit ${res.code}): ${(res.stderr || res.stdout || "").trim().slice(-200)}`);
+        if (prev[slug] === undefined) delete next[slug]; else next[slug] = prev[slug];
+        continue;
+      }
+      touched = true;
+    }
+    patchConfig({ snippet_availability: next });
+    // Report the new snippet state now rather than on the next beat.
+    if (touched) await sendHeartbeat().catch(() => {});
+  } finally {
+    gatedReconcileInFlight = false;
+  }
+}
+
 function runCastCommand(
   args: string[],
   opts: { timeoutMs?: number } = {},

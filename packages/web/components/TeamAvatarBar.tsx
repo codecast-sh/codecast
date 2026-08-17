@@ -1,3 +1,4 @@
+import { useCallsAvailable } from "../lib/teamFeatures";
 import { useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -78,7 +79,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
     const roster = useInboxStore.getState().teamMembers;
     return roster.length > 0 ? roster : null;
   }, [barSig]);
-  const callsEnabled = useInboxStore((s) => !!s.callConfig?.enabled);
+  const callsEnabled = useCallsAvailable();
   // Opens (or creates, local-first) THIS member's DM room. A bare
   // router.push("/chat") landed on the chat page's fallback — the busiest
   // room, i.e. somebody else's DM.

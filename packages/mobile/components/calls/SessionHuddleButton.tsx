@@ -13,10 +13,13 @@ import { joinCall } from "@/lib/calls/callManager";
 // room ("huddle about THIS conversation" — same key web's header chip uses).
 // When teammates are already in it, the button shows their count so it reads
 // as "join them", not "start something". Renders nothing when calling is not
-// configured — no dead affordance.
-export function SessionHuddleButton({ conversationId }: { conversationId: string }) {
+// configured, or when calls are off for the session's team (a per-team
+// opt-in; getCallConfig lists the caller's teams that have it on) — no dead
+// affordance.
+export function SessionHuddleButton({ conversationId, teamId }: { conversationId: string; teamId?: string | null }) {
   const router = useRouter();
-  const enabled = useQuery(api.calls.getCallConfig)?.enabled === true;
+  const config = useQuery(api.calls.getCallConfig);
+  const enabled = config?.enabled === true && !!teamId && (config.teams ?? []).includes(String(teamId));
   const roomKey = sessionRoomKey(conversationId);
   const occupancy = useQuery(api.calls.getRoomOccupancy, enabled ? { room_keys: [roomKey] } : "skip");
   if (!enabled) return null;

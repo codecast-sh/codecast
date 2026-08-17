@@ -7,8 +7,10 @@ import { Blocks } from "lucide-react";
 import {
   SNIPPET_CATALOG,
   STABLE_MODES,
+  snippetAvailableForTeams,
   type StableMode,
 } from "@codecast/shared/contracts";
+import { useInboxStore } from "../../../store/inboxStore";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../components/ui/card";
 import { Switch } from "../../../components/ui/switch";
@@ -33,6 +35,9 @@ import { isRecentlyShipped } from "../../../lib/newSnippets";
  */
 export default function AgentFeaturesPage() {
   const { devices, mostRecentOnlineLocal } = useDevices();
+  // Team-gated snippets (chat, calls) only appear while some team has the
+  // feature on; the daemon keeps a device's copy in step with the flag.
+  const teams = useInboxStore((s) => s.teams);
   const setSnippet = useMutation(api.devices.setDeviceSnippet);
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -109,7 +114,7 @@ export default function AgentFeaturesPage() {
             selected && (
               <div className="space-y-3">
                 <StableCard d={selected} pending={pending} run={run} setSnippet={setSnippet} />
-                {SNIPPET_CATALOG.map((s) => (
+                {SNIPPET_CATALOG.filter((s) => snippetAvailableForTeams(s.slug, teams)).map((s) => (
                   <FeatureCard
                     key={s.slug}
                     slug={s.slug}

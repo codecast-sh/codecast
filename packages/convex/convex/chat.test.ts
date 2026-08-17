@@ -61,6 +61,16 @@ function users() {
   ];
 }
 
+// Chat is a per-team opt-in (teamFeatures.ts): the fixture team has it on,
+// the outsider's team never turned it on — which is also what the feature
+// gate tests below lean on.
+function teams() {
+  return [
+    { _id: TEAM, name: "Main", invite_code: "MAIN", created_at: 1, features: { chat: true } },
+    { _id: OTHER_TEAM, name: "Other", invite_code: "OTHER", created_at: 1 },
+  ];
+}
+
 function memberships() {
   return [
     { _id: "m-alice", user_id: ALICE, team_id: TEAM, role: "member" },
@@ -110,6 +120,7 @@ function readRow(userId: string, level: "all" | "mentions" | "none", channelId =
 function context(authenticatedUser: string | null, seed: Record<string, any[]> = {}) {
   const db = makeFakeDb({
     users: users(),
+    teams: teams(),
     team_memberships: memberships(),
     chat_channels: channels(),
     chat_messages: [],

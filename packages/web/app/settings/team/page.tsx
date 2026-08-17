@@ -18,6 +18,7 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../../../store/inboxStore";
 import { TeamIcon, TEAM_ICONS, TEAM_COLORS, colorBgClassMap } from "../../../components/TeamIcon";
 import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatusEditor";
+import { TeamFeaturesEditor } from "../../../components/settings/TeamFeaturesEditor";
 import { ChevronDown } from "lucide-react";
 
 export default function TeamPage() {
@@ -438,6 +439,10 @@ export default function TeamPage() {
           </div>
         </div>
       </Card>
+
+      {effectiveTeamId && (
+        <TeamFeaturesEditor teamId={effectiveTeamId} isAdmin={isAdmin} />
+      )}
 
       {effectiveTeamId && (
         <TeamTaskStatusEditor

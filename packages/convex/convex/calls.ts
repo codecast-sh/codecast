@@ -20,6 +20,7 @@ import {
   authorizeRoom,
 } from "./callRooms";
 import { bucketTs } from "./presenceState";
+import { teamHasFeature } from "./teamFeatures";
 import {
   CALL_PUSH_CATEGORY,
   CALL_PUSH_SOUND,
@@ -53,13 +54,30 @@ function projectMember(m: Doc<"call_members">) {
   };
 }
 
-// Is calling configured at all? Public and cheap; the secret never leaves env.
+// Is calling available to the caller? Two gates: the deployment must have
+// LiveKit configured (the secret never leaves env), and calls are a per-team
+// opt-in — `teams` lists which of the caller's teams have it on so clients
+// hide every call affordance for the rest. `enabled` is true when at least
+// one of the caller's teams has calls (or, signed out, when the deployment
+// is configured), so a single boolean still answers "show anything at all?".
 export const getCallConfig = query({
   args: {},
-  handler: async () => {
+  handler: async (ctx) => {
     const url = process.env.LIVEKIT_URL;
-    const enabled = !!(url && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
-    return { enabled, url: enabled ? url : undefined };
+    const configured = !!(url && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
+    const userId = await getAuthUserId(ctx);
+    let teams: string[] = [];
+    if (configured && userId) {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+      for (const m of memberships) {
+        if (await teamHasFeature(ctx, m.team_id, "calls")) teams.push(String(m.team_id));
+      }
+    }
+    const enabled = configured && (userId ? teams.length > 0 : true);
+    return { enabled, url: enabled ? url : undefined, teams };
   },
 });
 

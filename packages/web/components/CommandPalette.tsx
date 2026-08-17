@@ -1,3 +1,5 @@
+import { useTeamFeature, useCallsAvailable } from "../lib/teamFeatures";
+import type { TeamFeatureKey } from "@codecast/shared/contracts";
 import { useState, useCallback, useMemo, useRef, memo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useShortcutAction, useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
@@ -9,7 +11,8 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { AvatarImg } from "../lib/avatarCache";
-import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
+import { canControlModel, modelOptionKey } from "../lib/modelSwitch";
+import { commitModelChange } from "../lib/modelSwitchWeb";
 import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useVaultStore } from "../store/vaultStore";
@@ -24,6 +27,8 @@ import { dmOtherIds } from "@codecast/shared/chat";
 import { channelDisplayName, dmCounterpart, memberName } from "../lib/chatViews";
 import { memberAvatarUrl } from "../lib/liveEntities";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { useCollectionRows } from "../hooks/useCollectionRows";
+import { useSyncTriggers } from "../hooks/useSyncTriggers";
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -132,13 +137,15 @@ const NAV_PAGES: ReadonlyArray<{
   icon: string;
   keywords: string;
   secondary?: boolean;
+  /** Only listed while the active team has this opt-in feature on. */
+  feature?: TeamFeatureKey;
 }> = [
   { label: "Dashboard", path: "/team/activity", icon: "grid", keywords: "home sessions main activity feed team" },
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
-  { label: "Chat", path: "/chat", icon: "message", keywords: "channels team talk messages rooms" },
+  { label: "Chat", path: "/chat", icon: "message", keywords: "channels team talk messages rooms", feature: "chat" },
   { label: "Tasks", path: "/tasks", icon: "check", keywords: "todo work items" },
   { label: "Plans", path: "/plans", icon: "map", keywords: "roadmap goals milestones planning" },
-  { label: "Calls", path: "/calls", icon: "phone", keywords: "huddle call transcript recording meeting summary voice" },
+  { label: "Calls", path: "/calls", icon: "phone", keywords: "huddle call transcript recording meeting summary voice", feature: "calls" },
   { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
   { label: "Files", path: "/files", icon: "folder", keywords: "notes markdown obsidian files vault code" },
   { label: "Triggers", path: "/triggers", icon: "clock", keywords: "schedules cron automation recurring followup reminders" },
@@ -1167,6 +1174,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // the personal workspace, so falling back to the user's default team here
   // would make personal rows unreachable from the palette.
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  // Opt-in team features: an off feature has no palette entry, no channel
+  // rows and no "search chat" — the same "no UI at all" rule the sidebar uses.
+  const chatOn = useTeamFeature("chat");
+  const callsOn = useCallsAvailable();
+  const featureOn = (f: TeamFeatureKey | undefined) => !f || (f === "chat" ? chatOn : callsOn);
 
   // Merge locally-loaded inbox sessions (own, instant) with the server list (own +
   // team-visible). Shows local sessions immediately, re-merges once when the server
@@ -1222,10 +1234,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // Triggers (schedules) search — same list the /triggers page subscribes to,
   // gated on an actual query so an idle palette costs nothing. Convex dedupes
   // the subscription when the page is already open.
-  const { data: triggerList } = useQueryNoThrow(
-    api.agentTasks.webList,
-    open && query.trim().length >= 2 ? {} : "skip",
-  );
+  // Store-fed (hooks/useSyncTriggers): the palette searches the cached
+  // roster; the feeder mounts only while a search is live.
+  useSyncTriggers(open && query.trim().length >= 2);
+  const triggerList = useCollectionRows<any>("agentTasks");
   const triggerMatches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (q.length < 2 || !Array.isArray(triggerList)) return [];
@@ -1346,7 +1358,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // never restated here: the store caches rooms across workspaces, and an
   // inlined predicate is how another team's rooms leak into this one's palette.
   const chatChannelRows = useMemo(() => {
-    if (!open || query.trim().length < 1) return [] as Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string }>;
+    if (!open || !chatOn || query.trim().length < 1) return [] as Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string }>;
     const state = useInboxStore.getState() as any;
     const viewerId = state.currentUser?._id ? String(state.currentUser._id) : "";
     const members = (state.teamMembers ?? []) as any[];
@@ -1367,14 +1379,14 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       rows.push({ id, label, kind: c.kind, isPrivate: c.kind === "private", image: memberAvatarUrl(counterpart), s });
     }
     return rows.sort((a, b) => a.s - b.s).slice(0, 5);
-  }, [open, query, activeTeamId]);
+  }, [open, query, activeTeamId, chatOn]);
 
   // Chat message hits ride the same debounced non-throwing lane as
   // conversation search — and the same access story: the server re-checks
   // room membership per hit, so private rooms never leak through here.
   const { data: chatSearchData } = useQueryNoThrow(
     api.chat.searchMessages,
-    open && debouncedQuery.length >= 2 && activeTeamId
+    open && chatOn && debouncedQuery.length >= 2 && activeTeamId
       ? { team_id: activeTeamId, q: debouncedQuery, limit: 5 }
       : "skip",
     { breakAfterMs: 15_000 }
@@ -2289,7 +2301,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         </CommandPrimitive.Group>
 
         <CommandPrimitive.Group heading="Pages" className={groupClass}>
-          {(query.trim() ? NAV_PAGES : NAV_PAGES.filter((p) => !p.secondary)).map((page) => (
+          {(query.trim() ? NAV_PAGES : NAV_PAGES.filter((p) => !p.secondary)).filter((p) => featureOn(p.feature)).map((page) => (
             <CommandPrimitive.Item
               key={page.path + page.label}
               value={`${page.label} ${page.keywords}`}
@@ -2476,7 +2488,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <KeyCap size="xs">&#9166;</KeyCap>
               </span>
             </CommandPrimitive.Item>
-            {activeTeamId && (
+            {activeTeamId && chatOn && (
               <CommandPrimitive.Item
                 value="__chat__ open-chat-search"
                 onSelect={() => {
