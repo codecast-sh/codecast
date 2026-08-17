@@ -293,7 +293,7 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "workflows" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    feeds: ["workflows.webList"],
+    feeds: ["workflows.webList", "workflows.webGet"],
   },
   // Workflow runs, fed by three windows (listDynamicRuns, listForWorkflow,
   // get) that overlay into one collection. The per-node `session` enrichment
@@ -304,7 +304,7 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     indexes: "_id, workflow_id",
     sync: { isDelta: true },
-    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow"],
+    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get"],
   },
   // Published pages (artifacts). listForWeb returns the complete visible set
   // — own plus shareable teammates' — so snapshot. Rows have no server _id;

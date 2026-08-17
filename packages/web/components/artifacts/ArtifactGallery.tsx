@@ -1,10 +1,9 @@
 "use client";
 // /pages — gallery of the signed-in user's published pages
-// (cast publish). Data: api.artifacts.listForWeb (authed convex query).
+// (cast publish). Data: store.artifacts, fed by artifacts.listForWeb (hooks/useSyncArtifacts).
 
 import { useState } from "react";
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { useArtifacts } from "../../hooks/useSyncArtifacts";
 import { toast } from "sonner";
 import { Copy, Globe } from "lucide-react";
 import { ArtifactCard, type ArtifactRow } from "./ArtifactCard";
@@ -65,8 +64,11 @@ function SkeletonGrid() {
 }
 
 export function ArtifactGallery() {
-  const data = useQuery(api.artifacts.listForWeb);
-  const artifacts = (data?.artifacts ?? []) as ArtifactRow[];
+  // Store-fed (hooks/useSyncArtifacts): the gallery paints from the cached
+  // set; the skeleton shows only for a genuinely cold cache.
+  const { artifacts: rows, ready } = useArtifacts();
+  const artifacts = rows as ArtifactRow[];
+  const data = ready || artifacts.length > 0 ? { artifacts } : undefined;
   const mine = artifacts.filter((a) => a.mine);
   const team = artifacts.filter((a) => !a.mine);
   const [teamEditing, setTeamEditing] = useState<ArtifactRow | null>(null);

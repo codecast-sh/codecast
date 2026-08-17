@@ -73,6 +73,21 @@ class CacheDB extends Dexie {
 
 const db = new CacheDB();
 
+// A schema upgrade needs every other Codecast tab on this origin to release
+// its connection; a tab that is mid-hydration for a few seconds holds the
+// upgrader, and every outbox write in THIS tab queues behind the blocked open
+// ("durable enqueue still uncommitted"). Dexie's own warning reads as noise —
+// name the cause so the fix (close/reload other tabs) is obvious.
+if (PERSISTENCE_AVAILABLE) {
+  db.on("blocked", (ev: any) => {
+    console.warn(
+      `[idbCache] codecast-store upgrade to schema v${CACHE_SCHEMA_VERSION} is blocked by another Codecast tab still on schema v${Math.ceil((ev?.oldVersion ?? 0) / 10)} — close or reload other tabs`,
+    );
+  });
+  // The other side (this tab is the holder) is Dexie's default versionchange
+  // handler: it closes with auto-reopen so the upgrader can proceed.
+}
+
 const COLLECTION_TABLES: Record<string, Dexie.Table<any, string>> = Object.fromEntries(
   COLLECTION_STORE_KEYS.filter((key) => (db as any)[key]).map((key) => [key, (db as any)[key]])
 );

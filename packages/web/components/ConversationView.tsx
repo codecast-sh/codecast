@@ -118,6 +118,7 @@ import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./br
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { findEntityInStore } from "../lib/liveEntities";
+import { useWorkflowRun, useWorkflows } from "../hooks/useSyncWorkflows";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
@@ -8536,7 +8537,7 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
 // Inline conversation card for a dynamic-workflow run. Reads live run state by id
 // (posted once as an anchor message), so it updates as the run progresses.
 function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
-  const run = useQuery(api.workflow_runs.get, runId ? { id: runId as any } : "skip");
+  const run = useWorkflowRun(runId);
   const status = run?.status as string | undefined;
   const sm = wfStatusMeta(status);
   return (
@@ -11947,9 +11948,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }));
   const isSessionLive = !!managedSession?.is_connected;
 
-  const workflowRun = useQuery(
-    api.workflow_runs.get,
-    deferredQueriesEnabled && conversation?.workflow_run_id ? { id: conversation.workflow_run_id as any } : "skip"
+  // Store-fed (hooks/useSyncWorkflows): the gate banner paints from the cached
+  // run on the first frame; the feeder keeps it live.
+  const workflowRun = useWorkflowRun(
+    deferredQueriesEnabled && conversation?.workflow_run_id ? conversation.workflow_run_id : null,
   ) as { _id: string; status: string; gate_prompt?: string; gate_choices?: Array<{ key: string; label: string; target: string }>; gate_response?: string | null } | null | undefined;
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const [gateResponding, setGateResponding] = useState(false);
@@ -11962,7 +11964,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const [showWorkflow, setShowWorkflow] = useState(false);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
-  const workflows = useQuery(api.workflows.webList);
+  const { workflows } = useWorkflows();
   const createWorkflowRun = useMutation(api.workflow_runs.create);
   const handleWorkflowLaunch = useCallback(async (goal: string) => {
     if (!selectedWorkflowId) return;

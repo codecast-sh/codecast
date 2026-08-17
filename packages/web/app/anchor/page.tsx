@@ -1,6 +1,7 @@
 "use client";
 
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useMutation } from "convex/react";
+import { useAnchorSpace } from "../../hooks/useSyncAnchorSpace";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useEffect, useMemo, useState } from "react";
 import { Settings2 } from "lucide-react";
@@ -28,7 +29,9 @@ export default function AnchorPage() {
 
 function AnchorSpace() {
   const [scope, setScope] = useState<ScopeType>("user");
-  const space = useQuery(api.anchors.getAnchorSpace, { scope_type: scope });
+  // Store-fed (hooks/useSyncAnchorSpace): paints from the cached row for this
+  // scope; "Loading your anchor" shows only for a genuinely cold cache.
+  const { space } = useAnchorSpace(scope);
 
   // When Slack redirects back to this (authenticated) page with ?code&?state,
   // complete the install here — binding it to the logged-in user's own anchor.

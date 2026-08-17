@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "convex/react";
+import { useDynamicRuns } from "../../hooks/useSyncWorkflows";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -55,7 +55,10 @@ function RunCard({ run }: { run: any }) {
 }
 
 function WorkflowsDashboardContent() {
-  const runs = useQuery(api.workflow_runs.listDynamicRuns, {});
+  // Store-fed (hooks/useSyncWorkflows): the dashboard paints from cached
+  // runs; the loader shows only for a genuinely cold cache.
+  const { runs: runRows, ready } = useDynamicRuns();
+  const runs = ready || runRows.length > 0 ? runRows : undefined;
   if (runs === undefined) return <AppLoader className="min-h-[16rem] h-full" />;
   return (
     <div className="h-full overflow-y-auto bg-sol-bg">

@@ -13116,7 +13116,10 @@ work
   .option("-n, --limit <n>", "Max results", "50")
   .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
   .option("--assignee <name>", "Filter by assignee (username, 'me', or user ID)")
+  .option("--label <label>", "Filter by label (case-insensitive)")
+  .option("--plan <plan_id>", "Filter by plan")
   .option("-v, --verbose", "Show descriptions")
+  .option("--json", "Output as JSON (an array of task rows; every field, no colours)")
   .action(async (options: any) => {
     const body: Record<string, any> = { limit: parseInt(options.limit) };
     if (options.project) body.project_id = await resolveProjectId(options.project);
@@ -13126,9 +13129,15 @@ work
     if (options.derived || options.all) body.include_derived = true;
     if (options.query) body.query = options.query;
     if (options.assignee) body.assignee = options.assignee;
+    if (options.label) body.label = options.label;
+    if (options.plan) body.plan_id = options.plan;
     body.project_path = getRealCwd();
 
     const tasks = await cliPost("/cli/work/list", body);
+    if (options.json) {
+      console.log(JSON.stringify(Array.isArray(tasks) ? tasks : [], null, 2));
+      return;
+    }
     if (!Array.isArray(tasks) || tasks.length === 0) {
       console.log(fmt.muted("No tasks found."));
       return;
@@ -13145,77 +13154,98 @@ work
 
 work
   .command("show")
-  .description("Show task details")
-  .argument("<short_id>", "Task short ID (e.g., ct-a1b2)")
+  .description("Show task details (several ids at once is fine)")
+  .argument("<short_ids...>", "Task short IDs (e.g., ct-a1b2 ct-c3d4)")
   .option("-c, --comments", "Show all comments")
-  .action(async (shortId: string, options: any) => {
-    const result = await cliPost("/cli/work/get", { short_id: shortId });
-    if (!result) {
-      console.error("Task not found");
-      process.exit(1);
-    }
-    const t = result;
-    const icon = STATUS_ICONS[t.status] || "?";
-    const pcolor = PRIORITY_COLORS[t.priority] || "";
-    const pri = pcolor ? `${pcolor}${t.priority}${c.reset}` : t.priority;
-    console.log(`\n  ${icon} ${c.bold}${t.title}${c.reset}`);
-    console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status} | ${pri} | ${t.task_type}`);
-    if (t.parent) {
-      console.log(`  ${c.dim}Subtask of ${c.reset}${c.cyan}${t.parent.short_id}${c.reset} ${c.dim}${t.parent.title}${c.reset}`);
-    }
-    if (t.execution_status && t.execution_status !== t.status) {
-      console.log(`  ${c.dim}Execution: ${t.execution_status}${c.reset}`);
-    }
-    if (t.project_id) {
-      const proj = await tryCliPost("/cli/projects/get", { id: t.project_id });
-      const projLabel = proj?.title ? `${proj.title} ${c.dim}(${t.project_id})${c.reset}` : t.project_id;
-      console.log(`  ${c.dim}Project:${c.reset} ${projLabel}`);
-    }
-    if (t.description) console.log(`\n  ${t.description}`);
-    if (t.acceptance_criteria?.length) {
-      console.log(`\n  ${c.bold}Acceptance Criteria${c.reset}`);
-      for (const ac of t.acceptance_criteria) {
-        console.log(`  ${c.dim}-${c.reset} ${ac}`);
+  .option("--json", "Output as JSON (one object for a single id, an array for several)")
+  .action(async (shortIds: string[], options: any) => {
+    const rows: any[] = [];
+    for (const shortId of shortIds) {
+      const result = await cliPost("/cli/work/get", { short_id: shortId });
+      if (!result) {
+        console.error(`Task not found: ${shortId}`);
+        process.exit(1);
       }
+      rows.push(result);
     }
-    if (t.steps?.length) {
-      console.log(`\n  ${c.bold}Steps${c.reset}`);
-      for (const s of t.steps) {
-        const check = s.done ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
-        console.log(`  ${check} ${s.title}`);
-      }
+    if (options.json) {
+      console.log(JSON.stringify(rows.length === 1 ? rows[0] : rows, null, 2));
+      return;
     }
-    if (t.subtasks?.length) {
-      console.log(`\n  ${c.bold}Subtasks (${t.subtasks.length})${c.reset}`);
-      for (const st of t.subtasks) {
-        const sIcon = STATUS_ICONS[st.status] || "?";
-        console.log(`  ${sIcon} ${c.cyan}${st.short_id}${c.reset} ${st.title}`);
-      }
-    }
-    if (t.labels?.length) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
-    if (t.assignee) console.log(`  ${c.dim}Assignee: ${t.assignee}${c.reset}`);
-    if (t.blocked_by?.length) console.log(`  ${c.red}Blocked by: ${t.blocked_by.join(", ")}${c.reset}`);
-    if (t.blocks?.length) console.log(`  ${c.dim}Blocks: ${t.blocks.join(", ")}${c.reset}`);
-    if (t.execution_concerns) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
-    if (t.comments?.length) {
-      const COMMENT_TYPE_ICONS: Record<string, string> = {
-        progress: `${c.blue}↳${c.reset}`,
-        blocker: `${c.red}!${c.reset}`,
-        review: `${c.magenta}◇${c.reset}`,
-        note: `${c.dim}·${c.reset}`,
-      };
-      const showAll = options.comments;
-      const comments = showAll ? t.comments : t.comments.slice(-5);
-      const truncated = !showAll && t.comments.length > 5;
-      console.log(`\n  ${c.bold}Comments (${t.comments.length})${c.reset}${truncated ? ` ${c.dim}showing last 5, use -c for all${c.reset}` : ""}`);
-      for (const cm of comments) {
-        const ago = formatMs(Date.now() - cm.created_at);
-        const typeIcon = COMMENT_TYPE_ICONS[cm.comment_type] || COMMENT_TYPE_ICONS.note;
-        console.log(`  ${typeIcon} ${c.dim}${cm.author} (${ago} ago):${c.reset} ${cm.text}`);
-      }
-    }
-    console.log();
+    for (const t of rows) await printTaskShow(t, options);
   });
+
+async function printTaskShow(t: any, options: any) {
+  const icon = STATUS_ICONS[t.status] || "?";
+  const pcolor = PRIORITY_COLORS[t.priority] || "";
+  const pri = pcolor ? `${pcolor}${t.priority}${c.reset}` : t.priority;
+  console.log(`\n  ${icon} ${c.bold}${t.title}${c.reset}`);
+  console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status} | ${pri} | ${t.task_type}`);
+  if (t.parent) {
+    console.log(`  ${c.dim}Subtask of ${c.reset}${c.cyan}${t.parent.short_id}${c.reset} ${c.dim}${t.parent.title}${c.reset}`);
+  }
+  if (t.execution_status && t.execution_status !== t.status) {
+    console.log(`  ${c.dim}Execution: ${t.execution_status}${c.reset}`);
+  }
+  if (t.project_id) {
+    const proj = await tryCliPost("/cli/projects/get", { id: t.project_id });
+    const projLabel = proj?.title ? `${proj.title} ${c.dim}(${t.project_id})${c.reset}` : t.project_id;
+    console.log(`  ${c.dim}Project:${c.reset} ${projLabel}`);
+  }
+  if (t.plan) console.log(`  ${c.dim}Plan:${c.reset} ${c.cyan}${t.plan.short_id}${c.reset} ${c.dim}${t.plan.title}${c.reset}`);
+  if (t.description) console.log(`\n  ${t.description}`);
+  if (t.acceptance_criteria?.length) {
+    console.log(`\n  ${c.bold}Acceptance Criteria${c.reset}`);
+    for (const ac of t.acceptance_criteria) {
+      console.log(`  ${c.dim}-${c.reset} ${ac}`);
+    }
+  }
+  if (t.steps?.length) {
+    console.log(`\n  ${c.bold}Steps${c.reset}`);
+    for (const s of t.steps) {
+      const check = s.done ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
+      console.log(`  ${check} ${s.title}`);
+    }
+  }
+  if (t.subtasks?.length) {
+    console.log(`\n  ${c.bold}Subtasks (${t.subtasks.length})${c.reset}`);
+    for (const st of t.subtasks) {
+      const sIcon = STATUS_ICONS[st.status] || "?";
+      console.log(`  ${sIcon} ${c.cyan}${st.short_id}${c.reset} ${st.title}`);
+    }
+  }
+  if (t.labels?.length) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
+  if (t.assignee) console.log(`  ${c.dim}Assignee: ${t.assignee_name || t.assignee}${c.reset}`);
+  if (t.blocked_by?.length) console.log(`  ${c.red}Blocked by: ${t.blocked_by.join(", ")}${c.reset}`);
+  if (t.blocks?.length) console.log(`  ${c.dim}Blocks: ${t.blocks.join(", ")}${c.reset}`);
+  if (t.execution_concerns) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
+  // Linked sessions by short id — the handle `cast read` / `cast diff` take —
+  // so a task's working session is one line away, not a regex over comments.
+  if (t.sessions?.length) {
+    console.log(`\n  ${c.bold}Sessions (${t.sessions.length})${c.reset} ${c.dim}newest last · cast read <id>${c.reset}`);
+    for (const sess of t.sessions) {
+      console.log(`  ${c.cyan}${sess.short_id}${c.reset}  ${sess.title || c.dim + "(untitled)" + c.reset}`);
+    }
+  }
+  if (t.comments?.length) {
+    const COMMENT_TYPE_ICONS: Record<string, string> = {
+      progress: `${c.blue}↳${c.reset}`,
+      blocker: `${c.red}!${c.reset}`,
+      review: `${c.magenta}◇${c.reset}`,
+      note: `${c.dim}·${c.reset}`,
+    };
+    const showAll = options.comments;
+    const comments = showAll ? t.comments : t.comments.slice(-5);
+    const truncated = !showAll && t.comments.length > 5;
+    console.log(`\n  ${c.bold}Comments (${t.comments.length})${c.reset}${truncated ? ` ${c.dim}showing last 5, use -c for all${c.reset}` : ""}`);
+    for (const cm of comments) {
+      const ago = formatMs(Date.now() - cm.created_at);
+      const typeIcon = COMMENT_TYPE_ICONS[cm.comment_type] || COMMENT_TYPE_ICONS.note;
+      console.log(`  ${typeIcon} ${c.dim}${cm.author} (${ago} ago):${c.reset} ${cm.text}`);
+    }
+  }
+  console.log();
+}
 
 work
   .command("start")
@@ -13390,6 +13420,7 @@ work
   .description("Get full context for a task (for agents)")
   .argument("[short_id]", "Task short ID (omit with --current)")
   .option("--current", "Use the task bound to the current session")
+  .option("--json", "Output as JSON (task, parent, subtasks, comments, sessions, project, relatedDocs)")
   .action(async (shortId: string | undefined, options: any) => {
     if (options.current || !shortId) {
       const pulse = readTaskPulse();
@@ -13404,9 +13435,15 @@ work
       console.error("Task not found");
       process.exit(1);
     }
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
     const t = result.task;
     console.log(`\n# ${t.title}`);
     console.log(`ID: ${t.short_id} | Status: ${t.status} | Priority: ${t.priority} | Type: ${t.task_type}`);
+    if (t.assignee) console.log(`Assignee: ${result.assignee_name || t.assignee}`);
+    if (t.labels?.length) console.log(`Labels: ${t.labels.join(", ")}`);
     if (result.parent) {
       console.log(`Subtask of: ${result.parent.short_id} ${result.parent.title} [${result.parent.status}]`);
     }
@@ -13440,7 +13477,16 @@ work
         if (d.content) console.log(`  ${d.content.slice(0, 200)}`);
       }
     }
-    if (result.sessionSummaries?.length) {
+    // Linked sessions by short id (newest last), each with its summary when
+    // one exists. Older backends only send `sessionSummaries`.
+    if (result.sessions?.length) {
+      console.log(`\n## Sessions (newest last · cast read <id>)`);
+      for (const sess of result.sessions) {
+        const title = sess.title ? ` ${sess.title}` : "";
+        const summary = sess.summary ? ` — ${sess.summary}` : "";
+        console.log(`- ${sess.short_id}:${title}${summary}`);
+      }
+    } else if (result.sessionSummaries?.length) {
       console.log(`\n## Session History`);
       for (const s of result.sessionSummaries) {
         console.log(`- ${s}`);
@@ -13456,6 +13502,7 @@ work
   .option("--plan <plan_id>", "Filter by plan")
   .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
   .option("--subtasks", "Include open subtasks of in-progress parents (rescue an abandoned tree)")
+  .option("--json", "Output as JSON (an array of task rows)")
   .action(async (options: any) => {
     const body: Record<string, any> = { ready: true };
     if (options.project) body.project_id = await resolveProjectId(options.project);
@@ -13464,6 +13511,10 @@ work
     if (options.subtasks) body.include_subtasks = true;
     body.project_path = getRealCwd();
     const tasks = await cliPost("/cli/work/list", body);
+    if (options.json) {
+      console.log(JSON.stringify(Array.isArray(tasks) ? tasks : [], null, 2));
+      return;
+    }
     if (!Array.isArray(tasks) || tasks.length === 0) {
       console.log(fmt.muted("No ready tasks."));
       return;

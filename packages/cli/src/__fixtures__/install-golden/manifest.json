@@ -2,7 +2,7 @@
   "memory": {
     "config": {
       "memory_enabled": true,
-      "memory_version": "13"
+      "memory_version": "14"
     },
     "stdout": "* Memory — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -29,7 +29,7 @@
   "tasks": {
     "config": {
       "work_enabled": true,
-      "work_version": "7"
+      "work_version": "8"
     },
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,

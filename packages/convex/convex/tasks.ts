@@ -1264,9 +1264,13 @@ export const get = query({
     const children = allChildren.filter((c: any) => isActiveTask(c));
 
     const assigneeNames = await assigneeNamesFor(ctx, [task.assignee]);
+    const plan = task.plan_id ? await ctx.db.get(task.plan_id) : null;
     return {
       ...task,
       assignee_name: task.assignee ? (assigneeNames[task.assignee] || task.assignee) : undefined,
+      plan: plan && (await canAccessPlan(ctx, auth.userId, plan))
+        ? { short_id: plan.short_id, title: plan.title, status: plan.status }
+        : null,
       sessions: await linkedSessionsFor(ctx, auth.userId, task, 10),
       comments,
       parent: parent ? { short_id: parent.short_id, title: parent.title, status: parent.status } : null,

@@ -105,7 +105,7 @@ const ABSENT = "@ABSENT@\n";
  *
  * Bump the version in update.ts, re-record, and delete the slug from this list.
  */
-const BODY_CHANGED_WITHOUT_VERSION_BUMP = ["memory"];
+const BODY_CHANGED_WITHOUT_VERSION_BUMP: string[] = [];
 
 /**
  * Slugs whose success line tells the user it wrote ~/.claude/CLAUDE.md when the
