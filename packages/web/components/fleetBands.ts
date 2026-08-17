@@ -60,9 +60,10 @@ export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
     return isLivenessStale(s, opts.now) || s.is_unresponsive ? "needsYou" : "running";
   }
   // Idle, but the agent's own pinned state still declares it blocked — the
-  // agent said "your move" in words; a stale declaration no longer counts.
+  // agent said "your move" in words. (A stale declaration has no view, so it
+  // no longer counts.)
   const ts = threadStateView(s, s.message_count ?? 0, opts.now);
-  if (ts?.status === "blocked" && ts.freshness !== "stale") return "needsYou";
+  if (ts?.status === "blocked") return "needsYou";
   return "finished";
 }
 
@@ -127,7 +128,7 @@ export function fleetTileContext(s: InboxSession): string {
  */
 export function fleetTileSummary(s: InboxSession, now: number): string {
   const ts = threadStateView(s, s.message_count ?? 0, now);
-  return (ts && ts.freshness !== "stale" ? ts.cardLine : "") || sessionCardSummary(s);
+  return ts?.cardLine || sessionCardSummary(s);
 }
 
 /** Live agent status worth naming on a running tile ("thinking", "compacting"). */

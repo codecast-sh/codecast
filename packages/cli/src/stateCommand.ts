@@ -27,12 +27,14 @@ import {
 
 // ── the local stamp the reminder hook reads ──────────────────────────────────
 //
-// The UserPromptSubmit hook (thread-state.sh) must decide whether to nudge
-// without a network call on every turn, so the decision is kept on disk: a
-// stamp file exists only while this session has a pinned state, and a counter
-// beside it holds the user turns since the last write. `cast state` resets the
-// counter on every write, which is what makes the reminder fire once per stale
-// stretch and re-arm when the agent actually updates its state.
+// The reminder hook (thread-state.sh, on Stop and UserPromptSubmit) must decide
+// whether to nudge without a network call on every event, so the decision is
+// kept on disk: a stamp file exists only while this session has a pinned state,
+// and a mark beside it holds the transcript message count the thread stood at
+// after the last write (plus a "nudged" flag once the reminder has fired).
+// `cast state` deletes the mark on every write, which is what makes the
+// reminder fire once per stretch and re-arm when the agent actually updates
+// its state.
 
 function threadStateDir(): string {
   return path.join(os.homedir(), ".codecast", "thread-state");
@@ -56,7 +58,7 @@ export interface ThreadStateStamp {
 }
 
 /** Stamp "this session has a pinned state" (with the declared status) and
- * reset the turn counter. */
+ * reset the reminder's message baseline. */
 export function writeThreadStatePulse(sessionId: string, status?: ThreadStateStatus): void {
   try {
     fs.mkdirSync(threadStateDir(), { recursive: true });

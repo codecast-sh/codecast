@@ -1,7 +1,11 @@
 // One reading of the pinned thread state for every surface that shows it: the
-// panel above the composer and the inbox card. The wording of "how old is this,
-// and how far has the thread moved since" is decided here once, so the card and
-// the panel can never disagree about whether a state still counts as current.
+// panel above the composer, the inbox card, the fleet tile, the mobile row. The
+// wording of "how old is this, and how far has the thread moved since" is decided
+// here once, so no two surfaces can disagree about whether a state still counts
+// as current — and a state that has gone STALE reads as absent everywhere: a
+// pinned line the thread has long run past is worse than no line, so it is
+// hidden rather than shown dimmed. It comes back the moment the agent rewrites
+// it (`cast state` resets the counters); the CLI still prints it to the agent.
 
 import {
   threadStateFreshness,
@@ -24,7 +28,8 @@ export interface ThreadStateView {
   cardLine: string;
   /** Declared tri-state, null on rows written before it existed. */
   status: ThreadStateStatus | null;
-  freshness: ThreadStateFreshness;
+  /** Never "stale" — a stale state is not viewable (the function returns null). */
+  freshness: Exclude<ThreadStateFreshness, "stale">;
   /** "4m" / "2h" / "3d", or null when the row predates the timestamp. */
   age: string | null;
   messagesSince: number | null;
@@ -34,10 +39,9 @@ export interface ThreadStateView {
 
 /** Pin colour by freshness, shared by every one-line surface (inbox card,
  * compact subagent row, mobile row) so they can't drift apart. */
-export const THREAD_STATE_PIN_CLASS: Record<ThreadStateFreshness, string> = {
+export const THREAD_STATE_PIN_CLASS: Record<ThreadStateView["freshness"], string> = {
   fresh: "text-sol-cyan/70",
   aging: "text-sol-yellow/70",
-  stale: "text-sol-orange/70",
 };
 
 /** Everything a surface needs to mark a status: the chip on the panel, the dot
@@ -91,8 +95,9 @@ export function compactAge(ms: number): string {
 }
 
 /**
- * Returns null when the row carries no state, so callers can render the panel
- * or the card line with a single truthy check.
+ * Returns null when the row carries no state — or carries one the thread has
+ * run past (stale) — so callers can render the panel or the card line with a
+ * single truthy check and never show an old claim.
  */
 export function threadStateView(
   fields: ThreadStateFields | null | undefined,
@@ -103,6 +108,7 @@ export function threadStateView(
   if (!text) return null;
 
   const { freshness, messagesSince, ageMs } = threadStateFreshness(fields!, liveMessageCount, now);
+  if (freshness === "stale") return null;
   const age = ageMs == null ? null : compactAge(ageMs);
 
   const parts: string[] = [];
