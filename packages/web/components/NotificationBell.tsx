@@ -2,6 +2,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useState, useRef, useCallback, useMemo } from "react";
 import { useEventListener } from "../hooks/useEventListener";
+import { AvatarImg } from "../lib/avatarCache";
 import { ClaudeIcon, OpenAIIcon, CursorIcon, GeminiIcon } from "./BrandIcons";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvexSync } from "../hooks/useConvexSync";
@@ -185,10 +186,15 @@ export function NotificationBell() {
                   >
                     <div className="flex items-start gap-3">
                       {actorAvatar ? (
-                        <img
+                        <AvatarImg
                           src={actorAvatar}
                           alt={actorName || ''}
                           className="w-9 h-9 rounded-full flex-shrink-0 mt-0.5"
+                          fallback={
+                            <div className="w-9 h-9 rounded-full flex-shrink-0 mt-0.5 bg-sol-bg-alt border border-sol-border flex items-center justify-center">
+                              <span className="text-sm font-medium text-sol-text-muted">{(actorName || "?").charAt(0).toUpperCase()}</span>
+                            </div>
+                          }
                         />
                       ) : isSessionNotif ? (
                         <div className="flex-shrink-0 mt-0.5">

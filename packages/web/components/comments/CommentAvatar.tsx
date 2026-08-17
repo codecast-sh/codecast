@@ -1,4 +1,5 @@
 import { AgentIcon } from "../ConversationList";
+import { AvatarImg } from "../../lib/avatarCache";
 
 // The app's small round avatar. Used by comments, by chat, and by anything else
 // that draws one face: a teammate must not be a circle in one surface and a
@@ -53,18 +54,7 @@ export function CommentAvatar({
       </span>
     );
   }
-  if (image) {
-    return (
-      <img
-        src={image}
-        alt={name}
-        title={name}
-        className={`cc-cmt-avatar shrink-0 rounded-full object-cover ring-1 ring-sol-border/40 ${className}`}
-        style={{ width: size, height: size }}
-      />
-    );
-  }
-  return (
+  const initialsFallback = (
     <span
       className={`cc-cmt-avatar grid place-items-center shrink-0 rounded-full font-semibold text-white ${className}`}
       // The initials must scale with the box. Leaving the size in CSS makes a
@@ -80,5 +70,15 @@ export function CommentAvatar({
     >
       {initials(name, letters)}
     </span>
+  );
+  return (
+    <AvatarImg
+      src={image}
+      alt={name}
+      title={name}
+      className={`cc-cmt-avatar shrink-0 rounded-full object-cover ring-1 ring-sol-border/40 ${className}`}
+      style={{ width: size, height: size }}
+      fallback={initialsFallback}
+    />
   );
 }

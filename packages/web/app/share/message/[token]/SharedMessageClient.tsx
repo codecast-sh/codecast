@@ -1,6 +1,7 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
+import { AvatarImg } from "../../../../lib/avatarCache";
 import Link from "next/link";
 import { CodeBlock } from "@/components/CodeBlock";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "@/components/tools/MarkdownRenderer";
@@ -328,7 +329,16 @@ export default function SharedMessageClient() {
         <div className="mb-6">
           <div className="flex items-center gap-3 mb-2">
             {user?.image ? (
-              <img src={user.image} alt="" className="w-8 h-8 rounded-full" />
+              <AvatarImg
+                src={user.image}
+                alt=""
+                className="w-8 h-8 rounded-full"
+                fallback={
+                  <div className="w-8 h-8 rounded-full bg-sol-text-dim/20 flex items-center justify-center text-sm font-medium text-sol-text-dim">
+                    {(user?.name || "?").charAt(0).toUpperCase()}
+                  </div>
+                }
+              />
             ) : (
               <div className="w-8 h-8 rounded-full bg-sol-text-dim/20 flex items-center justify-center">
                 <svg className="w-4 h-4 text-sol-text-dim" fill="none" viewBox="0 0 24 24" stroke="currentColor">

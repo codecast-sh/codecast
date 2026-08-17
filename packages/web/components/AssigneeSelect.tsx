@@ -2,6 +2,7 @@
 import { useState, useRef } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { Bot, User, ChevronDown, Search, Check, X } from "lucide-react";
+import { AvatarImg } from "../lib/avatarCache";
 
 export type AssigneeInfo = { name: string; image?: string };
 
@@ -72,12 +73,18 @@ export function AssigneeSelect({
 
   const renderAvatar = (opt: { id?: string; name: string; image?: string; type?: string }, size = "w-4 h-4") => {
     if (opt.type === "agent") return <Bot className={`${size} ${agentColor(opt.id || "")}`} />;
-    if (opt.image) return <img src={opt.image} alt={opt.name} className={`${size} rounded-full`} />;
     const initials = opt.name.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
     return (
-      <div className={`${size} rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted`}>
-        {initials}
-      </div>
+      <AvatarImg
+        src={opt.image}
+        alt={opt.name}
+        className={`${size} rounded-full`}
+        fallback={
+          <div className={`${size} rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted`}>
+            {initials}
+          </div>
+        }
+      />
     );
   };
 

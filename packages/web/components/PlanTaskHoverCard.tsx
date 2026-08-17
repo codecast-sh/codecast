@@ -1,6 +1,8 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { AppLoader } from "./AppLoader";
+import { useInboxStore } from "../store/inboxStore";
+import { computePlanProgress } from "../lib/liveEntities";
 import { useRouter } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -36,7 +38,21 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 function PlanHoverContent({ planId }: { planId: Id<"plans"> }) {
-  const plan = useQuery(api.plans.webPlanContext, { plan_id: planId });
+  const queryPlan = useQuery(api.plans.webPlanContext, { plan_id: planId });
+
+  // Local-first: the hover card is transient, so a spinner on EVERY hover is
+  // pure delay when the store already holds the plan and its tasks. Same
+  // composite as PlanContextPanel; the query replaces it when it answers.
+  const plan = useMemo(() => {
+    if (queryPlan !== undefined) return queryPlan;
+    const s = useInboxStore.getState();
+    const row = (s.plans as any)[String(planId)];
+    if (!row) return undefined;
+    const tasks = (row.task_ids ?? [])
+      .map((tid: any) => (s.tasks as any)[String(tid)])
+      .filter((t: any) => t && !t.parent_id);
+    return { ...row, tasks, progress: computePlanProgress(tasks) };
+  }, [queryPlan, planId]);
 
   if (!plan) return <AppLoader className="min-h-0 bg-transparent py-4 gap-3" size={20} />;
 

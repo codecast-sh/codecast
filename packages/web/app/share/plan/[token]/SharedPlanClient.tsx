@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import { MarkdownRenderer } from "../../../../components/tools/MarkdownRenderer";
 import { AppLoader } from "../../../../components/AppLoader";
+import { AvatarImg } from "../../../../lib/avatarCache";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   draft: { label: "Draft", color: "text-sol-text-dim", bg: "bg-sol-base02" },
@@ -80,7 +81,7 @@ export default function SharedPlanClient() {
           <h1 className="text-2xl font-semibold text-sol-text mb-3">{plan.title}</h1>
           <div className="flex items-center gap-3 text-xs text-sol-text-dim">
             {plan.user?.image && (
-              <img src={plan.user.image} alt="" className="w-5 h-5 rounded-full" />
+              <AvatarImg src={plan.user.image} alt="" className="w-5 h-5 rounded-full" />
             )}
             {plan.user?.name && <span className="text-sol-text-muted">{plan.user.name}</span>}
             <span>{formatDate(plan.created_at)}</span>

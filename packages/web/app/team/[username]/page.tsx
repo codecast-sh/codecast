@@ -2,6 +2,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, usePaginatedQuery } from "convex/react";
 import { AppLoader } from "../../../components/AppLoader";
+import { AvatarImg } from "../../../lib/avatarCache";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { DashboardLayout } from "../../../components/DashboardLayout";
@@ -143,13 +144,16 @@ function UserProfileContent() {
       {/* Profile header */}
       <div className="flex items-center gap-3 pb-3 mb-0">
         <div className="relative flex-shrink-0">
-          {profileUser.github_avatar_url ? (
-            <img src={profileUser.github_avatar_url} alt="" className="w-9 h-9 rounded-full ring-1 ring-sol-border/20" />
-          ) : (
-            <div className="w-9 h-9 rounded-full bg-sol-base02 flex items-center justify-center text-sol-text text-sm font-semibold">
-              {profileUser.name?.[0]?.toUpperCase() || "?"}
-            </div>
-          )}
+          <AvatarImg
+            src={profileUser.github_avatar_url}
+            alt=""
+            className="w-9 h-9 rounded-full ring-1 ring-sol-border/20"
+            fallback={
+              <div className="w-9 h-9 rounded-full bg-sol-base02 flex items-center justify-center text-sol-text text-sm font-semibold">
+                {profileUser.name?.[0]?.toUpperCase() || "?"}
+              </div>
+            }
+          />
           <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-sol-bg ${online ? "bg-sol-green" : recent ? "bg-sol-yellow" : "bg-sol-base01/30"}`} />
         </div>
         <div className="min-w-0 flex-1">

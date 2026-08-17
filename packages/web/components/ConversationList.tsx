@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AgentTypeIcon } from "./AgentTypeIcon";
+import { AvatarImg } from "../lib/avatarCache";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { Spinner } from "./ui/spinner";
@@ -579,13 +580,16 @@ export function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam 
             <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-dim select-none overflow-hidden">
               {(filter === "team" || !conv.is_own) && (
                 <span className="flex items-center gap-1.5 font-medium">
-                  {conv.author_avatar ? (
-                    <img src={conv.author_avatar} alt={conv.author_name} className="w-4 h-4 rounded-full" />
-                  ) : (
-                    <span className="w-4 h-4 rounded-full bg-sol-base02 flex items-center justify-center text-[8px] text-sol-text-muted">
-                      {conv.author_name?.charAt(0).toUpperCase()}
-                    </span>
-                  )}
+                  <AvatarImg
+                    src={conv.author_avatar}
+                    alt={conv.author_name}
+                    className="w-4 h-4 rounded-full"
+                    fallback={
+                      <span className="w-4 h-4 rounded-full bg-sol-base02 flex items-center justify-center text-[8px] text-sol-text-muted">
+                        {conv.author_name?.charAt(0).toUpperCase()}
+                      </span>
+                    }
+                  />
                   {conv.is_own ? (
                     <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300 font-semibold text-xs border border-blue-500/30">You</span>
                   ) : conv.author_name}

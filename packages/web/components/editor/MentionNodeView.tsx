@@ -1,4 +1,5 @@
 import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
+import { AvatarImg } from "../../lib/avatarCache";
 import {
   User,
   FileText,
@@ -101,13 +102,16 @@ function PersonMention({ attrs }: { attrs: Record<string, any> }) {
       href={`${ROUTE_MAP.person}/${attrs.id}`}
       className="mention-inline mention-inline-person"
     >
-      {attrs.image ? (
-        <img src={attrs.image} alt="" className="w-[18px] h-[18px] rounded-full object-cover" />
-      ) : (
-        <span className="w-[18px] h-[18px] rounded-full bg-[#859900]/20 flex items-center justify-center flex-shrink-0">
-          <User className="w-3 h-3 text-[#859900]" />
-        </span>
-      )}
+      <AvatarImg
+        src={attrs.image}
+        alt=""
+        className="w-[18px] h-[18px] rounded-full object-cover"
+        fallback={
+          <span className="w-[18px] h-[18px] rounded-full bg-[#859900]/20 flex items-center justify-center flex-shrink-0">
+            <User className="w-3 h-3 text-[#859900]" />
+          </span>
+        }
+      />
       <span className="mention-inline-label">{attrs.label}</span>
     </a>
   );

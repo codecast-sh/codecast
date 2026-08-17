@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -21,6 +21,8 @@ import {
   presenceLine,
 } from "./presence/memberPresence";
 import { startHuddle } from "../lib/calls/callManager";
+import { AvatarImg } from "../lib/avatarCache";
+import { useOpenDm } from "../hooks/useChatSync";
 import { dmRoomKey } from "@codecast/shared/contracts";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
@@ -64,7 +66,10 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
     let sig = "";
     for (const m of s.teamMembers) {
       if (!m?._id) continue;
-      sig += `${m._id}|${memberPresenceState(m)}|${m.status === "busy" ? 1 : 0}|${m.image ?? ""}|${m.github_avatar_url ?? ""}|${m.name ?? ""}|${m.email ?? ""}|${m.github_username ?? ""}|${m.in_room_key ?? ""}\n`;
+      // Full manual status, not just the busy bit: the hover card highlights
+      // the active status pill from this same memo, so an available↔away flip
+      // must wake the bar too — it's a rare, user-initiated change.
+      sig += `${m._id}|${memberPresenceState(m)}|${m.status ?? ""}|${m.image ?? ""}|${m.github_avatar_url ?? ""}|${m.name ?? ""}|${m.email ?? ""}|${m.github_username ?? ""}|${m.in_room_key ?? ""}\n`;
     }
     return sig;
   });
@@ -74,6 +79,10 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
     return roster.length > 0 ? roster : null;
   }, [barSig]);
   const callsEnabled = useInboxStore((s) => !!s.callConfig?.enabled);
+  // Opens (or creates, local-first) THIS member's DM room. A bare
+  // router.push("/chat") landed on the chat page's fallback — the busiest
+  // room, i.e. somebody else's DM.
+  const openDm = useOpenDm();
   const ctxMenu = useContextMenu<{ id: string; username?: string | null; displayName: string }>();
   // Which member's hover card is open. State-driven (not pure CSS hover) so
   // the card — which subscribes to session data for its fleet line — is
@@ -158,13 +167,16 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
                   : meta.ring
               } ${meta.dim && !isSelected ? "opacity-50 hover:opacity-80" : ""}`}
             >
-              {avatar ? (
-                <img src={avatar} alt={displayName} className="h-full w-full object-cover" />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center bg-sol-base02">
-                  <span className="text-xs font-medium text-sol-text-muted">{initial}</span>
-                </div>
-              )}
+              <AvatarImg
+                src={avatar}
+                alt={displayName}
+                className="h-full w-full object-cover"
+                fallback={
+                  <div className="flex h-full w-full items-center justify-center bg-sol-bg-highlight">
+                    <span className="text-xs font-medium text-sol-text-muted">{initial}</span>
+                  </div>
+                }
+              />
             </div>
             {busy && (
               <span
@@ -189,7 +201,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
               callsEnabled={callsEnabled}
               currentUserId={String((currentUser as any)?._id ?? "")}
               onOpenProfile={() => router.push(`/team/${member.github_username || member._id}`)}
-              onOpenChat={() => router.push("/chat")}
+              onOpenChat={() => openDm([String(member._id)])}
             />
           )}
           </span>
@@ -198,7 +210,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
       {teamMembers.length > 6 && (
         <button
           onClick={() => router.push("/team/activity?filter=team")}
-          className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-sol-border/50 bg-sol-base02 text-xs text-sol-text-muted transition-colors hover:border-sol-border"
+          className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-sol-border/50 bg-sol-bg-highlight text-xs text-sol-text-muted transition-colors hover:border-sol-border"
           title={`${teamMembers.length - 6} more team members`}
         >
           +{teamMembers.length - 6}
@@ -266,7 +278,6 @@ function MemberHoverCard({
   const now = useCoarseNow(15_000);
   const state = memberPresenceState(member);
   const meta = PRESENCE_META[state];
-  const updateProfile = useMutation(api.users.updateProfile);
   const s = useTrackedStore([
     (st: any) => st.sessions,
     (st: any) => st.sessionsWithQueuedMessages,
@@ -303,8 +314,11 @@ function MemberHoverCard({
       toUserId: String(member._id),
     });
   };
+  // Local-first: the store action flips the roster row in the same tick (the
+  // pill must not wait on a server round-trip) and dispatches the
+  // authoritative updateProfile through the outbox.
   const setStatus = (status: "available" | "busy" | "away") => {
-    void updateProfile({ status }).catch(() => {});
+    useInboxStore.getState().setMyStatus(status);
   };
 
   // Edge-aware anchoring: a 280px card anchored right-of-avatar clips off
@@ -330,13 +344,16 @@ function MemberHoverCard({
       <div className="w-[280px] rounded-lg border border-sol-border bg-sol-bg-alt p-3 text-left shadow-xl motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-150">
         <div className="flex items-start gap-2.5">
           <div className={`h-9 w-9 shrink-0 overflow-hidden rounded-full ${meta.ring}`}>
-            {avatar ? (
-              <img src={avatar} alt="" className="h-full w-full object-cover" />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center bg-sol-base02 text-sm text-sol-text-muted">
-                {displayName.charAt(0).toUpperCase()}
-              </div>
-            )}
+            <AvatarImg
+              src={avatar}
+              alt=""
+              className="h-full w-full object-cover"
+              fallback={
+                <div className="flex h-full w-full items-center justify-center bg-sol-bg-highlight text-sm text-sol-text-muted">
+                  {displayName.charAt(0).toUpperCase()}
+                </div>
+              }
+            />
           </div>
           <div className="min-w-0 flex-1">
             <button
@@ -404,9 +421,9 @@ function MemberHoverCard({
                     ? st === "busy"
                       ? "bg-sol-red/15 text-sol-red"
                       : st === "away"
-                        ? "bg-sol-base02 text-sol-text"
+                        ? "bg-sol-bg-highlight text-sol-text"
                         : "bg-sol-green/15 text-sol-green"
-                    : "text-sol-text-dim hover:bg-sol-base02 hover:text-sol-text"
+                    : "text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text"
                 }`}
               >
                 {st}
@@ -425,7 +442,7 @@ function MemberHoverCard({
               )}
               <button
                 onClick={onOpenChat}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-sol-base02 px-2 py-1.5 text-[12px] text-sol-text-muted transition-colors hover:text-sol-text"
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-sol-bg-highlight px-2 py-1.5 text-[12px] text-sol-text-muted transition-colors hover:text-sol-text"
               >
                 <MessageSquare className="h-3.5 w-3.5" />
                 Message
