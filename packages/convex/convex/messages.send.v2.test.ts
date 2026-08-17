@@ -324,6 +324,16 @@ describe("messages.send/v2 durable command", () => {
           owner_user_id: OWNER,
           status: "granted",
         }],
+        // A grantee necessarily opened the share link signed in — the
+        // redemption of the CURRENT token is what makes them "shared" at all
+        // (issue #27: token existence alone grants nothing).
+        share_redemptions: [{
+          _id: "redeem-member",
+          conversation_id: CONVERSATION,
+          user_id: MEMBER,
+          token: "shared",
+          created_at: 1,
+        }],
       }],
     ];
 
@@ -528,6 +538,14 @@ describe("messages.byConversation/v2 command coverage", () => {
         grantee_user_id: MEMBER,
         owner_user_id: OWNER,
         status: "granted",
+      }],
+      // Redemption of the current token — see the send-rule seed above.
+      share_redemptions: [{
+        _id: "redeem-member",
+        conversation_id: CONVERSATION,
+        user_id: MEMBER,
+        token: "shared",
+        created_at: 1,
       }],
     });
     expect((await (getMessageCoverageV2 as any)._handler(grantCtx, {
