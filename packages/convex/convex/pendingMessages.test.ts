@@ -712,3 +712,22 @@ describe("delivery revives a killed conversation", () => {
     expect(conv.status).toBe("completed");
   });
 });
+
+describe("getConversationPendingMessage", () => {
+  test("returns the pending row's own id as message_id (the client feeds it to getMessageStatus)", async () => {
+    const { getConversationPendingMessage } = await import("./pendingMessages");
+    const auth = { async getUserIdentity() { return { subject: "u_owner|session" }; } };
+    const ctx = {
+      auth,
+      db: makeFakeDb({
+        conversations: [{ _id: "conv_1", user_id: "u_owner" }],
+        pending_messages: [
+          { _id: "pm_1", conversation_id: "conv_1", from_user_id: "u_owner", status: "pending", created_at: 5, retry_count: 0, content: "hi" },
+        ],
+      }),
+    } as any;
+    const result = await (getConversationPendingMessage as any)._handler(ctx, { conversation_id: "conv_1" });
+    expect(result?.message_id).toBe("pm_1");
+    expect(result?.status).toBe("pending");
+  });
+});

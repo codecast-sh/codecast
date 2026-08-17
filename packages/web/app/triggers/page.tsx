@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useQuery, useMutation, useConvex } from "convex/react";
+import { useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { AuthGuard } from "../../components/AuthGuard";
@@ -18,7 +18,8 @@ import {
   TRIGGER_EVENT_LABELS,
 } from "../../components/triggerCadence";
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
-import { isTriggerFailing, patchTaskInWebList, taskDisplayTitle } from "../../components/triggerTasks";
+import { isTriggerFailing, taskDisplayTitle } from "../../components/triggerTasks";
+import { useTriggers, fetchTriggerRuns } from "../../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns, openRunInStore } from "../../components/TriggerRunHistory";
 import { TriggerPromptView } from "../../components/TriggerPromptView";
 import { SelectBox } from "../../components/ui/select-box";
@@ -172,7 +173,7 @@ function useOpenLatestRun() {
   const convex = useConvex();
   return useCallback(async (task: any) => {
     try {
-      const runs = (await convex.query(api.agentTasks.webListRuns, { task_id: task._id })) as any[];
+      const runs = await fetchTriggerRuns(convex, task._id);
       const run = runs?.[0]; // newest first — the dot is the latest run
       if (run) {
         openRunInStore(run);
@@ -431,21 +432,16 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
   }, [deepLinkRef]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [formMode, setFormMode] = useState<null | "edit" | "duplicate">(null);
-  // Verbs flip the row in the local webList cache synchronously (local-first);
-  // the server echo reconciles. Same helper the inbox schedule rows use.
-  const pause = useMutation(api.agentTasks.webPause).withOptimisticUpdate(
-    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "paused" }),
-  );
-  const resume = useMutation(api.agentTasks.webResume).withOptimisticUpdate(
-    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "scheduled" }),
-  );
-  const runNow = useMutation(api.agentTasks.webRunNow).withOptimisticUpdate(
-    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "scheduled", run_at: Date.now() }),
-  );
-  const cancel = useMutation(api.agentTasks.webCancel).withOptimisticUpdate(
-    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "completed" }),
-  );
-  const del = useMutation(api.agentTasks.webDelete);
+  // Verbs are store actions (local-first): the agent_tasks row flips on the
+  // draft synchronously and the dispatch side effect runs the real mutation.
+  // Same actions the inbox schedule rows and the conversation strip use.
+  const triggerAction = useInboxStore((st) => st.triggerAction);
+  const deleteTrigger = useInboxStore((st) => st.deleteTrigger);
+  const pause = () => triggerAction(task._id, "pause");
+  const resume = () => triggerAction(task._id, "resume");
+  const runNow = () => triggerAction(task._id, "runNow");
+  const cancel = () => triggerAction(task._id, "cancel");
+  const del = () => deleteTrigger(task._id);
   const regenSummary = useMutation(api.agentTasks.webRegenerateSummary);
 
   const isActive = task.status === "scheduled" || task.status === "running";
@@ -486,15 +482,12 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
     }
   };
 
-  const act = (fn: () => Promise<any>, msg: string) => async (e?: React.MouseEvent) => {
+  // Local-first: the verb lands on the draft synchronously; a failed dispatch
+  // surfaces through the store's outbox failure channel, not here.
+  const act = (fn: () => void, msg: string) => (e?: React.MouseEvent) => {
     e?.stopPropagation();
-    try {
-      const ok = await fn();
-      if (ok === false) toast.error("Couldn't update — refresh and retry");
-      else toast.success(msg);
-    } catch {
-      toast.error("Action failed");
-    }
+    fn();
+    toast.success(msg);
   };
 
   const iconBtn =
@@ -517,12 +510,12 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
           edit: () => openForm("edit")(),
           duplicate: () => openForm("duplicate")(),
           copyPrompt: () => copyPrompt(),
-          runNow: () => act(() => runNow({ task_id: task._id }), "Queued — runs within ~30s")(),
-          runAgain: () => act(() => runNow({ task_id: task._id }), "Re-armed — runs within ~30s")(),
-          pause: () => act(() => pause({ task_id: task._id }), "Paused")(),
-          resume: () => act(() => resume({ task_id: task._id }), "Resumed")(),
-          cancel: () => act(() => cancel({ task_id: task._id }), "Cancelled")(),
-          del: () => act(() => del({ task_id: task._id }), "Deleted")(),
+          runNow: () => act(runNow, "Queued — runs within ~30s")(),
+          runAgain: () => act(runNow, "Re-armed — runs within ~30s")(),
+          pause: () => act(pause, "Paused")(),
+          resume: () => act(resume, "Resumed")(),
+          cancel: () => act(cancel, "Cancelled")(),
+          del: () => act(del, "Deleted")(),
         })
       }
     >
@@ -642,17 +635,17 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
           {isActive && (
             <>
               <ShortcutTooltip label="Run now" hint="daemon picks it up within ~30s">
-                <button className={iconBtn} aria-label="Run now" onClick={act(() => runNow({ task_id: task._id }), "Queued — runs within ~30s")}>
+                <button className={iconBtn} aria-label="Run now" onClick={act(runNow, "Queued — runs within ~30s")}>
                   <Play className="w-3.5 h-3.5" />
                 </button>
               </ShortcutTooltip>
               <ShortcutTooltip label="Pause">
-                <button className={iconBtn} aria-label="Pause" onClick={act(() => pause({ task_id: task._id }), "Paused")}>
+                <button className={iconBtn} aria-label="Pause" onClick={act(pause, "Paused")}>
                   <Pause className="w-3.5 h-3.5" />
                 </button>
               </ShortcutTooltip>
               <ShortcutTooltip label="Cancel">
-                <button className={iconBtn} aria-label="Cancel" onClick={act(() => cancel({ task_id: task._id }), "Cancelled")}>
+                <button className={iconBtn} aria-label="Cancel" onClick={act(cancel, "Cancelled")}>
                   <X className="w-3.5 h-3.5" />
                 </button>
               </ShortcutTooltip>
@@ -661,12 +654,12 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
           {task.status === "paused" && (
             <>
               <ShortcutTooltip label="Resume">
-                <button className={iconBtn} aria-label="Resume" onClick={act(() => resume({ task_id: task._id }), "Resumed")}>
+                <button className={iconBtn} aria-label="Resume" onClick={act(resume, "Resumed")}>
                   <Play className="w-3.5 h-3.5" />
                 </button>
               </ShortcutTooltip>
               <ShortcutTooltip label="Cancel">
-                <button className={iconBtn} aria-label="Cancel" onClick={act(() => cancel({ task_id: task._id }), "Cancelled")}>
+                <button className={iconBtn} aria-label="Cancel" onClick={act(cancel, "Cancelled")}>
                   <X className="w-3.5 h-3.5" />
                 </button>
               </ShortcutTooltip>
@@ -675,7 +668,7 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
           {isHistory && (
             <>
               <ShortcutTooltip label="Run again" hint="re-arms, runs within ~30s">
-                <button className={iconBtn} aria-label="Run again" onClick={act(() => runNow({ task_id: task._id }), "Re-armed — runs within ~30s")}>
+                <button className={iconBtn} aria-label="Run again" onClick={act(runNow, "Re-armed — runs within ~30s")}>
                   <RotateCcw className="w-3.5 h-3.5" />
                 </button>
               </ShortcutTooltip>
@@ -690,7 +683,7 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
                     setTimeout(() => setConfirmDelete(false), 3000);
                     return;
                   }
-                  act(() => del({ task_id: task._id }), "Deleted")(e);
+                  act(del, "Deleted")(e);
                 }}
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -1570,7 +1563,11 @@ function FilteredEmpty({ onClear }: { onClear: () => void }) {
 }
 
 function TriggersContent() {
-  const tasks = useQuery(api.agentTasks.webList, {});
+  // Store-fed (hooks/useSyncTriggers): the list paints from the cached roster
+  // synchronously; the feeder keeps it fresh. `undefined` only while the cache
+  // is empty AND the first answer is in flight.
+  const { tasks: taskRows, ready: tasksReady } = useTriggers();
+  const tasks = tasksReady || taskRows.length > 0 ? taskRows : undefined;
   // ?new=1 arrives from the inbox dock's "+ New" — land with the create form
   // already open instead of making the user find the button again.
   const [showForm, setShowForm] = useState(

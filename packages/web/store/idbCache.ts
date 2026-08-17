@@ -40,9 +40,9 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 14;
+export const CACHE_SCHEMA_VERSION = 15;
 export const CACHE_SCHEMA_SIGNATURE =
-  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|comments:_id|commits:_id|docs:_id|managedSessions:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|sessionDecisions:_id|sessions:_id|tasks:_id|workflowRuns:_id, workflow_id|workflows:_id";
+  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|comments:_id|commits:_id|docs:_id|managedSessions:_id|messageFeed:_id, timestamp|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|sessionDecisions:_id|sessions:_id|tasks:_id|workflowRuns:_id, workflow_id|workflows:_id";
 
 const SYSTEM_TABLES = {
   meta: "key",
@@ -72,6 +72,21 @@ class CacheDB extends Dexie {
 }
 
 const db = new CacheDB();
+
+// A schema upgrade needs every other Codecast tab on this origin to release
+// its connection; a tab that is mid-hydration for a few seconds holds the
+// upgrader, and every outbox write in THIS tab queues behind the blocked open
+// ("durable enqueue still uncommitted"). Dexie's own warning reads as noise —
+// name the cause so the fix (close/reload other tabs) is obvious.
+if (PERSISTENCE_AVAILABLE) {
+  db.on("blocked", (ev: any) => {
+    console.warn(
+      `[idbCache] codecast-store upgrade to schema v${CACHE_SCHEMA_VERSION} is blocked by another Codecast tab still on schema v${Math.ceil((ev?.oldVersion ?? 0) / 10)} — close or reload other tabs`,
+    );
+  });
+  // The other side (this tab is the holder) is Dexie's default versionchange
+  // handler: it closes with auto-reopen so the upgrader can proceed.
+}
 
 const COLLECTION_TABLES: Record<string, Dexie.Table<any, string>> = Object.fromEntries(
   COLLECTION_STORE_KEYS.filter((key) => (db as any)[key]).map((key) => [key, (db as any)[key]])

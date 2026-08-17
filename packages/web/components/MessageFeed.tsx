@@ -1,6 +1,5 @@
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { useMemo, useState, useCallback, useRef } from "react";
+import { useMemo, useState } from "react";
+import { useMessageFeed } from "../hooks/useMessageFeed";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -31,7 +30,6 @@ type FeedMessage = {
 // pulling server batches until this many survive the filter (or history runs out).
 const MIN_VISIBLE = 30;
 // How many to add per "Load older" click / auto-fill step (server page size).
-const SERVER_PAGE = 100;
 
 function getRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -174,41 +172,13 @@ type FeedItem =
   | { kind: "text"; msg: FeedMessage; text: string };
 
 export function MessageFeed({ filter }: MessageFeedProps) {
-  const [cursor, setCursor] = useState<number | undefined>(undefined);
-  const [loadedMessages, setLoadedMessages] = useState<FeedMessage[]>([]);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [prevFilter, setPrevFilter] = useState(filter);
   const [onlyMine, setOnlyMine] = useState(false);
-
-  if (filter !== prevFilter) {
-    setPrevFilter(filter);
-    setCursor(undefined);
-    setLoadedMessages([]);
-  }
-
-  const result = useQuery(api.conversations.getMessageFeed, {
-    filter,
-    limit: SERVER_PAGE,
-    cursor,
-  });
-
-  const allMessages = useMemo(() => {
-    if (!result?.messages) return loadedMessages;
-    const allMsgs =
-      cursor === undefined
-        ? result.messages
-        : [...loadedMessages, ...result.messages];
-    const seen = new Set<string>();
-    const deduplicated: FeedMessage[] = [];
-    for (const msg of allMsgs) {
-      if (!seen.has(msg._id)) {
-        seen.add(msg._id);
-        deduplicated.push(msg);
-      }
-    }
-    deduplicated.sort((a, b) => b.timestamp - a.timestamp);
-    return deduplicated;
-  }, [result?.messages, loadedMessages, cursor]);
+  // Store-fed (hooks/useMessageFeed): the feed paints from cached rows on
+  // the first frame; the live newest page and one-shot older pages overlay
+  // the store, and the continuation cursor survives a reload.
+  const { messages: allMessages, ready, hasMore, isLoadingMore, loadMore } = useMessageFeed(filter);
+  const result = ready || allMessages.length > 0 ? { nextCursor: hasMore ? 1 : null } : undefined;
+  const loadedMessages = allMessages;
 
   // Classify every user-role message once. Session→session cross-talk gets its
   // own cyan card; machine noise (task notifications, command/skill expansions,
@@ -236,20 +206,6 @@ export function MessageFeed({ filter }: MessageFeedProps) {
     if (!onlyMine) return displayItems;
     return displayItems.filter((it) => it.kind === "text" && it.msg.is_own);
   }, [displayItems, onlyMine]);
-
-  const loadMoreRef = useRef(false);
-  const loadMore = useCallback(() => {
-    if (result?.nextCursor && !isLoadingMore && !loadMoreRef.current) {
-      loadMoreRef.current = true;
-      setIsLoadingMore(true);
-      setLoadedMessages(allMessages);
-      setCursor(result.nextCursor);
-      setTimeout(() => {
-        setIsLoadingMore(false);
-        loadMoreRef.current = false;
-      }, 400);
-    }
-  }, [result?.nextCursor, isLoadingMore, allMessages]);
 
   // Auto-fill: a server page can be almost all machine noise, leaving too few
   // real messages on screen. Keep pulling until MIN_VISIBLE survive the filter

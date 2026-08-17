@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import {
@@ -25,6 +25,7 @@ import type { InboxSession } from "../store/inboxStore";
 import { TriggerRunRail, useTriggerRuns } from "./TriggerRunHistory";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useTriggers } from "../hooks/useSyncTriggers";
 import { TriggerPromptView } from "./TriggerPromptView";
 
 const api = _api as any;
@@ -63,7 +64,10 @@ export function TriggerContextPanel({
   sessionId?: string | null;
   agentTaskId?: string | null;
 }) {
-  const tasks = useQuery(api.agentTasks.webList, {}) as TaskRow[] | undefined;
+  // Store-fed (hooks/useSyncTriggers): the strip paints from the cached
+  // roster on the first frame; the feeder keeps it fresh.
+  const { tasks: taskList, ready: tasksReady } = useTriggers();
+  const tasks = (tasksReady || taskList.length > 0 ? taskList : undefined) as TaskRow[] | undefined;
   // Arrive expanded when the navigation came FROM a schedule surface (dock row,
   // row under a card): the click meant "show me this trigger", so the strip
   // opens without a second click. Subscribed (not a one-shot mount read) so the
@@ -90,12 +94,12 @@ export function TriggerContextPanel({
   const [othersOpen, setOthersOpen] = useState(false);
   // User override of the auto-picked schedule, via the "+N more" switcher.
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Local-first verbs are synchronous; nothing is ever "busy".
+  const busy = false;
 
-  const pause = useMutation(api.agentTasks.webPause);
-  const resume = useMutation(api.agentTasks.webResume);
-  const runNow = useMutation(api.agentTasks.webRunNow);
-  const cancel = useMutation(api.agentTasks.webCancel);
+  // Verbs are store actions (local-first): the row flips on the draft the
+  // instant it's clicked and the dispatch side effect runs the real mutation.
+  const triggerAction = useInboxStore((s) => s.triggerAction);
   const regenerateSummary = useMutation(api.agentTasks.webRegenerateSummary);
   // Fire-and-forget: the Haiku distillation lands through the webList
   // subscription, at which point the briefing swaps in and the button goes.
@@ -220,15 +224,10 @@ export function TriggerContextPanel({
     }
   })();
 
-  const act = async (fn: (args: { task_id: string }) => Promise<unknown>) => {
+  const act = (verb: "pause" | "resume" | "runNow" | "cancel") => {
     if (busy) return;
-    setBusy(true);
-    try {
-      await fn({ task_id: primary._id });
-    } finally {
-      setBusy(false);
-      setConfirmingCancel(false);
-    }
+    triggerAction(primary._id, verb);
+    setConfirmingCancel(false);
   };
 
   const copyPrompt = () => {
@@ -507,7 +506,7 @@ export function TriggerContextPanel({
                 <ShortcutTooltip label="Queue a run immediately — doesn't shift the regular cadence">
                   <button
                     disabled={busy}
-                    onClick={() => act(runNow)}
+                    onClick={() => act("runNow")}
                     className={`${actionBtn} border-sol-cyan/40 text-sol-cyan bg-sol-cyan/10 hover:bg-sol-cyan/20`}
                   >
                     <span className="inline-flex items-center gap-1">
@@ -519,7 +518,7 @@ export function TriggerContextPanel({
                   <ShortcutTooltip label="Re-arm the trigger — fires resume from now">
                     <button
                       disabled={busy}
-                      onClick={() => act(resume)}
+                      onClick={() => act("resume")}
                       className={`${actionBtn} border-sol-orange/40 text-sol-orange hover:bg-sol-orange/10`}
                     >
                       <span className="inline-flex items-center gap-1">
@@ -531,7 +530,7 @@ export function TriggerContextPanel({
                   <ShortcutTooltip label="Pause — skips every fire until resumed">
                     <button
                       disabled={busy}
-                      onClick={() => act(pause)}
+                      onClick={() => act("pause")}
                       className={`${actionBtn} border-sol-border/50 text-sol-text-dim hover:bg-sol-bg-alt/60`}
                     >
                       <span className="inline-flex items-center gap-1">
@@ -544,7 +543,7 @@ export function TriggerContextPanel({
                   <ShortcutTooltip label="Really cancel — this trigger won't fire again">
                     <button
                       disabled={busy}
-                      onClick={() => act(cancel)}
+                      onClick={() => act("cancel")}
                       className={`${actionBtn} border-sol-red/50 text-sol-red bg-sol-red/10 hover:bg-sol-red/20`}
                     >
                       Confirm cancel

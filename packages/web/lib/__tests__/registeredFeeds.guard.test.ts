@@ -51,6 +51,10 @@ describe("registered feeds are subscribed only by feeder hooks", () => {
         if (ALLOWED.has(rel)) continue;
         const src = readFileSync(file, "utf8");
         src.split("\n").forEach((line, i) => {
+          // A type reference (`FunctionReturnType<typeof api.x.y>`) and a
+          // comment name the query without subscribing to it.
+          const t = line.trim();
+          if (t.startsWith("//") || t.startsWith("*") || /\btypeof\s+api\b/.test(line)) return;
           for (const { feed, re } of patterns) {
             if (re.test(line)) offenders.push(`${rel}:${i + 1} subscribes to ${feed} (feeds store.${REGISTERED_FEEDS[feed]})`);
           }

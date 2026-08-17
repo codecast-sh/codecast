@@ -8,8 +8,8 @@
 // so the pickers never go blank.
 
 import { useMemo } from "react";
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "../store/inboxStore";
+import { useSyncDevices } from "./useSyncDevices";
 import {
   AGENT_MODEL_CONFIG,
   modelAgentKey,
@@ -43,7 +43,11 @@ export function useDynamicModels(
   const menuDynamic = !!cfg?.menuDynamic;
   // Subscription only exists while a dynamic picker is mounted; Convex dedupes
   // it against other listDevices subscribers (DeviceBadge).
-  const devices = useQuery(api.devices.listDevices, dynamic || menuDynamic ? {} : "skip");
+  // Store-fed roster (hooks/useSyncDevices); the feeder only mounts while a
+  // dynamic picker is open.
+  useSyncDevices(dynamic || menuDynamic);
+  const roster = useInboxStore((s) => s.machineRoster);
+  const devices = dynamic || menuDynamic ? roster : undefined;
 
   return useMemo(() => {
     const staticFeatured = (cfg?.models ?? []).filter((m) => m.key !== "default");

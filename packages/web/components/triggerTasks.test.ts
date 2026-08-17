@@ -310,11 +310,21 @@ describe("visualOrderSessions absorbed projection", () => {
     run: session("run", { is_idle: true, agent_task_id: "sp" }),
   };
 
-  it("drops absorbed sessions from nav entirely", () => {
+  it("walks absorbed sessions with the DORMANT section, after the triage buckets", () => {
+    // A trigger's resting home / uneventful run is parked on the trigger's next
+    // fire: it leaves Needs Input but stays reachable by Ctrl+J/K at the end,
+    // where the panel renders it (Dormant). Nothing vanishes from the walk.
     const order = visualOrderSessions(sessions, new Set(), null, new Set(), {
       absorbedIds: new Set(["resting", "run"]),
     }).map((s) => s._id);
-    expect(order).toEqual(["ni"]);
+    expect(order[0]).toBe("ni");
+    expect(order.slice(1).sort()).toEqual(["resting", "run"]);
+    // …and a collapsed Dormant section hides them from the walk.
+    const collapsed = visualOrderSessions(sessions, new Set(), null, new Set(), {
+      absorbedIds: new Set(["resting", "run"]),
+      collapsedSections: { dormant: true },
+    }).map((s) => s._id);
+    expect(collapsed).toEqual(["ni"]);
   });
 
   it("without the set, behavior is unchanged", () => {

@@ -13,7 +13,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
-import { useConvexSync } from "../hooks/useConvexSync";
+import { useSyncDevices } from "../hooks/useSyncDevices";
 import type { RestartPhase, RestartProgressRow, RestartStage } from "../hooks/useSessionRestart";
 import {
   DropdownMenuItem,
@@ -138,18 +138,12 @@ const NO_DEVICES: Device[] = [];
 
 /** Load the user's devices, with helpers for routing-aware decisions. */
 export function useDevices() {
-  const fresh = useQuery(api.devices.listDevices, {}) as Device[] | undefined;
-  // While this mount's query is in flight, serve the store mirror another mount
-  // already filled — it holds full listDevices rows from THIS page load (never
-  // persisted), so a freshly mounted picker resolves its machine immediately
-  // instead of rendering an empty roster for a round-trip.
+  // Store-fed (hooks/useSyncDevices): the roster is persisted, so a chip
+  // resolves its machine on the first frame after boot; the feeder keeps it
+  // live and flips machineRosterLive for the path-seeding gate.
+  useSyncDevices();
   const mirrored = useInboxStore((s) => s.machineRoster) as Device[];
-  const devices = fresh ?? (mirrored.length > 0 ? mirrored : NO_DEVICES);
-  // Mirror the roster into the store so the create path can re-check a picked
-  // machine against live routing at the moment it fires (createSessionFromStub).
-  // Every surface that shows a device chip keeps this warm; nothing persists it.
-  const setMachineRoster = useInboxStore((s) => s.setMachineRoster);
-  useConvexSync(fresh, setMachineRoster);
+  const devices = mirrored.length > 0 ? mirrored : NO_DEVICES;
   return useMemo(() => {
     const byId = new Map(devices.map((d) => [d.device_id, d]));
     const locals = devices.filter((d) => !d.is_remote);
