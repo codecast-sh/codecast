@@ -8,9 +8,9 @@ import {
   CtxItem,
   CtxLabel,
   CtxSeparator,
-  useContextMenu,
   type ContextMenuState,
 } from "../ui/context-menu";
+import type { ChannelMenuPayload } from "../../hooks/useChannelMenu";
 import { useInboxStore } from "../../store/inboxStore";
 import type { ChatNotifyLevel } from "../../store/chatSlice";
 import { channelDisplayName } from "../../lib/chatViews";
@@ -38,19 +38,6 @@ const NOTIFY_LEVELS: { value: ChatNotifyLevel; label: string; hint: string }[] =
   { value: "mentions", label: "Just mentions", hint: "default" },
   { value: "none", label: "Mute", hint: "badge only" },
 ];
-
-export type ChannelMenuPayload = {
-  channelId: string;
-  notifyLevel: ChatNotifyLevel;
-  /** Where the view goes if this channel is archived out from under it. */
-  onArchived?: () => void;
-};
-
-/** One hook + one element per surface (sidebar, chat page); rows call
- *  `state.open(e, payload)` from clicks and right-clicks alike. */
-export function useChannelMenu(): ContextMenuState<ChannelMenuPayload> {
-  return useContextMenu<ChannelMenuPayload>();
-}
 
 export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelMenuPayload> }) {
   const setNotifyLevel = useInboxStore((s) => s.setChannelNotifyLevel);

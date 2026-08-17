@@ -7,18 +7,9 @@
 
 import { isWindowRolled, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo, formatCountdown } from "@codecast/shared/contracts";
+import { usageTone } from "../lib/usageTone";
 
-export { worstUsagePercent, isWindowRolled, formatAgo, formatCountdown };
 export type { CcUsage };
-
-// Status tone for a utilization percent: quiet while there's headroom, loud as
-// the window pegs. Values are shown alongside — color never carries alone.
-export function usageTone(pct: number): string {
-  if (pct >= 100) return "var(--sol-red)";
-  if (pct >= 85) return "var(--sol-orange)";
-  if (pct >= 60) return "var(--sol-yellow)";
-  return "var(--sol-blue)";
-}
 
 // Data older than this gets an explicit "as of" note: dormant profiles keep
 // their last reading once their token expires (~8h), and the reader must be

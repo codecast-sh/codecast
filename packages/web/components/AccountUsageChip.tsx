@@ -19,14 +19,10 @@ import { Switch } from "./ui/switch";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../hooks/useAccountRecoveryToggles";
 import { useTrackedStore } from "../store/inboxStore";
-import { isExhaustionCurrent } from "@codecast/convex/convex/ccAccountsShared";
-import {
-  AccountUsageBars,
-  formatAgo,
-  usageTone,
-  worstUsagePercent,
-  type CcUsage,
-} from "./AccountUsageMeter";
+import { isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { formatAgo } from "@codecast/shared/contracts";
+import { usageTone } from "../lib/usageTone";
+import { AccountUsageBars } from "./AccountUsageMeter";
 
 type ProfileRow = {
   name: string;
