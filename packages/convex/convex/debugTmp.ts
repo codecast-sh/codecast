@@ -530,3 +530,99 @@ export const attachImagesToUserMessage = internalMutation({
     return { attached: args.images.length, applied: true };
   },
 });
+
+// TEMPORARY: mobile huddles e2e — scratch team + channel for test users.
+// Same shape as the torn-down web-e2e helper. Safe to delete.
+export const e2eSetupMobile = internalMutation({
+  args: { members: v.array(v.id("users")) },
+  handler: async (ctx, args) => {
+    const NAME = "Huddle E2E";
+    let team = (await ctx.db.query("teams").collect()).find((t) => t.name === NAME);
+    const now = Date.now();
+    const teamId =
+      team?._id ??
+      (await ctx.db.insert("teams", {
+        name: NAME,
+        icon: "atom",
+        icon_color: "violet",
+        created_at: now,
+        invite_code: `E2E${now}`,
+      }));
+    for (const uid of args.members) {
+      const existing = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q) => q.eq("user_id", uid).eq("team_id", teamId))
+        .unique();
+      if (!existing) {
+        await ctx.db.insert("team_memberships", {
+          user_id: uid,
+          team_id: teamId,
+          role: "member",
+          joined_at: now,
+        });
+      }
+      await ctx.db.patch(uid, { active_team_id: teamId });
+    }
+    let channel = (await ctx.db.query("chat_channels").collect()).find(
+      (c) => String(c.team_id) === String(teamId) && c.name === "e2e-huddle",
+    );
+    if (!channel) {
+      const chId = await ctx.db.insert("chat_channels", {
+        team_id: teamId,
+        name: "e2e-huddle",
+        created_by: args.members[0],
+        created_at: now,
+        updated_at: now,
+      });
+      channel = (await ctx.db.get(chId)) ?? undefined;
+    }
+    return { teamId, channelId: channel!._id };
+  },
+});
+
+export const e2eTeardownMobile = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const team = (await ctx.db.query("teams").collect()).find((t) => t.name === "Huddle E2E");
+    if (!team) return { removed: false };
+    for (const c of (await ctx.db.query("chat_channels").collect()).filter(
+      (c) => String(c.team_id) === String(team._id),
+    )) {
+      await ctx.db.delete(c._id);
+    }
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_team_id", (q) => q.eq("team_id", team._id))
+      .collect();
+    for (const m of memberships) {
+      await ctx.db.delete(m._id);
+      const u = await ctx.db.get(m.user_id);
+      if (u && String(u.active_team_id ?? "") === String(team._id)) {
+        await ctx.db.patch(m.user_id, { active_team_id: u.team_id ?? undefined });
+      }
+    }
+    await ctx.db.delete(team._id);
+    return { removed: true };
+  },
+});
+
+// TEMPORARY (e2e): seed one team-visible conversation for the sim user so the
+// session-screen huddle button can be verified. Remove with e2eTeardownMobile.
+export const e2eSeedConversation = internalMutation({
+  args: { user_id: v.id("users"), team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const id = await ctx.db.insert("conversations", {
+      user_id: args.user_id,
+      team_id: args.team_id,
+      agent_type: "claude_code",
+      session_id: `e2e-huddle-${now}`,
+      started_at: now,
+      updated_at: now,
+      title: "Huddle e2e session",
+      is_private: false,
+      status: "completed",
+    } as any);
+    return id;
+  },
+});
