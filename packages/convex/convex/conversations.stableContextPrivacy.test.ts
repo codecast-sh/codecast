@@ -52,7 +52,7 @@ describe("stable-context share privacy", () => {
   test("getConversationWithMeta strips the owner's feed snapshot for shared access", async () => {
     const result = await (getConversationWithMeta as any)._handler(
       anonymousCtx(sharedFixture()),
-      { conversation_id: CONVERSATION_ID },
+      { conversation_id: CONVERSATION_ID, share_token: "public-token" },
     );
 
     expect(result?.title).toBe("Shared session");
@@ -62,7 +62,7 @@ describe("stable-context share privacy", () => {
   test("getConversationPublic strips the owner's feed snapshot for an anonymous viewer", async () => {
     const result = await (getConversationPublic as any)._handler(
       anonymousCtx(sharedFixture()),
-      { conversation_id: CONVERSATION_ID, limit: 20 },
+      { conversation_id: CONVERSATION_ID, limit: 20, share_token: "public-token" },
     );
 
     expect(result?.access_level).toBe("shared");

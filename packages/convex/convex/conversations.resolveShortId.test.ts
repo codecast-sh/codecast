@@ -72,10 +72,17 @@ describe("resolveConversationForViewer", () => {
     expect(result).toEqual({ access_level: "denied", conversation_id: null });
   });
 
-  test("guest resolves a short id when the conversation has a share token", async () => {
+  test("guest resolves a short id when PRESENTING the conversation's share token", async () => {
+    const db = fixtures();
+    db._tables.conversations[0].share_token = "tok_1";
+    const result = await resolveConversationForViewer({ db }, "jx7666x", null, "tok_1");
+    expect(result).toEqual({ access_level: "shared", conversation_id: TEAMMATE_CONV_ID });
+  });
+
+  test("issue #27: a guest with only the short id is denied even when a share token exists", async () => {
     const db = fixtures();
     db._tables.conversations[0].share_token = "tok_1";
     const result = await resolveConversationForViewer({ db }, "jx7666x", null);
-    expect(result).toEqual({ access_level: "shared", conversation_id: TEAMMATE_CONV_ID });
+    expect(result).toEqual({ access_level: "denied", conversation_id: null });
   });
 });

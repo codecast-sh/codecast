@@ -78,11 +78,12 @@ export interface FleetBands {
  * orphan subagents, old rows) stays decided in exactly one place.
  */
 export function splitFleetBands(
-  cat: Pick<CategorizedSessions, "pinned" | "needsInput" | "working" | "newSessions">,
+  cat: Pick<CategorizedSessions, "pinned" | "needsInput" | "working" | "newSessions"> &
+    Partial<Pick<CategorizedSessions, "done" | "dormant">>,
   opts: FleetBandOpts,
 ): FleetBands {
   const out: FleetBands = { needsYou: [], running: [], finished: [] };
-  for (const s of [...cat.pinned, ...cat.needsInput, ...cat.working]) {
+  for (const s of [...cat.pinned, ...cat.needsInput, ...(cat.done ?? []), ...(cat.dormant ?? []), ...cat.working]) {
     out[fleetBandFor(s, opts)].push(s);
   }
   // Blanks: a just-spawned worker (agent starting, or a first send in flight)

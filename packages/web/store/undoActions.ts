@@ -207,6 +207,49 @@ export function undoableDeferSession(id: string) {
   });
 }
 
+export function undoableDormantSession(id: string) {
+  const state = useInboxStore.getState();
+  const session = state.sessions[id];
+  const label = session?.title || "session";
+  const wasDormant = session?.is_dormant;
+  const wasDormantAt = session?.inbox_dormant_at ?? null;
+  const prevConvo = state.conversations[id]
+    ? { ...state.conversations[id] }
+    : null;
+
+  useInboxStore.getState().dormantSession(id);
+
+  pushUndo({
+    label: `Dormant ${label}`,
+    undo: () => {
+      const store = useInboxStore.getState();
+      const newSessions = { ...store.sessions };
+      if (newSessions[id]) {
+        newSessions[id] = { ...newSessions[id], is_dormant: wasDormant, inbox_dormant_at: wasDormantAt };
+      }
+      const newConvos = { ...store.conversations };
+      if (prevConvo) {
+        newConvos[id] = prevConvo;
+      }
+      const newPending = { ...store.pending };
+      delete newPending[`sessions:${id}:is_dormant`];
+      delete newPending[`sessions:${id}:inbox_dormant_at`];
+
+      useInboxStore.setState({
+        sessions: newSessions,
+        conversations: newConvos,
+        pending: newPending,
+      });
+      store.applyUndoPatches({
+        conversations: { [id]: { inbox_dormant_at: wasDormantAt } },
+      });
+    },
+    redo: () => {
+      useInboxStore.getState().dormantSession(id);
+    },
+  });
+}
+
 export function undoablePinSession(id: string) {
   const state = useInboxStore.getState();
   const session = state.sessions[id];

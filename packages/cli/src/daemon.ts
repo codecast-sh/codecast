@@ -167,7 +167,8 @@ import {
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES } from "@codecast/shared/contracts";
+import { readThreadStateStamp } from "./stateCommand.js";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, countModelSetEchoes, countEffortSetEchoes, isSwitchConfirmDialog, isStrandedSlashCommand } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -646,6 +647,27 @@ export function classifyTickGap(elapsedMs: number, cpuMs: number): "sleep" | "st
   return cpuMs >= elapsedMs * 0.2 ? "stall" : "sleep";
 }
 
+// Backend outage clock behind the self-heal restart. It must count only time the
+// backend was unreachable while the machine was AWAKE. A closed lid on battery
+// yields short maintenance wakes with no network: each one fails the heartbeat
+// and starts the clock, and the first real wake then reads "recovered after
+// 1701s down" and restarts a healthy daemon (2026-08-16, mid-delivery). A
+// suspend therefore clears the clock; a still-dead backend after wake restarts
+// it from the wake, and the 3-minute threshold applies from there.
+export class BackendOutageClock {
+  private downSince = 0;
+  markFailure(now = Date.now()): void { if (this.downSince === 0) this.downSince = now; }
+  /** Length of the outage that just ended, in ms; 0 when there was none. */
+  markSuccess(now = Date.now()): number {
+    if (this.downSince === 0) return 0;
+    const downFor = now - this.downSince;
+    this.downSince = 0;
+    return downFor;
+  }
+  noteSuspend(): void { this.downSince = 0; }
+}
+const backendOutage = new BackendOutageClock();
+
 // Sleep/wake detection: if the last tick was more than 30s ago, we probably just woke from sleep.
 // During the wake grace period, skip polling to let tmux recover and avoid zombie accumulation.
 // The grace period applies to stalls too — after the loop unfreezes, a short polling
@@ -667,6 +689,7 @@ setInterval(() => {
       log(`Event-loop stall (${Math.round(elapsed / 1000)}s gap, ${Math.round(cpuMs / 1000)}s CPU), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
     } else {
       log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
+      backendOutage.noteSuspend();
     }
   }
   lastTickTime = now;
@@ -951,6 +974,14 @@ const lastIdleNotifiedSize = new Map<string, number>();
 const lastWorkingStatusSent = new Map<string, number>();
 const WORKING_STATUS_THROTTLE_MS = 10_000;
 const lastSentAgentStatus = new Map<string, AgentStatus>();
+// When each session's CURRENT turn began — the moment its status last moved
+// from settled to active. A `cast state --status dormant|done` stamp counts as
+// a settle verdict only if written after this, so a declaration never outlives
+// the turn that made it (see declaredSettleVerdict). Empty after a daemon boot,
+// where the boot time stands in: a stamp older than the daemon has an unknown
+// turn and is NOT trusted — needs-input is the safe side.
+const turnStartedAt = new Map<string, number>();
+const DAEMON_BOOTED_AT = Date.now();
 const lastHeartbeatLogged = new Map<string, { status: string; ts: number; since: number }>();
 const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 
@@ -1236,6 +1267,12 @@ function sendAgentStatus(
   }
   if (status === "working") {
     lastWorkingStatusSent.set(sessionId, Date.now());
+  }
+  // Settled → active is a turn start; every settle verdict from before it is
+  // spent. Only the transition counts, so the 10s working re-sends inside a
+  // turn never move the mark.
+  if (ACTIVE_AGENT_STATUSES.has(status) && !(prevStatus && ACTIVE_AGENT_STATUSES.has(prevStatus))) {
+    turnStartedAt.set(sessionId, Date.now());
   }
   lastSentAgentStatus.set(sessionId, status);
   syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
@@ -1748,7 +1785,7 @@ function isAutostartEnabled(): boolean {
 }
 
 const processedPollCommandIds = new Set<string>();
-let backendDownSince = 0;
+
 
 async function pollDaemonCommands(): Promise<void> {
   const config = readConfig();
@@ -1773,12 +1810,11 @@ async function pollDaemonCommands(): Promise<void> {
       }),
     });
     if (!response.ok) {
-      if (backendDownSince === 0) backendDownSince = Date.now();
+      backendOutage.markFailure();
       return;
     }
-    if (backendDownSince > 0) {
-      const downFor = Date.now() - backendDownSince;
-      backendDownSince = 0;
+    const downFor = backendOutage.markSuccess();
+    if (downFor > 0) {
       if (downFor > STUCK_CONNECTION_THRESHOLD_MS) {
         const state = readDaemonState();
         const lastHeal = state.lastSelfHealRestart || 0;
@@ -1804,7 +1840,7 @@ async function pollDaemonCommands(): Promise<void> {
       }
     }
   } catch {
-    if (backendDownSince === 0) backendDownSince = Date.now();
+    backendOutage.markFailure();
   }
 }
 
@@ -8137,7 +8173,7 @@ async function processOpencodeSession(
     // fires the idle flip that routes the session into needs-input when its turn ends.
     if (conversationId && !appServerConversations.has(conversationId)) {
       const turn = classifyOpencodeTranscriptTail(assembled);
-      sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? "idle" : "working");
+      sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? resolveTurnEndStatus(sessionId) : "working");
     }
 
     syncStats.messagesSynced += toSync.length;
@@ -9834,7 +9870,11 @@ export function paneReconcileTarget(
     return stored === undefined || staleActive ? "idle" : null;
   }
   if (state === "busy") {
-    const quiet = stored === undefined || stored === "idle" || stored === "connected" || stored === "permission_blocked";
+    // The settle verdicts count as quiet too: a busy pane over a parked
+    // ("waiting" / "dormant" / "done") session is the wake whose activity hook
+    // was lost — promote it, or the row stays filed as parked while it works.
+    const quiet = stored === undefined || stored === "idle" || stored === "connected" || stored === "permission_blocked"
+      || stored === "waiting" || stored === "dormant" || stored === "done";
     return quiet ? "working" : null;
   }
   return null;
@@ -9848,8 +9888,11 @@ function reconcileStatusFromPane(
 ): void {
   const state = classifyTmuxLiveState(extractTmuxLiveRegion(paneContent));
   const stored = lastSentAgentStatus.get(sessionId);
-  const target = paneReconcileTarget(state, stored);
+  let target = paneReconcileTarget(state, stored);
   if (!target) return;
+  // A pane-confirmed settle goes through the same verdict as a Stop hook, so a
+  // turn whose hook was lost still lands on its declared / inferred status.
+  if (target === "idle") target = resolveTurnEndStatus(sessionId);
   log(`[STATUS-PANE-RECONCILE] ${sessionId.slice(0, 8)} stored=${stored ?? "none"} pane=${state} -> ${target}`);
   sendAgentStatus(syncService, conversationId, sessionId, target);
 }
@@ -10102,22 +10145,47 @@ export function openBackgroundTaskIds(transcriptPath: string, sessionId?: string
   }
 }
 
-// The status a finished turn should settle into: "waiting" when the transcript
-// shows open background work (the harness will re-invoke the agent), plain
-// "idle" otherwise. Claude transcripts only — other clients don't surface
-// background tasks in a scannable form. An interrupted turn always settles
-// idle: the user took control (ESC), so the ball is theirs even if an open
-// task (e.g. a dev server) is still running.
-function resolveTurnEndStatus(sessionId: string, transcriptPath?: string): "idle" | "waiting" {
+export type SettleVerdict = "idle" | "waiting" | "dormant" | "done";
+
+// The agent's own answer to "who acts next", if it gave one THIS turn: the
+// `cast state --status dormant|done` stamp, trusted only when written after
+// the turn began (turnStartedAt; the daemon's boot when the turn predates it —
+// an older stamp has an unknown turn and is not trusted). Any client — the
+// stamp is a plain file `cast state` writes on this machine, so Codex and the
+// rest declare exactly like Claude.
+export function declaredSettleVerdict(
+  sessionId: string,
+  now: number = Date.now(),
+  turnStart: number | undefined = turnStartedAt.get(sessionId),
+  stamp = readThreadStateStamp(sessionId),
+): "dormant" | "done" | null {
+  if (!stamp?.status || !DECLARED_VERDICT_STATUSES.has(stamp.status)) return null;
+  const since = turnStart ?? DAEMON_BOOTED_AT;
+  if (stamp.at < since || stamp.at > now + 60_000) return null;
+  return stamp.status as "dormant" | "done";
+}
+
+// The status a finished turn should settle into. In trust order: the agent's
+// declaration ("dormant" / "done", see declaredSettleVerdict); "waiting" when
+// the transcript shows open background work (the harness will re-invoke the
+// agent — Claude transcripts only, other clients don't surface background
+// tasks in a scannable form); plain "idle" otherwise. An interrupted turn
+// always settles idle: the user took control (ESC), so the ball is theirs even
+// if an open task (e.g. a dev server) is still running or a stamp was written.
+function resolveTurnEndStatus(sessionId: string, transcriptPath?: string): SettleVerdict {
   const file = transcriptPath
     ? { path: transcriptPath, agentType: "claude" as const }
     : findSessionFile(sessionId);
-  if (!file || file.agentType !== "claude") return "idle";
-  if (openBackgroundTaskIds(file.path, sessionId).length === 0) return "idle";
-  try {
-    if (transcriptTailEndsInterrupted(readFileTailSync(file.path))) return "idle";
-  } catch {}
-  return "waiting";
+  const declared = declaredSettleVerdict(sessionId);
+  const claude = !!file && file.agentType === "claude";
+  const openWork = claude && openBackgroundTaskIds(file!.path, sessionId).length > 0;
+  if (!declared && !openWork) return "idle";
+  if (claude) {
+    try {
+      if (transcriptTailEndsInterrupted(readFileTailSync(file!.path))) return "idle";
+    } catch {}
+  }
+  return declared ?? "waiting";
 }
 
 // True when the newest real message in a Claude JSONL tail is the synthetic
@@ -10293,18 +10361,28 @@ export function reconciledStatus(
 //     when the transcript went active (task notification arrived but the
 //     activity hook was lost), and down to "idle" once the turn is ended with
 //     no open work left (lost final Stop hook). Ambiguity defers, as ever.
+//   - a stored DECLARED verdict ("dormant" / "done") wakes forward to "working"
+//     when the transcript went active and otherwise holds: the agent said so,
+//     and the declaration is spent only by the next turn start (which is that
+//     very wake). A declaration made this turn also outranks the open-task
+//     "waiting" on any correction that would otherwise land on idle.
 export function reconciledStatusWithTasks(
   stored: AgentStatus | undefined,
   turn: TranscriptTurnState,
   hasOpenTasks: boolean,
+  declared: "dormant" | "done" | null = null,
 ): AgentStatus | null {
+  if (stored === "dormant" || stored === "done") {
+    return turn === "active" ? "working" : null;
+  }
   if (stored === "waiting") {
     if (turn === "active") return "working";
-    if (turn === "idle" && !hasOpenTasks) return "idle";
+    if (turn === "idle" && !hasOpenTasks) return declared ?? "idle";
     return null;
   }
   const base = reconciledStatus(stored, turn);
-  return base === "idle" && hasOpenTasks ? "waiting" : base;
+  if (base !== "idle") return base;
+  return declared ?? (hasOpenTasks ? "waiting" : "idle");
 }
 
 // The role of the most recent *real* (non-system/meta) message in a Claude JSONL
@@ -13624,7 +13702,7 @@ function reconcileStatusFromTranscript(sessionId: string, syncService: SyncServi
   if (resumeSessionCache.has(sessionId)) return;
   // Cheap in-memory gate first: skip the file read entirely unless the stored
   // status is one we'd ever correct.
-  if (!(stored === "working" || stored === "thinking" || stored === "idle" || stored === "connected" || stored === "waiting")) {
+  if (!(stored === "working" || stored === "thinking" || stored === "idle" || stored === "connected" || stored === "waiting" || stored === "dormant" || stored === "done")) {
     return;
   }
   const file = findSessionFile(sessionId);
@@ -13645,7 +13723,10 @@ function reconcileStatusFromTranscript(sessionId: string, syncService: SyncServi
   const needsTaskScan = file.agentType === "claude" &&
     (stored === "waiting" || reconciledStatus(stored, turn) === "idle");
   const hasOpenTasks = needsTaskScan && openBackgroundTaskIds(file.path, sessionId).length > 0;
-  const corrected = reconciledStatusWithTasks(stored, turn, hasOpenTasks);
+  // The stamp read is a single small file, paid only when a settle correction
+  // is on the table (same gate as the task scan).
+  const declared = needsTaskScan || reconciledStatus(stored, turn) === "idle" ? declaredSettleVerdict(sessionId) : null;
+  const corrected = reconciledStatusWithTasks(stored, turn, hasOpenTasks, declared);
   if (!corrected) return;
   // Only now (a correction is warranted) pay the conversation-cache read.
   const conversationId = readConversationCache()[sessionId];
@@ -19444,7 +19525,7 @@ async function main(): Promise<void> {
       if (status === "completed") {
         markAppServerConversationResumable(entry.conversationId, threadId);
       }
-      sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? "idle" : "working");
+      sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? resolveTurnEndStatus(threadId) : "working");
     } finally {
       clearAppServerTurnProgress(turnId);
     }

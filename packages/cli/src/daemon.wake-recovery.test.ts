@@ -114,3 +114,35 @@ test("threshold sits at 20% of wall time", () => {
   expect(classifyTickGap(100_000, 20_000)).toBe("stall");
   expect(classifyTickGap(100_000, 19_999)).toBe("sleep");
 });
+
+// BackendOutageClock feeds the self-heal restart ("backend recovered after Ns
+// down"). Root-caused 2026-08-16: a closed lid on battery produced several short
+// maintenance wakes with no network. Each failed the heartbeat and started the
+// clock; the first real wake then read "recovered after 1701s" and restarted a
+// healthy daemon in the middle of deliveries. Only time unreachable while AWAKE
+// may count, so a detected suspend clears the clock.
+import { BackendOutageClock } from "./daemon.js";
+
+test("an outage spanning a suspend does not count the sleep", () => {
+  const clock = new BackendOutageClock();
+  clock.markFailure(1_000);         // maintenance wake, no network
+  clock.noteSuspend();              // lid closed
+  expect(clock.markSuccess(1_701_000)).toBe(0); // first heartbeat after the real wake
+});
+
+test("a backend still dead after wake is timed from the wake, not from before it", () => {
+  const clock = new BackendOutageClock();
+  clock.markFailure(1_000);
+  clock.noteSuspend();
+  clock.markFailure(1_000_000);     // still failing after wake
+  expect(clock.markSuccess(1_200_000)).toBe(200_000);
+});
+
+test("an awake outage is measured from its first failure", () => {
+  const clock = new BackendOutageClock();
+  expect(clock.markSuccess(5_000)).toBe(0);
+  clock.markFailure(10_000);
+  clock.markFailure(20_000);        // repeated failures keep the original start
+  expect(clock.markSuccess(250_000)).toBe(240_000);
+  expect(clock.markSuccess(260_000)).toBe(0); // clock is cleared by success
+});

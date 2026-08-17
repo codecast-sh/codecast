@@ -501,6 +501,27 @@ describe("isApiErrorBanner", () => {
     expect(classifyApiErrorBanner("API Error: 408 Request timeout")).toBe("error");
   });
 
+  test("a 429 carrying the subscription exceeded_limit payload is a limit park, not a transient", () => {
+    // 2026-08-15: the raw refusal for a pegged 5h window while 7d sat at 39% —
+    // longer than the prose cap, and retrying it until resets_at is pure waste.
+    const payload =
+      'API Error: 429 {"type":"exceeded_limit","resetsAt":1786814400,"remaining":null,"perModelLimit":false,' +
+      '"representativeClaim":"five_hour","overageDisabledReason":"org_level_disabled","overageInUse":false,' +
+      '"windows":{"5h":{"status":"exceeded_limit","resets_at":1786814400,"utilization":1.0,"surpassed_threshold":1.0},' +
+      '"7d":{"status":"within_limit","resets_at":1786852800,"utilization":0.39}},' +
+      '"resolved":{"status":"exceeded","limit":{"kind":"session","group":"session","percent":100,"severity":"critical",' +
+      '"resets_at":"2026-08-15T17:20:00+00:00","scope":null,"is_active":true},"spend":null,"disabled_reason":"org_level_disabled"}}';
+    expect(payload.length).toBeGreaterThan(400);
+    expect(classifyApiErrorBanner(payload)).toBe("limit");
+    // The marker must be the payload's own quoted key: a bare mention in a
+    // transient 429 body, another status, or multi-line prose about the
+    // payload never promotes to limit.
+    expect(classifyApiErrorBanner("API Error: 429 exceeded_limit rate limited, retry later")).toBe("error");
+    expect(classifyApiErrorBanner('API Error: 529 {"type":"exceeded_limit"}')).toBe("error");
+    expect(classifyApiErrorBanner('API Error: 429 {"type":"exceeded_limit"}\nSo the account is rationed — here is what I found:')).toBe("error");
+    expect(classifyApiErrorBanner('The tool failed with {"type":"exceeded_limit"} — the account hit its five-hour window.')).toBe(null);
+  });
+
   test("terminal statuses the CLI won't retry classify as fatal (blocked set), 401/403 as auth", () => {
     // A 400 kills the turn — the CLI gives up and the session sits parked at
     // the prompt exactly like a connection drop; continue retries it.
@@ -559,16 +580,55 @@ describe("classifyWorkState", () => {
   }
 
   test("active agent statuses → working", () => {
-    for (const agentStatus of ["working", "thinking", "compacting", "connected", "starting", "resuming", "waiting"]) {
+    for (const agentStatus of ["working", "thinking", "compacting", "connected", "starting", "resuming"]) {
       expect(classifyWorkState(wsi({ agentStatus }))).toBe("working");
     }
   });
 
-  test("waiting (turn ended, background task open) files as working even when settled", () => {
+  test("waiting (turn ended, background task open) files as DORMANT once settled", () => {
     // The daemon reports "waiting" when a turn ended with a live run_in_background
     // command or Monitor — the harness will re-invoke the agent, so the ball is
-    // NOT in the user's court and the session must not land in NEEDS INPUT.
-    expect(classifyWorkState(wsi({ agentStatus: "waiting", isIdle: true }))).toBe("working");
+    // NOT in the user's court (never NEEDS INPUT) — but the agent is not producing
+    // either, so it is parked, not WORKING: it must not inflate the "N agents
+    // running" count.
+    expect(classifyWorkState(wsi({ agentStatus: "waiting", isIdle: true }))).toBe("dormant");
+    // Mid-grace right after the turn (isIdle not yet settled) it still reads as
+    // in flight, like any settle.
+    expect(classifyWorkState(wsi({ agentStatus: "waiting", isIdle: false }))).toBe("working");
+  });
+
+  test("declared settle verdicts: dormant / done are the agent's own answer to who acts next", () => {
+    expect(classifyWorkState(wsi({ agentStatus: "dormant", isIdle: true }))).toBe("dormant");
+    expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true }))).toBe("done");
+    // Blank sessions never rest anywhere.
+    expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, messageCount: 0 }))).toBe("idle");
+  });
+
+  test("hard blocks outrank every rest verdict", () => {
+    expect(classifyWorkState(wsi({ agentStatus: "dormant", isIdle: true, awaitingInput: true }))).toBe("needs_input");
+    expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, isUnresponsive: true }))).toBe("needs_input");
+    expect(classifyWorkState(wsi({ isIdle: true, userDormant: true, awaitingInput: true }))).toBe("needs_input");
+    expect(classifyWorkState(wsi({ isIdle: true, armedTriggerHome: true, isUnresponsive: true }))).toBe("needs_input");
+    // A killed row is retired, whatever it declared.
+    expect(classifyWorkState(wsi({ killed: true, agentStatus: "dormant", isIdle: true }))).toBe("idle");
+  });
+
+  test("structural + user dormancy: an armed inject trigger's home, or the user's park stamp", () => {
+    expect(classifyWorkState(wsi({ isIdle: true, armedTriggerHome: true }))).toBe("dormant");
+    expect(classifyWorkState(wsi({ isIdle: true, userDormant: true }))).toBe("dormant");
+    // Dormant beats done: a session that both delivered and parked is parked.
+    expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, armedTriggerHome: true }))).toBe("dormant");
+    // …but a wake in flight is working, whatever the home's standing state.
+    expect(classifyWorkState(wsi({ isIdle: false, hasPending: true, armedTriggerHome: true }))).toBe("working");
+  });
+
+  test("the settle classifier speaks only for an UNDECLARED settle", () => {
+    expect(classifyWorkState(wsi({ isIdle: true, settleVerdict: "done" }))).toBe("done");
+    expect(classifyWorkState(wsi({ agentStatus: "idle", isIdle: true, settleVerdict: "dormant" }))).toBe("dormant");
+    expect(classifyWorkState(wsi({ isIdle: true, settleVerdict: "needs_input" }))).toBe("needs_input");
+    // A declaration always outranks it.
+    expect(classifyWorkState(wsi({ agentStatus: "dormant", isIdle: true, settleVerdict: "done" }))).toBe("dormant");
+    expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, settleVerdict: "needs_input" }))).toBe("done");
   });
 
   test("deliverable pending work on a live daemon → working", () => {
@@ -651,9 +711,12 @@ describe("normalizeWorkStateFilter", () => {
     expect(normalizeWorkStateFilter("Blocked")).toBe("needs_input");
     expect(normalizeWorkStateFilter("attention")).toBe("needs_input");
     expect(normalizeWorkStateFilter("BUSY")).toBe("working");
-    // "waiting" is an active substate (finished turn parked on live background
-    // work), so the alias follows the agent status into working — not idle.
-    expect(normalizeWorkStateFilter("waiting")).toBe("working");
+    // "waiting" is the settle verdict of a finished turn parked on live
+    // background work, so the alias follows the agent status into dormant.
+    expect(normalizeWorkStateFilter("waiting")).toBe("dormant");
+    expect(normalizeWorkStateFilter("parked")).toBe("dormant");
+    expect(normalizeWorkStateFilter("done")).toBe("done");
+    expect(normalizeWorkStateFilter("delivered")).toBe("done");
     expect(normalizeWorkStateFilter("running")).toBe("live");
   });
 

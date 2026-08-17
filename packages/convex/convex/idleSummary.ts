@@ -108,15 +108,59 @@ export const cleanupUnusableSummaries = internalMutation({
   },
 });
 
+// The settle verdicts the classifier may return — the who-acts-next answer for
+// a settle the agent did not declare itself. Anything else the model says maps
+// to null (no verdict written), so the row falls to needs-input, the safe side
+// of the asymmetry: a blocked session misfiled as done stalls work silently,
+// while a finished one misfiled as needs-input is merely today's noise.
+export const SETTLE_VERDICTS = ["done", "needs_input", "dormant"] as const;
+export type SettleVerdict = (typeof SETTLE_VERDICTS)[number];
+
+export function parseSettleVerdict(raw: string | null | undefined): SettleVerdict | null {
+  const word = (raw ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return (SETTLE_VERDICTS as readonly string[]).includes(word) ? (word as SettleVerdict) : null;
+}
+
+// Split the classifier's two-line reply. Tolerates a missing VERDICT line (older
+// prompt shape, or a model that skipped it) by returning the whole text as the
+// summary with no verdict.
+export function parseSettleReply(raw: string): { verdict: SettleVerdict | null; summary: string } {
+  const text = raw.replace(/^```(?:\w+)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  let verdict: SettleVerdict | null = null;
+  const summaryLines: string[] = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*verdict\s*:\s*(.+)$/i);
+    if (m && verdict === null) {
+      verdict = parseSettleVerdict(m[1]);
+      continue;
+    }
+    summaryLines.push(line.replace(/^\s*summary\s*:\s*/i, ""));
+  }
+  const summary = summaryLines
+    .join("\n")
+    .trim()
+    .replace(/\s*\.{3,}\s*$/, "")
+    .replace(/\s+to\s*$/, "")
+    .trim();
+  return { verdict, summary };
+}
+
 export const setIdleSummary = internalMutation({
   args: {
     conversation_id: v.id("conversations"),
-    idle_summary: v.string(),
+    idle_summary: v.optional(v.string()),
+    settle_verdict: v.optional(v.union(...SETTLE_VERDICTS.map((s) => v.literal(s)))),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.conversation_id, {
-      idle_summary: args.idle_summary,
-    });
+    const patch: Record<string, unknown> = {};
+    if (args.idle_summary !== undefined) patch.idle_summary = args.idle_summary;
+    // Stamped now, after the settle it describes, so isSettleVerdictCurrent
+    // holds until the next turn bumps updated_at past it.
+    if (args.settle_verdict !== undefined) {
+      patch.settle_verdict = args.settle_verdict;
+      patch.settle_verdict_at = Date.now();
+    }
+    if (Object.keys(patch).length) await ctx.db.patch(args.conversation_id, patch);
   },
 });
 
@@ -163,19 +207,18 @@ export const generateIdleSummary = internalAction({
       .map((m: any) => `${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`)
       .join("\n\n");
 
-    const prompt = `This agent session is idle. Based on the recent conversation below, write ONE short sentence.
+    const prompt = `An agent session just went quiet. Decide who acts next, then describe the moment in one sentence.
 
-If the agent is clearly blocked waiting for specific user input, write an imperative action starting with a verb:
-  "Confirm the exact UI change needed"
-  "Provide the API endpoint details"
-  "Choose between the two proposed approaches"
+Reply with exactly two lines:
+VERDICT: <needs_input | done | dormant>
+SUMMARY: <one sentence>
 
-If there is no clear next action needed from the user (agent just finished work, delivered results, or is at a natural stopping point), summarize what was last completed:
-  "Deployed auth fix and verified tests pass"
-  "Refactored the payment module into three files"
-  "Fixed the infinite scroll regression"
+VERDICT rules — when in doubt choose needs_input; misfiling a blocked agent as done stalls its work silently:
+- needs_input: the agent asked something, needs a choice, hit an error it cannot resolve, or its last message contains any request of the human at all.
+- done: the agent finished and delivered the task and its last message contains no ask — a report, a summary of what shipped, a natural stopping point.
+- dormant: the agent explicitly says it is waiting on a NAMED machine event it will be woken by (a scheduled trigger, a CI run it is watching, another session's reply, a monitor). Not for a vague "will check later" — that is needs_input.
 
-Rules: never use "please", "the user", or "you". Start with a verb. Be specific. One sentence max. No quotes or JSON formatting.
+SUMMARY rules — for needs_input write the imperative action the human should take, starting with a verb ("Confirm the exact UI change needed", "Choose between the two proposed approaches"); for done or dormant summarize what was last completed or what it waits on, starting with a verb ("Deployed auth fix and verified tests pass", "Waiting on the nightly trigger to re-run the audit"). Never use "please", "the user", or "you". Be specific. One sentence. No quotes or JSON.
 
 Conversation:
 ${messageText}`;
@@ -201,15 +244,21 @@ ${messageText}`;
       }
 
       const data = await response.json();
-      const raw = data.content?.[0]?.text?.trim();
-      const text = raw?.replace(/^```(?:\w+)?\s*/i, "").replace(/\s*```$/i, "").replace(/\s*\.{3,}\s*$/, "").replace(/\s+to\s*$/, "").trim();
+      const raw = data.content?.[0]?.text?.trim() ?? "";
+      const { verdict, summary } = parseSettleReply(raw);
+      const usableSummary = summary && isUsableIdleSummary(summary) ? summary : undefined;
 
-      if (text && isUsableIdleSummary(text)) {
+      // The verdict is written even when the summary line fails the prose
+      // guards — the two are independent claims about the same settle. A
+      // missing verdict writes nothing, so the row keeps its needs-input default.
+      if (usableSummary || verdict) {
         await ctx.runMutation(internal.idleSummary.setIdleSummary, {
           conversation_id: args.conversation_id,
-          idle_summary: text,
+          idle_summary: usableSummary,
+          settle_verdict: verdict ?? undefined,
         });
-
+      }
+      if (usableSummary) {
         await ctx.runAction(internal.sessionInsights.generateSessionInsight, {
           conversation_id: args.conversation_id,
           reason: "idle",
