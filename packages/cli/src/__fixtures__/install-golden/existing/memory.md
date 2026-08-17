@@ -68,15 +68,16 @@ cast sessions --messages -w       # follow MESSAGES across my live sessions (mul
 cast sessions <id> --messages -w  # …focused on one session
 # ORCHESTRATE a fleet: spawn workers under a label, run the watch in the background, act on events.
 #   cast spawn --label fleet "task A" "task B"
-#   cast sessions --label fleet -w --json     ← emits {"event":"transition","to":"needs_input",…}
-#   worker flips to needs_input = finished or blocked → cast read <id>, then cast send <id> "next step"
+#   cast sessions --label fleet -w --json     ← emits {"event":"transition","to":"done",…}
+#   worker flips to done = finished, needs_input = blocked → cast read <id>, then cast send <id> "next step"
 # The -w stream prints nothing until something changes, so wake-on-output is a reliable signal.
 # Event states use underscores ("needs_input"); the --state flag accepts either form.
-# --state: working | needs-input | idle | pinned | live (also works on cast feed)
-# needs-input = ball in your court (finished turn, open question, permission prompt, dead with
-# output) — same as the web inbox's NEEDS INPUT. idle = blank sessions with nothing to act on.
-# A finished turn with a live background task/Monitor stays WORKING (status "waiting") —
-# the harness re-invokes the agent when the task ends, so don't wait on needs-input for it.
+# --state: needs-input | done | working | dormant | idle | pinned | live (also works on cast feed)
+# States answer WHO ACTS NEXT, same as the web inbox: needs-input = a human must unblock it (open
+# question, permission prompt, dead with output, or a finished turn nobody classified); done = the
+# agent declared it delivered; working = producing now; dormant = a machine wakes it (a declared
+# `cast state --status dormant`, an open background task/Monitor, an armed trigger into it) — parked,
+# not blocked, so don't wait on needs-input for it; idle = blank sessions with nothing to act on.
 
 # Labels — personal filing. File a session under a name, then filter by it
 # (cast sessions/feed/search --label <name>). A session carries at most one label.

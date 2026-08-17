@@ -130,15 +130,16 @@ cast sessions --messages -w       # follow MESSAGES across my live sessions (mul
 cast sessions <id> --messages -w  # …focused on one session
 # ORCHESTRATE a fleet: spawn workers under a label, run the watch in the background, act on events.
 #   cast spawn --label fleet "task A" "task B"
-#   cast sessions --label fleet -w --json     ← emits {"event":"transition","to":"needs_input",…}
-#   worker flips to needs_input = finished or blocked → cast read <id>, then cast send <id> "next step"
+#   cast sessions --label fleet -w --json     ← emits {"event":"transition","to":"done",…}
+#   worker flips to done = finished, needs_input = blocked → cast read <id>, then cast send <id> "next step"
 # The -w stream prints nothing until something changes, so wake-on-output is a reliable signal.
 # Event states use underscores ("needs_input"); the --state flag accepts either form.
-# --state: working | needs-input | idle | pinned | live (also works on cast feed)
-# needs-input = ball in your court (finished turn, open question, permission prompt, dead with
-# output) — same as the web inbox's NEEDS INPUT. idle = blank sessions with nothing to act on.
-# A finished turn with a live background task/Monitor stays WORKING (status "waiting") —
-# the harness re-invokes the agent when the task ends, so don't wait on needs-input for it.
+# --state: needs-input | done | working | dormant | idle | pinned | live (also works on cast feed)
+# States answer WHO ACTS NEXT, same as the web inbox: needs-input = a human must unblock it (open
+# question, permission prompt, dead with output, or a finished turn nobody classified); done = the
+# agent declared it delivered; working = producing now; dormant = a machine wakes it (a declared
+# \`cast state --status dormant\`, an open background task/Monitor, an armed trigger into it) — parked,
+# not blocked, so don't wait on needs-input for it; idle = blank sessions with nothing to act on.
 
 # Labels — personal filing. File a session under a name, then filter by it
 # (cast sessions/feed/search --label <name>). A session carries at most one label.
@@ -276,12 +277,21 @@ If blocked, say so explicitly:
 
 When your context gets compacted, re-read your task or plan context (\`cast task context --current\` / \`cast plan context --current\`) to reground yourself. Don't rely on memory of earlier conversation alone.
 
+### Reading tasks
+
+Answering a question about tasks — what is assigned to someone, a summary of the open tasks on a topic, which session did the work — is a read, not a lifecycle step. Filter on the server instead of grepping the list: \`--assignee me\`, \`--label <name>\`, \`-p "<project>"\`, \`--plan <id>\`, \`-q "<text>"\`, \`-s <status>\`, and \`-a\` to include closed tasks. Every read command takes \`--json\` and prints full rows (assignee_name, labels, linked sessions, comments) — use it whenever you will process the result rather than glance at it. Piped output is plain text; there is nothing to strip. \`cast task show\` takes several ids at once and lists each task's linked sessions by short id, so the session behind a task is one \`cast read <id>\` away.
+
 ### Commands
 
 \`\`\`bash
 cast task ready                             # Find available work
 cast task ready -q "<topic>"                # Filter ready tasks by title/description
 cast task ls -q "<topic>"                   # Search all active tasks by title/description
+cast task ls --assignee me                  # Tasks assigned to me (also a username)
+cast task ls --label <name> --json          # Filter by label; full rows as JSON (every read takes --json)
+cast task ls -a -s done -q "<topic>"        # Include closed tasks (-a) or pin one status (-s)
+cast task show ct-1 ct-2 ct-3               # Several at once: details, linked sessions, comments (-c for all)
+cast task show <id> --json | jq .sessions   # Linked sessions as {short_id, title} → cast read <short_id>
 cast plan ls -q "<topic>"                   # Search active plans by title/goal
 cast project ls                             # Projects in your workspace (the triage unit)
 cast project show <id>                      # A project and every task under it
@@ -549,7 +559,7 @@ export const BROWSER_SNIPPET_END = "<!-- /codecast-browser -->";
 export const BROWSER_SNIPPET = `
 ## Browser
 
-\`cast browser\` drives a real Chrome, cloned from the human's profile so their logins carry over. Use it whenever the work is on a web page: verifying a UI change, reading behind a sign-in, filling a form, reproducing a bug.
+\`cast browser\` drives a real Chrome, cloned from the human's profile so their logins carry over — except Google, which the agent browser signs into on its own (below). Use it whenever the work is on a web page: verifying a UI change, reading behind a sign-in, filling a form, reproducing a bug.
 
 \`\`\`bash
 cast browser open <url>       # starts the browser if needed; reuses this session's tab
@@ -565,6 +575,7 @@ What cast adds to the usual pattern:
 
 - **Evidence flows to the thread.** A failing step automatically prints console errors, failed requests and a screenshot. \`shot\` puts a capture in the conversation — \`--annotate\` numbers elements with their refs, \`--share\` uploads a link you can paste. \`cast browser shots on\` adds an automatic small capture after commands that change the page (off by default for agents; a \`do\` flow then captures once, at the end). Never link local file paths — the human's browser cannot read them.
 - **One Chrome, many agents.** Each session owns one tab; \`tabs\` marks yours. Act only on yours, and \`--new-tab\` only for a genuine second page. State persists until \`cast browser stop\` (\`--wipe\` also removes the profile copy; \`start --fresh\` starts signed out). The clone holds the human's logins — treat that access as theirs. Modal dialogs are dismissed automatically and never block.
+- **Sign-in pages.** When \`open\` reports it landed on a sign-in page, the fix is a person signing in once in the agent browser: run \`cast browser login <url>\` (raises its window, waits) and tell the human — a \`cast decide\` or a push, not a restart. Google is never carried from the human's Chrome (a shared Google session signs both browsers out), so the agent browser's Google login is always this one-time sign-in; it survives restarts and \`--resync\`. Never \`--resync\` or \`stop --all\` to fix a sign-out — it drops nothing useful and kills other sessions' tabs.
 - **Remote hosts.** \`start --remote linux\` runs Chrome on a cloud host that sleeps when idle (about a dollar a month); \`--remote mac\` cannot sleep and bills continuously (~EUR75/month, minimum lease 24 hours) — only for work that truly needs macOS. Cookies are injected per site as you navigate and wiped on stop. \`cast browser hosts sleep\` when done.
 ${BROWSER_SNIPPET_END}
 `;
