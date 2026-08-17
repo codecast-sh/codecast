@@ -241,13 +241,17 @@ function formatRole(role: string): string {
 // everywhere the CLI shows it.
 const WORK_STATE_LABEL: Record<string, string> = {
   needs_input: "needs input",
+  done: "done",
   working: "working",
+  dormant: "dormant",
   idle: "idle",
 };
 
 function colorForState(ws: string): string {
   if (ws === "needs_input") return c.yellow;
+  if (ws === "done") return c.cyan;
   if (ws === "working") return c.green;
+  if (ws === "dormant") return c.blue;
   return c.gray;
 }
 
@@ -993,7 +997,7 @@ interface MonitorResult {
   // stashed / dismissed / killed are three distinct retirement states, not one
   // "hidden" figure: stashed = hidden but agent ALIVE, dismissed = hidden and
   // agent torn down, killed = retired (outranks both, so they never double-count).
-  counts: { working: number; needs_input: number; idle: number; pinned: number; live: number; stashed?: number; dismissed?: number; killed?: number; total: number };
+  counts: { working: number; needs_input: number; done?: number; dormant?: number; idle: number; pinned: number; live: number; stashed?: number; dismissed?: number; killed?: number; total: number };
   labels?: Array<{ name: string; count: number }>;
   scope: string;
 }
@@ -1057,9 +1061,14 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
   const live = options.watch ? `${c.dim} — live, every ${options.interval ?? 3}s (Ctrl-C to exit)${c.reset}` : "";
   lines.push(`${c.bold}${command}${c.reset}${scope}${live}  ${c.dim}${clock}${c.reset}`);
 
+  // The header reads as "who acts next": you (needs input, done to review),
+  // the agent (working), a machine (dormant), nobody (idle). Older servers
+  // don't send done/dormant; those columns are simply absent then.
   const summary = [
     `${c.yellow}needs input ${counts.needs_input}${c.reset}`,
+    ...(counts.done !== undefined ? [`${c.cyan}done ${counts.done}${c.reset}`] : []),
     `${c.green}working ${counts.working}${c.reset}`,
+    ...(counts.dormant !== undefined ? [`${c.blue}dormant ${counts.dormant}${c.reset}`] : []),
     `${c.gray}idle ${counts.idle}${c.reset}`,
   ];
   const extra: string[] = [];
@@ -1139,9 +1148,9 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
     const pinned = threadStateHeadline(s.thread_state || "");
     if (pinned) {
       // Marker color = the agent's declared status: cyan working, yellow
-      // blocked (ball in the human's court), green done.
+      // blocked (ball in the human's court), green done, blue dormant.
       const status = parseThreadStateStatus(s.thread_state_status);
-      const markerColor = status === "blocked" ? c.yellow : status === "done" ? c.green : c.cyan;
+      const markerColor = status === "blocked" ? c.yellow : status === "done" ? c.green : status === "dormant" ? c.blue : c.cyan;
       lines.push(`   ${markerColor}▪${c.reset} ${pinned.replace(/\s+/g, " ").slice(0, 86)}`);
     } else {
       const snippet = (s.idle_summary || s.last_user_message || "").replace(/\s+/g, " ").trim().slice(0, 88);
@@ -1168,11 +1177,15 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
   } else if (options.state) {
     result.sessions.forEach(renderRow);
   } else {
-    // Default view stays focused on what's actionable: NEEDS INPUT + WORKING.
-    // Idle sessions are summarized as a one-liner unless -a/--all is passed.
+    // Default view reads top-down as "who acts next": NEEDS INPUT and DONE are
+    // yours, WORKING is the agent's, DORMANT is a machine's (an armed trigger,
+    // an open monitor, a declared wait). Idle sessions are summarized as a
+    // one-liner unless -a/--all is passed.
     const groups: Array<[string, string]> = [
       ["needs_input", `${c.yellow}NEEDS INPUT${c.reset}`],
+      ["done", `${c.cyan}DONE${c.reset}`],
       ["working", `${c.green}WORKING${c.reset}`],
+      ["dormant", `${c.blue}DORMANT${c.reset}`],
     ];
     if (options.all) groups.push(["idle", `${c.gray}IDLE${c.reset}`]);
 

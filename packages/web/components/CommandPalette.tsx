@@ -8,6 +8,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { AvatarImg } from "../lib/avatarCache";
 import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
 import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
@@ -28,7 +29,7 @@ import { isInboxRoute } from "../lib/inboxRouting";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
-import { undoableArchiveDoc, undoableHideSession, undoableDeferSession } from "../store/undoActions";
+import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, undoableDormantSession } from "../store/undoActions";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { STATUS_OPTIONS, PRIORITY_OPTIONS, PLAN_STATUS_OPTIONS, DOC_TYPE_OPTIONS } from "./menus/entityOptions";
 import { statusByKey, statusEntityOptions, statusWriteFields, taskStatusKey, useTeamTaskStatusList } from "../lib/taskStatuses";
@@ -137,6 +138,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Chat", path: "/chat", icon: "message", keywords: "channels team talk messages rooms" },
   { label: "Tasks", path: "/tasks", icon: "check", keywords: "todo work items" },
   { label: "Plans", path: "/plans", icon: "map", keywords: "roadmap goals milestones planning" },
+  { label: "Calls", path: "/calls", icon: "phone", keywords: "huddle call transcript recording meeting summary voice" },
   { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
   { label: "Files", path: "/files", icon: "folder", keywords: "notes markdown obsidian files vault code" },
   { label: "Triggers", path: "/triggers", icon: "clock", keywords: "schedules cron automation recurring followup reminders" },
@@ -205,6 +207,8 @@ function NavIcon({ type, className }: { type: string; className?: string }) {
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h8M8 14h5M21 12a8 8 0 01-8 8H7l-4 3v-4.5A8 8 0 0113 4a8 8 0 018 8z" /></svg>;
     case "map":
       return <MapIcon className={c} />;
+    case "phone":
+      return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>;
     case "clock":
       return <Clock className={c} />;
     case "workflow":
@@ -946,13 +950,16 @@ function ActionSubmenu({
               {item.type === "agent" ? (
                 <Bot className={`w-4 h-4 flex-shrink-0 ${AGENT_COLORS[item.key] || "text-sol-violet"}`} />
               ) : mode === "assign" ? (
-                item.image ? (
-                  <img src={item.image} alt={item.label} className="w-4 h-4 rounded-full flex-shrink-0" />
-                ) : (
-                  <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
-                    {item.label.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-                  </div>
-                )
+                <AvatarImg
+                  src={item.image}
+                  alt={item.label}
+                  className="w-4 h-4 rounded-full flex-shrink-0"
+                  fallback={
+                    <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                      {item.label.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                    </div>
+                  }
+                />
               ) : mode === "labels" ? (
                 <span className={`w-3 h-3 rounded-full flex-shrink-0 ${item.dot || "bg-neutral-400"}`} />
               ) : mode === "bucket" && item.dot ? (
@@ -1686,6 +1693,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       } else if (actionKey === "session_defer") {
         undoableDeferSession(session._id);
         closePalette();
+      } else if (actionKey === "session_dormant") {
+        undoableDormantSession(session._id);
+        closePalette();
       } else if (actionKey === "session_copy") {
         copyToClipboard(session._id);
         toast.success("Copied session ID");
@@ -1777,6 +1787,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       { key: "session_stash", label: "Stash session", icon: Archive, shortcutAction: "session.stash" },
       { key: "session_kill", label: "Kill session", icon: Square, shortcutAction: "session.kill" },
       { key: "session_defer", label: "Defer session", icon: Clock, shortcutAction: "session.deferAdvance" },
+      { key: "session_dormant", label: "Dormant — a machine wakes it", icon: Moon, shortcutAction: "session.dormantAdvance" },
       { key: "session_rename", label: "Rename session", icon: Pencil, shortcutAction: "session.rename" },
       { key: "session_copy", label: "Copy session ID", icon: Copy },
       { key: "session_copylink", label: "Copy link", icon: LinkIcon, shortcutAction: "conv.copyLink" },
@@ -2000,12 +2011,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 onSelect={() => navigateToSession(conv)}
                 className={`${itemClass} group`}
               >
-                {isTeam && conv.authorAvatar ? (
-                  <img src={conv.authorAvatar} alt={conv.authorName} className="w-4 h-4 rounded-full flex-shrink-0" />
-                ) : isTeam && conv.authorName ? (
-                  <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
-                    {conv.authorName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-                  </div>
+                {isTeam && (conv.authorAvatar || conv.authorName) ? (
+                  <AvatarImg
+                    src={conv.authorAvatar}
+                    alt={conv.authorName}
+                    className="w-4 h-4 rounded-full flex-shrink-0"
+                    fallback={
+                      <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                        {(conv.authorName || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                      </div>
+                    }
+                  />
                 ) : (
                   <span className="text-sol-text-dim flex-shrink-0">
                     <NavIcon type="session" />
@@ -2055,11 +2071,12 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 className={itemClass}
               >
                 {c.kind === "dm" ? (
-                  c.image ? (
-                    <img src={c.image} alt="" className="w-4 h-4 rounded-full flex-shrink-0" />
-                  ) : (
-                    <User className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                  )
+                  <AvatarImg
+                    src={c.image}
+                    alt=""
+                    className="w-4 h-4 rounded-full flex-shrink-0"
+                    fallback={<User className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />}
+                  />
                 ) : c.isPrivate ? (
                   <Lock className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
                 ) : (
@@ -2521,12 +2538,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 )}
                 className={itemClass}
               >
-                {!result.isOwn && result.authorAvatar ? (
-                  <img src={result.authorAvatar} alt={result.authorName} className="w-4 h-4 rounded-full flex-shrink-0" />
-                ) : !result.isOwn && result.authorName ? (
-                  <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
-                    {result.authorName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-                  </div>
+                {!result.isOwn && (result.authorAvatar || result.authorName) ? (
+                  <AvatarImg
+                    src={result.authorAvatar}
+                    alt={result.authorName}
+                    className="w-4 h-4 rounded-full flex-shrink-0"
+                    fallback={
+                      <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                        {(result.authorName || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                      </div>
+                    }
+                  />
                 ) : (
                   <span className="text-sol-text-dim flex-shrink-0">
                     <NavIcon type="session" />

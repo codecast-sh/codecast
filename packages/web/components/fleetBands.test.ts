@@ -25,10 +25,13 @@ describe("fleetBandFor", () => {
     expect(fleetBandFor(sess({ is_idle: false, agent_status: "working" }), noQueue)).toBe("running");
   });
 
-  it("keeps a finished turn with a live background task in RUNNING, not FINISHED", () => {
-    // "waiting" is an ACTIVE agent status: the harness will re-invoke the
-    // agent when its background task ends, so the ball is not with the human.
-    expect(fleetBandFor(sess({ is_idle: false, agent_status: "waiting" }), noQueue)).toBe("running");
+  it("files a finished turn with a live background task as FINISHED, never NEEDS YOU", () => {
+    // "waiting" is a settle verdict, not production: the harness will re-invoke
+    // the agent when its background task ends, so the ball is not with the
+    // human — but nothing is running either, so the tile must not read as such.
+    // The server settles is_idle for it; a still-unsettled row rides the same
+    // liveness rule as any other quiet status.
+    expect(fleetBandFor(sess({ is_idle: true, agent_status: "waiting" }), noQueue)).toBe("finished");
   });
 
   it("puts a plain finished turn in FINISHED, not NEEDS YOU", () => {

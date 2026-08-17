@@ -9,6 +9,7 @@ export type ShortcutAction =
   | 'session.stash'
   | 'session.kill'
   | 'session.deferAdvance'
+  | 'session.dormantAdvance'
   | 'session.create'
   | 'session.compose'
   | 'session.rename'
@@ -189,6 +190,14 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: 'whenEmpty', description: 'Stash session (keep agent running)' },
   { key: 'ctrl+shift+backspace', action: 'session.kill', skipInputCheck: 'whenEmpty', description: 'Kill session' },
   { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: 'whenEmpty', description: 'Defer and advance' },
+  // Dormant deliberately leaves the backspace family: every backspace variant
+  // is someone's editing reflex (bare = delete, alt = delete word), and the
+  // 'whenEmpty' bypass fires exactly when a reflexive delete lands on an
+  // already-empty composer. Ctrl+Shift+D has no text-editing meaning anywhere,
+  // so it is safe from a composer that happens to be empty, and it sits beside
+  // Ctrl+Shift+P (pin) as a triage verb. Non-destructive: the row moves to the
+  // Dormant section and comes back on its own at the next wake.
+  { key: 'ctrl+shift+d', action: 'session.dormantAdvance', skipInputCheck: true, description: 'Dormant and advance (a machine wakes it)' },
   { key: 'ctrl+n', action: 'session.compose', skipInputCheck: true, description: 'New session' },
   { key: 'ctrl+alt+n', action: 'session.create', skipInputCheck: true, description: 'New session (full page)' },
   { key: 'ctrl+shift+n', action: 'session.compose', skipInputCheck: true, description: 'Quick compose (palette)' },

@@ -86,6 +86,7 @@ export function projectPrincipalTeam(team: Record<string, any>, membership: Reco
     ...(team.icon !== undefined ? { icon: team.icon } : {}),
     ...(team.icon_color !== undefined ? { icon_color: team.icon_color } : {}),
     ...(team.task_statuses !== undefined ? { task_statuses: team.task_statuses } : {}),
+    ...(team.features !== undefined ? { features: team.features } : {}),
     role: membership.role,
     joined_at: membership.joined_at,
     visibility: membership.visibility || "summary",
