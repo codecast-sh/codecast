@@ -79,6 +79,7 @@ export const getUserTeams = query({
           icon: team.icon,
           icon_color: team.icon_color,
           task_statuses: team.task_statuses,
+          features: team.features,
           role: m.role,
           joined_at: m.joined_at,
           visibility: m.visibility || "summary",
