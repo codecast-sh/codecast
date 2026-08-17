@@ -18,7 +18,7 @@ export function StorageHealthBanner() {
         <HardDrive className="w-4 h-4 text-sol-orange flex-shrink-0" />
         <span className="text-sm text-sol-text truncate">
           Local storage is not keeping up
-          <span className="text-sol-text-dim"> — messages still send, but offline cache and crash recovery are degraded. Reloading this window usually clears it.</span>
+          <span className="text-sol-text-dim"> — messages still send, but offline cache and crash recovery are degraded. Another Codecast tab is usually holding the database; closing or reloading other tabs clears it.</span>
         </span>
       </div>
     </div>
