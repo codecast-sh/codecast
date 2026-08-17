@@ -3,11 +3,45 @@ export type DispatchTableKind = "collection" | "singleton";
 export type HydrationPhase = "critical" | "deferred";
 export type HydrationMerge = "shape" | "fill";
 
+// The data-only subset of inboxStore's SyncOpts. Registered here so ONE entry
+// is the whole registration of a synced collection: how it syncs, how it
+// persists, how it hydrates, how it's indexed on disk. Store-internal opts
+// (transforms, merge functions, normalize) stay in inboxStore's SYNC_REGISTRY,
+// which spreads these defaults first and overrides per key.
+export type RegistrySyncOpts = {
+  kind?: "collection" | "singleton" | "list" | "scalar";
+  // Delta overlay: absence in a payload means "unchanged", never "deleted".
+  // Right for every windowed/paged list channel; wrong for a query that
+  // returns the COMPLETE visible set (there, absence means removed).
+  isDelta?: boolean;
+  // Optimistic stubs carry this field with their own stub id; the server row
+  // that arrives with the same value supersedes the stub.
+  altKey?: string;
+  keepSelected?: string;
+  ignoreFields?: string[];
+  preserveFields?: string[];
+};
+
 export type ClientSyncRegistryEntry = {
   persistence?: {
     kind: PersistenceKind;
     key: string;
   };
+  // How the collection syncs (see RegistrySyncOpts). Omit for meta keys.
+  sync?: RegistrySyncOpts;
+  // Dexie index spec for a persisted collection. Default "_id". Secondary
+  // indexes ("_id, channel_id") let a slice be read off disk without a scan.
+  // The on-disk schema is DERIVED from these — adding a collection or an index
+  // here is the whole schema change (then bump CACHE_SCHEMA_VERSION).
+  indexes?: string;
+  // Rows carry a `workspace` access key and enumerate only through the
+  // useWorkspaceCollection chokepoint (a strict-boundary table).
+  workspaceScoped?: boolean;
+  // The Convex queries that FEED this key ("agentTasks.webList"). Registering
+  // one is a promise that components render from the store, not from the
+  // query: a source-level test fails any component/app file that subscribes
+  // to a registered feed directly. Only the sync hook may.
+  feeds?: readonly string[];
   // Boot hydration is automatic for every persisted key — registering a
   // persistence entry IS the permission to load AND save. This field only
   // tunes it, never gates it:
@@ -71,6 +105,7 @@ export const CLIENT_SYNC_REGISTRY = {
         "inbox_stashed_at",
         "inbox_pinned_at",
         "inbox_deferred_at",
+        "inbox_dormant_at",
         "title",
         "is_favorite",
       ],
@@ -85,6 +120,7 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "tasks" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    workspaceScoped: true,
     // Real tasks always carry a ct- short_id (required by schema, asserted by
     // webGetTaskDetail's lookup guard). Conversations masquerading as tasks
     // carry a session short id (jx…) or none.
@@ -96,6 +132,9 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     validRow: (row: any) =>
       typeof row?.capability_slug === "string" && typeof row?.scope_kind === "string",
+    // An optimistic stub keyed by client_key is superseded by the server row
+    // carrying the same client_key — the tasks convention.
+    sync: { altKey: "client_key" },
   },
   capabilityState: {
     persistence: { kind: "collection", key: "capabilityState" },
@@ -107,11 +146,16 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: false,
     validRow: (row: any) =>
       typeof row?.device_id === "string" && typeof row?.client === "string",
+    // A COLLECTION keyed by server _id: rows are (device, client, scope)
+    // tuples; a singleton would make every device's report clobber the fleet.
+    sync: {},
   },
   docs: {
     persistence: { kind: "collection", key: "docs" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    workspaceScoped: true,
+    sync: { isDelta: true },
     // `docs` is the THIN list: bodies live in docDetails (the doc page) and in
     // live webGet queries (embeds, pills). Drop a body a past channel cached —
     // unless it is an unsynced local edit still under a pending field lock.
@@ -140,11 +184,18 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "plans" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    workspaceScoped: true,
+    sync: { isDelta: true },
+    feeds: ["plans.webList"],
   },
   projects: {
     persistence: { kind: "collection", key: "projects" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    workspaceScoped: true,
+    // Liberal delta cache like the others; a snapshot here was the one
+    // remaining collection that pruned by absence.
+    sync: { isDelta: true },
   },
   buckets: {
     persistence: { kind: "collection", key: "buckets" },
@@ -185,6 +236,9 @@ export const CLIENT_SYNC_REGISTRY = {
   chatMessages: {
     persistence: { kind: "collection", key: "chatMessages" },
     hydration: { phase: "deferred" },
+    // A channel (or a thread) reads off disk without scanning every message
+    // the client ever cached.
+    indexes: "_id, channel_id, thread_root_id",
     // A row must know which channel it belongs to; anything else is a foreign
     // document that would render as a message with no home.
     validRow: (row: any) => typeof row?.channel_id === "string" && typeof row?.content === "string",
@@ -192,10 +246,12 @@ export const CLIENT_SYNC_REGISTRY = {
   chatReactions: {
     persistence: { kind: "collection", key: "chatReactions" },
     hydration: { phase: "deferred" },
+    indexes: "_id, message_id",
   },
   chatReads: {
     persistence: { kind: "collection", key: "chatReads" },
     hydration: { phase: "deferred" },
+    indexes: "_id, channel_id",
   },
   // The server's own per-channel unread numbers (chat.listChannels' rail). A
   // small array, so a meta blob: it is the only honest count for a channel whose
@@ -204,6 +260,136 @@ export const CLIENT_SYNC_REGISTRY = {
   chatRail: {
     persistence: { kind: "meta", key: "chatRail" },
     hydration: { phase: "deferred" },
+  },
+
+  // ── Tier-2 collections: surfaces that used to render from a live query ──
+  // Each is ONE entry. The Dexie table, the sync defaults, the {} at boot, the
+  // typed store slot and the feed-leakage guard all derive from it.
+
+  // Triggers (agent_tasks). webList returns the COMPLETE set for the user, so
+  // this is a snapshot sync (absence = deleted), not a delta. localFirst: the
+  // pause/resume/run-now/cancel gestures flip status on the draft and ride
+  // named dispatch side effects to the real mutations.
+  agentTasks: {
+    persistence: { kind: "collection", key: "agentTasks" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    sync: {},
+    feeds: ["agentTasks.webList"],
+  },
+  // A trigger's run history: one window per task (webListRuns is capped at
+  // 100 rows), so a delta overlay keeps every opened trigger's runs. Rows are
+  // keyed by run_key (the server's `_id` is the conversation and repeats for
+  // inject-mode runs) — the feeder stamps _id = run_key and task_id.
+  agentTaskRuns: {
+    persistence: { kind: "collection", key: "agentTaskRuns" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, task_id",
+    sync: { isDelta: true },
+    feeds: ["agentTasks.webListRuns"],
+  },
+  // Workflow definitions. webList is a 50-newest window, so delta.
+  workflows: {
+    persistence: { kind: "collection", key: "workflows" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["workflows.webList"],
+  },
+  // Workflow runs, fed by three windows (listDynamicRuns, listForWorkflow,
+  // get) that overlay into one collection. The per-node `session` enrichment
+  // rides only the enriched channels and may be absent on a row from
+  // listForWorkflow; readers treat it as optional.
+  workflowRuns: {
+    persistence: { kind: "collection", key: "workflowRuns" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, workflow_id",
+    sync: { isDelta: true },
+    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow"],
+  },
+  // Published pages (artifacts). listForWeb returns the complete visible set
+  // — own plus shareable teammates' — so snapshot. Rows have no server _id;
+  // the feeder keys them by slug.
+  artifacts: {
+    persistence: { kind: "collection", key: "artifacts" },
+    hydration: { phase: "deferred" },
+    sync: {},
+    feeds: ["artifacts.listForWeb"],
+  },
+  // The anchor space, one row per scope_type ("team" | "user"), keyed by it.
+  // Delta so the two scopes coexist; each push replaces its own row.
+  anchorSpaces: {
+    persistence: { kind: "collection", key: "anchorSpaces" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["anchors.getAnchorSpace"],
+  },
+  // Cross-session message graph (crosstalk): one server-derived snapshot.
+  // Singleton; the store's SYNC_REGISTRY strips the per-push generatedAt so an
+  // unchanged graph doesn't wake subscribers.
+  sessionThreads: {
+    persistence: { kind: "meta", key: "sessionThreads" },
+    hydration: { phase: "deferred", merge: "fill" },
+    sync: { kind: "singleton" },
+    feeds: ["sessionThreads.listSessionThreads"],
+  },
+  // Timeline lanes. Both queries are windows (commits: 2×limit newest,
+  // PRs: 50 by updated_at), so delta overlays accumulate history.
+  commits: {
+    persistence: { kind: "collection", key: "commits" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["commits.getCommitsForTimeline"],
+  },
+  pullRequests: {
+    persistence: { kind: "collection", key: "pullRequests" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["pull_requests.getPRsForTimeline"],
+  },
+  // The daemon-side fleet (managed_sessions). listActiveSessions is the
+  // COMPLETE live set (24h heartbeat window) — snapshot, so a session that
+  // stops heartbeating leaves. Readers additionally hide rows whose
+  // last_heartbeat is stale, so a persisted row can't outlive its window.
+  managedSessions: {
+    persistence: { kind: "collection", key: "managedSessions" },
+    hydration: { phase: "deferred" },
+    sync: {},
+    feeds: ["managedSessions.listActiveSessions"],
+  },
+  // Aggregate CPU/memory over the last 2h — a recomputed list, not rows.
+  sessionMetricsAggregate: {
+    persistence: { kind: "meta", key: "sessionMetricsAggregate" },
+    hydration: { phase: "deferred", merge: "fill" },
+    sync: { kind: "list" },
+    feeds: ["managedSessions.getAggregateMetrics"],
+  },
+  // Pending tool-permission requests, per conversation. Each conversation's
+  // push is the complete pending set for THAT conversation, so the feeder
+  // syncs with pruneAbsentScope for it (a resolved permission leaves the
+  // pending query and must leave the store). Persisted so the decision queue
+  // paints permission cards at boot; readers hide rows past the 2h window.
+  pendingPermissions: {
+    persistence: { kind: "collection", key: "pendingPermissions" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, conversation_id",
+    sync: { isDelta: true },
+    feeds: ["permissions.getPendingPermissions"],
+  },
+  // Delivery status of the viewer's in-flight message per conversation
+  // (getConversationPendingMessage). One row keyed by conversation id;
+  // transient — never persisted (a reload re-derives it).
+  pendingMessageStatus: {
+    sync: { isDelta: true },
+    feeds: ["pendingMessages.getConversationPendingMessage"],
+  },
+  // The viewer's device roster (listDevices), keyed by device_id. Persisted so
+  // /capabilities, device chips and the terminal picker paint at boot. The
+  // path-seeding gate (pathOnMyMachines) reads it only once a LIVE push has
+  // landed (machineRosterLive) — a stale roster must not veto a freshly cloned
+  // path — so persistence helps display and never the gate.
+  machineRoster: {
+    persistence: { kind: "meta", key: "machineRoster" },
+    feeds: ["devices.listDevices"],
   },
   notifications: {
     localFirst: true,
@@ -391,6 +577,70 @@ export function hydrationMergeStrategy(key: string): HydrationMerge {
   if (hydration && hydration !== "manual" && hydration.merge) return hydration.merge;
   return "shape";
 }
+
+// ── Derived from the registry: the things a new collection used to need a
+// hand-written line for in some other file. Register once; these follow.
+
+/** Sync-time defaults per key (inboxStore spreads these under SYNC_REGISTRY). */
+export const REGISTRY_SYNC_OPTS: Record<string, RegistrySyncOpts> = Object.fromEntries(
+  registryEntries.flatMap(([key, entry]) => (entry.sync ? [[key, entry.sync]] : [])),
+);
+
+/** Dexie `stores()` spec for every persisted collection: `{ key: indexes }`. */
+export const COLLECTION_INDEXES: Record<string, string> = Object.fromEntries(
+  COLLECTION_STORE_KEYS.map((key) => [
+    key,
+    (CLIENT_SYNC_REGISTRY[key] as ClientSyncRegistryEntry).indexes ?? "_id",
+  ]),
+);
+
+/** Tables whose rows enumerate only through useWorkspaceCollection. */
+export const WORKSPACE_SCOPED_KEYS = registryEntries
+  .filter(([, entry]) => entry.workspaceScoped)
+  .map(([key]) => key);
+export type WorkspaceScopedStoreKey = {
+  [K in ClientSyncStoreKey]: (typeof CLIENT_SYNC_REGISTRY)[K] extends { readonly workspaceScoped: true } ? K : never
+}[ClientSyncStoreKey];
+
+/** Every registered feed query → the store key it feeds. */
+export const REGISTERED_FEEDS: Record<string, string> = Object.fromEntries(
+  registryEntries.flatMap(([key, entry]) => (entry.feeds ?? []).map((f) => [f, key])),
+);
+
+/** Every key that is a collection in memory: persisted as a collection table,
+ *  OR synced as one (`sync` with the default "collection" kind) without
+ *  persistence — a transient collection still needs its `{}` at boot. */
+export type RegisteredCollectionKey = {
+  [K in ClientSyncStoreKey]: (typeof CLIENT_SYNC_REGISTRY)[K] extends { readonly persistence: { readonly kind: "collection" } }
+    ? K
+    : (typeof CLIENT_SYNC_REGISTRY)[K] extends { readonly sync: { readonly kind: "singleton" | "list" | "scalar" } }
+      ? never
+      : (typeof CLIENT_SYNC_REGISTRY)[K] extends { readonly sync: object }
+        ? K
+        : never
+}[ClientSyncStoreKey];
+
+export const REGISTERED_COLLECTION_KEYS = registryEntries
+  .filter(([, entry]) =>
+    entry.persistence?.kind === "collection" ||
+    (entry.sync && (entry.sync.kind ?? "collection") === "collection" && !entry.persistence))
+  .map(([key]) => key) as RegisteredCollectionKey[];
+
+/**
+ * The in-memory floor for every registered collection: an empty Record. Spread
+ * at the base of the store config so a registered collection can never be
+ * `undefined` at boot (Object.values(undefined) was the crash class).
+ */
+export function collectionInitialState(): Record<RegisteredCollectionKey, Record<string, any>> {
+  return Object.fromEntries(REGISTERED_COLLECTION_KEYS.map((key) => [key, {}])) as any;
+}
+
+/** Typed slots for every registered collection, mixed into InboxStoreState so
+ *  a registration alone gives `s.<key>` a type. Narrow it further on the
+ *  interface when a collection has a real row type. */
+export type RegisteredCollectionSlots = {
+  [K in RegisteredCollectionKey]: Record<string, any>;
+};
 
 export const DISPATCH_TABLE_MAP: Record<string, { table: string; kind: DispatchTableKind; fields?: readonly string[] }> = Object.fromEntries(
   registryEntries.flatMap(([key, entry]) =>

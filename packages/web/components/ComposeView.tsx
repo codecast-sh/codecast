@@ -426,8 +426,8 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
 // The "keep or discard this draft?" confirm shown when a dismissal would drop
 // typed content. Renders the draft itself as context — text snippet, pasted
 // image thumbnails, target project + agent — so the decision is informed, not
-// blind. Enter (autofocused button) keeps; Escape and the backdrop cancel back
-// into the draft; only the explicit Discard button destroys it.
+// blind. Each button wears its own key: Enter (autofocused button) keeps, D
+// discards; Escape and the backdrop cancel back into the draft.
 function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
   stubId: string | null;
   onKeep: () => void;
@@ -447,6 +447,20 @@ function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
       agentLabel: AGENT_LAUNCH_OPTIONS.find((a) => a.convexType === row?.agent_type)?.label,
     };
   }, [stubId]);
+
+  // Capture phase, like the composer's Escape listener: MessageInput swallows
+  // keys in the bubble phase, and the dialog owns the keyboard while it shows.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key !== "d" && e.key !== "D") return;
+      e.preventDefault();
+      e.stopPropagation();
+      onDiscard();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [onDiscard]);
 
   return (
     <div
@@ -477,20 +491,21 @@ function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
         <div className="flex items-center justify-end gap-2">
           <button
             onClick={onDiscard}
-            className="px-3 py-1.5 text-xs rounded-md border border-sol-red/40 text-sol-red hover:bg-sol-red/10 transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-sol-red/40 text-sol-red hover:bg-sol-red/10 transition-colors"
           >
+            <KeyCap size="xs">d</KeyCap>
             Discard
           </button>
           <button
             autoFocus
             onClick={onKeep}
-            className="px-3 py-1.5 text-xs rounded-md bg-sol-cyan text-white font-medium hover:bg-sol-cyan/90 transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-sol-cyan text-white font-medium hover:bg-sol-cyan/90 transition-colors"
           >
+            <FooterKeys combo="enter" />
             Keep draft
           </button>
         </div>
         <div className="mt-2.5 flex items-center justify-end gap-3 text-[10px] text-sol-text-dim">
-          <span className="flex items-center gap-1.5"><FooterKeys combo="enter" /> keep</span>
           <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> back to draft</span>
         </div>
       </div>

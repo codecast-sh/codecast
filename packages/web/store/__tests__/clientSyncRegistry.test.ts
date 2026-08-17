@@ -1,19 +1,23 @@
 import { describe, expect, it } from "bun:test";
 import {
   CLIENT_SYNC_REGISTRY,
+  COLLECTION_INDEXES,
   COLLECTION_STORE_KEYS,
   DISPATCH_FIELD_TABLE_MAP,
   DISPATCH_TABLE_MAP,
   HYDRATION_CRITICAL_KEYS,
   HYDRATION_DEFERRED_KEYS,
   META_STORE_KEYS,
+  REGISTRY_SYNC_OPTS,
+  WORKSPACE_SCOPED_KEYS,
   collectionRowHydrator,
   collectionRowValidator,
   hydrationMergeStrategy,
   isPersistedClientStoreKey,
   isProtectedSyncCollection,
 } from "../clientSyncRegistry";
-import { MISSING_COLLECTION_TABLES } from "../idbCache";
+import { CACHE_SCHEMA_SIGNATURE, MISSING_COLLECTION_TABLES, cacheSchemaSignature } from "../idbCache";
+import { useInboxStore } from "../inboxStore";
 
 describe("client sync registry", () => {
   it("covers the core synced and persisted store slices", () => {
@@ -126,10 +130,54 @@ describe("client sync registry", () => {
     expect(validMessage({})).toBe(false);
   });
 
-  it("every registered collection has a Dexie table (schema version bumped)", () => {
+  it("every registered collection has a Dexie table (schema is derived from the registry)", () => {
     // A missing table used to reject loadCache's whole Promise.all — one
     // forgotten migration silently disabled the entire cache.
     expect(MISSING_COLLECTION_TABLES).toEqual([]);
+  });
+
+  // ── Registration is the whole job ────────────────────────────────────────
+  // Adding a synced collection used to touch five files (registry, SYNC_REGISTRY,
+  // a Dexie schema version, the state interface, initial state) and forgetting
+  // any one of them failed silently — no table, undefined at boot, or a
+  // snapshot sync pruning the cache. These pin the derivations that replaced
+  // the hand-written lines.
+  describe("derived registration", () => {
+    it("the on-disk schema signature matches the pinned one (bump CACHE_SCHEMA_VERSION when it changes)", () => {
+      // If this fails you added/removed a persisted collection or changed an
+      // index: bump CACHE_SCHEMA_VERSION and paste the new signature. That
+      // bump is what makes IndexedDB run the upgrade on users' machines.
+      expect(cacheSchemaSignature()).toBe(CACHE_SCHEMA_SIGNATURE);
+    });
+
+    it("every persisted collection defaults to _id and carries its own indexes", () => {
+      expect(COLLECTION_INDEXES.tasks).toBe("_id");
+      expect(COLLECTION_INDEXES.chatMessages).toBe("_id, channel_id, thread_root_id");
+      for (const key of COLLECTION_STORE_KEYS) expect(COLLECTION_INDEXES[key]).toBeTruthy();
+    });
+
+    it("every registered collection starts as an empty record in the store", () => {
+      const state = useInboxStore.getState() as any;
+      for (const key of COLLECTION_STORE_KEYS) {
+        expect(state[key]).toBeDefined();
+        expect(typeof state[key]).toBe("object");
+      }
+      // And so does every persisted meta key: hydration writes into it.
+      for (const key of META_STORE_KEYS) expect(key in state).toBe(true);
+    });
+
+    it("sync opts registered on the collection reach the store's sync path", () => {
+      // docs/plans/projects declare isDelta on the registry entry (no
+      // SYNC_REGISTRY line). A snapshot sync of ONE row must not prune the rest.
+      expect(REGISTRY_SYNC_OPTS.plans).toEqual({ isDelta: true });
+      useInboxStore.setState({ plans: { a: { _id: "a" }, b: { _id: "b" } } } as any);
+      useInboxStore.getState().syncTable("plans", [{ _id: "a", title: "A" }]);
+      expect(Object.keys(useInboxStore.getState().plans).sort()).toEqual(["a", "b"]);
+    });
+
+    it("workspace-scoped tables are declared on the entry", () => {
+      expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["docs", "plans", "projects", "tasks"].sort());
+    });
   });
 
   it("rejects foreign documents persisted under tasks (conversation-as-task poisoning)", () => {

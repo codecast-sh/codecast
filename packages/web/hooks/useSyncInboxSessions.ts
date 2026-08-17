@@ -2,7 +2,7 @@ import { useRef, useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore, InboxSession, isSessionWaitingForInput, isSub, isConvexId, ensureHydrated, DISMISS_RECONCILE_WINDOW_MS } from "../store/inboxStore";
+import { useInboxStore, InboxSession, isSessionWaitingForInput, classifySession, isSub, isConvexId, ensureHydrated, DISMISS_RECONCILE_WINDOW_MS } from "../store/inboxStore";
 import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
@@ -47,6 +47,10 @@ const MAX_COLD_WARM_PER_SYNC = 50;
 
 export function waitingSoundKey(session: InboxSession, queued: Set<string>): string | null {
   if (!isSessionWaitingForInput(session, queued)) return null;
+  // Only a genuine claim on the human chimes. A delivered (done) or parked
+  // (dormant) settle is quiet — the server's needs-input push stands down on
+  // the same verdict (classifyWorkState !== "needs_input").
+  if (classifySession(session).rest !== "needs_input") return null;
   const kind = session.awaiting_input
     ? "awaiting_input"
     : session.agent_status === "permission_blocked"

@@ -94,6 +94,35 @@ describe("storage watchdog", () => {
     await waitFor(() => health.at(-1)?.healthy === true);
   });
 
+  it("logs the late commit so a stall reads as a stall, not a permanent wedge", async () => {
+    const { wrapped, health, parked } = makeHarness();
+    const warned: string[] = [];
+    const originalWarn = console.warn;
+    const originalError = console.error;
+    console.warn = (...args: unknown[]) => {
+      const line = String(args[0]);
+      if (line.includes("storage recovered")) warned.push(line);
+    };
+    console.error = () => {};
+    try {
+      wrapped.poke("a");
+      await waitFor(() => health.length > 0);
+      expect(warned).toEqual([]);
+      parked[0]!.resolve();
+      await waitFor(() => health.at(-1)?.healthy === true);
+      expect(warned).toEqual([expect.stringMatching(/committed after \d+ms — storage recovered/)]);
+      // A write that never tripped commits silently — the recovery line pairs
+      // only with a preceding error line.
+      wrapped.poke("b");
+      parked[1]!.resolve();
+      await sleep(10);
+      expect(warned).toHaveLength(1);
+    } finally {
+      console.warn = originalWarn;
+      console.error = originalError;
+    }
+  });
+
   it("does not clear on a fast commit while another write is still stuck", async () => {
     const { wrapped, health, parked } = makeHarness();
     wrapped.poke("stuck");
