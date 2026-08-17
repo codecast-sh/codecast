@@ -12,19 +12,20 @@ const VERSION = pkg.version;
 // older CLI compares its own constant against the config key, so a downgrade
 // still finds the value it expects instead of rewriting on every run. Bump one
 // when you want the recorded version to say something meaningful to a human.
-const MEMORY_VERSION = "12"; // bumped: shared "Referencing objects" section
+const MEMORY_VERSION = "13"; // bumped: cast calls / cast call (huddle transcripts)
 const TASK_VERSION = "5"; // bumped: triggers have short ids (tr-42) + shared "Referencing objects" section
 const WORK_VERSION = "7"; // bumped: per-type "Referencing sessions" replaced by the shared "Referencing objects" section
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "7"; // bumped: target on evidence (cast diff/read before attributing); teammate sessions live on other machines
 const VISUAL_VERSION = "6"; // bumped: image captions from alt text + side-by-side rows for adjacent images
-const FORKS_VERSION = "4"; // bumped: fan-out is a handoff — one cast fork call, no orchestration; default anchor excludes the fork request so branches never know they are forks
+const FORKS_VERSION = "5"; // bumped: cast spawn --subagent — nested subagent row the parent session manages, on any agent backend
 const PUBLISH_VERSION = "4"; // bumped: cast image cross-reference for single-image sharing; never link local paths
 const BROWSER_VERSION = "5"; // bumped: reuse your tab by default, no reload when already there
 const CHAT_VERSION = "1"; // first release: channels, threads, search, anchor replies
 const DECIDE_VERSION = "1"; // first release: cast decide + the web decision queue
-const STATE_VERSION = "3"; // bumped: first line = what you're working on; --status working|blocked|done
+const CALLS_VERSION = "1"; // first release: cast calls / cast call (transcripts, summaries)
+const STATE_VERSION = "4"; // bumped: --status dormant + the end-of-turn "who acts next" declaration
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_RETRY_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
@@ -158,6 +159,10 @@ export function getChatVersion(): string {
 
 export function getDecideVersion(): string {
   return DECIDE_VERSION;
+}
+
+export function getCallsVersion(): string {
+  return CALLS_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {
