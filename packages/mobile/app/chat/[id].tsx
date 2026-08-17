@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useActiveTeamFeature } from '@/lib/teamFeatures';
 import {
   StyleSheet, FlatList, TouchableOpacity, View as RNView,
   KeyboardAvoidingView, Platform, AppState, Alert, Animated,
@@ -52,8 +53,11 @@ export default function ChatChannelScreen() {
   const currentUser = useQuery(api.users.getCurrentUser);
   const viewerId = currentUser?._id ? String(currentUser._id) : '';
 
+  // Chat is a per-team opt-in; a deep link into an off team's channel must
+  // not subscribe (the server refuses, and a thrown query drops the screen).
+  const chatOn = useActiveTeamFeature("chat");
   // Channel meta + roster come from queries this screen's tab already warmed.
-  const channelData = useQuery(api.chat.listChannels, {});
+  const channelData = useQuery(api.chat.listChannels, chatOn ? {} : 'skip');
   const channel = useMemo(
     () => (channelData?.channels as any[] | undefined)?.find((c) => String(c._id) === String(channelId)),
     [channelData, channelId],
@@ -95,7 +99,7 @@ export default function ChatChannelScreen() {
   );
 
   // Head page stays live via the subscription; older pages accumulate below it.
-  const head = useQuery(api.chat.listMessages, { channel_id: channelId, limit: 60 });
+  const head = useQuery(api.chat.listMessages, chatOn ? { channel_id: channelId, limit: 60 } : 'skip');
   // Names for authors the roster no longer carries (departed members): the
   // query's own authors map, so old messages never degrade to "Teammate".
   const authorById = useMemo(() => {

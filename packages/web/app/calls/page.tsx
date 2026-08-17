@@ -7,6 +7,8 @@
 // what" is never a diarization guess. The same objects are available to
 // agents via `cast calls` / `cast call <id>`.
 
+import { useTeamFeature } from "../../lib/teamFeatures";
+import { TeamFeatureOff } from "../../components/TeamFeatureOff";
 import { useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
@@ -215,7 +217,8 @@ function CallDetail({ id }: { id: string }) {
 export default function CallsPage() {
   const params = useParams() as { id?: string };
   const selectedId = params?.id ?? null;
-  const calls = useQueryNoThrow(api.transcripts.webListCalls, { limit: 100 }).data as
+  const callsOn = useTeamFeature("calls");
+  const calls = useQueryNoThrow(api.transcripts.webListCalls, callsOn ? { limit: 100 } : "skip").data as
     | any[]
     | undefined;
   const { liveCalls, pastCalls } = useMemo(() => {
@@ -225,6 +228,16 @@ export default function CallsPage() {
       pastCalls: rows.filter((r) => r.status !== "live"),
     };
   }, [calls]);
+
+  if (!callsOn) {
+    return (
+      <AuthGuard>
+        <DashboardLayout>
+          <TeamFeatureOff feature="calls" />
+        </DashboardLayout>
+      </AuthGuard>
+    );
+  }
 
   return (
     <AuthGuard>

@@ -9,6 +9,8 @@
 
 import {
   SNIPPET_CATALOG,
+  snippetAvailableForTeams,
+  type TeamFeatures,
   type SnippetDescriptor,
   type DeviceSnippetSettings,
 } from "@codecast/shared/contracts";
@@ -44,17 +46,22 @@ export function newSnippetsFor({
   userCreatedAt,
   devices,
   dismissed,
+  teams = [],
   now = Date.now(),
 }: {
   /** Account creation time (Convex `_creationTime`); undefined = unknown. */
   userCreatedAt: number | undefined;
   devices: Array<{ settings?: DeviceSnippetSettings | null }>;
   dismissed: Record<string, unknown> | undefined;
+  /** The viewer's teams (store `teams`): a team-gated snippet is only news
+   *  while some team has its feature on. */
+  teams?: Array<{ features?: TeamFeatures | null } | null | undefined>;
   now?: number;
 }): SnippetDescriptor[] {
   // No machines = not a CLI user yet; the setup banner owns that journey.
   if (devices.length === 0) return [];
   return SNIPPET_CATALOG.filter((s) => {
+    if (!snippetAvailableForTeams(s.slug, teams)) return false;
     const shipped = Date.parse(s.shipped);
     if (!Number.isFinite(shipped)) return false;
     if (now - shipped >= UPSELL_WINDOW_MS) return false;

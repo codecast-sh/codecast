@@ -97,7 +97,7 @@ describe("joinRoom rejoin after lease lapse", () => {
             return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
           },
         }),
-        get: async (id: string) => (id === "u1" ? { _id: "u1", name: "U" } : id === "ch1" ? { _id: "ch1", team_id: "t1" } : rows.find((r) => r._id === id) ?? null),
+        get: async (id: string) => (id === "u1" ? { _id: "u1", name: "U" } : id === "ch1" ? { _id: "ch1", team_id: "t1" } : id === "t1" ? { _id: "t1", name: "T", features: { calls: true } } : rows.find((r) => r._id === id) ?? null),
         delete: async (id: string) => { deleted.push(id); },
         patch: async (id: string) => { if (deleted.includes(id)) throw new Error("Update on nonexistent document ID " + id); patched.push(id); },
         insert: async (_t: string, doc: any) => { inserted.push(doc); return "cm2"; },

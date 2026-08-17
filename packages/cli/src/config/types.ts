@@ -136,6 +136,12 @@ export interface Config {
   chat_version?: string;
   calls_enabled?: boolean;
   calls_version?: string;
+  // Last heartbeat-reported availability of team-gated snippets (chat, calls),
+  // keyed by slug: whether any of this user's teams has the feature on. The
+  // daemon installs/disables the snippet when this CHANGES (never on every
+  // beat, so a hand `--disable` sticks until the team flips again); the
+  // install wizard skips a snippet known to be off for every team.
+  snippet_availability?: Record<string, boolean>;
 
   // --- Cross-machine project-path resolution (daemon.ts) ---
   // Explicit project-path overrides for resuming sessions/forks recorded on another

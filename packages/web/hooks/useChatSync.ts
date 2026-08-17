@@ -39,6 +39,7 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { memberListSig } from "./useTeamRoster";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useTeamFeature } from "../lib/teamFeatures";
 import { markChatRailLive } from "../lib/chatLive";
 import { isConvexId } from "../lib/entityLinks";
 import {
@@ -127,6 +128,14 @@ function railSig(rail: ChatRailRow[]): string {
 export function useChatChannelsSync(): { error?: Error } {
   const teamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
   const syncTable = useInboxStore((s) => s.syncTable);
+  // Chat is a per-team opt-in. Off = no subscription AND an empty rail, so the
+  // unread badge, the title count and the arrival toasts — which all read the
+  // rail — go quiet along with the nav row. The server refuses the query for
+  // an off team anyway; skipping it keeps the console clean.
+  const chatOn = useTeamFeature("chat");
+  useEffect(() => {
+    if (!chatOn) syncTable("chatRail", []);
+  }, [chatOn, syncTable]);
   // useQueryNoThrow, not useQuery: chat is local-first — the components read the
   // STORE, and this subscription only feeds it. A backend that is down (or a
   // client running ahead of a deploy) must leave the reader with the cached
@@ -137,7 +146,7 @@ export function useChatChannelsSync(): { error?: Error } {
     // users.active_team_id — a second source of truth that can disagree with
     // the workspace the client is actually showing. In the personal workspace
     // chat has no scope at all, so there is nothing to subscribe to.
-    teamId && isConvexId(teamId) ? { team_id: teamId } : "skip",
+    chatOn && teamId && isConvexId(teamId) ? { team_id: teamId } : "skip",
   );
 
   useConvexSync(

@@ -3,12 +3,12 @@ import { Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { dmRoomKey } from '@codecast/shared/contracts';
+import { dmRoomKey, teamFeatureEnabled } from '@codecast/shared/contracts';
 import { startHuddle } from '@/lib/calls/callManager';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Theme, Spacing } from '@/constants/Theme';
@@ -69,9 +69,18 @@ export default function TeamScreen() {
   // Mentions of you across all channels put a number on the Chat segment — the
   // same rule as everywhere: unread is quiet, being named is not.
   const chatRail = useChatRail(activeTeamId);
-  // Calling affordances only exist when the deployment has LiveKit configured.
-  const callsEnabled = useQuery(api.calls.getCallConfig)?.enabled === true;
-  const chatMentions = chatRail?.mentionTotal ?? 0;
+  // Chat and calls are per-team opt-ins (default off): no Chat segment unless
+  // the active team turned chat on, and no huddle buttons unless it turned
+  // calls on (getCallConfig lists the caller's teams that have calls, and is
+  // false outright when the deployment has no LiveKit).
+  const chatOn = teamFeatureEnabled(activeTeam as any, "chat");
+  const callConfig = useQuery(api.calls.getCallConfig);
+  const callsEnabled = callConfig?.enabled === true && !!activeTeamId && (callConfig.teams ?? []).includes(String(activeTeamId));
+  const chatMentions = chatOn ? (chatRail?.mentionTotal ?? 0) : 0;
+  const segments = useMemo(() => (chatOn ? (['sessions', 'chat', 'members'] as const) : (['sessions', 'members'] as const)), [chatOn]);
+  useEffect(() => {
+    if (!chatOn && segment === 'chat') setSegment('sessions');
+  }, [chatOn, segment]);
 
   const filteredMembers = useMemo(() => {
     if (!teamMembers) return [];
@@ -156,7 +165,7 @@ export default function TeamScreen() {
           )}
         </TouchableOpacity>
         <RNView style={styles.segmentRow}>
-          {(['sessions', 'chat', 'members'] as const).map((s) => (
+          {segments.map((s) => (
             <TouchableOpacity
               key={s}
               style={[styles.segmentTab, segment === s && styles.segmentTabActive]}

@@ -30,6 +30,7 @@ export function NewSnippetsBanner() {
   const { user } = useCurrentUser();
   const { devices, onlineLocals, onlineRemotes } = useDevices();
   const dismissed = useInboxStore((s) => s.clientState.dismissed);
+  const teams = useInboxStore((s) => s.teams);
   const updateDismissed = useInboxStore((s) => s.updateClientDismissed);
   const openSettingsModal = useInboxStore((s) => s.openSettingsModal);
   const setSnippet = useMutation(api.devices.setDeviceSnippet);
@@ -44,8 +45,9 @@ export function NewSnippetsBanner() {
         userCreatedAt: typeof user?._creationTime === "number" ? user._creationTime : undefined,
         devices,
         dismissed,
+        teams,
       }),
-    [user?._creationTime, devices, dismissed],
+    [user?._creationTime, devices, dismissed, teams],
   );
 
   // Freeze the roster when the dialog opens: enabling or dismissing a feature

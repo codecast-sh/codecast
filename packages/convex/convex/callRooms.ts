@@ -12,6 +12,7 @@
 // so this module is the entire security boundary for who can listen in.
 import type { Id } from "./_generated/dataModel";
 import { createTeamFeedFilter } from "./privacy";
+import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 // Key shapes, builders and lease timings are the shared contract
 // (@codecast/shared/contracts/callRoomKeys) so the web client can build keys
 // and share staleness math without importing server code. This module adds
@@ -59,7 +60,25 @@ export type RoomAuthorization =
 
 // May `userId` participate in `roomKey`? Returns the team the room bills its
 // membership rows to (call_members.team_id) so callers never re-derive it.
+//
+// Calls are a per-team opt-in: after the membership rules below pick the
+// room's team, the team must have `features.calls` on. This one function is
+// every call path's authorization (rooms, rings, tokens, occupancy,
+// transcripts), so the feature gate lives here and nowhere else.
 export async function authorizeRoom(
+  ctx: any,
+  userId: Id<"users">,
+  roomKey: string,
+): Promise<RoomAuthorization> {
+  const auth = await authorizeRoomMembership(ctx, userId, roomKey);
+  if (!auth.ok) return auth;
+  if (!(await teamHasFeature(ctx, auth.teamId, "calls"))) {
+    return { ok: false, reason: teamFeatureOffMessage("calls") };
+  }
+  return auth;
+}
+
+async function authorizeRoomMembership(
   ctx: any,
   userId: Id<"users">,
   roomKey: string,

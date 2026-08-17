@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SNIPPET_CATALOG } from "@codecast/shared/contracts";
+import { SNIPPET_CATALOG, TEAM_FEATURES } from "@codecast/shared/contracts";
 import { isRecentlyShipped, newSnippetsFor, snippetIntroKey } from "./newSnippets";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -14,6 +14,9 @@ const newestSlugs = SNIPPET_CATALOG.filter(
 const aSlug = newestSlugs[0];
 
 const oldAccount = newest - 200 * DAY;
+// A team with every opt-in feature on, so gated snippets (chat, calls) count
+// as available in the "offers everything new" case.
+const allOn = [{ features: Object.fromEntries(TEAM_FEATURES.map((f) => [f.key, true])) }];
 const device = (snippets: Record<string, boolean> = {}) => ({ settings: { snippets } });
 
 describe("newSnippetsFor", () => {
@@ -22,9 +25,23 @@ describe("newSnippetsFor", () => {
       userCreatedAt: oldAccount,
       devices: [device()],
       dismissed: undefined,
+      teams: allOn,
       now: NOW,
     });
     expect(got.map((s) => s.slug).sort()).toEqual([...newestSlugs].sort());
+  });
+
+  test("a team-gated snippet is only news while some team has the feature on", () => {
+    const gated = TEAM_FEATURES.flatMap((f) => f.snippets);
+    const got = newSnippetsFor({
+      userCreatedAt: oldAccount,
+      devices: [device()],
+      dismissed: undefined,
+      teams: [{ features: {} }],
+      now: NOW,
+    });
+    for (const slug of gated) expect(got.map((s) => s.slug)).not.toContain(slug);
+    expect(got.map((s) => s.slug).sort()).toEqual(newestSlugs.filter((s) => !gated.includes(s)).sort());
   });
 
   test("offers nothing to a brand-new account", () => {

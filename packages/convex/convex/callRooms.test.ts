@@ -11,6 +11,9 @@ import {
 // index filtering, which is all authorizeRoom queries need.
 function fakeCtx(seed: Record<string, any[]> = {}) {
   const tables: Record<string, any[]> = {
+    // Calls are a per-team opt-in; the fixture team has it on (the feature
+    // gate itself is covered in "authorizeRoom feature gate" below).
+    teams: [{ _id: "team1", name: "T1", features: { calls: true } }, { _id: "team-off", name: "Off" }],
     team_memberships: [],
     chat_channels: [],
     conversations: [],
@@ -188,5 +191,19 @@ describe("authorizeRoom session", () => {
     expect(
       (await authorizeRoom(ctx, "owner" as any, "session:cv1")).ok,
     ).toBe(true);
+  });
+});
+
+describe("authorizeRoom feature gate", () => {
+  test("a room in a team without calls is refused even for a member", async () => {
+    const ctx = fakeCtx({
+      team_memberships: [membership("ua", "team-off"), membership("ub", "team-off")],
+      chat_channels: [{ _id: "ch-off", team_id: "team-off", name: "general" }],
+    });
+    const dm = await authorizeRoom(ctx, "ua" as any, dmRoomKey("ua", "ub"));
+    expect(dm.ok).toBe(false);
+    if (!dm.ok) expect(dm.reason).toContain("not enabled for this team");
+    const ch = await authorizeRoom(ctx, "ua" as any, channelRoomKey("ch-off"));
+    expect(ch.ok).toBe(false);
   });
 });

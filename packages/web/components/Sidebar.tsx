@@ -1,3 +1,4 @@
+import { useTeamFeature } from "../lib/teamFeatures";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useRef, memo } from "react";
@@ -12,10 +13,12 @@ import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore } from "../store/inboxStore";
+import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useDecisionQueue } from "../hooks/useDecisionQueue";
 import { useChatUnread, useChatRail, useChatMembers, useOpenDm } from "../hooks/useChatSync";
-import { ChannelContextMenu, useChannelMenu } from "./chat/ChannelMenu";
+import { ChannelContextMenu } from "./chat/ChannelMenu";
+import { useChannelMenu } from "../hooks/useChannelMenu";
 import { channelDisplayName, dmCounterpart, memberName, suggestedDmMembers } from "../lib/chatViews";
 import { memberAvatarUrl } from "../lib/liveEntities";
 import { dmOtherIds } from "@codecast/shared/chat";
@@ -453,7 +456,11 @@ function PinnedRail({
   const chatChannels = useInboxStore((s) => s.chatChannels);
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
-  if (pins.length === 0) return null;
+  // A pinned channel is chat UI: gone with the feature (the pin itself is
+  // kept, so turning chat back on restores it).
+  const chatOn = useTeamFeature("chat");
+  const visiblePins = chatOn ? pins : pins.filter((p) => p.kind !== "channel");
+  if (visiblePins.length === 0) return null;
 
   // The icon already names the kind (a hash IS the channel marker), so the
   // label is just the name — never "# #team".
@@ -512,13 +519,18 @@ function PinnedRail({
   return (
     <div className="mb-1">
       <RailHeading label="Pinned" isNarrow={false} />
-      {pins.map((pin) => {
+      {visiblePins.map((pin) => {
         const row = resolve(pin);
         return <SectionRow key={row.id} row={row} className="mx-2 rounded" />;
       })}
     </div>
   );
 }
+
+// The session fields the directory rail groups by; anything else on the row
+// (heartbeats, streaming counters) doesn't wake the sidebar.
+const sidebarSessionSig = (r: any) => `${r.git_root ?? ""}|${r.project_path ?? ""}|${r.updated_at ?? 0}`;
+const byUpdatedDesc = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
 export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
   const pathname = usePathname();
@@ -529,6 +541,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
+  // Per-team opt-in: no chat row (and no create-channel modal) unless the
+  // active team turned chat on.
+  const chatOn = useTeamFeature("chat");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
@@ -747,12 +762,22 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []));
   useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));
   useConvexSync(favoritesQuery, useCallback((d: any) => useInboxStore.getState().syncTable("favorites", d), []));
-  const { conversations } =
-    useQuery(api.conversations.listConversations, {
-      filter: "my",
-      limit: 100,
-      include_message_previews: false,
-    }) ?? { conversations: [] };
+  // Local-first: the workspace/directory rail derives from the viewer's own
+  // sessions already in the store (the inbox sync + persisted cache), not a
+  // second listConversations subscription — which painted the rail silently
+  // EMPTY for a beat on every cold boot. Wakes only on the fields the rail
+  // groups by (path, recency); the 100 most recent, like the old query.
+  const sidebarViewerId = useInboxStore((st) => (st.currentUser?._id ? String(st.currentUser._id) : ""));
+  const sidebarOwnSessionWhere = useCallback(
+    (row: any) => !!row?._id && String(row.user_id ?? "") === sidebarViewerId,
+    [sidebarViewerId],
+  );
+  const ownSessions = useCollectionRows<any>("sessions", {
+    where: sidebarOwnSessionWhere,
+    sig: sidebarSessionSig,
+    sort: byUpdatedDesc,
+  });
+  const conversations = useMemo(() => ownSessions.slice(0, 100), [ownSessions]);
 
   const handleDirectoryClick = (dir: string) => {
     const newDir = directoryFilter === dir ? null : dir;
@@ -905,14 +930,14 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
           />
-          <ChatNavRow
+          {chatOn && <ChatNavRow
             isActive={!!isChat}
             isNarrow={isNarrow}
             pathname={pathname}
             expanded={viewSectionOverride.chat ?? !!isChat}
             onToggle={() => setViewSectionOverride((v) => ({ ...v, chat: !(v.chat ?? !!isChat) }))}
             onMobileClose={onMobileClose}
-          />
+          />}
         </div>
 
         {/* What you are working on. Projects leads: it is the container the rest
@@ -1235,7 +1260,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       {createModal === "plan" && (
         <CreateDocModal onClose={() => closeCreateModal()} initialType="plan" />
       )}
-      {createModal === "chat" && (
+      {createModal === "chat" && chatOn && (
         <CreateChannelModal
           onClose={() => closeCreateModal()}
           // The stub id is what the rail already shows; the tab path follows the

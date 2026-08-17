@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useActiveTeamFeature } from '@/lib/teamFeatures';
 import {
   StyleSheet, FlatList, TouchableOpacity, View as RNView,
   KeyboardAvoidingView, Platform, AppState, Alert,
@@ -47,10 +48,11 @@ export default function ChatThreadScreen() {
   const currentUser = useQuery(api.users.getCurrentUser);
   const viewerId = currentUser?._id ? String(currentUser._id) : '';
 
-  const thread = useQuery(api.chat.getThread, { root_id: rootId });
+  const chatOn = useActiveTeamFeature("chat");
+  const thread = useQuery(api.chat.getThread, chatOn ? { root_id: rootId } : 'skip');
   const channelId = (thread?.root?.channel_id ?? channelParam) as Id<'chat_channels'> | undefined;
 
-  const channelData = useQuery(api.chat.listChannels, {});
+  const channelData = useQuery(api.chat.listChannels, chatOn ? {} : 'skip');
   const channel = useMemo(
     () => (channelData?.channels as any[] | undefined)?.find(
       (c) => String(c._id) === String(channelId),

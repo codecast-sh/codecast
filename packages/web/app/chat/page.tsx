@@ -27,6 +27,8 @@
 // component exists. A hidden tab that marks the channel read and silences its
 // own toasts is the exact failure this file's read rule exists to prevent.
 
+import { useTeamFeature } from "../../lib/teamFeatures";
+import { TeamFeatureOff } from "../../components/TeamFeatureOff";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
@@ -60,7 +62,8 @@ import { ChatChannelRail } from "../../components/chat/ChatChannelRail";
 import { ChatMessageList } from "../../components/chat/ChatMessageList";
 import { ChatThreadPanel } from "../../components/chat/ChatThreadPanel";
 import { ChatComposer } from "../../components/chat/ChatComposer";
-import { ChannelContextMenu, useChannelMenu } from "../../components/chat/ChannelMenu";
+import { ChannelContextMenu } from "../../components/chat/ChannelMenu";
+import { useChannelMenu } from "../../hooks/useChannelMenu";
 import { setChatFocus, clearChatFocus } from "../../lib/chatFocus";
 import "../../components/chat/chat.css";
 
@@ -126,6 +129,7 @@ export default function ChatPage() {
   }, [supersededTo, router]);
 
   const activeWorkspaceTeam = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
+  const chatOn = useTeamFeature("chat");
   const navCollapsed = useInboxStore((s) => selectNavCollapsed(s as any));
   const zenMode = useInboxStore((s) => s.clientState.ui?.zen_mode ?? false);
   const narrowViewport = useSyncExternalStore(
@@ -379,6 +383,8 @@ export default function ChatPage() {
   const showEmpty = messages.length === 0 && !feed.error && (knownEmpty || !feed.loading);
   const showError = messages.length === 0 && !!feed.error;
   const showSkeleton = messages.length === 0 && feed.loading && !knownEmpty;
+
+  if (!chatOn) return <TeamFeatureOff feature="chat" />;
 
   return (
     <div className="ch-shell">
