@@ -18,8 +18,10 @@
  *  - Failure is silence: a screenshot that cannot be taken must never fail
  *    the action it was documenting.
  *
- * Opt-outs: `--no-shot` on any acting command, or persistently via the shared
- * config file (`cast browser shots off` → browser.auto_shots=false).
+ * Defaults are per audience (autoShotsEnabled): on for a human at a terminal,
+ * off for agent sessions, whose context pays for every frame. Overrides:
+ * `--no-shot` on any acting command for one call, or persistently via the
+ * shared config file (`cast browser shots on|off` → browser.auto_shots).
  */
 
 import * as crypto from "node:crypto";
@@ -27,6 +29,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { screenshot } from "./actions.js";
+import { ownerKey } from "./owner.js";
 import { browserHome } from "./profile.js";
 import type { PageSession } from "./instance.js";
 import { readSharedConfig, writeSharedConfig } from "../config/sharedConfig.js";
@@ -61,14 +64,32 @@ function defaultConfigDir(): string {
   return process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
 }
 
-/** On unless the shared config says otherwise. */
-export function autoShotsEnabled(configDir = defaultConfigDir()): boolean {
-  return readSharedConfig(configDir).browser?.auto_shots !== false;
+/**
+ * Explicit config wins. When unset, the default depends on the audience: ON
+ * for a human at a terminal, OFF for agent sessions — an agent's every
+ * page-changing command would otherwise spend a JPEG of its context that is
+ * rarely looked at (decision 2026-08-16). `cast browser shots on` opts a
+ * machine back in; failure capture and an explicit `shot` are unaffected.
+ */
+export function autoShotsEnabled(
+  configDir = defaultConfigDir(),
+  agentSession: boolean = ownerKey() !== null,
+): boolean {
+  const configured = readSharedConfig(configDir).browser?.auto_shots;
+  if (typeof configured === "boolean") return configured;
+  return !agentSession;
 }
 
 export function setAutoShots(on: boolean, configDir = defaultConfigDir()): void {
   const config = readSharedConfig(configDir);
   writeSharedConfig(configDir, { ...config, browser: { ...config.browser, auto_shots: on } });
+}
+
+/** Drop the override and return to the audience default. */
+export function clearAutoShots(configDir = defaultConfigDir()): void {
+  const config = readSharedConfig(configDir);
+  const { auto_shots: _dropped, ...browser } = config.browser ?? {};
+  writeSharedConfig(configDir, { ...config, browser });
 }
 
 // ------------------------------------------------------------------- dedupe

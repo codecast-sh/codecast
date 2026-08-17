@@ -31,9 +31,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import {
-  ENGINE_PACKAGE, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, runEngine,
+  ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, runEngine,
 } from "./engine.js";
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
+import { matchRefs, nearMatches } from "./snapshot.js";
+import { ensurePinnedTab } from "./pinnedTab.js";
 import { formatBytes, listRealProfiles } from "./profile.js";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
 import { readState, stopInstance } from "./instance.js";
@@ -42,7 +44,7 @@ import { isPidAlive } from "../workspace/chrome.js";
 import { auditLanding, NAVIGATING_VERBS, refuseNavigation, viaFor } from "./siteGuard.js";
 import { emitFailureBlock, engineSource } from "./capture.js";
 import { registerAuditCommand } from "./auditCommand.js";
-import { autoShotsEnabled, isMutatingStep, maybeAutoShot, setAutoShots, type AutoShotSource } from "./autoShot.js";
+import { autoShotsEnabled, clearAutoShots, isMutatingStep, maybeAutoShot, setAutoShots, type AutoShotSource } from "./autoShot.js";
 import { tabFooterLines, TAB_AFFECTING_VERBS } from "./tabFooter.js";
 import { tokenize } from "./batch.js";
 import { ownerKey } from "./owner.js";
@@ -115,10 +117,11 @@ function engineAutoShotSource(o: Ctx): AutoShotSource {
  * listed is still reachable: `cast browser raw <args…>`.
  */
 const PASSTHROUGH: Array<{ verb: string; engine?: string; args: string; desc: string }> = [
-  { verb: "open", args: "[args...]", desc: "Navigate to a URL" },
-  { verb: "snapshot", args: "[args...]", desc: "The page as an accessibility tree with refs to act on" },
-  { verb: "click", args: "[args...]", desc: "Click an element (@ref or selector)" },
-  { verb: "type", args: "[args...]", desc: "Type into an element" },
+  { verb: "open", args: "[args...]", desc: "Navigate to a URL (--new-tab for a second page)" },
+  { verb: "snapshot", args: "[args...]", desc: "The page as an accessibility tree with refs (-i interactive only, -s <sel> scope, -c compact, -d <n> depth, -u link urls)" },
+  { verb: "read", args: "[args...]", desc: 'The page, or a URL, as clean readable text (--outline, --filter <text>) — best for "what does this page say"' },
+  { verb: "click", args: "[args...]", desc: "Click an element (#e42 ref or CSS selector)" },
+  { verb: "type", args: "[args...]", desc: "Type into an element (--submit presses Enter after)" },
   { verb: "fill", args: "[args...]", desc: "Clear a field and fill it" },
   { verb: "press", args: "[args...]", desc: 'Press a key ("Enter", "Control+a")' },
   { verb: "hover", args: "[args...]", desc: "Hover an element, revealing menus" },
@@ -128,10 +131,11 @@ const PASSTHROUGH: Array<{ verb: string; engine?: string; args: string; desc: st
   { verb: "upload", args: "[args...]", desc: "Attach files to a file input" },
   { verb: "download", args: "[args...]", desc: "Download a file by clicking an element" },
   { verb: "drag", args: "[args...]", desc: "Drag one element onto another" },
-  { verb: "wait", args: "[args...]", desc: "Wait for an element, or a number of ms" },
-  { verb: "eval", args: "[args...]", desc: "Run JavaScript in the page" },
-  { verb: "text", engine: "read", args: "[args...]", desc: "The page's visible text, for reading" },
-  { verb: "get", args: "[args...]", desc: "Read text, html, value, attr, box or styles" },
+  { verb: "wait", args: "[args...]", desc: "Wait for --text <s>, --url <pat>, --load <state>, --fn <js>, a selector, or ms" },
+  { verb: "eval", args: "[args...]", desc: "Run JavaScript in the page (--stdin reads a heredoc — no quote escaping)" },
+  { verb: "text", engine: "read", args: "[args...]", desc: "Visible text of the page, or of one element (text <selector>)" },
+  { verb: "get", args: "[args...]", desc: "Element data without eval: get text|html|value|attr|count|box|styles <sel>" },
+  { verb: "diff", args: "[args...]", desc: "What changed: diff snapshot (since your last snapshot; -s <sel> scope), diff url <u1> <u2>" },
   { verb: "back", args: "[args...]", desc: "Go back in history" },
   { verb: "forward", args: "[args...]", desc: "Go forward in history" },
   { verb: "reload", args: "[args...]", desc: "Reload the page" },
@@ -147,8 +151,56 @@ const PASSTHROUGH: Array<{ verb: string; engine?: string; args: string; desc: st
   { verb: "a11y", args: "[args...]", desc: "Accessibility audit (axe-core)" },
   { verb: "trace", args: "[args...]", desc: "Record a DevTools trace" },
   { verb: "record", args: "[args...]", desc: "Record video of the session" },
-  { verb: "skills", args: "[args...]", desc: "The engine's own usage guides" },
+  { verb: "skills", args: "[args...]", desc: "The engine's own usage guides (skills get core --full)" },
 ];
+
+/** What the wrapper layers on top of every engine verb, appended to the
+ *  generated help so it documents the command an agent actually runs. */
+const CAST_HELP_EXTRAS = `Cast additions:
+  #e42 and @e42 both work as element refs (they come from \`cast browser snapshot\`)
+  --no-shot      Skip the automatic screenshot after a page-changing command
+  --no-capture   Skip the failure context (console, network, screenshot) when a step fails
+
+The engine's full guide: cast browser skills get core --full`;
+
+/** Hand-written help for `text`: its selector form is ours (it fans out to two
+ *  engine verbs), so no single engine help page describes it. */
+const TEXT_HELP = `cast browser text - Visible text, for reading rather than acting
+
+Usage: cast browser text [selector]
+
+With no selector, prints the whole page as readable text.
+With a CSS selector or a ref, prints just that element's text — the cheap way
+to read one region of a large page:
+
+  cast browser text                     # the whole page
+  cast browser text "div[role=main]"    # one region, by CSS selector
+  cast browser text #e42                # one element, by snapshot ref
+
+Related:
+  cast browser read             the page or a URL as clean text/markdown (--outline, --filter <text>)
+  cast browser get text <sel>   what a scoped \`text\` runs underneath`;
+
+/**
+ * Per-verb help, generated from the engine's own \`--help\` so the flag list
+ * cannot drift from what the passthrough accepts. Only the branding and verb
+ * names are reworded into our vocabulary.
+ */
+export function verbHelp(p: { verb: string; engine?: string; desc: string }): string {
+  if (p.verb === "text") return `${TEXT_HELP}\n\n${CAST_HELP_EXTRAS}`;
+  const engineVerb = p.engine ?? p.verb;
+  const raw = engineHelpText(engineVerb);
+  if (!raw) {
+    return (
+      `Usage: cast browser ${p.verb} [args...]\n\n${p.desc}\n\n` +
+      `(run \`cast browser start\` once to install the engine — the per-flag help comes from it)\n\n${CAST_HELP_EXTRAS}`
+    );
+  }
+  const body = raw
+    .replace(/\bagent-browser\b/g, "cast browser")
+    .replace(new RegExp(`\\bcast browser ${engineVerb}\\b`, "g"), `cast browser ${p.verb}`);
+  return `${body}\n\n${CAST_HELP_EXTRAS}`;
+}
 
 /** Our preset sizes, kept so the names in CLAUDE.md keep meaning the same
  *  thing regardless of which engine is driving. */
@@ -181,6 +233,16 @@ type Ctx = ReturnType<typeof ctx>;
 /** `#e42` (what CLAUDE.md says) → `@e42` (what the engine reads). */
 export function engineRef(a: string): string {
   return a.replace(/^#e(\d+)$/i, "@e$1");
+}
+
+/**
+ * `[role=main]` → `[role="main"]`. The engine's `-s` scoping rejects unquoted
+ * attribute values that querySelector accepts, so the CSS an agent naturally
+ * writes would miss. Quoting is always valid, so normalise rather than teach
+ * the quirk.
+ */
+export function quoteAttrValues(sel: string): string {
+  return sel.replace(/\[([\w-]+)([~^$*|]?=)([^"'\]]+)\]/g, '[$1$2"$3"]');
 }
 
 /** Where a `find` remembers what it matched, so a bare action can use it. */
@@ -263,6 +325,34 @@ export function translate(verb: string, args: string[], lastFind: string | null)
 
   if (verb === "network" && (!a.length || a[0] === "--failed")) a = ["requests", ...a.slice(1)];
 
+  if (verb === "snapshot" || verb === "diff") {
+    a = a.map((x, i) => (a[i - 1] === "-s" || a[i - 1] === "--selector" ? quoteAttrValues(x) : x));
+  }
+
+  if (verb === "read") {
+    // `read -s <sel>` arrives by analogy with `snapshot -s` (observed in
+    // agent testing). Scoped text is the engine's `get text`; absorb the
+    // analogy instead of teaching the asymmetry. Only when no URL competes.
+    const i = a.findIndex((x) => x === "-s" || x === "--selector");
+    if (i >= 0) {
+      const sel = a[i + 1];
+      const others = a.filter((_, j) => j !== i && j !== i + 1);
+      if (sel && !others.some((x) => !x.startsWith("-"))) {
+        return [{ args: ["get", "text", sel, ...others] }];
+      }
+    }
+  }
+
+  if (verb === "text") {
+    // `text <selector|ref>` reads ONE element (the engine's `get text`);
+    // bare `text` reads the whole page (the engine's `read`). Without this,
+    // reading one region of a big app forces agents into `eval`. A URL still
+    // reads as a document, and a leading flag (--outline, --filter) means the
+    // whole-page read was intended.
+    if (a[0] === "-s" || a[0] === "--selector") return [{ args: ["get", "text", ...a.slice(1)] }];
+    if (a[0] && !a[0].startsWith("-") && !/^[a-z]+:\/\//i.test(a[0])) return [{ args: ["get", "text", ...a] }];
+  }
+
   if (verb === "open") {
     // The engine always waits and always navigates; these built-in flags have
     // nothing to say to it.
@@ -338,6 +428,9 @@ export async function runVerb(verb: string, args: string[], o: Ctx = ctx(), run:
     const deny = url ? refuseNavigation(url, owner, "open") : null;
     if (deny) die(deny.message, deny.hint);
     await ensureBrowser();
+    // The pre-action hook ran before the browser existed on a cold start;
+    // now that it does, bind this session's tab quietly (pinnedTab.ts).
+    await ensurePinnedTab(session);
     // `open` is where a session's browsing begins, so it is also where tabs
     // whose sessions have died get closed (engineReap.ts) — throttled, and
     // never this session's own.
@@ -346,6 +439,14 @@ export async function runVerb(verb: string, args: string[], o: Ctx = ctx(), run:
     // Your logins for this site, as your real Chrome holds them right now —
     // the clone the browser started from may be hours old (credentials.ts).
     if (url) await carryLogins(url);
+  }
+
+  // `read <url>` fetches that URL, so the same site policy that gates `open`
+  // gates it — a denied site must not be readable through a side door.
+  if (verb === "read") {
+    const url = args.find((x) => !x.startsWith("-"));
+    const deny = url ? refuseNavigation(url, owner, "open") : null;
+    if (deny) die(deny.message, deny.hint);
   }
 
   // `tab <id>` takes what the footer printed — the 8-char target id — or a
@@ -359,8 +460,9 @@ export async function runVerb(verb: string, args: string[], o: Ctx = ctx(), run:
     if (hit) args = [hit.targetId, ...args.slice(1)];
   }
 
-  // Ours, never the engine's.
-  const capture = !args.includes("--no-capture");
+  // Ours, never the engine's. `skills` never touches a page, so a failure
+  // there gets no page evidence either way.
+  const capture = !args.includes("--no-capture") && verb !== "skills";
   const shot = !args.includes("--no-shot");
   const forwarded = args.filter((a) => a !== "--no-capture" && a !== "--no-shot");
 
@@ -432,27 +534,42 @@ async function passthrough(verb: string, args: string[]): Promise<never> {
   process.exit(await runVerb(verb, args));
 }
 
+/** One line of the engine's snapshot that carries a ref, parsed for matching.
+ *  Flags render as `[expanded=false, ref=e162]` — the ref is not always at the
+ *  start of the bracket, so match the pattern, not a "[ref=" prefix (that
+ *  prefix filter silently hid every expanded/checked/disabled element). */
+const REF_IN_LINE = /[[ ]ref=(e\d+)\]/;
+
+export function parseEngineRefs(stdout: string): Array<{ line: string; role: string; name: string }> {
+  return stdout
+    .split("\n")
+    .filter((l) => REF_IN_LINE.test(l))
+    .map((line) => ({
+      line: line.trim(),
+      role: line.match(/^\s*- (\w+)/)?.[1] ?? "",
+      name: line.match(/"([^"]*)"/)?.[1] ?? "",
+    }));
+}
+
 /** `find <text>`: refs on the page whose accessible name matches, best first.
- *  Remembers the best one so a following bare action can use it. */
-function findRefs(text: string, o: Ctx): { hits: string[]; total: number } {
+ *  Parses the engine's snapshot lines into (role, name) and hands matching to
+ *  the shared matcher, so both drivers rank identically. Remembers the best
+ *  hit so a following bare action can use it. */
+function findRefs(text: string, o: Ctx): { hits: string[]; near: string[]; total: number } {
   const res = runEngine(["snapshot"], o);
   if (res.status !== 0) die((res.stderr || res.stdout).trim().split("\n")[0] || "could not read the page");
-  const q = text.toLowerCase();
-  const lines = res.stdout.split("\n").filter((l) => l.includes("[ref="));
-  // Exact name first: "Save" must not be ambiguous just because "Save
-  // draft" also contains it.
-  const named = (l: string) => (l.match(/"([^"]*)"/) ?? [, ""])[1]!.toLowerCase();
-  const exact = lines.filter((l) => named(l) === q);
-  const hits = exact.length ? exact : lines.filter((l) => l.toLowerCase().includes(q));
-  const ref = hits[0]?.match(/\[ref=(e\d+)\]/)?.[1];
+  const items = parseEngineRefs(res.stdout);
+  const hits = matchRefs(items, text);
+  const near = hits.length ? [] : nearMatches(items, text);
+  const ref = hits[0]?.line.match(REF_IN_LINE)?.[1];
   if (ref) rememberFind(o.session, `@${ref}`);
-  return { hits: hits.map((h) => h.trim()), total: lines.length };
+  return { hits: hits.map((h) => h.line), near: near.map((h) => h.line), total: items.length };
 }
 
 /** `shot`: screenshot to a file, inline in the conversation, optionally shared. */
 async function takeShot(
   pathArg: string | undefined,
-  o: { full?: boolean; share?: boolean; alt?: string; inline?: boolean; extra?: string[] },
+  o: { full?: boolean; annotate?: boolean; share?: boolean; alt?: string; inline?: boolean; extra?: string[] },
   c: Ctx,
   deps: PublishDeps,
 ): Promise<string> {
@@ -460,11 +577,20 @@ async function takeShot(
   fs.mkdirSync(path.dirname(out), { recursive: true });
   const extra = [...(o.extra ?? [])];
   if (o.full) extra.push("--full-page");
+  if (o.annotate) extra.push("--annotate");
   const res = runEngine(["screenshot", out, ...extra], c);
   if (res.status !== 0) {
     die((res.stderr || res.stdout).trim().split("\n")[0] || "the screenshot failed");
   }
   if (!fs.existsSync(out)) die(`the engine reported success but wrote no file at ${out}`);
+
+  // The legend mapping each [N] label to a snapshot ref is the point of an
+  // annotated shot; it arrives on the engine's stdout.
+  if (o.annotate) {
+    for (const line of res.stdout.split("\n")) {
+      if (line.trim() && !/screenshot saved/i.test(line)) console.log(line);
+    }
+  }
 
   const bytes = fs.statSync(out).size;
   console.log(`${OK} ${out} (${formatBytes(bytes)})`);
@@ -480,6 +606,17 @@ async function takeShot(
     console.log(img.markdown);
   }
   return out;
+}
+
+/** The index of the last page-changing step in a flow, or -1 when none is.
+ *  Pure, so it is testable without a browser. */
+export function lastMutatingIndex(steps: string[]): number {
+  let last = -1;
+  steps.forEach((raw, i) => {
+    const [verb, ...rest] = tokenize(raw);
+    if (verb && isMutatingStep(verb, rest)) last = i;
+  });
+  return last;
 }
 
 /**
@@ -498,9 +635,14 @@ async function runFlow(
   let failed = 0;
   // Flow-level opt-outs apply to every step.
   const flowFlags = [...(o.shot === false ? ["--no-shot"] : []), ...(o.capture === false ? ["--no-capture"] : [])];
-  for (const raw of steps) {
+  // One auto shot per flow, after its LAST page-changing step: that is where
+  // the flow landed, and the only frame anyone reads. Intermediate shots cost
+  // context and are superseded within the same invocation.
+  const lastShot = lastMutatingIndex(steps);
+  for (const [i, raw] of steps.entries()) {
     const [verb, ...rest] = tokenize(raw);
     const args = [...rest, ...flowFlags];
+    if (i !== lastShot && !args.includes("--no-shot")) args.push("--no-shot");
     if (!verb) continue;
     let ok = true;
     console.log(`${fmt.highlight("›")} ${raw}`);
@@ -508,8 +650,14 @@ async function runFlow(
       if (verb === "shot") {
         await takeShot(args.find((a) => !a.startsWith("--")), { full: args.includes("--full") }, c, deps);
       } else if (verb === "find") {
-        const { hits, total } = findRefs(args.join(" "), c);
-        if (!hits.length) throw new Error(`no element matching ${JSON.stringify(args.join(" "))} (${total} refs on the page)`);
+        // The query is the step's own words — flow-level flags are not part
+        // of what the agent asked to find.
+        const query = rest.join(" ");
+        const { hits, near, total } = findRefs(query, c);
+        if (!hits.length) {
+          const hint = near.length ? `; closest: ${near.slice(0, 3).join(", ")}` : "";
+          throw new Error(`no element matching ${JSON.stringify(query)} (${total} refs on the page)${hint}`);
+        }
         for (const h of hits.slice(0, 5)) console.log(`    ${h}`);
       } else {
         ok = (await runVerb(verb, args, c, { quiet: true })) === 0;
@@ -542,13 +690,58 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   auditOwner = () => ownerKey(deps.detectCurrentSessionId);
   registerAuditCommand(br, auditOwner);
 
+  // Any verb that reaches the page can be the one that starts this session's
+  // daemon, and a daemon attaching with no live bound tab creates one in the
+  // FOREGROUND — raising Chrome over the human's work. Bind a background tab
+  // first (pinnedTab.ts). Verbs that never touch this session's page skip it.
+  const NO_TAB_NEEDED = new Set(["start", "stop", "profiles", "shots", "dialogs", "audit"]);
+  br.hook("preAction", async (_thisCommand, actionCommand) => {
+    if (NO_TAB_NEEDED.has(actionCommand.name()) || actionCommand.parent !== br) return;
+    await ensurePinnedTab(engineSession());
+  });
+
   for (const p of PASSTHROUGH) {
-    br.command(`${p.verb} ${p.args}`)
+    const cmd = br
+      .command(`${p.verb} ${p.args}`)
       .description(p.desc)
       .allowUnknownOption(true)
       .helpOption(false)
-      .action((args: string[] = []) => passthrough(p.verb, args));
+      .action((args: string[] = []) => {
+        // helpOption is off so flags pass through, which makes --help one of
+        // them — catch it here so it prints our help, not raw engine branding.
+        if (args.includes("--help") || args.includes("-h")) {
+          console.log(verbHelp(p));
+          process.exit(0);
+        }
+        return passthrough(p.verb, args);
+      });
+    // What `cast browser help <verb>` prints: the engine's own flag docs,
+    // reworded into our vocabulary — generated, so it cannot drift.
+    cmd.helpInformation = () => `${verbHelp(p)}\n`;
   }
+
+  // The flags that make browsing cheap, where an agent scanning the command
+  // list will actually see them. Everything deeper is one `help <verb>` away.
+  br.addHelpText(
+    "after",
+    `
+The cheap-browsing loop — scope reads instead of dumping whole pages:
+
+  cast browser open "https://mail.google.com/mail/u/0/#search/test"
+  cast browser snapshot -i -s "div[role=main]"    # interactive refs in one region, not the app shell
+  cast browser do "click #e920" "wait --text Changelog" "get text div.a3s"
+
+  snapshot -i -s <sel>     only interactive elements, only that region
+  read                     the page (or a URL) as clean text — "what does this page say"
+  get text <sel>           one element's text, no eval needed
+  text <sel>               same, in one word
+  diff snapshot            only what changed since your last snapshot
+  wait --text/--url/--fn   wait for the state you mean, not a fixed delay
+  eval --stdin             JavaScript from a heredoc, no quote escaping
+  shot --annotate          screenshot with numbered labels matching snapshot refs
+
+\`cast browser help <command>\` documents every flag; \`cast browser skills get core --full\` is the engine's full guide.`,
+  );
 
   // Escape hatch: the engine gains verbs faster than this table does, and an
   // agent should never be blocked because we have not listed one yet.
@@ -567,14 +760,17 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   // -------------------------------------------------------------- screenshots
 
   br.command("shot [pathArg]")
-    .description("Screenshot the page — appears inline in this conversation")
+    .description("Screenshot the page — appears inline in this conversation (--annotate labels refs on it)")
     .option("--full", "Whole scroll height, not just the viewport")
+    .option("--annotate", "Number every interactive element on the image; each [N] label is snapshot ref #eN, with a legend")
     .option("--share", "Also upload it and print a link you can paste elsewhere")
     .option("--alt <text>", "Caption for the shared image — say what it shows")
     .option("--no-inline", "Do not show the image in the conversation")
     .allowUnknownOption(true)
     .action(async (pathArg: string | undefined, o: any, cmd: any) => {
-      // Anything we do not recognise belongs to the engine, not to us.
+      // Anything we do not recognise belongs to the engine, not to us. Only
+      // valueless flags can pass this way: commander cannot know an unknown
+      // flag takes a value, so it would misread the value as the path.
       const extra = (cmd.args ?? []).filter((a: unknown) => typeof a === "string" && a.startsWith("--"));
       await takeShot(pathArg, { ...o, extra }, ctx(), deps);
     });
@@ -599,7 +795,9 @@ Pass \`-\` to read them from stdin, one per line:
   shot
   EOF
 
-A step with no ref uses whatever the last \`find\` matched.`,
+A step with no ref uses whatever the last \`find\` matched.
+One auto screenshot per flow, after the last page-changing step — intermediate
+frames are superseded before anyone reads them.`,
     )
     .action(async (steps: string[] = [], o: { keepGoing?: boolean; shot?: boolean; capture?: boolean }) => {
       let plan = steps;
@@ -634,9 +832,14 @@ A step with no ref uses whatever the last \`find\` matched.`,
       // The engine has no `find` of this shape. A snapshot already carries every
       // ref with its accessible name, so matching here costs one call and keeps
       // the verb — and remembers the match for a bare action to use.
-      const { hits, total } = findRefs(text, ctx());
+      const { hits, near, total } = findRefs(text, ctx());
       if (!hits.length) {
         console.log(`no element matching ${JSON.stringify(text)} (${total} refs on the page)`);
+        if (near.length) {
+          console.log("closest:");
+          for (const h of near) console.log(`  ${h}`);
+        }
+        console.log(fmt.muted("see everything: cast browser snapshot"));
         process.exit(1);
       }
       for (const h of hits.slice(0, 25)) console.log(h);
@@ -763,19 +966,24 @@ A step with no ref uses whatever the last \`find\` matched.`,
     });
 
   br.command("shots [mode]")
-    .description("Automatic screenshots after page-changing commands: on | off | status")
+    .description("Automatic screenshots after page-changing commands: on | off | default | status")
     .action((mode?: string) => {
       if (!mode || mode === "status") {
         console.log(
           autoShotsEnabled()
             ? `${OK} auto screenshots are on — page-changing commands inline a small capture (\`--no-shot\` skips one)`
-            : `${fmt.muted(icons.dot)} auto screenshots are off — enable with \`cast browser shots on\``,
+            : `${fmt.muted(icons.dot)} auto screenshots are off${ownerKey() ? " (the default for agent sessions)" : ""} — \`cast browser shots on\` enables them`,
         );
         return;
       }
-      if (mode !== "on" && mode !== "off") die(`'${mode}' is not a mode`, "use: cast browser shots on | off | status");
+      if (mode === "default") {
+        clearAutoShots();
+        console.log(`${OK} auto screenshots follow the default again: on at a terminal, off for agent sessions`);
+        return;
+      }
+      if (mode !== "on" && mode !== "off") die(`'${mode}' is not a mode`, "use: cast browser shots on | off | default | status");
       setAutoShots(mode === "on");
-      console.log(`${OK} auto screenshots ${mode}`);
+      console.log(`${OK} auto screenshots ${mode} (machine-wide; \`cast browser shots default\` restores the per-audience default)`);
     });
 
   br.command("profiles")

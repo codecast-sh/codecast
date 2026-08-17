@@ -33,6 +33,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
 import { browserHome } from "./profile.js";
+import { frontAppPid, restoreFocusIfStolen } from "./focusGuard.js";
 import { readState } from "./instance.js";
 import { ownerKey } from "./owner.js";
 
@@ -208,6 +209,9 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
   const session = opts.session ?? engineSession();
   const full = [...args, "--cdp", String(port), "--pin-tab"];
 
+  // The engine raises Chrome as a side effect of ordinary commands; if it
+  // takes the front during this call, hand focus back (focusGuard.ts).
+  const front = frontAppPid();
   const res = spawnSync(binary, full, {
     encoding: "utf-8",
     timeout: opts.timeoutMs ?? 120_000,
@@ -218,6 +222,7 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
       AGENT_BROWSER_SESSION: session,
     },
   });
+  restoreFocusIfStolen(front);
 
   return {
     status: res.status ?? 1,
@@ -297,6 +302,25 @@ export function engineFitness(): EngineFitness {
   if (!v) return { ok: true, version: "unknown" };
   if (compareVersions(v, ENGINE_MIN_VERSION) < 0) return { ok: false, reason: "too-old", version: v };
   return { ok: true, version: v };
+}
+
+/**
+ * The engine's own `--help` for one verb, or null when it cannot answer.
+ *
+ * Runs the binary directly, without `--cdp`/`--pin-tab`: help must work with
+ * no browser running. This is what `cast browser help <verb>` renders from, so
+ * the flag documentation is the engine's own and cannot drift from what the
+ * passthrough actually accepts.
+ */
+export function engineHelpText(engineVerb: string): string | null {
+  const binary = findEngine();
+  if (!binary) return null;
+  const res = spawnSync(binary, [engineVerb, "--help"], { encoding: "utf-8", timeout: 15_000 });
+  if (res.status !== 0) return null;
+  const text = (((res.stdout as string) ?? "") + ((res.stderr as string) ?? "")).trim();
+  // A verb the engine does not know prints its generic usage error.
+  if (!text || /^Unknown command:/m.test(text)) return null;
+  return text;
 }
 
 /** Version string of the installed engine, for `status`. */

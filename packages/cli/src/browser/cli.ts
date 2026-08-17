@@ -35,7 +35,7 @@ import { BrowserNotLive, explainConnectionLoss, isTabUnresponsive } from "./reco
 import {
   browserHome, clonePath, cloneProfile, formatBytes, listRealProfiles, type ChromeChannel,
 } from "./profile.js";
-import { matchRefs, snapshotPage } from "./snapshot.js";
+import { matchRefs, nearMatches, snapshotPage } from "./snapshot.js";
 import {
   clearViewport, click, clickAt, DEVICES, evaluate, focus, hover, locate, pressKey,
   screenshot, scroll, selectOption, setViewport, type, uploadFiles,
@@ -44,7 +44,7 @@ import { armRecorder, clearRecording, readRecording } from "./observe.js";
 import { emitFailureContext } from "./capture.js";
 import { pageViewportCapture, parseViewport, runViewportRow, ViewportArgError, viewportChoices } from "./viewports.js";
 import { writeShotFile } from "./shotFile.js";
-import { autoShotsEnabled, cdpAutoShotSource, maybeAutoShot, pruneHashes, setAutoShots } from "./autoShot.js";
+import { autoShotsEnabled, cdpAutoShotSource, clearAutoShots, maybeAutoShot, pruneHashes, setAutoShots } from "./autoShot.js";
 import { ownerKey } from "./owner.js";
 import { registerEngineCommands } from "./cliEngine.js";
 import { DEFAULT_CLONE, resolveRemote, startLocalBrowser, startManagedBrowser, waitingOnLaunch, type StartOptions } from "./managedBrowser.js";
@@ -864,19 +864,24 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     });
 
   br.command("shots [mode]")
-    .description("Automatic screenshots after page-changing commands: on | off | status")
+    .description("Automatic screenshots after page-changing commands: on | off | default | status")
     .action((mode?: string) => {
       if (!mode || mode === "status") {
         console.log(
           autoShotsEnabled()
             ? `${OK} auto screenshots are on — page-changing commands inline a small capture (\`--no-shot\` skips one)`
-            : `${fmt.muted(icons.dot)} auto screenshots are off — enable with \`cast browser shots on\``,
+            : `${fmt.muted(icons.dot)} auto screenshots are off${ownerKey() ? " (the default for agent sessions)" : ""} — \`cast browser shots on\` enables them`,
         );
         return;
       }
-      if (mode !== "on" && mode !== "off") die(`'${mode}' is not a mode`, "use: cast browser shots on | off | status");
+      if (mode === "default") {
+        clearAutoShots();
+        console.log(`${OK} auto screenshots follow the default again: on at a terminal, off for agent sessions`);
+        return;
+      }
+      if (mode !== "on" && mode !== "off") die(`'${mode}' is not a mode`, "use: cast browser shots on | off | default | status");
       setAutoShots(mode === "on");
-      console.log(`${OK} auto screenshots ${mode}`);
+      console.log(`${OK} auto screenshots ${mode} (machine-wide; \`cast browser shots default\` restores the per-audience default)`);
     });
 
   // -------------------------------------------------------------- perception
@@ -918,6 +923,12 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         const hits = matchRefs(snap.refs, text);
         if (!hits.length) {
           console.log(`no element matching ${JSON.stringify(text)} (${snap.refs.length} refs on the page)`);
+          const near = nearMatches(snap.refs, text);
+          if (near.length) {
+            console.log("closest:");
+            for (const h of near) console.log(`  ${h.role} ${JSON.stringify(h.name)} #e${h.ref}`);
+          }
+          console.log(fmt.muted("see everything: cast browser snapshot"));
           return;
         }
         for (const h of hits.slice(0, 25)) console.log(`  ${h.role} ${JSON.stringify(h.name)} #e${h.ref}`);

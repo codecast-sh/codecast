@@ -230,10 +230,138 @@ export async function snapshotPage(page: PageSession, opts: SnapshotOptions = {}
   };
 }
 
-/** Find refs whose accessible name matches, for `cast browser find`. */
-export function matchRefs(refs: SnapshotRef[], query: string): SnapshotRef[] {
-  const q = query.toLowerCase();
-  const exact = refs.filter((r) => r.name.toLowerCase() === q);
-  if (exact.length) return exact;
-  return refs.filter((r) => r.name.toLowerCase().includes(q) || r.role.toLowerCase() === q);
+/**
+ * Matching for `cast browser find`.
+ *
+ * The caller is an agent, so the job is not to be right — it is to get the
+ * target onto a short ranked list and let the caller pick. Three consequences:
+ *
+ *   - A hit needs word overlap in EITHER direction. Agents routinely query
+ *     with more words than the accessible name ("All issues link" for a link
+ *     named "All issues"), and one-way substring matching fails exactly the
+ *     queries that were trying hardest to be precise.
+ *   - A trailing role word ("… button") narrows by intent, softly. People say
+ *     button for links and menu for buttons, so a role mismatch demotes a
+ *     candidate but never disqualifies it.
+ *   - Misses still answer. `nearMatches` returns the sub-threshold candidates
+ *     so a failed find can show what was close instead of a dead end.
+ */
+
+interface Named {
+  role: string;
+  name: string;
+}
+
+/** What a human might mean by a trailing role word. Deliberately generous
+ *  about `button`: menus, dropdowns and toggles usually render as buttons. */
+const QUERY_ROLES: Record<string, string[]> = {
+  button: ["button"],
+  link: ["link"],
+  tab: ["tab"],
+  checkbox: ["checkbox"],
+  radio: ["radio"],
+  input: ["textbox", "searchbox", "combobox"],
+  field: ["textbox", "searchbox", "combobox"],
+  textbox: ["textbox"],
+  box: ["textbox", "searchbox", "combobox", "checkbox"],
+  dropdown: ["combobox", "listbox", "button"],
+  menu: ["menu", "menubar", "menuitem", "button"],
+  toggle: ["switch", "checkbox", "button"],
+  switch: ["switch"],
+  heading: ["heading"],
+  option: ["option", "menuitem"],
+  slider: ["slider"],
+};
+
+const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+const tokensOf = (s: string): string[] => norm(s).split(" ").filter(Boolean);
+
+interface Scored<T> {
+  item: T;
+  score: number;
+  hit: boolean;
+  exact: boolean;
+}
+
+function scoreAll<T extends Named>(items: T[], query: string): Scored<T>[] {
+  let qTokens = tokensOf(query);
+  let wantRoles: Set<string> | null = null;
+  const last = qTokens[qTokens.length - 1];
+  if (qTokens.length > 1 && QUERY_ROLES[last]) {
+    wantRoles = new Set(QUERY_ROLES[last]);
+    qTokens = qTokens.slice(0, -1);
+  }
+  const qn = qTokens.join(" ");
+  // A query that is just a role word ("link", "combobox") matches by role.
+  const roleOnly = !wantRoles && qTokens.length === 1 ? new Set([qn, ...(QUERY_ROLES[qn] ?? [])]) : null;
+
+  const out: Scored<T>[] = [];
+  for (const item of items) {
+    const nn = norm(item.name);
+    const nTokens = nn ? nn.split(" ") : [];
+    let score = 0;
+    let hit = false;
+    let exact = false;
+
+    if (qn && nn === qn) {
+      score = 100;
+      hit = true;
+      exact = true;
+    } else if (qn && nn.includes(qn)) {
+      score = 70 + 20 * (qn.length / nn.length);
+      hit = true;
+    } else if (nn && qn.includes(nn)) {
+      score = 60 + 10 * (nn.length / qn.length);
+      hit = true;
+    } else if (qn) {
+      // Word overlap: how much of the query the name accounts for. Substring
+      // per token so "173 comments" finds a link named "173comments".
+      const covered = qTokens.filter((t) => nTokens.some((n) => n === t || n.includes(t))).length;
+      const cov = covered / qTokens.length;
+      if (cov > 0) {
+        score = 40 + 20 * cov - Math.min(8, nTokens.length / 4);
+        hit = cov > 0.5;
+      }
+    }
+
+    // A bare role word ("link") matches by role, as it always has.
+    if (roleOnly?.has(item.role.toLowerCase()) && !hit) {
+      score = Math.max(score, 30);
+      hit = true;
+    }
+    if (score <= 0) continue;
+    if (wantRoles) score += wantRoles.has(item.role.toLowerCase()) ? 8 : -6;
+    if (INTERACTIVE.has(item.role)) score += 5;
+    out.push({ item, score, hit, exact });
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
+/** Refs whose name or role matches the query, best first. An exact name match
+ *  collapses the list to exacts: "Save" must not be ambiguous just because
+ *  "Save draft" also contains it. */
+export function matchRefs<T extends Named>(items: T[], query: string): T[] {
+  const scored = scoreAll(items, query).filter((s) => s.hit);
+  const exact = scored.filter((s) => s.exact);
+  const kept = exact.length ? exact : scored;
+  // One widget, many rows: grid apps give a row, its cells and the control
+  // inside them the same accessible name (a Gmail message is row + gridcell +
+  // checkbox + link, all named alike). When an interactive element carries
+  // the name, its non-interactive shadows add nothing an agent could act on —
+  // but a row that is the ONLY carrier of its name stays.
+  const interactiveNames = new Set(
+    kept.filter((s) => INTERACTIVE.has(s.item.role)).map((s) => norm(s.item.name)),
+  );
+  return kept
+    .filter((s) => INTERACTIVE.has(s.item.role) || !interactiveNames.has(norm(s.item.name)))
+    .map((s) => s.item);
+}
+
+/** What almost matched — for the miss message, so the agent sees candidates
+ *  instead of a dead end. Only meaningful when matchRefs returned nothing. */
+export function nearMatches<T extends Named>(items: T[], query: string, limit = 5): T[] {
+  return scoreAll(items, query)
+    .filter((s) => !s.hit)
+    .slice(0, limit)
+    .map((s) => s.item);
 }

@@ -116,6 +116,12 @@ function defaultArgs(opts: LaunchChromeOptions): string[] {
     // Reduce flakiness in CI/sandbox environments.
     "--disable-dev-shm-usage",
     "--disable-features=Translate,InterestFeedContentSuggestions",
+    // Headful only, in effect: an occluded or backgrounded window otherwise
+    // reports visibilityState "hidden" and freezes rAF, so WebGL never paints
+    // and screenshots of it come back blank (see browser/instance.ts).
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-background-timer-throttling",
     // Faster startup; we don't need GPU for headless DOM/CDP work.
     ...(opts.headless !== false ? ["--headless=new"] : []),
     "--remote-debugging-address=127.0.0.1",

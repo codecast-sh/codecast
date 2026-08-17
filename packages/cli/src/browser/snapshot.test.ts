@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { matchRefs, snapshotPage, type Snapshot } from "./snapshot.js";
+import { matchRefs, nearMatches, snapshotPage, type Snapshot } from "./snapshot.js";
 import type { PageSession } from "./instance.js";
 
 interface FakeNode {
@@ -212,5 +212,128 @@ describe("matchRefs", () => {
 
   test("matches on role when the name does not match", () => {
     expect(matchRefs(refs, "link").map((r) => r.ref)).toEqual([3]);
+  });
+
+  test("a query more specific than the name still hits", () => {
+    // The most common agent phrasing: the name plus a role word.
+    expect(matchRefs(refs, "Save draft button").map((r) => r.ref)).toEqual([2]);
+    expect(matchRefs(refs, "the Home link").map((r) => r.ref)).toEqual([3]);
+  });
+
+  test("a trailing role word narrows but never disqualifies", () => {
+    // "button" on a link: wrong role word, right element.
+    expect(matchRefs(refs, "Home button").map((r) => r.ref)).toEqual([3]);
+  });
+
+  test("word overlap matches out-of-order and unspaced names", () => {
+    const hn = [
+      { ref: 10, role: "link", name: "173comments" },
+      { ref: 11, role: "link", name: "past" },
+    ];
+    expect(matchRefs(hn, "173 comments").map((r) => r.ref)).toEqual([10]);
+    const mac = [{ ref: 12, role: "button", name: "Download for Mac" }];
+    expect(matchRefs(mac, "mac download button").map((r) => r.ref)).toEqual([12]);
+  });
+
+  test("near matches surface what almost hit, and only on a miss", () => {
+    const page = [
+      { ref: 20, role: "button", name: "Edit file" },
+      { ref: 21, role: "cell", name: "README.md, (File)" },
+      { ref: 22, role: "button", name: "Sign in" },
+    ];
+    expect(matchRefs(page, "edit readme")).toEqual([]);
+    const near = nearMatches(page, "edit readme").map((r) => r.ref);
+    expect(near).toContain(20);
+    expect(near).not.toContain(22);
+  });
+});
+
+describe("matchRefs against real pages", () => {
+  // Condensed from live snapshots of github.com/anthropics/claude-code,
+  // news.ycombinator.com and codecast.sh (2026-08-15). Each query is phrased
+  // the way agents actually phrase them; `expected` is a hit anywhere in the
+  // returned list, because the caller reads the whole short list.
+  const github = [
+    { ref: 9, role: "link", name: "All issues" },
+    { ref: 10, role: "link", name: "All pull requests" },
+    { ref: 12, role: "link", name: "You have no unread notifications ( g then n )" },
+    { ref: 16, role: "button", name: "Open quick search dialog, type / to search" },
+    { ref: 19, role: "button", name: "Open user navigation menu" },
+    { ref: 33, role: "button", name: "Code" },
+    { ref: 56, role: "button", name: "main branch" },
+    { ref: 161, role: "button", name: "Watch: Participating in anthropics/claude-code. Click to change subscription settings." },
+    { ref: 200, role: "button", name: "Star anthropics/claude-code" },
+    { ref: 201, role: "button", name: "Star lists" },
+    { ref: 249, role: "button", name: "Copy code to clipboard" },
+    { ref: 101, role: "cell", name: "Fix lock-closed-issues workflow: use search API instead of offset pag…" },
+    { ref: 124, role: "cell", name: "CHANGELOG.md, (File)" },
+  ];
+  const codecast = [
+    { ref: 48, role: "button", name: "Sign in" },
+    { ref: 49, role: "button", name: "Sign up" },
+    { ref: 50, role: "button", name: "Get started free" },
+    { ref: 51, role: "button", name: "Download for Mac" },
+    { ref: 57, role: "button", name: "View on GitHub" },
+    { ref: 59, role: "button", name: "Windows" },
+    { ref: 61, role: "button", name: "Copy to clipboard" },
+  ];
+
+  const cases: Array<[typeof github, string, number]> = [
+    [github, "All issues link", 9],
+    [github, "star button", 200],
+    [github, "watch button", 161],
+    [github, "user menu", 19],
+    [github, "search box", 16],
+    [github, "main branch button", 56],
+    [github, "notifications", 12],
+    [github, "copy code button", 249],
+    [codecast, "Sign in button", 48],
+    [codecast, "copy button", 61],
+    [codecast, "windows button", 59],
+    [codecast, "github link", 57],
+  ];
+
+  for (const [page, query, expected] of cases) {
+    test(`finds ${JSON.stringify(query)}`, () => {
+      expect(matchRefs(page, query).map((r) => r.ref)).toContain(expected);
+    });
+  }
+
+  test("ranks the intended element at or near the top for role-suffixed queries", () => {
+    // "star button" is genuinely ambiguous between "Star …" and "Star lists";
+    // both belong on the short list the caller reads.
+    expect(matchRefs(github, "star button").slice(0, 2).map((r) => r.ref)).toContain(200);
+    expect(matchRefs(github, "main branch button")[0].ref).toBe(56);
+    expect(matchRefs(codecast, "Sign in button")[0].ref).toBe(48);
+  });
+
+  test("one grid widget is not four hits", () => {
+    // Gmail gives a message's row, gridcell, checkbox and link the identical
+    // accessible name. Only the interactive carriers are worth listing.
+    const name = "Changelog: Cal.com v6.8";
+    const gmail = [
+      { ref: 1, role: "row", name },
+      { ref: 2, role: "gridcell", name },
+      { ref: 3, role: "checkbox", name },
+      { ref: 4, role: "link", name },
+      { ref: 5, role: "row", name: "Weekly digest" },
+    ];
+    const hits = matchRefs(gmail, name);
+    expect(hits.map((r) => r.ref).sort()).toEqual([3, 4]);
+    // A row that is the only carrier of its name survives.
+    expect(matchRefs(gmail, "Weekly digest").map((r) => r.ref)).toEqual([5]);
+    // Same-role duplicates are genuinely distinct elements and all stay.
+    const dupes = [
+      { ref: 6, role: "button", name: "Copy code to clipboard" },
+      { ref: 7, role: "button", name: "Copy code to clipboard" },
+    ];
+    expect(matchRefs(dupes, "Copy code to clipboard").length).toBe(2);
+  });
+
+  test("pure synonyms still miss, with an empty near list", () => {
+    // "avatar" shares no words with "Open user navigation menu". That case
+    // belongs to the calling agent (snapshot and pick), not to this matcher.
+    expect(matchRefs(github, "avatar")).toEqual([]);
+    expect(nearMatches(github, "avatar")).toEqual([]);
   });
 });

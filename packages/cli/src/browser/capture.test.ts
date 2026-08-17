@@ -62,6 +62,22 @@ describe("classifyFailure", () => {
     expect(classifyFailure("open needs a url")).toBe("usage");
     expect(classifyFailure("unknown step 'frobnicate'")).toBe("usage");
   });
+
+  test("the engine's argument errors get no page context either", () => {
+    // `cast browser skills core` (the wrong form) used to screenshot the page.
+    expect(classifyFailure("Unknown skills subcommand: core")).toBe("usage");
+    expect(classifyFailure("Unknown command: frobnicate")).toBe("usage");
+    expect(classifyFailure("Skill not found: bogus")).toBe("usage");
+    expect(classifyFailure("Missing arguments for: get")).toBe("usage");
+    expect(classifyFailure("Usage: agent-browser click <selector> [--new-tab]")).toBe("usage");
+    expect(classifyFailure("Invalid read URL: invalid international domain name")).toBe("usage");
+    expect(classifyFailure("Unexpected read argument: [role=main]")).toBe("usage");
+  });
+
+  test("engine failures that asked the page keep their context", () => {
+    expect(classifyFailure("Unknown ref: e99999")).toBe("capturable");
+    expect(classifyFailure("Wait timed out after 1000ms")).toBe("capturable");
+  });
 });
 
 describe("formatFailureContext", () => {
