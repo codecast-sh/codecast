@@ -42,6 +42,7 @@ import { SettingsModal } from "./settings/SettingsModal";
 import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
+import { liveMachineRoster } from "../hooks/useSyncDevices";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow } from "../lib/desktop";
@@ -622,7 +623,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     // project, so a stale focus from elsewhere can't pull a new session out of it.
     // And the focused/current session can be a TEAMMATE's (team inbox), whose
     // checkout no machine of ours has — such a path never seeds a new session.
-    const seedable = (p: string | null | undefined) => pathOnMyMachines(store.machineRoster, p);
+    // Only a LIVE roster may veto a path: the persisted roster paints chips at
+    // boot but a stale copy must not block a freshly cloned checkout.
+    const seedable = (p: string | null | undefined) => pathOnMyMachines(liveMachineRoster(store), p);
     const selected = sessionListActiveId
       ? (store.sessions[sessionListActiveId]
           ?? store.conversations[sessionListActiveId])

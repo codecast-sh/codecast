@@ -3,7 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
+import { useWorkflow, useWorkflowRun } from "../../../../hooks/useSyncWorkflows";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../../../components/AuthGuard";
 import { AppLoader } from "../../../../components/AppLoader";
@@ -87,11 +88,10 @@ function formatDuration(startMs: number, endMs?: number): string {
 }
 
 function RunDetailContent({ runId }: { runId: string }) {
-  const run = useQuery(api.workflow_runs.get, { id: runId }) as WorkflowRun | null | undefined;
-  const workflow = useQuery(
-    api.workflows.webGet,
-    run ? { id: run.workflow_id } : "skip"
-  ) as Workflow | null | undefined;
+  // Store-fed (hooks/useSyncWorkflows): the run and its workflow paint from
+  // the cache; the feeders keep them fresh.
+  const run = useWorkflowRun(runId) as WorkflowRun | null | undefined;
+  const workflow = useWorkflow(run?.workflow_id) as Workflow | null | undefined;
 
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const [gateText, setGateText] = useState("");

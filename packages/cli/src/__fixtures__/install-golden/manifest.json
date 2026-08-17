@@ -2,7 +2,7 @@
   "memory": {
     "config": {
       "memory_enabled": true,
-      "memory_version": "13"
+      "memory_version": "14"
     },
     "stdout": "* Memory — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -29,7 +29,7 @@
   "tasks": {
     "config": {
       "work_enabled": true,
-      "work_version": "7"
+      "work_version": "8"
     },
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -79,8 +79,8 @@
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/thread-state.sh": "c035d5e02cc77aab",
-      ".claude/settings.json": "e6bbe8b54259b3bf"
+      ".claude/hooks/thread-state.sh": "0d0d7d2e00dcdbea",
+      ".claude/settings.json": "926fe51fd0bc9de5"
     }
   },
   "chat": {
@@ -122,7 +122,7 @@
   "orchestration": {
     "config": {
       "orch_enabled": true,
-      "orch_version": "7"
+      "orch_version": "8"
     },
     "stdout": "* Orchestration — updated in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": false,

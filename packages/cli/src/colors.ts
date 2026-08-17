@@ -1,4 +1,10 @@
-const isColorSupported = process.stdout.isTTY !== false && process.env.NO_COLOR === undefined;
+// Colour only when a person is looking at a terminal. A pipe has `isTTY`
+// UNDEFINED (not false), so the test must be `=== true` — the older
+// `!== false` left escape codes on for every agent reading through a Bash
+// tool, and each one had to sed them back out. FORCE_COLOR opts back in
+// (e.g. `cast … | less -R`); NO_COLOR wins over everything.
+const isColorSupported = process.env.NO_COLOR === undefined
+  && (process.stdout.isTTY === true || !!process.env.FORCE_COLOR);
 
 const raw = {
   reset: "\x1b[0m",

@@ -1,3 +1,4 @@
+import { useCallsAvailable } from "../../lib/teamFeatures";
 import { Headphones } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { joinCall } from "../../lib/calls/callManager";
@@ -65,7 +66,7 @@ export function OccupancyChip({
 // the chip when the room is live, a quiet start affordance otherwise. Hidden
 // entirely when calling isn't configured.
 export function SessionHuddleButton({ conversationId }: { conversationId: string }) {
-  const enabled = useInboxStore((st) => !!st.callConfig?.enabled);
+  const enabled = useCallsAvailable();
   const roomKey = `session:${conversationId}`;
   const occupied = useInboxStore((st) => (st.callOccupancy[roomKey]?.length ?? 0) > 0);
   if (!enabled) return null;

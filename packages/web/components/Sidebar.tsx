@@ -1,3 +1,4 @@
+import { useTeamFeature } from "../lib/teamFeatures";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useRef, memo } from "react";
@@ -453,7 +454,11 @@ function PinnedRail({
   const chatChannels = useInboxStore((s) => s.chatChannels);
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
-  if (pins.length === 0) return null;
+  // A pinned channel is chat UI: gone with the feature (the pin itself is
+  // kept, so turning chat back on restores it).
+  const chatOn = useTeamFeature("chat");
+  const visiblePins = chatOn ? pins : pins.filter((p) => p.kind !== "channel");
+  if (visiblePins.length === 0) return null;
 
   // The icon already names the kind (a hash IS the channel marker), so the
   // label is just the name — never "# #team".
@@ -512,7 +517,7 @@ function PinnedRail({
   return (
     <div className="mb-1">
       <RailHeading label="Pinned" isNarrow={false} />
-      {pins.map((pin) => {
+      {visiblePins.map((pin) => {
         const row = resolve(pin);
         return <SectionRow key={row.id} row={row} className="mx-2 rounded" />;
       })}
@@ -529,6 +534,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
+  // Per-team opt-in: no chat row (and no create-channel modal) unless the
+  // active team turned chat on.
+  const chatOn = useTeamFeature("chat");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
@@ -905,14 +913,14 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
           />
-          <ChatNavRow
+          {chatOn && <ChatNavRow
             isActive={!!isChat}
             isNarrow={isNarrow}
             pathname={pathname}
             expanded={viewSectionOverride.chat ?? !!isChat}
             onToggle={() => setViewSectionOverride((v) => ({ ...v, chat: !(v.chat ?? !!isChat) }))}
             onMobileClose={onMobileClose}
-          />
+          />}
         </div>
 
         {/* What you are working on. Projects leads: it is the container the rest
@@ -1235,7 +1243,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       {createModal === "plan" && (
         <CreateDocModal onClose={() => closeCreateModal()} initialType="plan" />
       )}
-      {createModal === "chat" && (
+      {createModal === "chat" && chatOn && (
         <CreateChannelModal
           onClose={() => closeCreateModal()}
           // The stub id is what the rail already shows; the tab path follows the

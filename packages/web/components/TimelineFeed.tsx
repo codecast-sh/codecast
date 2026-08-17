@@ -1,6 +1,7 @@
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
+import { useInboxStore } from "../store/inboxStore";
+import { useCollectionRows } from "../hooks/useCollectionRows";
+import { useCommits, usePullRequests, useSyncCommits, useSyncPullRequests } from "../hooks/useSyncTimeline";
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { ClaudeIcon } from "./BrandIcons";
@@ -380,18 +381,43 @@ function PRCard({ item }: { item: Extract<TimelineItem, { type: "pr" }> }) {
   );
 }
 
+// The session fields the timeline renders; anything else on the row
+// (heartbeats, streaming counters) doesn't wake it.
+const timelineSessionSig = (r: any) =>
+  `${r.title ?? ""}|${r.subtitle ?? ""}|${r.updated_at ?? 0}|${r.message_count ?? 0}|${r.is_active ? 1 : 0}|${r.duration_ms ?? 0}|${r.active_plan?.short_id ?? ""}|${r.author_name ?? ""}`;
+
 interface TimelineFeedProps {
   filter: "my" | "team";
   dateRange?: { start?: number; end?: number };
 }
 
 export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
-  const conversations = useQuery(api.conversations.listConversations, { filter });
-  const commits = useQuery(api.commits.getCommitsForTimeline, {
-    start_time: dateRange?.start,
-    end_time: dateRange?.end,
-  });
-  const prs = useQuery(api.pull_requests.getPRsForTimeline, {});
+  // Local-first: all three lanes render from the store. Sessions are the
+  // inbox's own synced rows (my = mine, team = everything the workspace
+  // holds); commits and PRs are store collections fed by the timeline
+  // queries (hooks/useSyncTimeline). The skeleton shows only while every
+  // lane is cold; a populated cache paints immediately and the feeders
+  // catch up behind it.
+  const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : ""));
+  const sessionWhere = useCallback(
+    (row: any) => !!row?._id && (filter === "team" || String(row.user_id ?? "") === viewerId),
+    [filter, viewerId],
+  );
+  const sessionRows = useCollectionRows<any>("sessions", { where: sessionWhere, sig: timelineSessionSig });
+  const conversations = useMemo(
+    () => ({ conversations: sessionRows.map((r) => ({ ...r, is_own: String(r.user_id ?? "") === viewerId })) }),
+    [sessionRows, viewerId],
+  );
+  const { ready: commitsReady } = useSyncCommits({ start_time: dateRange?.start, end_time: dateRange?.end });
+  const { ready: prsReady } = useSyncPullRequests({});
+  const commitWhere = useCallback(
+    (c: any) => (dateRange?.start ? c.timestamp >= dateRange.start : true) && (dateRange?.end ? c.timestamp <= dateRange.end : true),
+    [dateRange?.start, dateRange?.end],
+  );
+  const commitRows = useCommits(commitWhere);
+  const prRows = usePullRequests();
+  const commits = commitsReady || commitRows.length > 0 ? commitRows : undefined;
+  const prs = prsReady || prRows.length > 0 ? prRows : undefined;
 
   const { timelineItems, sessionTitleMap } = useMemo(() => {
     if (!conversations?.conversations || !commits || !prs)
@@ -457,7 +483,7 @@ export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
     return { timelineItems: items, sessionTitleMap: titleMap };
   }, [conversations, commits, prs]);
 
-  if (conversations === undefined || commits === undefined || prs === undefined) {
+  if (sessionRows.length === 0 && commits === undefined && prs === undefined) {
     return <LoadingSkeleton />;
   }
 

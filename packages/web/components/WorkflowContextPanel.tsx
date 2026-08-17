@@ -1,4 +1,5 @@
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
+import { useWorkflow, useWorkflowRun } from "../hooks/useSyncWorkflows";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
@@ -40,11 +41,10 @@ const NODE_COLOR: Record<string, string> = {
 };
 
 export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"workflow_runs"> }) {
-  const run = useQuery(api.workflow_runs.get, { id: workflowRunId });
-  const workflow = useQuery(
-    api.workflows.webGet,
-    run?.workflow_id ? { id: run.workflow_id } : "skip"
-  );
+  // Store-fed (hooks/useSyncWorkflows): paints from cached rows on the first
+  // frame instead of popping in a round-trip late.
+  const run = useWorkflowRun(workflowRunId);
+  const workflow = useWorkflow(run?.workflow_id);
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const [expanded, setExpanded] = useState(true);
   const [responding, setResponding] = useState(false);

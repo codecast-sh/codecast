@@ -3,6 +3,7 @@
 // readers below.
 import { useCallback, useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "../store/inboxStore";
 import { useSyncCollection, keyRowsBy } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 
@@ -60,4 +61,21 @@ export function useTriggerRuns(taskId: string | null | undefined): any[] | undef
   if (!taskId) return undefined;
   if (runs.length > 0) return runs;
   return ready ? runs : undefined;
+}
+
+/**
+ * One-shot fetch of a trigger's runs for a click that needs the newest run
+ * NOW (deep-linking to its trigger message). Serves the store's cached rows
+ * when it has any; otherwise queries and lands the page in the store so the
+ * next click (and the run rail) read it for free.
+ */
+export async function fetchTriggerRuns(convex: { query: (q: any, args: any) => Promise<any> }, taskId: string): Promise<any[]> {
+  const cached = (Object.values(useInboxStore.getState().agentTaskRuns) as any[])
+    .filter((r) => r?.task_id === taskId)
+    .sort(newestFirst);
+  if (cached.length > 0) return cached;
+  const rows = await convex.query(api.agentTasks.webListRuns, { task_id: taskId });
+  const keyed = keyRowsBy(rows as any[], "run_key").map((r) => ({ ...r, task_id: taskId }));
+  useInboxStore.getState().syncTable("agentTaskRuns", keyed);
+  return keyed.sort(newestFirst);
 }

@@ -118,6 +118,8 @@ import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./br
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { findEntityInStore } from "../lib/liveEntities";
+import { useWorkflowRun, useWorkflows } from "../hooks/useSyncWorkflows";
+import { usePendingMessageStatus, usePendingPermissions } from "../hooks/useSyncPendingPermissions";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
@@ -1034,7 +1036,10 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   const currentConvContext = useInboxStore((s) => s.currentConversation);
   // The context fallback can point at a TEAMMATE's session (team inbox) whose
   // checkout no machine of ours has — never present that as the current project.
-  const ctxPath = [currentConvContext?.projectPath, currentConvContext?.gitRoot].find((p) => pathOnMyMachines(devices, p));
+  // Gate on the LIVE roster only: a persisted roster draws the chips at boot,
+  // but a stale copy must not veto a freshly cloned checkout.
+  const rosterLive = useInboxStore((s) => s.machineRosterLive);
+  const ctxPath = [currentConvContext?.projectPath, currentConvContext?.gitRoot].find((p) => pathOnMyMachines(rosterLive ? devices : [], p));
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || ctxPath;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
 
@@ -7190,9 +7195,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   // per-message banner used to fire a false "hasn't reached the agent" + kill & restart
   // while the message had, in fact, arrived. Only query while this message is optimistic;
   // an optimistic row only exists for the local sender.
-  const conversationPending = useQuery(
-    api.pendingMessages.getConversationPendingMessage,
-    isPending && conversationId && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip",
+  const conversationPending = usePendingMessageStatus(
+    conversationId && isConvexId(conversationId) ? conversationId : null,
+    !!isPending,
   );
   const messageReachedSession = conversationPending?.status === "injected" || conversationPending?.status === "delivered";
   const bannerState = pendingBannerState(agentStatus, {
@@ -7772,11 +7777,11 @@ type CondensedReceipt = { entries: ReceiptEntry[]; expanded: boolean; onToggle: 
 // why the root is a div, not a button (thumbnails are interactive, and
 // buttons can't nest).
 //
-// Open, the chip becomes the HEADER of a bordered group and the real tool
-// blocks nest under it, in this same row: a disclosure, not a second copy.
-// The header switches to the counting phrase (the blocks below carry each
-// tool's subject, so restating them would read as duplication) and shows a
-// hide hint; thumbnails step aside since the blocks show their images inline.
+// Open, the chip becomes the HEADER of a group marked by one left rule, and
+// the real tool blocks nest under it, in this same row: a disclosure, not a
+// second copy. The header switches to the counting phrase (the blocks below
+// carry each tool's subject, so restating them would read as duplication);
+// thumbnails step aside since the blocks show their images inline.
 // The disclosure triangle leads in both states so the open/closed change is
 // unmistakable, and the header keeps its position and size across the toggle
 // so the click target never moves under the pointer.
@@ -7821,7 +7826,7 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
       className={`flex items-center flex-wrap gap-x-2 gap-y-1 max-w-full cursor-pointer pl-2 pr-2.5 py-0.5 text-[11px] transition-colors ${
         expanded
-          ? "w-full text-sol-text-secondary bg-sol-bg-alt/70 hover:bg-sol-bg-alt border-b border-sol-border/50"
+          ? "w-fit rounded-md text-sol-text-secondary hover:bg-sol-bg-alt/70"
           : "w-fit rounded-md border border-dashed border-sol-border/60 bg-sol-bg-alt/40 text-sol-text-dim hover:border-sol-cyan/40 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70"
       }`}
       title={expanded ? "Hide tool activity" : "Show tool activity"}
@@ -7830,14 +7835,13 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       <Wrench className="w-3 h-3 shrink-0 opacity-70" />
       <span className="truncate font-medium tracking-tight">{expanded ? counted : summary}</span>
       {!expanded && screenshots.map(({ id, image }) => <CondensedImageThumb key={id} image={image} />)}
-      {expanded && <span className="ml-auto pl-3 shrink-0 text-[10px] uppercase tracking-wider text-sol-text-dim/80">hide</span>}
     </div>
   );
   if (!expanded) return <div className="not-prose mt-1 flex">{header}</div>;
   return (
-    <div className="not-prose mt-1 rounded-md border border-sol-border/70 border-l-2 border-l-sol-cyan/50 bg-sol-bg-alt/20 overflow-hidden">
+    <div className="not-prose mt-1 border-l-2 border-sol-cyan/50 pl-2">
       {header}
-      <div className="px-2 pt-0.5 pb-1.5">
+      <div className="pt-0.5 pb-1">
         {entries.map((entry) => entry.tools.map((tc) => renderTool(tc, entry)))}
       </div>
     </div>
@@ -8536,7 +8540,7 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
 // Inline conversation card for a dynamic-workflow run. Reads live run state by id
 // (posted once as an anchor message), so it updates as the run progresses.
 function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
-  const run = useQuery(api.workflow_runs.get, runId ? { id: runId as any } : "skip");
+  const run = useWorkflowRun(runId);
   const status = run?.status as string | undefined;
   const sm = wfStatusMeta(status);
   return (
@@ -9556,10 +9560,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   );
 
   const canQueryServer = isConvexId(conversationId);
-  const existingPending = useQuery(
-    api.pendingMessages.getConversationPendingMessage,
-    canQueryServer ? { conversation_id: conversationId as Id<"conversations"> } : "skip"
-  );
+  const existingPending = usePendingMessageStatus(canQueryServer ? conversationId : null);
 
   // The send is fire-and-forget through the store sync, so we no longer get the
   // message id back. Recover precise per-message status tracking from the
@@ -11947,9 +11948,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }));
   const isSessionLive = !!managedSession?.is_connected;
 
-  const workflowRun = useQuery(
-    api.workflow_runs.get,
-    deferredQueriesEnabled && conversation?.workflow_run_id ? { id: conversation.workflow_run_id as any } : "skip"
+  // Store-fed (hooks/useSyncWorkflows): the gate banner paints from the cached
+  // run on the first frame; the feeder keeps it live.
+  const workflowRun = useWorkflowRun(
+    deferredQueriesEnabled && conversation?.workflow_run_id ? conversation.workflow_run_id : null,
   ) as { _id: string; status: string; gate_prompt?: string; gate_choices?: Array<{ key: string; label: string; target: string }>; gate_response?: string | null } | null | undefined;
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const [gateResponding, setGateResponding] = useState(false);
@@ -11962,7 +11964,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const [showWorkflow, setShowWorkflow] = useState(false);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
-  const workflows = useQuery(api.workflows.webList);
+  const { workflows } = useWorkflows();
   const createWorkflowRun = useMutation(api.workflow_runs.create);
   const handleWorkflowLaunch = useCallback(async (goal: string) => {
     if (!selectedWorkflowId) return;
@@ -12241,9 +12243,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [messages]);
 
-  const pendingPermissionsRaw = useQuery(
-    api.permissions.getPendingPermissions,
-    deferredQueriesEnabled && conversation?._id && isConvexId(conversation._id) ? { conversation_id: conversation._id } : "skip"
+  // Store-fed (hooks/useSyncPendingPermissions): the permission stack paints
+  // from cached rows on the first frame; a resolved request leaves the store
+  // (and disk) on the next push.
+  const pendingPermissionsRaw = usePendingPermissions(
+    conversation?._id && isConvexId(conversation._id) ? conversation._id : null,
+    deferredQueriesEnabled,
   );
   const pendingPermissions = pendingPermissionsRaw?.filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name));
   const hasAskUserQuestion = pendingPermissionsRaw?.some((p: any) => p.tool_name === "AskUserQuestion") ?? false;
@@ -12515,10 +12520,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // optimistic queue above only exists in the browser that hit Send; this surfaces a queued
   // message to EVERY viewer, and to CLI-originated `cast send`s that no browser optimistically
   // rendered, so it shows as pending immediately (before the JSONL echo) instead of nothing.
-  const serverPending = useQuery(
-    api.pendingMessages.getConversationPendingMessage,
-    isConvexId(pendingConvId) ? { conversation_id: pendingConvId as Id<"conversations"> } : "skip"
-  );
+  const serverPending = usePendingMessageStatus(isConvexId(pendingConvId) ? pendingConvId : null);
   // Slack-style "New" divider anchor: "seen up to" advances only when you leave
   // a session, so it holds steady for the whole visit. Everything strictly after
   // it arrived while you were away.

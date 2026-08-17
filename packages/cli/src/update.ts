@@ -12,9 +12,9 @@ const VERSION = pkg.version;
 // older CLI compares its own constant against the config key, so a downgrade
 // still finds the value it expects instead of rewriting on every run. Bump one
 // when you want the recorded version to say something meaningful to a human.
-const MEMORY_VERSION = "13"; // bumped: cast calls / cast call (huddle transcripts)
+const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
 const TASK_VERSION = "5"; // bumped: triggers have short ids (tr-42) + shared "Referencing objects" section
-const WORK_VERSION = "7"; // bumped: per-type "Referencing sessions" replaced by the shared "Referencing objects" section
+const WORK_VERSION = "8"; // bumped: "Reading tasks" — server-side filters, --json on every read, show takes several ids and lists linked sessions
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "7"; // bumped: target on evidence (cast diff/read before attributing); teammate sessions live on other machines

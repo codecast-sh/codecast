@@ -42,16 +42,15 @@ import {
 type CallKitApi = typeof import("expo-callkit-telecom");
 
 let ck: CallKitApi | null | undefined;
+let ckLoadError: string | null = null;
 function getCallKit(): CallKitApi | null {
   if (ck !== undefined) return ck ?? null;
   try {
-    const { TurboModuleRegistry, NativeModules } = require("react-native");
-    const has = !!(TurboModuleRegistry?.get?.("ExpoCallKitTelecom") || NativeModules?.ExpoCallKitTelecom);
     // Expo modules register under ExpoModulesCore, not TurboModuleRegistry —
     // requiring is the reliable probe; it throws on a binary without the pod.
     ck = require("expo-callkit-telecom");
-    void has;
-  } catch {
+  } catch (e: any) {
+    ckLoadError = String(e?.message ?? e).slice(0, 300);
     ck = null;
   }
   return ck ?? null;
@@ -223,6 +222,7 @@ export function republishVoipToken(): void {
 if (__DEV__) {
   (global as any).__callKit = {
     available: callKitAvailable,
+    loadError: () => ckLoadError,
     active: () => active,
     // Simulate a VoIP-push-reported ring without APNs (the simulator has no
     // PushKit): reports straight to CallKit, same code path from there on.

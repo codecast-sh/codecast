@@ -21,6 +21,13 @@ export const THREAD_STATE_MAX_CHARS = 1200;
 export const THREAD_STATE_AGING_MSGS = 60;
 export const THREAD_STATE_STALE_MSGS = 200;
 
+/** Messages after which the agent's own reminder hook asks it to refresh the
+ * state (once per stretch — `cast state` re-arms it). Sits well under the
+ * aging step so a maintained state never reaches "doubtful" in the UI. The
+ * hook counts user + assistant entries in the local transcript, the same unit
+ * the UI's "N messages since" is measured in. */
+export const THREAD_STATE_NUDGE_MSGS = 20;
+
 /** Time is the weaker signal — a thread parked overnight on a CI run has not
  * changed, so the clock only takes over when the thread is quiet for long. */
 export const THREAD_STATE_AGING_MS = 12 * 60 * 60 * 1000;
