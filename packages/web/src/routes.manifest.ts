@@ -268,7 +268,7 @@ export const ROUTES: RouteEntry[] = [
   // `windows` is NOT in DashboardShell in App.tsx, yet TabContent CAN render it in
   // place — so it carries a `tab` here even though its layout is "standalone".
   { path: "explore", component: cast(Explore), layout: "standalone" },
-  { path: "timeline", component: cast(Timeline), layout: "standalone" },
+  { path: "timeline", component: cast(Timeline), layout: "standalone", tab: "/timeline" },
   { path: "windows", component: cast(Windows), layout: "standalone", tab: "/windows", fullWidth: true },
   { path: "orchestration", component: cast(Orchestration), layout: "standalone" },
   { path: "roadmap", component: cast(Roadmap), layout: "standalone" },

@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { toast } from "sonner";
 import {
   AGENT_MODEL_CONFIG,
   modelAgentKey,
@@ -23,12 +22,8 @@ import {
 } from "./ui/dropdown-menu";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { formatModel } from "../lib/conversationProcessor";
-import {
-  modelOptionKey,
-  effortGlyph,
-  canControlModel,
-  commitModelChange as commitModelChangeCore,
-} from "../lib/modelSwitch";
+import { modelOptionKey, effortGlyph, canControlModel } from "../lib/modelSwitch";
+import { commitModelChange, notifyModelToast as notifyToast } from "../lib/modelSwitchWeb";
 import { useModelCommandWatch } from "../hooks/useModelCommandWatch";
 
 // First-class model/effort control for the web. The commit rails and the
@@ -37,21 +32,6 @@ import { useModelCommandWatch } from "../hooks/useModelCommandWatch";
 // owns the web surfaces: the conversation-header badge (HeaderModelControl,
 // live sessions), the new-session launch pill (LaunchModelPill, blank
 // sessions), and the shared dropdown menu the Cmd+K palette also drives.
-
-export { modelOptionKey, effortGlyph, canControlModel };
-
-const notifyToast = (message: string) => toast.error(message);
-
-/** Web commit path: shared rails + sonner toasts for errors. */
-export function commitModelChange(opts: {
-  conversationId: string;
-  agentType: string | undefined;
-  current: { model?: string | null; effort?: string | null };
-  sel: { model?: string; effort?: string };
-  blank: boolean;
-}): Promise<void> {
-  return commitModelChangeCore({ ...opts, notify: notifyToast });
-}
 
 /**
  * Mounted by the conversation header: supervises pending model commands for

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cleanUserMessage } from "../GlobalSessionPanel";
+import { cleanUserMessage } from "../sessionMessage";
 
 describe("cleanUserMessage", () => {
   it("hides the [Codecast import] truncation banner from the inbox preview", () => {

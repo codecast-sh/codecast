@@ -34,6 +34,7 @@ const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"))
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
+const Timeline = lazy(() => import("@/app/timeline/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 const Routines = lazy(() => import("@/app/workflows/page"));
@@ -92,6 +93,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
   { pattern: /^\/feed$/, paramNames: [], component: Feed },
   { pattern: /^\/crosstalk$/, paramNames: [], component: Crosstalk },
+  { pattern: /^\/timeline$/, paramNames: [], component: Timeline },
   { pattern: /^\/chat$/, paramNames: [], component: Chat },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
   { pattern: /^\/routines$/, paramNames: [], component: Routines },

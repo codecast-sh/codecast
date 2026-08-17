@@ -44,7 +44,7 @@ import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
 import { undoableArchiveDoc, undoableHideSession, undoableDeferSession } from "../../store/undoActions";
 import { copyToClipboard, shareOrigin, cn } from "../../lib/utils";
 import { getLabelColor } from "../../lib/labelColors";
-import { canControlModel } from "../ModelEffortPicker";
+import { canControlModel } from "../../lib/modelSwitch";
 
 // Menu CONTENT per object type — the items every right-click surface renders
 // inside a <ContextMenu>. Verbs call the same store actions the command

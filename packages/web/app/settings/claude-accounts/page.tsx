@@ -22,7 +22,8 @@ import { Button } from "../../../components/ui/button";
 import { Switch } from "../../../components/ui/switch";
 import { toast } from "sonner";
 import { Check, Copy, KeyRound, TimerReset, Trash2, Zap } from "lucide-react";
-import { AccountUsageBars, formatAgo } from "../../../components/AccountUsageMeter";
+import { AccountUsageBars } from "../../../components/AccountUsageMeter";
+import { formatAgo } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
 

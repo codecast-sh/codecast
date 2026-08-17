@@ -26,7 +26,7 @@ import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { TriggerContextPanel } from "../../components/TriggerContextPanel";
 import { toast } from "sonner";
 import { animatedHideSession } from "../../store/undoActions";
-import { cleanUserMessage } from "../../components/GlobalSessionPanel";
+import { cleanUserMessage } from "../../components/sessionMessage";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 
 export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetTimestamp, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void }) {
