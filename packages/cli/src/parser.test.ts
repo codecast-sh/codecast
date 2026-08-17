@@ -1075,3 +1075,32 @@ describe("extractTeamInfo - agent-team teammate stamps", () => {
     expect(extractTeamInfo(content)).toEqual({ teamName: "session-x", agentName: "convex-audit" });
   });
 });
+
+describe("parser - multi-block tool results", () => {
+  test("keeps one line per step for a browser_batch result and lifts its screenshot", () => {
+    const line = JSON.stringify({
+      type: "user",
+      uuid: "u1",
+      timestamp: "2026-08-17T17:21:26.620Z",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "toolu_batch",
+          content: [
+            { type: "text", text: "[computer:left_click] Clicked at (660, 178)" },
+            { type: "text", text: "[computer:wait] Waited for 3 seconds" },
+            { type: "text", text: "[computer:screenshot] Successfully captured screenshot (1568x762, jpeg) - ID: ss_1" },
+            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "/9j/AAAA" } },
+            { type: "text", text: "\n\nTab Context:\n- Executed on tabId: 1" },
+          ],
+        }],
+      },
+    });
+    const [msg] = parseSessionFile(line);
+    expect(msg.toolResults?.[0].content).toBe(
+      "[computer:left_click] Clicked at (660, 178)\n[computer:wait] Waited for 3 seconds\n[computer:screenshot] Successfully captured screenshot (1568x762, jpeg) - ID: ss_1\n\nTab Context:\n- Executed on tabId: 1",
+    );
+    expect(msg.images?.[0]).toMatchObject({ mediaType: "image/jpeg", toolUseId: "toolu_batch" });
+  });
+});

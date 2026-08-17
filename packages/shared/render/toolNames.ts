@@ -19,6 +19,8 @@
 export const mcpToolNames: Record<string, string> = {
   "mcp__node_repl__js": "Browser",
   "mcp__claude-in-chrome__computer": "Browser",
+  // A batch renders as its steps; the wrapper's own name is just "Browser".
+  "mcp__claude-in-chrome__browser_batch": "Browser",
   "mcp__claude-in-chrome__navigate": "Navigate",
   "mcp__claude-in-chrome__read_page": "Read Page",
   "mcp__claude-in-chrome__find": "Find",

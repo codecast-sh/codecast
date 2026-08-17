@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -491,5 +491,71 @@ describe("buildBrowserRowMap", () => {
   test("an open row with no output yet links to its destination argument", () => {
     const map = buildBrowserRowMap([row("t1", "open", "b.dev/path", "")]);
     expect(map).toEqual({ t1: { url: "https://b.dev/path" } });
+  });
+});
+
+describe("cast browser do steps", () => {
+  test("splits quoted and bare steps and drops the do flags", () => {
+    expect(extractBrowserDoSteps('"open example.com" "find Sign in" click --keep-going --tab 4A2C shot')).toEqual([
+      { verb: "open", args: "example.com" },
+      { verb: "find", args: "Sign in" },
+      { verb: "click", args: "" },
+      { verb: "shot", args: "" },
+    ]);
+  });
+
+  test("reads one step per heredoc line", () => {
+    const args = "- <<'EOF'\nopen https://example.com\nfind \"Sign in\"\nclick\nEOF";
+    expect(extractBrowserDoSteps(args)).toEqual([
+      { verb: "open", args: "https://example.com" },
+      { verb: "find", args: '"Sign in"' },
+      { verb: "click", args: "" },
+    ]);
+  });
+
+  test("attributes output lines to their step and reads the pass/fail glyph", () => {
+    const out = [
+      "* open example.com",
+      "    Example Domain — https://example.com/",
+      "* find Sign in",
+      "    #e12 button \"Sign in\"",
+      "x click",
+      "    element is covered by another element",
+      "",
+      "2/3 steps in 1.4s",
+    ].join("\n");
+    expect(splitBrowserDoOutput(out, 4)).toEqual([
+      { output: "Example Domain — https://example.com/", ok: true },
+      { output: '#e12 button "Sign in"', ok: true },
+      { output: "element is covered by another element", ok: false },
+      { output: "" },
+    ]);
+  });
+
+  test("reads the engine format: › headers, glyph verdict lines, footer dropped", () => {
+    const out = [
+      "› open https://example.com",
+      "✓ Example Domain",
+      "  https://example.com/",
+      "› find More information",
+      "x no element matching \"More information\" (2 refs on the page); closest: - link \"Learn more\" [ref=e2]",
+      "  https://example.com/",
+      "  tab 023260EE",
+      "  4 steps in 23.1s, 1 failed",
+    ].join("\n");
+    expect(splitBrowserDoOutput(out, 4)).toEqual([
+      { output: "Example Domain\nhttps://example.com/", ok: true },
+      { output: 'no element matching "More information" (2 refs on the page); closest: - link "Learn more" [ref=e2]', ok: false },
+      { output: "" },
+      { output: "" },
+    ]);
+  });
+
+  test("understands the colour glyphs and ANSI from a TTY run", () => {
+    const out = "\x1b[32m●\x1b[0m \x1b[1mclick\x1b[0m\n    clicked\n\x1b[31m○\x1b[0m \x1b[1mshot\x1b[0m\n    no page\n";
+    expect(splitBrowserDoOutput(out, 2)).toEqual([
+      { output: "clicked", ok: true },
+      { output: "no page", ok: false },
+    ]);
   });
 });

@@ -13,10 +13,17 @@ export interface ToolCallLike {
   input: string;
 }
 
-export interface CodexExecAction extends ToolCallLike {
-  /** The source expression passed to this inner tool, retained for inspection. */
-  source: string;
+// One real tool invocation recovered from a wrapper tool call. Three wrappers
+// exist: Codex's `exec` program (`tools.<name>(...)` expressions), the Chrome
+// extension's `browser_batch` (`{actions:[{name,input}]}`), and — parsed by the
+// web's castCommand.ts into the same step shape — the CLI's `cast browser do`.
+export interface NestedAction extends ToolCallLike {
+  /** For Codex `exec`: the source expression passed to this inner tool. */
+  source?: string;
 }
+
+/** @deprecated name kept for readers of old call sites; the type is NestedAction. */
+export type CodexExecAction = NestedAction;
 
 function skipQuoted(source: string, start: number): number {
   const quote = source[start];
@@ -158,11 +165,11 @@ function codexExecSource(tc: ToolCallLike): string {
  * extracts actual `tools.<name>(...)` expressions without evaluating agent
  * code, so historical Codex sessions can use the same renderer semantics.
  */
-export function extractCodexExecActions(tc: ToolCallLike): CodexExecAction[] {
+export function extractCodexExecActions(tc: ToolCallLike): NestedAction[] {
   const source = codexExecSource(tc);
   if (!source) return [];
 
-  const actions: CodexExecAction[] = [];
+  const actions: NestedAction[] = [];
   for (let i = 0; i < source.length;) {
     const ch = source[i];
     if (ch === "'" || ch === '"' || ch === "`") {
@@ -199,7 +206,45 @@ export function extractCodexExecActions(tc: ToolCallLike): CodexExecAction[] {
   return actions;
 }
 
-export function summarizeCodexExecActions(actions: readonly CodexExecAction[]): string {
+export const BROWSER_BATCH_TOOL = "mcp__claude-in-chrome__browser_batch";
+const BROWSER_MCP_PREFIX = "mcp__claude-in-chrome__";
+
+/**
+ * The inner tool calls of a `browser_batch`. Each item is `{name, input}` with
+ * the bare extension tool name (`computer`, `navigate`, `find`…); re-prefixing
+ * it makes every existing label / summary / visual rule for the standalone
+ * tool apply to the batched step unchanged.
+ */
+export function extractBrowserBatchActions(tc: ToolCallLike): NestedAction[] {
+  if (tc.name !== BROWSER_BATCH_TOOL) return [];
+  let parsed: any;
+  try {
+    parsed = JSON.parse(tc.input);
+  } catch {
+    return [];
+  }
+  const actions = Array.isArray(parsed?.actions) ? parsed.actions : [];
+  return actions
+    .filter((a: any) => a && typeof a.name === "string")
+    .map((a: any) => ({
+      name: a.name.startsWith("mcp__") ? a.name : `${BROWSER_MCP_PREFIX}${a.name}`,
+      input: JSON.stringify(a.input && typeof a.input === "object" ? a.input : {}),
+    }));
+}
+
+/**
+ * Every real invocation wrapped by this tool call, or [] when it is not a
+ * wrapper. This is the ONE entry point renderers use to decide "is this a
+ * batch, and of what" — the collapsed-row name, the summary, the tool-group
+ * counts and the expanded step list all key off it.
+ */
+export function extractNestedActions(tc: ToolCallLike): NestedAction[] {
+  if (tc.name === "exec") return extractCodexExecActions(tc);
+  if (tc.name === BROWSER_BATCH_TOOL) return extractBrowserBatchActions(tc);
+  return [];
+}
+
+export function summarizeNestedActions(actions: readonly NestedAction[]): string {
   if (actions.length === 0) return "";
   if (actions.length === 1) {
     const action = actions[0];
@@ -211,11 +256,86 @@ export function summarizeCodexExecActions(actions: readonly CodexExecAction[]): 
     const label = formatToolName(action.name);
     counts.set(label, (counts.get(label) ?? 0) + 1);
   }
+  // A batch of one tool kind (five Browser steps), or of browser tools only
+  // (Navigate · Wait · Screenshot), says nothing through its labels; the steps
+  // themselves are the summary. Mixed kinds keep the counts.
+  const browserOnly = actions.every(a => a.name.startsWith(BROWSER_MCP_PREFIX));
+  if (counts.size === 1 || browserOnly) {
+    const steps = actions.map(a => {
+      const label = formatToolName(a.name);
+      const summary = toolSummary(a);
+      if (!summary) return label;
+      return counts.size === 1 || label === "Browser" ? summary : `${label} ${summary}`;
+    });
+    return truncateStr(`${actions.length} steps · ${steps.join(" · ")}`, 100);
+  }
   const groups = [...counts.entries()]
     .slice(0, 3)
     .map(([label, count]) => count === 1 ? label : `${label} ×${count}`);
   if (counts.size > 3) groups.push(`+${counts.size - 3} more`);
   return `${actions.length} actions · ${groups.join(" · ")}`;
+}
+
+/** @deprecated use summarizeNestedActions. */
+export const summarizeCodexExecActions = summarizeNestedActions;
+
+// The outcome of one step of a batch, aligned by index with its actions.
+export interface NestedStepOutcome {
+  /** What the step reported ("Clicked at (660, 178)"), without the step tag. */
+  output: string;
+  /** false = this step failed; undefined = it never ran (a step before it failed). */
+  ok?: boolean;
+}
+
+// The extension reports a batch as one text block per step, each tagged
+// "[tool]" or "[tool:action]" (older builds glued them into one line, so the
+// tag — not a newline — is the boundary), then on failure a line
+//   actions[i] (name) failed: <reason> (k completed, r remaining)
+// after which nothing else ran. A screenshot step's image is not in the text;
+// it rides on the message as an image keyed by the tool call id.
+const BATCH_STEP_TAG = /\[[a-z][\w-]*(?::[a-z][\w-]*)?\]\s?/gi;
+const BATCH_FAILURE = /^\s*actions\[(\d+)\]\s+\([^)]*\)\s+failed:\s*([\s\S]*?)(?:\s*\(\d+ completed, \d+ remaining\))?\s*$/i;
+
+export function splitBrowserBatchResult(content: string, actionCount: number): NestedStepOutcome[] {
+  const text = content.replace(/\n?\n?Tab Context:[\s\S]*$/, "").trim();
+  const outcomes: NestedStepOutcome[] = Array.from({ length: actionCount }, () => ({ output: "" }));
+  if (!text) return outcomes;
+
+  // Peel a trailing failure line off first so its "actions[i]" index binds the
+  // right step even when the tagged segments before it are glued together.
+  let body = text;
+  let failure: { index: number; reason: string } | null = null;
+  const lastLineAt = text.lastIndexOf("\n");
+  const lastLine = text.slice(lastLineAt + 1);
+  const failMatch = BATCH_FAILURE.exec(lastLine) ?? (lastLineAt < 0 ? BATCH_FAILURE.exec(text) : null);
+  if (failMatch) {
+    failure = { index: Number(failMatch[1]), reason: failMatch[2].trim() };
+    body = lastLineAt < 0 ? "" : text.slice(0, lastLineAt);
+  }
+
+  const tags = [...body.matchAll(BATCH_STEP_TAG)];
+  let ran = 0;
+  if (tags.length > 0) {
+    tags.forEach((m, i) => {
+      const start = (m.index ?? 0) + m[0].length;
+      const end = i + 1 < tags.length ? (tags[i + 1].index ?? body.length) : body.length;
+      if (i < actionCount) outcomes[i] = { output: body.slice(start, end).trim(), ok: true };
+    });
+    ran = Math.min(tags.length, actionCount);
+  } else if (body.trim() && actionCount > 0) {
+    // Untagged text: attribute it to the last step that ran.
+    const last = failure ? Math.max(0, Math.min(failure.index, actionCount) - 1) : actionCount - 1;
+    outcomes[last] = { output: body.trim(), ok: true };
+    ran = last + 1;
+  }
+  if (failure) {
+    if (failure.index < actionCount) outcomes[failure.index] = { output: failure.reason, ok: false };
+    // Everything after the failure never ran; everything before it did.
+    for (let i = 0; i < Math.min(failure.index, actionCount); i++) if (outcomes[i].ok === undefined) outcomes[i].ok = true;
+  } else if (ran > 0 && ran === actionCount) {
+    for (const o of outcomes) if (o.ok === undefined) o.ok = true;
+  }
+  return outcomes;
 }
 
 // A `Write` whose target lives under `.claude/plans/` is a plan write — both
@@ -293,8 +413,8 @@ export function toolSummary(tc: ToolCallLike): string {
     return "";
   }
 
-  if (tc.name === "exec") {
-    return summarizeCodexExecActions(extractCodexExecActions(tc));
+  if (tc.name === "exec" || tc.name === BROWSER_BATCH_TOOL) {
+    return summarizeNestedActions(extractNestedActions(tc));
   }
 
   // File-based tools. opencode/pi lower-case their names (`read`/`edit`/`write`)
