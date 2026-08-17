@@ -21,9 +21,10 @@ import { AppLoader } from "../../../components/AppLoader";
 import { Button } from "../../../components/ui/button";
 import { Switch } from "../../../components/ui/switch";
 import { toast } from "sonner";
-import { Check, Copy, KeyRound, Trash2, Zap } from "lucide-react";
+import { Check, Copy, KeyRound, TimerReset, Trash2, Zap } from "lucide-react";
 import { AccountUsageBars, formatAgo } from "../../../components/AccountUsageMeter";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
+import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
 
 type DeviceAccounts = {
   device_id: string;
@@ -34,6 +35,8 @@ type DeviceAccounts = {
   active_email?: string;
   profiles: Array<{ name: string; email?: string; tier?: string; subscription?: string; usage?: CcUsage }>;
   auto_switch: boolean;
+  /** Absent on servers that predate the field — treated as on. */
+  auto_continue?: boolean;
   auto_switch_state?: { last_action_at?: number; last_action?: string; exhausted_at?: number };
 };
 
@@ -114,27 +117,13 @@ function SaveCurrentForm({ device, suggestedName }: { device: DeviceAccounts; su
 }
 
 function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
-  const setAutoSwitch = useMutation(api.accountSwitch.setAutoSwitchAccounts);
   const now = useCoarseNow(30_000);
-  const [pending, setPending] = useState<boolean | null>(null);
-
-  const enabled = pending ?? device.auto_switch;
+  const { autoSwitch, autoContinue } = useAccountRecoveryToggles(device);
+  const enabled = autoSwitch.on;
   const state = device.auto_switch_state;
   // Time-aware: the stamp is only cleared by a re-check that may never run, so
   // past the session window it needs a still-pegged account to stand on.
   const exhausted = isExhaustionCurrent(state?.exhausted_at, device.profiles, now);
-
-  const handleToggle = async (next: boolean) => {
-    setPending(next);
-    try {
-      await setAutoSwitch({ device_id: device.device_id, enabled: next });
-      toast.success(next ? "Auto-switch on" : "Auto-switch off");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Toggle failed");
-    } finally {
-      setPending(null);
-    }
-  };
 
   return (
     <div
@@ -152,14 +141,32 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
             everything is unblocked or every account is spent. Subagent workers are left out.
           </p>
         </div>
-        <Switch checked={enabled} onCheckedChange={handleToggle} disabled={pending !== null} />
+        <Switch checked={enabled} onCheckedChange={autoSwitch.set} disabled={autoSwitch.pending} />
+      </div>
+      <div className="mt-3 flex items-center gap-2.5 border-t border-sol-border/40 pt-3">
+        <TimerReset
+          className={`h-4 w-4 shrink-0 ${autoContinue.on ? "text-sol-cyan" : "text-sol-text-dim"}`}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text">Resume at window reset</div>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-sol-text-dim">
+            Sessions parked on this account&apos;s limit in the last few hours get a &quot;continue&quot;
+            on their own once the window resets — no account change. Off means they stay parked
+            until you continue them.
+          </p>
+        </div>
+        <Switch
+          checked={autoContinue.on}
+          onCheckedChange={autoContinue.set}
+          disabled={autoContinue.pending}
+        />
       </div>
       {enabled && exhausted && (
         <div className="mt-2 rounded bg-sol-red/10 px-2 py-1 text-[11px] text-sol-red">
           All accounts are at their limits — auto-switch will retry at the next window reset.
         </div>
       )}
-      {enabled && !exhausted && state?.last_action && state.last_action_at && (
+      {(enabled || autoContinue.on) && !exhausted && state?.last_action && state.last_action_at && (
         <div className="mt-2 text-[11px] text-sol-text-dim">
           Last action: {state.last_action.replace("switch:", "switched to ")}{" "}
           {formatAgo(now - state.last_action_at)}.

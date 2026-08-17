@@ -395,6 +395,78 @@ describe("decideAutoSwitch", () => {
     expect(d).toEqual({ action: "switch", profile: "b" });
   });
 
+  test("a settled probe showing headroom proves the window rolled even after the snapshot re-probed to 0%", () => {
+    // After a reset the usage endpoint reports the session window as
+    // {percent: 0} with NO resets_at, so the rolled-since-park proof is gone
+    // the moment the daemon's 5-minute probe refreshes the snapshot. The
+    // probe itself is then the evidence — but only once it post-dates the
+    // park by the settle margin (a probe seconds after the park can still be
+    // mid-burn and read 97%).
+    const rolledSnapshot = (fetchedAt: number): CcUsage => ({
+      fetched_at: fetchedAt,
+      session: { percent: 0 },
+      weekly: { percent: 40, resets_at: now + 86_400_000 },
+    });
+    const at = (fetchedAt: number) =>
+      decideAutoSwitch({
+        now,
+        parkedAt,
+        activeEmail: "a@x.com",
+        profiles: [{ name: "a", email: "a@x.com", usage: rolledSnapshot(fetchedAt) }],
+        attempts: [],
+        allowSwitch: false,
+      });
+    expect(at(parkedAt - 60_000).action).toBe("exhausted");
+    expect(at(parkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS - 1_000).action).toBe("exhausted");
+    expect(at(parkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS + 1_000)).toEqual({ action: "continue" });
+    // A settled probe that still shows a pegged window is not headroom.
+    const stillPegged = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        {
+          name: "a",
+          email: "a@x.com",
+          usage: { ...mkUsage(100), fetched_at: parkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS + 1_000 },
+        },
+      ],
+      attempts: [],
+      allowSwitch: false,
+    });
+    expect(stillPegged.action).toBe("exhausted");
+  });
+
+  test("allowSwitch:false never switches — it waits on the active account's own resets", () => {
+    const resetSoon = now + 30 * 60_000;
+    const input = {
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        { name: "a", email: "a@x.com", usage: mkUsage(100, { sessionResetAt: resetSoon }) },
+        { name: "b", email: "b@x.com", usage: mkUsage(10, { sessionResetAt: now + 10 * 60_000 }) },
+      ],
+      attempts: [],
+    };
+    // Same fleet, switching allowed: b is the obvious pick.
+    expect(decideAutoSwitch(input)).toEqual({ action: "switch", profile: "b" });
+    // Switching off: exhausted, and the wake-up tracks the ACTIVE account's
+    // reset (b's earlier reset can't help a session that will never move).
+    const d = decideAutoSwitch({ ...input, allowSwitch: false });
+    expect(d.action).toBe("exhausted");
+    if (d.action === "exhausted") expect(d.retry_at).toBe(resetSoon + 2 * 60_000);
+    // Once the active window rolls, the free continue still wins.
+    expect(
+      decideAutoSwitch({
+        ...input,
+        allowSwitch: false,
+        now: resetSoon + 60_000,
+        parkedAt: resetSoon - 60_000,
+      }),
+    ).toEqual({ action: "continue" });
+  });
+
   test("exhausted carries the earliest future reset (plus settle margin)", () => {
     const resetSoon = now + 30 * 60_000;
     const d = decideAutoSwitch({
