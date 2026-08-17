@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { AvatarImg } from "../../lib/avatarCache";
 import {
   getCallTiles,
   getMicLevel,
@@ -327,20 +328,21 @@ function AudioOnlyStage({
 }
 
 function Avatar({ m, size }: { m: any; size: number }) {
-  return m.user_image ? (
-    <img
+  return (
+    <AvatarImg
       src={m.user_image}
       alt=""
       style={{ width: size, height: size }}
       className="rounded-full object-cover"
+      fallback={
+        <span
+          style={{ width: size, height: size, fontSize: Math.max(11, size / 2.6) }}
+          className="flex items-center justify-center rounded-full bg-sol-base02 font-mono text-sol-text-muted"
+        >
+          {(m.user_name || "?").charAt(0).toUpperCase()}
+        </span>
+      }
     />
-  ) : (
-    <span
-      style={{ width: size, height: size, fontSize: Math.max(11, size / 2.6) }}
-      className="flex items-center justify-center rounded-full bg-sol-base02 font-mono text-sol-text-muted"
-    >
-      {(m.user_name || "?").charAt(0).toUpperCase()}
-    </span>
   );
 }
 

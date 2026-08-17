@@ -76,6 +76,9 @@ function createCtx(seed: Record<string, Rec[]> = {}) {
         async first() {
           return run()[0] ?? null;
         },
+        async take(n: number) {
+          return run().slice(0, n);
+        },
       };
       return chain;
     },
@@ -185,6 +188,58 @@ describe("performPushFlush", () => {
     expect(pushes[0].args.body).toBe("fix-auth is waiting");
     expect(pushes[0].args.data.conversationId).toBe("c1");
     expect(ctx.tables.push_outbox.length).toBe(0);
+  });
+
+  test("a chat banner reads like a message: subtitle, chat channel, urgency", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({ users: [USER] });
+    await enqueuePush(ctx, {
+      user: USER,
+      type: "chat_dm",
+      title: "Samvit",
+      subtitle: undefined,
+      body: "lunch?",
+      data: { channelId: "ch1", messageId: "m1" },
+    });
+    freezeTime(NOW + AWAY_DEBOUNCE_MS);
+    await performPushFlush(ctx, "users_1");
+    const pushes = sentPushes(ctx);
+    expect(pushes.length).toBe(1);
+    expect(pushes[0].args.title).toBe("Samvit");
+    expect(pushes[0].args.body).toBe("lunch?");
+    expect(pushes[0].args.channel_id).toBe("chat");
+    expect(pushes[0].args.interruption_level).toBe("time-sensitive");
+  });
+
+  test("a mention carries its channel as the subtitle; a plain reply is not time-sensitive", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({ users: [USER] });
+    await enqueuePush(ctx, {
+      user: USER,
+      type: "chat_reply",
+      title: "Jason",
+      subtitle: "thread · #team",
+      body: "done, shipped",
+      data: {},
+    });
+    freezeTime(NOW + AWAY_DEBOUNCE_MS);
+    await performPushFlush(ctx, "users_1");
+    const pushes = sentPushes(ctx);
+    expect(pushes[0].args.subtitle).toBe("thread · #team");
+    expect(pushes[0].args.channel_id).toBe("chat");
+    expect(pushes[0].args.interruption_level).toBeUndefined();
+  });
+
+  test("a batch drops the subtitle — counts have no one place", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({ users: [USER] });
+    await enqueuePush(ctx, { user: USER, type: "chat_mention", title: "A", subtitle: "#team", body: "x", data: {} });
+    await enqueuePush(ctx, { user: USER, type: "chat_mention", title: "B", subtitle: "#ops", body: "y", data: {} });
+    freezeTime(NOW + AWAY_DEBOUNCE_MS);
+    await performPushFlush(ctx, "users_1");
+    const pushes = sentPushes(ctx);
+    expect(pushes.length).toBe(1);
+    expect(pushes[0].args.subtitle).toBeUndefined();
   });
 
   test("a storm aggregates into ONE push", async () => {

@@ -123,6 +123,8 @@ const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
 const Plans = lazy(() => import("@/app/plans/page"));
+const Calls = lazy(() => import("@/app/calls/page"));
+const CallDetailEntry = lazy(() => import("@/app/calls/[id]/page"));
 const PlanDetail = lazy(() => import("@/app/plans/[id]/page"));
 const Tasks = lazy(() => import("@/app/tasks/page"));
 const TaskDetail = lazy(() => import("@/app/tasks/[id]/page"));
@@ -240,6 +242,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "pages", component: cast(Artifacts), layout: "dashboardShell", tab: "/pages" },
   { path: "artifacts", component: cast(Artifacts), layout: "dashboardShell", tab: "/artifacts" }, // pre-rename alias for /pages
   { path: "docs/:id", component: cast(DocDetail), layout: "dashboardShell", tab: "/docs/:id", fullWidth: true },
+  { path: "calls", component: cast(Calls), layout: "dashboardShell", tab: "/calls", fullWidth: true },
+  { path: "calls/:id", component: cast(CallDetailEntry), layout: "dashboardShell", tab: "/calls/:id", fullWidth: true },
   { path: "plans", component: cast(Plans), layout: "dashboardShell", tab: "/plans", fullWidth: true },
   { path: "plans/:id", component: cast(PlanDetail), layout: "dashboardShell", tab: "/plans/:id", fullWidth: true },
   { path: "tasks", component: cast(Tasks), layout: "dashboardShell", tab: "/tasks", fullWidth: true },

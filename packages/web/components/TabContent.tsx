@@ -25,6 +25,7 @@ const Docs = lazy(() => import("@/app/docs/page"));
 const Capabilities = lazy(() => import("@/app/capabilities/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
 const Plans = lazy(() => import("@/app/plans/page"));
+const Calls = lazy(() => import("@/app/calls/page"));
 const PlanDetail = lazy(() => import("@/app/plans/[id]/page"));
 const Projects = lazy(() => import("@/app/projects/page"));
 const ProjectDetail = lazy(() => import("@/app/projects/[id]/page"));
@@ -66,6 +67,9 @@ const ROUTES: RouteEntry[] = [
   // Same component as the list: /tasks and /tasks/<id> share one <Tasks> so
   // selecting a task reconciles (instant) instead of swapping components (re-mount).
   { pattern: /^\/tasks\/([^/]+)$/, paramNames: ["id"], component: Tasks },
+  // Same component for list and detail (the /tasks/<id> trick): selecting a
+  // call reconciles beside the list instead of remounting the page.
+  { pattern: /^\/calls\/([^/]+)$/, paramNames: ["id"], component: Calls },
   { pattern: /^\/docs\/([^/]+)$/, paramNames: ["id"], component: DocDetail },
   { pattern: /^\/plans\/([^/]+)$/, paramNames: ["id"], component: PlanDetail },
   // A task opened from inside a project keeps the project mounted, same trick
@@ -83,6 +87,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/docs$/, paramNames: [], component: Docs },
   { pattern: /^\/capabilities$/, paramNames: [], component: Capabilities },
   { pattern: /^\/plans$/, paramNames: [], component: Plans },
+  { pattern: /^\/calls$/, paramNames: [], component: Calls },
   { pattern: /^\/projects$/, paramNames: [], component: Projects },
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
   { pattern: /^\/feed$/, paramNames: [], component: Feed },

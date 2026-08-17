@@ -382,6 +382,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // /schedules = pre-rename alias for /triggers, kept for old links.
   const isOnSchedulesPage = pathname === "/schedules" || (pathname?.startsWith("/schedules/") ?? false);
   const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
+  const isOnCallsPage = pathname === "/calls" || (pathname?.startsWith("/calls/") ?? false);
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
   const isOnCapabilitiesPage = pathname === "/capabilities";
   const isOnFilesPage = pathname === "/files" || (pathname?.startsWith("/files/") ?? false);
@@ -406,7 +407,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const surface = isOnSettingsPage ? "settings" : surfaceForPath(pathname ?? "");
   const slotPolicy = slotPolicyFor(surface);
   const isOnWorkingPage = slotPolicy.secondary === "split";
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
@@ -995,7 +996,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                   <SessionListPanel
                     onSessionSelect={sessionListOnSelect}
                     activeSessionId={sessionListActiveId}
-                    onCollapse={() => s.toggleSidePanel()}
                   />
                 </div>
               </ErrorBoundary>
@@ -1198,7 +1198,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <SessionListPanel
                 onSessionSelect={sessionListOnSelect}
                 activeSessionId={sessionListActiveId}
-                onCollapse={() => s.toggleSidePanel()}
               />
             </div>
           </ErrorBoundary>
@@ -1293,7 +1292,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <SessionListPanel
                 onSessionSelect={sessionListOnSelect}
                 activeSessionId={sessionListActiveId}
-                onCollapse={() => s.toggleSidePanel()}
               />
             </ErrorBoundary>
           </div>
