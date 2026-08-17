@@ -117,9 +117,18 @@ export function useIncomingRing(): RingRow | null {
   return useIncomingRings()[0] ?? null;
 }
 export function useIncomingRings(): RingRow[] {
+  return useIncomingRingsLoaded().rings;
+}
+// `loaded` distinguishes "no rings" from "not yet known" — a consumer that
+// SETTLES state on absence (the CallKit bridge dismissing a ring) must never
+// act on the pre-subscription empty array.
+export function useIncomingRingsLoaded(): { rings: RingRow[]; loaded: boolean } {
   const { isAuthenticated } = useAuth();
   const myCalls = useQuery(api.calls.getMyCalls, isAuthenticated ? {} : "skip");
-  return (myCalls?.incoming as RingRow[] | undefined) ?? [];
+  return {
+    rings: (myCalls?.incoming as RingRow[] | undefined) ?? [],
+    loaded: myCalls !== undefined,
+  };
 }
 
 // App-wide call chrome, mounted once in the root layout:
@@ -134,7 +143,7 @@ export function CallOverlay() {
   const insets = useSafeAreaInsets();
   const { isAuthenticated } = useAuth();
   const call = useSyncExternalStore(subscribeCall, getCallSnapshot, getCallSnapshot);
-  const rawRings = useIncomingRings();
+  const { rings: rawRings, loaded: ringsLoaded } = useIncomingRingsLoaded();
   const rawRing = rawRings[0] ?? null;
   // On a CallKit binary the OS rings (lock-screen call UI, its own sound):
   // our banner + ringtone would be a second ring for one call. The system UI
@@ -143,9 +152,11 @@ export function CallOverlay() {
   const callKit = callKitAvailable();
   const ring = callKit ? null : rawRing;
   useEffect(() => {
-    if (!callKit) return;
+    // Only a LOADED subscription can prove a ring settled; the initial empty
+    // array is "unknown", and acting on it ended every CallKit ring 1.5s in.
+    if (!callKit || !ringsLoaded) return;
     void endCallKitRingIfStale(new Set(rawRings.map((r) => String(r._id))));
-  }, [callKit, rawRings]);
+  }, [callKit, ringsLoaded, rawRings]);
   // Manual "busy" is the closed door — same rule as web's useCallRing and the
   // server's ring push: the banner still shows (a silent, dismissable card),
   // but no sound and no haptic.

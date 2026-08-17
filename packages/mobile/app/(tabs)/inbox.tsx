@@ -1118,7 +1118,7 @@ export default function InboxScreen() {
   // Full-args categorize (matches web): pendingSendIds keeps optimistic sends
   // in Working, and opts make isEngagedBlank work so the New section actually
   // surfaces freshly created blank sessions.
-  const { sorted: sortedAll, subsByParent, pinned, newSessions, needsInput, working, stashed: stashedSessions, dismissed: dismissedOnly } = useMemo(
+  const { sorted: sortedAll, subsByParent, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly } = useMemo(
     () => categorizeSessions(visibleSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages), {
       currentSessionId,
       pendingCreateIds: new Set(Object.keys(pendingSessionCreates)),
@@ -1327,6 +1327,8 @@ export default function InboxScreen() {
   const filteredPinned = useMemo(() => chipFilter(pinned), [chipFilter, pinned]);
   const filteredNew = useMemo(() => chipFilter(newSessions), [chipFilter, newSessions]);
   const filteredNeedsInput = useMemo(() => chipFilter(needsInput), [chipFilter, needsInput]);
+  const filteredDone = useMemo(() => chipFilter(done), [chipFilter, done]);
+  const filteredDormant = useMemo(() => chipFilter(dormant), [chipFilter, dormant]);
   const filteredWorking = useMemo(() => chipFilter(working), [chipFilter, working]);
   const filteredStashed = useMemo(() => chipFilter(stashedSessions), [chipFilter, stashedSessions]);
   const filteredKilled = useMemo(() => chipFilter(dismissedOnly), [chipFilter, dismissedOnly]);
@@ -1354,10 +1356,20 @@ export default function InboxScreen() {
     () => filteredNeedsInput.filter((s) => !schedulePartition.absorbedIds.has(s._id)),
     [filteredNeedsInput, schedulePartition.absorbedIds],
   );
-  const statusWorking = useMemo(
-    () => filteredWorking.filter((s) => !schedulePartition.absorbedIds.has(s._id)),
-    [filteredWorking, schedulePartition.absorbedIds],
+  const statusDone = useMemo(
+    () => filteredDone.filter((s) => !schedulePartition.absorbedIds.has(s._id)),
+    [filteredDone, schedulePartition.absorbedIds],
   );
+  // Absorbed settled rows are parked on their trigger's next fire — same as
+  // web, they file under DORMANT (visible) instead of vanishing.
+  const statusDormant = useMemo(
+    () => [
+      ...filteredDormant,
+      ...[...filteredNeedsInput, ...filteredDone].filter((s) => schedulePartition.absorbedIds.has(s._id)),
+    ],
+    [filteredDormant, filteredNeedsInput, filteredDone, schedulePartition.absorbedIds],
+  );
+  const statusWorking = filteredWorking;
 
   const listData = useMemo(() => {
     const sections: React.ReactNode[] = [];
@@ -1403,7 +1415,7 @@ export default function InboxScreen() {
     // not theme); the active set regroups by label or plan, with unfiled
     // sessions falling to auto-derived project groups — exactly web's layout.
     if (viewMode === "bucket" || viewMode === "plan") {
-      const active = [...filteredNew, ...statusNeedsInput, ...statusWorking];
+      const active = [...filteredNew, ...statusNeedsInput, ...statusDone, ...filteredDormant.filter((s) => !schedulePartition.absorbedIds.has(s._id)), ...statusWorking];
       sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
       if (viewMode === "bucket") {
         const { labelGroups, projectGroups } = groupSessionsForLabelView(active, buckets, bucketByConv);
@@ -1422,11 +1434,15 @@ export default function InboxScreen() {
     }
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
     sections.push(renderSection("New", filteredNew, Theme.blue));
+    // Top-down "who acts next": you (Needs Input, Done to review), the agent
+    // (Working), a machine (Dormant) — same order as the web panel.
     sections.push(renderSection("Needs Input", statusNeedsInput, Theme.accent));
+    sections.push(renderSection("Done", statusDone, Theme.cyan));
     sections.push(renderSection("Working", statusWorking, Theme.greenBright));
+    sections.push(renderSection("Dormant", statusDormant, Theme.blue));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredPinned, statusWorking, statusNeedsInput, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.

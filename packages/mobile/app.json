@@ -39,7 +39,8 @@
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Codecast uses the camera for team huddles.",
         "NSMicrophoneUsageDescription": "Codecast uses the microphone for team huddles."
-      }
+      },
+      "deploymentTarget": "16.0"
     },
     "android": {
       "adaptiveIcon": {
