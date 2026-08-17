@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import * as crypto from "node:crypto";
-import { cookieHostKeys, decryptCookieValue } from "./credentials.js";
+import { cookieHostKeys, decryptCookieValue, OWN_LOGIN_REASON, provisionCredentials, provisionLocalLogins } from "./credentials.js";
 
 /** Encrypt like Chrome does on macOS, to test the reverse. */
 function chromeEncrypt(plaintext: string, key: Buffer, withDomainHash = false): Buffer {
@@ -99,5 +99,21 @@ describe("decryptCookieValue", () => {
   test("handles a value long enough to span several blocks", () => {
     const long = "j".repeat(500);
     expect(decryptCookieValue(chromeEncrypt(long, key), key)).toBe(long);
+  });
+});
+
+describe("own-login hosts are never carried", () => {
+  // Neither call may reach a browser or a cookie store for these hosts: the
+  // refusal has to come before any I/O, or a Google session gets shared and
+  // both browsers are signed out (profile.ts). A dead port and a fake page
+  // would throw if either path got that far.
+  test("the local carry refuses Google before touching anything", async () => {
+    const r = await provisionLocalLogins(1, "https://ads.google.com/aw/overview", { profileDir: "Default" });
+    expect(r).toEqual({ injected: 0, host: "ads.google.com", reason: OWN_LOGIN_REASON });
+  });
+  test("the remote carry refuses Google before touching anything", async () => {
+    const page = { conn: { send: () => { throw new Error("must not be called"); } } } as any;
+    const r = await provisionCredentials(page, "https://mail.google.com/mail/u/0/", "/nonexistent");
+    expect(r).toEqual({ injected: 0, host: "mail.google.com", reason: OWN_LOGIN_REASON });
   });
 });

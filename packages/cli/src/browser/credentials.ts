@@ -29,6 +29,13 @@
  * the set of credentials that ever leaves this machine is exactly the set the
  * work actually used — which is a smaller exposure than any list a human would
  * have written, not a larger one.
+ *
+ * ## The one site that is never carried: Google
+ *
+ * Google rotates its session cookies and revokes a session it sees from two
+ * browsers — carrying them signs the HUMAN out too (profile.ts has the full
+ * story). Both carry paths skip the own-login hosts; the agent browser holds
+ * its own Google login, made once by a person with `cast browser login`.
  */
 
 import { execFileSync } from "node:child_process";
@@ -38,7 +45,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { PageSession } from "./instance.js";
 import { CdpConnection } from "./cdp.js";
-import { chromeUserDataRoot, type ChromeChannel } from "./profile.js";
+import { chromeUserDataRoot, cookieDbPath, keepsOwnLogin, type ChromeChannel } from "./profile.js";
+
+export { cookieDbPath };
 
 /** A cookie in the shape `Network.setCookies` wants. */
 export interface Cookie {
@@ -136,15 +145,6 @@ export function cookieHostKeys(host: string): string[] {
   return [...keys];
 }
 
-/** Where the managed clone keeps its cookie database. */
-export function cookieDbPath(userDataDir: string, profileDir = "Default"): string | null {
-  for (const rel of [[profileDir, "Network", "Cookies"], [profileDir, "Cookies"]]) {
-    const p = path.join(userDataDir, ...rel);
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
-
 export interface ReadCookiesResult {
   cookies: Cookie[];
   /** Set when nothing could be read, so callers can say why rather than "0". */
@@ -216,6 +216,26 @@ export function localCookiesForHost(userDataDir: string, host: string, profileDi
   }
 }
 
+/**
+ * Does the clone hold the SAME Google session as the human's Chrome — copied
+ * cookies rather than a login of its own? Used once, when a clone made before
+ * the own-login rule is first started under it: shared rows must go (they are
+ * the hazard), a distinct session is the clone's own and is kept, so the
+ * person is not asked to sign in for nothing. Unreadable is treated as
+ * shared — stripping costs one sign-in, keeping a shared session costs both.
+ */
+export function sharesGoogleSession(realRoot: string, cloneRoot: string, profileDir = "Default"): boolean {
+  const SESSION = new Set(["SID", "__Secure-1PSID", "__Secure-3PSID", "LSID"]);
+  const clone = localCookiesForHost(cloneRoot, "accounts.google.com");
+  if (clone.reason) return true;
+  const mine = clone.cookies.filter((c) => SESSION.has(c.name));
+  if (!mine.length) return false;
+  const real = localCookiesForHost(realRoot, "accounts.google.com", profileDir);
+  if (real.reason) return true;
+  const theirs = new Map(real.cookies.map((c) => [`${c.name}\u0000${c.domain}`, c.value]));
+  return mine.some((c) => theirs.get(`${c.name}\u0000${c.domain}`) === c.value);
+}
+
 /** Cookies the target browser already holds for this host, keyed name+domain. */
 async function remoteCookies(page: PageSession, url: string): Promise<Map<string, string>> {
   const map = new Map<string, string>();
@@ -227,6 +247,9 @@ async function remoteCookies(page: PageSession, url: string): Promise<Map<string
   }
   return map;
 }
+
+/** Why a carry was skipped for an own-login host — the message agents read. */
+export const OWN_LOGIN_REASON = "the agent browser keeps its own login for this site (a shared one signs both browsers out)";
 
 export interface ProvisionResult {
   /** How many cookies were injected. Zero means none were needed or available. */
@@ -256,6 +279,7 @@ export async function provisionCredentials(
   if (!host || host === "localhost" || /^[\d.]+$/.test(host)) {
     return { injected: 0, host, reason: "local address" };
   }
+  if (keepsOwnLogin(host)) return { injected: 0, host, reason: OWN_LOGIN_REASON };
 
   const { cookies, reason } = localCookiesForHost(userDataDir, host);
   if (!cookies.length) return { injected: 0, host, reason: reason ?? "no local cookies for this site" };
@@ -300,6 +324,7 @@ export async function provisionLocalLogins(
     return { injected: 0, host: url, reason: "not a url" };
   }
   if (!host || host === "localhost" || /^[\d.]+$/.test(host)) return { injected: 0, host, reason: "local address" };
+  if (keepsOwnLogin(host)) return { injected: 0, host, reason: OWN_LOGIN_REASON };
   const root = chromeUserDataRoot(source.channel ?? "chrome");
   if (!root) return { injected: 0, host, reason: "no real Chrome profile on this machine" };
 

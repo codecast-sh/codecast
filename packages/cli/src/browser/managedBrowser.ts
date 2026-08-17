@@ -18,7 +18,11 @@ import {
   acquireStartLock, freePort, killStrayChrome, launchManagedChrome, probeLiveness, readState,
   waitForStraysGone, writeState, type InstanceState,
 } from "./instance.js";
-import { clonePath, cloneProfile, formatBytes, listRealProfiles, type ChromeChannel } from "./profile.js";
+import {
+  chromeUserDataRoot, clonePath, cloneProfile, detachSharedIdentity, formatBytes, identityDetached, listRealProfiles,
+  type ChromeChannel, type DetachReport,
+} from "./profile.js";
+import { sharesGoogleSession } from "./credentials.js";
 import { startRemoteBrowser } from "./remote.js";
 import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
 import { readHosts, ensureUp, toRemoteHost } from "./cloudHost.js";
@@ -48,6 +52,22 @@ function die(msg: string, hint?: string): never {
   console.error(`${fmt.error(icons.cross)} ${msg}`);
   if (hint) console.error(`  ${fmt.muted(hint)}`);
   process.exit(1);
+}
+
+/** One line on what the clone no longer shares with the human's Chrome.
+ *  `kept` counts own-login cookies carried across a resync; -1 says the
+ *  clone's existing Google login was its own and was left in place. */
+function reportDetach(d: DetachReport, kept: number, quiet?: boolean): void {
+  if (!quiet) {
+    const parts = [
+      d.cookies !== null ? `${d.cookies} Google cookie${d.cookies === 1 ? "" : "s"}` : null,
+      d.tokens !== null ? `${d.tokens} Chrome account token${d.tokens === 1 ? "" : "s"}` : null,
+    ].filter(Boolean);
+    const keptNote = kept > 0 ? ` — kept the agent browser's own Google login (${kept} cookies)` : kept < 0 ? " — its Google login was its own and stays" : "";
+    console.log(`${OK} detached from your Chrome account (${parts.join(", ") || "identity only"})${keptNote}`);
+    if (!kept) console.log(fmt.muted("  Google is signed out here on purpose; `cast browser login <url>` signs it in once"));
+  }
+  for (const n of d.notes) console.log(`${WARN} ${n}`);
 }
 
 /** Told to the user when a start queues behind another agent's launch. */
@@ -104,6 +124,7 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
         if (!o.quiet) console.log(`  cloning ${fmt.highlight(known?.name ?? pick)}${known?.email ? fmt.muted(` <${known.email}>`) : ""}…`);
         const res = cloneProfile({ sourceDir: pick, destRoot: userDataDir, channel: o.channel });
         if (!o.quiet) console.log(`${OK} cloned ${res.files} items, ${formatBytes(res.bytes)}`);
+        reportDetach(res.detach, res.ownLoginsKept, o.quiet);
         if (!res.cookiesFound) {
           console.log(
             `${WARN} no cookie store was copied — the browser will start logged out.\n` +
@@ -111,7 +132,7 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
           );
         }
       } else if (!o.quiet) {
-        console.log(`  reusing existing clone ${fmt.muted(userDataDir)} ${fmt.muted("(--resync to refresh logins)")}`);
+        console.log(`  reusing existing clone ${fmt.muted(userDataDir)} ${fmt.muted("(--resync re-copies your Chrome's logins; the agent browser's own Google login is kept)")}`);
       }
     }
 
@@ -124,6 +145,15 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
       // SIGTERM is not instant; launching while one is still exiting hands our
       // command line to a dying Chrome and nothing ever listens.
       await waitForStraysGone(userDataDir);
+    }
+
+    // A clone made before the rule still holds copies of the human's Google
+    // session and Chrome account. Strip them once, now that nothing has the
+    // profile open; the stamp keeps this from touching a later, own login.
+    if (sourceProfile && !identityDetached(userDataDir)) {
+      const realRoot = chromeUserDataRoot(o.channel);
+      const shared = !realRoot || sharesGoogleSession(realRoot, userDataDir, sourceProfile);
+      reportDetach(detachSharedIdentity(userDataDir, { cookies: shared }), shared ? 0 : -1, o.quiet);
     }
 
     const [w, h] = o.size.split("x").map((n) => parseInt(n, 10));
