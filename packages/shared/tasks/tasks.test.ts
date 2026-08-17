@@ -8,6 +8,7 @@ import {
   isActiveTask,
   isCountableSubtask,
   isHumanOrigin,
+  isOnHumanBoard,
   subtaskProgressOf,
   taskDepth,
   taskFamilyIndex,
@@ -48,6 +49,15 @@ describe("taskOrigin", () => {
     expect(isHumanOrigin({ source: "meeting" })).toBe(true);
     expect(isHumanOrigin({ source: "agent" })).toBe(false);
     expect(isHumanOrigin({ source: "todo_sync" })).toBe(false);
+  });
+
+  test("isOnHumanBoard: human origin, promoted, or assigned to someone", () => {
+    expect(isOnHumanBoard({ source: "human" })).toBe(true);
+    expect(isOnHumanBoard({ source: "agent" })).toBe(false);
+    expect(isOnHumanBoard({ source: "agent", promoted: true })).toBe(true);
+    // An agent handed this task to a person: it belongs on their board.
+    expect(isOnHumanBoard({ source: "agent", assignee: "user_1" })).toBe(true);
+    expect(isOnHumanBoard({ source: "plan_mode", assignee: null })).toBe(false);
   });
 });
 

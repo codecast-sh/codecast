@@ -24,7 +24,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
 import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
-import { buildTaskTree, isHumanOrigin, taskFamilyIndex } from "@codecast/shared/tasks";
+import { buildTaskTree, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
 import { filterToWorkspace } from "@codecast/web/lib/workspaceScope";
 import { useSyncTasks } from "@/hooks/useSyncTasks";
 import { useSyncPlans } from "@/hooks/useSyncPlans";
@@ -219,13 +219,13 @@ export default function TasksScreen() {
   const plansList = useMemo(() => filterToWorkspace(Object.values(plans), teamId), [plans, teamId]);
   const docsList = useMemo(() => filterToWorkspace(Object.values(docs), teamId), [docs, teamId]);
 
-  // "human" = the human's board: human or meeting origin (shared predicate,
-  // same as the web board), plus anything promoted onto it (cast task create
-  // --human, triage accept). "bot" = machine-created tasks that stay internal
-  // to agent work. Plans/docs have no promoted field or meeting source, so for
-  // them this degrades to a plain source split.
-  const onBoard = (i: { source?: string; promoted?: boolean }) => isHumanOrigin(i) || !!i.promoted;
-  const applySourceFilter = useCallback(<T extends { source?: string; promoted?: boolean }>(list: T[]): T[] => {
+  // "human" = the human's board (isOnHumanBoard, shared with web): human or
+  // meeting origin, promoted (cast task create --human, triage accept), or
+  // assigned to a person. "bot" = machine-created tasks that stay internal to
+  // agent work. Plans/docs have no promoted/assignee field or meeting source,
+  // so for them this degrades to a plain source split.
+  const onBoard = isOnHumanBoard;
+  const applySourceFilter = useCallback(<T extends { source?: string; promoted?: boolean; assignee?: string | null }>(list: T[]): T[] => {
     if (sourceFilter === "human") return list.filter(onBoard);
     if (sourceFilter === "bot") return list.filter((i) => !onBoard(i));
     return list;
