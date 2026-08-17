@@ -16,6 +16,7 @@ Snippets:
   publish       Shareable published pages (cast publish)
   state         A pinned, agent-maintained status per thread (cast state)
   chat          Post to and read team channels (cast chat)
+  calls         Read transcribed team calls (cast calls)
   browser       Drive a real Chrome (cast browser)
   decide        Hand your human one well-formed decision (cast decide)
   orchestration Multi-agent plan execution (/orchestrate)

@@ -2,7 +2,7 @@
   "memory": {
     "config": {
       "memory_enabled": true,
-      "memory_version": "12"
+      "memory_version": "13"
     },
     "stdout": "* Memory — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -20,7 +20,7 @@
   "forks": {
     "config": {
       "forks_enabled": true,
-      "forks_version": "4"
+      "forks_version": "5"
     },
     "stdout": "* Forks & Sessions — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -74,7 +74,7 @@
   "state": {
     "config": {
       "state_enabled": true,
-      "state_version": "3"
+      "state_version": "4"
     },
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -89,6 +89,15 @@
       "chat_version": "1"
     },
     "stdout": "* Team chat — installed in ~/.claude/CLAUDE.md\n",
+    "wroteClaudeMd": true,
+    "otherFiles": {}
+  },
+  "calls": {
+    "config": {
+      "calls_enabled": true,
+      "calls_version": "1"
+    },
+    "stdout": "* Calls — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },

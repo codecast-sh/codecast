@@ -43,6 +43,7 @@ You can spin work off into your human's inbox as independent sessions — not hi
 ```bash
 cast fork "<direction>" ["<direction>" ...]   # branch THIS conversation N ways from here
 cast spawn "<task>" ["<task>" ...]            # start N fresh sessions, no shared history
+cast spawn --subagent --agent codex "<task>"  # subagent row nested under THIS session — yours to manage
 cast spawn - <<'EOF'                          # multi-line briefing via stdin (same as cast send)
 …goal, numbered steps, constraints — exact newlines preserved…
 EOF
@@ -63,6 +64,8 @@ EOF
 A fork fan-out is a handoff, not an orchestration. When the human asks to run work in N forks, issue ONE `cast fork` with all N directions, report the roster, and return to your own thread. A branch doesn't know it is a fork — its history ends before the fork request, and its seed arrives as its next instruction — so write each direction as a complete, self-contained instruction for that thread. The branches run independently and the human steers them from the inbox; do not stage launches, monitor branches, or build coordination between them.
 
 `cast spawn` starts fresh sessions with no shared history, in the current project (`-C <dir>` for elsewhere). Use it to hand off self-contained work — a parallel audit, a port, a spike — rather than research you'd fold back into your own answer.
+
+`cast spawn --subagent` inverts the ownership: the new session nests in the UI as a subagent row under this session instead of landing as a first-class inbox card, and it is YOURS to manage — brief it, watch it, `cast send <id>` it follow-ups, `cast read <id>` its results, and fold what it finds back into your own work. Unlike a Task-tool subagent it is a full session on any agent backend, so `--subagent --agent codex` runs a codex worker under a claude parent. Bare `--subagent` nests under the session running the command; pass a value (`--subagent <session>`) to nest under another of your sessions. To block on it, watch it by id — `cast sessions <id> -w --json` emits a `transition` to `needs_input` when the worker finishes its turn (a subagent row is hidden from the top-level list, but always answers when named), then `cast read <id>` for its result. Tell the human what you delegated, and report the results yourself — a subagent row is your worker, not a handoff to their inbox.
 
 Both start working immediately and appear in the inbox. A branch or session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human what you sent where.
 
