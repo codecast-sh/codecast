@@ -6,8 +6,9 @@
 // settings page so both always tell the same story.
 
 import { isWindowRolled, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { formatAgo, formatCountdown } from "@codecast/shared/contracts";
 
-export { worstUsagePercent, isWindowRolled };
+export { worstUsagePercent, isWindowRolled, formatAgo, formatCountdown };
 export type { CcUsage };
 
 // Status tone for a utilization percent: quiet while there's headroom, loud as
@@ -17,23 +18,6 @@ export function usageTone(pct: number): string {
   if (pct >= 85) return "var(--sol-orange)";
   if (pct >= 60) return "var(--sol-yellow)";
   return "var(--sol-blue)";
-}
-
-export function formatCountdown(msFromNow: number): string {
-  const mins = Math.max(1, Math.round(msFromNow / 60_000));
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 48) return `${hours}h ${mins % 60 > 0 && hours < 10 ? `${mins % 60}m` : ""}`.trim();
-  return `${Math.round(hours / 24)}d`;
-}
-
-export function formatAgo(msAgo: number): string {
-  const mins = Math.round(msAgo / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 48) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
 }
 
 // Data older than this gets an explicit "as of" note: dormant profiles keep
