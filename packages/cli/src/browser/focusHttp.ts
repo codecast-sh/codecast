@@ -19,7 +19,7 @@
 
 import type http from "http";
 import { CdpConnection, listTargets } from "./cdp.js";
-import { raiseAppByPid } from "./raiseApp.js";
+import { raiseAppByPid, raiseAppByPidSync } from "./raiseApp.js";
 import { readState } from "./instance.js";
 import { listChromeDebugPorts } from "./localChrome.js";
 import { isPidAlive } from "../workspace/chrome.js";
@@ -145,7 +145,18 @@ export interface FocusDeps {
   log?: (line: string) => void;
 }
 
-const defaultDeps = (): FocusDeps => ({ engines, raiseApp: raiseAppByPid });
+const defaultDeps = (raiseApp = raiseAppByPid): FocusDeps => ({ engines, raiseApp });
+
+/**
+ * The same raise for a CLI that keeps working afterwards (`cast browser
+ * login`). The raise must have LANDED before the next engine call: the focus
+ * guard (focusGuard.ts) reads who is frontmost before each call and hands
+ * focus back if the managed Chrome took it during the call — an async raise
+ * that completes mid-call is read as a theft and undone.
+ */
+export function focusBrowserTabBlocking(query: string): Promise<FocusResult> {
+  return focusBrowserTab(query, defaultDeps(raiseAppByPidSync));
+}
 
 /**
  * Ask each engine for the tab; the first one that has it wins. The reported

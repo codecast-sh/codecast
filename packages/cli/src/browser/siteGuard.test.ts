@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { NAVIGATING_VERBS, refuseNavigation, viaFor, withScheme } from "./siteGuard.js";
+import { NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, viaFor, withScheme } from "./siteGuard.js";
 import { readAudit } from "./audit.js";
 import type { SitePolicy } from "./policy.js";
 
@@ -62,5 +62,38 @@ describe("passthrough verb table", () => {
   test("withScheme mirrors open's bare-host default", () => {
     expect(withScheme("example.com")).toBe("https://example.com");
     expect(withScheme("http://x")).toBe("http://x");
+  });
+});
+
+describe("signInHost", () => {
+  test("names the identity host a signed-out browser is redirected to", () => {
+    expect(signInHost("https://accounts.google.com/v3/signin/accountchooser?continue=https://ads.google.com")).toBe("accounts.google.com");
+    expect(signInHost("https://login.microsoftonline.com/common/oauth2/authorize")).toBe("login.microsoftonline.com");
+    expect(signInHost("https://github.com/login?return_to=%2Fsettings")).toBe("github.com");
+    expect(signInHost("https://app.example.com/users/sign_in")).toBe("app.example.com");
+    expect(signInHost("https://sso.corp.example.com/")).toBe("sso.corp.example.com");
+  });
+  test("leaves ordinary pages alone", () => {
+    expect(signInHost("https://ads.google.com/aw/overview")).toBeNull();
+    expect(signInHost("https://github.com/ashot/codecast")).toBeNull();
+    expect(signInHost("https://example.com/blog/how-we-login-users")).toBeNull();
+    expect(signInHost("id.example")).toBeNull(); // two labels: "id" is the site, not a front door
+    expect(signInHost("not a url at all ::")).toBeNull();
+  });
+});
+
+describe("signInLandingNote", () => {
+  const google = (h: string) => h.endsWith("google.com");
+  test("says the login was never copied for a site the agent browser keeps for itself", () => {
+    const note = signInLandingNote("https://accounts.google.com/signin", google)!;
+    expect(note).toContain("accounts.google.com");
+    expect(note).toContain("keeps its own login");
+    expect(note).toContain("cast browser login");
+  });
+  test("says the cookies were carried for any other site", () => {
+    expect(signInLandingNote("https://github.com/login", google)).toContain("were carried");
+  });
+  test("is silent off a sign-in page", () => {
+    expect(signInLandingNote("https://github.com/ashot", google)).toBeNull();
   });
 });

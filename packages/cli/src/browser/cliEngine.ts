@@ -36,12 +36,13 @@ import {
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
 import { matchRefs, nearMatches } from "./snapshot.js";
 import { ensurePinnedTab } from "./pinnedTab.js";
-import { formatBytes, listRealProfiles } from "./profile.js";
+import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
 import { readState, stopInstance } from "./instance.js";
 import { provisionLocalLogins } from "./credentials.js";
 import { isPidAlive } from "../workspace/chrome.js";
-import { auditLanding, NAVIGATING_VERBS, refuseNavigation, viaFor } from "./siteGuard.js";
+import { auditLanding, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, viaFor } from "./siteGuard.js";
+import { focusBrowserTabBlocking } from "./focusHttp.js";
 import { emitFailureBlock, engineSource } from "./capture.js";
 import { registerAuditCommand } from "./auditCommand.js";
 import { autoShotsEnabled, clearAutoShots, isMutatingStep, maybeAutoShot, setAutoShots, type AutoShotSource } from "./autoShot.js";
@@ -526,7 +527,69 @@ function printFooter(o: Ctx, verb: string, owner: string | null): void {
     // per session, so per-session dedup is the same thing.
     const warn = url ? auditLanding({ url, tab: `engine:${o.session}`, session: owner, via: viaFor(verb) }) : null;
     if (warn) console.log(`${fmt.warning("!")} ${warn}`);
+    // A login form where the work was expected. Named, with the fix, so an
+    // agent does not read it as an empty page or restart the browser over it.
+    const signIn = url ? signInLandingNote(url, keepsOwnLogin) : null;
+    if (signIn) console.log(`${fmt.warning("!")} ${signIn}`);
   }
+}
+
+/** This session's current tab, as the engine sees it. */
+function currentTab(o: Ctx): { targetId: string; url: string } | null {
+  const tabs = engineTabs(o);
+  const t = tabs.find((x) => x.active) ?? tabs[0];
+  return t?.targetId ? { targetId: t.targetId, url: t.url ?? "" } : null;
+}
+
+/**
+ * `login [url]`: a person signs in once, in the agent browser.
+ *
+ * Opens the page (when given), brings the agent browser's window and this
+ * session's tab to the front — the same route the web's "open tab" link uses
+ * (focusHttp.ts) — and waits until the tab has left the sign-in page. The
+ * login lands in the clone's own cookie store, so it survives restarts and
+ * `--resync`; only `stop --wipe` and `start --fresh` drop it. This is the
+ * whole answer for the sites the agent browser never borrows a login for
+ * (Google — profile.ts), and the fallback for any site that keeps its session
+ * where a cookie carry cannot reach.
+ */
+async function loginAsPerson(url: string | undefined, waitSeconds: number): Promise<number> {
+  const o = ctx();
+  if (url) {
+    const code = await runVerb("open", [url], o, { quiet: true });
+    if (code !== 0) return code;
+  } else {
+    await ensureBrowser();
+    await ensurePinnedTab(o.session);
+  }
+  const tab = currentTab(o);
+  if (!tab) die("this session has no tab to sign in on", "give a URL: cast browser login <url>");
+  const startHost = signInHost(tab.url);
+  const raised = await focusBrowserTabBlocking(tab.targetId);
+  if (raised.ok) console.log(`${OK} raised the agent browser${startHost ? ` on ${startHost}` : ""} — a separate window from your Chrome`);
+  else console.log(`${fmt.warning("!")} could not raise the window (${raised.reason}); it is the Chrome window titled by the page, behind your others`);
+  console.log(fmt.muted("  sign in there once; the login stays in the agent browser across restarts (only `stop --wipe` / `start --fresh` drop it)"));
+  printFooter(o, "login", auditOwner());
+  if (!startHost) {
+    console.log(`${OK} not on a sign-in page (${tab.url}) — nothing to wait for`);
+    return 0;
+  }
+  if (waitSeconds <= 0) return 0;
+
+  const deadline = Date.now() + waitSeconds * 1000;
+  console.log(fmt.muted(`  waiting up to ${waitSeconds}s for the page to leave the sign-in page…`));
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const now = currentTab(o);
+    if (!now) die("the tab went away while waiting");
+    if (now.url && now.url !== tab.url && !signInHost(now.url)) {
+      console.log(`${OK} signed in — now on ${now.url}`);
+      return 0;
+    }
+  }
+  const still = currentTab(o)?.url ?? tab.url;
+  console.log(`${fmt.warning("!")} still on a sign-in page after ${waitSeconds}s (${still}) — run \`cast browser login\` again once the person has signed in`);
+  return 1;
 }
 
 /** Run a verb and exit with its status — the shape commander actions want. */
@@ -822,6 +885,13 @@ frames are superseded before anyone reads them.`,
   // problem to absorb, not something to push onto agents by rewriting prose
   // they have already read into their context.
 
+  br.command("login [url]")
+    .description("A person signs in once: raises the agent browser on the page and waits until it leaves the sign-in page")
+    .option("--wait <seconds>", "How long to wait for the sign-in; 0 returns at once", "300")
+    .action(async (url: string | undefined, o: { wait: string }) => {
+      process.exit(await loginAsPerson(url, Math.max(0, parseInt(o.wait, 10) || 0)));
+    });
+
   br.command("tabs")
     .description("List open tabs")
     .action(() => passthrough("tab", ["list"]));
@@ -927,7 +997,7 @@ frames are superseded before anyone reads them.`,
       console.log(`${alive ? OK : BAD} browser ${alive ? "up" : "gone"} — pid ${state.pid}, CDP 127.0.0.1:${state.port}${state.headless ? ", headless" : ""}`);
       console.log(`  engine: ${ENGINE_PACKAGE} ${engineVersion() ?? "?"}  ${fmt.muted(binary)}`);
       console.log(`  session: ${c.session}`);
-      console.log(`  profile: ${state.sourceProfile ? `${state.sourceProfile} (logins inherited)` : "fresh — signed out"}`);
+      console.log(`  profile: ${state.sourceProfile ? `${state.sourceProfile} (logins inherited; Google is its own — \`cast browser login\` once)` : "fresh — signed out"}`);
       if (!alive) return;
       const res = runEngine(["tab", "list"], c);
       if (res.status === 0 && res.stdout.trim()) {

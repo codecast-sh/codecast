@@ -13,16 +13,34 @@
  * real profile into a managed directory that CDP is allowed to drive.
  *
  * Measured on Chrome 151 (macOS): a full profile is ~6.8G, the identity subset
- * is ~68M, and the clone comes up logged into GitHub, Google and X — macOS
+ * is ~68M, and the clone comes up logged into GitHub, X and codecast — macOS
  * keeps the cookie encryption key in the Keychain under "Chrome Safe Storage",
  * which is per-browser rather than per-profile, so the copied cookie database
  * still decrypts.
  *
  * The clone is a POINT-IN-TIME COPY. It drifts as the real profile's sessions
- * refresh, so `cast browser profile sync` re-copies. It also means an agent's
+ * refresh, so `cast browser start --resync` re-copies. It also means an agent's
  * writes never touch the human's real browser state.
+ *
+ * ## What the clone must NOT share: Google
+ *
+ * Google's session cookies rotate every few minutes (`__Secure-1PSIDTS` and
+ * friends), and a token that keeps turning up from two browsers reads to Google
+ * as a stolen cookie: it invalidates the whole session, and BOTH browsers land
+ * on the account chooser — the agent's and the human's real Chrome. Seen on
+ * 2026-08-17: the clone was signed out first, then the human's Chrome. The
+ * copied profile also carries the Chrome-level account (refresh tokens in
+ * `Web Data`'s token_service, the account list and device id in Preferences),
+ * which lets the clone act as a second copy of the human's Chrome.
+ *
+ * So the clone keeps its OWN Google login. `detachSharedIdentity` strips the
+ * Google/YouTube cookies and the Chrome account from every clone, the per-open
+ * cookie carry (credentials.ts) skips those hosts, and a person signs in once
+ * in the agent browser (`cast browser login`). That login is the clone's own
+ * session, so a `--resync` preserves it instead of copying the shared one back.
  */
 
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -35,6 +53,165 @@ export function browserHome(): string {
 
 export function clonePath(name: string): string {
   return path.join(browserHome(), "profiles", name);
+}
+
+// ---------------------------------------------------------------------------
+// Logins the agent browser keeps for itself
+// ---------------------------------------------------------------------------
+
+/**
+ * Sites whose login the clone must own rather than borrow from the human's
+ * Chrome. Google rotates its session cookies and revokes a session it sees
+ * from two browsers (header comment); YouTube carries the same cookies.
+ * Matched as the host itself or any subdomain, so `accounts.google.com`,
+ * `ads.google.com` and `.google.com` cookie rows all count.
+ */
+export const OWN_LOGIN_HOSTS: readonly string[] = ["google.com", "youtube.com"];
+
+/** Does the agent browser keep its own login for this host (see OWN_LOGIN_HOSTS)? */
+export function keepsOwnLogin(host: string): boolean {
+  const h = host.replace(/^\.+/, "").toLowerCase();
+  return OWN_LOGIN_HOSTS.some((s) => h === s || h.endsWith(`.${s}`));
+}
+
+/** SQL predicate selecting the cookie rows of the own-login hosts. */
+function ownLoginCookieWhere(): string {
+  return OWN_LOGIN_HOSTS.map((s) => `host_key = '${s}' OR host_key LIKE '%.${s}'`).join(" OR ");
+}
+
+/** Where a Chrome profile keeps its cookie database (moved across versions). */
+export function cookieDbPath(userDataDir: string, profileDir = "Default"): string | null {
+  for (const rel of [[profileDir, "Network", "Cookies"], [profileDir, "Cookies"]]) {
+    const p = path.join(userDataDir, ...rel);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * Run SQL against a database with the sqlite3 CLI; throws on failure. Refuses
+ * a file that is not SQLite first: pointed at one, sqlite3 truncates the
+ * `-wal` sidecar beside it while failing, which is a worse outcome than
+ * skipping the step.
+ */
+function sqlite(db: string, sql: string): string {
+  const head = Buffer.alloc(16);
+  const fd = fs.openSync(db, "r");
+  try {
+    fs.readSync(fd, head, 0, 16, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (head.toString("latin1") !== "SQLite format 3\0") throw new Error(`${path.basename(db)} is not a SQLite database`);
+  return execFileSync("sqlite3", [db, sql], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+/**
+ * Written into a clone once its shared identity has been stripped. A clone
+ * without it predates the rule: its Google cookies are copies of the human's
+ * session and must not be preserved across a resync.
+ */
+const IDENTITY_STAMP = "cast-identity.json";
+
+export function identityDetached(userDataDir: string): boolean {
+  return fs.existsSync(path.join(userDataDir, IDENTITY_STAMP));
+}
+
+export interface DetachReport {
+  /** Cookie rows removed for the own-login hosts; null when the store was unreadable. */
+  cookies: number | null;
+  /** Chrome account refresh tokens removed; null when Web Data was unreadable. */
+  tokens: number | null;
+  /** Steps that did not apply, in words — surfaced, never fatal. */
+  notes: string[];
+}
+
+/**
+ * Turn a copied profile into a browser that is nobody's Chrome: drop the
+ * own-login hosts' cookies, the Chrome account's refresh tokens (`Web Data`
+ * token_service), the account list, device id and cookie cache in
+ * Preferences, and the signed-in identity in `Local State`'s profile cache.
+ * Idempotent, and stamps the clone so a later start can tell it has run.
+ * Every step is best effort: a Chrome build that renamed a table loses one
+ * layer of the strip, not the launch.
+ */
+export function detachSharedIdentity(userDataDir: string, opts: { cookies?: boolean } = {}): DetachReport {
+  const profile = path.join(userDataDir, "Default");
+  const report: DetachReport = { cookies: null, tokens: null, notes: [] };
+
+  if (opts.cookies !== false) {
+    const db = cookieDbPath(userDataDir);
+    if (db) {
+      try {
+        report.cookies = parseInt(sqlite(db, `DELETE FROM cookies WHERE ${ownLoginCookieWhere()}; SELECT changes();`), 10) || 0;
+      } catch (err) {
+        report.notes.push(`could not strip Google cookies: ${(err as Error).message.split("\n")[0]}`);
+      }
+    }
+  }
+
+  const webData = path.join(profile, "Web Data");
+  if (fs.existsSync(webData)) {
+    try {
+      report.tokens = parseInt(sqlite(webData, "DELETE FROM token_service; SELECT changes();"), 10) || 0;
+    } catch (err) {
+      report.notes.push(`could not strip Chrome account tokens: ${(err as Error).message.split("\n")[0]}`);
+    }
+  }
+
+  const prefsPath = path.join(profile, "Preferences");
+  try {
+    if (fs.existsSync(prefsPath)) {
+      const prefs = JSON.parse(fs.readFileSync(prefsPath, "utf-8"));
+      prefs.account_info = [];
+      delete prefs.gaia_cookie;
+      if (prefs.google) delete prefs.google.services;
+      fs.writeFileSync(prefsPath, JSON.stringify(prefs));
+    }
+  } catch (err) {
+    report.notes.push(`could not strip the account from Preferences: ${(err as Error).message}`);
+  }
+
+  const localStatePath = path.join(userDataDir, "Local State");
+  try {
+    if (fs.existsSync(localStatePath)) {
+      const state = JSON.parse(fs.readFileSync(localStatePath, "utf-8"));
+      const cache = state?.profile?.info_cache ?? {};
+      // Keep the look of the profile (name, colours), drop everything that
+      // says whose Google account it is or that a company manages it.
+      const own = Object.fromEntries(
+        Object.entries(cache.Default ?? {}).filter(([k]) => !/gaia|picture|hosted_domain|managed|user_name|consented|enterprise/.test(k)),
+      );
+      state.profile = {
+        ...(state.profile ?? {}),
+        info_cache: { Default: { ...own, gaia_id: "", gaia_name: "", user_name: "", is_consented_primary_account: false } },
+        last_used: "Default",
+        last_active_profiles: ["Default"],
+      };
+      fs.writeFileSync(localStatePath, JSON.stringify(state));
+    }
+  } catch (err) {
+    report.notes.push(`could not strip the account from Local State: ${(err as Error).message}`);
+  }
+
+  fs.writeFileSync(path.join(userDataDir, IDENTITY_STAMP), JSON.stringify({ version: 1, detached_at: Date.now() }));
+  return report;
+}
+
+/**
+ * Copy the own-login hosts' cookie rows from an earlier clone's store into a
+ * fresh one, so a resync keeps the login a person made in the agent browser.
+ * Both stores were written by the same Chrome under the same Keychain key, so
+ * the encrypted values carry over as they are.
+ */
+function preserveOwnLogins(fromDb: string, toDb: string): number {
+  const rows = sqlite(
+    toDb,
+    `ATTACH DATABASE '${fromDb.replace(/'/g, "''")}' AS old;
+     INSERT OR REPLACE INTO cookies SELECT * FROM old.cookies WHERE ${ownLoginCookieWhere()};
+     SELECT changes();`,
+  );
+  return parseInt(rows, 10) || 0;
 }
 
 /** Root of a real Chrome install's user data, by channel. */
@@ -148,6 +325,10 @@ export interface CloneResult {
    *  for success (an early version copied no cookies at all and looked fine). */
   missing: string[];
   cookiesFound: boolean;
+  /** What was stripped so the clone shares no identity with the human's Chrome. */
+  detach: DetachReport;
+  /** Own-login cookie rows carried over from the previous clone (a resync). */
+  ownLoginsKept: number;
 }
 
 function copyFile(from: string, to: string): number {
@@ -204,6 +385,20 @@ export function cloneProfile(opts: {
 
   const dest = opts.destRoot;
   const destProfile = path.join(dest, "Default");
+
+  // A resync replaces the store, but the login a person made in the agent
+  // browser for the own-login hosts is the clone's own and must survive it.
+  // Only from a clone that was already detached: before that, its rows for
+  // those hosts were copies of the human's session — the thing being removed.
+  let keep: string | null = null;
+  const oldDb = identityDetached(dest) ? cookieDbPath(dest) : null;
+  if (oldDb) {
+    keep = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cast-own-logins-")), "Cookies");
+    for (const suffix of SQLITE_SIDECARS) {
+      if (fs.existsSync(oldDb + suffix)) fs.copyFileSync(oldDb + suffix, keep + suffix);
+    }
+  }
+
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(destProfile, { recursive: true, mode: 0o700 });
   fs.chmodSync(dest, 0o700);
@@ -269,7 +464,21 @@ export function cloneProfile(opts: {
     /* preference tidying is best effort */
   }
 
-  return { dest, bytes: dirSize(dest), files, missing, cookiesFound };
+  const detach = detachSharedIdentity(dest);
+  let ownLoginsKept = 0;
+  if (keep) {
+    const newDb = cookieDbPath(dest);
+    if (newDb) {
+      try {
+        ownLoginsKept = preserveOwnLogins(keep, newDb);
+      } catch (err) {
+        detach.notes.push(`could not keep the agent browser's own logins: ${(err as Error).message.split("\n")[0]}`);
+      }
+    }
+    fs.rmSync(path.dirname(keep), { recursive: true, force: true });
+  }
+
+  return { dest, bytes: dirSize(dest), files, missing, cookiesFound, detach, ownLoginsKept };
 }
 
 export function formatBytes(n: number): string {

@@ -11,7 +11,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { cloneProfile, formatBytes, parseLocalState } from "./profile.js";
+import { execFileSync } from "node:child_process";
+import { cloneProfile, detachSharedIdentity, formatBytes, identityDetached, keepsOwnLogin, parseLocalState } from "./profile.js";
 
 const temps: string[] = [];
 function tempDir(): string {
@@ -194,5 +195,147 @@ describe("formatBytes", () => {
     expect(formatBytes(2048)).toBe("2K");
     expect(formatBytes(68 * 1024 * 1024)).toBe("68M");
     expect(formatBytes(1.2 * 1024 ** 3)).toBe("1.2G");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The identity a clone must not share (see the header of profile.ts)
+// ---------------------------------------------------------------------------
+
+function sql(db: string, statement: string): string {
+  return execFileSync("sqlite3", [db, statement], { encoding: "utf-8" }).trim();
+}
+
+/** A source profile with real SQLite stores: cookies for Google and GitHub, and a Chrome account. */
+function identityRoot(): string {
+  const root = tempDir();
+  const profile = path.join(root, "Default");
+  fs.mkdirSync(profile, { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "Local State"),
+    JSON.stringify({
+      profile: {
+        last_used: "Profile 9",
+        last_active_profiles: ["Default", "Profile 9"],
+        info_cache: {
+          Default: { name: "Ashot", gaia_id: "111", user_name: "ashot@example.com", gaia_name: "Ashot P", is_consented_primary_account: true },
+          "Profile 9": { name: "Other", gaia_id: "222", user_name: "other@example.com" },
+        },
+      },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(profile, "Preferences"),
+    JSON.stringify({
+      profile: { exit_type: "Crashed" },
+      account_info: [{ account_id: "111", email: "ashot@example.com" }],
+      gaia_cookie: { hash: "abc" },
+      google: { services: { last_gaia_id: "111", signin_scoped_device_id: "dev-1", consented_to_sync: true }, other: 1 },
+    }),
+  );
+  const cookies = path.join(profile, "Cookies");
+  sql(cookies, "CREATE TABLE cookies (host_key TEXT, name TEXT, encrypted_value BLOB, path TEXT)");
+  for (const [host, name] of [
+    [".google.com", "SID"],
+    [".google.com", "__Secure-1PSIDTS"],
+    ["accounts.google.com", "LSID"],
+    ["ads.google.com", "pref"],
+    [".youtube.com", "SID"],
+    [".github.com", "user_session"],
+    ["mygoogle.com", "session"], // a different site that merely ends in the letters
+  ]) {
+    sql(cookies, `INSERT INTO cookies VALUES ('${host}', '${name}', x'7631', '/')`);
+  }
+  const webData = path.join(profile, "Web Data");
+  sql(webData, "CREATE TABLE token_service (service TEXT, encrypted_token BLOB); INSERT INTO token_service VALUES ('AccountId-111', x'00'), ('AccountId-222', x'00')");
+  return root;
+}
+
+describe("keepsOwnLogin", () => {
+  test("covers Google and YouTube, host and subdomains, with or without the dot", () => {
+    for (const h of ["google.com", ".google.com", "accounts.google.com", "ads.google.com", "YouTube.com", "www.youtube.com"]) {
+      expect(keepsOwnLogin(h)).toBe(true);
+    }
+  });
+  test("leaves every other site to the cookie carry", () => {
+    for (const h of ["github.com", "mygoogle.com", "google.com.evil.example", "googleusercontent.com"]) {
+      expect(keepsOwnLogin(h)).toBe(false);
+    }
+  });
+});
+
+describe("cloneProfile: shared identity", () => {
+  test("strips Google cookies, Chrome account tokens and the signed-in identity, and stamps the clone", () => {
+    const root = identityRoot();
+    const dest = path.join(tempDir(), "clone");
+    const res = cloneProfile({ sourceDir: "Default", destRoot: dest, sourceRoot: root });
+
+    expect(res.detach.cookies).toBe(5);
+    expect(res.detach.tokens).toBe(2);
+    expect(res.detach.notes).toEqual([]);
+    expect(identityDetached(dest)).toBe(true);
+
+    const left = sql(path.join(dest, "Default", "Cookies"), "SELECT host_key FROM cookies ORDER BY host_key");
+    expect(left.split("\n")).toEqual([".github.com", "mygoogle.com"]);
+    expect(sql(path.join(dest, "Default", "Web Data"), "SELECT count(*) FROM token_service")).toBe("0");
+
+    const prefs = JSON.parse(fs.readFileSync(path.join(dest, "Default", "Preferences"), "utf-8"));
+    expect(prefs.account_info).toEqual([]);
+    expect(prefs.gaia_cookie).toBeUndefined();
+    expect(prefs.google.services).toBeUndefined();
+    expect(prefs.google.other).toBe(1); // only the account goes
+    expect(prefs.profile.exit_type).toBe("Normal"); // the crash-flag tidy still ran
+
+    const state = JSON.parse(fs.readFileSync(path.join(dest, "Local State"), "utf-8"));
+    expect(Object.keys(state.profile.info_cache)).toEqual(["Default"]);
+    expect(state.profile.info_cache.Default).toMatchObject({ name: "Ashot", gaia_id: "", user_name: "", is_consented_primary_account: false });
+    expect(state.profile.last_used).toBe("Default");
+  });
+
+  test("a resync keeps the Google login a person made in the agent browser", () => {
+    const root = identityRoot();
+    const dest = path.join(tempDir(), "clone");
+    cloneProfile({ sourceDir: "Default", destRoot: dest, sourceRoot: root });
+    // The person signs in to Google in the agent browser: its own rows, its own values.
+    const cloneDb = path.join(dest, "Default", "Cookies");
+    sql(cloneDb, "INSERT INTO cookies VALUES ('.google.com', 'SID', x'6f776e', '/'), ('accounts.google.com', 'LSID', x'6f776e', '/')");
+
+    const res = cloneProfile({ sourceDir: "Default", destRoot: dest, sourceRoot: root });
+    expect(res.ownLoginsKept).toBe(2);
+    const rows = sql(cloneDb, "SELECT host_key || ':' || name || ':' || hex(encrypted_value) FROM cookies WHERE host_key LIKE '%.google.com' ORDER BY 1");
+    expect(rows.split("\n")).toEqual([".google.com:SID:6F776E", "accounts.google.com:LSID:6F776E"]);
+    // And the human's copies still did not come along.
+    expect(sql(cloneDb, "SELECT count(*) FROM cookies WHERE name = '__Secure-1PSIDTS'")).toBe("0");
+  });
+
+  test("a resync over a clone from before the rule keeps nothing — those rows were the human's session", () => {
+    const root = identityRoot();
+    const dest = path.join(tempDir(), "clone");
+    cloneProfile({ sourceDir: "Default", destRoot: dest, sourceRoot: root });
+    fs.rmSync(path.join(dest, "cast-identity.json"));
+    sql(path.join(dest, "Default", "Cookies"), "INSERT INTO cookies VALUES ('.google.com', 'SID', x'6f776e', '/')");
+
+    const res = cloneProfile({ sourceDir: "Default", destRoot: dest, sourceRoot: root });
+    expect(res.ownLoginsKept).toBe(0);
+    expect(sql(path.join(dest, "Default", "Cookies"), "SELECT count(*) FROM cookies WHERE host_key LIKE '%.google.com'")).toBe("0");
+  });
+
+  test("detaching an existing clone is idempotent and survives stores it cannot read", () => {
+    const root = identityRoot();
+    const dest = path.join(tempDir(), "clone");
+    cloneProfile({ sourceDir: "Default", destRoot: dest, sourceRoot: root });
+    const again = detachSharedIdentity(dest);
+    expect(again.cookies).toBe(0);
+    expect(again.tokens).toBe(0);
+    expect(again.notes).toEqual([]);
+
+    // A cookie store that is not SQLite (the older fixtures) is reported, not
+    // fatal — and left alone, sidecars included.
+    const plain = path.join(tempDir(), "plain");
+    const res = cloneProfile({ sourceDir: "Default", destRoot: plain, sourceRoot: fixtureRoot({ withSidecars: true }) });
+    expect(identityDetached(plain)).toBe(true);
+    expect(res.detach.cookies).toBeNull();
+    expect(res.detach.notes.join(" ")).toContain("not a SQLite database");
+    expect(fs.readFileSync(path.join(plain, "Default", "Cookies-wal"), "utf-8")).toBe("uncommitted-tail");
   });
 });

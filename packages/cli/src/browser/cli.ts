@@ -33,7 +33,7 @@ import { describeHolders, planStop, releaseSession } from "./refcount.js";
 import { openDriver, type BrowserDriver } from "./driver.js";
 import { BrowserNotLive, explainConnectionLoss, isTabUnresponsive } from "./recovery.js";
 import {
-  browserHome, clonePath, cloneProfile, formatBytes, listRealProfiles, type ChromeChannel,
+  browserHome, clonePath, cloneProfile, formatBytes, keepsOwnLogin, listRealProfiles, type ChromeChannel,
 } from "./profile.js";
 import { matchRefs, nearMatches, snapshotPage } from "./snapshot.js";
 import {
@@ -51,7 +51,7 @@ import { DEFAULT_CLONE, resolveRemote, startLocalBrowser, startManagedBrowser, w
 import { ENGINE_MIN_VERSION, ENGINE_PACKAGE, engineFitness, findEngine } from "./engine.js";
 import { sameDocument } from "./url.js";
 import { loadSitePolicy } from "./policy.js";
-import { auditLanding, refuseNavigation } from "./siteGuard.js";
+import { auditLanding, refuseNavigation, signInLandingNote } from "./siteGuard.js";
 import { registerAuditCommand } from "./auditCommand.js";
 import { runBatch, type BatchContext } from "./batch.js";
 import { provisionCredentials } from "./credentials.js";
@@ -714,6 +714,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         // what was asked for, and if it left the allowlist, say so loudly.
         const landed = auditLanding({ url: snap.url, tab: targetId, session: me(), via: "open", policy });
         if (landed) console.log(`${WARN} ${landed}`);
+        const signIn = signInLandingNote(snap.url, keepsOwnLogin);
+        if (signIn) console.log(`${WARN} ${signIn}`);
         console.log(fmt.muted(`  ${tabLine(targetId, "next: cast browser snapshot")}`));
         await emitAutoShot(page, o.shot);
       } catch (err) {
