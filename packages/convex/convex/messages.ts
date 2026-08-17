@@ -1247,7 +1247,8 @@ export const addMessage = mutation({
     if (args.role === "user") {
       const hasContent = !!safeContent?.trim();
       const hasImages = args.images && args.images.length > 0;
-      if (hasContent || hasImages) {
+      const hasToolResults = !!args.tool_results && args.tool_results.length > 0;
+      if ((hasContent || hasImages) && !hasToolResults) {
         const recentMessages = await ctx.db
           .query("messages")
           .withIndex("by_conversation_timestamp", (q) =>
@@ -1255,11 +1256,10 @@ export const addMessage = mutation({
           )
           .order("desc")
           .take(5);
-        const dup = recentMessages.find(
-          (r) =>
-            r.role === "user" &&
-            redactSecrets(r.content || "").trim() === (safeContent || "").trim() &&
-            Math.abs(msgTimestamp - r.timestamp) < (hasContent ? 5 * 60 * 1000 : 30_000)
+        const dup = findDuplicateUserRow(
+          recentMessages,
+          { content: safeContent, timestamp: msgTimestamp, tool_results: args.tool_results, images: args.images },
+          redactSecrets,
         );
         if (dup) {
           return dup._id;
@@ -1556,6 +1556,43 @@ export function shouldApplyAddMessagesAgentStatusProjection(
   return agentStatusUpdatedAt === undefined || agentStatusUpdatedAt <= scheduledAt;
 }
 
+// Content-matched duplicate suppression for USER rows: the same typed message
+// (or the same pasted image with no text) can reach the server twice with
+// different uuids — a fast text-only sync path and a later image-aware one — so
+// a fresh user row within the window is folded into the existing one.
+//
+// A tool result is not a typed message. Its `content` is empty, so under the
+// image branch every screenshot-carrying result matched the previous tool
+// result row and was silently dropped (12 of 20 browser_batch results in one
+// session). Rows carrying tool_results are excluded on BOTH sides: an incoming
+// result is never folded, and an existing result row is never a fold target.
+export type UserDedupeRow = {
+  role: string;
+  content?: string;
+  timestamp: number;
+  tool_results?: unknown[];
+  images?: unknown[];
+};
+
+export function findDuplicateUserRow<T extends UserDedupeRow>(
+  recent: T[],
+  incoming: { content?: string; timestamp: number; tool_results?: unknown[]; images?: unknown[] },
+  normalize: (content: string) => string = (c) => c,
+): T | undefined {
+  if (incoming.tool_results && incoming.tool_results.length > 0) return undefined;
+  const content = (incoming.content || "").trim();
+  const hasImages = !!incoming.images && incoming.images.length > 0;
+  if (!content && !hasImages) return undefined;
+  const window = content ? 5 * 60 * 1000 : 30_000;
+  return recent.find(
+    (r) =>
+      r.role === "user" &&
+      !(r.tool_results && r.tool_results.length > 0) &&
+      normalize(r.content || "").trim() === content &&
+      Math.abs(incoming.timestamp - r.timestamp) < window,
+  );
+}
+
 export const addMessages = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -1679,7 +1716,8 @@ export const addMessages = mutation({
       if (msg.role === "user") {
         const hasContent = !!safeContent?.trim();
         const hasImages = msg.images && msg.images.length > 0;
-        if (hasContent || hasImages) {
+        const hasToolResults = !!msg.tool_results && msg.tool_results.length > 0;
+        if ((hasContent || hasImages) && !hasToolResults) {
           const recentMessages = await ctx.db
             .query("messages")
             .withIndex("by_conversation_timestamp", (q) =>
@@ -1687,11 +1725,10 @@ export const addMessages = mutation({
             )
             .order("desc")
             .take(5);
-          const dup = recentMessages.find(
-            (r) =>
-              r.role === "user" &&
-              redactSecrets(r.content || "").trim() === (safeContent || "").trim() &&
-              Math.abs(msgTimestamp - r.timestamp) < (hasContent ? 5 * 60 * 1000 : 30_000)
+          const dup = findDuplicateUserRow(
+            recentMessages,
+            { content: safeContent, timestamp: msgTimestamp, tool_results: msg.tool_results, images: msg.images },
+            redactSecrets,
           );
           if (dup && (!matchingPending?.client_id ||
             dup.client_id === matchingPending.client_id)) {
