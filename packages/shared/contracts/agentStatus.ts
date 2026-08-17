@@ -24,17 +24,46 @@ export const AGENT_STATUSES = [
   "stopped",
   "starting",
   "resuming",
+  // The three SETTLE VERDICTS below are siblings of "idle": the turn is over,
+  // and the status says why the agent stopped. The daemon re-derives the
+  // verdict at every turn end, so a verdict never outlives the settle that
+  // produced it — a wake (trigger inject, Monitor completion, a human message)
+  // flips the agent to "working" and the next settle must earn its verdict
+  // again. None of them is "active": the agent is not producing.
+  //
   // Turn ended but the harness holds live background work (a run_in_background
-  // command, a Monitor) that will re-invoke the agent when it finishes. The ball
-  // is NOT in the user's court, so this is an active substate, not idle. The
-  // daemon derives it from the transcript (open task starts minus terminal
-  // task-notifications); it decays through the normal STATUS_TRUST_TTL_MS path,
-  // so a task that never exits (e.g. a dev server) cannot pin a session in the
-  // working bucket forever.
+  // command, a Monitor, a workflow) that will re-invoke the agent when it
+  // finishes. Inferred from the transcript (open task starts minus terminal
+  // task-notifications), so it keeps the STATUS_TRUST_TTL_MS decay: a task that
+  // never exits (a dev server) cannot park a session forever.
   "waiting",
+  // Turn ended and the agent DECLARED it is parked on a nameable machine wake
+  // (`cast state --status dormant`). Exempt from the quiet-time decay — a
+  // nightly trigger's home is quiet for 23h by design — but a dead daemon still
+  // coerces it away, since a dead daemon cannot deliver the promised wake.
+  "dormant",
+  // Turn ended and the agent DECLARED the task delivered (`cast state --status
+  // done`). Nothing is stalled; the human reads it at leisure.
+  "done",
 ] as const;
 
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
+
+// The settle verdicts: turn over, agent quiet, and the status names why. Every
+// "is this session settled" predicate treats these exactly like "idle"; only
+// the work-state classifier tells them apart.
+export const SETTLE_VERDICT_STATUSES: ReadonlySet<string> = new Set<string>([
+  "waiting",
+  "dormant",
+  "done",
+]);
+
+// The declared subset — an agent said so, on purpose, this turn. Trusted past
+// the quiet-time decay because the declaration names the wake / the delivery.
+export const DECLARED_VERDICT_STATUSES: ReadonlySet<string> = new Set<string>([
+  "dormant",
+  "done",
+]);
 
 // The canonical "agent is actively producing" set. A session in one of these is
 // busy and should NOT be classified idle/needs-input. This reconciles three
@@ -42,7 +71,10 @@ export type AgentStatus = (typeof AGENT_STATUSES)[number];
 //   - web/store/inboxStore.ts ACTIVE_AGENT_STATUSES
 //   - convex/inboxFilters.ts ACTIVE_AGENT_STATUSES
 // which were already identical. "idle", "permission_blocked" and "stopped" are
-// deliberately excluded (finished / blocked on the user / dead).
+// deliberately excluded (finished / blocked on the user / dead), and so are the
+// SETTLE_VERDICT_STATUSES: a parked or delivered agent is not producing, and
+// putting "waiting" here used to file every Monitor-parked session under
+// WORKING and count it in the "N agents running" badge.
 //
 // NOTE on the deliberate CLI difference: cli/src/resourceMonitor.ts
 // WORKING_STATUSES omits "connected". That set gates CPU-idle accounting and the
@@ -60,6 +92,16 @@ export const ACTIVE_AGENT_STATUSES: ReadonlySet<string> = new Set<string>([
   "connected",
   "starting",
   "resuming",
+]);
+
+// Statuses the quiet-time trust decay (STATUS_TRUST_TTL_MS) applies to: every
+// ACTIVE status, plus the INFERRED settle verdict. "waiting" is scraped from
+// the transcript, so a background task that never emits a terminal notification
+// (a dev server, a wedged watch) would otherwise park its session forever; an
+// hour of silence demotes it to plain "idle" and the row resurfaces. The
+// declared verdicts are deliberately absent — see DECLARED_VERDICT_STATUSES.
+export const TRUST_DECAYING_STATUSES: ReadonlySet<string> = new Set<string>([
+  ...ACTIVE_AGENT_STATUSES,
   "waiting",
 ]);
 
