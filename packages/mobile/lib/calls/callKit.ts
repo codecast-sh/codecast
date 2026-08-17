@@ -42,16 +42,15 @@ import {
 type CallKitApi = typeof import("expo-callkit-telecom");
 
 let ck: CallKitApi | null | undefined;
+let ckLoadError: string | null = null;
 function getCallKit(): CallKitApi | null {
   if (ck !== undefined) return ck ?? null;
   try {
-    const { TurboModuleRegistry, NativeModules } = require("react-native");
-    const has = !!(TurboModuleRegistry?.get?.("ExpoCallKitTelecom") || NativeModules?.ExpoCallKitTelecom);
     // Expo modules register under ExpoModulesCore, not TurboModuleRegistry —
     // requiring is the reliable probe; it throws on a binary without the pod.
     ck = require("expo-callkit-telecom");
-    void has;
-  } catch {
+  } catch (e: any) {
+    ckLoadError = String(e?.message ?? e).slice(0, 300);
     ck = null;
   }
   return ck ?? null;
@@ -63,7 +62,12 @@ export const callKitAvailable = (): boolean => getCallKit() !== null;
 // CallKit's id ↔ our invite + room. One at a time — a second CallKit call
 // while one is up is the OS's "hold/end & accept" flow, which we map to
 // end-old + accept-new (huddles have no hold).
-type Active = { ckId: string; inviteId: string; roomKey: string; answered: boolean };
+type Active = { ckId: string; inviteId: string; roomKey: string; answered: boolean; reportedAt: number };
+// A CallKit ring reported from a VoIP push can precede the getMyCalls
+// subscription reflecting the invite (PushKit → CallKit is faster than Convex
+// propagation). Inside this window, absence from the subscription is not
+// evidence the ring settled.
+const RING_SETTLE_GRACE_MS = 5_000;
 let active: Active | null = null;
 let subs: EventSubscription[] = [];
 let unsubCall: (() => void) | null = null;
@@ -76,6 +80,7 @@ export async function endCallKitRingIfStale(liveInviteIds: Set<string>): Promise
   const k = getCallKit();
   if (!k || !active || active.answered) return;
   if (liveInviteIds.has(active.inviteId)) return;
+  if (Date.now() - active.reportedAt < RING_SETTLE_GRACE_MS) return;
   const { ckId } = active;
   active = null;
   try {
@@ -106,7 +111,7 @@ function onSessionAdded(session: any) {
   const inviteId = meta?.invite_id ?? ev?.serverCallId;
   const roomKey = meta?.room_key;
   if (!inviteId || !roomKey) return;
-  active = { ckId: session.id, inviteId, roomKey, answered: false };
+  active = { ckId: session.id, inviteId, roomKey, answered: false, reportedAt: Date.now() };
 }
 
 async function onAnswered(ev: { id: string; requestId: string }) {
@@ -159,10 +164,17 @@ export function startCallKitBridge(): void {
   if (!k) return;
   started = true;
 
+  const dbg = (name: string, e: any) => {
+    if (__DEV__) (global as any).__ckEvents?.push({ name, e: JSON.parse(JSON.stringify(e ?? null)) });
+  };
   subs = [
-    k.addCallSessionAddedListener((e: any) => onSessionAdded(e.session)),
-    k.addCallAnsweredListener((e: any) => void onAnswered(e)),
-    k.addCallEndedListener((e: any) => void onEnded(e)),
+    k.addCallSessionAddedListener((e: any) => { dbg("sessionAdded", e); onSessionAdded(e.session); }),
+    k.addCallSessionUpdatedListener((e: any) => dbg("sessionUpdated", e)),
+    k.addCallSessionRemovedListener((e: any) => dbg("sessionRemoved", e)),
+    k.addCallAnsweredListener((e: any) => { dbg("answered", e); void onAnswered(e); }),
+    k.addCallEndedListener((e: any) => { dbg("ended", e); void onEnded(e); }),
+    k.addReportedCallEndedListener((e: any) => dbg("reportedEnded", e)),
+    k.addIncomingCallReportedListener((e: any) => dbg("incomingReported", e)),
     k.addSetMutedActionListener((e: any) => onSetMuted(e)),
     // PushKit token → server, so invites route through APNs VoIP.
     k.addVoIPPushTokenUpdatedListener((e: any) => void publishVoipToken(e?.token ?? null)),
@@ -221,8 +233,12 @@ export function republishVoipToken(): void {
 }
 
 if (__DEV__) {
+  (global as any).__ckEvents = [] as any[];
   (global as any).__callKit = {
     available: callKitAvailable,
+    loadError: () => ckLoadError,
+    events: () => (global as any).__ckEvents,
+    mod: () => getCallKit(),
     active: () => active,
     // Simulate a VoIP-push-reported ring without APNs (the simulator has no
     // PushKit): reports straight to CallKit, same code path from there on.
