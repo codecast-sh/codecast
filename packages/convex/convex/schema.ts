@@ -30,6 +30,13 @@ const teamTaskStatusesValidator = v.array(v.object({
   category: taskStatusCategoryValidator,
   color: v.optional(v.union(...TASK_STATUS_COLORS.map((c) => v.literal(c)))),
 }));
+// Per-team opt-in features (chat, calls). Only flags that were ever set are
+// stored; an absent flag reads as OFF (teamFeatureEnabled in shared
+// contracts). Every key optional so a new feature needs no migration.
+const teamFeaturesValidator = v.object({
+  chat: v.optional(v.boolean()),
+  calls: v.optional(v.boolean()),
+});
 
 // The entity kinds that can participate in entity-conversation links.
 const linkableEntityTypeValidator = v.union(
@@ -78,6 +85,10 @@ export default defineSchema({
     github_avatar_url: v.optional(v.string()),
     github_access_token: v.optional(v.string()),
     push_token: v.optional(v.string()),
+    // PushKit VoIP token (hex device token, iOS only). Rings the phone through
+    // CallKit even when the app is killed; sent DIRECTLY to APNs (the Expo push
+    // service has no VoIP channel). Cleared when APNs reports it unregistered.
+    voip_push_token: v.optional(v.string()),
     notifications_enabled: v.optional(v.boolean()),
     // Opt-in: widen push presence from "active in Codecast" to "active anywhere
     // on this Mac". Off, only the web/Electron client reports presence, so
@@ -245,6 +256,9 @@ export default defineSchema({
     icon: v.optional(v.string()),
     icon_color: v.optional(v.string()),
     task_statuses: v.optional(teamTaskStatusesValidator),
+    // Opt-in features; default off. Enforced server-side at each feature's
+    // access chokepoint (teamFeatures.requireTeamFeature), hidden client-side.
+    features: v.optional(teamFeaturesValidator),
     created_at: v.number(),
     invite_code: v.string(),
     invite_code_expires_at: v.optional(v.number()),
@@ -461,7 +475,23 @@ export default defineSchema({
     inbox_stashed_at: v.optional(v.number()),
     inbox_killed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
+    // The user's "dormant" gesture: "a machine owns this, wake me when something
+    // happens". A stamp that any later activity silently expires — honored only
+    // while >= updated_at (see inboxFilters.isUserDormant), the same contract as
+    // inbox_deferred_at. Never cleared by hand; a wake, a message, or a new turn
+    // bumps updated_at past it and the row moves on.
+    inbox_dormant_at: v.optional(v.number()),
     inbox_pinned_at: v.optional(v.number()),
+    // The settle classifier's verdict for the settle it last inspected: "done"
+    // (delivered, no ask present), "dormant" (parked on a named machine wake),
+    // or "needs_input". Written by idleSummary alongside idle_summary, from the
+    // same model call over the same transcript tail, so the two can never
+    // describe different turns. Honored only while settle_verdict_at >=
+    // updated_at (inboxFilters.isSettleVerdictCurrent) and only when the agent
+    // made no declaration of its own — a declaration (agent_status dormant /
+    // done) always outranks the classifier.
+    settle_verdict: v.optional(v.string()),
+    settle_verdict_at: v.optional(v.number()),
     // Distinct from inbox_pinned_at: this is the PUBLIC-profile pin. Setting it
     // is the consent act that makes a session world-visible (the mutation also
     // guarantees a share_token, so the card deep-links to the existing /share
@@ -1578,6 +1608,10 @@ export default defineSchema({
     // and revives them, retrying until unblocked or every account is spent.
     // Web-set (setAutoSwitchAccounts); the heartbeat never writes these.
     cc_auto_switch: v.optional(v.boolean()),
+    // Same-account resume once the limit window resets (no switch). Unset
+    // means ON — see isAutoContinueEnabled; false is the explicit opt-out.
+    // Web-set (setAutoContinueAccounts). Shares cc_auto_switch_state.
+    cc_auto_continue: v.optional(v.boolean()),
     cc_auto_switch_state: v.optional(ccAutoSwitchStateValidator),
     // The in-flight browser sign-in round trip (web CTA → daemon `claude auth
     // login` → outcome). Web-set to pending; daemon-set to confirmed/rejected.
@@ -2058,6 +2092,9 @@ export default defineSchema({
     notification_id: v.optional(v.id("notifications")),
     type: v.optional(v.string()),
     title: v.string(),
+    // iOS second line ("#team", "thread · #team"). Only a single-row flush
+    // shows it — a batch collapses to counts where a subtitle would lie.
+    subtitle: v.optional(v.string()),
     body: v.string(),
     data: v.optional(v.any()),
     created_at: v.number(),
@@ -2146,6 +2183,19 @@ export default defineSchema({
   // told, means running commands on the owner's machine. The owner approves once
   // per session; the grant then lets performSessionSend accept that user's sends.
   // Co-writing the draft needs no grant — only firing it into the session does.
+  // A signed-in viewer who presented a conversation's share link. Access via a
+  // share link requires PRESENTING the token — id knowledge is not a grant
+  // (issue #27). Anonymous guests carry the token on every query; signed-in
+  // viewers redeem it once here and checkConversationAccess honors the row
+  // only while its stored token still matches the conversation's current one,
+  // so rotating or revoking the token cuts every past redeemer off.
+  share_redemptions: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    token: v.string(),
+    created_at: v.number(),
+  }).index("by_conversation_user", ["conversation_id", "user_id"]),
+
   collab_grants: defineTable({
     conversation_id: v.id("conversations"),
     grantee_user_id: v.id("users"),
@@ -3281,6 +3331,25 @@ export default defineSchema({
     started_at: v.number(),
     ended_at: v.optional(v.number()),
     title: v.optional(v.string()),
+    // A transcript IS the durable call object (the calls page, cast calls).
+    // Who spoke — accumulated from segment speaker ids as they append, so it
+    // reflects actual voices, not seat leases.
+    participants: v.optional(
+      v.array(v.object({ id: v.string(), name: v.string() })),
+    ),
+    // Generated when the transcript ends (internal.transcripts.generateSummary):
+    // a few sentences of what happened, plus extracted action items.
+    summary: v.optional(v.string()),
+    action_items: v.optional(v.array(v.string())),
+    summary_status: v.optional(
+      v.union(
+        v.literal("pending"),
+        v.literal("done"),
+        v.literal("failed"),
+        // Too little was said to summarize.
+        v.literal("skipped"),
+      ),
+    ),
     routes: v.array(
       v.object({
         kind: v.union(v.literal("session"), v.literal("doc"), v.literal("slack")),
@@ -3297,7 +3366,9 @@ export default defineSchema({
     last_seq: v.number(),
   })
     .index("by_room", ["room_key"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    // The calls page / cast calls: a team's call history, newest first.
+    .index("by_team_started", ["team_id", "started_at"]),
 
   transcript_segments: defineTable({
     transcript_id: v.id("transcripts"),
