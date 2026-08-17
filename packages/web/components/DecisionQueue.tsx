@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { usePendingPermissions } from "../hooks/useSyncPendingPermissions";
 import { isUsageLimitDialog } from "@codecast/shared/contracts";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { useInboxStore } from "../store/inboxStore";
@@ -154,9 +153,10 @@ function DecisionCard({
   // its own mutation and y/n keys, which is also the safety property here —
   // approving a command must never be reachable from the digit that answers
   // the card before it in the stack.
-  const permissionsRaw = useQuery(
-    (_api as any).permissions.getPendingPermissions,
-    item.source === "permission" ? { conversation_id: item.conversationId } : "skip"
+  // Store-fed (hooks/useSyncPendingPermissions): the card paints from cached
+  // rows at boot instead of an empty slot waiting on a round-trip.
+  const permissionsRaw = usePendingPermissions(
+    item.source === "permission" ? item.conversationId : null,
   );
   const permissions = useMemo(
     () => (permissionsRaw ?? []).filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name)),

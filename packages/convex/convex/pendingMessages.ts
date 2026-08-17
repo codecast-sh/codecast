@@ -1123,7 +1123,7 @@ export const getConversationPendingMessage = query({
       ?? visible.find((m) => m.status === "undeliverable")
       ?? null;
     if (!msg) return null;
-    return { created_at: msg.created_at, retry_count: msg.retry_count, status: msg.status as string, content: msg.content };
+    return { message_id: msg._id, created_at: msg.created_at, retry_count: msg.retry_count, status: msg.status as string, content: msg.content };
   },
 });
 

@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
+import { useAggregateMetrics, useManagedSessions } from "../../hooks/useSyncManagedSessions";
 import { AuthGuard } from "../../components/AuthGuard";
 import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
@@ -208,7 +209,9 @@ function SessionMetricsChart({ sessionId }: { sessionId: string }) {
 // ---- Aggregate Overview ----
 
 function AggregateOverview({ sessions }: { sessions: ClassifiedSession[] }) {
-  const aggregateMetrics = useQuery(api.managedSessions.getAggregateMetrics);
+  // Store-fed (hooks/useSyncManagedSessions): the chart paints from the
+  // cached samples and the feeder replaces them as the server recomputes.
+  const { metrics: aggregateMetrics } = useAggregateMetrics();
 
   const totals = useMemo(() => {
     let mem = 0, cpu = 0, procs = 0;
@@ -309,11 +312,14 @@ function AggregateChart({ metrics }: { metrics: AggregatePoint[] }) {
 // ---- Main View ----
 
 function SessionsView() {
-  const sessions = useQuery(api.managedSessions.listActiveSessions);
+  // Store-fed (hooks/useSyncManagedSessions): the fleet table paints from the
+  // cached rows synchronously; "loading" shows only for a genuinely cold cache.
+  const { sessions: managedRows, ready: managedReady } = useManagedSessions();
+  const sessions = managedReady || managedRows.length > 0 ? managedRows : undefined;
   // Triage state (pinned / needs-input / working / dismissed) lives on the
-  // conversation and is computed by listInboxSessions; we join it in by id
-  // rather than recompute the (message-read-heavy) logic here.
-  const inboxData = useQuery(api.conversations.listInboxSessions, { show_all: true });
+  // conversation row — the inbox's own synced sessions collection, joined by
+  // id, so no second listInboxSessions subscription duplicates the sync.
+  const storeSessions = useInboxStore((st) => st.sessions);
   const convCommand = useInboxStore((s) => s.convCommand);
   const pruneSession = useMutation(api.managedSessions.unregisterManagedSession);
   // Local-first: patchConversation mutates conversations[id] synchronously and
@@ -342,9 +348,9 @@ function SessionsView() {
 
   const inboxById = useMemo(() => {
     const m = new Map<string, InboxSession>();
-    for (const s of inboxData?.sessions ?? []) m.set(String(s._id), s as InboxSession);
+    for (const id in storeSessions) m.set(id, storeSessions[id] as InboxSession);
     return m;
-  }, [inboxData]);
+  }, [storeSessions]);
 
   const classified = useMemo((): ClassifiedSession[] => {
     if (!sessions) return [];

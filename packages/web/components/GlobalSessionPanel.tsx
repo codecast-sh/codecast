@@ -34,7 +34,8 @@ import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
-import { partitionTriggerInbox, groupSessionsByTrigger, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
+import { partitionTriggerInbox, groupSessionsByTrigger, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
+import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
 import { sessionHasOpenQuestion } from "../lib/decisionQueue";
@@ -55,11 +56,7 @@ import { useTipActions, checkMilestone } from "../tips";
 import { RESTART_GIVE_UP_AFTER_MS } from "../hooks/useSessionRestart";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 
-// Moved to sessionMessage.ts (pure module) so the mobile bundle can share it;
-// re-exported here for existing importers.
-export { cleanUserMessage };
-
-export function formatIdleDuration(updatedAt: number): string {
+function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
   const minutes = Math.floor(diff / 60000);
   if (minutes < 1) return "<1m";
@@ -69,7 +66,6 @@ export function formatIdleDuration(updatedAt: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-export { getProjectName } from "../store/inboxStore";
 
 // -- InboxConversation (shared) --
 
@@ -1100,28 +1096,16 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
   // to query. See triggerTasks.ts.
   const isPseudo = !!row.kind;
   const now = useCoarseNow(30_000);
-  // Every verb patches the local webList cache in the same write (local-first):
-  // the row flips the instant it's clicked; the server echo reconciles.
-  const pause = useMutation(api.agentTasks.webPause).withOptimisticUpdate(
-    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "paused" }),
-  );
-  const resume = useMutation(api.agentTasks.webResume).withOptimisticUpdate(
-    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "scheduled" }),
-  );
-  const runNow = useMutation(api.agentTasks.webRunNow).withOptimisticUpdate(
-    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "scheduled", run_at: Date.now() }),
-  );
-  const cancel = useMutation(api.agentTasks.webCancel).withOptimisticUpdate(
-    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "completed" }),
-  );
-  const reactivate = useMutation(api.agentTasks.webReactivate).withOptimisticUpdate(
-    (ls: any, args: any) =>
-      patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, {
-        status: "scheduled",
-        run_at: Date.now() + (task.schedule_type === "recurring" && task.interval_ms ? task.interval_ms : 60_000),
-      }),
-  );
+  // Every verb is a store action (local-first): the agent_tasks row flips on
+  // the draft the instant it's clicked and the dispatch side effect runs the
+  // real mutation. Same actions the triggers page and the strip use.
+  const triggerAction = useInboxStore((st) => st.triggerAction);
   const taskId = task._id as Id<"agent_tasks">;
+  const runNow = () => triggerAction(taskId, "runNow");
+  const pause = () => triggerAction(taskId, "pause");
+  const resume = () => triggerAction(taskId, "resume");
+  const cancel = () => triggerAction(taskId, "cancel");
+  const reactivate = () => triggerAction(taskId, "reactivate");
   const paused = task.status === "paused";
   const isActive = !!row.openId && row.openId === activeSessionId;
   const accent = schedAccent(task);
@@ -1345,7 +1329,7 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
           <ShortcutTooltip label="Run now" side="top">
             <button
               aria-label="Run now"
-              onClick={(e) => { e.stopPropagation(); runNow({ task_id: taskId }).catch(() => {}); toast.success("Run queued"); }}
+              onClick={(e) => { e.stopPropagation(); runNow(); toast.success("Run queued"); }}
               className="p-1 rounded text-sol-text-dim hover:text-sol-amber hover:bg-sol-amber/10 transition-[color,background-color,transform] duration-100 active:scale-90"
             >
               <Play className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} />
@@ -1357,7 +1341,7 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
             aria-label={paused ? "Resume trigger" : "Pause trigger"}
             onClick={(e) => {
               e.stopPropagation();
-              (paused ? resume({ task_id: taskId }) : pause({ task_id: taskId })).catch(() => {});
+              if (paused) resume(); else pause();
             }}
             className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-[color,background-color,transform] duration-100 active:scale-90"
           >
@@ -1393,14 +1377,14 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
               {task.status !== "running" && (
                 <CtxItem
                   icon={Play}
-                  onSelect={() => { runNow({ task_id: taskId }).catch(() => {}); toast.success("Run queued"); }}
+                  onSelect={() => { runNow(); toast.success("Run queued"); }}
                 >
                   Run now
                 </CtxItem>
               )}
               <CtxItem
                 icon={paused ? Play : Pause}
-                onSelect={() => { (paused ? resume({ task_id: taskId }) : pause({ task_id: taskId })).catch(() => {}); }}
+                onSelect={() => { if (paused) resume(); else pause(); }}
               >
                 {paused ? "Resume trigger" : "Pause trigger"}
               </CtxItem>
@@ -1422,8 +1406,8 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
                 danger
                 icon={X}
                 onSelect={() => {
-                  cancel({ task_id: taskId }).catch(() => {});
-                  toast("Trigger canceled", { description: taskDisplayTitle(task), action: { label: "Undo", onClick: () => { reactivate({ task_id: taskId }).catch(() => {}); } } });
+                  cancel();
+                  toast("Trigger canceled", { description: taskDisplayTitle(task), action: { label: "Undo", onClick: () => { reactivate(); } } });
                 }}
               >
                 Cancel trigger
@@ -1443,7 +1427,7 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
 // same way its full row would. The pill's ⚡ toggle unfolds every strip into
 // full rows; nothing here is a second way to expand.
 const SCHED_ACCENT_RANK: Record<SchedAccent, number> = { running: 0, attention: 1, normal: 2, paused: 3 };
-export function primaryTriggerRow(rows: TriggerRow[]): TriggerRow {
+function primaryTriggerRow(rows: TriggerRow[]): TriggerRow {
   return rows.reduce((best, r) => {
     const d = SCHED_ACCENT_RANK[schedAccent(r.task)] - SCHED_ACCENT_RANK[schedAccent(best.task)];
     if (d !== 0) return d < 0 ? r : best;
@@ -2342,9 +2326,9 @@ export const SessionCard = memo(function SessionCard({
                 ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
                 // The agent's declared status tints the resting row: amber for
                 // "needs input", green for "complete". Liveness outranks it —
-                // a running agent isn't blocked-on-you right now — and a stale
-                // state loses the tint rather than shouting an old claim.
-                : stateView?.status && stateView.status !== "working" && stateView.freshness !== "stale" && !session.implementation_session
+                // a running agent isn't blocked-on-you right now. (A stale
+                // state has no view at all, so it can't tint anything.)
+                : stateView?.status && stateView.status !== "working" && !session.implementation_session
                   ? `${THREAD_STATE_STATUS_META[stateView.status].row} hover:bg-sol-bg-alt/80`
                   : "hover:bg-sol-bg-alt/80"
       }`}
@@ -2410,12 +2394,12 @@ export const SessionCard = memo(function SessionCard({
                 quiet: the liveness pulse already says "running". */}
             {stateView.status && stateView.status !== "working" && (
               <span
-                className={`shrink-0 mt-[1px] px-1 py-0 rounded border text-[9px] font-semibold uppercase tracking-wide ${THREAD_STATE_STATUS_META[stateView.status].chip} ${stateView.freshness === "stale" ? "opacity-60" : ""}`}
+                className={`shrink-0 mt-[1px] px-1 py-0 rounded border text-[9px] font-semibold uppercase tracking-wide ${THREAD_STATE_STATUS_META[stateView.status].chip}`}
               >
                 {THREAD_STATE_STATUS_META[stateView.status].label}
               </span>
             )}
-            <span className={`text-[11px] truncate leading-snug ${stateView.freshness === "stale" ? "text-sol-text-dim" : "text-sol-text-secondary"}`}>
+            <span className="text-[11px] truncate leading-snug text-sol-text-secondary">
               {stateView.cardLine}
             </span>
           </div>
@@ -3120,7 +3104,10 @@ export function SessionListPanel({
   // sessions absorbed behind those rows (resting loop homes + uneventful runs),
   // and the armed-inject map the kill gesture consults. All membership rules
   // live in partitionTriggerInbox.
-  const scheduleTasks = useQuery(api.agentTasks.webList, {}) as TaskRow[] | undefined;
+  // Store-fed (hooks/useSyncTriggers): the schedule rows paint from the
+  // cached roster at boot instead of waiting a round-trip.
+  const { tasks: scheduleTaskRows, ready: schedulesReady } = useTriggers();
+  const scheduleTasks = (schedulesReady || scheduleTaskRows.length > 0 ? scheduleTaskRows : undefined) as TaskRow[] | undefined;
   const schedulesSeenAt = s.clientState.ui?.schedules_seen_at ?? 0;
   const schedulePartition = useMemo(
     () => partitionTriggerInbox(scheduleTasks, visibleSessions, {
@@ -3314,8 +3301,7 @@ export function SessionListPanel({
     const beforeIds = new Set([st.currentSessionId, st.viewingDismissedId].filter(Boolean));
     handleSelect(sess);
     if (!hasRun) return;
-    convex
-      .query(api.agentTasks.webListRuns, { task_id: row.task._id as Id<"agent_tasks"> })
+    fetchTriggerRuns(convex, row.task._id)
       .then((runs: TriggerRun[]) => {
         const run = runs?.[0];
         if (!run?.trigger_message_id || run._id !== sess._id) return;

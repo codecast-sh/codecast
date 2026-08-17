@@ -6,8 +6,7 @@
 import { useMemo, useState, useCallback, Component, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useQuery } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useSessionThreads } from "../../hooks/useSyncSessionThreads";
 import { useTrackedStore } from "../../store/inboxStore";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -31,7 +30,6 @@ import {
   Copy,
 } from "lucide-react";
 
-const api = _api as any;
 
 type Link0 = {
   _id: string;
@@ -159,9 +157,10 @@ function CrosstalkReconnecting({ onRetry }: { onRetry: () => void }) {
 
 function CrosstalkInner() {
   const router = useRouter();
-  const data = useQuery(api.sessionThreads.listSessionThreads, {}) as
-    | { links: Link0[]; nodes: Node0[]; generatedAt: number }
-    | undefined;
+  // Store-fed (hooks/useSyncSessionThreads): the graph paints from the cached
+  // snapshot; the feeder replaces it as the server recomputes.
+  const { threads } = useSessionThreads();
+  const data = (threads ?? undefined) as { links: Link0[]; nodes: Node0[] } | undefined;
 
   const s = useTrackedStore([
     (st) => st.sessions,

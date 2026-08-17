@@ -16,14 +16,12 @@
 
 import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useTriggerRuns as useStoreTriggerRuns } from "../hooks/useSyncTriggers";
 import { ArrowUpRight } from "lucide-react";
 import { fmtClock, fmtDuration } from "./triggerCadence";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { useInboxStore } from "../store/inboxStore";
 
-const api = _api as any;
 
 // agentTasks.webListRuns payload. `_id` is the conversation a run lives in
 // (inject runs share their schedule's home conversation); `run_key` is unique
@@ -41,12 +39,11 @@ export type TriggerRun = {
   trigger_message_timestamp?: number;
 };
 
-// Subscribe to a schedule's run history. Pass null/undefined to skip (e.g.
-// while the surface is collapsed) so closed rows cost no query.
+// A schedule's run history, from the store (hooks/useSyncTriggers feeds and
+// reads store.agentTaskRuns). Pass null/undefined to skip (e.g. while the
+// surface is collapsed) so closed rows cost no query.
 export function useTriggerRuns(taskId: string | null | undefined): TriggerRun[] | undefined {
-  return useQuery(api.agentTasks.webListRuns, taskId ? { task_id: taskId } : "skip") as
-    | TriggerRun[]
-    | undefined;
+  return useStoreTriggerRuns(taskId) as TriggerRun[] | undefined;
 }
 
 // Navigate to a run's trigger message through the store's atomic deep-link

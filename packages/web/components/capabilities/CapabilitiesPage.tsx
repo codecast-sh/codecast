@@ -12,6 +12,7 @@ import { useDevices } from "../DeviceBadge";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useSyncCapabilityState, useSyncCapabilityBindings } from "../../hooks/useSyncCapabilityState";
+import { useSyncDevices } from "../../hooks/useSyncDevices";
 import {
   capabilityStateWakeSig,
   isCapabilityReportStale,
@@ -208,7 +209,11 @@ function useFleet(): {
   // the same query here costs nothing: the Convex client keys a watch by query
   // and args, so this is the identical subscription every device chip in the app
   // already holds, read for whether it has resolved rather than for its rows.
-  const rosterResolved = useQuery(api.devices.listDevices, {}) !== undefined;
+  // Store-fed: a persisted roster resolves at boot; the feeder's `ready` (or a
+  // populated cache) is what tells the skeleton from the "no machines" panel.
+  const { ready: rosterLive } = useSyncDevices();
+  const rosterCached = useInboxStore((s) => s.machineRoster.length > 0);
+  const rosterResolved = rosterLive || rosterCached;
   const sig = useInboxStore((s) => capabilityStateWakeSig(readCapabilityState(s)));
   const now = useCoarseNow(60_000);
 

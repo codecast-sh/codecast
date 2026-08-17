@@ -293,7 +293,7 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "workflows" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    feeds: ["workflows.webList"],
+    feeds: ["workflows.webList", "workflows.webGet"],
   },
   // Workflow runs, fed by three windows (listDynamicRuns, listForWorkflow,
   // get) that overlay into one collection. The per-node `session` enrichment
@@ -304,7 +304,7 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     indexes: "_id, workflow_id",
     sync: { isDelta: true },
-    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow"],
+    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get"],
   },
   // Published pages (artifacts). listForWeb returns the complete visible set
   // — own plus shareable teammates' — so snapshot. Rows have no server _id;
@@ -381,6 +381,18 @@ export const CLIENT_SYNC_REGISTRY = {
   pendingMessageStatus: {
     sync: { isDelta: true },
     feeds: ["pendingMessages.getConversationPendingMessage"],
+  },
+  // The message feed (getMessageFeed): the viewer's and teammates' user
+  // messages, keyed by message id. The newest page rides a live subscription
+  // and older pages arrive as one-shot fetches; every page overlays (delta),
+  // like feedConversations. Paging cursors live in feedCursors/feedHasMore
+  // under "msg:<filter>". A "my" view is the rows with is_own.
+  messageFeed: {
+    persistence: { kind: "collection", key: "messageFeed" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, timestamp",
+    sync: { isDelta: true },
+    feeds: ["conversations.getMessageFeed"],
   },
   // The viewer's device roster (listDevices), keyed by device_id. Persisted so
   // /capabilities, device chips and the terminal picker paint at boot. The

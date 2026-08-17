@@ -2,6 +2,7 @@
 // runs collection (registry: workflowRuns isDelta).
 import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "../store/inboxStore";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 
@@ -72,4 +73,22 @@ export function useWorkflowRun(runId: string | null | undefined): any | null | u
   if (!runId) return undefined;
   if (rows[0]) return rows[0];
   return ready ? null : undefined;
+}
+
+/** Feeder: one workflow by id (same raw doc shape as webList). */
+export function useSyncWorkflow(id: string | null | undefined) {
+  return useSyncCollection(
+    "workflows",
+    api.workflows.webGet,
+    id ? { id } : "skip",
+    { select: (row: any) => (row ? [row] : []) },
+  );
+}
+
+/** Reader: one workflow (undefined while cold, null once the server said no). */
+export function useWorkflow(id: string | null | undefined): any | null | undefined {
+  const { ready } = useSyncWorkflow(id);
+  const row = useInboxStore((s) => (id ? (s.workflows as any)[id] : undefined));
+  if (!id) return undefined;
+  return row ?? (ready ? null : undefined);
 }

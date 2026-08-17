@@ -6611,11 +6611,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
       }
     }
 
-    if (!config.altKey && !config.extra && !config.transform) {
+    // No-op push: nothing to commit. Decided by ROW IDENTITY — applySyncTable
+    // hands back the previous row object whenever nothing it compares changed
+    // — never by `updated_at` alone: a table whose rows carry no updated_at
+    // (agent_tasks) made every push after the first look identical
+    // (undefined === undefined) and silently dropped real changes. And the
+    // pending map must land even when the rows didn't: an echo that CLEARS a
+    // local-first field protection changes pending, not the table.
+    if (!config.altKey && !config.extra && !config.transform && base.pending === pending) {
       if (prevCollection) {
         const newKeys = Object.keys(table);
         if (newKeys.length === Object.keys(prevCollection).length &&
-            newKeys.every(k => prevCollection[k]?.updated_at === (table[k] as any)?.updated_at)) {
+            newKeys.every(k => prevCollection[k] === table[k])) {
           return;
         }
       }

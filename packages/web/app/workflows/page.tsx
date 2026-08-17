@@ -2,7 +2,8 @@
 
 import { useState, useCallback } from "react";
 import Link from "next/link";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
+import { useSyncWorkflowRuns, useWorkflowRun, useWorkflowRuns, useWorkflows } from "../../hooks/useSyncWorkflows";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { AppLoader } from "../../components/AppLoader";
@@ -393,10 +394,14 @@ function RunsPanel({ workflowId, activeRunId, onSelectRun }: {
   activeRunId: string | null;
   onSelectRun: (id: string | null) => void;
 }) {
-  const runs = useQuery(api.workflow_runs.listForWorkflow, { workflow_id: workflowId }) as WorkflowRun[] | undefined;
+  // Store-fed: the panel paints from cached runs; the feeder overlays this
+  // workflow's newest window.
+  useSyncWorkflowRuns(workflowId);
+  const runWhere = useCallback((r: any) => r.workflow_id === workflowId, [workflowId]);
+  const runs = useWorkflowRuns(runWhere) as WorkflowRun[];
   const cancelRun = useMutation(api.workflow_runs.cancel);
 
-  if (!runs || runs.length === 0) return null;
+  if (runs.length === 0) return null;
 
   return (
     <div className="border-t border-sol-border/20 bg-sol-bg-alt">
@@ -445,7 +450,10 @@ function RunsPanel({ workflowId, activeRunId, onSelectRun }: {
 }
 
 function WorkflowsContent() {
-  const workflows = useQuery(api.workflows.webList) as Workflow[] | undefined;
+  // Store-fed (hooks/useSyncWorkflows): paints from the cache synchronously;
+  // `undefined` only while the cache is empty AND the first answer is in flight.
+  const { workflows: workflowRows, ready: workflowsReady } = useWorkflows();
+  const workflows = (workflowsReady || workflowRows.length > 0 ? workflowRows : undefined) as Workflow[] | undefined;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<WFNode | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -462,10 +470,7 @@ function WorkflowsContent() {
     return parts.join("\n");
   }, [selected]);
 
-  const activeRun = useQuery(
-    api.workflow_runs.get,
-    activeRunId ? { id: activeRunId } : "skip"
-  ) as WorkflowRun | null | undefined;
+  const activeRun = useWorkflowRun(activeRunId) as WorkflowRun | null | undefined;
 
   const nodeStatuses = activeRun?.node_statuses
     ? Object.fromEntries(
