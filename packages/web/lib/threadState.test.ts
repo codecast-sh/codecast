@@ -43,14 +43,22 @@ describe("threadStateView", () => {
     expect(v.messagesSince).toBe(0);
   });
 
-  test("a far-behind state is marked stale", () => {
+  test("a far-behind state is hidden, not shown stale", () => {
     const v = threadStateView(
       { thread_state: "Waiting on CI", thread_state_at: NOW - 60_000, thread_state_msg_count: 0 },
       400,
       NOW,
-    )!;
-    expect(v.freshness).toBe("stale");
-    expect(v.provenance).toContain("400 messages since");
+    );
+    expect(v).toBeNull();
+  });
+
+  test("a state parked for days is hidden too", () => {
+    const v = threadStateView(
+      { thread_state: "Waiting on CI", thread_state_at: NOW - 3 * 24 * 60 * 60_000, thread_state_msg_count: 0 },
+      0,
+      NOW,
+    );
+    expect(v).toBeNull();
   });
 
   test("a row with no write-time count claims no gap", () => {

@@ -5,9 +5,8 @@ import { Pin, ChevronDown, X } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
-import { threadStateView, THREAD_STATE_STATUS_META } from "../lib/threadState";
+import { threadStateView, THREAD_STATE_STATUS_META, type ThreadStateView } from "../lib/threadState";
 import { FormattedSummary } from "./FormattedSummary";
-import type { ThreadStateFreshness } from "@codecast/shared/contracts";
 
 // The pinned thread state, rendered directly above the composer: the agent's own
 // standing answer to "where does this thread stand?", so a human opening a long
@@ -16,12 +15,12 @@ import type { ThreadStateFreshness } from "@codecast/shared/contracts";
 // The panel is deliberately loud about age. A pinned line that has quietly gone
 // wrong is worse than no line at all, so the header always carries how long ago
 // the agent wrote it and how many messages have landed since, and the accent
-// walks from cyan to yellow to orange as that gap grows.
+// walks from cyan to yellow as that gap grows. Past that the view is null and
+// the panel disappears (lib/threadState decides the cutoff).
 
-const TONE: Record<ThreadStateFreshness, { bar: string; label: string; meta: string }> = {
+const TONE: Record<ThreadStateView["freshness"], { bar: string; label: string; meta: string }> = {
   fresh: { bar: "border-l-sol-cyan/70", label: "text-sol-cyan/80", meta: "text-sol-text-dim" },
   aging: { bar: "border-l-sol-yellow/70", label: "text-sol-yellow/90", meta: "text-sol-yellow/70" },
-  stale: { bar: "border-l-sol-orange/70", label: "text-sol-orange/90", meta: "text-sol-orange/80" },
 };
 
 export const ThreadStatePanel = memo(function ThreadStatePanel({
@@ -41,8 +40,8 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
   messageCount?: number | null;
   canClear?: boolean;
 }) {
-  // The age and the "stale" verdict are time-driven, not field-driven — without
-  // a coarse ticker the panel would keep claiming "just now" for hours.
+  // The age and the stale cutoff are time-driven, not field-driven — without a
+  // coarse ticker the panel would keep claiming "just now" for hours.
   const now = useCoarseNow(30_000);
   const collapsed = useInboxStore((s) => s.clientState?.ui?.thread_state_collapsed === true);
 
@@ -139,7 +138,7 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
               </span>
               {statusMeta && (
                 <span
-                  className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-[9px] font-semibold uppercase tracking-wide ${statusMeta.chip} ${view.freshness === "stale" ? "opacity-60" : ""}`}
+                  className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-[9px] font-semibold uppercase tracking-wide ${statusMeta.chip}`}
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-current" />
                   {statusMeta.label}
