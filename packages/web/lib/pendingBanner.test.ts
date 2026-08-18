@@ -90,3 +90,24 @@ describe("pendingBannerState", () => {
     expect(pendingBannerState("idle", opts({ restartInFlight: true, retryEligible: false }))).toBe("stuck");
   });
 });
+
+// 2026-08-16: the daemon restarted twice and then froze 5–48s at a time under
+// machine load. Every sent message sat unechoed and the bubble said "Message
+// hasn't reached the agent" with a kill & restart button — the message HAD
+// reached the agent, and the restart would have gone through the frozen daemon.
+import { withDaemonHealth } from "./pendingBanner";
+
+test("a degraded daemon replaces the session verdict with a daemon note", () => {
+  expect(withDaemonHealth("stuck", { daemonDegraded: true, restartInFlight: false })).toBe("daemon");
+  expect(withDaemonHealth("queued", { daemonDegraded: true, restartInFlight: false })).toBe("daemon");
+});
+
+test("a healthy daemon leaves the session verdict alone", () => {
+  expect(withDaemonHealth("stuck", { daemonDegraded: false, restartInFlight: false })).toBe("stuck");
+  expect(withDaemonHealth("queued", { daemonDegraded: false, restartInFlight: false })).toBe("queued");
+});
+
+test("nothing to say stays nothing, and a restart in flight keeps its progress UI", () => {
+  expect(withDaemonHealth("none", { daemonDegraded: true, restartInFlight: false })).toBe("none");
+  expect(withDaemonHealth("stuck", { daemonDegraded: true, restartInFlight: true })).toBe("stuck");
+});

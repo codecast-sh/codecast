@@ -6,8 +6,10 @@ import { tabTitle, tabSessionId, chatTabTitle } from "../lib/tabTitle";
 import { pathLabel } from "../lib/pathLabel";
 import { bridge, isDesktop, isDetachedTabWindow } from "../lib/desktop";
 import { PageIcon } from "./RecentlyViewedMenu";
-import { LivenessDot, sessionLivenessState } from "./LivenessDot";
+import { LivenessDot } from "./LivenessDot";
+import { sessionLivenessState } from "../lib/liveness";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
+import { useTitlebarHead } from "../hooks/useTitlebarHead";
 
 export function TabBar() {
   // A detached tab window (desktop breakout) renders its one surface with no
@@ -28,6 +30,7 @@ export function TabBar() {
     // signature, so a DM tab also wakes when its counterpart's name loads.
     (s) => s.tabs.map((t) => chatTabTitle(t.path, s.chatChannels, s.teamMembers, (s as any).currentUser?._id) ?? "").join("\x1f"),
   ]);
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const tabs = s.tabs;
@@ -155,7 +158,7 @@ export function TabBar() {
   if (tabs.length <= 1) return null;
 
   return (
-    <div className="flex-shrink-0 bg-sol-bg-alt/50 border-b border-sol-border/20 flex items-center h-[32px] pl-2 pr-1 gap-1 overflow-hidden">
+    <div ref={titlebarRef} className="flex-shrink-0 bg-sol-bg-alt/50 border-b border-sol-border/20 flex items-center h-[32px] pl-2 pr-1 gap-1 overflow-hidden">
       <div
         ref={scrollRef}
         className="flex items-center gap-1 overflow-x-auto scrollbar-none flex-1 min-w-0"

@@ -1,6 +1,6 @@
 "use client";
 import { useMemo, useState, useRef } from "react";
-import { Activity, Clock, LayoutGrid, MessageSquare } from "lucide-react";
+import { Activity, Clock, LayoutGrid, MessageSquare, Send } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import { SegmentedToggle } from "./SegmentedToggle";
 import { HEAT_COLORS_LIGHT, HEAT_COLORS_DARK, heatColor, useContainerWidth, HoverTip } from "./ActivityHeatmap";
@@ -10,8 +10,10 @@ import { HEAT_COLORS_LIGHT, HEAT_COLORS_DARK, heatColor, useContainerWidth, Hove
 // public profile (anonymized punchcard query). Purely presentational: callers
 // fetch their own data and pass it in as `punchcard`.
 
-export type PunchRow = { date: string; hours: number[]; msgs: number[]; sessions: number[]; day_sessions: number };
-export type TimelineMetric = "hours" | "msgs";
+// `sends` (messages the person actually typed) shipped later than the rest —
+// older cached payloads may omit it, so consumers treat it as optional zeros.
+export type PunchRow = { date: string; hours: number[]; msgs: number[]; sends?: number[]; sessions: number[]; day_sessions: number };
+export type TimelineMetric = "hours" | "msgs" | "sends";
 
 export function fmtK(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
@@ -53,7 +55,23 @@ const METRIC_CFG = {
     fmtVal: (v: number) => `${fmtK(Math.round(v))} msgs`,
     fmtAxis: (v: number) => fmtK(Math.round(v)),
   },
+  sends: {
+    label: "Typed",
+    heading: "Messages typed per day",
+    line: "#268bd2",
+    light: ["#eee8d5", "#c3d9e8", "#8cbcdd", "#4d9cd4", "#268bd2"] as string[],
+    dark: ["#073642", "#0d4a63", "#15618a", "#1d78b1", "#268bd2"] as string[],
+    fmtVal: (v: number) => `${fmtK(Math.round(v))} typed`,
+    fmtAxis: (v: number) => fmtK(Math.round(v)),
+  },
 } as const;
+
+// Metric accessor tolerant of payloads that predate the sends counters.
+export function metricHours(r: PunchRow, metric: TimelineMetric): number[] {
+  if (metric === "hours") return r.hours;
+  if (metric === "msgs") return r.msgs;
+  return r.sends ?? zeros24();
+}
 
 const RANGE_DAYS: Record<string, number | null> = { "1m": 30, "3m": 90, all: null };
 
@@ -107,7 +125,7 @@ export function TimelineCharts({ punchcard }: { punchcard: PunchRow[] | undefine
     const out: PunchRow[] = [];
     while (out.length < 400) {
       const key = dateKey(cur);
-      out.push(map.get(key) ?? { date: key, hours: zeros24(), msgs: zeros24(), sessions: zeros24(), day_sessions: 0 });
+      out.push(map.get(key) ?? { date: key, hours: zeros24(), msgs: zeros24(), sends: zeros24(), sessions: zeros24(), day_sessions: 0 });
       if (key === todayKey) break;
       cur.setDate(cur.getDate() + 1);
     }
@@ -123,7 +141,7 @@ export function TimelineCharts({ punchcard }: { punchcard: PunchRow[] | undefine
     () =>
       sliced.map((r) => ({
         date: r.date,
-        value: metric === "hours" ? sum(r.hours) : sum(r.msgs),
+        value: sum(metricHours(r, metric)),
         sessions: r.day_sessions,
       })),
     [sliced, metric]
@@ -136,16 +154,17 @@ export function TimelineCharts({ punchcard }: { punchcard: PunchRow[] | undefine
     () =>
       view !== "chart"
         ? []
-        : sliced.flatMap((r) =>
-            r.hours.map((_, h) => ({
+        : sliced.flatMap((r) => {
+            const vals = metricHours(r, metric);
+            return r.hours.map((_, h) => ({
               date: r.date,
               hour: h,
               hours: r.hours[h],
               msgs: r.msgs[h],
               sessions: r.sessions[h],
-              value: metric === "hours" ? r.hours[h] : r.msgs[h],
-            }))
-          ),
+              value: vals[h],
+            }));
+          }),
     [sliced, metric, view]
   );
 
@@ -181,7 +200,8 @@ export function TimelineCharts({ punchcard }: { punchcard: PunchRow[] | undefine
             onChange={(k) => setMetric(k as TimelineMetric)}
             items={[
               { key: "hours", icon: Clock, label: "Hours", title: "Agent hours" },
-              { key: "msgs", icon: MessageSquare, label: "Messages", title: "Messages sent" },
+              { key: "msgs", icon: MessageSquare, label: "Messages", title: "All session messages" },
+              { key: "sends", icon: Send, label: "Typed", title: "Messages the person typed" },
             ]}
           />
           <SegmentedToggle
@@ -227,14 +247,14 @@ function PunchcardChart({ rows, metric }: { rows: PunchRow[]; metric: TimelineMe
 
   const max = useMemo(() => {
     let m = 0;
-    for (const r of rows) for (const v of r[metric]) if (v > m) m = v;
+    for (const r of rows) for (const v of metricHours(r, metric)) if (v > m) m = v;
     return m || 1;
   }, [rows, metric]);
 
   // Cells are memoized so hover-state changes don't rebuild thousands of rects.
   const cells = useMemo(
     () => rows.flatMap((r, di) =>
-      r[metric].map((v, h) =>
+      metricHours(r, metric).map((v, h) =>
         v > 0 ? (
           <rect
             key={`${di}-${h}`}
@@ -304,7 +324,7 @@ function PunchcardChart({ rows, metric }: { rows: PunchRow[]; metric: TimelineMe
       </svg>
       {hover && hovered && (
         <HoverTip x={hover.x} y={hover.y - 2}>
-          {fmtDayLabel(hovered.date)} {hourLabel(hover.hr)}–{hourLabel(hover.hr + 1)} · {hovered.hours[hover.hr].toFixed(1)}h · {Math.round(hovered.msgs[hover.hr])} msgs · {hovered.sessions[hover.hr]} sess
+          {fmtDayLabel(hovered.date)} {hourLabel(hover.hr)}–{hourLabel(hover.hr + 1)} · {hovered.hours[hover.hr].toFixed(1)}h · {Math.round(hovered.msgs[hover.hr])} msgs · {Math.round(hovered.sends?.[hover.hr] ?? 0)} typed · {hovered.sessions[hover.hr]} sess
         </HoverTip>
       )}
     </div>

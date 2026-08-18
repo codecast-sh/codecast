@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { monitorRowsFor, effectiveMonitorStatus, watchingMonitors, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription } from "./monitorRows";
+import { monitorRowsFor, effectiveMonitorStatus, watchingMonitors, isWatchHostDead, liveWatchRowsFor, reportSaysDead, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription } from "./monitorRows";
 
 // The wire shapes below mirror a real transcript: a Monitor tool_use, its
 // "Monitor started (task <id> …)" result on the next message, then
@@ -331,6 +331,118 @@ describe("effectiveMonitorStatus — agent restart cuts the watches it armed", (
   });
 });
 
+describe("isWatchHostDead — the session can still host the watch", () => {
+  const HOUR = 3600_000;
+  const NOW = 1_000 * HOUR;
+  const quietFor = (ms: number) => NOW - ms;
+
+  test("a waiting session quiet past the trust TTL still hosts its poll (2026-08-17: a live 5h build poll)", () => {
+    // Turn ended on an open background task, then nothing for 5 hours — the
+    // exact card that lost its bar at the hour and drew "are you polling?".
+    expect(isWatchHostDead({ agent_status: "waiting", message_count: 940, updated_at: quietFor(5 * HOUR) }, NOW)).toBe(false);
+    // The server's own decay has already coerced that status to plain idle by
+    // then; the process is still alive, so the watch is too.
+    expect(isWatchHostDead({ agent_status: "idle", message_count: 940, updated_at: quietFor(5 * HOUR) }, NOW)).toBe(false);
+  });
+
+  test("an active session quiet past the TTL still hosts (a lost idle transition, not a dead process)", () => {
+    expect(isWatchHostDead({ agent_status: "working", message_count: 10, updated_at: quietFor(3 * HOUR) }, NOW)).toBe(false);
+  });
+
+  test("a stopped agent hosts nothing — the watch died with the process", () => {
+    expect(isWatchHostDead({ agent_status: "stopped", message_count: 10, updated_at: NOW }, NOW)).toBe(true);
+  });
+
+  test("a killed row hosts nothing, whatever live fields it froze with", () => {
+    expect(isWatchHostDead({ agent_status: "waiting", message_count: 10, updated_at: NOW, inbox_killed_at: NOW - 1 }, NOW)).toBe(true);
+  });
+
+  test("a row no daemon speaks for: hosts only inside the idle grace", () => {
+    // Statusless and quiet 10s: mid-grace, still plausibly alive.
+    expect(isWatchHostDead({ agent_status: null, message_count: 10, updated_at: quietFor(10_000) }, NOW)).toBe(false);
+    // Statusless and quiet 5 minutes: nothing anywhere claims a live process —
+    // however the row's is_idle reads (an aged-out row freezes it at true).
+    expect(isWatchHostDead({ agent_status: null, message_count: 10, updated_at: quietFor(5 * 60_000) }, NOW)).toBe(true);
+    expect(isWatchHostDead({ agent_status: undefined, message_count: 10, updated_at: quietFor(17 * 24 * HOUR) }, NOW)).toBe(true);
+  });
+});
+
+describe("monitorRowsFor — a result that merely QUOTES a start phrase arms nothing", () => {
+  test("a foreground grep whose output cites 'moved to the background' births no row", () => {
+    const rows = monitorRowsFor([
+      { role: "assistant", timestamp: 1000, tool_calls: [{ id: "tu", name: "Bash", input: JSON.stringify({ command: "grep -n 'moved to the background' transcript.jsonl", description: "Inspect the phantom-open task ids" }) }] },
+      { role: "user", timestamp: 1001, tool_results: [{ tool_use_id: "tu", content: "252:  Command did not complete within its 60s timeout and was moved to the background (ID: bk2dy02vm). Output is being written to: /tmp/x" }] },
+    ]);
+    expect(rows.length).toBe(0);
+  });
+
+  test("a background call whose (synchronous) output cites 'running in background with ID' is dead, not armed", () => {
+    const rows = monitorRowsFor([
+      { role: "assistant", timestamp: 1000, tool_calls: [{ id: "tu", name: "Bash", input: JSON.stringify({ command: "grep 'running in background' t.jsonl", description: "grep", run_in_background: true }) }] },
+      { role: "user", timestamp: 1001, tool_results: [{ tool_use_id: "tu", content: "18:{\"x\":\"Command running in background with ID: bwxa1nfbs. Output\"}" }] },
+    ]);
+    expect(rows.length).toBe(0);
+  });
+});
+
+describe("liveWatchRowsFor — the daemon's verified report merged with the message rows", () => {
+  const T0 = 1_000_000_000;
+  const armed = (toolUseId: string, taskId: string, ts: number, description = "watch run") => [
+    { ...bgBashCall(toolUseId, description), timestamp: ts },
+    { ...bgStartedResult(toolUseId, taskId), timestamp: ts + 1 },
+  ];
+  const report = (ids: string[], at: number, extra: Partial<{ description: string; command: string; started_at: number; tool_use_id: string }> = {}) => ({
+    open_tasks: ids.map((id) => ({ id, kind: "background" as const, ...extra })),
+    open_tasks_at: at,
+  });
+
+  test("no report (old daemon): the messages decide", () => {
+    const rows = liveWatchRowsFor({}, armed("tu", "t1", T0), T0 + 60_000);
+    expect(rows.map((r) => r.taskId)).toEqual(["t1"]);
+  });
+
+  test("a message row the report does not list, armed before the report, is dead (harness lost the notice)", () => {
+    const host = report([], T0 + 30_000);
+    expect(reportSaysDead(host, { taskId: "t1", startedAt: T0 })).toBe(true);
+    expect(liveWatchRowsFor(host, armed("tu", "t1", T0), T0 + 60_000)).toEqual([]);
+  });
+
+  test("a message row armed AFTER the report is unknown to it and stands", () => {
+    const host = report([], T0 - 30_000);
+    expect(reportSaysDead(host, { taskId: "t1", startedAt: T0 })).toBe(false);
+    expect(liveWatchRowsFor(host, armed("tu", "t1", T0), T0 + 60_000).map((r) => r.taskId)).toEqual(["t1"]);
+  });
+
+  test("a reported task the loaded messages don't cover gets a row from the report alone", () => {
+    const host = report(["srv1"], T0 + 30_000, { description: "Wait for EAS build to finish", command: "until s=$(eas build:view x); do sleep 60; done", started_at: T0 + 10, tool_use_id: "toolu_x" });
+    const rows = liveWatchRowsFor(host, undefined, T0 + 60_000);
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toMatchObject({ kind: "background", taskId: "srv1", toolUseId: "toolu_x", description: "Wait for EAS build to finish", command: "until s=$(eas build:view x); do sleep 60; done", startedAt: T0 + 10, status: "watching" });
+  });
+
+  test("a task both sides know renders once, from the messages (they carry the start message id and events)", () => {
+    const host = report(["t1"], T0 + 30_000);
+    const rows = liveWatchRowsFor(host, armed("tu", "t1", T0), T0 + 60_000);
+    expect(rows.length).toBe(1);
+    expect(rows[0].toolUseId).toBe("tu");
+  });
+
+  test("workflow tasks in the report are left to the workflow bar", () => {
+    const host = { open_tasks: [{ id: "wf1", kind: "workflow" as const }], open_tasks_at: T0 };
+    expect(liveWatchRowsFor(host, undefined, T0 + 60_000)).toEqual([]);
+  });
+
+  test("a report from before the current process booted adds nothing (its shells died with the old one)", () => {
+    const boot = T0 + 3600_000;
+    const stale = { ...report(["t1"], boot - 60_000), agent_started_at: boot };
+    expect(liveWatchRowsFor(stale, armed("tu", "t1", T0), boot + 120_000)).toEqual([]);
+    // A report made AFTER the boot that lists the task is fresh evidence: the
+    // daemon checked it against the new process, so it stands.
+    const fresh = { ...report(["t1"], boot + 60_000, { started_at: boot + 30_000 }), agent_started_at: boot };
+    expect(liveWatchRowsFor(fresh, undefined, boot + 120_000).map((r) => r.taskId)).toEqual(["t1"]);
+  });
+});
+
 describe("notification parsing helpers", () => {
   test("event notifications are classified and carry the description", () => {
     const n = parseTaskNotificationBlock(eventNotif("t1", "deploy watch", "EXIT CODE: 1", 0).content);
@@ -365,3 +477,41 @@ describe("notification parsing helpers", () => {
   });
 });
 
+
+// A FOREGROUND Bash the harness promoted to the background on timeout. The
+// daemon's turn-end scan counts it as open work (the session settles "waiting"
+// → Dormant), so the card must show the same row or the park has no visible
+// reason — the first live Dormant review found exactly that gap.
+describe("monitorRowsFor — timeout-promoted foreground commands", () => {
+  const fgCall = (id: string) => ({
+    role: "assistant",
+    timestamp: 1000,
+    tool_calls: [{ id, name: "Bash", input: JSON.stringify({ command: "until tmux has-session -t wr; do sleep 5; done", description: "Wait for the pane", timeout: 400000 }) }],
+  });
+  const promoted = (toolUseId: string, taskId: string) => ({
+    role: "user",
+    timestamp: 1400,
+    content: "",
+    tool_results: [{ tool_use_id: toolUseId, content: `Command did not complete within its 400s timeout and was moved to the background (ID: ${taskId}). Output is being written to: /tmp/tasks/${taskId}.output. You will be notified when it completes.` }],
+  });
+
+  test("births a watching background row keyed to the promoted task id", () => {
+    const rows = monitorRowsFor([fgCall("tu9"), promoted("tu9", "bpzok")]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe("background");
+    expect(rows[0].taskId).toBe("bpzok");
+    expect(rows[0].status).toBe("watching");
+    expect(rows[0].description).toBe("Wait for the pane");
+    expect(rows[0].startedAt).toBe(1000);
+  });
+
+  test("its terminal notification closes it like any background task", () => {
+    const rows = monitorRowsFor([fgCall("tu9"), promoted("tu9", "bpzok"), endedNotif("bpzok", "tu9", "Wait for the pane", 2000)]);
+    expect(rows[0].status).not.toBe("watching");
+  });
+
+  test("an ordinary foreground result arms nothing", () => {
+    const rows = monitorRowsFor([fgCall("tu9"), { role: "user", timestamp: 1001, content: "", tool_results: [{ tool_use_id: "tu9", content: "ok\n" }] }]);
+    expect(rows).toHaveLength(0);
+  });
+});

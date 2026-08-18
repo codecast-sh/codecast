@@ -4,6 +4,7 @@ import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { openConversationAsCompanion } from "../hooks/useOpenLinkedSession";
+import { installOpenIntent } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -33,6 +34,8 @@ import { ConnectionBanner } from "./ConnectionBanner";
 import { StorageHealthBanner } from "./StorageHealthBanner";
 import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
+import { AnchorChip, AnchorPanel } from "./anchor/AnchorPanel";
+import { useSyncAnchors } from "../hooks/useSyncAnchors";
 import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
@@ -218,6 +221,9 @@ function DashboardSyncEffects() {
   // fires while chat is open is a toast nobody needs.
   useChatChannelsSync();
   useChatToasts();
+  // The anchors collection feeds the header chip, the slide-over, the inbox's
+  // anchor marks and chat's DM naming — one subscription for the whole shell.
+  useSyncAnchors();
   useChatTitleBadge();
   // Huddles: config/ring/occupancy sync + the incoming-ring pipeline, both
   // app-wide for the same reason as chat toasts — a ring must reach someone
@@ -366,6 +372,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   });
 
   useEventListener('resize', recalcHeight);
+
+  // Desktop: Cmd-click / middle-click on any in-app object opens it in a
+  // background tab; Cmd-Shift-click in a detached window (lib/openIntent). One
+  // listener for the whole shell — every link and row already routes through
+  // the chokepoints it diverts. A no-op on the web (browser keeps Cmd-click).
+  useMountEffect(() => installOpenIntent());
 
   useWatchEffect(() => {
     const header = headerRef.current;
@@ -1015,16 +1027,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
         <DashboardSyncEffects />
       </ErrorBoundary>
-      {/* Zen hides the header, but a desktop window still needs the macOS
-          traffic lights cleared and a surface to drag the window by. This slim
-          strip stands in for both; the centered pill makes the grabber
-          discoverable. */}
-      {isZenMode && isDesktopApp && (
-        <div className="flex-shrink-0 h-9 electron-drag-region flex items-center justify-center">
-          {/* Tailwind /opacity is a no-op on bare --sol-* tokens; mix explicitly. */}
-          <div className="w-14 h-1 rounded-full" style={{ background: "color-mix(in srgb, var(--sol-text-dim) 22%, transparent)" }} />
-        </div>
-      )}
+      {/* Zen hides this header. On the desktop app each surface's own top row
+          then stands in as the titlebar — drag region + traffic-light inset —
+          via useTitlebarHead, so no strip is needed above the page. */}
       {/* Header spans full width */}
       <header ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""} relative`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
@@ -1114,6 +1119,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <SyncStatusChip />
             </ErrorBoundary>
             <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
+            <ErrorBoundary name="AnchorChip" level="inline">
+              <AnchorChip />
+            </ErrorBoundary>
             <ShortcutTooltip label="New session" action="session.create">
               <button
                 onClick={(e) => {
@@ -1249,6 +1257,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           </Group>
         </div>
         <KeyboardShortcutsPanel />
+        {/* The anchor slide-over: scoped to the content area so it starts
+            below the header/banners/tab bar and covers the stage, not the
+            chrome. */}
+        <ErrorBoundary name="AnchorPanel" level="panel">
+          <AnchorPanel />
+        </ErrorBoundary>
       </div>
 
       {/* Integrated terminal, docked across the bottom (ctrl+`). Mounts lazily

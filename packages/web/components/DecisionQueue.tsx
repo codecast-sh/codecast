@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePendingPermissions } from "../hooks/useSyncPendingPermissions";
 import { isUsageLimitDialog } from "@codecast/shared/contracts";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
@@ -49,6 +49,17 @@ export function DecisionQueue({ onExit }: { onExit?: () => void }) {
   // there. Distinct from `advance` only in intent, which the name carries.
   const evict = useCallback((key: string) => advance(key), [advance]);
 
+  // "I am not going to answer this." A `cast decide` row resolves as dismissed
+  // (local-first, same action the answer path uses, no message to the session);
+  // a Claude Code poll/permission card has no row of its own to resolve, so it
+  // leaves this pass of the queue and comes back only if the session is still
+  // asking on the next load.
+  const answerDecision = useInboxStore((s) => s.answerDecision);
+  const dismiss = useCallback((item: QueueItem) => {
+    if (item.source === "decide" && item.decisionId) answerDecision(item.decisionId, { dismiss: true });
+    advance(item.key);
+  }, [answerDecision, advance]);
+
   if (!current) return <QueueEmpty total={items.length} onExit={onExit} />;
 
   return (
@@ -59,6 +70,7 @@ export function DecisionQueue({ onExit }: { onExit?: () => void }) {
       total={queue.length}
       onDone={() => advance(current.key)}
       onSkip={() => setCursor((c) => (c + 1) % Math.max(1, queue.length))}
+      onDismiss={() => dismiss(current)}
       onExit={onExit}
       onNotADecision={() => evict(current.key)}
     />
@@ -100,6 +112,7 @@ function DecisionCard({
   total,
   onDone,
   onSkip,
+  onDismiss,
   onExit,
   onNotADecision,
 }: {
@@ -108,6 +121,7 @@ function DecisionCard({
   total: number;
   onDone: () => void;
   onSkip: () => void;
+  onDismiss: () => void;
   onExit?: () => void;
   onNotADecision: () => void;
 }) {
@@ -116,14 +130,41 @@ function DecisionCard({
   const sendMessage = useInboxStore((s) => s.sendMessage);
   const navigateToSession = useInboxStore((s) => s.navigateToSession);
   // The question owns the screen at rest; scrolling up hands the screen to the
-  // thread behind it. Two states rather than a free drag: the point of the
-  // queue is that you never manage a layout.
+  // thread. "peek" is a compact dock — question line, options, keys — stacked
+  // UNDER the conversation, so the whole thread (composer included) is
+  // readable and scrollable above it. Two states rather than a free drag: the
+  // point of the queue is that you never manage a layout.
   const [sheet, setSheet] = useState<"full" | "peek">("full");
+  const docked = sheet === "peek";
   const [otherOpen, setOtherOpen] = useState(false);
   const [otherText, setOtherText] = useState("");
   const otherRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const paneRef = useRef<HTMLDivElement>(null);
+  const sheetInnerRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // The dock is as tall as its content and no taller, but a height of "auto"
+  // cannot animate — so measure the content and drive an explicit pixel
+  // height. The thread pane above takes the same number as its bottom inset,
+  // so the two move together and the composer stays on screen throughout.
+  const [dockHeight, setDockHeight] = useState(0);
+  useLayoutEffect(() => {
+    if (!docked) return;
+    const inner = sheetInnerRef.current;
+    const root = rootRef.current;
+    if (!inner || !root) return;
+    const measure = () => {
+      // Cap at half the screen: a long free-text box or nine options must not
+      // turn the dock back into the sheet it replaced.
+      setDockHeight(Math.min(inner.offsetHeight + 1, Math.floor(root.clientHeight * 0.5)));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(inner);
+    ro.observe(root);
+    return () => ro.disconnect();
+  }, [docked]);
 
   // Set imperatively rather than as a JSX prop: `inert` only became a real
   // React attribute in 19, and a silently-dropped prop here would look exactly
@@ -262,6 +303,7 @@ function DecisionCard({
         case "answer": { const opt = options[action.option]; if (opt) answer(opt.index); break; }
         case "open-session": openSession(); break;
         case "skip": onSkip(); break;
+        case "dismiss": onDismiss(); break;
         case "open-free-text":
           setOtherOpen(true);
           setTimeout(() => otherRef.current?.focus(), 0);
@@ -280,17 +322,45 @@ function DecisionCard({
     // and drive the inbox behind it, hence stopPropagation at each branch.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, onExit, sheet, isPermissionCard]);
+  }, [options, answer, answerFreeText, otherText, openSession, onSkip, onDismiss, onExit, sheet, isPermissionCard]);
 
   const tier = queueTier(item);
   const session = item.session;
   const project = session?.project_path ? getProjectName(session.project_path) : undefined;
 
+  const whoIsAsking = (
+    <div className={`flex items-center gap-2 min-w-0 ${docked ? "" : "mb-3"}`}>
+      <span
+        className={`w-1.5 h-1.5 shrink-0 rounded-full ${tier === 1 ? "bg-sol-yellow animate-pulse" : tier === 2 ? "bg-sol-text-dim" : "bg-sol-blue"}`}
+      />
+      <button
+        onClick={openSession}
+        className="text-sm text-sol-text hover:text-sol-blue transition-colors truncate"
+      >
+        {session?.title || "Session"}
+      </button>
+      {project && <span className="text-[11px] text-sol-text-dim truncate">{project}</span>}
+      {tier === 3 && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue shrink-0">
+          advisory
+        </span>
+      )}
+      {tier === 2 && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim shrink-0">
+          session not running
+        </span>
+      )}
+    </div>
+  );
+
   return (
-    <div className="relative h-full overflow-hidden">
-      {/* The session itself, behind the question — the same pane the inbox
-          renders when you open the session, so "not enough context" is one
-          scroll away instead of a navigation.
+    <div ref={rootRef} className="relative h-full overflow-hidden">
+      {/* The session itself — the same pane the inbox renders when you open
+          the session, so "not enough context" is one scroll away instead of a
+          navigation. At rest it sits behind the full-screen question; docked,
+          it takes every pixel above the compact dock (its bottom inset IS the
+          dock height), composer and all, so the whole thread is readable and
+          scrollable and its tail never hides behind the question.
 
           Held INERT while the question owns the screen. That pane ships a
           message composer, and it takes focus on mount: every queue keystroke
@@ -298,7 +368,11 @@ function DecisionCard({
           answer digit would have been typed at the session instead. Inert
           removes it from focus and pointer entirely; docking the sheet hands
           it back, which is exactly when you mean to interact with it. */}
-      <div ref={paneRef} className="absolute inset-0">
+      <div
+        ref={paneRef}
+        className="absolute inset-x-0 top-0 transition-[bottom] duration-200 ease-out motion-reduce:transition-none"
+        style={{ bottom: docked ? dockHeight : 0 }}
+      >
         <InboxConversation
           sessionId={item.conversationId}
           isIdle={!!session?.is_idle}
@@ -306,66 +380,58 @@ function DecisionCard({
         />
       </div>
 
-      {/* The question. Full height at rest; scroll up (or ArrowUp) docks it so
-          the thread above becomes reachable. */}
+      {/* The question. Full screen at rest; scroll up (or ArrowUp) docks it
+          into a compact pane under the thread; scroll down over the dock (or
+          ArrowDown) brings it back. The wheel handler sits on the sheet only,
+          so a wheel over the thread scrolls the thread. */}
       <div
-        // z-30 is load-bearing: the conversation pane behind carries a sticky
-        // header, a sticky state bar and a sticky composer, and sticky elements
-        // make their own stacking context — without an explicit layer they
-        // paint straight through the sheet and the question reads as broken.
-        className={`absolute left-0 right-0 bottom-0 z-30 flex flex-col bg-sol-bg border-t border-sol-border shadow-[0_-8px_24px_rgba(0,0,0,0.18)] transition-[height] duration-200 ease-out motion-reduce:transition-none ${
-          sheet === "full" ? "h-full" : "h-[44%]"
-        }`}
+        // z-30 is load-bearing: the conversation pane carries a sticky header,
+        // a sticky state bar and a sticky composer, and sticky elements make
+        // their own stacking context — without an explicit layer they paint
+        // straight through the full sheet and the question reads as broken.
+        className="absolute inset-x-0 bottom-0 z-30 overflow-hidden bg-sol-bg border-t border-sol-border shadow-[0_-8px_24px_rgba(0,0,0,0.18)] transition-[height] duration-200 ease-out motion-reduce:transition-none"
+        style={{ height: docked ? dockHeight : "100%" }}
         onWheel={(e) => {
-          // Scrolling up at the top of the question hands the gesture to the
-          // thread; scrolling down at the bottom brings the question back.
-          if (e.deltaY < 0 && sheet === "full" && (bodyRef.current?.scrollTop ?? 0) <= 0) setSheet("peek");
-          else if (e.deltaY > 0 && sheet === "peek") setSheet("full");
+          // Scrolling up at the top of the question hands the screen to the
+          // thread; scrolling down over the dock brings the question back.
+          if (e.deltaY < 0 && !docked && (bodyRef.current?.scrollTop ?? 0) <= 0) setSheet("peek");
+          else if (e.deltaY > 0 && docked) setSheet("full");
         }}
       >
+      <div ref={sheetInnerRef} className={`flex flex-col ${docked ? "" : "h-full"}`}>
       {/* grab handle + progress rail */}
-      <div className="px-6 pt-3 shrink-0">
+      <div className={`px-6 shrink-0 ${docked ? "pt-2" : "pt-3"}`}>
         <button
-          onClick={() => setSheet(sheet === "full" ? "peek" : "full")}
-          className="mx-auto mb-2 block h-1 w-10 rounded-full bg-sol-border hover:bg-sol-text-dim transition-colors"
-          title={sheet === "full" ? "Show the conversation above" : "Back to the question"}
+          onClick={() => setSheet(docked ? "full" : "peek")}
+          className={`mx-auto block h-1 w-10 rounded-full bg-sol-border hover:bg-sol-text-dim transition-colors ${docked ? "mb-1.5" : "mb-2"}`}
+          title={docked ? "Back to the question" : "Show the conversation above"}
         />
-        <div className="flex items-center gap-3 text-[11px] text-sol-text-dim mb-4">
-          <span>decision {position} of {total}</span>
-          <div className="flex-1 h-px bg-sol-border relative">
-            <div
-              className="absolute inset-y-0 left-0 bg-sol-yellow/60"
-              style={{ width: `${((position - 1) / Math.max(1, total)) * 100}%` }}
-            />
-          </div>
-          <span>{total - position + 1} left</span>
+        <div className={`flex items-center gap-3 text-[11px] text-sol-text-dim ${docked ? "mb-2" : "mb-4"}`}>
+          <span className="shrink-0">decision {position} of {total}</span>
+          {docked ? (
+            <div className="flex-1 min-w-0 flex justify-center">{whoIsAsking}</div>
+          ) : (
+            <div className="flex-1 h-px bg-sol-border relative">
+              <div
+                className="absolute inset-y-0 left-0 bg-sol-yellow/60"
+                style={{ width: `${((position - 1) / Math.max(1, total)) * 100}%` }}
+              />
+            </div>
+          )}
+          <span className="shrink-0">{total - position + 1} left</span>
         </div>
       </div>
 
-      <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-6">
-        {/* who is asking */}
-        <div className="flex items-center gap-2 mb-3">
-          <span
-            className={`w-1.5 h-1.5 rounded-full ${tier === 1 ? "bg-sol-yellow animate-pulse" : tier === 2 ? "bg-sol-text-dim" : "bg-sol-blue"}`}
-          />
-          <button
-            onClick={openSession}
-            className="text-sm text-sol-text hover:text-sol-blue transition-colors truncate"
-          >
-            {session?.title || "Session"}
-          </button>
-          {project && <span className="text-[11px] text-sol-text-dim">{project}</span>}
-          {tier === 3 && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue">
-              advisory
-            </span>
-          )}
-          {tier === 2 && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">
-              session not running
-            </span>
-          )}
+      {docked && (
+        // Docked: the question alone, clamped, with the full text a hover
+        // away. Context, report and permission stack live in the full sheet.
+        <div className="px-6 shrink-0">
+          <div className="text-sm text-sol-text leading-snug line-clamp-2" title={question}>{question}</div>
         </div>
+      )}
+
+      <div ref={bodyRef} className={`flex-1 min-h-0 overflow-y-auto px-6 ${docked ? "hidden" : ""}`}>
+        {whoIsAsking}
 
         {/* the question */}
         <h1 className="text-xl text-sol-text leading-snug mb-4">{question}</h1>
@@ -418,7 +484,7 @@ function DecisionCard({
       </div>
 
       {/* the options */}
-      <div className="pt-4 pb-4 px-6 border-t border-sol-border shrink-0">
+      <div className={`px-6 shrink-0 ${docked ? "pt-2 pb-3" : "pt-4 pb-4 border-t border-sol-border"}`}>
         <div className="flex flex-wrap gap-2">
           {options.map((o, n) => (
             <button
@@ -447,8 +513,9 @@ function DecisionCard({
           </button>
         </div>
 
-        {/* per-option consequences, when the agent wrote them */}
-        {options.some((o) => o.description) && (
+        {/* per-option consequences, when the agent wrote them (docked: the
+            button tooltip carries them) */}
+        {!docked && options.some((o) => o.description) && (
           <div className="mt-3 space-y-1">
             {options.filter((o) => o.description).map((o) => (
               <div key={o.index} className="text-[12px] text-sol-text-dim">
@@ -478,7 +545,7 @@ function DecisionCard({
         )}
 
         {/* the escape hatch: always offer the whole session */}
-        <div className="flex items-center gap-4 mt-3 text-[11px] text-sol-text-dim">
+        <div className={`flex items-center flex-wrap gap-4 text-[11px] text-sol-text-dim ${docked ? "mt-2" : "mt-3"}`}>
           <button onClick={openSession} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
             <KeyCap size="xs">o</KeyCap><span>open the session</span>
           </button>
@@ -486,11 +553,20 @@ function DecisionCard({
             <KeyCap size="xs">s</KeyCap><span>skip for now</span>
           </button>
           <button
-            onClick={() => setSheet(sheet === "full" ? "peek" : "full")}
+            onClick={onDismiss}
+            className="flex items-center gap-1.5 hover:text-sol-red transition-colors"
+            title={item.source === "decide"
+              ? "Dismiss without answering — the agent is not told, and the question leaves your queue"
+              : "Drop this from the queue for now — the session keeps waiting on you"}
+          >
+            <KeyCap size="xs">x</KeyCap><span>dismiss</span>
+          </button>
+          <button
+            onClick={() => setSheet(docked ? "full" : "peek")}
             className="flex items-center gap-1.5 hover:text-sol-text transition-colors"
           >
-            <KeyCap size="xs">{sheet === "full" ? "↑" : "↓"}</KeyCap>
-            <span>{sheet === "full" ? "read the thread" : "back to the question"}</span>
+            <KeyCap size="xs">{docked ? "↓" : "↑"}</KeyCap>
+            <span>{docked ? "back to the question" : "read the thread"}</span>
           </button>
           {onExit && (
             <button onClick={onExit} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
@@ -498,6 +574,7 @@ function DecisionCard({
             </button>
           )}
         </div>
+      </div>
       </div>
       </div>
     </div>

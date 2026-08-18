@@ -7,18 +7,16 @@ import { Pressable,
 import { Text } from '@/components/Themed';
 import { Feather } from '@expo/vector-icons';
 import { AGENT_MODEL_CONFIG, launchRailOptions, modelAgentKey } from '@codecast/shared/contracts';
-import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { commitModelChange, modelOptionKey, effortGlyph } from '@codecast/web/lib/modelSwitch';
-import { useModelCommandWatch } from '@codecast/web/hooks/useModelCommandWatch';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { Theme, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '../constants/Theme';
 
 // Session-header model/effort chip + bottom-sheet switcher — the mobile
 // counterpart of the web's HeaderModelControl / LaunchModelPill. Same two
 // rails via the shared commitModelChange (blank session → reconfigureSession
-// relaunch flags; live claude session → set_model drives the /model picker),
-// same pending-command supervision via useModelCommandWatch. Read-only
-// contexts (teammates' sessions, agents without a rail) render a static chip.
+// relaunch flags; live claude session → `/model` / `/effort` sent as ordinary
+// messages). Read-only contexts (teammates' sessions, agents without a rail)
+// render a static chip.
 export function ModelSwitcherChip({
   conversationId,
   agentType,
@@ -37,12 +35,10 @@ export function ModelSwitcherChip({
   showToast: (msg: string) => void;
 }) {
   const [sheetVisible, setSheetVisible] = useState(false);
-  useModelCommandWatch(conversationId, showToast);
-  const busy = useInboxStore((s) => s.pendingModelCommand?.convId === conversationId);
 
   const blank = (messageCount ?? 0) === 0;
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
-  const interactive = !!cfg && canEdit && (blank || (cfg.midSession && isConvexId(conversationId)));
+  const interactive = !!cfg && canEdit && (blank || cfg.midSession);
 
   const modelKey = modelOptionKey(model, agentType);
   const opt = cfg?.models.find((m) => m.key === modelKey);
@@ -56,7 +52,7 @@ export function ModelSwitcherChip({
   if (!model && !interactive) return null;
 
   const chip = (
-    <View style={[styles.chip, busy && { opacity: 0.5 }]}>
+    <View style={styles.chip}>
       <Feather name="cpu" size={10} color={Theme.cyan} />
       <Text style={styles.chipText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</Text>
       {!!glyph && <Text style={styles.chipGlyph}>{glyph}</Text>}
@@ -77,14 +73,14 @@ export function ModelSwitcherChip({
     });
   };
 
-  // Blank session: the launch rail (picker-only models hidden, effort gains the
-  // "default" stop) — one definition shared with the new-session sheet. A live
-  // session mirrors the /model picker instead: all models, no default stop.
+  // Blank session: the launch rail (effort gains the "default" stop) — one
+  // definition shared with the new-session sheet. A live session: all models,
+  // no default stop.
   const rail = blank ? launchRailOptions(cfg) : { models: cfg.models, efforts: [...cfg.efforts] };
 
   return (
     <>
-      <Pressable onPress={() => { if (!busy) setSheetVisible(true); }} hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}>
+      <Pressable onPress={() => setSheetVisible(true)} hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}>
         {chip}
       </Pressable>
       <ModelEffortSheet

@@ -56,13 +56,14 @@ import {
 } from "./resolveWorkspace.js";
 import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
+import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion} from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
@@ -2099,6 +2100,7 @@ const SNIPPET_SECTIONS = {
   state: snippetSection("state"),
   decide: snippetSection("decide"),
   calls: snippetSection("calls"),
+  limits: snippetSection("limits"),
 } satisfies Record<string, SnippetSection>;
 
 // Every feature that introduces an object the agent names in prose (a session, a
@@ -2281,6 +2283,10 @@ function refreshEnabledSnippets(config: Record<string, any>): void {
   if (config.browser_enabled) installBrowserSnippet(true);
   if (config.chat_enabled) installChatSnippet(true);
   if (config.calls_enabled) installSnippetSection("calls", true);
+  // Usage-limit guidance turns itself on the first time a machine has more
+  // than one saved Claude account (never re-enabled after an explicit off).
+  if (ensureLimitsGuidanceForMultiAccount(config)) writeConfig(config);
+  if (config.limits_enabled) installSnippetSection("limits", true);
   // Messaging is on by default for memory installs — backfill/refresh + persist.
   const msgPatch = ensureMessagingForMemory(config);
   if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
@@ -2468,6 +2474,18 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     }
   } else if (config.calls_enabled && config.calls_version !== getCallsVersion()) {
     stampSnippet(config, "calls", getCallsVersion()); // shadow only, no file write
+    writeConfig(config);
+  }
+  if (config.limits_enabled && snippetStale(config, "limits")) {
+    const result = installSnippetSection("limits", true);
+    stampSnippet(config, "limits", getLimitsVersion());
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Usage limits snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  } else if (config.limits_enabled && config.limits_version !== getLimitsVersion()) {
+    stampSnippet(config, "limits", getLimitsVersion()); // shadow only, no file write
     writeConfig(config);
   }
 
@@ -2908,30 +2926,36 @@ program
     }
   });
 
-// ── cast dismiss / undismiss / kill ──────────────────────────────────────────
+// ── cast stash / restore / kill (dismiss/undismiss = legacy aliases) ─────────
 // Inbox visibility management: hide a session from the human's inbox, bring it
 // back, or retire it outright. Same server transitions as the web inbox
 // gestures (stash / restore / kill), so an agent tidying its workers behaves
 // exactly like the human pressing the buttons.
 
 program
-  .command("dismiss")
-  .alias("stash")
+  .command("stash")
+  // "dismiss" is the legacy verb — it meant stash on the CLI while the
+  // database's "dismissed" field means killed, the worst word to keep. It
+  // stays as a hidden alias so old snippets and muscle memory keep working.
+  .alias("dismiss")
   .description(
-    "Hide a session from the inbox — the agent keeps running\n\n" +
+    "Stash a session — out of the inbox, the agent keeps running\n\n" +
     "Moves the session to the Stashed bucket: out of the active inbox, agent\n" +
     "alive and resumable. Use it to tidy finished or parked workers out of the\n" +
-    "human's view without killing them. An empty never-used session is cleaned\n" +
-    "up entirely. Reverse with cast undismiss.\n\n" +
+    "human's view without killing them. A stashed session stays silent except\n" +
+    "for asks: a machine wake never un-stashes it, but a settle declared\n" +
+    "--status blocked, a --needs-attention run, or a stall (permission prompt,\n" +
+    "open question, dead process) returns it to the inbox. An empty never-used\n" +
+    "session is cleaned up entirely. Reverse with cast restore.\n\n" +
     "Examples:\n" +
-    "  cast dismiss jx7c6zk\n" +
-    "  cast dismiss             # current session (tidy yourself away when done)"
+    "  cast stash jx7c6zk\n" +
+    "  cast stash               # current session (tidy yourself away when done)"
   )
   .argument("[session]", "Session short ID (default: current session)")
   .action(async (session: string | undefined) => {
     const target = session || detectCurrentSessionId();
     if (!target) {
-      console.error("No session given and none detected — pass a short ID (e.g. cast dismiss jx7c6zk)");
+      console.error("No session given and none detected — pass a short ID (e.g. cast stash jx7c6zk)");
       process.exit(1);
     }
     const result = await cliPost("/cli/sessions/dismiss", { session: target });
@@ -2940,27 +2964,28 @@ program
       : "";
     const note = result.outcome === "reap"
       ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
-      : ` ${c.dim}— hidden from inbox${grouped}, agent still alive (cast undismiss ${result.short_id} to bring back)${c.reset}`;
-    console.log(`${c.green}ok${c.reset} dismissed ${c.cyan}${result.short_id}${c.reset}${note}`);
+      : ` ${c.dim}— hidden from inbox${grouped}, agent still alive (cast restore ${result.short_id} to bring back)${c.reset}`;
+    console.log(`${c.green}ok${c.reset} stashed ${c.cyan}${result.short_id}${c.reset}${note}`);
   });
 
 program
-  .command("undismiss")
-  .alias("restore")
+  .command("restore")
+  // Legacy verb, kept as a hidden alias (see `stash` above).
+  .alias("undismiss")
   .description(
-    "Bring a dismissed or killed session back into the inbox\n\n" +
+    "Bring a stashed or killed session back into the inbox\n\n" +
     "Clears the hide flags so the session shows in the active inbox again. A\n" +
     "killed session comes back as a card the human can restart — this does not\n" +
     "relaunch the agent by itself.\n\n" +
     "Examples:\n" +
-    "  cast undismiss jx7c6zk\n" +
-    "  cast undismiss           # current session (resurface yourself for attention)"
+    "  cast restore jx7c6zk\n" +
+    "  cast restore             # current session (resurface yourself for attention)"
   )
   .argument("[session]", "Session short ID (default: current session)")
   .action(async (session: string | undefined) => {
     const target = session || detectCurrentSessionId();
     if (!target) {
-      console.error("No session given and none detected — pass a short ID (e.g. cast undismiss jx7c6zk)");
+      console.error("No session given and none detected — pass a short ID (e.g. cast restore jx7c6zk)");
       process.exit(1);
     }
     const result = await cliPost("/cli/sessions/undismiss", { session: target });
@@ -3006,7 +3031,7 @@ program
       ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
       : result.was_hidden
         ? ` ${c.dim}— ${result.teardown_enqueued ? "teardown re-enqueued" : "teardown already queued for the daemon"}${grouped}${canceled}${dropped}${c.reset}`
-        : ` ${c.dim}— agent torn down${grouped}${canceled}${dropped} (cast undismiss ${result.short_id} to resurface)${c.reset}`;
+        : ` ${c.dim}— agent torn down${grouped}${canceled}${dropped} (cast restore ${result.short_id} to resurface)${c.reset}`;
     const verb = result.was_hidden && result.outcome !== "reap" ? "re-killed" : "killed";
     console.log(`${c.green}ok${c.reset} ${verb} ${c.cyan}${result.short_id}${c.reset}${note}`);
   });
@@ -4198,6 +4223,13 @@ accountsCmd
     try {
       const meta = saveProfile(name);
       console.log(`${c.green}✓${c.reset} saved ${c.cyan}${name}${c.reset} (${meta.email ?? "unknown email"})`);
+      // A second saved account is when the usage-limits guidance becomes
+      // unambiguously right — turn it on now (once; an explicit off sticks).
+      const config = readConfig() || {};
+      if (ensureLimitsGuidanceForMultiAccount(config)) {
+        writeConfig(config as Config);
+        console.log(`${c.dim}  usage-limits agent guidance enabled (cast install limits --disable to turn off)${c.reset}`);
+      }
     } catch (err) {
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
@@ -9418,6 +9450,7 @@ program
       // suite is what caught it.
       decide: { getVersion: getDecideVersion, install: (update = false) => installSnippetSection("decide", update), reEnable: "cast install decide" },
       calls: { getVersion: getCallsVersion, install: (update = false) => installSnippetSection("calls", update), reEnable: "cast install calls" },
+      limits: { getVersion: getLimitsVersion, install: (update = false) => installSnippetSection("limits", update), reEnable: "cast install limits" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
     // Single-snippet path: `cast install workflows` (+ --disable to turn off).
@@ -11635,6 +11668,22 @@ anchor
   });
 
 anchor
+  .command("brief")
+  .description("Re-send an anchor its standing briefing (who it is, its routines, how it reaches people)")
+  .option("--team [id]", "Target the team anchor (default: your personal anchor)")
+  .action(async (options: any) => {
+    const scopeType = options.team ? "team" : "user";
+    const teamId = typeof options.team === "string" ? options.team : undefined;
+    const anchorRow = await cliPost("/cli/anchor/resolve", { scope_type: scopeType, team_id: teamId });
+    if (!anchorRow?._id) {
+      console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found. Create one: cast anchor create${scopeType === "team" ? " --team" : ""}`);
+      process.exit(1);
+    }
+    await cliPost("/cli/anchor/brief", { anchor_id: anchorRow._id });
+    console.log(`${c.green}✓${c.reset} re-briefed ${c.cyan}${anchorRow.name}${c.reset}`);
+  });
+
+anchor
   .command("rm")
   .alias("decommission")
   .description("Retire an anchor: stop it being persistent and drop its Slack mappings")
@@ -11713,11 +11762,55 @@ anchor
 
 anchor
   .command("say")
-  .description("Post a message to Slack as the anchor (used by the anchor itself)")
-  .requiredOption("--channel <id>", "Slack channel id")
-  .option("--thread <ts>", "Slack thread timestamp to reply in")
-  .argument("<text>", "Message text")
-  .action(async (text: string, options: any) => {
+  .description("Speak as the anchor: post in codecast chat (--chat / --dm) or in Slack (--channel). Used by the anchor itself")
+  .option("--chat <channel>", "Codecast channel: id or #name. Posts as the anchor")
+  .option("--dm <handles>", "Message people directly, as the anchor: comma-separated @handles")
+  .option("--channel <id>", "Slack channel id")
+  .option("--thread <id>", "Reply on a thread: a codecast thread root id (with --chat) or a Slack thread ts (with --channel)")
+  .option("--team <name|id>", "Team whose roster resolves --dm handles / --chat #names (a team anchor uses its own team)")
+  .option("--personal", "Speak as your personal anchor (default when not run from inside an anchor session)")
+  .option("--json", "Machine-readable output")
+  .argument("<text>", "Message text; '-' reads it from stdin (heredoc-friendly)")
+  .action(async (rawText: string, options: any) => {
+    const text = expandStdinPromptArgs([rawText ?? ""])[0];
+    if (!text.trim()) {
+      console.error("Message text is empty");
+      process.exit(1);
+    }
+    if (options.chat || options.dm) {
+      // Which anchor speaks: the calling session's own (an anchor's session
+      // names its anchor), else the personal one, else the named team's.
+      const sessionId = process.env.CODECAST_SESSION_ID || process.env.CODECAST_MANAGED_SESSION || undefined;
+      // The same canonical pointer every chat command reads: --team by name or
+      // id, else the active workspace when it is a team.
+      const ws = await readWorkspace(options.team);
+      const teamId = workspaceArgs(ws).team_id;
+      const body: Record<string, any> = {
+        content: text,
+        session_id: options.personal ? undefined : sessionId,
+        scope_type: options.personal ? "user" : (options.team ? "team" : "user"),
+        team_id: teamId,
+      };
+      if (options.chat) {
+        body.channel_id = await resolveChatChannelId(options.chat, teamId);
+        body.thread_root_id = options.thread;
+      } else {
+        body.dm_handles = String(options.dm).split(",").map((h: string) => h.trim()).filter(Boolean);
+      }
+      const result = await cliPost("/cli/anchor/say-chat", body);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(
+        `${c.green}✓${c.reset} said as the anchor ${c.dim}${result.message_id} · channel ${result.channel_id}${c.reset}`,
+      );
+      return;
+    }
+    if (!options.channel) {
+      console.error("Say where: --chat <channel> or --dm <handles> for codecast chat, --channel <id> for Slack");
+      process.exit(1);
+    }
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
@@ -11914,7 +12007,9 @@ chat
       return;
     }
     console.log(`${c.green}✓${c.reset} sent ${c.dim}${result.message_id}${c.reset}`);
-    if (result.anchor_thinking_message_id) {
+    if (result.anchor_thinking_message_id && result.anchor_listening) {
+      console.log(`${c.dim}  the anchor follows this thread and is reading — it answers only if the line was for it${c.reset}`);
+    } else if (result.anchor_thinking_message_id) {
       console.log(`${c.dim}  the anchor is answering — placeholder ${result.anchor_thinking_message_id}${c.reset}`);
     } else if (result.anchor_wake_skipped) {
       console.log(`${c.yellow}•${c.reset} the anchor was not woken: ${result.anchor_wake_skipped}`);
@@ -11923,18 +12018,26 @@ chat
 
 chat
   .command("reply")
-  .description("Fill the placeholder the anchor was woken for (run by the anchor)")
+  .description("Fill the placeholder the anchor was woken for, or pass on it (run by the anchor)")
   .argument("<message_id>", "The placeholder id from the wake prompt")
-  .argument("<text>", "Your reply; '-' reads it from stdin (heredoc-friendly)")
-  .option("--status <status>", "'done' (default) or 'error' to report a turn you could not finish")
-  .action(async (messageId: string, text: string, options: any) => {
-    const body = expandStdinPromptArgs([text ?? ""])[0];
-    const status = options.status === "error" ? "error" : "done";
+  .argument("[text]", "Your reply; '-' reads it from stdin (heredoc-friendly). Omit with --pass")
+  .option("--status <status>", "'done' (default), 'error' to report a turn you could not finish, or 'passed'")
+  .option("--pass", "Stay quiet: the line was not for you. Closes the placeholder without a word")
+  .action(async (messageId: string, text: string | undefined, options: any) => {
+    const passing = !!options.pass || options.status === "passed";
+    const body = passing ? "" : expandStdinPromptArgs([text ?? ""])[0];
+    if (!passing && !body.trim()) {
+      console.error("Reply text is empty (or pass with --pass)");
+      process.exit(1);
+    }
+    const status = passing ? "passed" : options.status === "error" ? "error" : "done";
     const result = await cliPost("/cli/chat/reply", {
       message_id: messageId, content: body, status,
     });
     console.log(
-      `${c.green}✓${c.reset} replied in chat ${c.dim}(${result.agent_status})${c.reset}`,
+      passing
+        ? `${c.dim}passed — nothing posted${c.reset}`
+        : `${c.green}✓${c.reset} replied in chat ${c.dim}(${result.agent_status})${c.reset}`,
     );
   });
 
@@ -12625,6 +12728,20 @@ async function writeWorkspace(
     }
     throw e;
   }
+}
+
+// A codecast chat channel by id or "#name" (name lookup goes through the
+// caller's channel list, in the named team or their active one).
+async function resolveChatChannelId(ref: string, teamId?: string): Promise<string> {
+  const name = ref.replace(/^#/, "").trim().toLowerCase();
+  if (!ref.startsWith("#") && /^[a-z0-9]{20,}$/i.test(ref)) return ref;
+  const result = await cliPost("/cli/chat/channels", { team_id: teamId });
+  const match = (result?.channels ?? []).find((ch: any) => String(ch.name).toLowerCase() === name);
+  if (!match) {
+    console.error(`No channel named #${name}. See: cast chat channels`);
+    process.exit(1);
+  }
+  return String(match._id);
 }
 
 async function cliPost(urlPath: string, body: Record<string, any>): Promise<any> {

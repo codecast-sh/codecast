@@ -1369,14 +1369,35 @@ pre[class*="language-"] {
   display: none;
 }
 
-/* Desktop: titlebar drag region for overlay titlebar */
-.electron-drag-region {
+/* Desktop: titlebar drag region for the overlay titlebar.
+   --titlebar-inset clears the macOS traffic lights (main.js places them at
+   x:16,y:12). .electron-drag-region is the global header; .titlebar-head is
+   any surface's top row standing in for it while zen mode hides that header
+   (hooks/useTitlebarHead). */
+:root {
+  --titlebar-inset: 78px;
+}
+.electron-drag-region,
+.titlebar-head {
   -webkit-app-region: drag;
 }
-.electron-drag-region button,
-.electron-drag-region a,
-.electron-drag-region input,
-.electron-drag-region [role="button"] {
+.titlebar-head.titlebar-head--edge {
+  /* Set per element by attachTitlebarHead: the lights' width minus the row's own left. */
+  padding-left: var(--titlebar-edge-inset, var(--titlebar-inset)) !important;
+}
+/* A lent row on a headerless page (lib/pageLayout PageShell): it has height
+   only while it measures as the titlebar, so it vanishes under a tab bar. */
+.titlebar-strip.titlebar-head--edge {
+  height: 36px;
+}
+.titlebar-strip.titlebar-head--edge + [data-main-scroll] {
+  padding-top: 8px;
+}
+/* Too narrow to indent (an icon-only rail): the row sits below the lights. */
+.titlebar-head.titlebar-head--under {
+  padding-top: 28px !important;
+}
+:is(.electron-drag-region, .titlebar-head) :is(button, a, input, textarea, select, [role="button"], [role="tab"], [role="combobox"], [role="menuitem"], [contenteditable="true"]) {
   -webkit-app-region: no-drag;
 }
 

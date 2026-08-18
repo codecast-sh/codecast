@@ -70,11 +70,20 @@ function UserProfileContent() {
   const currentUser = useQuery(api.users.getCurrentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const teamId = activeTeamId || currentUser?.active_team_id || currentUser?.team_id;
+  const myTeams = useQuery(api.teams.getUserTeams);
 
   // Own profile shows everything across teams; a teammate's profile is scoped
   // to the current workspace so you see their contribution to *this* team.
+  // The scope picker overrides either default with an explicit team (or, on
+  // your own profile, back to all teams).
   const isOwn = !!currentUser?._id && currentUser._id === profileUser?._id;
-  const scopeTeamId = isOwn ? undefined : teamId;
+  const [teamScope, setTeamScope] = useState<"default" | "all" | string>("default");
+  const scopeTeamId =
+    teamScope === "default"
+      ? (isOwn ? undefined : teamId)
+      : teamScope === "all"
+        ? undefined
+        : (teamScope as Id<"teams">);
 
   const aa = useQuery(
     api.users.getUserAbstractActivity,
@@ -93,13 +102,15 @@ function UserProfileContent() {
     { initialNumItems: 15 }
   );
 
+  // Work-tab data loads only when that tab is open — the default Feed paint
+  // shouldn't pay for queries whose results aren't on screen.
   const userTasks = useQuery(
     api.users.getUserTasks,
-    profileUser?._id ? { user_id: profileUser._id, limit: 30 } : "skip"
+    profileUser?._id && view === "work" ? { user_id: profileUser._id, team_id: scopeTeamId, limit: 30 } : "skip"
   );
   const userDocs = useQuery(
     api.users.getUserDocs,
-    profileUser?._id ? { user_id: profileUser._id, limit: 20 } : "skip"
+    profileUser?._id && view === "work" ? { user_id: profileUser._id, team_id: scopeTeamId, limit: 20 } : "skip"
   );
 
   const filtered = useMemo(() => {
@@ -193,18 +204,33 @@ function UserProfileContent() {
         <button onClick={() => setView("feed")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "feed" ? "text-sol-text border-sol-yellow/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Feed</button>
         <button onClick={() => setView("work")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "work" ? "text-sol-text border-sol-violet/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Work</button>
         <button onClick={() => setView("timeline")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "timeline" ? "text-sol-text border-sol-cyan/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Timeline</button>
-        {view === "feed" && (
-          <div className="ml-auto pb-1 scale-[0.82] origin-bottom-right">
-            <SegmentedToggle
-              value={showAll ? "all" : "mine"}
-              onChange={(k) => setShowAll(k === "all")}
-              items={[
-                { key: "mine", icon: User, label: "Typed", title: "Only messages you typed" },
-                { key: "all", icon: Activity, label: "All", title: "All activity — tasks, docs, commits, PRs" },
-              ]}
-            />
-          </div>
-        )}
+        <div className="ml-auto flex items-center gap-1.5 pb-1">
+          {myTeams && myTeams.length > 0 && (
+            <select
+              value={teamScope === "default" ? (isOwn ? "all" : String(teamId ?? "all")) : teamScope}
+              onChange={(e) => setTeamScope(e.target.value)}
+              title="Scope activity to one team"
+              className="text-[10px] text-sol-base01/60 bg-transparent border border-sol-border/25 rounded px-1.5 py-0.5 hover:border-sol-border/50 focus:outline-none cursor-pointer max-w-[130px]"
+            >
+              {isOwn && <option value="all">All teams</option>}
+              {myTeams.filter((t): t is NonNullable<typeof t> => t !== null).map((t) => (
+                <option key={String(t._id)} value={String(t._id)}>{t.name}</option>
+              ))}
+            </select>
+          )}
+          {view === "feed" && (
+            <div className="scale-[0.82] origin-right">
+              <SegmentedToggle
+                value={showAll ? "all" : "mine"}
+                onChange={(k) => setShowAll(k === "all")}
+                items={[
+                  { key: "mine", icon: User, label: "Typed", title: "Only messages you typed" },
+                  { key: "all", icon: Activity, label: "All", title: "All activity — tasks, docs, commits, PRs" },
+                ]}
+              />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Feed view */}

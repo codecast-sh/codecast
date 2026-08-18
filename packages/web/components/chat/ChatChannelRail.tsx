@@ -1,11 +1,12 @@
 import { memo } from "react";
+import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { Hash, Lock, Plus, BellOff, Users, SquarePen } from "lucide-react";
 import type { ChatChannelView } from "./chatTypes";
 import { OccupancyChip } from "../calls/OccupancyChip";
-import { channelRoomKey } from "@codecast/shared/contracts";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import {
   channelDisplayName,
+  chatViewRoomKey,
   dmCounterpart,
   memberName,
   suggestedDmMembers,
@@ -31,12 +32,14 @@ function RailRow({
   c,
   active,
   members,
+  viewer,
   onSelect,
   onChannelContextMenu,
 }: {
   c: ChatChannelView;
   active: boolean;
   members: ChatMember[];
+  viewer: string;
   onSelect: (channelId: string) => void;
   onChannelContextMenu?: (e: React.MouseEvent, channel: ChatChannelView) => void;
 }) {
@@ -83,7 +86,7 @@ function RailRow({
         )}
       </span>
       <span className="ch-chan-name">{name}</span>
-      <OccupancyChip roomKey={channelRoomKey(String(c.id))} className="shrink-0" />
+      <OccupancyChip roomKey={chatViewRoomKey(c, viewer)} className="shrink-0" />
       {c.muted && <BellOff className="w-3 h-3 shrink-0 opacity-70" aria-label="Muted" />}
       {mentions > 0 ? (
         <span className="ch-chan-badge" aria-label={`${mentions} mentions`}>
@@ -125,9 +128,10 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   // The section never opens empty: teammates without an open room are listed
   // right below the real conversations, dimmer, one click from becoming one.
   const suggested = onOpenDm ? suggestedDmMembers(dms, members, viewer) : [];
+  const headTitlebarRef = useTitlebarHead<HTMLDivElement>();
   return (
     <nav className="ch-rail" aria-label="Channels">
-      <div className="ch-rail-head">
+      <div ref={headTitlebarRef} className="ch-rail-head">
         <span className="ch-rail-title">Channels</span>
         {onCreate && (
           <button type="button" className="ch-rail-add" title="New channel" onClick={onCreate}>
@@ -142,6 +146,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
             c={c}
             active={c.id === activeChannelId}
             members={members}
+            viewer={String(viewer)}
             onSelect={onSelect}
             onChannelContextMenu={onChannelContextMenu}
           />
@@ -162,6 +167,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
             c={c}
             active={c.id === activeChannelId}
             members={members}
+            viewer={String(viewer)}
             onSelect={onSelect}
             onChannelContextMenu={onChannelContextMenu}
           />

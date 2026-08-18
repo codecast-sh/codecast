@@ -7,7 +7,17 @@ declare global {
       onUpdateStatus: (cb: (status: { status: string; version?: string; percent?: number }) => void) => void;
       restartForUpdate: () => Promise<void>;
       checkForUpdate: (opts?: { manual?: boolean }) => Promise<void>;
-      showNotification: (title: string, body: string, data?: { conversationId?: string; route?: string }) => Promise<void>;
+      // Resolves { shown } on builds with multi-window routing (undefined on
+      // older builds, which always showed the banner).
+      showNotification: (
+        title: string,
+        body: string,
+        data?: NotifyNativeData,
+      ) => Promise<{ shown: boolean; reason?: string } | void>;
+      // Multi-window notification routing (see main.js). Absent on older
+      // builds — gate on them; without them this window behaves as the only one.
+      reportWindowState?: (state: DesktopWindowState) => void;
+      onWindowRole?: (cb: (role: DesktopWindowRole) => void) => void;
       getShortcuts: () => Promise<Record<string, string>>;
       getShortcutConfig: () => Promise<DesktopShortcutConfig>;
       setShortcut: (key: string, accelerator: string) => Promise<Record<string, string>>;
@@ -51,6 +61,27 @@ declare global {
     };
   }
 }
+
+// What a banner carries besides its text. `key` is a stable id for the event
+// (a notification row id, `ring:<invite>`) so every window reporting the same
+// event collapses to one banner; `kind` hints the click target for banners
+// with no route ("call" → the window hosting the call / the calls page).
+export type NotifyNativeData = { conversationId?: string; route?: string; key?: string; kind?: string };
+
+// What this window shows, reported to the desktop shell so a banner click can
+// land in the best window: the active surface path, every surface it could
+// switch to (the main window's tabs), and whether it hosts a connected call.
+export type DesktopWindowState = {
+  active: string | null;
+  open: Array<{ id: string | null; path: string }>;
+  inCall: boolean;
+};
+
+// This window's role among the desktop's windows, pushed by the shell.
+//   leader:     the ONE window that may play notification sounds
+//   appFocused: some app window (not just this one) has OS focus
+//   anyInCall:  some window hosts a connected call
+export type DesktopWindowRole = { leader: boolean; appFocused: boolean; anyInCall: boolean };
 
 export type DesktopDisplaySource = {
   id: string;
@@ -225,21 +256,28 @@ export async function requestNotificationPermission(): Promise<boolean> {
   return result === "granted";
 }
 
+// Resolves true when THIS window announced the event to the user — the caller
+// may pair a sound with it. False when the app is focused (the toast/bell
+// layer owns that case) or, on desktop, when another window already showed
+// the same banner (the shell dedupes by `data.key`).
 export async function notifyNative(
   title: string,
   body: string,
-  data?: { conversationId?: string; route?: string },
-) {
+  data?: NotifyNativeData,
+): Promise<boolean> {
   // OS notifications are for the unfocused app: when the window has focus the
   // user already sees the bell/inbox update (and hears the idle sound), so a
   // native banner on top is noise. Applies to desktop and browser alike.
-  if (typeof document !== "undefined" && document.hasFocus()) return;
+  if (typeof document !== "undefined" && document.hasFocus()) return false;
   // One click target per banner: an explicit route (chat, tasks, docs) wins,
   // else the conversation. Electron receives both and applies the same rule.
   const route = data?.route ?? (data?.conversationId ? `/conversation/${data.conversationId}` : undefined);
   if (isElectron()) {
-    bridge("showNotification")?.(title, body, { ...data, route });
-  } else if (hasBrowserNotificationPermission()) {
+    const res = await bridge("showNotification")?.(title, body, { ...data, route });
+    // Older shells resolve void: they showed it.
+    return res ? res.shown : true;
+  }
+  if (hasBrowserNotificationPermission()) {
     const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId ?? route });
     if (route) {
       n.onclick = () => {
@@ -248,6 +286,40 @@ export async function notifyNative(
       };
     }
   }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Window role. The desktop can run several windows of this app (main +
+// detached tabs); the shell elects one leader for notification sounds and
+// tells each window whether the app as a whole is focused. Outside the desktop
+// (or before the shell's first push) this window is the only one: leader.
+// ---------------------------------------------------------------------------
+
+let windowRole: DesktopWindowRole = { leader: true, appFocused: false, anyInCall: false };
+let windowRoleTracked = false;
+
+export function getDesktopWindowRole(): DesktopWindowRole {
+  return windowRole;
+}
+
+// True when this window should be the one that sounds a notification.
+export function isNotificationLeader(): boolean {
+  return windowRole.leader;
+}
+
+// Subscribe once (DesktopProvider) so the role above tracks the shell.
+export function installWindowRoleTracker(): void {
+  if (windowRoleTracked) return;
+  windowRoleTracked = true;
+  bridge("onWindowRole")?.((role) => {
+    windowRole = { leader: role.leader !== false, appFocused: !!role.appFocused, anyInCall: !!role.anyInCall };
+  });
+}
+
+// Tell the shell what this window shows (no-op outside the desktop).
+export function reportDesktopWindowState(state: DesktopWindowState): void {
+  bridge("reportWindowState")?.(state);
 }
 
 export async function updateBadge(count: number) {
@@ -293,8 +365,85 @@ export function hasInProcessUpdater(): boolean {
 
 export function desktopHeaderClass(): string {
   if (typeof window === "undefined") return "";
-  if (isElectron()) return "electron-drag-region pl-[78px]";
+  if (isElectron()) return "electron-drag-region pl-[var(--titlebar-inset)]";
   return "";
+}
+
+// The macOS traffic lights sit at x:16,y:12 (main.js trafficLightPosition),
+// three 12px lights 20px apart — they end at x=68, y=24. A row whose top is
+// below them is clear of them. --titlebar-inset in globals.css is the CSS twin.
+const TRAFFIC_LIGHTS_W = 78;
+const TRAFFIC_LIGHTS_H = 24;
+// Rows starting within this band act as the titlebar (drag surface).
+const TITLEBAR_H = 36;
+
+// Zen mode hides the global header, yet a desktop window still needs a
+// surface to drag by and the traffic lights cleared. Rather than a dedicated
+// strip, the top row of whatever surface is showing plays that role: while it
+// lies in the titlebar band it becomes the drag region (the .titlebar-head
+// rules), and when it also sits at the window's left edge it indents past the
+// lights. Both are measured, not declared, because which row is topmost and
+// leftmost depends on layout — a tab bar, a breadcrumb trail, or a rail may or
+// may not be open. Re-measured when the row resizes (horizontal layout changes
+// reach it that way) and when it moves through the band (an IntersectionObserver
+// whose root is the band — vertical shifts from rows appearing above it).
+export function attachTitlebarHead(el: HTMLElement): () => void {
+  const measure = () => {
+    const r = el.getBoundingClientRect();
+    const inBand = r.width > 0 && r.top < TITLEBAR_H;
+    const edge = inBand && r.top < TRAFFIC_LIGHTS_H && r.left < TRAFFIC_LIGHTS_W;
+    // Indent only past the part of the lights this row actually sits under
+    // (a row beside a 44px rail needs 34px, not 78). A row too narrow to indent
+    // (an icon-only rail) drops below the lights instead.
+    const inset = TRAFFIC_LIGHTS_W - Math.max(0, r.left);
+    const fits = r.width >= inset + 40;
+    el.classList.toggle("titlebar-head", inBand);
+    el.classList.toggle("titlebar-head--edge", edge && fits);
+    el.classList.toggle("titlebar-head--under", edge && !fits);
+    if (edge && fits) el.style.setProperty("--titlebar-edge-inset", `${inset}px`);
+    else el.style.removeProperty("--titlebar-edge-inset");
+  };
+  // Every trigger fires at the START of a layout change; the sidebar and the
+  // rails animate their width, so the row keeps sliding for a few hundred ms
+  // after. Measure now and again once the motion has settled.
+  let settle: ReturnType<typeof setTimeout>[] = [];
+  const kick = () => {
+    settle.forEach(clearTimeout);
+    measure();
+    settle = [400, 900].map((ms) => setTimeout(measure, ms));
+  };
+  kick();
+  const ro = new ResizeObserver(kick);
+  ro.observe(el);
+  // Vertical moves (a tab bar or breadcrumb appearing above) change how much of
+  // the row lies in the titlebar band; horizontal moves (a rail opening beside
+  // it) change how much lies in the traffic-light corner. Neither resizes the
+  // row itself, so each gets an IntersectionObserver rooted on that region —
+  // rebuilt on window resize since the regions are expressed as root margins.
+  let observers: IntersectionObserver[] = [];
+  const watch = () => {
+    observers.forEach((o) => o.disconnect());
+    const threshold = Array.from({ length: 11 }, (_, i) => i / 10);
+    observers = [
+      `0px 0px ${TITLEBAR_H - window.innerHeight}px 0px`,
+      `0px ${TRAFFIC_LIGHTS_W - window.innerWidth}px ${TITLEBAR_H - window.innerHeight}px 0px`,
+    ].map((rootMargin) => {
+      const io = new IntersectionObserver(kick, { rootMargin, threshold });
+      io.observe(el);
+      return io;
+    });
+  };
+  watch();
+  const onResize = () => { watch(); kick(); };
+  window.addEventListener("resize", onResize);
+  return () => {
+    settle.forEach(clearTimeout);
+    ro.disconnect();
+    observers.forEach((o) => o.disconnect());
+    window.removeEventListener("resize", onResize);
+    el.classList.remove("titlebar-head", "titlebar-head--edge", "titlebar-head--under");
+    el.style.removeProperty("--titlebar-edge-inset");
+  };
 }
 
 export function useIsDesktop(): boolean {

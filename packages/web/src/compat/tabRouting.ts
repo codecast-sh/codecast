@@ -1,7 +1,7 @@
-import { useInboxStore } from "@/store/inboxStore";
-import { pathLabel } from "@/lib/pathLabel";
-import { isDetachedTabWindow } from "@/lib/desktop";
-import { settingsSectionForPath } from "@/lib/settingsSections";
+import { useInboxStore } from "../../store/inboxStore";
+import { pathLabel } from "../../lib/pathLabel";
+import { isDetachedTabWindow } from "../../lib/desktop";
+import { settingsSectionForPath } from "../../lib/settingsSections";
 
 // Routes that live OUTSIDE the dashboard tab shell. The tab system (DashboardLayout
 // / TabBar / TabContent) is only mounted for dashboard routes, but `tabs`/`activeTabId`

@@ -5,10 +5,11 @@ import {
   useSearchParams as useRRSearchParams,
   useParams as useRRParams,
 } from "react-router";
-import { useTabContext } from "@/components/TabContent";
+import { useTabContext } from "@/lib/tabParams";
 import { useInboxStore } from "@/store/inboxStore";
 import { isDetachedTabWindow } from "@/lib/desktop";
 import { interceptSettingsNav, shouldUseTabRouting, tabNavigate } from "./tabRouting";
+import { divertNavigation } from "@/lib/openIntent";
 
 /**
  * Returns the current pathname. When tabs are active, reads from the active
@@ -42,6 +43,9 @@ export function useRouter() {
       // We don't act on it, but accepting it keeps `router.push/replace(path,
       // { scroll: false })` call sites type-checking against this shim.
       push: (path: string, _options?: { scroll?: boolean }) => {
+        // A Cmd-click's push opens the path in a background tab / detached
+        // window instead (lib/openIntent) — the current view stays put.
+        if (divertNavigation(path)) return;
         const settings = interceptSettingsNav(path);
         if (settings) {
           if (settings.carryUrl) navigate(settings.carryUrl, { replace: true });
@@ -54,6 +58,9 @@ export function useRouter() {
         }
       },
       replace: (path: string, _options?: { scroll?: boolean }) => {
+        // A replace canonicalizes the current URL; it never claims a Cmd-click
+        // on its own, but stands down when a sibling push in the same click did.
+        if (divertNavigation(path, { openable: false })) return;
         const settings = interceptSettingsNav(path);
         if (settings) {
           if (settings.carryUrl) navigate(settings.carryUrl, { replace: true });

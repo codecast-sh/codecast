@@ -57,6 +57,7 @@ export type ShortcutAction =
   | 'sidebar.toggleRight'
   | 'sidebar.toggleComments'
   | 'terminal.toggle'
+  | 'anchor.toggle'
   | 'workbench.1'
   | 'workbench.2'
   | 'workbench.3'
@@ -277,6 +278,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+[', action: 'sidebar.toggleLeft', skipInputCheck: true, description: 'Toggle left sidebar' },
   { key: 'ctrl+]', action: 'sidebar.toggleRight', skipInputCheck: true, description: 'Toggle sessions panel' },
   { key: 'ctrl+`', action: 'terminal.toggle', skipInputCheck: true, description: 'Toggle terminal' },
+  // The anchor is reachable from anywhere: one chord opens its slide-over
+  // (the last anchor you spoke to) without leaving the page you are on.
+  { key: 'ctrl+shift+a', mac: 'meta+shift+a', action: 'anchor.toggle', skipInputCheck: true, description: 'Talk to Anchor' },
   // Cmd+O mirrors Obsidian's quick switcher. The handler declines when no
   // vault is connected, so the chord costs nothing in vault-less workspaces.
   { key: 'ctrl+o', mac: 'meta+o', action: 'vault.quickSwitch', skipInputCheck: true, description: 'Open a note' },

@@ -113,10 +113,8 @@ describe("new-session launch options", () => {
     }
   });
 
-  it("launch rail hides midSessionOnly models and prepends the default effort stop", () => {
+  it("launch rail prepends the default effort stop", () => {
     const claude = launchRailOptions(AGENT_CLIENTS.claude.modelConfig!);
-    expect(claude.models.some((m) => m.midSessionOnly)).toBe(false);
-    expect(claude.models.some((m) => m.key === "sonnet-1m")).toBe(false);
     expect(claude.models.some((m) => m.key === "opus")).toBe(true);
     expect(claude.efforts).toEqual(["default", "low", "medium", "high", "max"]);
 

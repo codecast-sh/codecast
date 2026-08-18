@@ -27,6 +27,7 @@ import {
   RotateCcw,
   BookmarkPlus,
 } from "lucide-react";
+import { useTitlebarHead } from "../hooks/useTitlebarHead";
 
 export interface ListTab {
   key: string;
@@ -648,6 +649,7 @@ export function GenericListView<T>({
   children,
 }: GenericListViewProps<T>) {
   const router = useRouter();
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const currentPath = usePathname();
 
   // Open/close a row's detail by driving the URL: navigating to the row's route
@@ -1184,7 +1186,7 @@ export function GenericListView<T>({
           .cq-header row is what adapts (wraps the toolbar below the tabs) as the
           panel narrows — a container can't query its own width, only a child's. */}
       <div className={`cq-container ${filterBarShown ? "" : "border-b border-sol-border/30"}`}>
-        <div className="cq-header cq-header-pad cc-panel__head cc-panel__head--flow flex-wrap justify-between gap-x-2">
+        <div ref={titlebarRef} className="cq-header cq-header-pad cc-panel__head cc-panel__head--flow flex-wrap justify-between gap-x-2">
         <div className="flex items-center gap-2 min-w-0">
           <h1 className="sr-only">{title}</h1>
           {syncScope && <SyncProgressBadge scope={syncScope} />}

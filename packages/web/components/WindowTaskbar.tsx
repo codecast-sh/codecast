@@ -1,6 +1,6 @@
-import { memo, useCallback, useState, useMemo, useRef, useEffect, type RefObject } from "react";
+import { memo, useCallback, type RefObject } from "react";
 import { useWindowManager, TASKBAR_HEIGHT_PX, type ArrangeMode } from "../store/windowManagerStore";
-import { useTrackedStore, isSessionEffectivelyIdle, filterInboxScopeFromState } from "../store/inboxStore";
+import { useTrackedStore, useInboxStore, isSessionEffectivelyIdle } from "../store/inboxStore";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { LayoutGrid, Layers, Columns, Rows, X, Plus } from "lucide-react";
 
@@ -23,19 +23,30 @@ export const WindowTaskbar = memo(function WindowTaskbar({ containerRef }: { con
   const { windows, autoArrange, closeAll, openWindow } = useWindowManager();
   const minimized = Object.values(windows).filter(w => w.minimized);
   const windowCount = Object.keys(windows).length;
-  const [pickerOpen, setPickerOpen] = useState(false);
 
   const handleArrange = useCallback((mode: ArrangeMode) => {
     autoArrange(mode, getContainerViewport(containerRef.current));
   }, [autoArrange, containerRef]);
 
   const handleAddSession = useCallback((sessionId: string) => {
+    // openWindow brings an already-open session's window to the front instead
+    // of duplicating it, so the picker needs no exclusion list.
     openWindow(sessionId);
-    setPickerOpen(false);
     setTimeout(() => {
       autoArrange("tile", getContainerViewport(containerRef.current));
     }, 0);
   }, [openWindow, autoArrange, containerRef]);
+
+  // Choosing the session is the command palette in pick mode.
+  const pickSession = useCallback(() => {
+    useInboxStore.getState().openPalette({
+      pick: {
+        title: "Open session in a window…",
+        kinds: ["session"],
+        onPick: (t) => { if (t.kind === "session") handleAddSession(t.id); },
+      },
+    });
+  }, [handleAddSession]);
 
   return (
     <div
@@ -61,7 +72,7 @@ export const WindowTaskbar = memo(function WindowTaskbar({ containerRef }: { con
         ))}
         <div className="w-px h-5 bg-sol-border/30 mx-1" />
         <button
-          onClick={() => setPickerOpen(!pickerOpen)}
+          onClick={pickSession}
           className="p-1.5 rounded text-sol-text-dim/50 hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
           title="Add window"
         >
@@ -92,100 +103,9 @@ export const WindowTaskbar = memo(function WindowTaskbar({ containerRef }: { con
         </div>
       )}
 
-      {/* Session picker popover */}
-      {pickerOpen && (
-        <SessionPicker
-          onSelect={handleAddSession}
-          onClose={() => setPickerOpen(false)}
-        />
-      )}
     </div>
   );
 });
-
-function SessionPicker({ onSelect, onClose }: { onSelect: (id: string) => void; onClose: () => void }) {
-  const s = useTrackedStore([s => s.sessions]);
-  const { windows } = useWindowManager();
-  const ref = useRef<HTMLDivElement>(null);
-  const [search, setSearch] = useState("");
-
-  const openSessionIds = useMemo(
-    () => new Set(Object.values(windows).map(w => w.sessionId)),
-    [windows],
-  );
-
-  const available = useMemo(() => {
-    // Scope the shared cache before enumerating — it holds rows from other
-    // inbox scopes/teams that must not surface in this picker.
-    const all = Object.values(filterInboxScopeFromState(s)).filter(
-      sess => !openSessionIds.has(sess._id) && sess.message_count > 0,
-    );
-    if (!search) return all;
-    const q = search.toLowerCase();
-    return all.filter(sess => (sess.title || "").toLowerCase().includes(q));
-  }, [s.sessions, openSessionIds, search]);
-
-  // Close on outside click
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [onClose]);
-
-  return (
-    <div
-      ref={ref}
-      className="absolute bottom-full left-0 mb-1 w-80 max-h-[360px] flex flex-col rounded-lg border border-sol-border/30 shadow-2xl overflow-hidden"
-      style={{ background: "var(--sol-bg)", zIndex: 9999 }}
-    >
-      <div className="p-2 border-b border-sol-border/20">
-        <input
-          autoFocus
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Search sessions..."
-          className="w-full px-2.5 py-1.5 rounded-md bg-sol-bg-alt border border-sol-border/20 text-sm text-sol-text placeholder:text-sol-text-dim/40 outline-none focus:border-sol-cyan/40"
-        />
-      </div>
-      <div className="flex-1 overflow-y-auto p-1">
-        {available.length === 0 ? (
-          <div className="px-3 py-4 text-center text-sm text-sol-text-dim/50">
-            {search ? "No matching sessions" : "All sessions already open"}
-          </div>
-        ) : (
-          available.slice(0, 30).map(sess => {
-            const idle = isSessionEffectivelyIdle(sess);
-            return (
-              <button
-                key={sess._id}
-                onClick={() => onSelect(sess._id)}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-sol-text-dim/8 transition-colors text-left"
-              >
-                <span className="relative flex h-2 w-2 flex-shrink-0">
-                  {!idle && (
-                    <span
-                      className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-40"
-                      style={{ backgroundColor: "var(--sol-green)", animationDuration: "1.5s" }}
-                    />
-                  )}
-                  <span
-                    className="relative inline-flex rounded-full h-2 w-2"
-                    style={{ backgroundColor: idle ? "var(--sol-text-dim)" : "var(--sol-green)" }}
-                  />
-                </span>
-                <span className="flex-1 min-w-0 truncate text-xs text-sol-text-muted">
-                  {cleanTitle(sess.title || "New Session")}
-                </span>
-              </button>
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
-}
 
 const MinimizedPill = memo(function MinimizedPill({ windowId, sessionId }: { windowId: string; sessionId: string }) {
   const { restoreWindow, bringToFront, closeWindow } = useWindowManager();

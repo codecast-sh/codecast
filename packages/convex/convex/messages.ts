@@ -9,6 +9,7 @@ import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } fro
 import { computeWorkspaceKey } from "./lib/access";
 import { redactSecrets } from "./redact";
 import { canSendProductMessage, markPendingDelivered } from "./pendingMessages";
+import { classifyUserSend, recordUserSend } from "./lib/userSend";
 import { validateCommandId } from "./localFirstCommands";
 import {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -1315,6 +1316,10 @@ export const addMessage = mutation({
       // (the delivered-tier match in findEchoedPendingMessage keys off this).
       await ctx.db.patch(matchingPending._id, { echo_message_id: messageId });
     }
+    {
+      const send = classifyUserSend(conversation, { role: args.role, content: contentToStore, tool_results: safeToolResults, from_user_id: fromUserIdToStore });
+      if (send) await recordUserSend(ctx, send, msgTimestamp);
+    }
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
     const newMessageCount = conversation.message_count + 1;
@@ -1814,6 +1819,10 @@ export const addMessages = mutation({
       }
       ids.push(messageId);
       insertedCount++;
+      {
+        const send = classifyUserSend(conversation, { role: msg.role, content: contentToStore, tool_results: safeToolResults, from_user_id: matchingPending?.from_user_id });
+        if (send) await recordUserSend(ctx, send, msgTimestamp);
+      }
       await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
       await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
       if (msg.role === "user") lastUserContentStored = contentToStore;

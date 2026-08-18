@@ -6,7 +6,7 @@ import { FilterDropdown } from "../FilterDropdown";
 import { SegmentedToggle, type SegmentedItem } from "../SegmentedToggle";
 import { KeyCap, ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useShortcutAction, useShortcutContext } from "../../shortcuts";
-import { useTabContext } from "../TabContent";
+import { useTabContext } from "../../lib/tabParams";
 import {
   CapabilityCard,
   CAPABILITY_KINDS,

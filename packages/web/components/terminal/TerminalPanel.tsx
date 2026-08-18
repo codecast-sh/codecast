@@ -34,6 +34,7 @@ import {
   type TermTabState,
 } from "../../lib/terminal/termSessions";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../ui/context-menu";
+import { SplitResizeHandle } from "../SplitResizeHandle";
 import "@xterm/xterm/css/xterm.css";
 
 const MIN_HEIGHT = 110;
@@ -214,18 +215,16 @@ export function TerminalPanel() {
       // Maximized: a huge grow factor lets flexbox hand the panel all free
       // space (the flex-1 content sibling collapses to ~0) — no pixel math,
       // and it tracks window resizes for free.
-      className={`flex-col bg-sol-bg border-t border-sol-border/40 ${open ? "flex" : "hidden"} ${maximized ? "flex-[999_1_0%] min-h-0" : "flex-shrink-0"}`}
+      className={`flex-col bg-sol-bg ${open ? "flex" : "hidden"} ${maximized ? "flex-[999_1_0%] min-h-0" : "flex-shrink-0"}`}
       style={maximized ? undefined : { height: open ? height : 0 }}
     >
       {/* drag handle */}
-      <div
+      <SplitResizeHandle
         onPointerDown={onHandlePointerDown}
         onDoubleClick={() => setMaximized((m) => !m)}
-        className={`group relative h-[3px] -mt-[2px] flex-shrink-0 z-20 ${maximized ? "" : "cursor-row-resize"}`}
-      >
-        <div className="absolute inset-x-0 -top-[3px] -bottom-[3px]" />
-        <div className="absolute inset-x-0 top-[1px] h-px bg-transparent group-hover:bg-sol-cyan transition-colors duration-150" />
-      </div>
+        disabled={maximized}
+        title="Drag to resize · double-click to maximize"
+      />
 
       {/* header */}
       <div className="cc-panel__head gap-1.5">

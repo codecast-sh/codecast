@@ -30,6 +30,8 @@ for (const dir of ["downloads", "temp"]) {
   app.setPath(dir, p);
 }
 
+const { pickWindow, chooseLeader, RecentKeys } = require("./notificationRouter");
+
 let notificationRefs = [];
 
 function showNativeNotification(title, body, onClick) {
@@ -285,7 +287,9 @@ function createWindow() {
   mainWindow.on("closed", () => {
     clearTimeout(stallTimer);
     mainWindow = null;
+    broadcastWindowRole();
   });
+  broadcastWindowRole();
 }
 
 // ---------------------------------------------------------------------------
@@ -349,7 +353,11 @@ function createTabWindow(navPath) {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: "deny" };
   });
-  win.on("closed", () => tabWindows.delete(win));
+  win.on("closed", () => {
+    tabWindows.delete(win);
+    broadcastWindowRole();
+  });
+  broadcastWindowRole();
   return win;
 }
 
@@ -374,6 +382,115 @@ ipcMain.handle("attach-tab", (e, navPath) => {
   }
   if (sender && tabWindows.has(sender)) sender.close();
 });
+
+// ---------------------------------------------------------------------------
+// Multi-window notification routing. Every window runs the same web app and
+// would otherwise fire its own banner and sound for the same event. Main is
+// the one process that sees all windows, so it (a) collapses duplicates,
+// (b) suppresses banners while ANY app window is focused, (c) elects ONE
+// leader window that may play notification sounds, and (d) lands a banner
+// click in the window best placed to show the target. Policy lives in
+// notificationRouter.js; this block only feeds it window facts.
+// ---------------------------------------------------------------------------
+
+// webContents.id → what that renderer shows: { active, open: [{id,path}], inCall }
+const windowStates = new Map();
+// BrowserWindow.id → last time it held focus (tie-breaker for routing/leader)
+const lastFocusedAt = new Map();
+const recentBanners = new RecentKeys();
+
+// The app windows that count for routing: main + detached tab windows. The
+// palette is a floating summon, never a place a banner should land or sound.
+function appWindows() {
+  const out = [];
+  if (mainWindow && !mainWindow.isDestroyed()) out.push(mainWindow);
+  for (const w of tabWindows) if (!w.isDestroyed()) out.push(w);
+  return out;
+}
+
+function describeWindows() {
+  return appWindows().map((win) => {
+    const st = windowStates.get(win.webContents.id) || {};
+    return {
+      id: win.id,
+      isMain: win === mainWindow,
+      focused: win.isFocused(),
+      lastFocusedAt: lastFocusedAt.get(win.id) || 0,
+      active: st.active || null,
+      open: Array.isArray(st.open) ? st.open : [],
+      inCall: st.inCall === true,
+    };
+  });
+}
+
+function isAppFocused() {
+  return appWindows().some((w) => w.isFocused());
+}
+
+// Tell every window its role. Coalesced to a tick: focus flips, reports and
+// window churn arrive in bursts.
+let roleBroadcastTimer = null;
+function broadcastWindowRole() {
+  if (roleBroadcastTimer) return;
+  roleBroadcastTimer = setTimeout(() => {
+    roleBroadcastTimer = null;
+    const windows = describeWindows();
+    const leader = chooseLeader(windows);
+    const anyInCall = windows.some((w) => w.inCall);
+    const appFocused = windows.some((w) => w.focused);
+    for (const win of appWindows()) {
+      win.webContents.send("window-role", {
+        leader: !!leader && leader.id === win.id,
+        appFocused,
+        anyInCall,
+      });
+    }
+  }, 30);
+}
+
+app.on("browser-window-focus", (_e, win) => {
+  lastFocusedAt.set(win.id, Date.now());
+  broadcastWindowRole();
+});
+app.on("browser-window-blur", () => broadcastWindowRole());
+
+ipcMain.on("report-window-state", (e, state) => {
+  if (!state || typeof state !== "object") return;
+  windowStates.set(e.sender.id, {
+    active: typeof state.active === "string" ? state.active : null,
+    open: Array.isArray(state.open)
+      ? state.open.filter((t) => t && typeof t.path === "string").map((t) => ({ id: t.id ?? null, path: t.path }))
+      : [],
+    inCall: state.inCall === true,
+  });
+  e.sender.once("destroyed", () => windowStates.delete(e.sender.id));
+  broadcastWindowRole();
+});
+
+function sendNavigate(win, navPath, tabId) {
+  const detail = tabId ? { path: navPath, tabId } : navPath;
+  win.webContents.executeJavaScript(
+    `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify(detail)} }))`
+  );
+}
+
+// A banner was clicked: land in the best window for its target. With no
+// window at all (macOS keeps the app alive with every window closed), boot the
+// main window and let the deep-link buffer deliver the path on load.
+function openNotificationTarget(data) {
+  const route = data?.route || (data?.conversationId ? `/conversation/${data.conversationId}` : null);
+  const pick = pickWindow(describeWindows(), { route, kind: data?.kind || null });
+  if (!pick) {
+    if (route) deepLinkUrl = `codecast://open${route}`;
+    createWindow();
+    return;
+  }
+  const win = BrowserWindow.fromId(pick.window.id);
+  if (!win || win.isDestroyed()) return;
+  win.show();
+  win.focus();
+  if (route) sendNavigate(win, route, pick.tabId);
+}
 
 function createPaletteWindow() {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
@@ -953,21 +1070,18 @@ ipcMain.handle("restart-for-update", () => installUpdateAndRestart());
 // Any renderer-invoked check is user-initiated ("Try again" / "Update now"),
 // which lets it supersede a wedged in-flight download (see checkForDesktopUpdate).
 ipcMain.handle("check-for-update", (_e, opts) => checkForDesktopUpdate({ manual: opts?.manual === true, userInitiated: true }));
-ipcMain.handle("show-notification", (_e, { title, body, data }) => {
-  showNativeNotification(title, body, () => {
-    if (mainWindow) {
-      mainWindow.show();
-      mainWindow.focus();
-      // `route` is the one click target (chat message, task, doc...); the bare
-      // conversationId form predates it and stays as the fallback.
-      const path = data?.route || (data?.conversationId ? `/conversation/${data.conversationId}` : null);
-      if (path) {
-        mainWindow.webContents.executeJavaScript(
-          `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify(path)} }))`
-        );
-      }
-    }
-  });
+// Returns { shown } so the renderer knows whether IT announced the event.
+// Every window reports the same server row; the first report wins the banner,
+// duplicates inside the TTL are dropped, and nothing banners while an app
+// window is focused (the user already sees the bell / toast there).
+ipcMain.handle("show-notification", (_e, payload) => {
+  const { title, body, data } = payload || {};
+  if (isAppFocused()) return { shown: false, reason: "focused" };
+  if (!recentBanners.claim(RecentKeys.keyFor(payload))) return { shown: false, reason: "duplicate" };
+  // `route` is the one click target (chat message, task, doc...); the bare
+  // conversationId form predates it and stays as the fallback.
+  showNativeNotification(title, body, () => openNotificationTarget(data));
+  return { shown: true };
 });
 
 // Sign-in hands its OAuth flow to the user's real browser (issue #20): the

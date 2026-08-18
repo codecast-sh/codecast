@@ -20,29 +20,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
-import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useInboxStore } from "../store/inboxStore";
 import { formatModel } from "../lib/conversationProcessor";
 import { modelOptionKey, effortGlyph, canControlModel } from "../lib/modelSwitch";
 import { commitModelChange, notifyModelToast as notifyToast } from "../lib/modelSwitchWeb";
-import { useModelCommandWatch } from "../hooks/useModelCommandWatch";
 
-// First-class model/effort control for the web. The commit rails and the
-// pending-command reconciliation live in lib/modelSwitch.ts +
-// hooks/useModelCommandWatch.ts (shared with the mobile switcher); this module
-// owns the web surfaces: the conversation-header badge (HeaderModelControl,
-// live sessions), the new-session launch pill (LaunchModelPill, blank
-// sessions), and the shared dropdown menu the Cmd+K palette also drives.
-
-/**
- * Mounted by the conversation header: supervises pending model commands for
- * this conversation (see useModelCommandWatch). Rendering it where the badge
- * lives means whichever surface fired the switch (badge, launch pill, Cmd+K),
- * the open conversation supervises it.
- */
-function ModelCommandWatch({ conversationId }: { conversationId: string }) {
-  useModelCommandWatch(conversationId, notifyToast);
-  return null;
-}
+// First-class model/effort control for the web. The commit rails live in
+// lib/modelSwitch.ts (shared with the mobile switcher); this module owns the
+// web surfaces: the conversation-header badge (HeaderModelControl, live
+// sessions), the new-session launch pill (LaunchModelPill, blank sessions),
+// and the shared dropdown menu the Cmd+K palette also drives.
 
 /**
  * The user's codecast-wide default model for one agent client, with a
@@ -86,28 +73,21 @@ export function ModelEffortMenu({
   agentType: string | undefined;
   modelKey: string;
   effort: string | undefined | null;
-  /** Live-session rail: include midSessionOnly models (Sonnet 1M). */
+  /** Live-session rail (no "default" effort stop). */
   midSession: boolean;
   onSelect: (opts: { model?: string; effort?: string }) => void;
   /** Dynamic clients: scope the live inventory to the session's device. */
   ownerDeviceId?: string | null;
 }) {
-  const { dynamic, featured, all, menuRows } = useDynamicModels(agentType, ownerDeviceId);
+  const { dynamic, featured, all } = useDynamicModels(agentType, ownerDeviceId);
   const [search, setSearch] = useState("");
   const { defaultKey, setDefault } = useDefaultModelPin(agentType);
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
   if (!cfg) return null;
   // Dynamic clients: Default + the curated featured head; typing searches the
-  // device's full inventory. Menu-dynamic clients (claude) on the LIVE rail:
-  // Default + the harvested /model menu rows — the session's actual choices,
-  // tracking CC's menu across releases (stale curated options drop out, new
-  // rows appear). Launch rail and unharvested devices: the shared rail.
+  // device's full inventory. Everything else: the shared curated rail.
   const rail = midSession ? { models: cfg.models, efforts: [...cfg.efforts] } : launchRailOptions(cfg);
-  const models = dynamic
-    ? [cfg.models[0], ...featured]
-    : midSession && menuRows.length > 0
-      ? [cfg.models[0], ...menuRows]
-      : rail.models;
+  const models = dynamic ? [cfg.models[0], ...featured] : rail.models;
   const q = search.trim().toLowerCase();
   const matches = dynamic && q
     ? all.filter((id) => id.toLowerCase().includes(q) && !models.some((m) => m.key === id)).slice(0, 24)
@@ -118,7 +98,7 @@ export function ModelEffortMenu({
     key === modelKey || (dynamic && modelKey !== "default" && key.endsWith(`/${modelKey}`));
   const modelRow = (m: ModelOption) => {
     // Only launchable options can be the codecast default (the same bar the
-    // server holds): menu:<label> rows and Sonnet 1M have no launch alias.
+    // server holds).
     const pinnable = m.key !== "default" && !!m.cliAlias;
     const isDefault = m.key === defaultKey;
     // The "Default" row resolves to the user's codecast default at launch —
@@ -214,7 +194,7 @@ export function ModelEffortMenu({
  * Conversation-header badge, upgraded from a read-only label to the in-place
  * model/effort control for LIVE claude sessions. Blank sessions are owned by
  * LaunchModelPill (the new-session surface); non-editable views keep the
- * static label. Also hosts the command watcher for this conversation.
+ * static label.
  */
 export function HeaderModelControl({
   conversationId,
@@ -231,7 +211,6 @@ export function HeaderModelControl({
   messageCount: number | undefined;
   canEdit: boolean;
 }) {
-  const busy = useInboxStore((s) => !!conversationId && s.pendingModelCommand?.convId === conversationId);
   const blank = (messageCount ?? 0) === 0;
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
 
@@ -239,20 +218,15 @@ export function HeaderModelControl({
     canEdit &&
     !blank &&
     conversationId &&
-    isConvexId(conversationId) &&
     cfg?.midSession
   );
 
   const glyph = effortGlyph(effort);
-  const watcher = conversationId && isConvexId(conversationId)
-    ? <ModelCommandWatch conversationId={conversationId} />
-    : null;
 
   if (!interactive) {
-    if (!model) return watcher;
+    if (!model) return null;
     return (
       <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
-        {watcher}
         <span className="text-sol-text-dim">&middot;</span>
         <span className="font-mono truncate max-w-none" title={model}>{formatModel(model)}</span>
         {glyph && <span className="text-sol-text-dim/80" title={`${effort} effort`}>{glyph}</span>}
@@ -262,12 +236,11 @@ export function HeaderModelControl({
 
   return (
     <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
-      {watcher}
       <span className="text-sol-text-dim">&middot;</span>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
-            className={`group flex items-center gap-1 font-mono rounded px-1 -mx-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text-secondary ${busy ? "animate-pulse" : ""}`}
+            className="group flex items-center gap-1 font-mono rounded px-1 -mx-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text-secondary"
             title={`Model: ${model ?? "default"}${effort ? ` · ${effort} effort` : ""} — click to change`}
           >
             <span className="truncate max-w-none">{model ? formatModel(model) : "model"}</span>

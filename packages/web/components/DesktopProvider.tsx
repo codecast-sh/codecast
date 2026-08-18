@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
+import { useLocation } from "react-router";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
@@ -20,6 +21,9 @@ import {
   installDesktopInputTracker,
   shouldApplyAutoDeepLink,
   conversationIdFromPath,
+  installWindowRoleTracker,
+  reportDesktopWindowState,
+  isDetachedTabWindow,
 } from "../lib/desktop";
 import { showBrowserHandoffToast } from "./BrowserHandoffToast";
 import { cleanNotificationBody } from "../lib/notificationText";
@@ -121,7 +125,9 @@ export function DesktopProvider() {
         // The same click target the bell computes: a chat banner lands on the
         // message, a task banner on the task — not just "the app, focused".
         const route = notificationRoute(n.entity_type, n.entity_id, n.chat_message_id) ?? undefined;
-        notifyNative(title, body, { conversationId: n.conversation_id, route });
+        // `key` lets the desktop shell collapse the same row reported by every
+        // open window into one banner.
+        notifyNative(title, body, { conversationId: n.conversation_id, route, key: String(n._id) });
         // Browser/Electron OS banners are silent by default; the page supplies
         // the same marimba the focused toast plays, so a chat message sounds
         // identical whether the window has focus or not. notifyNative already
@@ -143,11 +149,16 @@ export function DesktopProvider() {
     updateDismissed("has_used_desktop", true);
 
     installDesktopInputTracker();
+    installWindowRoleTracker();
 
     // Single in-app navigation path, shared by codecast:// deep links (from the
     // native layer) and the codecast-navigate event (tray/menus/notifications).
-    const goTo = (path: string | undefined) => {
+    // `tabId` names an open tab of this window that already shows the target
+    // (the shell's notification router found it): switch there first so the
+    // navigation lands in that tab instead of retargeting the active one.
+    const goTo = (path: string | undefined, tabId?: string | null) => {
       if (!path) return;
+      if (tabId) useInboxStore.getState().switchTab(tabId);
 
       const convId = conversationIdFromPath(path);
       if (convId) {
@@ -185,7 +196,11 @@ export function DesktopProvider() {
       }
     });
 
-    const handleNavigate = (e: Event) => goTo((e as CustomEvent).detail);
+    const handleNavigate = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && typeof detail === "object") goTo(detail.path, detail.tabId);
+      else goTo(detail);
+    };
     window.addEventListener("codecast-navigate", handleNavigate);
 
     // Electron's built-in updater emits real download progress + a "ready"
@@ -194,6 +209,38 @@ export function DesktopProvider() {
     onUpdateStatus((s) => setIpc(s));
 
   }, [router]);
+
+  // Tell the desktop shell what this window shows, so a banner click can land
+  // in the window (and tab) already on the target and so the shell knows which
+  // window hosts a live call. Main window: its tabs, with the inbox tab named
+  // by the conversation it shows; detached window: its own URL.
+  const location = useLocation();
+  const surfaceSig = useInboxStore((st) => {
+    const tabs = st.tabs.map((t) => `${t.id}=${t.path}`).join("|");
+    return `${tabs}#${st.activeTabId ?? ""}#${st.currentSessionId ?? ""}#${st.call?.phase ?? ""}`;
+  });
+  useWatchEffect(() => {
+    if (!isDesktop()) return;
+    const st = useInboxStore.getState();
+    const live = `${location.pathname}${location.search}`;
+    const inboxFamily = (p: string) => p === "/inbox" || p.startsWith("/inbox?") || p.startsWith("/conversation/");
+    const withSession = (p: string) =>
+      inboxFamily(p) && st.currentSessionId ? `/conversation/${st.currentSessionId}` : p;
+    if (isDetachedTabWindow() || st.tabs.length === 0 || !st.activeTabId) {
+      reportDesktopWindowState({ active: withSession(live), open: [], inCall: st.call?.phase === "connected" });
+      return;
+    }
+    const open = st.tabs.map((t) => ({
+      id: t.id,
+      path: t.id === st.activeTabId ? withSession(t.path) : t.path,
+    }));
+    const activeTab = open.find((t) => t.id === st.activeTabId);
+    reportDesktopWindowState({
+      active: activeTab?.path ?? withSession(live),
+      open,
+      inCall: st.call?.phase === "connected",
+    });
+  }, [surfaceSig, location.pathname, location.search]);
 
   // Desktop update detection: compare the running app version against the latest
   // published version (same-origin /api/desktop/latest). Poll on mount, on window

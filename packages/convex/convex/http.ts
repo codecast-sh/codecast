@@ -2625,7 +2625,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, device_id, device_label, device_hostname, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, settings, model_inventory } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, daemon_started_at, loop_freeze_ms, device_id, device_label, device_hostname, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, settings, model_inventory } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2648,6 +2648,8 @@ http.route({
         oldest_pending_ms,
         pending_sync_messages,
         pending_sync_conversations,
+        daemon_started_at,
+        loop_freeze_ms,
         device_id,
         device_label,
         device_hostname,
@@ -3643,6 +3645,9 @@ cliRoute("/cli/anchor/wake", async (ctx, body) => {
 cliRoute("/cli/anchor/resolve", async (ctx, body) => {
   return await ctx.runQuery(api.anchors.resolveAnchorForScope, body);
 });
+cliRoute("/cli/anchor/brief", async (ctx, body) => {
+  return await ctx.runMutation(api.anchors.rebriefAnchor, body);
+});
 cliRoute("/cli/anchor/decommission", async (ctx, body) => {
   return await ctx.runMutation(api.anchors.decommissionAnchor, body);
 });
@@ -3657,6 +3662,11 @@ cliRoute("/cli/anchor/channels", async (ctx, body) => {
 });
 cliRoute("/cli/anchor/say", async (ctx, body) => {
   return await ctx.runAction(api.slack.postMessage, body);
+});
+// The anchor speaking in codecast chat on its own: a channel post, a thread
+// reply, or a DM. Authorizes the caller as the anchor's host inside.
+cliRoute("/cli/anchor/say-chat", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.sendAsAnchor, body);
 });
 
 // Team chat. Every one of these authorizes the caller inside the function — this

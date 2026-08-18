@@ -14,6 +14,7 @@ import {
   Clock, CheckCircle, XCircle, Loader2, Pause, ExternalLink,
   Timer, AlertCircle, ChevronLeft,
 } from "lucide-react";
+import { useTitlebarHead } from "../../../../hooks/useTitlebarHead";
 
 const api = _api as any;
 
@@ -91,6 +92,7 @@ function RunDetailContent({ runId }: { runId: string }) {
   // Store-fed (hooks/useSyncWorkflows): the run and its workflow paint from
   // the cache; the feeders keep them fresh.
   const run = useWorkflowRun(runId) as WorkflowRun | null | undefined;
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const workflow = useWorkflow(run?.workflow_id) as Workflow | null | undefined;
 
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
@@ -127,7 +129,7 @@ function RunDetailContent({ runId }: { runId: string }) {
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-sol-bg">
-      <div className="flex items-center gap-3 px-5 py-3 border-b border-sol-border/20 bg-sol-bg-alt flex-shrink-0">
+      <div ref={titlebarRef} className="flex items-center gap-3 px-5 py-3 border-b border-sol-border/20 bg-sol-bg-alt flex-shrink-0">
         <Link href="/workflows" className="text-sol-text-dim hover:text-sol-text transition-colors">
           <ChevronLeft className="w-4 h-4" />
         </Link>

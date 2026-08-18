@@ -1,55 +1,15 @@
 import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { copyToClipboard } from "../lib/utils";
-import { useDaemonHealth, formatDuration } from "../hooks/useDaemonHealth";
+import { useDaemonHealth } from "../hooks/useDaemonHealth";
+import { useSyncDevices } from "../hooks/useSyncDevices";
+import { describeDaemonHealth } from "../lib/daemonHealthCopy";
 import { useAppOffline } from "../hooks/useAppOffline";
 
-interface ChipView {
-  colorVar: string;
-  label: string;
-  title: string;
-  command: string;
-}
-
-function viewFor(health: ReturnType<typeof useDaemonHealth>): ChipView | null {
-  if (health.kind === "offline") {
-    const stale = formatDuration(health.offlineMs);
-    if (health.tier === "warn") {
-      return {
-        colorVar: "--sol-yellow",
-        label: `daemon stale ${stale}`,
-        title: `CLI hasn't synced in ${stale}. Run cast status to inspect (click to copy).`,
-        command: "cast status",
-      };
-    }
-    return {
-      colorVar: health.tier === "severe" ? "--sol-red" : "--sol-orange",
-      label: `daemon offline ${stale}`,
-      title: `CLI offline for ${stale}. Run cast restart to recover (click to copy).`,
-      command: "cast restart",
-    };
-  }
-  if (health.kind === "sync_stalled") {
-    const stalled = formatDuration(health.stalledMs);
-    // Prefer the honest message count; fall back to logical ops for older
-    // daemons that don't report it yet.
-    const count = health.messages > 0 ? health.messages : health.pending;
-    const unit = health.messages > 0 ? "message" : "operation";
-    const convoNote =
-      health.conversations > 0
-        ? ` across ${health.conversations} conversation${health.conversations === 1 ? "" : "s"}`
-        : "";
-    return {
-      colorVar: "--sol-yellow",
-      label: `syncing ${count}, oldest ${stalled} behind`,
-      title: `Daemon is online but ${count} ${unit}${count === 1 ? "" : "s"}${convoNote} have been waiting to sync for ${stalled}. Run cast status to inspect (click to copy).`,
-      command: "cast status",
-    };
-  }
-  return null;
-}
-
 export function DaemonStatusChip() {
+  // Keep the device roster fed: health is per machine (devices.listDevices),
+  // and this chip is the one always-mounted reader.
+  useSyncDevices();
   const health = useDaemonHealth();
   // When this client itself is disconnected, daemon_last_seen is stale because
   // WE can't sync — the ConnectionBanner owns that story; a "daemon stale"
@@ -64,7 +24,7 @@ export function DaemonStatusChip() {
 
   if (!mounted || appOffline) return null;
 
-  const view = viewFor(health);
+  const view = describeDaemonHealth(health);
   if (!view) return null;
 
   const color = `var(${view.colorVar})`;
@@ -84,7 +44,7 @@ export function DaemonStatusChip() {
         border: `1px solid color-mix(in srgb, ${color} 28%, transparent)`,
         boxShadow: `0 0 10px color-mix(in srgb, ${color} 12%, transparent)`,
       }}
-      title={view.title}
+      title={`${view.detail} Run ${view.command} to inspect (click to copy).`}
     >
       <span className="relative flex h-2 w-2">
         <span
@@ -94,7 +54,7 @@ export function DaemonStatusChip() {
         <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: color }} />
       </span>
       <span className="text-[11px] font-mono font-bold whitespace-nowrap" style={{ color }}>
-        {copied ? "copied!" : view.label}
+        {copied ? "copied!" : health.device ? `${health.device}: ${view.label}` : view.label}
       </span>
     </button>
   );

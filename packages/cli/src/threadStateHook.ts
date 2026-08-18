@@ -5,7 +5,7 @@
 //
 // The stamp and mark files it reads are written by `cast state` — see
 // stateCommand.ts (writeThreadStatePulse / clearThreadStatePulse).
-import { THREAD_STATE_NUDGE_MSGS } from "@codecast/shared/contracts";
+import { THREAD_STATE_NUDGE_MSGS, THREAD_STATE_RECRUIT_MSGS } from "@codecast/shared/contracts";
 
 export const THREAD_STATE_HOOK = `#!/bin/bash
 # Pinned thread-state reminder — ONE short nudge once the thread has moved on
@@ -23,15 +23,34 @@ print('\\t'.join([str(d.get('session_id','')), str(d.get('hook_event_name','')),
 [ -z "\${SESSION_ID:-}" ] && exit 0
 
 DIR="$HOME/.codecast/thread-state"
-# No stamp = no pinned state. A session that never ran \`cast state\` is never
-# nudged about it — the reminder maintains what exists, it doesn't recruit.
-[ -f "$DIR/$SESSION_ID.json" ] || exit 0
 
 # Messages in the transcript now: user + assistant entries, tool calls included —
 # the same unit the UI's "N messages since" is counted in.
 COUNT=0
 if [ -n "\${TRANSCRIPT:-}" ] && [ -f "$TRANSCRIPT" ]; then
-  COUNT=$(grep -cE '"type":"(user|assistant)"' "$TRANSCRIPT" 2>/dev/null || echo 0)
+  # grep -c prints its count even when it is 0 (and exits 1 then), so no
+  # "|| echo 0" — that produced two zeros on an empty transcript.
+  COUNT=$(grep -cE '"type":"(user|assistant)"' "$TRANSCRIPT" 2>/dev/null || true)
+fi
+case "\${COUNT:-}" in ''|*[!0-9]*) COUNT=0 ;; esac
+
+# No stamp = the session has NEVER declared a state. Short exchanges stay
+# quiet; a substantial thread ending its turn undeclared is asked ONCE (Stop
+# only, held for one more step) to say who acts next — its own \`--status\` is
+# what files it under Needs Input / Done / Dormant, and beats any classifier
+# reading its prose. The recruit mark makes it once per session; a session that
+# then declares gets the ordinary staleness reminders below.
+if [ ! -f "$DIR/$SESSION_ID.json" ]; then
+  [ "$EVENT" = "Stop" ] || exit 0
+  [ "\${STOP_ACTIVE:-false}" = "true" ] && exit 0
+  [ "$COUNT" -ge ${THREAD_STATE_RECRUIT_MSGS} ] || exit 0
+  mkdir -p "$DIR/recruited"
+  RECRUIT="$DIR/recruited/$SESSION_ID"
+  [ -f "$RECRUIT" ] && exit 0
+  : > "$RECRUIT"
+  MSG="You are ending your turn without declaring who acts next. Run cast state --status done|blocked|dormant with one line saying where this stands (done = delivered, blocked = a human must act, dormant = a machine wakes you — name the wake), then stop. It decides where this session files in the inbox."
+  python3 -c 'import json,sys; print(json.dumps({"decision":"block","reason":sys.argv[1]}))' "$MSG"
+  exit 0
 fi
 
 # The mark holds "<baseline> [nudged]". \`cast state\` deletes it on every write,
