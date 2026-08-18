@@ -4,7 +4,7 @@ import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams } from "next/navigation";
-import { useTabContext } from "../../components/TabContent";
+import { useTabContext } from "../../lib/tabParams";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";

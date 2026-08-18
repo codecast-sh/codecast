@@ -13,7 +13,8 @@ import { toast } from "sonner";
 import { nanoid } from "nanoid";
 import { useInboxStore, getProjectName, filterInboxScopeFromState, type InboxSession } from "../store/inboxStore";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { LivenessDot, sessionLivenessState } from "./LivenessDot";
+import { LivenessDot } from "./LivenessDot";
+import { sessionLivenessState } from "../lib/liveness";
 import { formatPendingComments, sortPendingComments, formatDocFeedback } from "../lib/quoteFormat";
 import { Send, X, Search, Plus } from "lucide-react";
 

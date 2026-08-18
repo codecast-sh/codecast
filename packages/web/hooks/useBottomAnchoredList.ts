@@ -22,13 +22,14 @@
 //      virtualizer is about to file it under is discarded. Without the guard a
 //      row's height lands under a neighbour's key and never self corrects.
 //   3. The virtualizer config: stable getItemKey, overscan, padding, and native
-//      chat anchoring (anchorTo:"end", followOnAppend:"auto",
-//      scrollEndThreshold:8) gated on a real user scroll latch, so a reader who
+//      chat anchoring (anchorTo:"end", followOnAppend:"auto", scrollEndThreshold
+//      = the atBottom band) gated on a real user scroll latch, so a reader who
 //      scrolled up is never pulled back down by an append or a re measure.
 //   4. The scroll bookkeeping: atBottom inside a 100px band, near top and near
 //      bottom inside wider 200px bands for edge affordances, isScrollable, and
 //      the latch itself — any genuine upward scroll latches, reaching the bottom
-//      while moving down releases.
+//      while moving down releases. A viewport resize (the composer growing) holds
+//      the bottom for a reader parked there.
 //   5. The retry ladder for programmatic scrolls (frame, then 100/300/600ms),
 //      because the target offset is computed from estimates that keep moving as
 //      rows measure in. It bails the moment the reader scrolls on purpose.
@@ -297,12 +298,19 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
     //                         change re-pins to the bottom, and a prepend keeps
     //                         the visible row stable by key.
     //   followOnAppend      — follow a new row only when already at the tail.
-    //   scrollEndThreshold  — small enough that a real scroll up unpins.
+    //   scrollEndThreshold  — the same band as `atBottom`. Intent is the upward
+    //                         scroll latch below, not proximity: a reader who
+    //                         is parked inside the band but a few px up (the
+    //                         composer grew, a row re-measured) is still pinned.
+    //                         The library's default 1px, and the 8px this once
+    //                         used, left them behind: nothing followed and the
+    //                         pill stayed hidden because the hook still called
+    //                         them at the bottom.
     // Both are gated on the upward scroll latch: the library's own proximity
     // heuristic cannot tell streaming growth from intent.
     anchorTo: userScrolled ? undefined : "end",
     followOnAppend: userScrolled ? false : "auto",
-    scrollEndThreshold: 8,
+    scrollEndThreshold: bottomThresholdPx,
   } as any);
 
   const rowProps = useCallback(
@@ -385,10 +393,34 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
 
       // Latch on ANY genuine upward scroll, not only large ones, so a nudge
       // inside the pin band still registers. The cooldown masks the offset
-      // adjustment a freshly mounted page causes.
-      if (up && Date.now() >= paginationCooldownRef.current) setUserScrolled(true);
+      // adjustment a freshly mounted page causes. An "upward" move that ends
+      // exactly at the bottom is the browser clamping scrollTop after the
+      // viewport grew (composer shrank back, window resized), never a reader
+      // leaving the bottom.
+      if (up && fromBottom > 1 && Date.now() >= paginationCooldownRef.current) setUserScrolled(true);
       if (fromBottom < bottomThresholdPx && down) setUserScrolled(false);
     };
+
+    // The viewport itself changes height: the composer grows as a draft gets
+    // longer or an image preview appears, a rail opens, the window resizes.
+    // scrollTop does not move, so a reader parked at the bottom is left that
+    // many px above it, and no scroll event fires to say so. Nothing in the
+    // virtualizer re-pins on THIS resize (its anchoring covers row sizes and
+    // appends), so hold the bottom here while the reader has not scrolled away.
+    // The first observation is the baseline, not a change — reacting to it
+    // would drag a list that is landing on the unread rule to the bottom.
+    let lastHeight = -1;
+    const ro = new ResizeObserver(() => {
+      const h = sc.clientHeight;
+      if (lastHeight === -1) { lastHeight = h; return; }
+      if (h === lastHeight) return;
+      lastHeight = h;
+      if (userScrolledRef.current || !atBottomRef.current) return;
+      // Mask the clamp scroll a growth causes so it cannot read as intent.
+      paginationCooldownRef.current = Math.max(paginationCooldownRef.current, Date.now() + 300);
+      scrollToRef.current("bottom", { bailOnUserScroll: true });
+    });
+    ro.observe(sc);
 
     // A wheel or touch is the one signal the virtualizer cannot forge. Arm here,
     // consume in the loader, so a page is pulled once per gesture to an edge.
@@ -403,6 +435,7 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
     sc.addEventListener("touchmove", arm, { passive: true });
     requestAnimationFrame(onScroll);
     return () => {
+      ro.disconnect();
       sc.removeEventListener("scroll", onScroll);
       sc.removeEventListener("wheel", arm);
       sc.removeEventListener("touchmove", arm);

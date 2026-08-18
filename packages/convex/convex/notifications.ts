@@ -1,4 +1,5 @@
 import { mutation, query, internalAction, internalMutation } from "./functions";
+import { openTasksVouchForWaiting } from "@codecast/shared/contracts";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { enqueuePush } from "./pushRouter";
@@ -654,7 +655,10 @@ export async function performNeedsInputCheck(
   const now = Date.now();
   // Single-row mirror of enrichInboxSessionRow's derivation.
   const heartbeatFresh = !!session?.last_heartbeat && now - session.last_heartbeat < HEARTBEAT_ALIVE_MS;
-  const agentStatus = trustedAgentStatus(session?.agent_status, conv.updated_at, now, heartbeatFresh);
+  const agentStatus = trustedAgentStatus(
+    session?.agent_status, conv.updated_at, now, heartbeatFresh,
+    openTasksVouchForWaiting(session?.open_tasks_at, session?.open_tasks?.length ?? 0, now),
+  );
   const daemonAlive = agentStatus === "stopped" ? false : heartbeatFresh;
   const hasPending = !!conv.has_pending_messages;
 
@@ -732,18 +736,13 @@ export async function performNeedsInputCheck(
     userDormant: isUserDormant(conv),
     armedTriggerHome: isArmedTriggerHome(conv, await loadArmedTriggerHomes(ctx, conv.user_id)),
     settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
+    declaredStatus: conv.thread_state_status ?? null,
   });
-  // A settle that lands in needs-input with NO declaration from the agent is
-  // the settle classifier's cue: it reads the tail once and files the row as
-  // done / dormant / needs_input (idleSummary.generateIdleSummary writes the
-  // verdict next to the summary). Scheduled here — before the push filters —
-  // because a machine-started turn or a dedupe-suppressed push still deserves
-  // its verdict; gated on the verdict not already covering this settle.
-  if (state === "needs_input" && !awaitingInput && !isSettleVerdictCurrent(conv)) {
-    await ctx.scheduler.runAfter(0, internal.idleSummary.generateIdleSummary, {
-      conversation_id: conv._id,
-    });
-  }
+  // The settle classifier is NOT scheduled from here any more: this check
+  // stands down for pinned / agent-spawned / schedule-run rows before this
+  // point, and those need a verdict too. It has its own entry off the same
+  // status change (managedSessions.scheduleNeedsInputCheck →
+  // idleSummary.classifySettle).
   if (state !== "needs_input") return { notified: false, reason: "not_needs_input" };
 
   const kind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });

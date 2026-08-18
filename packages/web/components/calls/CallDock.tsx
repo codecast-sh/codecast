@@ -24,8 +24,9 @@ import {
   switchDevice,
   type ParticipantTile,
 } from "../../lib/calls/callManager";
-import { parseRoomKey } from "@codecast/shared/contracts";
 import { CallStage } from "./CallStage";
+import { AddPeopleButton } from "./AddPeople";
+import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 
 // The in-call surface: a floating pill above the composer, on every tab, only
 // while a call exists (call.phase !== idle). Expanded, it grows the roster,
@@ -70,18 +71,6 @@ export function CallDock() {
   );
 }
 
-function roomLabel(roomKey: string | null, roster: any[]): string {
-  if (!roomKey) return "Huddle";
-  const parsed = parseRoomKey(roomKey);
-  if (parsed?.kind === "channel") return "Channel huddle";
-  if (parsed?.kind === "session") return "Session huddle";
-  const others = roster.filter((r) => r);
-  if (others.length <= 2) {
-    return others.map((r) => firstName(r.user_name)).join(" & ") || "Huddle";
-  }
-  return `Huddle · ${others.length}`;
-}
-
 function firstName(name: string | undefined): string {
   return (name || "").split(/\s+/)[0] || "Teammate";
 }
@@ -98,6 +87,10 @@ function DockPill({
   onToggleExpand: () => void;
 }) {
   const speaking = new Set<string>(call.speaking);
+  const { label } = useRoomDescription(call.roomKey);
+  // The caller's side of a ring settles the sentence: "ringing sam, ana…"
+  // while phones ring, "ana declined" for a beat afterwards, then the room.
+  const { ringing, declined } = useOutgoingRings(call.roomKey);
   const statusText =
     call.phase === "error"
       ? call.error || "Call failed"
@@ -105,7 +98,11 @@ function DockPill({
         ? "Connecting…"
         : call.phase === "ringing_out"
           ? "Ringing…"
-          : roomLabel(call.roomKey, roster);
+          : ringing.length > 0
+            ? `ringing ${ringing.map((r) => firstName(r.user_name)).join(", ")}…`
+            : declined.length > 0 && roster.length <= 1
+              ? `${declined.map((r) => firstName(r.user_name)).join(", ")} declined`
+              : label;
 
   return (
     <div className="flex items-center gap-2 px-3 py-2">
@@ -149,6 +146,9 @@ function DockPill({
         )}
       </button>
       <div className="mx-0.5 h-5 w-px bg-sol-border" />
+      {call.roomKey && call.phase === "connected" && (
+        <AddPeopleButton roomKey={call.roomKey} />
+      )}
       <MicLevel muted={call.muted} />
       <button
         onClick={() => void setMuted(!call.muted)}

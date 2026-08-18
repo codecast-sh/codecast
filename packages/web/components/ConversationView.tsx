@@ -9,6 +9,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, hasOpenModal, altChordDirection, type ShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
+import { useChatMessageRow, useEnsureChatMessage } from "../hooks/useChatSync";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
@@ -25,7 +26,7 @@ import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus, type ThreadStateFields } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus, type ThreadStateFields } from "@codecast/shared/contracts";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import {
   describeSmallToolGroup,
@@ -78,7 +79,7 @@ import { useConversationCommentsSync } from "../hooks/useConversationComments";
 import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
 import { CollapsibleBody, ExpandableLine } from "./CollapsibleBody";
-import { monitorRowsFor, effectiveMonitorStatus, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
+import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
   const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -92,6 +93,7 @@ function extractTextFromHast(node: any): string {
   return '';
 }
 import { extractFileChanges } from "../lib/fileChangeExtractor";
+import { parseWorkflowScriptMeta, parseWorkflowLaunch } from "../lib/workflowLaunch";
 import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
 import { DiffView } from "./DiffView";
@@ -137,9 +139,10 @@ import { FormattedSummary } from "./FormattedSummary";
 import { ThreadStatePanel } from "./ThreadStatePanel";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
-import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
+import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
+import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, type ChatWakePrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, normalizeCastCategory, extractCastBodyParts, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -189,6 +192,7 @@ import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyC
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { PendingDeliveryNote } from "./PendingDeliveryNote";
 import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
@@ -286,23 +290,6 @@ function safeString(value: any): string {
   try { return JSON.stringify(value); } catch { return String(value); }
 }
 
-function renderMarkdownPre(node: any, children: any, props: any) {
-  const codeElement = node?.children?.[0];
-  if (codeElement && codeElement.type === "element" && codeElement.tagName === "code") {
-    const className = codeElement.properties?.className as string[] | undefined;
-    const language = className?.find((cls) => cls.startsWith("language-"))?.replace("language-", "");
-    const code = extractTextFromHast(codeElement);
-    if (code) {
-      const canvas = tryRenderCanvas(language, code);
-      if (canvas) return canvas;
-      const castDiff = tryRenderCastDiff(language, code);
-      if (castDiff) return castDiff;
-      return <CodeBlock code={code} language={language} />;
-    }
-  }
-  return <pre {...(props as any)}>{children as any}</pre>;
-}
-
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
   const regex = /"([^"]+)"|(\S+)/g;
@@ -323,6 +310,13 @@ const HighlightContext = createContext<string | undefined>(undefined);
 // with a content-stable identity so an unrelated message sync doesn't
 // re-render every cast row.
 const CastBrowserRowContext = createContext<Record<string, BrowserRowState>>({});
+
+// placeholder message id → the team-chat wake that asked for it. A `cast chat
+// reply` names only the placeholder, so the reply card reads the channel and
+// thread off the wake in the same transcript — no lookup, and it still works
+// after the chat thread is deleted. Keyed by placeholder id, so identity is
+// stable across syncs that added no wake.
+const ChatWakeContext = createContext<Record<string, ChatWakePrompt>>({});
 
 type ReactMarkdownProps = ComponentProps<typeof ReactMarkdownBase>;
 
@@ -352,19 +346,6 @@ const ReactMarkdown = memo(function ReactMarkdown(props: ReactMarkdownProps) {
   return <ReactMarkdownBase {...props} rehypePlugins={plugins} />;
 });
 
-// Stable plugin/component identities for message-body markdown. Inline literals at
-// the call sites made react-markdown re-run its full parse + rehype-highlight pass on
-// EVERY block re-render — measured as the single largest cost during a session switch
-// (~4.2s self-time / 775 renders). None of these overrides close over props.
-export const MESSAGE_MD_REHYPE = [rehypeHighlight];
-export const MESSAGE_MD_COMPONENTS = {
-  code: EntityAwareCode,
-  a: EntityAwareLink,
-  img: ({ src, alt }: { src?: string | Blob; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
-  p: ImageRowParagraph,
-  pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
-};
-
 // Stable variants for non-message-body call sites (tool results, sent-message
 // cards, command markdown, summaries). Same identity rule as above: the memo'd
 // ReactMarkdown wrapper only bails out of a re-parse when these are module consts.
@@ -375,28 +356,6 @@ const MD_COMPONENTS_CODE_LINK = { code: MESSAGE_MD_COMPONENTS.code, a: MESSAGE_M
 const MD_COMPONENTS_NO_IMG = { ...MD_COMPONENTS_CODE_LINK, pre: MESSAGE_MD_COMPONENTS.pre, img: () => null };
 const MD_COMPONENTS_NO_PRE = { ...MD_COMPONENTS_CODE_LINK, img: MESSAGE_MD_COMPONENTS.img };
 
-// User messages are typed (or pasted) as plain text, not authored markdown: a
-// single newline is a real line break, and a literal <tag> is content, not
-// markup. remark-breaks keeps the newlines; the html→text pass keeps pasted
-// tags visible (react-markdown drops raw html nodes, which would otherwise
-// silently eat snippets like `<div className=…>` from the rendered message).
-function remarkUserHtmlAsText() {
-  const walk = (node: any, isRoot: boolean) => {
-    if (!Array.isArray(node.children)) return;
-    node.children = node.children.map((child: any) => {
-      if (child.type === "html") {
-        const text = { type: "text", value: child.value };
-        // A block-level html node sits directly under root, where a bare text
-        // node isn't valid flow content — rewrap it as a paragraph.
-        return isRoot ? { type: "paragraph", children: [text] } : text;
-      }
-      walk(child, false);
-      return child;
-    });
-  };
-  return (tree: any) => walk(tree, true);
-}
-export const USER_MD_REMARK = [...entityRemarkPlugins, remarkBreaks, remarkUserHtmlAsText];
 
 // Cross-mount markdown render cache. React.memo only helps while a component
 // stays MOUNTED — but the message virtualizer constantly unmounts and remounts
@@ -2715,7 +2674,8 @@ type UserMessageKind =
   | { kind: 'poll_response' }
   | { kind: 'scheduled_task' }
   | { kind: 'machine_move'; destination?: string; machineChanged: boolean }
-  | { kind: 'session_message'; from: string; body: string; name?: string };
+  | { kind: 'session_message'; from: string; body: string; name?: string }
+  | { kind: 'chat_wake'; wake: ChatWakePrompt };
 
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:", "[Codecast import]"];
 
@@ -2723,7 +2683,7 @@ const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Y
 // The daemon collapses newlines to spaces on inject (injectViaTmux) and a few control
 // chars can leak in, so we strip reminders + control chars and flatten all whitespace —
 // the multi-line stored pending content and the single-line echoed copy normalize equal.
-export function normalizePendingContent(s: string): string {
+function normalizePendingContent(s: string): string {
   // Slash commands: the pending row holds what the user typed ("/cmd args") but the JSONL
   // echo holds the expanded tag form ("<command-name>/cmd</command-name><command-args>args
   // </command-args>"). Canonicalize both to "/cmd args" so they match and the pending bubble
@@ -2760,6 +2720,8 @@ function classifyUserMessage(
   if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
   const sessionMsg = parseInboundSessionMessage(t);
   if (sessionMsg) return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body, name: sessionMsg.name };
+  const chatWake = parseChatWakePrompt(t);
+  if (chatWake) return { kind: 'chat_wake', wake: chatWake };
   if (t.startsWith('{') && t.includes('__cc_poll')) {
     try { if (JSON.parse(t).__cc_poll) return { kind: 'poll_response' }; } catch {}
   }
@@ -3422,23 +3384,6 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
 // background. Task ID: … Run ID: wf_…"). Parse it plus the script's meta literal into
 // the same card language as DynamicRunCard, and resolve the live run by its wf_ id so
 // the card shows real status/progress instead of the raw blob.
-
-export function parseWorkflowScriptMeta(script: string): { name?: string; description?: string } {
-  const head = script.slice(0, 2000);
-  return {
-    name: head.match(/\bname:\s*['"`]([^'"`\n]+)['"`]/)?.[1],
-    description: head.match(/\bdescription:\s*['"`]([^'"`\n]+)['"`]/)?.[1],
-  };
-}
-
-export function parseWorkflowLaunch(content: string): { taskId?: string; summary?: string; scriptFile?: string; runId?: string } {
-  return {
-    taskId: content.match(/\bTask ID:\s*(\S+)/)?.[1],
-    summary: content.match(/\bSummary:\s*([^\n]+)/)?.[1],
-    scriptFile: content.match(/\bScript file:\s*([^\n]+)/)?.[1],
-    runId: content.match(/\bRun ID:\s*(wf_[\w-]+)/)?.[1],
-  };
-}
 
 function WorkflowToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
   const [expanded, setExpanded] = useState(false);
@@ -5222,6 +5167,13 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
   if (sessionTarget) {
     return <CastSessionRefBlock cat={cat} target={sessionTarget} args={args} fullCmd={cast.fullCmd} output={output} isError={!!isError} />;
   }
+  // `cast chat reply <id> "…"` / `cast chat send "…" --channel <id>` — the
+  // agent's side of a team-chat exchange, rendered as the outgoing twin of the
+  // ChatWakeBlock that asked.
+  const chatSend = cat === "chat" ? extractChatSendArgs(subcommand, args) : null;
+  if (chatSend) {
+    return <CastChatSendBlock send={chatSend} isReply={subcommand === "reply"} isError={!!isError} />;
+  }
 
   return (
     <div className="my-0.5">
@@ -5483,7 +5435,15 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
   const sessionDead = useInboxStore((s) => {
     if (!conversationId) return false;
     const sess = s.sessions[conversationId];
-    return !!sess && (sess.agent_status === "stopped" || isLivenessStale(sess, now));
+    return !!sess && isWatchHostDead(sess, now);
+  });
+  // The daemon's verdict on THIS watch: armed before its last verified report
+  // and not in it means the shell is gone (a lost completion notice, a died
+  // process) — the block must not claim "running". Narrow boolean subscription.
+  const reportedDead = useInboxStore((s) => {
+    if (!conversationId || !row) return false;
+    const sess = s.sessions[conversationId];
+    return !!sess && reportSaysDead(sess, row);
   });
   // Start of the process currently behind this session. A watch armed before it
   // died with the process that armed it — the session being alive says nothing
@@ -5492,7 +5452,7 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
     (conversationId ? s.sessions[conversationId]?.agent_started_at : undefined) ?? undefined,
   );
   const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now, agentStartedAt) : "watching";
-  const status: MonitorStatus = rawStatus === "watching" && sessionDead ? "stopped" : rawStatus;
+  const status: MonitorStatus = rawStatus === "watching" && (sessionDead || reportedDead) ? "stopped" : rawStatus;
   const failed = isBackground && status === "ended" && (row?.exitCode ?? 0) > 0;
   const badge = failed
     ? { label: `exit ${row!.exitCode}`, cls: "bg-sol-red/10 text-sol-red border-sol-red/30" }
@@ -6876,6 +6836,126 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
   );
 }
 
+// ── Team chat: the anchor's inbound wake and its outbound reply ─────────────
+// A mention in team chat wakes the anchor session with a plain-text prompt
+// (convex/chat.ts buildAnchorWake): the channel, who asked, the quoted thread,
+// and the `cast chat reply` it should run. The transcript shows the exchange
+// the way chat does — a channel pill, the thread's lines by speaker — and hides
+// the framing that exists only to brief the agent.
+
+// Where a chat card clicks through: the channel, positioned on a message when
+// one is known. Mirrors convex/chatText.ts chatPermalink.
+function chatHref(channelId?: string, messageId?: string): string | null {
+  if (!channelId) return null;
+  return messageId ? `/chat/${channelId}?m=${messageId}` : `/chat/${channelId}`;
+}
+
+function ChatChannelPill({ name, href }: { name: string; href: string | null }) {
+  const cls = "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-sol-magenta/30 bg-sol-magenta/10 text-sol-magenta text-[11px] font-mono shrink-0";
+  const inner = <><Hash className="w-3 h-3" />{name}</>;
+  return href ? (
+    <Link href={href} className={`${cls} hover:bg-sol-magenta/20 hover:underline underline-offset-2`} title="Open in team chat">{inner}</Link>
+  ) : (
+    <span className={cls}>{inner}</span>
+  );
+}
+
+function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; timestamp?: number }) {
+  // Land on the thread. A permalink to a REPLY opens the thread panel; the root
+  // alone would only scroll the channel — so prefer the anchor's placeholder,
+  // which is always a reply, and fall back to the root.
+  const href = chatHref(wake.channelId, wake.placeholderId ?? wake.threadRootId);
+  return (
+    <div className="mb-2 mx-1 rounded border-l-2 border-sol-magenta/60 bg-sol-magenta/5">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap">
+        <MessageSquare className="w-3.5 h-3.5 shrink-0 text-sol-magenta/70" />
+        <span className="text-[11px] font-medium tracking-wide uppercase shrink-0 text-sol-magenta/70">Team chat</span>
+        <ChatChannelPill name={wake.channelName} href={href} />
+        <span className="text-xs text-sol-text-muted truncate">
+          <span className="text-sol-text font-medium">{wake.askerName}</span>
+          {wake.addressed ? " mentioned you" : " replied in a thread"}
+        </span>
+        {timestamp != null && timestamp > 0 && (
+          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        )}
+      </div>
+      <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
+        <div className="space-y-1.5">
+          {wake.entries.map((entry, i) => (
+            <div key={i} className="flex gap-2 text-sm">
+              <span className={`shrink-0 font-medium ${entry.self ? "text-sol-magenta/80" : "text-sol-text"}`}>
+                {entry.self ? "You" : entry.name}
+              </span>
+              <div className="min-w-0 text-sol-text prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+                  components={MESSAGE_MD_COMPONENTS}
+                >{entry.content}</ReactMarkdown>
+              </div>
+            </div>
+          ))}
+          {wake.entries.length === 0 && (
+            <span className="text-xs text-sol-text-dim italic">thread excerpt not available</span>
+          )}
+        </div>
+      </CollapsibleBody>
+    </div>
+  );
+}
+
+// The outgoing half. A reply names only the placeholder id, so the channel and
+// the thread come from the chat store (fetched on demand when this client has
+// not paged to that message) — the header stays honest when they are unknown.
+function CastChatSendBlock({ send, isReply, isError }: { send: ChatSendArgs; isReply: boolean; isError: boolean }) {
+  const wake = useContext(ChatWakeContext)[send.messageId ?? ""];
+  // The wake that asked is the first source; the chat store (fetched on demand)
+  // covers a reply whose wake was compacted away or a `cast chat send`.
+  const lookupId = isReply && !wake ? send.messageId : undefined;
+  useEnsureChatMessage(lookupId);
+  const row = useChatMessageRow(lookupId);
+  const channelId = send.channelId ?? wake?.channelId ?? row?.channel_id;
+  const storeName = useInboxStore((s) => (channelId ? s.chatChannels[channelId]?.name : undefined));
+  const channelName = wake?.channelName ?? storeName;
+  const href = chatHref(channelId, isReply ? send.messageId : send.threadRootId);
+  const declinedByFlag = send.status === "error";
+  // The server's own verdict on the reply outranks the command's flag.
+  const declined = row?.agent_status === "error" || (row?.agent_status == null && declinedByFlag);
+  // A reply always lands in the thread it was asked in; only a send needs the label.
+  const inThread = !isReply && !!send.threadRootId;
+  return (
+    <div className="my-2 mx-1 rounded border-l-2 border-sol-magenta/60 bg-sol-magenta/5">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap">
+        <CornerUpRight className="w-3.5 h-3.5 text-sol-magenta/70 shrink-0" />
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-magenta/70 shrink-0">{isReply ? "Reply in chat" : "Message to chat"}</span>
+        {channelName ? (
+          <ChatChannelPill name={channelName} href={href} />
+        ) : href ? (
+          <Link href={href} className="text-[11px] font-mono text-sol-magenta hover:underline underline-offset-2">open thread</Link>
+        ) : null}
+        {inThread && <span className="text-[10px] text-sol-text-dim">in thread</span>}
+        {isError ? (
+          <span className="text-sol-red/80 text-[10px] ml-auto shrink-0">failed</span>
+        ) : declined ? (
+          <span className="text-sol-red/80 text-[10px] ml-auto shrink-0">could not answer</span>
+        ) : (
+          <span className="text-sol-green/70 text-[10px] ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
+        )}
+      </div>
+      {send.kind === "dynamic" ? (
+        <div className="px-3 pb-2">
+          <code className="text-xs font-mono text-sol-text-secondary break-all">{send.body}</code>
+          <div className="text-[10px] text-sol-text-dim mt-1">shown as typed — the shell filled in the actual message; open the thread to read what arrived</div>
+        </div>
+      ) : (
+        <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+            components={MESSAGE_MD_COMPONENTS}
+          >{send.body}</ReactMarkdown>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const USER_CONTENT_MAX_HEIGHT = 1800;
 
 function parseSkillBlocks(text: string): { parts: Array<{ type: 'text' | 'skill'; content: string; skillName?: string; skillDesc?: string; skillPath?: string }>} {
@@ -7571,13 +7651,15 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           and flips to "working" once the pane is ready, so reassure rather than alarm.
           While the agent is actively processing we show nothing — the message is already
           sitting in its native input queue (see pendingBannerState). */}
-      {isPending && bannerState === "queued" && (
+      {isPending && bannerState !== "none" && (
+      <PendingDeliveryNote state={bannerState} restartInFlight={!!retryClickedAt} conversationId={conversationId}>
+      {bannerState === "queued" && (
         <div className="flex items-center gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-queued">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70 animate-pulse flex-shrink-0" />
           <span>Starting up — your message will send once the session is ready</span>
         </div>
       )}
-      {isPending && bannerState === "stuck" && (
+      {bannerState === "stuck" && (
         <div className="flex items-center flex-wrap gap-2 mt-2 pl-8" data-testid="pending-message-retry">
           {!retryStage && (
             <span className="text-xs text-sol-orange/90">
@@ -7605,6 +7687,8 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
               : retryClickedAt ? "Retry again" : (agentStatus ? "Resend message" : "Retry (kill & restart)")}
           </button>
         </div>
+      )}
+      </PendingDeliveryNote>
       )}
 
       {fullscreen && createPortal(
@@ -8209,6 +8293,16 @@ function AssistantBlockImpl({
 
   const hasPlanWrite = hasToolCalls && toolCalls?.some(isPlanWriteToolCall);
 
+  // Corner toolbar placement. With the agent header row the toolbar rides its
+  // empty right side. Without it, content starts at the very top of the
+  // message, and a block card there (published page, doc, canvas, PR) keeps
+  // its own controls in that corner — so the toolbar hangs fully above the
+  // content instead of covering them. Tool-only rows stack tightly and keep
+  // the toolbar inside the row (a plan card lifts it, like a block card).
+  const toolbarTop = onlyToolCalls
+    ? (hasPlanWrite ? "-top-6" : "top-1")
+    : shouldShowHeader ? "-top-2" : "-top-7";
+
   return (
     <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-1.5" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       <ContextMenu state={ctxMenu}>
@@ -8244,7 +8338,7 @@ function AssistantBlockImpl({
         </button>
       )}
       {(hasContent || visibleThinking || hasToolCalls) && (
-        <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+        <div className={`absolute ${toolbarTop} right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
           {/* Respond actions (quote into your reply) live on each block's left
               gutter — see MessageReview. This corner is META only: a plain row
               of icon buttons, distinct icons + tooltips so link vs share read clearly. */}
@@ -12830,7 +12924,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // COMPACT works at TURN granularity (one collapsed card per assistant run), so
   // we also track each message's turn key, first/last message, and stats.
   const turnAggregates = useMemo(() => {
-    const TURN_BOUNDARY_KINDS = new Set(['normal', 'command', 'plan', 'session_message']);
+    const TURN_BOUNDARY_KINDS = new Set(['normal', 'command', 'plan', 'session_message', 'chat_wake']);
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
     const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId
@@ -14737,6 +14831,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return browserRowMapRef.current;
   }, [conversation?.messages, globalToolResultMap]);
 
+  const chatWakeMapRef = useRef<Record<string, ChatWakePrompt>>({});
+  const chatWakeMap = useMemo(() => {
+    const next: Record<string, ChatWakePrompt> = {};
+    for (const kind of userMsgKindMap.values()) {
+      if (kind.kind === 'chat_wake' && kind.wake.placeholderId) next[kind.wake.placeholderId] = kind.wake;
+    }
+    const prev = chatWakeMapRef.current;
+    const prevKeys = Object.keys(prev);
+    const same = prevKeys.length === Object.keys(next).length && prevKeys.every((k) => k in next);
+    if (!same) chatWakeMapRef.current = next;
+    return chatWakeMapRef.current;
+  }, [userMsgKindMap]);
+
   // Every image in the session, in transcript order — the header gallery's
   // source list (attachments, tool screenshots, trusted markdown images).
   //
@@ -15066,6 +15173,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
         case 'session_message':
           return <SessionMessageBlock key={msg._id} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} recipientActive={conversation?.status === "active"} />;
+        case 'chat_wake':
+          return <ChatWakeBlock key={msg._id} wake={kind.wake} timestamp={msg.timestamp} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
@@ -15249,6 +15358,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   return (
     <HighlightContext.Provider value={highlightQuery}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
+    <ChatWakeContext.Provider value={chatWakeMap}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
     <main className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
@@ -16491,6 +16601,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     </main>
     </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
+    </ChatWakeContext.Provider>
     </CastBrowserRowContext.Provider>
     </HighlightContext.Provider>
   );

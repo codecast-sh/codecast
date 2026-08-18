@@ -28,6 +28,12 @@ export const THREAD_STATE_STALE_MSGS = 200;
  * the UI's "N messages since" is measured in. */
 export const THREAD_STATE_NUDGE_MSGS = 20;
 
+/** Transcript messages after which a session that has NEVER declared a state
+ * is asked ONCE, at Stop, to say who acts next (`cast state --status …`). A
+ * quick exchange stays quiet; a thread this long is one the inbox will file,
+ * and the agent's own declaration beats any classifier reading its prose. */
+export const THREAD_STATE_RECRUIT_MSGS = 40;
+
 /** Time is the weaker signal — a thread parked overnight on a CI run has not
  * changed, so the clock only takes over when the thread is quiet for long. */
 export const THREAD_STATE_AGING_MS = 12 * 60 * 60 * 1000;

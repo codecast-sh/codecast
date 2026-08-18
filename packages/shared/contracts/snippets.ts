@@ -279,7 +279,7 @@ When your context gets compacted, re-read your task or plan context (\`cast task
 
 ### Reading tasks
 
-Answering a question about tasks — what is assigned to someone, a summary of the open tasks on a topic, which session did the work — is a read, not a lifecycle step. Filter on the server instead of grepping the list: \`--assignee me\`, \`--label <name>\`, \`-p "<project>"\`, \`--plan <id>\`, \`-q "<text>"\`, \`-s <status>\`, and \`-a\` to include closed tasks. Every read command takes \`--json\` and prints full rows (assignee_name, labels, linked sessions, comments) — use it whenever you will process the result rather than glance at it. Piped output is plain text; there is nothing to strip. \`cast task show\` takes several ids at once and lists each task's linked sessions by short id, so the session behind a task is one \`cast read <id>\` away.
+Filter on the server, not with grep: \`--assignee me\`, \`--label <name>\`, \`-p "<project>"\`, \`-q "<text>"\`, \`-s <status>\`, \`-a\` (closed too). Every read takes \`--json\`; \`cast task show\` takes several ids and lists each task's linked sessions by short id (\`cast read <id>\`).
 
 ### Commands
 
@@ -287,11 +287,8 @@ Answering a question about tasks — what is assigned to someone, a summary of t
 cast task ready                             # Find available work
 cast task ready -q "<topic>"                # Filter ready tasks by title/description
 cast task ls -q "<topic>"                   # Search all active tasks by title/description
-cast task ls --assignee me                  # Tasks assigned to me (also a username)
-cast task ls --label <name> --json          # Filter by label; full rows as JSON (every read takes --json)
-cast task ls -a -s done -q "<topic>"        # Include closed tasks (-a) or pin one status (-s)
-cast task show ct-1 ct-2 ct-3               # Several at once: details, linked sessions, comments (-c for all)
-cast task show <id> --json | jq .sessions   # Linked sessions as {short_id, title} → cast read <short_id>
+cast task ls --assignee me --label <name>   # Server-side filters (also -p, -q, -s, -a); --json for full rows
+cast task show ct-1 ct-2 --json             # Several ids; .sessions = linked sessions (short id + title)
 cast plan ls -q "<topic>"                   # Search active plans by title/goal
 cast project ls                             # Projects in your workspace (the triage unit)
 cast project show <id>                      # A project and every task under it
@@ -566,16 +563,21 @@ cast browser open <url>       # starts the browser if needed; reuses this sessio
 cast browser snapshot -i -s "[role=main]"   # interactive elements with #eNN refs — scope first on big apps
 cast browser read             # the page as clean text (big apps: scope with get text "[role=main]")
 cast browser click #e42       # act on refs: click, type --submit, press, hover, select…
-cast browser do "find Sign in" click "wait --text Welcome"   # several steps, one invocation (\`do -\` reads steps from stdin)
+cast browser do "find Sign in" click "wait --text Welcome"   # several steps, one process — the default once you know the next steps
+cast browser do - <<'EOF'     # long flows: one step per line
+open https://example.com
+find "Sign in"
+click
+EOF
 \`\`\`
 
-The loop is snapshot, then act on a ref — and when you can already name the target, skip the snapshot: \`find "Sign in"\` then a bare \`click\`. Scope reads on big apps (\`snapshot -i -s\`, \`get text <sel>\`, \`text <sel>\`); \`diff snapshot\` prints only what changed since your last one. \`cast browser --help\` lists every verb and \`cast browser help <cmd>\` every flag — ask the CLI instead of guessing.
+The loop is snapshot, then act on a ref — and when you can already name the target, skip the snapshot: \`find "Sign in"\` then a bare \`click\`. Batch by default: each \`cast browser\` command spends one to three seconds starting the CLI for about 85 ms of browser work, so whenever you can see two or more steps ahead, put them in one \`do\` — the same verbs, one process. A flow stops at the first failing step and reports what ran and what never did (\`--keep-going\` carries on past a failure); the conversation shows each step with its own result. Scope reads on big apps (\`snapshot -i -s\`, \`get text <sel>\`, \`text <sel>\`); \`diff snapshot\` prints only what changed since your last one. \`cast browser --help\` lists every verb and \`cast browser help <cmd>\` every flag — ask the CLI instead of guessing.
 
 What cast adds to the usual pattern:
 
 - **Evidence flows to the thread.** A failing step automatically prints console errors, failed requests and a screenshot. \`shot\` puts a capture in the conversation — \`--annotate\` numbers elements with their refs, \`--share\` uploads a link you can paste. \`cast browser shots on\` adds an automatic small capture after commands that change the page (off by default for agents; a \`do\` flow then captures once, at the end). Never link local file paths — the human's browser cannot read them.
 - **One Chrome, many agents.** Each session owns one tab; \`tabs\` marks yours. Act only on yours, and \`--new-tab\` only for a genuine second page. State persists until \`cast browser stop\` (\`--wipe\` also removes the profile copy; \`start --fresh\` starts signed out). The clone holds the human's logins — treat that access as theirs. Modal dialogs are dismissed automatically and never block.
-- **Sign-in pages.** When \`open\` reports it landed on a sign-in page, the fix is a person signing in once in the agent browser: run \`cast browser login <url>\` (raises its window, waits) and tell the human — a \`cast decide\` or a push, not a restart. Google is never carried from the human's Chrome (a shared Google session signs both browsers out); the agent browser signs into Google on its own from the human's Chrome account when it launches, and this one-time sign-in is the fallback if it did not; it survives restarts and \`--resync\`. Never \`--resync\` or \`stop --all\` to fix a sign-out — it drops nothing useful and kills other sessions' tabs.
+- **Sign-in pages.** When \`open\` reports it landed on a sign-in page, the fix is a person signing in once in the agent browser: run \`cast browser login <url>\` (raises its window, waits) and tell the human — a \`cast decide\` or a push, not a restart. Google is never carried from the human's Chrome (a shared Google session signs both browsers out); the agent browser signs into Google on its own from the human's Chrome account when it launches, and this one-time sign-in is the fallback if it did not; it survives restarts and \`--resync\`. For any other site, \`cast browser sync [url]\` carries the human's current Chrome logins into the running browser (all sites with no URL) — never \`--resync\` or \`stop --all\` to fix a sign-out; that kills other sessions' tabs.
 - **Remote hosts.** \`start --remote linux\` runs Chrome on a cloud host that sleeps when idle (about a dollar a month); \`--remote mac\` cannot sleep and bills continuously (~EUR75/month, minimum lease 24 hours) — only for work that truly needs macOS. Cookies are injected per site as you navigate and wiped on stop. \`cast browser hosts sleep\` when done.
 ${BROWSER_SNIPPET_END}
 `;
@@ -683,6 +685,27 @@ ${CALLS_SNIPPET_END}
 export const CALLS_SECTION: SectionSpec = {
   headings: ["## Calls"],
   endMarker: CALLS_SNIPPET_END,
+};
+
+export const LIMITS_SNIPPET_END = "<!-- /codecast-limits -->";
+export const LIMITS_SNIPPET = `
+## Usage limits
+
+Hitting a usage limit is a pause, not the end of the task. Codecast recovers limit-parked
+sessions on its own: with auto-switch on, this machine hops to the saved account with the most
+headroom and continues them; with resume-at-reset on (the default), they continue when the
+window resets. So do not wind down, trim scope, or stop early because a limit is near — that
+includes when Claude Code itself injects a note that the usage limit is approaching and asks
+you to checkpoint. Finish the step you are on and keep working; if the limit lands, the session
+parks and comes back. A one-line \`cast state\` is welcome, stopping is not.
+
+\`cast usage\` shows the current account's windows, reset times, and which recovery is on.
+${LIMITS_SNIPPET_END}
+`;
+
+export const LIMITS_SECTION: SectionSpec = {
+  headings: ["## Usage limits"],
+  endMarker: LIMITS_SNIPPET_END,
 };
 
 export const DECIDE_SNIPPET_END = "<!-- /codecast-decide -->";
@@ -997,6 +1020,24 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     enabledKey: "decide_enabled",
     versionKey: "decide_version",
     section: { spec: DECIDE_SECTION, body: DECIDE_SNIPPET },
+  },
+  {
+    slug: "limits",
+    aliases: ["usage", "usage-limits", "limit"],
+    name: "Usage limits",
+    desc: "Keep working through usage limits (codecast recovers parked sessions)",
+    detail:
+      "Tells agents that a usage limit is a pause, not a stop: codecast resumes limit-parked " +
+      "sessions when the window resets and, with auto-switch on, hops this machine to the " +
+      "saved account with the most headroom — so an agent should finish its step and keep " +
+      "working rather than wind down when Claude Code warns that a limit is near. Adds " +
+      "`cast usage` for the account's windows and reset times. Turned on automatically once " +
+      "a machine has more than one saved Claude account.",
+    writesTo: "CLAUDE.md — a ## Usage limits section",
+    shipped: "2026-08-17",
+    enabledKey: "limits_enabled",
+    versionKey: "limits_version",
+    section: { spec: LIMITS_SECTION, body: LIMITS_SNIPPET },
   },
   {
     slug: "orchestration",

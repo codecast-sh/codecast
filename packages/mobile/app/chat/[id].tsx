@@ -16,6 +16,8 @@ import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
 import { buildChatTimeline, dmOtherIds, memberHandle } from '@codecast/shared/chat';
+import { chatRoomKey } from '@codecast/shared/contracts';
+import { HuddleButton } from '@/components/calls/SessionHuddleButton';
 import { MessageRow, DayDivider, NewDivider, ChatAvatar, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
 import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
@@ -516,6 +518,20 @@ export default function ChatChannelScreen() {
             <RNText style={styles.topic} numberOfLines={1}>{channel.topic}</RNText>
           ) : null}
         </RNView>
+        {/* Every room can huddle: a DM or group thread rings its people, a
+            channel is an open door (same keys web's chips use). */}
+        {channel && (
+          <HuddleButton
+            roomKey={chatRoomKey({
+              id: String(channel._id),
+              kind: channel.kind,
+              memberIds: isDm && dmOthers.length && viewerId ? [viewerId, ...dmOthers] : undefined,
+            })}
+            teamId={channel.team_id ? String(channel.team_id) : null}
+            ring={isDm ? dmOthers : undefined}
+            anchorTitle={isDm ? (dmOthers.length > 1 ? `with ${roomName}` : undefined) : `#${channel.name}`}
+          />
+        )}
       </RNView>
 
       <KeyboardAvoidingView

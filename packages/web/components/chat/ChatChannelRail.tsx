@@ -2,10 +2,10 @@ import { memo } from "react";
 import { Hash, Lock, Plus, BellOff, Users, SquarePen } from "lucide-react";
 import type { ChatChannelView } from "./chatTypes";
 import { OccupancyChip } from "../calls/OccupancyChip";
-import { channelRoomKey } from "@codecast/shared/contracts";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import {
   channelDisplayName,
+  chatViewRoomKey,
   dmCounterpart,
   memberName,
   suggestedDmMembers,
@@ -45,6 +45,7 @@ function RailRow({
   const isDm = c.kind === "dm";
   const name = channelDisplayName(c, members);
   const counterpart = dmCounterpart(c, members);
+  const viewerId = useInboxStore((s) => String((s as any).currentUser?._id ?? ""));
   const cls = [
     "ch-chan",
     active ? "ch-chan-active" : "",
@@ -83,7 +84,7 @@ function RailRow({
         )}
       </span>
       <span className="ch-chan-name">{name}</span>
-      <OccupancyChip roomKey={channelRoomKey(String(c.id))} className="shrink-0" />
+      <OccupancyChip roomKey={chatViewRoomKey(c, viewerId)} className="shrink-0" />
       {c.muted && <BellOff className="w-3 h-3 shrink-0 opacity-70" aria-label="Muted" />}
       {mentions > 0 ? (
         <span className="ch-chan-badge" aria-label={`${mentions} mentions`}>

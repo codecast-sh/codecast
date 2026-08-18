@@ -38,11 +38,6 @@ export const DAEMON_COMMANDS = [
   // banner), and enqueue "continue" to each so the delivery rail resumes them
   // on the new account.
   "switch_account",
-  // In-place model/effort switch for a RUNNING claude session: the daemon
-  // drives the /model picker (arrows + `s`) so the change stays session-scoped
-  // — the one-shot `/model <x>` and `/effort <x>` forms rewrite the user's
-  // GLOBAL default in ~/.claude/settings.json. Old daemons: "Unknown command".
-  "set_model",
   // User clicked "Update now" on the in-app desktop-update banner: apply the
   // published desktop release immediately (force quit + swap + relaunch), rather
   // than waiting for the next app quit. Old daemons: "Unknown command".

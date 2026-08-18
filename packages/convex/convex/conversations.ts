@@ -6,6 +6,7 @@ import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus } from "@codecast/shared/contracts";
+import { openTasksVouchForWaiting } from "@codecast/shared/contracts";
 import { Doc, Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
@@ -15,8 +16,8 @@ import { latestImagePreviewUrl } from "./messages";
 import { inboxVisibilityFields } from "./inboxProjection";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
-import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, findModelOption, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
+import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, requireSessionCommandTarget } from "./daemonCommandUtils";
+import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, isUserDormant, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, type WorkState } from "./inboxFilters";
 import { armedTriggerHomeLoader, loadArmedTriggerHomes, isArmedTriggerHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
@@ -6500,7 +6501,10 @@ export const feedForCLI = query({
       // stricter 60s liveStatusMap above) so both surfaces coerce identically.
       const heartbeatFresh =
         !!managed?.last_heartbeat && now - managed.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS;
-      const agentStatus = trustedAgentStatus(managed?.agent_status, conv.updated_at, now, heartbeatFresh);
+      const agentStatus = trustedAgentStatus(
+        managed?.agent_status, conv.updated_at, now, heartbeatFresh,
+        openTasksVouchForWaiting(managed?.open_tasks_at, managed?.open_tasks?.length ?? 0, now),
+      );
       coercedStatusMap.set(conv._id.toString(), agentStatus);
       const daemonAlive = agentStatus === "stopped" ? false : isLive;
       const hasPending = !!(conv as any).has_pending_messages;
@@ -6537,6 +6541,7 @@ export const feedForCLI = query({
         userDormant: isUserDormant(conv),
         armedTriggerHome: isArmedTriggerHome(conv, armedHomes),
         settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
+        declaredStatus: conv.thread_state_status ?? null,
       });
       workStateMap.set(conv._id.toString(), ws);
       return ws;
@@ -7483,9 +7488,20 @@ type InboxSessionMaps = {
   tmuxSessionMap: Map<string, string>;
   permissionModeMap: Map<string, string>;
   agentStartedAtMap: Map<string, number>;
+  // The daemon's last verified open-task report per conversation (see
+  // shared/contracts/openTasks): the "↳ Background …" rows the inbox draws
+  // without messages, and what vouches for a "waiting" status past the decay.
+  openTasksMap: Map<string, { tasks: any[]; at: number }>;
   liveConvIds: Set<string>;
   userDaemonAlive: boolean;
 };
+
+// Whether the daemon's open-task report vouches for a "waiting" on this
+// conversation right now (fresh, non-empty) — the fifth trustedAgentStatus arg.
+function verifiedWaitingFor(maps: Pick<InboxSessionMaps, "openTasksMap">, cid: string, now: number): boolean {
+  const rep = maps.openTasksMap.get(cid);
+  return openTasksVouchForWaiting(rep?.at, rep?.tasks.length ?? 0, now);
+}
 
 // Build the per-user managed-session maps once, then look up by conversation id.
 async function buildUserSessionMaps(
@@ -7509,6 +7525,7 @@ async function buildUserSessionMaps(
   const tmuxSessionMap = new Map<string, string>();
   const permissionModeMap = new Map<string, string>();
   const agentStartedAtMap = new Map<string, number>();
+  const openTasksMap = new Map<string, { tasks: any[]; at: number }>();
   for (const s of managedSessions) {
     if (!s.conversation_id) continue;
     const cid = s.conversation_id.toString();
@@ -7518,6 +7535,7 @@ async function buildUserSessionMaps(
     // been reported yet still has a process generation, and that is exactly
     // what decides whether its standing watches are real.
     if (s.agent_started_at !== undefined) agentStartedAtMap.set(cid, s.agent_started_at);
+    if (s.open_tasks !== undefined && s.open_tasks_at !== undefined) openTasksMap.set(cid, { tasks: s.open_tasks, at: s.open_tasks_at });
     if (!s.agent_status) continue;
     if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
     // Raw status. The heartbeat-staleness coercion lives in trustedAgentStatus
@@ -7531,7 +7549,7 @@ async function buildUserSessionMaps(
     (s: any) => now - s.last_heartbeat < 6 * 60 * 1000
   );
 
-  return { agentStatusMap, agentStatusUpdatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, liveConvIds, userDaemonAlive };
+  return { agentStatusMap, agentStatusUpdatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, openTasksMap, liveConvIds, userDaemonAlive };
 }
 
 // Empty maps for the liveness-excluded path: computeInboxSessions({includeLiveness:false})
@@ -7544,6 +7562,7 @@ const EMPTY_INBOX_MAPS: InboxSessionMaps = {
   tmuxSessionMap: new Map(),
   permissionModeMap: new Map(),
   agentStartedAtMap: new Map(),
+  openTasksMap: new Map(),
   liveConvIds: new Set(),
   userDaemonAlive: false,
 };
@@ -7571,6 +7590,7 @@ async function mergeForeignConversationLiveness(
     if (managed.tmux_session) maps.tmuxSessionMap.set(cid, managed.tmux_session);
     if (managed.permission_mode) maps.permissionModeMap.set(cid, managed.permission_mode);
     if (managed.agent_started_at !== undefined) maps.agentStartedAtMap.set(cid, managed.agent_started_at);
+    if (managed.open_tasks !== undefined && managed.open_tasks_at !== undefined) maps.openTasksMap.set(cid, { tasks: managed.open_tasks, at: managed.open_tasks_at });
     if (!managed.agent_status) continue;
     if (managed.agent_status_updated_at !== undefined) {
       maps.agentStatusUpdatedAtMap.set(cid, managed.agent_status_updated_at);
@@ -7587,6 +7607,7 @@ async function mergeForeignConversationLiveness(
 const INBOX_LIVENESS_FIELDS = [
   "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
   "is_connected", "tmux_session", "permission_mode", "agent_started_at",
+  "open_tasks", "open_tasks_at",
 ] as const;
 function stripInboxLiveness(row: any): void {
   for (const f of INBOX_LIVENESS_FIELDS) row[f] = null;
@@ -7642,6 +7663,7 @@ async function enrichInboxSessionRow(
     conv.updated_at,
     now,
     maps.liveConvIds.has(conv._id.toString()),
+    verifiedWaitingFor(maps, conv._id.toString(), now),
   );
   // Don't let userDaemonAlive resurrect sessions we know are stopped
   const daemonAlive = agentStatus === "stopped"
@@ -7838,6 +7860,8 @@ async function enrichInboxSessionRow(
     tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(conv._id.toString()) ?? null,
+    open_tasks: maps.openTasksMap.get(conv._id.toString())?.tasks ?? null,
+    open_tasks_at: maps.openTasksMap.get(conv._id.toString())?.at ?? null,
     last_user_message: lastUserMessage,
     // Newest image in the conversation (see schema) — the inbox row thumbnail.
     // Presence doubles as "this session has images".
@@ -7925,6 +7949,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     child.updated_at,
     now,
     childDaemon,
+    verifiedWaitingFor(maps, child._id.toString(), now),
   );
   const childRecentlyUpdated = (now - child.updated_at) < 45 * 1000;
   const childHasPending = !!child.has_pending_messages;
@@ -7968,6 +7993,8 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(child._id.toString()) ?? null,
+    open_tasks: maps.openTasksMap.get(child._id.toString())?.tasks ?? null,
+    open_tasks_at: maps.openTasksMap.get(child._id.toString())?.at ?? null,
     last_user_message: null,
     session_error: child.session_error,
     pending_api_error: child.pending_api_error === true,
@@ -8021,7 +8048,7 @@ function sortInboxRows(results: any[]) {
 // stale-cluster cutoff. Extracted so the full inbox enrichment (computeInboxSessions)
 // and the lightweight liveness overlay (computeSessionsLiveness) scan the SAME candidate
 // set the same way — they only differ in what they enrich per row.
-async function scanInboxConversations(
+export async function scanInboxConversations(
   ctx: any,
   userId: Id<"users">,
   now: number,
@@ -8029,7 +8056,13 @@ async function scanInboxConversations(
 ): Promise<{
   conversations: any[];
   maps: InboxSessionMaps;
-  extraIds: Set<string>;
+  // Rows that reached the candidate set by a deliberate act rather than by
+  // recency: a label's filed extras, and sessions ASSIGNED to this user but run
+  // by another account. Both are exempt from the cluster cutoff (they are old
+  // by design — a parked label, a decision handed over days ago) and excluded
+  // from the gap analysis so their age can't bridge a gap that should hide the
+  // caller's own cruft.
+  deliberateIds: Set<string>;
   clusterCutoff: number;
   // Conversations in this user's owner set — drives the owned_by_me flag during
   // enrichment without a per-row session_owners lookup.
@@ -8185,6 +8218,14 @@ async function scanInboxConversations(
   }
   const conversations = Array.from(byId.values());
 
+  const deliberateIds = new Set<string>(extraIds);
+  for (const c of conversations) {
+    const idStr = c._id.toString();
+    if (ownedByMeIds.has(idStr) && c.user_id.toString() !== userId.toString()) {
+      deliberateIds.add(idStr);
+    }
+  }
+
   const maps = opts.includeLiveness
     ? await buildUserSessionMaps(ctx, userId, now)
     : EMPTY_INBOX_MAPS;
@@ -8199,11 +8240,12 @@ async function scanInboxConversations(
   }
 
   // Cluster cutoff hides stale active sessions when there's a clean time gap.
-  // Dismissed/stashed sessions have their own 30d window, and explicitly-requested
-  // extras are old by design — exclude both from the gap analysis.
+  // Dismissed/stashed sessions have their own 30d window, and deliberately-filed
+  // rows (label extras, sessions assigned to me) are old by design — exclude
+  // both from the gap analysis.
   let clusterCutoff = 0;
   const activeConvs = conversations.filter(
-    (c) => !c.inbox_dismissed_at && !c.inbox_stashed_at && !extraIds.has(c._id.toString())
+    (c) => !c.inbox_dismissed_at && !c.inbox_stashed_at && !deliberateIds.has(c._id.toString())
   );
   if (activeConvs.length > 0) {
     const sorted = [...activeConvs].sort((a, b) => b.updated_at - a.updated_at);
@@ -8216,10 +8258,10 @@ async function scanInboxConversations(
     }
   }
 
-  return { conversations, maps, extraIds, clusterCutoff, ownedByMeIds, myOwnerRowById };
+  return { conversations, maps, deliberateIds, clusterCutoff, ownedByMeIds, myOwnerRowById };
 }
 
-async function computeInboxSessions(
+export async function computeInboxSessions(
   ctx: any,
   userId: Id<"users">,
   opts: {
@@ -8241,7 +8283,7 @@ async function computeInboxSessions(
   // unchanged. Default MUST stay true — inboxForCLI classifies work-state from it.
   const includeLiveness = opts.includeLiveness !== false;
   const now = Date.now();
-  const { conversations, maps, extraIds, clusterCutoff, ownedByMeIds, myOwnerRowById } =
+  const { conversations, maps, deliberateIds, clusterCutoff, ownedByMeIds, myOwnerRowById } =
     await scanInboxConversations(ctx, userId, now, {
       includeLiveness,
       extraConvIds: opts.extraConvIds,
@@ -8264,8 +8306,12 @@ async function computeInboxSessions(
   };
   for (const conv of conversations) {
     if (!shouldShowInInbox(conv)) continue;
-    // Explicitly-requested rows are deliberately filed — never cluster-hide them.
-    const cutoff = extraIds.has(conv._id.toString()) ? 0 : clusterCutoff;
+    // Deliberately-filed rows (label extras, sessions assigned to me by another
+    // account) never cluster-hide: an assignment routes a session into my inbox
+    // on purpose, and it stays there until I dismiss it — otherwise a decision
+    // handed over on Friday is silently gone by Monday while `cast sessions`
+    // with explicit ids still lists it as needs input.
+    const cutoff = deliberateIds.has(conv._id.toString()) ? 0 : clusterCutoff;
     const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff);
     if (hidden) {
       hiddenCount++;
@@ -8393,6 +8439,11 @@ type LivenessFields = {
   // overlay rather than the base row because it changes on restart, exactly
   // when the rest of the liveness picture does.
   agent_started_at: number | null;
+  // The daemon's verified open background work (shared/contracts/openTasks) —
+  // overlay-borne for the same reason: it changes when the session parks or
+  // wakes, and the inbox draws its "↳ Background …" rows from it.
+  open_tasks: any[] | null;
+  open_tasks_at: number | null;
 };
 
 // The parents that a producing subagent child should keep in "working", derived ONCE
@@ -8502,7 +8553,7 @@ async function enrichLivenessFields(
   const dismissed = !!conv.inbox_dismissed_at;
   const stashed = !!conv.inbox_stashed_at;
 
-  const agentStatus = trustedAgentStatus(maps.agentStatusMap.get(cid), conv.updated_at, now, maps.liveConvIds.has(cid));
+  const agentStatus = trustedAgentStatus(maps.agentStatusMap.get(cid), conv.updated_at, now, maps.liveConvIds.has(cid), verifiedWaitingFor(maps, cid, now));
   const daemonAlive = agentStatus === "stopped"
     ? false
     : maps.liveConvIds.has(cid) ||
@@ -8583,6 +8634,8 @@ async function enrichLivenessFields(
     tmux_session: maps.tmuxSessionMap.get(cid) ?? null,
     permission_mode: maps.permissionModeMap.get(cid) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(cid) ?? null,
+    open_tasks: maps.openTasksMap.get(cid)?.tasks ?? null,
+    open_tasks_at: maps.openTasksMap.get(cid)?.at ?? null,
   };
 }
 
@@ -8758,6 +8811,7 @@ export function tallyInboxRows(
         ? isArmedTriggerHome({ _id: s._id, last_message_preview: s.last_user_message }, opts.armedTriggerHomes)
         : false,
       settleVerdict: s.settle_verdict ?? null,
+      declaredStatus: s.thread_state_status ?? null,
     });
     const is_live = !!s.is_connected;
 
@@ -9959,7 +10013,6 @@ export const reconfigureSession = mutation({
     const launchModelOpt = args.model ? launchCfg?.models.find((m) => m.key === args.model) : undefined;
     if (args.model !== undefined) {
       if (!launchModelOpt) throw new Error(`Unknown model: ${args.model}`);
-      if (launchModelOpt.midSessionOnly) throw new Error(`${launchModelOpt.label} can't be set at launch`);
       patch.model = launchModelOpt.cliAlias
         ? (modelAgentKey(reconfAgent) === "claude" ? `claude-${launchModelOpt.key}` : launchModelOpt.key)
         : undefined;
@@ -10612,25 +10665,10 @@ export const backfillDenormalizedFields = internalMutation({
   },
 });
 
-// Authorize a session command and return its live target. A session may be
-// commanded by its RUNNER (conv.user_id — the account whose daemon executes
-// commands) or its second-party owner (conv.owner_user_id — e.g. a Mr-Bot-run
-// session assigned to a human). Callers MUST stamp the resulting
-// daemon_commands row with conv.user_id: daemons poll by their own account, so
-// an actor-stamped row lands on the actor's machines and fails "No session
-// found" (the 2026-07-13 setSessionModel loop). killSession/restartSession
-// keep their own variants — they must proceed on ghost rows this rejects.
-export async function requireSessionCommandTarget(
-  ctx: MutationCtx,
-  userId: Id<"users">,
-  conversationId: Id<"conversations">,
-): Promise<Doc<"conversations">> {
-  const conv = await ctx.db.get(conversationId);
-  if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
-    throw new Error("Not authorized");
-  }
-  return conv;
-}
+// requireSessionCommandTarget lives in daemonCommandUtils (shared with
+// users.resumeSession and the dispatch resume handler); re-exported for callers
+// and tests that reach it through this module.
+export { requireSessionCommandTarget };
 
 export const sendEscapeToSession = mutation({
   args: {
@@ -10668,109 +10706,6 @@ export const sendKeysToSession = mutation({
       args: JSON.stringify({ conversation_id: args.conversation_id, keys: args.keys }),
       created_at: Date.now(),
     });
-  },
-});
-
-// In-place model/effort switch for a running claude session. The daemon drives
-// the /model picker session-scoped (`s` commit) — never the one-shot
-// `/model <x>` / `/effort <x>` forms, which rewrite the user's GLOBAL default.
-// conversations.model/effort are stamped optimistically here (string fields
-// reconcile cleanly when the rollup confirms from the switch echo; the
-// optimistic model is the alias shape "claude-opus" — the echo replaces it with
-// the precise versioned id). model/effort are picker option keys from
-// @codecast/shared/contracts AGENT_MODEL_CONFIG; "default" = leave model as the
-// agent's saved default (effort-only switch).
-export const setSessionModel = mutation({
-  args: {
-    conversation_id: v.id("conversations"),
-    model: v.optional(v.string()),
-    effort: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-
-    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
-    const agentKey = modelAgentKey(conv.agent_type);
-    const agentCfg = AGENT_MODEL_CONFIG[agentKey];
-    if (!agentCfg?.midSession) {
-      throw new Error(`In-place model switch not supported for ${conv.agent_type ?? "this agent"}`);
-    }
-    // findModelOption covers curated keys AND harvested `menu:<label>` keys
-    // (claude live-menu rows) — the same check the daemon applies, so a key
-    // valid here is drivable there. The in-place rail needs a menuMatch.
-    if (args.model !== undefined && !findModelOption(conv.agent_type, args.model)?.menuMatch) {
-      throw new Error(`Unknown model: ${args.model}`);
-    }
-    if (args.effort !== undefined && !agentCfg.efforts.includes(args.effort)) {
-      throw new Error(`Unknown effort: ${args.effort}`);
-    }
-    if (args.model === undefined && args.effort === undefined) return null;
-
-    // No server-side optimistic stamp: the web updates its local store
-    // instantly, and the durable truth arrives via the rollup parsing the
-    // picker's "Set model to … for this session only" echo. Stamping here
-    // would leave a wrong value behind whenever the daemon refuses (busy
-    // session, no tmux) — the command id lets the client watch for that.
-    //
-    // Target the owner device. Broadcast would race every daemon the user
-    // runs: an out-of-date one treats set_model as an unknown GLOBAL command
-    // and stamps "Unknown command: set_model" into the result before the
-    // owning daemon even sees it (observed live with a remote box on 1.1.58).
-    // Address the command to the RUNNER's daemon (conv.user_id) — same routing
-    // as killSession. An owner's switch must reach the machine actually running
-    // the session, and that daemon polls commands under the runner's account.
-    const target = await resolveOwnerDevice(ctx, conv.user_id, {
-      projectPath: conv.project_path ?? null,
-      gitRoot: conv.git_root ?? null,
-      ownerDeviceId: (conv as any).owner_device_id ?? null,
-    });
-    return await ctx.db.insert("daemon_commands", {
-      user_id: conv.user_id,
-      command: "set_model",
-      args: JSON.stringify({
-        conversation_id: args.conversation_id,
-        ...(args.model !== undefined ? { model: args.model } : {}),
-        ...(args.effort !== undefined ? { effort: args.effort } : {}),
-      }),
-      created_at: Date.now(),
-      target_device_id: target ?? undefined,
-    });
-  },
-});
-
-// Owner-scoped result watch for a single daemon command — the reactive channel
-// the model picker uses to confirm an in-place switch or surface the daemon's
-// refusal ("Session is busy…"). Old daemons never execute unknown commands, so
-// executed_at stays null forever — the client treats a long-pending command as
-// "daemon predates set_model".
-export const getDaemonCommandResult = query({
-  args: { command_id: v.id("daemon_commands") },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return null;
-    const cmd = await ctx.db.get(args.command_id);
-    if (!cmd) return null;
-    if (cmd.user_id !== userId) {
-      // Commands on an owned session are stamped with the RUNNER's user_id so
-      // the runner's daemon executes them (see setSessionModel/killSession).
-      // The second-party owner who issued one may still read its verdict —
-      // authorized through the target conversation, same rule as issuing.
-      let rawConvId: unknown;
-      try {
-        rawConvId = JSON.parse(cmd.args ?? "{}").conversation_id;
-      } catch {
-        return null;
-      }
-      const convId = typeof rawConvId === "string" ? ctx.db.normalizeId("conversations", rawConvId) : null;
-      const conv = convId ? await ctx.db.get(convId) : null;
-      if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) return null;
-    }
-    return {
-      executed_at: cmd.executed_at ?? null,
-      result: cmd.result ?? null,
-      error: cmd.error ?? null,
-    };
   },
 });
 

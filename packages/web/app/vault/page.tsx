@@ -37,7 +37,7 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { VAULT_SORT_OPTIONS, type VaultSortMode } from "../../lib/vault/explorerModel";
-import { useTabContext } from "../../components/TabContent";
+import { useTabContext } from "../../lib/tabParams";
 import { useShortcutAction } from "../../shortcuts";
 import { VaultExplorer } from "../../components/vault/VaultExplorer";
 import { VaultNoteView } from "../../components/vault/VaultNoteView";

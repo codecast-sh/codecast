@@ -97,7 +97,7 @@ describe("joinRoom rejoin after lease lapse", () => {
             return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
           },
         }),
-        get: async (id: string) => (id === "u1" ? { _id: "u1", name: "U" } : id === "ch1" ? { _id: "ch1", team_id: "t1" } : id === "t1" ? { _id: "t1", name: "T", features: { calls: true } } : rows.find((r) => r._id === id) ?? null),
+        get: async (id: string) => (id === "u1" ? { _id: "u1", name: "U" } : id === "ch1" ? { _id: "ch1", team_id: "t1" } : id === "t1" ? { _id: "t1", name: "T", features: { calls: true, chat: true } } : rows.find((r) => r._id === id) ?? null),
         delete: async (id: string) => { deleted.push(id); },
         patch: async (id: string) => { if (deleted.includes(id)) throw new Error("Update on nonexistent document ID " + id); patched.push(id); },
         insert: async (_t: string, doc: any) => { inserted.push(doc); return "cm2"; },
@@ -115,5 +115,129 @@ describe("joinRoom rejoin after lease lapse", () => {
     expect(deleted).toContain("cm1");
     expect(patched).not.toContain("cm1");
     expect(inserted).toHaveLength(1);
+  });
+});
+
+// invite fan-out: one mutation rings many. Each recipient gets their own row
+// and their own outcome; teammates outside the room's anchor are rung (the
+// ring is their grant); strangers to the team are refused per row, never by
+// failing the whole batch.
+describe("invite fan-out", () => {
+  function inviteCtx() {
+    const now = Date.now();
+    const rows: Record<string, any[]> = {
+      teams: [{ _id: "t1", name: "T", features: { calls: true } }],
+      team_memberships: [
+        { _id: "m1", user_id: "ua", team_id: "t1" },
+        { _id: "m2", user_id: "ub", team_id: "t1" },
+        { _id: "m3", user_id: "uc", team_id: "t1" },
+        // ud is on another team entirely
+        { _id: "m4", user_id: "ud", team_id: "t2" },
+      ],
+      users: [
+        { _id: "ua", name: "Ann" },
+        { _id: "ub", name: "Bob", status: "busy" },
+        { _id: "uc", name: "Cy" },
+        { _id: "ud", name: "Dee" },
+      ],
+      call_invites: [],
+      call_members: [],
+    };
+    const inserted: any[] = [];
+    const scheduled: any[] = [];
+    const ctx: any = {
+      auth: { getUserIdentity: async () => ({ subject: "ua|sess", tokenIdentifier: "x" }) },
+      scheduler: { runAfter: async (_ms: number, fn: any, args: any) => { scheduled.push({ fn, args }); } },
+      db: {
+        query: (t: string) => ({
+          withIndex: (_i: string, builder: any) => {
+            const eqs: Array<[string, any]> = [];
+            builder({ eq(f: string, v: any) { eqs.push([f, v]); return this; } });
+            const hit = (rows[t] ?? []).filter((r) => eqs.every(([f, v]) => String(r[f]) === String(v)));
+            return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
+          },
+        }),
+        get: async (id: string) => {
+          for (const list of Object.values(rows)) {
+            const r = list.find((x) => String(x._id) === String(id));
+            if (r) return r;
+          }
+          return null;
+        },
+        insert: async (t: string, doc: any) => {
+          const _id = `${t}-${(rows[t] ??= []).length + 1}`;
+          rows[t].push({ _id, ...doc });
+          inserted.push({ t, doc });
+          return _id;
+        },
+        patch: async (id: string, patch: any) => {
+          for (const list of Object.values(rows)) {
+            const r = list.find((x) => String(x._id) === String(id));
+            if (r) Object.assign(r, patch);
+          }
+        },
+        delete: async (id: string) => {
+          for (const list of Object.values(rows)) {
+            const i = list.findIndex((x) => String(x._id) === String(id));
+            if (i >= 0) list.splice(i, 1);
+          }
+        },
+      },
+    };
+    return { ctx, rows, inserted, scheduled, now };
+  }
+
+  async function handler() {
+    const { invite } = await import("./calls");
+    return (invite as any)._handler ?? (invite as any).handler;
+  }
+
+  test("rings every recipient with one row each and reports per recipient", async () => {
+    const { ctx, rows } = inviteCtx();
+    const res = await (await handler())(ctx, {
+      room_key: "dm:ua:ub",
+      to_users: ["ub", "uc", "ud"],
+      anchor_title: "design sync",
+    });
+    // ub (member) and uc (teammate, not in the pair) ring; ud is refused.
+    const ringing = rows.call_invites.filter((i) => i.status === "ringing");
+    expect(ringing.map((i) => i.to_user).sort()).toEqual(["ub", "uc"]);
+    expect(ringing.every((i) => i.room_key === "dm:ua:ub" && i.anchor_title === "design sync")).toBe(true);
+    const byUser = Object.fromEntries(res.results.map((r: any) => [r.to_user, r]));
+    expect(byUser.ub.busy).toBe(true); // manual busy: rang quietly
+    expect(byUser.uc.busy).toBe(false);
+    expect(byUser.ud.refused).toBeTruthy();
+    // Historic single-recipient mirror.
+    expect(res.busy).toBe(true);
+  });
+
+  test("the single `to_user` form still rings, and both forms dedupe", async () => {
+    const { ctx, rows } = inviteCtx();
+    await (await handler())(ctx, { room_key: "dm:ua:ub", to_user: "ub", to_users: ["ub"] });
+    expect(rows.call_invites.filter((i) => i.to_user === "ub")).toHaveLength(1);
+  });
+
+  test("re-ringing refreshes the same row instead of minting a second", async () => {
+    const { ctx, rows } = inviteCtx();
+    const h = await handler();
+    await h(ctx, { room_key: "dm:ua:ub", to_users: ["ub"] });
+    await h(ctx, { room_key: "dm:ua:ub", to_users: ["ub", "uc"] });
+    expect(rows.call_invites.filter((i) => i.to_user === "ub")).toHaveLength(1);
+    expect(rows.call_invites.filter((i) => i.to_user === "uc")).toHaveLength(1);
+  });
+
+  test("refuses ringing yourself, nobody, or more than the roster cap", async () => {
+    const { ctx } = inviteCtx();
+    const h = await handler();
+    await expect(h(ctx, { room_key: "dm:ua:ub", to_users: ["ua"] })).rejects.toThrow(/yourself/);
+    await expect(h(ctx, { room_key: "dm:ua:ub", to_users: [] })).rejects.toThrow(/Nobody/);
+    const many = Array.from({ length: 10 }, (_, i) => `x${i}`);
+    await expect(h(ctx, { room_key: "dm:ua:ub", to_users: many })).rejects.toThrow(/at most/);
+  });
+
+  test("a caller who may not be in the room cannot ring anyone into it", async () => {
+    const { ctx } = inviteCtx();
+    // ua is not part of dm:ub:uc and holds no grant.
+    await expect((await handler())(ctx, { room_key: "dm:ub:uc", to_users: ["ub"] })).rejects.toThrow(/Cannot invite/);
   });
 });

@@ -31,6 +31,8 @@ import {
 import { parseRoomKey } from "@codecast/shared/contracts";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import { TranscribeControls } from "./TranscribePanel";
+import { AddPeopleButton } from "./AddPeople";
+import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import type { DesktopDisplaySource } from "../../lib/desktop";
 
 // The call stage: the full surface a huddle opens into when video or a screen
@@ -75,7 +77,8 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
   const hero = (heroKey && screens.find((t) => t.key === heroKey)) || screens[0] || null;
 
   const parsed = call.roomKey ? parseRoomKey(call.roomKey) : null;
-  const anchorTitle = useAnchorTitle(parsed);
+  const { label } = useRoomDescription(call.roomKey);
+  const { ringing, declined } = useOutgoingRings(call.roomKey);
 
   // Portaled to <body>: the dock mounts inside the app shell, whose
   // transformed ancestors would otherwise capture this fixed overlay (the
@@ -85,7 +88,7 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
       {/* Header: where this huddle lives, and the way out. */}
       <div className="flex items-center gap-3 px-5 pt-4 pb-2">
         <span className="font-mono text-[13px] lowercase text-sol-text-muted">
-          {anchorTitle}
+          {parsed?.kind === "session" ? `huddle · ${label}` : label}
         </span>
         {parsed?.kind === "session" && (
           <button
@@ -159,7 +162,13 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
             ))}
           </div>
         ) : (
-          <AudioOnlyStage roster={roster} speaking={speaking} phase={call.phase} />
+          <AudioOnlyStage
+            roster={roster}
+            speaking={speaking}
+            phase={call.phase}
+            ringing={ringing}
+            declined={declined}
+          />
         )}
       </div>
 
@@ -187,21 +196,6 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
 function firstName(name: string | undefined): string {
   const base = (name || "").split("@")[0];
   return base.split(/\s+/)[0].toLowerCase() || "teammate";
-}
-
-function useAnchorTitle(parsed: ReturnType<typeof parseRoomKey>): string {
-  const title = useInboxStore((st: any) => {
-    if (parsed?.kind === "session") {
-      const row = Object.values(st.sessions ?? {}).find(
-        (x: any) => x && String(x._id) === parsed.conversationId,
-      ) as any;
-      return row?.title ?? null;
-    }
-    return null;
-  });
-  if (parsed?.kind === "session") return title ? `huddle · ${title}` : "session huddle";
-  if (parsed?.kind === "channel") return "channel huddle";
-  return "huddle";
 }
 
 // One video surface. `contain` letterboxes (screen shares must not crop);
@@ -289,19 +283,38 @@ function AudioOnlyStage({
   roster,
   speaking,
   phase,
+  ringing = [],
+  declined = [],
 }: {
   roster: any[];
   speaking: Set<string>;
   phase: string;
+  ringing?: { user_id: string; user_name: string; user_image?: string }[];
+  declined?: { user_id: string; user_name: string; user_image?: string }[];
 }) {
+  const inRoom = new Set(roster.map((m) => String(m.user_id)));
+  // People we are ringing take a seat before they answer: a breathing,
+  // translucent face with "ringing…" under it, so a group start reads as
+  // "these three are on their way" rather than "just you so far".
+  const ghosts = ringing.filter((r) => !inRoom.has(r.user_id));
   return (
-    <div className="flex min-w-0 flex-1 items-center justify-center">
+    <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-6">
       <div className="flex flex-wrap items-center justify-center gap-10">
-        {roster.length === 0 && (
+        {roster.length === 0 && ghosts.length === 0 && (
           <span className="font-mono text-[13px] lowercase text-sol-text-dim">
             {phase === "connecting" ? "connecting…" : phase === "ringing_out" ? "ringing…" : "just you so far"}
           </span>
         )}
+        {ghosts.map((r) => (
+          <div key={`ring:${r.user_id}`} className="flex flex-col items-center gap-3 opacity-60">
+            <div className="animate-pulse rounded-full ring-2 ring-sol-violet/40 ring-offset-4 ring-offset-sol-base03">
+              <Avatar m={r} size={88} />
+            </div>
+            <span className="font-mono text-[12px] lowercase text-sol-text-dim">
+              {firstName(r.user_name)} · ringing…
+            </span>
+          </div>
+        ))}
         {roster.map((m) => (
           <div key={m.user_id} className="flex flex-col items-center gap-3">
             <div
@@ -323,6 +336,11 @@ function AudioOnlyStage({
           </div>
         ))}
       </div>
+      {declined.length > 0 && (
+        <span className="font-mono text-[12px] lowercase text-sol-text-dim">
+          {declined.map((r) => firstName(r.user_name)).join(", ")} declined
+        </span>
+      )}
     </div>
   );
 }
@@ -410,6 +428,14 @@ function ControlBar({ call, roster }: { call: any; roster: any[] }) {
           {call.camera ? <Video className="h-[18px] w-[18px]" /> : <VideoOff className="h-[18px] w-[18px]" />}
         </button>
         <StageShareButton sharing={call.sharing} />
+        {call.roomKey && call.phase === "connected" && (
+          <AddPeopleButton
+            roomKey={call.roomKey}
+            className="rounded-lg p-2 text-sol-text-muted transition-colors hover:bg-sol-base02"
+            iconClassName="h-[18px] w-[18px]"
+            align="center"
+          />
+        )}
         {/* Transcribe, with its route picker (send the words to a session,
             doc or Slack channel; live routes deliver on conversation gaps). */}
         <TranscribeControls getRoom={getRoom} />

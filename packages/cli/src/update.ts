@@ -21,11 +21,12 @@ const MESSAGING_VERSION = "7"; // bumped: target on evidence (cast diff/read bef
 const VISUAL_VERSION = "6"; // bumped: image captions from alt text + side-by-side rows for adjacent images
 const FORKS_VERSION = "5"; // bumped: cast spawn --subagent — nested subagent row the parent session manages, on any agent backend
 const PUBLISH_VERSION = "4"; // bumped: cast image cross-reference for single-image sharing; never link local paths
-const BROWSER_VERSION = "6"; // bumped: sign-in pages — cast browser login; Google is never carried from the human's Chrome
+const BROWSER_VERSION = "7"; // bumped: batching by default — cast browser do is the loop, not a footnote
 const CHAT_VERSION = "1"; // first release: channels, threads, search, anchor replies
 const DECIDE_VERSION = "1"; // first release: cast decide + the web decision queue
 const CALLS_VERSION = "1"; // first release: cast calls / cast call (transcripts, summaries)
-const STATE_VERSION = "4"; // bumped: --status dormant + the end-of-turn "who acts next" declaration
+const LIMITS_VERSION = "1"; // first release: usage limits are a pause, not a stop; cast usage
+const STATE_VERSION = "5"; // bumped: Stop hook recruits undeclared long sessions to declare who acts next
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_RETRY_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
@@ -163,6 +164,10 @@ export function getDecideVersion(): string {
 
 export function getCallsVersion(): string {
   return CALLS_VERSION;
+}
+
+export function getLimitsVersion(): string {
+  return LIMITS_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {

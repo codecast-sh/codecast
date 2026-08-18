@@ -41,51 +41,20 @@ import {
   subscribeTerminals,
 } from "../../lib/terminal/termSessions";
 import { ConnectingNote } from "./TerminalPanel";
+import { SplitResizeHandle } from "../SplitResizeHandle";
+import {
+  conversationTerminalSplits as splits,
+  bumpConversationTerminals as bump,
+  subscribeConversationTerminals as subscribe,
+  getConversationTerminalsVersion as getVersion,
+  toggleConversationTerminal,
+  type SplitState,
+} from "../../lib/terminal/conversationTerminalState";
 
-const DEFAULT_HEIGHT = 260;
 const MIN_HEIGHT = 90;
 // Comfortably more than the daemon's heartbeat, so a slow round-trip doesn't
 // flicker the "paused" label on and off.
 const STALE_AFTER_MS = 12_000;
-
-interface SplitState {
-  termId: string | null;
-  target: string;
-  height: number;
-}
-
-const splits = new Map<string, SplitState>();
-let version = 0;
-const listeners = new Set<() => void>();
-
-function bump(): void {
-  version++;
-  for (const l of listeners) l();
-}
-
-function subscribe(cb: () => void): () => void {
-  listeners.add(cb);
-  return () => listeners.delete(cb);
-}
-
-function getVersion(): number {
-  return version;
-}
-
-export function isConversationTerminalOpen(convKey: string): boolean {
-  return splits.has(convKey);
-}
-
-export function toggleConversationTerminal(convKey: string, target: string): void {
-  const existing = splits.get(convKey);
-  if (existing) {
-    if (existing.termId) closeTab(existing.termId);
-    splits.delete(convKey);
-  } else {
-    splits.set(convKey, { termId: null, target, height: DEFAULT_HEIGHT });
-  }
-  bump();
-}
 
 export function ConversationTerminalSplit({ convKey, tmuxSession }: { convKey: string; tmuxSession?: string | null }) {
   useSyncExternalStore(subscribe, getVersion, getVersion);
@@ -333,10 +302,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
         />
       </div>
 
-      <div onPointerDown={onHandlePointerDown} className="group relative h-[3px] -mb-[2px] flex-shrink-0 z-10 cursor-row-resize">
-        <div className="absolute inset-x-0 -top-[3px] -bottom-[3px]" />
-        <div className="absolute inset-x-0 bottom-[1px] h-px bg-transparent group-hover:bg-sol-cyan transition-colors duration-150" />
-      </div>
+      <SplitResizeHandle onPointerDown={onHandlePointerDown} title="Drag to resize" />
     </div>
   );
 }

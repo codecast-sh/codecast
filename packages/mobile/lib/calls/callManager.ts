@@ -376,14 +376,21 @@ export async function setSpeaker(on: boolean): Promise<void> {
 
 // ── ringing (same shapes as web) ──────────────────────────────────────────
 
-export async function startHuddle(opts: { roomKey: string; toUserId: string; anchorTitle?: string }) {
+export async function startHuddle(opts: { roomKey: string; toUserIds: string[]; anchorTitle?: string }) {
   await joinCall(opts.roomKey);
   if (getCallSnapshot().phase !== "connected") return;
+  await ringInto(opts.roomKey, opts.toUserIds, opts.anchorTitle);
+}
+
+// Ring people into a room you are already in ("add people"); the ring is
+// their grant to a room they are not otherwise a member of.
+export async function ringInto(roomKey: string, toUserIds: string[], anchorTitle?: string) {
+  if (toUserIds.length === 0) return;
   await convex
     .mutation(api.calls.invite, {
-      room_key: opts.roomKey,
-      to_user: opts.toUserId as any,
-      anchor_title: opts.anchorTitle,
+      room_key: roomKey,
+      to_users: toUserIds as any,
+      anchor_title: anchorTitle,
     })
     .catch(() => {});
 }

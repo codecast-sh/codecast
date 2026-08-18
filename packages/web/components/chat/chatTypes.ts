@@ -57,7 +57,8 @@ export type ChatMessageView = {
   /** An agent turn in flight (or failed) inside this root's thread, so the
    *  affordance can say "thinking…" without the panel open. */
   threadAgentStatus?: "thinking" | "streaming" | "error";
-  /** Optimistic rows render at reduced opacity until the server echoes them. */
+  /** Optimistic, not yet echoed by the server. Renders like a sent row; the
+   *  flag is kept for callers that reason about the outbox. */
   pending?: boolean;
   failed?: boolean;
 };

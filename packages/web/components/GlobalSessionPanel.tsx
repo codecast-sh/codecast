@@ -33,7 +33,7 @@ import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
-import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
+import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
 import { partitionTriggerInbox, groupSessionsByTrigger, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
@@ -1469,15 +1469,17 @@ const TriggerStrip = memo(function TriggerStrip({ rows, activeSessionId, onOpen 
 });
 
 // -- Monitor bars (live background watches) --
-// A live Monitor (the harness background-watch tool) stacks under its session
-// card exactly like the schedule bars above: same ↳ child idiom and two-line
-// header + subrow anatomy, in monitor blue so it can't blur into schedule
-// orange or subagent violet. Rows derive client-side from the conversation's
-// loaded message window (monitorRowsFor) — no server row exists for monitors,
-// so a conversation whose messages aren't in the store shows no bars rather
-// than guessed state. "Watching" is only claimed while the session itself is
-// believable: not stopped, and inside the shared status-trust TTL — the same
-// predicate the card's own "working" claims use, so the two can't disagree.
+// A live Monitor (the harness background-watch tool) or background command
+// stacks under its session card exactly like the schedule bars above: same ↳
+// child idiom and two-line header + subrow anatomy, in monitor blue so it
+// can't blur into schedule orange or subagent violet. Rows come from two
+// sources merged (liveWatchRowsFor): the conversation's loaded message window
+// (the watch's own lifecycle) and the daemon's verified open-task report on
+// the row (open_tasks — draws the row without messages, and retires a watch
+// the daemon found dead). "Watching" is only claimed while the session can
+// still host the watch (isWatchHostDead: not killed, not stopped, spoken for
+// by a daemon) — NOT the card's status-trust decay, which would hide a live
+// poll on a long build the moment the session went quiet for an hour.
 // A card with many live watchers (a deploy fanning out `until grep` shells
 // can stand eight at once) would stack that many bars — cap the stack and
 // fold the rest behind a count row.
@@ -1489,11 +1491,17 @@ const MAX_MONITOR_BARS = 3;
 // the row's enriched scalars (conversations.workflow_run_id → workflow_runs),
 // so it shows even when the launch message isn't in the loaded window. Paused
 // runs stay the card's magenta Gate chip; this bar carries running/pending.
+// Whether the card wears the workflow bar — shared with the Dormant fallback
+// row so the two can't disagree about "this card already shows its wake".
+function workflowBarVisible(session: InboxSession): boolean {
+  if (!session.is_workflow_primary || !session.workflow_run_id) return false;
+  return session.workflow_run_status === "running" || session.workflow_run_status === "pending";
+}
+
 function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: boolean }) {
   const router = useRouter();
   const now = useCoarseNow(30_000);
-  if (!session.is_workflow_primary || !session.workflow_run_id) return null;
-  if (session.workflow_run_status !== "running" && session.workflow_run_status !== "pending") return null;
+  if (!workflowBarVisible(session)) return null;
   const done = session.workflow_run_agents_done ?? 0;
   const total = session.workflow_run_agents_total ?? 0;
   const ariaLabel = "Workflow — running inside this session";
@@ -1551,13 +1559,15 @@ function MonitorBars({ session, isActive, onOpen }: {
 }) {
   const messages = useInboxStore((st) => st.messages[session._id]);
   const now = useCoarseNow(30_000);
-  const rows = useMemo(() => monitorRowsFor(messages), [messages]);
   const [expanded, setExpanded] = useState(false);
-  if (session.agent_status === "stopped" || isLivenessStale(session, now)) return null;
-  // A live session can still be showing watches armed by a process it has since
-  // replaced (a restart takes its background shells with it but leaves the rows
-  // un-notified) — fence those out rather than stacking dead bars.
-  const watching = rows.filter((r) => effectiveMonitorStatus(r, now, session.agent_started_at ?? undefined) === "watching");
+  // Message-derived rows (own lifecycle + restart fence) merged with the
+  // daemon's verified report — the report supplies rows the loaded window
+  // lacks and retires rows the daemon found dead (liveWatchRowsFor).
+  const watching = useMemo(
+    () => (isWatchHostDead(session, now) ? [] : liveWatchRowsFor(session, messages, now)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the row fields the merge reads
+    [messages, now, session.open_tasks, session.open_tasks_at, session.agent_started_at, session.agent_status, session.inbox_killed_at, session.updated_at],
+  );
   if (watching.length === 0) return null;
   const shown = expanded ? watching : watching.slice(0, MAX_MONITOR_BARS);
   const hiddenCount = watching.length - shown.length;
@@ -1655,6 +1665,86 @@ function MonitorBars({ session, isActive, onOpen }: {
         </button>
       )}
     </>
+  );
+}
+
+// -- Dormant reason row --
+// A card in DORMANT is parked on a machine wake, and the wake must be visible
+// as a ↳ child row: the trigger bar for an armed schedule, the workflow bar
+// for a run in flight, a Background/Monitor bar for an open watch. When none
+// of those has anything to draw — the messages that would show the watch are
+// not loaded and no daemon report exists, the agent declared dormancy on a
+// wake outside this session (another session's reply, an external job), or
+// the user parked the card — this row states the reason from what the row
+// itself carries, so a Dormant card never sits there unexplained.
+function DormantReasonRow({ session, isActive, hasOtherRows, onOpen }: {
+  session: InboxSession;
+  isActive: boolean;
+  hasOtherRows: boolean;
+  onOpen: (session: InboxSession) => void;
+}) {
+  const messages = useInboxStore((st) => st.messages[session._id]);
+  const now = useCoarseNow(30_000);
+  const watchRows = useMemo(
+    () => (isWatchHostDead(session, now) ? 0 : liveWatchRowsFor(session, messages, now).length),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the row fields the merge reads
+    [messages, now, session.open_tasks, session.open_tasks_at, session.agent_started_at, session.agent_status, session.inbox_killed_at, session.updated_at],
+  );
+  if (hasOtherRows || watchRows > 0) return null;
+  const ts = threadStateView(session, session.message_count ?? 0, now);
+  let family: string;
+  let title: string;
+  let detail: string;
+  if (session.agent_status === "waiting") {
+    family = "Background";
+    title = "waiting on background work";
+    detail = "the turn ended on an open task — the agent resumes when it finishes";
+  } else if (session.agent_status === "dormant") {
+    family = "Dormant";
+    title = ts?.headline || "parked on a machine wake";
+    detail = ts?.provenance ? `declared by the agent · ${ts.provenance}` : "declared by the agent";
+  } else if (session.is_dormant) {
+    family = "Parked";
+    title = "parked by you";
+    detail = "a machine wake resumes it; open it to un-park";
+  } else {
+    family = "Dormant";
+    title = ts?.headline || "waiting on a machine wake";
+    detail = ts?.provenance || "";
+  }
+  const ariaLabel = `${family} — why this session is parked`;
+  return (
+    <div className={`group/dormrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
+      <button
+        className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
+        onClick={() => onOpen(session)}
+        title="Open the session"
+      >
+        <div className="flex gap-1.5 min-w-0">
+          <span className="flex items-center mt-[2px] shrink-0 text-sol-blue/70" role="img" aria-label={ariaLabel}>
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <title>{ariaLabel}</title>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+            </svg>
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
+              <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{title}</span>
+              <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-blue/10 text-sol-blue border-sol-blue/30">
+                parked
+              </span>
+            </div>
+            {detail && (
+              <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
+                <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-mono text-sol-text-dim">{detail}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </button>
+    </div>
   );
 }
 
@@ -4148,6 +4238,17 @@ export function SessionListPanel({
                 {viewMode !== "trigger" && renderScheduleBars(session)}
                 <WorkflowBar session={session} isActive={session._id === activeSessionId} />
                 <MonitorBars session={session} isActive={session._id === activeSessionId} onOpen={handleSelect} />
+                {/* DORMANT invariant: a parked card always shows its wake as a
+                    child row. When no concrete bar above has anything to draw,
+                    this row states the reason from the row's own fields. */}
+                {key === "dormant" && (
+                  <DormantReasonRow
+                    session={session}
+                    isActive={session._id === activeSessionId}
+                    hasOtherRows={(viewMode !== "trigger" && scheduleBarRowsFor(session).length > 0) || workflowBarVisible(session)}
+                    onOpen={handleSelect}
+                  />
+                )}
                 {visibleSubs.map((sub) => (
                   <SessionCard
                     key={sub._id}

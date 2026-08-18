@@ -9,10 +9,9 @@ import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots } from ".
 import { fromConvexAgentType, AGENT_CLIENTS, findModelOption } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
-import { hasRecentPendingDaemonCommand, enqueueResumeSession } from "./daemonCommandUtils";
+import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
 import { canAccessTask, canAccessDoc } from "./lib/access";
-import { resetConversationPendingMessages } from "./pendingMessages";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath, pathWithinLocalRoots } from "./projectPaths";
@@ -220,6 +219,8 @@ export const daemonHeartbeat = mutation({
     oldest_pending_ms: v.optional(v.number()),
     pending_sync_messages: v.optional(v.number()),
     pending_sync_conversations: v.optional(v.number()),
+    daemon_started_at: v.optional(v.number()),
+    loop_freeze_ms: v.optional(v.number()),
     // Device identity (remote/device.ts). When present, upsert a per-device
     // row so multiple machines don't clobber each other's project roots.
     device_id: v.optional(v.string()),
@@ -341,11 +342,18 @@ export const daemonHeartbeat = mutation({
       !existingUser?.daemon_last_seen || now - existingUser.daemon_last_seen > HEARTBEAT_WRITE_THROTTLE_MS;
     const queueZeronessFlipped =
       ((existingUser?.daemon_pending_sync_count ?? 0) === 0) !== (newPending === 0);
-    if (lastSeenStale || queueZeronessFlipped || Object.keys(patch).length > 0) {
+    // Same rule for load: a loop that just started (or stopped) freezing must
+    // reach the web on this beat, not up to 50s later.
+    const loadFlipped =
+      args.loop_freeze_ms !== undefined &&
+      ((existingUser?.daemon_loop_freeze_ms ?? 0) === 0) !== (args.loop_freeze_ms === 0);
+    if (lastSeenStale || queueZeronessFlipped || loadFlipped || Object.keys(patch).length > 0) {
       patch.daemon_last_seen = now;
       patch.last_heartbeat = now;
       patch.daemon_pending_sync_count = newPending;
       patch.daemon_oldest_pending_ms = newOldest;
+      if (args.loop_freeze_ms !== undefined) patch.daemon_loop_freeze_ms = args.loop_freeze_ms;
+      if (args.daemon_started_at !== undefined) patch.daemon_started_at = args.daemon_started_at;
       // Only patch the per-table backlog fields when the daemon actually sent
       // them. During a mixed-version rollout an OLD daemon omits these (undefined),
       // and coercing to 0 would clobber a real backlog → the web chip shows
@@ -389,6 +397,15 @@ export const daemonHeartbeat = mutation({
         platform: args.platform,
         last_seen: now,
         status: "online" as const,
+        // Per-device daemon health (see schema devices.daemon_started_at). Only
+        // the fields this daemon actually sent: an older daemon must not zero a
+        // value a newer one wrote — same rule as backlogFieldsPatch.
+        ...(args.daemon_started_at !== undefined ? { daemon_started_at: args.daemon_started_at } : {}),
+        ...(args.loop_freeze_ms !== undefined ? { loop_freeze_ms: args.loop_freeze_ms } : {}),
+        ...(args.pending_sync_count !== undefined ? { pending_sync_count: args.pending_sync_count } : {}),
+        ...(args.oldest_pending_ms !== undefined ? { oldest_pending_ms: args.oldest_pending_ms } : {}),
+        ...(args.pending_sync_messages !== undefined ? { pending_sync_messages: args.pending_sync_messages } : {}),
+        ...(args.pending_sync_conversations !== undefined ? { pending_sync_conversations: args.pending_sync_conversations } : {}),
         // Absolute time of this machine's last HID event, on the server clock.
         // Left untouched when the daemon doesn't report idle (Linux, or a daemon
         // predating this): a frozen last_input_at simply goes stale, which reads
@@ -505,6 +522,11 @@ export const daemonHeartbeat = mutation({
       min_cli_version: minVersionConfig?.value ?? undefined,
       agent_permission_modes: user?.agent_permission_modes ?? undefined,
       agent_default_params: user?.agent_default_params ?? undefined,
+      // The user's codecast default model per client. The daemon mirrors the
+      // claude one into ~/.claude/settings.json every beat, so the file (and
+      // with it every bare `claude` terminal) tracks the codecast default even
+      // after a session's `/model <x>` one-shot rewrote it.
+      default_models: user?.default_models ?? undefined,
       // Feature-gated agent snippets this user's teams make available (chat,
       // calls). The daemon reconciles its installed snippets to this on every
       // beat, so a team flipping a feature reaches offline machines when they
@@ -773,39 +795,10 @@ export const resumeSession = mutation({
     if (!authUserId) {
       throw new Error("Not authenticated");
     }
-
-    const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) {
-      throw new Error("Conversation not found");
-    }
-    if (conversation.user_id.toString() !== authUserId.toString()) {
-      throw new Error("Unauthorized");
-    }
-    if (!conversation.session_id) {
-      throw new Error("No session ID on this conversation");
-    }
-
-    // Skip resume for fresh 0-message sessions. The inline new-session flow
-    // (DashboardLayout.handleQuickCreate, ContextChatInput.handleSubmit)
-    // stamps a 10-char nanoid as session_id before any Claude process exists,
-    // so a `claude --resume <nanoid>` would fail every time. The UI's
-    // stuck-banner auto-resume kept firing this for brand-new sessions,
-    // triggering kill → repair → reconstitute → start-fresh churn on the
-    // daemon. tryStartedTmux on the daemon side already delivers the first
-    // message via the pane, so a no-op here is safe.
-    if ((conversation.message_count ?? 0) === 0) {
-      return { skipped: true, reason: "fresh_session_no_messages" } as const;
-    }
-
-    const { deduplicated, command_id } = await enqueueResumeSession(ctx, conversation);
-
-    // Re-queue any stranded messages so the resume actually delivers them. A message that
-    // failed to reach a dead session sits as injected/failed/undeliverable; without this it
-    // stays stuck and the user has to manually resend. restartSession already does this — the
-    // missing call here was the asymmetry that left "Force resume" doing nothing visible.
-    // Runs on the dedup path too: the queued resume still needs its messages back.
-    await resetConversationPendingMessages(ctx, args.conversation_id);
-    return deduplicated ? { deduplicated: true } : { command_id };
+    // Runner or second-party owner, runner-addressed command — the same core
+    // as the dispatch resume handler, so an owned (Mr-Bot-run) session resumes
+    // from the owner's inbox exactly like their own.
+    return await resumeConversationSession(ctx, authUserId, args.conversation_id);
   },
 });
 

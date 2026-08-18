@@ -1,3 +1,4 @@
+import { openTasksVouchForWaiting, OPEN_TASKS_FRESH_MS } from "@codecast/shared/contracts";
 import { describe, expect, test } from "bun:test";
 // The REAL web helpers, imported so the cross-check below enforces the
 // convex/web agreement instead of restating it.
@@ -624,7 +625,9 @@ describe("classifyWorkState", () => {
 
   test("the settle classifier speaks only for an UNDECLARED settle", () => {
     expect(classifyWorkState(wsi({ isIdle: true, settleVerdict: "done" }))).toBe("done");
-    expect(classifyWorkState(wsi({ agentStatus: "idle", isIdle: true, settleVerdict: "dormant" }))).toBe("dormant");
+    // The classifier never parks a session: dormancy needs a verifiable wake, so
+    // a stored "dormant" verdict (pre-rule rows) is ignored.
+    expect(classifyWorkState(wsi({ agentStatus: "idle", isIdle: true, settleVerdict: "dormant" }))).toBe("needs_input");
     expect(classifyWorkState(wsi({ isIdle: true, settleVerdict: "needs_input" }))).toBe("needs_input");
     // A declaration always outranks it.
     expect(classifyWorkState(wsi({ agentStatus: "dormant", isIdle: true, settleVerdict: "done" }))).toBe("dormant");
@@ -749,6 +752,24 @@ describe("trustedAgentStatus (stale 'working' trust TTL)", () => {
     for (const s of ["idle", "stopped", "permission_blocked"]) {
       expect(trustedAgentStatus(s, NOW - 24 * 60 * 60 * 1000, NOW)).toBe(s);
     }
+  });
+
+  test("a VERIFIED waiting (daemon-checked open tasks, fresh report) skips the quiet-time decay", () => {
+    // Unverified: a transcript guess decays like an active status.
+    expect(trustedAgentStatus("waiting", NOW - STATUS_TRUST_TTL_MS, NOW, true)).toBe("idle");
+    // Verified: a five-hour build poll stays parked.
+    expect(trustedAgentStatus("waiting", NOW - 5 * 60 * 60 * 1000, NOW, true, true)).toBe("waiting");
+    // …but a dead daemon still coerces it — nobody is watching the shell now.
+    expect(trustedAgentStatus("waiting", NOW - 5 * 60 * 60 * 1000, NOW, false, true)).toBe("stopped");
+    // The vouch is specific to "waiting": an active status decays regardless.
+    expect(trustedAgentStatus("working", NOW - STATUS_TRUST_TTL_MS, NOW, true, true)).toBe("idle");
+  });
+
+  test("openTasksVouchForWaiting: fresh + non-empty only", () => {
+    expect(openTasksVouchForWaiting(NOW - 60_000, 1, NOW)).toBe(true);
+    expect(openTasksVouchForWaiting(NOW - 60_000, 0, NOW)).toBe(false);
+    expect(openTasksVouchForWaiting(NOW - OPEN_TASKS_FRESH_MS, 1, NOW)).toBe(false);
+    expect(openTasksVouchForWaiting(null, 1, NOW)).toBe(false);
   });
 
   test("undefined status / unknown updatedAt are left alone", () => {

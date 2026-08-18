@@ -536,11 +536,13 @@ export async function switchDevice(
 
 // ── ringing ───────────────────────────────────────────────────────────────
 
-// Ring a teammate into a room, joining it yourself first (the caller waits
-// inside — answering drops the callee straight into a live room).
+// Ring people into a room, joining it yourself first (the caller waits
+// inside — answering drops each callee straight into a live room). One or
+// many recipients: a 1:1 from the avatar bar and a group start from the
+// picker are the same call with a longer list.
 export async function startHuddle(opts: {
   roomKey: string;
-  toUserId: string;
+  toUserIds: string[];
   anchorTitle?: string;
 }): Promise<void> {
   if (!convex) return;
@@ -548,14 +550,29 @@ export async function startHuddle(opts: {
   try {
     await joinCall(opts.roomKey);
     if (useInboxStore.getState().call.phase !== "connected") return;
-    await convex.mutation(api.calls.invite, {
-      room_key: opts.roomKey,
-      to_user: opts.toUserId,
-      anchor_title: opts.anchorTitle,
-    });
+    await ringInto(opts.roomKey, opts.toUserIds, opts.anchorTitle);
   } catch (err: any) {
     setCall({ phase: "error", error: humanizeConvexError(err, "Could not start the huddle") });
   }
+}
+
+// Ring people into a room you are already in ("add people"). The ring is
+// their grant: a teammate outside the room's anchor may answer it while the
+// huddle runs. Per-recipient outcomes come back so a surface can say who is
+// on quiet hours or in a decline cooldown; the ringing/declined state itself
+// arrives through myCalls.outgoing.
+export async function ringInto(
+  roomKey: string,
+  toUserIds: string[],
+  anchorTitle?: string,
+): Promise<{ to_user: string; busy: boolean; cooldown: boolean; refused?: string }[]> {
+  if (!convex || toUserIds.length === 0) return [];
+  const res = await convex.mutation(api.calls.invite, {
+    room_key: roomKey,
+    to_users: toUserIds,
+    anchor_title: anchorTitle,
+  });
+  return res?.results ?? [];
 }
 
 export async function acceptInvite(inviteId: string, roomKey: string): Promise<void> {
@@ -634,5 +651,7 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     setMuted,
     setCamera,
     setScreenShare,
+    startHuddle,
+    ringInto,
   };
 }

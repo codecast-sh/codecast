@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
+import { openTaskValidator } from "./lib/openTasksValidator";
 import { TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
@@ -187,6 +188,12 @@ export default defineSchema({
     daemon_oldest_pending_ms: v.optional(v.number()),
     daemon_pending_sync_messages: v.optional(v.number()),
     daemon_pending_sync_conversations: v.optional(v.number()),
+    // Daemon boot time and ms its event loop was blocked in the last minute —
+    // last-writer across machines, like daemon_last_seen. The web reads the
+    // per-device twins on `devices` first and falls back to these only when a
+    // daemon predates device rows.
+    daemon_started_at: v.optional(v.number()),
+    daemon_loop_freeze_ms: v.optional(v.number()),
     // Capability convergence: monotonic revision (bumped by any binding write)
     // and the reconciler mode kill switch ("off" | "dry" | "on").
     capability_revision: v.optional(v.number()),
@@ -483,8 +490,8 @@ export default defineSchema({
     inbox_dormant_at: v.optional(v.number()),
     inbox_pinned_at: v.optional(v.number()),
     // The settle classifier's verdict for the settle it last inspected: "done"
-    // (delivered, no ask present), "dormant" (parked on a named machine wake),
-    // or "needs_input". Written by idleSummary alongside idle_summary, from the
+    // (delivered, no ask present) or "needs_input" — never "dormant", which
+    // needs a wake the system can verify. Written by idleSummary alongside idle_summary, from the
     // same model call over the same transcript tail, so the two can never
     // describe different turns. Honored only while settle_verdict_at >=
     // updated_at (inboxFilters.isSettleVerdictCurrent) and only when the agent
@@ -1557,6 +1564,17 @@ export default defineSchema({
     // Consumed by pushRouter unless the user opted out of machine_wide_presence.
     last_input_at: v.optional(v.number()),
     status: v.optional(v.union(v.literal("online"), v.literal("offline"))),
+    // Per-device daemon health, written on every beat: boot time, ms the event
+    // loop was blocked in the last minute, and the sync backlog. The web derives
+    // "restarted, catching up" / "under load" / "syncing N" PER MACHINE from
+    // these — the user-doc twins are last-writer across machines, so with two
+    // daemons alive one machine's trouble is masked by the other's beats.
+    daemon_started_at: v.optional(v.number()),
+    loop_freeze_ms: v.optional(v.number()),
+    pending_sync_count: v.optional(v.number()),
+    oldest_pending_ms: v.optional(v.number()),
+    pending_sync_messages: v.optional(v.number()),
+    pending_sync_conversations: v.optional(v.number()),
     is_remote: v.optional(v.boolean()),
     local_project_roots: v.optional(v.array(v.string())),
     // Git-plane health per repo with live sessions on this device (gitPlane.ts),
@@ -1648,6 +1666,14 @@ export default defineSchema({
     // so it names the process GENERATION: the web fences background watches
     // armed by an earlier one, which died with it and are never notified.
     agent_started_at: v.optional(v.number()),
+    // The background work the harness still holds for this session, as the
+    // daemon last verified it (shared/contracts/openTasks). Reported with every
+    // settle verdict and refreshed by the heartbeat reconcile while the session
+    // is parked; `open_tasks_at` is when. Drives the inbox's "↳ Background …"
+    // row without the conversation's messages, and vouches for a "waiting"
+    // status past the quiet-time decay.
+    open_tasks: v.optional(v.array(openTaskValidator)),
+    open_tasks_at: v.optional(v.number()),
     // Accumulated time the session has been idle while the machine was AWAKE
     // (sleep gaps excluded). Reset to 0 whenever the session shows activity.
     awake_idle_ms: v.optional(v.number()),
@@ -3256,8 +3282,9 @@ export default defineSchema({
 
   // Huddle roster: one row per (room, member), each member writing ONLY their
   // own row — never a shared room document, so a full room has no hot-document
-  // writer pileup. A room is a KEY, not an entity: "dm:<a>:<b>" (sorted user
-  // ids), "channel:<chat_channel id>", "session:<conversation id>". It exists
+  // writer pileup. A room is a KEY, not an entity: "dm:<id>:<id>[:<id>…]" (a
+  // sorted set of people — a chat DM or group thread huddles in the room of
+  // its members), "channel:<chat_channel id>", "session:<conversation id>". It exists
   // while occupied and vanishes when the last row goes stale. Lifetime is a
   // lease (terminal-streaming philosophy): the client heartbeats last_seen
   // in-call, readers filter rows older than CALL_MEMBER_STALE_MS, so a crashed
@@ -3300,16 +3327,20 @@ export default defineSchema({
       v.literal("cancelled"),
       v.literal("expired"),
     ),
-    // Ring-toast context ("about: <session title>") for anchored rooms,
-    // resolved at invite time under the CALLER's visibility so the toast
-    // never leaks a title the recipient couldn't otherwise see... the callee
-    // is being invited into it, which is exactly the sharing gesture.
+    // The ring's context line, ready to read under "<caller> wants to
+    // huddle": "about: <session title>", "with Sam, Ana", "#design". Rendered
+    // verbatim by the web toast, the push body and the phone's ring screen.
+    // Resolved at invite time under the CALLER's visibility — the callee is
+    // being invited into it, which is exactly the sharing gesture.
     anchor_title: v.optional(v.string()),
     created_at: v.number(),
     // Set when the recipient answers either way; lets the caller's UI settle.
     responded_at: v.optional(v.number()),
   })
     .index("by_to_status", ["to_user", "status"])
+    // The invite grant (callRooms.acceptedInviteGrant): "was I rung into
+    // THIS room" — the door a non-member enters a live huddle through.
+    .index("by_to_room", ["to_user", "room_key"])
     .index("by_from_status", ["from_user", "status"])
     .index("by_room", ["room_key"]),
 
@@ -3675,7 +3706,7 @@ export default defineSchema({
   // Scope notes:
   //  - A public channel (kind absent) is visible to every member of its team.
   //    Private channels and DMs gate on `chat_channel_members` rows on top of
-  //    the team check — `canAccessChannel` (chat.ts) is the one gate for all
+  //    the team check — `canAccessChannel` (chatAccess.ts) is the one gate for all
   //    three kinds, and every read and write goes through it.
   //  - Nothing here denormalizes a counter onto a shared row. `last_message_at`
   //    and `message_count` on the channel would make EVERY member a writer of the

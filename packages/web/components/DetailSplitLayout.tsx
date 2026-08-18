@@ -5,7 +5,7 @@ import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
 import { Maximize2, Minimize2, Pin, PinOff } from "lucide-react";
 import { useTrackedStore, useInboxStore } from "../store/inboxStore";
 import { hasOpenModal } from "../shortcuts/registry";
-import { useTabContext } from "./TabContent";
+import { useTabContext } from "../lib/tabParams";
 
 const separatorClass = "cc-split";
 

@@ -958,6 +958,42 @@ describe("queued-command attachments (Ctrl+Enter / busy-agent delivery)", () => 
     });
   });
 
+  // The attachment's own timestamp is the ENQUEUE time; the agent receives the
+  // turn later, and the harness writes the line then. Synced with the early
+  // stamp it sorted before turns already on the server and every "newer than
+  // my latest" delta reader skipped it — a mid-turn task notification became a
+  // background watch the web never saw close (2026-08-17).
+  test("stamps a queued turn with its delivery time (the matching dequeue), not its enqueue time", () => {
+    const notice = "<task-notification>\n<task-id>bm01pn6rk</task-id>\n<status>completed</status>\n</task-notification>";
+    const entries: ClaudeSessionEntry[] = [
+      { type: "assistant", uuid: "a1", timestamp: "2026-08-17T17:35:03Z", message: { role: "assistant", content: [{ type: "text", text: "still working" }] } },
+      { type: "queue-operation", operation: "enqueue", timestamp: "2026-08-17T17:35:04.083Z", content: notice },
+      { type: "queue-operation", operation: "remove", timestamp: "2026-08-17T17:35:10.393Z", content: notice },
+      { type: "attachment", uuid: "queued-n", timestamp: "2026-08-17T17:35:04.083Z", attachment: { type: "queued_command", prompt: notice, commandMode: "task-notification" } },
+    ];
+    const messages = extractMessages(entries);
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toMatchObject({ uuid: "queued-n", role: "user", content: notice });
+    expect(messages[1].timestamp).toBe(Date.parse("2026-08-17T17:35:10.393Z"));
+  });
+
+  test("without a matching dequeue a queued turn is never stamped earlier than the turn already emitted", () => {
+    const entries: ClaudeSessionEntry[] = [
+      { type: "assistant", uuid: "a1", timestamp: "2026-08-17T17:35:09Z", message: { role: "assistant", content: [{ type: "text", text: "still working" }] } },
+      { type: "attachment", uuid: "queued-p", timestamp: "2026-08-17T17:35:04Z", attachment: { type: "queued_command", prompt: "next, do X", commandMode: "prompt", origin: { kind: "human" } } },
+    ];
+    const messages = extractMessages(entries);
+    expect(messages[1].timestamp).toBe(Date.parse("2026-08-17T17:35:09Z"));
+  });
+
+  test("a queued turn newer than everything before it keeps its own stamp", () => {
+    const entries: ClaudeSessionEntry[] = [
+      { type: "assistant", uuid: "a1", timestamp: "2026-08-17T17:35:03Z", message: { role: "assistant", content: [{ type: "text", text: "done" }] } },
+      { type: "attachment", uuid: "queued-q", timestamp: "2026-08-17T17:36:00Z", attachment: { type: "queued_command", prompt: "thanks", commandMode: "prompt" } },
+    ];
+    expect(extractMessages(entries)[1].timestamp).toBe(Date.parse("2026-08-17T17:36:00Z"));
+  });
+
   test("strips leading terminal control bytes from the queued prompt", () => {
     const entries: ClaudeSessionEntry[] = [
       {

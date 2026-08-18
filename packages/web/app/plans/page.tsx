@@ -33,7 +33,8 @@ import {
   Link2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { LivenessDot, planLivenessState } from "../../components/LivenessDot";
+import { LivenessDot } from "../../components/LivenessDot";
+import { planLivenessState } from "../../lib/liveness";
 
 type PlanStatus = "draft" | "active" | "paused" | "done" | "abandoned";
 

@@ -46,7 +46,8 @@ describe("sessionRestState", () => {
 
   it("the settle classifier speaks only for an undeclared settle", () => {
     expect(sessionRestState(mk("a", { settle_verdict: "done" }))).toBe("done");
-    expect(sessionRestState(mk("a", { agent_status: "idle", settle_verdict: "dormant" }))).toBe("dormant");
+    // The classifier never parks a session: a stale stored "dormant" verdict is ignored.
+    expect(sessionRestState(mk("a", { agent_status: "idle", settle_verdict: "dormant" as any }))).toBe("needs_input");
     expect(sessionRestState(mk("a", { settle_verdict: "needs_input" }))).toBe("needs_input");
     expect(sessionRestState(mk("a", { agent_status: "done", settle_verdict: "needs_input" }))).toBe("done");
     expect(sessionRestState(mk("a", { agent_status: "dormant", settle_verdict: "done" }))).toBe("dormant");

@@ -157,15 +157,24 @@ export const DEAD_AGENT_STATUSES = new Set(["stopped"]);
 // `heartbeatAlive` defaults to true for callers that already gate on a fresh
 // heartbeat (or have no managed row in hand); map-based consumers pass
 // liveConvIds membership.
+//
+// `verifiedWaiting`: the daemon has CHECKED the open background work behind a
+// "waiting" — matched each task to a live child shell of the agent process and
+// re-reported it recently (open_tasks / open_tasks_at on the managed row, see
+// shared/contracts/openTasks). A checked "waiting" is not a transcript guess, so
+// it skips the quiet-time decay like a declared verdict: a poll on a five-hour
+// build stays parked with its bar instead of resurfacing at the hour. The
+// dead-daemon leg still applies — nobody is watching the shell any more.
 export function trustedAgentStatus(
   agentStatus: string | undefined,
   updatedAt: number | undefined,
   now: number,
   heartbeatAlive: boolean = true,
+  verifiedWaiting: boolean = false,
 ): string | undefined {
   if (!agentStatus) return agentStatus;
-  const decays = TRUST_DECAYING_STATUSES.has(agentStatus);
-  const declared = DECLARED_VERDICT_STATUSES.has(agentStatus);
+  const decays = TRUST_DECAYING_STATUSES.has(agentStatus) && !(agentStatus === "waiting" && verifiedWaiting);
+  const declared = DECLARED_VERDICT_STATUSES.has(agentStatus) || (agentStatus === "waiting" && verifiedWaiting);
   if (!decays && !declared) return agentStatus;
   const quietPastHeartbeat = updatedAt === undefined || now - updatedAt >= HEARTBEAT_ALIVE_MS;
   if (!heartbeatAlive && quietPastHeartbeat && agentStatus !== "done") return "stopped";
@@ -420,8 +429,10 @@ export interface WorkStateInput {
   userDormant?: boolean;
   /** The home of an armed recurring/event trigger that injects into it (and whose last run did not fail or flag attention). */
   armedTriggerHome?: boolean;
-  /** The settle classifier's verdict for THIS settle (settle_verdict, current per isSettleVerdictCurrent), when no declaration exists. */
+  /** The settle classifier's verdict for THIS settle (settle_verdict, current per isSettleVerdictCurrent), when no declaration exists. Only "done" carries weight. */
   settleVerdict?: string | null;
+  /** conversations.thread_state_status — the agent's declaration ON THE ROW, for rows with no daemon status at all (see the fallback in classifyWorkState). */
+  declaredStatus?: string | null;
 }
 
 // The user's "dormant" gesture is a stamp that any later activity silently
@@ -541,14 +552,20 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // park gesture, and last the settle classifier — which only speaks when no
   // declaration exists, and only for THIS settle.
   const declaredDormant = agentStatus === "dormant" || agentStatus === "waiting";
-  const declaredDone = agentStatus === "done";
+  // The daemon carries a declaration as the settle status while the session is
+  // live. When there is NO daemon status at all (the managed row aged out, the
+  // machine is gone, the row predates the feature), the row's own pinned
+  // thread_state_status is the best remaining evidence — a `done` there was
+  // the agent's last word and nothing can have moved since without a daemon.
+  // Only `done` rides this fallback: a `dormant` promise with no daemon has no
+  // one to deliver its wake, so it stays needs_input (a human must look).
+  const declaredDone = agentStatus === "done" || (!agentStatus && input.declaredStatus === "done");
   const restState = (): WorkState => {
     if (declaredDormant || input.armedTriggerHome || input.userDormant) return "dormant";
     if (declaredDone) return "done";
-    if (agentStatus === "idle" || !agentStatus) {
-      if (input.settleVerdict === "dormant") return "dormant";
-      if (input.settleVerdict === "done") return "done";
-    }
+    // The classifier only ever files DONE: dormancy needs a wake the system can
+    // verify, and prose cannot supply one (see idleSummary.SETTLE_VERDICTS).
+    if ((agentStatus === "idle" || !agentStatus) && input.settleVerdict === "done") return "done";
     return "needs_input";
   };
 

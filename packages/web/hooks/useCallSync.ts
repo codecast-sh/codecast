@@ -5,7 +5,7 @@ import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useConvexSync } from "./useConvexSync";
 import { bindConvex } from "../lib/calls/callManager";
-import { channelRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
+import { channelRoomKey, chatRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
 
 // The huddles data pump, mounted once app-wide (DashboardLayout, beside
 // useChatToasts). Renders nothing; binds the Convex client into callManager
@@ -40,23 +40,33 @@ export function useCallSync(): void {
     (st: any) => st.teamMembers.map((m: any) => m.in_room_key).filter(Boolean).sort().join("|"),
     (st: any) => st.currentSessionId,
     (st: any) => st.call.roomKey,
-    (st: any) => (st.chatRail ?? []).map((r: any) => r.channel_id).join("|"),
+    (st: any) =>
+      (st.chatRail ?? [])
+        .map((r: any) => `${r.channel_id}:${st.chatChannels?.[r.channel_id]?.kind ?? ""}:${(r.member_ids ?? []).join(",")}`)
+        .join("|"),
   ]);
   const roomKeys = useMemo(() => {
     const keys = new Set<string>();
     for (const m of s.teamMembers) if (m?.in_room_key) keys.add(m.in_room_key);
     const current = s.currentSessionId && s.getConvexId(s.currentSessionId);
     if (current) keys.add(sessionRoomKey(current));
-    // Channel standing rooms — the rail is the team's few channels, bounded.
+    // Chat rooms — the rail is the team's few channels, bounded. A DM or
+    // group thread huddles in the room of its member set (chatRoomKey), a
+    // channel in its own; the same mapping the rail chip and header use.
     for (const r of s.chatRail ?? []) {
-      if (r?.channel_id) keys.add(channelRoomKey(String(r.channel_id)));
+      if (!r?.channel_id) continue;
+      keys.add(chatRoomKey({
+        id: String(r.channel_id),
+        kind: s.chatChannels?.[r.channel_id]?.kind,
+        memberIds: r.member_ids,
+      }));
     }
     // The room I'M in, always — the dock's roster must not depend on a
     // teammate's heartbeat having landed in the strip.
     if (s.call.roomKey) keys.add(s.call.roomKey);
     return [...keys].sort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.teamMembers, s.currentSessionId, s.call.roomKey, s.chatRail]);
+  }, [s.teamMembers, s.currentSessionId, s.call.roomKey, s.chatRail, s.chatChannels]);
 
   const { data: occupancy } = useQueryNoThrow(
     api.calls.getRoomOccupancy,

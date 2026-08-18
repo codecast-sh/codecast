@@ -28,6 +28,7 @@ import { internal } from "./_generated/api";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { isTeamAdmin, isTeamMember } from "./privacy";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
+import { canAccessChannel, channelMemberIds, isChannelMember, isRestricted } from "./chatAccess";
 import { dmKeyFor } from "@codecast/shared/chat";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 // `userCanAccessAnchor` is the WAKE permission (any member of a team anchor's
@@ -137,55 +138,6 @@ export async function requireCaller(
   const userId = await getAuthenticatedUserId(ctx as any, apiToken);
   if (!userId) chatFail("UNAUTHENTICATED", "Unauthorized: authentication failed");
   return userId;
-}
-
-/** Private channels and DMs gate on their member rows; public gates on the
- *  team. `team_id` stays ROUTING on every kind — access never reads it alone. */
-function isRestricted(channel: Doc<"chat_channels">): boolean {
-  return channel.kind === "private" || channel.kind === "dm";
-}
-
-async function isChannelMember(
-  ctx: ReadCtx,
-  channelId: Id<"chat_channels">,
-  userId: Id<"users">,
-): Promise<boolean> {
-  const row = await ctx.db
-    .query("chat_channel_members")
-    .withIndex("by_channel_user", (q: any) =>
-      q.eq("channel_id", channelId).eq("user_id", userId))
-    .first();
-  return !!row;
-}
-
-async function channelMemberIds(
-  ctx: ReadCtx,
-  channelId: Id<"chat_channels">,
-): Promise<Id<"users">[]> {
-  const rows = await ctx.db
-    .query("chat_channel_members")
-    .withIndex("by_channel", (q: any) => q.eq("channel_id", channelId))
-    .collect();
-  return rows.map((r) => r.user_id);
-}
-
-// The ONE access rule. A public channel is readable and writable by the members
-// of its team. A private channel or DM additionally requires a membership row —
-// the team check stays underneath so leaving the team closes every door at
-// once, even if a membership row lingers. Returns false rather than throwing so
-// queries can degrade to an empty result.
-async function canAccessChannel(
-  ctx: ReadCtx,
-  userId: Id<"users">,
-  channel: Doc<"chat_channels"> | null,
-): Promise<boolean> {
-  if (!channel) return false;
-  if (!(await isTeamMember(ctx as any, userId, channel.team_id))) return false;
-  // Chat is a per-team opt-in: a team that turned it off (or never turned it
-  // on) has no readable channels, member or not.
-  if (!(await teamHasFeature(ctx as any, channel.team_id, "chat"))) return false;
-  if (isRestricted(channel)) return await isChannelMember(ctx, channel._id, userId);
-  return true;
 }
 
 async function readChannel(

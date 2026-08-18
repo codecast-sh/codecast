@@ -1,4 +1,4 @@
-import { useTeamFeature } from "../lib/teamFeatures";
+import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useRef, memo } from "react";
@@ -36,6 +36,7 @@ import { toast } from "sonner";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
 import { CreateChannelModal } from "./CreateChannelModal";
+import { NewMessageModal } from "./chat/NewMessageModal";
 import { Globe, Workflow, Zap, MessageSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks, Lock, SquarePen } from "lucide-react";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
@@ -544,6 +545,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // Per-team opt-in: no chat row (and no create-channel modal) unless the
   // active team turned chat on.
   const chatOn = useTeamFeature("chat");
+  const callsOn = useCallsAvailable();
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
@@ -1267,6 +1269,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           // supersede when the server row lands (rekeyId).
           onCreated={(channelId) => router.push(`/chat/${channelId}`)}
         />
+      )}
+      {/* "New huddle" is the new-message field with a huddle intent: the
+          same people/rooms search, ending in a ring instead of a room. */}
+      {createModal === "huddle" && callsOn && (
+        <NewMessageModal intent="huddle" onClose={() => closeCreateModal()} />
       )}
     </nav>
   );

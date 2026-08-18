@@ -71,3 +71,21 @@ export function pendingBannerState(
   if (isBootingAgentStatus(agentStatus)) return opts.bootGraceElapsed ? "stuck" : "queued";
   return opts.idleGraceElapsed ? "stuck" : "none";
 }
+
+// Layered on top of pendingBannerState by the bubble. pendingBannerState judges
+// the SESSION (booting, busy, idle, gone); this judges the DAEMON that carries
+// the message. When the daemon is offline, quiet, freshly restarted, under load
+// or behind on sync, a pending message is late because of the daemon — so say
+// that, instead of "hasn't reached the agent" plus a kill & restart that would
+// itself have to travel through the struggling daemon. A restart the user has
+// already clicked keeps its progress UI: the daemon note must not paper over an
+// action in flight.
+export type PendingDeliveryState = PendingBannerState | "daemon";
+
+export function withDaemonHealth(
+  state: PendingBannerState,
+  opts: { daemonDegraded: boolean; restartInFlight: boolean },
+): PendingDeliveryState {
+  if (state === "none" || opts.restartInFlight) return state;
+  return opts.daemonDegraded ? "daemon" : state;
+}

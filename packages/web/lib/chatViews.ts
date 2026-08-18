@@ -14,6 +14,7 @@ import { compareMembersByPresence } from "../components/presence/memberPresence"
 import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
 import type { ChatAuthor, ChatMessageView, ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
+import { chatRoomKey } from "@codecast/shared/contracts";
 
 export type ChatMember = {
   _id: string;
@@ -48,6 +49,22 @@ export function channelDisplayName(
     return ids.length > 1 ? full.split(/\s+/)[0] : full;
   });
   return names.join(", ");
+}
+
+/** The huddle room of a chat view. A DM or group thread huddles in the room
+ *  of its member set (the viewer plus `dmMemberIds`, which is known even for a
+ *  stub the rail has never seen); a channel in its own standing room. One
+ *  rule for the rail chip, the header button and the occupancy sync, so the
+ *  three can never point at different keys for the same conversation. */
+export function chatViewRoomKey(
+  view: { id: string; kind?: string; dmMemberIds?: string[]; memberIds?: string[] },
+  viewerId: string,
+): string {
+  const roster =
+    view.kind === "dm" && view.dmMemberIds?.length && viewerId
+      ? [String(viewerId), ...view.dmMemberIds]
+      : view.memberIds;
+  return chatRoomKey({ id: view.id, kind: view.kind, memberIds: roster });
 }
 
 /** The avatar-bearing side of a 1:1 DM, for surfaces that show a face. */

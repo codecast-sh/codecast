@@ -6,7 +6,7 @@ import { hashImageBytes, lookupByHash, lookupByPath, storeUpload } from "./image
 import { redactSecrets } from "./redact.js";
 import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
-import type { AgentStatus } from "@codecast/shared/contracts";
+import type { OpenTaskReport, AgentStatus } from "@codecast/shared/contracts";
 
 const MAX_CONTENT_SIZE = 100_000;
 const MAX_TOOL_RESULT_SIZE = 50_000;
@@ -1853,7 +1853,7 @@ export class SyncService {
     } catch {}
   }
 
-  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string): Promise<void> {
+  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string, openTasks?: OpenTaskReport[]): Promise<void> {
     if (!this.apiToken) return;
     try {
       await this.mutate(
@@ -1864,6 +1864,7 @@ export class SyncService {
           client_ts: clientTs || Date.now(),
           api_token: this.apiToken,
           ...(permissionMode ? { permission_mode: permissionMode } : {}),
+          ...(openTasks ? { open_tasks: openTasks } : {}),
         }
       );
     } catch {}

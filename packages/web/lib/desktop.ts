@@ -7,7 +7,17 @@ declare global {
       onUpdateStatus: (cb: (status: { status: string; version?: string; percent?: number }) => void) => void;
       restartForUpdate: () => Promise<void>;
       checkForUpdate: (opts?: { manual?: boolean }) => Promise<void>;
-      showNotification: (title: string, body: string, data?: { conversationId?: string; route?: string }) => Promise<void>;
+      // Resolves { shown } on builds with multi-window routing (undefined on
+      // older builds, which always showed the banner).
+      showNotification: (
+        title: string,
+        body: string,
+        data?: NotifyNativeData,
+      ) => Promise<{ shown: boolean; reason?: string } | void>;
+      // Multi-window notification routing (see main.js). Absent on older
+      // builds — gate on them; without them this window behaves as the only one.
+      reportWindowState?: (state: DesktopWindowState) => void;
+      onWindowRole?: (cb: (role: DesktopWindowRole) => void) => void;
       getShortcuts: () => Promise<Record<string, string>>;
       getShortcutConfig: () => Promise<DesktopShortcutConfig>;
       setShortcut: (key: string, accelerator: string) => Promise<Record<string, string>>;
@@ -51,6 +61,27 @@ declare global {
     };
   }
 }
+
+// What a banner carries besides its text. `key` is a stable id for the event
+// (a notification row id, `ring:<invite>`) so every window reporting the same
+// event collapses to one banner; `kind` hints the click target for banners
+// with no route ("call" → the window hosting the call / the calls page).
+export type NotifyNativeData = { conversationId?: string; route?: string; key?: string; kind?: string };
+
+// What this window shows, reported to the desktop shell so a banner click can
+// land in the best window: the active surface path, every surface it could
+// switch to (the main window's tabs), and whether it hosts a connected call.
+export type DesktopWindowState = {
+  active: string | null;
+  open: Array<{ id: string | null; path: string }>;
+  inCall: boolean;
+};
+
+// This window's role among the desktop's windows, pushed by the shell.
+//   leader:     the ONE window that may play notification sounds
+//   appFocused: some app window (not just this one) has OS focus
+//   anyInCall:  some window hosts a connected call
+export type DesktopWindowRole = { leader: boolean; appFocused: boolean; anyInCall: boolean };
 
 export type DesktopDisplaySource = {
   id: string;
@@ -225,21 +256,28 @@ export async function requestNotificationPermission(): Promise<boolean> {
   return result === "granted";
 }
 
+// Resolves true when THIS window announced the event to the user — the caller
+// may pair a sound with it. False when the app is focused (the toast/bell
+// layer owns that case) or, on desktop, when another window already showed
+// the same banner (the shell dedupes by `data.key`).
 export async function notifyNative(
   title: string,
   body: string,
-  data?: { conversationId?: string; route?: string },
-) {
+  data?: NotifyNativeData,
+): Promise<boolean> {
   // OS notifications are for the unfocused app: when the window has focus the
   // user already sees the bell/inbox update (and hears the idle sound), so a
   // native banner on top is noise. Applies to desktop and browser alike.
-  if (typeof document !== "undefined" && document.hasFocus()) return;
+  if (typeof document !== "undefined" && document.hasFocus()) return false;
   // One click target per banner: an explicit route (chat, tasks, docs) wins,
   // else the conversation. Electron receives both and applies the same rule.
   const route = data?.route ?? (data?.conversationId ? `/conversation/${data.conversationId}` : undefined);
   if (isElectron()) {
-    bridge("showNotification")?.(title, body, { ...data, route });
-  } else if (hasBrowserNotificationPermission()) {
+    const res = await bridge("showNotification")?.(title, body, { ...data, route });
+    // Older shells resolve void: they showed it.
+    return res ? res.shown : true;
+  }
+  if (hasBrowserNotificationPermission()) {
     const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId ?? route });
     if (route) {
       n.onclick = () => {
@@ -248,6 +286,40 @@ export async function notifyNative(
       };
     }
   }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Window role. The desktop can run several windows of this app (main +
+// detached tabs); the shell elects one leader for notification sounds and
+// tells each window whether the app as a whole is focused. Outside the desktop
+// (or before the shell's first push) this window is the only one: leader.
+// ---------------------------------------------------------------------------
+
+let windowRole: DesktopWindowRole = { leader: true, appFocused: false, anyInCall: false };
+let windowRoleTracked = false;
+
+export function getDesktopWindowRole(): DesktopWindowRole {
+  return windowRole;
+}
+
+// True when this window should be the one that sounds a notification.
+export function isNotificationLeader(): boolean {
+  return windowRole.leader;
+}
+
+// Subscribe once (DesktopProvider) so the role above tracks the shell.
+export function installWindowRoleTracker(): void {
+  if (windowRoleTracked) return;
+  windowRoleTracked = true;
+  bridge("onWindowRole")?.((role) => {
+    windowRole = { leader: role.leader !== false, appFocused: !!role.appFocused, anyInCall: !!role.anyInCall };
+  });
+}
+
+// Tell the shell what this window shows (no-op outside the desktop).
+export function reportDesktopWindowState(state: DesktopWindowState): void {
+  bridge("reportWindowState")?.(state);
 }
 
 export async function updateBadge(count: number) {

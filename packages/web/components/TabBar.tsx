@@ -6,7 +6,8 @@ import { tabTitle, tabSessionId, chatTabTitle } from "../lib/tabTitle";
 import { pathLabel } from "../lib/pathLabel";
 import { bridge, isDesktop, isDetachedTabWindow } from "../lib/desktop";
 import { PageIcon } from "./RecentlyViewedMenu";
-import { LivenessDot, sessionLivenessState } from "./LivenessDot";
+import { LivenessDot } from "./LivenessDot";
+import { sessionLivenessState } from "../lib/liveness";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 
 export function TabBar() {

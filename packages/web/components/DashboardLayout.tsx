@@ -4,6 +4,7 @@ import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { openConversationAsCompanion } from "../hooks/useOpenLinkedSession";
+import { installOpenIntent } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -366,6 +367,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   });
 
   useEventListener('resize', recalcHeight);
+
+  // Desktop: Cmd-click / middle-click on any in-app object opens it in a
+  // background tab; Cmd-Shift-click in a detached window (lib/openIntent). One
+  // listener for the whole shell — every link and row already routes through
+  // the chokepoints it diverts. A no-op on the web (browser keeps Cmd-click).
+  useMountEffect(() => installOpenIntent());
 
   useWatchEffect(() => {
     const header = headerRef.current;

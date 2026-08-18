@@ -3,7 +3,6 @@ import {
   buildUsageReport,
   describeRecovery,
   renderUsageReport,
-  usagePressureLine,
   USAGE_WARN_PERCENT,
 } from "./usageCommand";
 
@@ -78,38 +77,6 @@ describe("buildUsageReport", () => {
     expect(r.next_reset).toBeUndefined();
     expect(r.fallbacks).toEqual([]);
     expect(renderUsageReport(r, c)).toContain("Session (5h)   reset");
-  });
-
-  test("the session-start pressure line: silent with headroom, names the hot windows when pressured, says so at the wall", () => {
-    const at = (session: number, weekly = 20) => [
-      {
-        name: "work",
-        email: "w@x.com",
-        active: true,
-        usage: {
-          fetched_at: now,
-          session: { percent: session, resets_at: now + 72 * 60_000 },
-          weekly: { percent: weekly, resets_at: now + 3 * 24 * H },
-        },
-      },
-    ];
-    expect(usagePressureLine(at(69), now)).toBeNull();
-    expect(usagePressureLine(at(USAGE_WARN_PERCENT - 1), now)).toBeNull();
-    const warm = usagePressureLine(at(88), now);
-    expect(warm).toContain("work is close to its limit: Session (5h) 88% (resets in 1h 12m)");
-    expect(warm).not.toContain("Week");
-    expect(warm).toContain("`cast usage`");
-    const wall = usagePressureLine(at(100, 90), now);
-    expect(wall).toContain("at its limit — model calls fail until the reset");
-    expect(wall).toContain("Session (5h) 100% (resets in 1h 12m), Week (7d) 90%");
-    // A rolled pegged window is history, not pressure.
-    expect(
-      usagePressureLine(
-        [{ name: "w", email: "w@x.com", active: true, usage: { fetched_at: now - 6 * H, session: { percent: 100, resets_at: now - H } } }],
-        now,
-      ),
-    ).toBeNull();
-    expect(usagePressureLine([], now)).toBeNull();
   });
 
   test("no active account renders the waiting note", () => {

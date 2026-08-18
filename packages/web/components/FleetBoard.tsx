@@ -13,7 +13,8 @@ import {
   type InboxSession,
 } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
-import { LivenessDot, sessionLivenessState } from "./LivenessDot";
+import { LivenessDot } from "./LivenessDot";
+import { sessionLivenessState } from "../lib/liveness";
 import { SegmentedToggle } from "./SegmentedToggle";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { InboxConversation } from "./GlobalSessionPanel";

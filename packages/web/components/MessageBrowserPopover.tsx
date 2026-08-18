@@ -34,6 +34,7 @@ const MACHINE_KIND_LABEL: Record<HiddenKind, string> = {
   schedule: "trigger", // user-facing vocabulary is "trigger" (ct-38953); the kind key mirrors the wire tag
   session: "session",
   teammate: "teammate",
+  chat: "chat",
   continue: "continue",
 };
 
@@ -87,6 +88,8 @@ function MachineKindIcon({ kind }: { kind: HiddenKind }) {
       ? "M13 7l5 5m0 0l-5 5m5-5H6"
       : kind === "continue"
       ? "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+      : kind === "chat"
+      ? "M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"
       : "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z";
   return (
     <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

@@ -91,6 +91,7 @@ import {
   Repeat,
   Zap,
   CornerDownRight,
+  Headphones,
 } from "lucide-react";
 import { setTaskParent, closeTaskWithGuard } from "../lib/taskActions";
 
@@ -520,8 +521,7 @@ function ActionSubmenu({
     }
     if (mode === "model") {
       // Model + effort options for the target session's agent, one flat
-      // numbered list. The blank/live rail picks which models qualify
-      // (Sonnet 1M is reachable only via the in-place picker).
+      // numbered list. The blank rail adds the "default" effort stop.
       const s0 = target as any;
       const agentType = s0?.agent_type as string | undefined;
       const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
@@ -531,15 +531,11 @@ function ActionSubmenu({
       const curEffort = s0?.effort as string | undefined;
       const rows: any[] = [];
       // Dynamic clients: Default + the live featured head; the query also
-      // searches the device's full inventory below. Menu-dynamic (claude) on a
-      // live session: Default + the harvested /model menu rows.
+      // searches the device's full inventory below.
       const models = dynamicModels.dynamic
         ? [cfg.models[0], ...dynamicModels.featured]
-        : !blank && dynamicModels.menuRows.length > 0
-          ? [cfg.models[0], ...dynamicModels.menuRows]
-          : cfg.models;
+        : cfg.models;
       for (const m of models) {
-        if (blank && m.midSessionOnly) continue;
         rows.push({ key: `model:${m.key}`, label: m.label, sub: m.hint, active: m.key === curModelKey, icon: Cpu });
       }
       for (const level of [...(blank ? ["default"] : []), ...cfg.efforts]) {
@@ -2289,6 +2285,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             <FileText className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
             <span className="truncate flex-1">Create Document</span>
           </CommandPrimitive.Item>
+          {callsOn && (
+            <CommandPrimitive.Item
+              key="create-huddle"
+              value="Start huddle new call ring people group voice"
+              onSelect={() => { closePalette(); openCreateModal('huddle'); }}
+              className={itemClass}
+            >
+              <Headphones className="w-4 h-4 text-sol-violet flex-shrink-0" />
+              <span className="truncate flex-1">Start Huddle</span>
+            </CommandPrimitive.Item>
+          )}
           <CommandPrimitive.Item
             key="create-trigger"
             value="Create trigger new schedule cron automation reminder"

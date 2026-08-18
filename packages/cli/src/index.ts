@@ -56,13 +56,14 @@ import {
 } from "./resolveWorkspace.js";
 import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
+import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion} from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { expandStdinArgs, readStdinBody } from "./sendBody.js";
@@ -2099,6 +2100,7 @@ const SNIPPET_SECTIONS = {
   state: snippetSection("state"),
   decide: snippetSection("decide"),
   calls: snippetSection("calls"),
+  limits: snippetSection("limits"),
 } satisfies Record<string, SnippetSection>;
 
 // Every feature that introduces an object the agent names in prose (a session, a
@@ -2281,6 +2283,10 @@ function refreshEnabledSnippets(config: Record<string, any>): void {
   if (config.browser_enabled) installBrowserSnippet(true);
   if (config.chat_enabled) installChatSnippet(true);
   if (config.calls_enabled) installSnippetSection("calls", true);
+  // Usage-limit guidance turns itself on the first time a machine has more
+  // than one saved Claude account (never re-enabled after an explicit off).
+  if (ensureLimitsGuidanceForMultiAccount(config)) writeConfig(config);
+  if (config.limits_enabled) installSnippetSection("limits", true);
   // Messaging is on by default for memory installs — backfill/refresh + persist.
   const msgPatch = ensureMessagingForMemory(config);
   if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
@@ -2468,6 +2474,18 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     }
   } else if (config.calls_enabled && config.calls_version !== getCallsVersion()) {
     stampSnippet(config, "calls", getCallsVersion()); // shadow only, no file write
+    writeConfig(config);
+  }
+  if (config.limits_enabled && snippetStale(config, "limits")) {
+    const result = installSnippetSection("limits", true);
+    stampSnippet(config, "limits", getLimitsVersion());
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Usage limits snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  } else if (config.limits_enabled && config.limits_version !== getLimitsVersion()) {
+    stampSnippet(config, "limits", getLimitsVersion()); // shadow only, no file write
     writeConfig(config);
   }
 
@@ -4198,6 +4216,13 @@ accountsCmd
     try {
       const meta = saveProfile(name);
       console.log(`${c.green}✓${c.reset} saved ${c.cyan}${name}${c.reset} (${meta.email ?? "unknown email"})`);
+      // A second saved account is when the usage-limits guidance becomes
+      // unambiguously right — turn it on now (once; an explicit off sticks).
+      const config = readConfig() || {};
+      if (ensureLimitsGuidanceForMultiAccount(config)) {
+        writeConfig(config as Config);
+        console.log(`${c.dim}  usage-limits agent guidance enabled (cast install limits --disable to turn off)${c.reset}`);
+      }
     } catch (err) {
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
@@ -9418,6 +9443,7 @@ program
       // suite is what caught it.
       decide: { getVersion: getDecideVersion, install: (update = false) => installSnippetSection("decide", update), reEnable: "cast install decide" },
       calls: { getVersion: getCallsVersion, install: (update = false) => installSnippetSection("calls", update), reEnable: "cast install calls" },
+      limits: { getVersion: getLimitsVersion, install: (update = false) => installSnippetSection("limits", update), reEnable: "cast install limits" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
     // Single-snippet path: `cast install workflows` (+ --disable to turn off).

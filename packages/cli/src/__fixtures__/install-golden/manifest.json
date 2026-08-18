@@ -74,12 +74,12 @@
   "state": {
     "config": {
       "state_enabled": true,
-      "state_version": "4"
+      "state_version": "5"
     },
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/thread-state.sh": "0d0d7d2e00dcdbea",
+      ".claude/hooks/thread-state.sh": "ad5a66eaf57d8a1d",
       ".claude/settings.json": "926fe51fd0bc9de5"
     }
   },
@@ -104,7 +104,7 @@
   "browser": {
     "config": {
       "browser_enabled": true,
-      "browser_version": "6"
+      "browser_version": "7"
     },
     "stdout": "* Browser — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -116,6 +116,15 @@
       "decide_version": "1"
     },
     "stdout": "* Decision queue — installed in ~/.claude/CLAUDE.md\n",
+    "wroteClaudeMd": true,
+    "otherFiles": {}
+  },
+  "limits": {
+    "config": {
+      "limits_enabled": true,
+      "limits_version": "1"
+    },
+    "stdout": "* Usage limits — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },

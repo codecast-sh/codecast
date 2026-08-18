@@ -36,6 +36,8 @@ import { api as _chatApi } from "@codecast/convex/convex/_generated/api";
 const api = _chatApi as any;
 import { Lock, BellOff, Bell, Plus, AlertTriangle, RotateCw, Search, SquarePen } from "lucide-react";
 import { ChannelMembersButton, DmHeadline } from "../../components/chat/ChannelPeople";
+import { HuddleButton } from "../../components/calls/OccupancyChip";
+import { chatViewRoomKey } from "../../lib/chatViews";
 import { NewMessageModal } from "../../components/chat/NewMessageModal";
 import { ChatSearch } from "../../components/chat/ChatSearch";
 import { useShortcutAction } from "../../shortcuts";
@@ -57,7 +59,7 @@ import {
   useThreadMessages,
   useThreadSync,
 } from "../../hooks/useChatSync";
-import { useTabContext } from "../../components/TabContent";
+import { useTabContext } from "../../lib/tabParams";
 import { ChatChannelRail } from "../../components/chat/ChatChannelRail";
 import { ChatMessageList } from "../../components/chat/ChatMessageList";
 import { ChatThreadPanel } from "../../components/chat/ChatThreadPanel";
@@ -434,6 +436,23 @@ export default function ChatPage() {
                 : <span className="ch-head-topic" />}
               {activeChannel && (activeChannel.kind === "dm" || activeChannel.isPrivate) && (
                 <ChannelMembersButton channel={activeChannel} />
+              )}
+              {/* Every room can huddle. A DM or group thread rings its people
+                  the moment it opens; a channel is an open door — the rail
+                  chip and the "in a huddle" strip tell the team it's live. */}
+              {activeChannel && (
+                <HuddleButton
+                  roomKey={chatViewRoomKey(activeChannel, viewerId)}
+                  ring={activeChannel.kind === "dm" ? activeChannel.dmMemberIds : undefined}
+                  anchorTitle={
+                    activeChannel.kind === "dm"
+                      ? (activeChannel.dmMemberIds?.length ?? 0) > 1
+                        ? `with ${channelDisplayName(activeChannel, useInboxStore.getState().teamMembers)}`
+                        : undefined
+                      : `#${activeChannel.name}`
+                  }
+                  className="shrink-0"
+                />
               )}
               <SearchPill onOpen={() => setSearchOpen(true)} />
               <button
