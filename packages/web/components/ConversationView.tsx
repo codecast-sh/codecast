@@ -1815,7 +1815,9 @@ export interface NewSessionAgentControls {
 function NewSessionBucketPill({ conversation }: { conversation: ConversationData }) {
   const buckets = useInboxStore((st) => st.buckets);
   const bucketAssignments = useInboxStore((st) => st.bucketAssignments);
-  const activeBucketFilter = useInboxStore((st) => st.activeBucketFilter);
+  // Auto-filing applies only to an INCLUDE label chip — an excluded label must
+  // never claim new blanks.
+  const activeBucketFilter = useInboxStore((st) => (st.chipFilterExclude ? null : st.activeBucketFilter));
   const convId = conversation._id;
 
   const visibleBuckets = useMemo(

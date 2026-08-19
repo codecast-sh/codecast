@@ -2995,6 +2995,7 @@ export function SessionListPanel({
     s => s.pendingMessages,
     s => s.activeProjectFilter,
     s => s.activeBucketFilter,
+    s => s.chipFilterExclude,
     s => s.buckets,
     s => s.bucketAssignments,
     s => s.collapsedSections,
@@ -3180,9 +3181,9 @@ export function SessionListPanel({
   const filterByChip = useCallback(
     (items: InboxSession[]) =>
       items.filter((sess) =>
-        chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, bucketFilter: s.activeBucketFilter, bucketByConv }),
+        chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, bucketFilter: s.activeBucketFilter, exclude: s.chipFilterExclude, bucketByConv }),
       ),
-    [s.activeProjectFilter, s.activeBucketFilter, bucketByConv],
+    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, bucketByConv],
   );
 
   const filteredPinned = useMemo(() => filterByChip(pinned), [filterByChip, pinned]);
@@ -3251,10 +3252,10 @@ export function SessionListPanel({
     () =>
       s.activeProjectFilter
         ? schedulePartition.rows.filter(
-            (r) => getProjectName(undefined, r.task.project_path) === s.activeProjectFilter,
+            (r) => (getProjectName(undefined, r.task.project_path) === s.activeProjectFilter) !== s.chipFilterExclude,
           )
         : schedulePartition.rows,
-    [schedulePartition.rows, s.activeProjectFilter],
+    [schedulePartition.rows, s.activeProjectFilter, s.chipFilterExclude],
   );
   // A schedule row opens the conversation behind it — the loop's home session
   // or the newest run; the dismissed-peek path handles folded runs.
@@ -3564,9 +3565,9 @@ export function SessionListPanel({
         manualOrder,
         freezeOrder: viewMode === "recent" ? recentFreezeOrder : null,
         chipMatches: (sess) =>
-          chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, bucketFilter: s.activeBucketFilter, bucketByConv }),
+          chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, bucketFilter: s.activeBucketFilter, exclude: s.chipFilterExclude, bucketByConv }),
       }),
-    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, bucketByConv],
+    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, bucketByConv],
   );
   const totalSubagentCount = useMemo(() => {
     let count = 0;
@@ -3630,13 +3631,13 @@ export function SessionListPanel({
   const favoriteGroups = useMemo(() => {
     if (!favoritesView) return null;
     const scoped = s.activeProjectFilter
-      ? allFavorites.filter((x) => getProjectName(x.git_root, x.project_path) === s.activeProjectFilter)
+      ? allFavorites.filter((x) => (getProjectName(x.git_root, x.project_path) === s.activeProjectFilter) !== s.chipFilterExclude)
       : allFavorites;
     const pinned = scoped.filter((x) => x.is_pinned).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
     const rest = scoped.filter((x) => !x.is_pinned);
     const { projectGroups } = groupSessionsForLabelView(rest, {}, {});
     return { pinned, projectGroups, count: scoped.length };
-  }, [favoritesView, allFavorites, s.activeProjectFilter]);
+  }, [favoritesView, allFavorites, s.activeProjectFilter, s.chipFilterExclude]);
   const favChipCounts = useMemo(
     () => (favoritesView ? computeChipCounts(allFavorites, bucketByConv) : null),
     [favoritesView, allFavorites, bucketByConv],
@@ -4372,11 +4373,15 @@ export function SessionListPanel({
             <div className="px-4 py-12 flex flex-col items-center text-center gap-2">
               <Star className="w-6 h-6 text-sol-yellow/40" />
               <div className="text-sm font-medium text-sol-text-muted">
-                {s.activeProjectFilter ? "No favorites in this project" : "No favorites yet"}
+                {s.activeProjectFilter
+                  ? s.chipFilterExclude ? "No favorites outside this project" : "No favorites in this project"
+                  : "No favorites yet"}
               </div>
               <div className="text-[11px] text-sol-text-dim max-w-[220px] leading-relaxed">
                 {s.activeProjectFilter
-                  ? "Clear the project filter to see every kept session."
+                  ? s.chipFilterExclude
+                    ? "Every kept session lives in the excluded project. Clear the filter to see them."
+                    : "Clear the project filter to see every kept session."
                   : "Star a conversation to keep it here for later — it stays no matter how old it gets, and it’s one keystroke to jump back in."}
               </div>
               {s.activeProjectFilter && (
@@ -4436,7 +4441,9 @@ export function SessionListPanel({
           renderSection("All", flatList, "text-sol-cyan", undefined, true, { reorderable: viewMode === "time" })
         ) : viewMode === "bucket" && bucketView ? (
         <>
-        {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
+        {/* An exclude chip is a near-global view ("everything but X") — the
+            failed/blocked banner must not vanish behind it. */}
+        {(s.chipFilterExclude || (!s.activeProjectFilter && !s.activeBucketFilter)) && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {bucketView.labelGroups.map(({ bucket, items }) => (
           <div key={bucket._id}>
@@ -4453,7 +4460,9 @@ export function SessionListPanel({
         </>
         ) : viewMode === "plan" && planView ? (
         <>
-        {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
+        {/* An exclude chip is a near-global view ("everything but X") — the
+            failed/blocked banner must not vanish behind it. */}
+        {(s.chipFilterExclude || (!s.activeProjectFilter && !s.activeBucketFilter)) && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {planView.planGroups.map(({ key, label, items }) => (
           <div key={key}>
@@ -4514,7 +4523,9 @@ export function SessionListPanel({
         </>
         ) : (
         <>
-        {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
+        {/* An exclude chip is a near-global view ("everything but X") — the
+            failed/blocked banner must not vanish behind it. */}
+        {(s.chipFilterExclude || (!s.activeProjectFilter && !s.activeBucketFilter)) && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}
         {statusQuestions.length > 0 && <QuestionsSectionHeader count={statusQuestions.length} />}

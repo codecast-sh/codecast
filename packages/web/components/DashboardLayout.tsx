@@ -616,7 +616,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
   const resolveNewSessionContext = useCallback(() => {
     const store = useInboxStore.getState();
-    const { activeProjectFilter, activeProjectPath } = store;
+    // An exclude chip ("everything but X") expresses no project preference for
+    // new sessions — only include mode constrains/seeds below.
+    const activeProjectFilter = store.chipFilterExclude ? null : store.activeProjectFilter;
+    const activeProjectPath = store.chipFilterExclude ? null : store.activeProjectPath;
     // Ctrl+N clones the selected session's project path (preserving its worktree /
     // subdirectory) — the session the user sees highlighted (sessionListActiveId).
     // But a project-filter chip is an explicit "I'm working in this project": when
@@ -739,9 +742,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         const v = popped.inboxView;
         const store = useInboxStore.getState();
         withApplyingViewHistory(() => {
-          if (v.bucket !== store.activeBucketFilter || v.project !== store.activeProjectFilter) {
-            if (v.bucket) store.setActiveBucketFilter(v.bucket);
-            else if (v.project) store.setActiveProjectFilter(v.project, v.projectPath);
+          if (v.bucket !== store.activeBucketFilter || v.project !== store.activeProjectFilter || !!v.exclude !== store.chipFilterExclude) {
+            if (v.bucket) store.setActiveBucketFilter(v.bucket, v.exclude);
+            else if (v.project) store.setActiveProjectFilter(v.project, v.projectPath, v.exclude);
             else {
               store.setActiveBucketFilter(null);
               store.setActiveProjectFilter(null, null);

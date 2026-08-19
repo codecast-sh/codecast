@@ -94,6 +94,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
       conversation: ctx,
       activeProjectFilter: store.activeProjectFilter,
       activeProjectPath: store.activeProjectPath,
+      chipFilterExclude: store.chipFilterExclude,
       recentProjects: store.recentProjects,
       machineRoster: store.machineRoster,
     });

@@ -56,8 +56,25 @@ export function LabelChipsRow({
     st => st.buckets,
     st => st.activeBucketFilter,
     st => st.activeProjectFilter,
+    st => st.chipFilterExclude,
   ]);
   const visibleBuckets = useMemo(() => sortLabels(s.buckets), [s.buckets]);
+
+  // Clicking a chip cycles it through three states: off → include ("only
+  // this") → exclude ("everything but this") → off. Clicking a DIFFERENT chip
+  // always starts that chip at include.
+  const cycleBucket = useCallback((bucketId: string) => {
+    const store = useInboxStore.getState();
+    if (store.activeBucketFilter !== bucketId) store.setActiveBucketFilter(bucketId);
+    else if (!store.chipFilterExclude) store.setActiveBucketFilter(bucketId, true);
+    else store.setActiveBucketFilter(null);
+  }, []);
+  const cycleProject = useCallback((name: string, path: string | null) => {
+    const store = useInboxStore.getState();
+    if (store.activeProjectFilter !== name) store.setActiveProjectFilter(name, path);
+    else if (!store.chipFilterExclude) store.setActiveProjectFilter(name, path, true);
+    else store.setActiveProjectFilter(null, null);
+  }, []);
 
   // Labels created inline THIS session stay row-visible at count 0 — creating
   // a chip that instantly vanishes into +N is broken feedback. The exemption
@@ -352,6 +369,7 @@ export function LabelChipsRow({
   const labelChip = (bucket: BucketItem, index: number) => {
     const bc = getLabelColor(bucket.name);
     const active = s.activeBucketFilter === bucket._id;
+    const excluded = active && s.chipFilterExclude;
     const count = bucketCounts[bucket._id] || 0;
     const key = `label:${bucket._id}`;
     return (
@@ -365,7 +383,7 @@ export function LabelChipsRow({
           setDraggingLabelId(bucket._id);
         }}
         onDragEnd={clearDragState}
-        onClick={() => useInboxStore.getState().setActiveBucketFilter(active ? null : bucket._id)}
+        onClick={() => cycleBucket(bucket._id)}
         onContextMenu={(e) => ctxMenu.open(e, { kind: "label", bucket })}
         onDragOver={(e) => {
           // Session-card drops target the chip itself; label reorders are
@@ -393,15 +411,30 @@ export function LabelChipsRow({
           dragOverBucketId === bucket._id
             ? `ring-1 ring-sol-cyan ${bc.bg} ${bc.text}`
             : active
-              ? `${bc.bg} ${bc.text} font-medium`
+              ? `${bc.bg} ${bc.text}`
               : count === 0
                 ? "bg-gray-400/10 text-gray-400/60 hover:bg-gray-400/20 hover:text-gray-500"
                 : "bg-gray-400/10 text-gray-400 hover:bg-gray-400/20 hover:text-gray-500"
         }`}
-        title={`Label: ${bucket.name} — drag to reorder`}
+        title={
+          excluded
+            ? `Hiding "${bucket.name}" — click to clear`
+            : active
+              ? `Filtering to "${bucket.name}" — click to exclude it instead`
+              : `Label: ${bucket.name} — click to filter, drag to reorder`
+        }
       >
-        <span className={`w-1.5 h-1.5 rounded-[2px] ${bc.dot} ${active ? "" : "opacity-50"}`} />
-        {bucket.name}
+        {/* Exclude keeps the filter's colors, quieter cues carry the meaning:
+            hollow dot + struck-through name. border-current inherits the
+            chip's label-colored text. */}
+        <span className={`w-1.5 h-1.5 rounded-[2px] ${excluded ? "border border-current" : bc.dot} ${active ? "" : "opacity-50"}`} />
+        {/* Bold invisible twin reserves the active state's text width so the
+            chip is the SAME width in all three filter states — cycling never
+            shifts the row under the pointer. */}
+        <span className="inline-grid">
+          <span aria-hidden className="invisible font-medium col-start-1 row-start-1">{bucket.name}</span>
+          <span className={`col-start-1 row-start-1 ${active ? "font-medium" : ""} ${excluded ? "line-through" : ""}`}>{bucket.name}</span>
+        </span>
         {/* Fixed-width slot: the ✕ overlays the count on hover instead of
             replacing it, so the chip never changes size and the row never
             shifts under the pointer. */}
@@ -475,27 +508,37 @@ export function LabelChipsRow({
         {projectCounts.map(([name, count]) => {
           const pc = getLabelColor(name);
           const active = s.activeProjectFilter === name;
+          const excluded = active && s.chipFilterExclude;
           const key = `project:${name}`;
           return (
             <button
               key={name}
               ref={chipRef(key)}
-              onClick={() => {
-                const next = active ? null : name;
-                useInboxStore.getState().setActiveProjectFilter(next, next ? (projectPathByName[name] || null) : null);
-              }}
+              onClick={() => cycleProject(name, projectPathByName[name] || null)}
               onContextMenu={(e) => ctxMenu.open(e, { kind: "project", name })}
               style={rowHint ? { transform: `translateX(${REORDER_GAP}px)`, transition: "transform 150ms ease" } : { transition: "transform 150ms ease" }}
               className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 ${
                 hiddenKeys.has(key) && key !== peekKey ? "invisible pointer-events-none" : ""
               } ${
                 active
-                  ? `${pc.bg} ${pc.text} font-medium`
+                  ? `${pc.bg} ${pc.text}`
                   : "bg-gray-400/10 text-gray-400 hover:bg-gray-400/20 hover:text-gray-500"
               }`}
+              title={
+                excluded
+                  ? `Hiding "${name}" — click to clear`
+                  : active
+                    ? `Filtering to "${name}" — click to exclude it instead`
+                    : `Project: ${name} — click to filter`
+              }
             >
-              <span className={`w-1.5 h-1.5 rounded-full ${pc.dot} ${active ? "" : "opacity-50"}`} />
-              {name}
+              {/* Same exclude cues + constant-width construction as the label
+                  chips above. */}
+              <span className={`w-1.5 h-1.5 rounded-full ${excluded ? "border border-current" : pc.dot} ${active ? "" : "opacity-50"}`} />
+              <span className="inline-grid">
+                <span aria-hidden className="invisible font-medium col-start-1 row-start-1">{name}</span>
+                <span className={`col-start-1 row-start-1 ${active ? "font-medium" : ""} ${excluded ? "line-through" : ""}`}>{name}</span>
+              </span>
               <span className="ml-0.5 opacity-50">{count}</span>
             </button>
           );
@@ -515,17 +558,18 @@ export function LabelChipsRow({
           mutating the user's order. Resizing wider un-hides the in-row chip
           and this pin dissolves automatically. */}
       {activeFilterHidden && (() => {
+        const excluded = s.chipFilterExclude;
         const activeBucket = s.activeBucketFilter ? visibleBuckets.find((b) => b._id === s.activeBucketFilter) : undefined;
         if (activeBucket) {
           const bc = getLabelColor(activeBucket.name);
           return (
             <button
-              onClick={() => useInboxStore.getState().setActiveBucketFilter(null)}
-              title={`Filtering by "${activeBucket.name}" — click to clear`}
+              onClick={() => cycleBucket(activeBucket._id)}
+              title={excluded ? `Hiding "${activeBucket.name}" — click to clear` : `Filtering to "${activeBucket.name}" — click to exclude it instead`}
               className={`group min-w-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${bc.bg} ${bc.text}`}
             >
-              <span className={`w-1.5 h-1.5 rounded-[2px] flex-shrink-0 ${bc.dot}`} />
-              <span className="truncate">{activeBucket.name}</span>
+              <span className={`w-1.5 h-1.5 rounded-[2px] flex-shrink-0 ${excluded ? "border border-current" : bc.dot}`} />
+              <span className={`truncate ${excluded ? "line-through" : ""}`}>{activeBucket.name}</span>
               <span className="ml-0.5 relative inline-flex flex-shrink-0 items-center justify-center min-w-[10px]">
                 <span className="opacity-50 group-hover:opacity-0 tabular-nums">{bucketCounts[activeBucket._id] || 0}</span>
                 <span className="absolute inset-0 hidden group-hover:flex items-center justify-center opacity-70">
@@ -540,12 +584,12 @@ export function LabelChipsRow({
         const pc = getLabelColor(activeProject[0]);
         return (
           <button
-            onClick={() => useInboxStore.getState().setActiveProjectFilter(null, null)}
-            title={`Filtering by "${activeProject[0]}" — click to clear`}
+            onClick={() => cycleProject(activeProject[0], projectPathByName[activeProject[0]] || null)}
+            title={excluded ? `Hiding "${activeProject[0]}" — click to clear` : `Filtering to "${activeProject[0]}" — click to exclude it instead`}
             className={`min-w-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${pc.bg} ${pc.text}`}
           >
-            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${pc.dot}`} />
-            <span className="truncate">{activeProject[0]}</span>
+            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${excluded ? "border border-current" : pc.dot}`} />
+            <span className={`truncate ${excluded ? "line-through" : ""}`}>{activeProject[0]}</span>
             <span className="ml-0.5 opacity-50 tabular-nums flex-shrink-0">{activeProject[1]}</span>
           </button>
         );
@@ -602,6 +646,7 @@ export function LabelChipsRow({
             {visibleBuckets.map((bucket, i) => {
               const bc = getLabelColor(bucket.name);
               const active = s.activeBucketFilter === bucket._id;
+              const excluded = active && s.chipFilterExclude;
               return (
                 <div
                   key={bucket._id}
@@ -617,7 +662,7 @@ export function LabelChipsRow({
                   }}
                   onDragEnd={clearDragState}
                   onClick={() => {
-                    useInboxStore.getState().setActiveBucketFilter(active ? null : bucket._id);
+                    cycleBucket(bucket._id);
                     setPopoverOpen(false);
                   }}
                   onDragOver={(e) => {
@@ -650,11 +695,11 @@ export function LabelChipsRow({
                       ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10 text-sol-text"
                       : active ? "bg-sol-cyan/10 text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt/60"
                   }`}
-                  title="Click to filter — drag to reorder"
+                  title={excluded ? "Hidden — click to clear" : active ? "Filtering — click to exclude instead" : "Click to filter — drag to reorder"}
                 >
                   <span className="text-sol-text-dim/40 cursor-grab select-none leading-none">⠿</span>
-                  <span className={`w-2 h-2 rounded-[2px] flex-shrink-0 ${bc.dot}`} />
-                  <span className={`flex-1 truncate ${active ? "font-medium" : ""}`}>{bucket.name}</span>
+                  <span className={`w-2 h-2 rounded-[2px] flex-shrink-0 ${excluded ? `border border-current ${bc.text}` : bc.dot}`} />
+                  <span className={`flex-1 truncate ${active ? "font-medium" : ""} ${excluded ? "line-through" : ""}`}>{bucket.name}</span>
                   <span className="text-[10px] tabular-nums text-sol-text-dim/70">{bucketCounts[bucket._id] || 0}</span>
                   {/* Fixed slot — ✕ appears without shifting the count. */}
                   <span className="w-3 inline-flex items-center justify-center">
@@ -697,21 +742,22 @@ export function LabelChipsRow({
               {projectCounts.map(([name, count]) => {
                 const pc = getLabelColor(name);
                 const active = s.activeProjectFilter === name;
+                const excluded = active && s.chipFilterExclude;
                 return (
                   <div
                     key={name}
                     onClick={() => {
-                      const next = active ? null : name;
-                      useInboxStore.getState().setActiveProjectFilter(next, next ? (projectPathByName[name] || null) : null);
+                      cycleProject(name, projectPathByName[name] || null);
                       setPopoverOpen(false);
                     }}
                     className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors ${
                       active ? "bg-sol-cyan/10 text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt/60"
                     }`}
+                    title={excluded ? "Hidden — click to clear" : active ? "Filtering — click to exclude instead" : "Click to filter"}
                   >
                     <span className="w-3" />
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${pc.dot}`} />
-                    <span className={`flex-1 truncate ${active ? "font-medium" : ""}`}>{name}</span>
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${excluded ? `border border-current ${pc.text}` : pc.dot}`} />
+                    <span className={`flex-1 truncate ${active ? "font-medium" : ""} ${excluded ? "line-through" : ""}`}>{name}</span>
                     <span className="text-[10px] tabular-nums text-sol-text-dim/70">{count}</span>
                   </div>
                 );

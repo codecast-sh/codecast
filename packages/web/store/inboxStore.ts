@@ -2166,6 +2166,8 @@ export function visualOrderSessions(
     // mirroring the project filter. bucketByConv comes from convBucketMap().
     bucketFilter?: string | null;
     bucketByConv?: Record<string, string | undefined>;
+    // Exclude mode: the active chip HIDES its matches instead of focusing them.
+    filterExclude?: boolean;
     // Grouped-view collapse: when provided, sessions inside a collapsed status
     // section are skipped, so Ctrl+J/K only walks cards the panel is actually
     // rendering. Keys mirror GlobalSessionPanel's renderSection keys
@@ -2202,8 +2204,14 @@ export function visualOrderSessions(
   for (const [section, key] of sections) {
     if (collapsed?.[key]) continue;
     for (const s of section) {
-      if (projectFilter && getProjectName(s.git_root, s.project_path) !== projectFilter) continue;
-      if (opts.bucketFilter && opts.bucketByConv?.[s._id] !== opts.bucketFilter) continue;
+      if (projectFilter) {
+        const m = getProjectName(s.git_root, s.project_path) === projectFilter;
+        if (opts.filterExclude ? m : !m) continue;
+      }
+      if (opts.bucketFilter) {
+        const m = opts.bucketByConv?.[s._id] === opts.bucketFilter;
+        if (opts.filterExclude ? m : !m) continue;
+      }
       result.push(s);
     }
   }
@@ -2269,10 +2277,16 @@ export function resolveComposeProjectPath(opts: {
   conversation: { projectPath?: string; gitRoot?: string };
   activeProjectFilter?: string | null;
   activeProjectPath?: string | null;
+  // Exclude-mode chip: "everything but this project" expresses no preference
+  // for where a NEW session should live, so the filter neither vetoes the
+  // conversation's path nor seeds its own.
+  chipFilterExclude?: boolean;
   recentProjects?: Array<{ path: string }>;
   machineRoster?: Array<Pick<MachineCandidate, "local_project_roots">>;
 }): string | undefined {
-  const { context, conversation, activeProjectFilter, activeProjectPath, recentProjects, machineRoster } = opts;
+  const { context, conversation, recentProjects, machineRoster } = opts;
+  const activeProjectFilter = opts.chipFilterExclude ? null : opts.activeProjectFilter;
+  const activeProjectPath = opts.chipFilterExclude ? null : opts.activeProjectPath;
   const rawConvPath =
     !activeProjectFilter || getProjectName(conversation.gitRoot, conversation.projectPath) === activeProjectFilter
       ? conversation.projectPath || conversation.gitRoot
@@ -2472,9 +2486,10 @@ export function selectFavoriteSessions(
   sessions: Record<string, InboxSession>,
   projectFilter?: string | null,
   favoritesList?: any[],
+  filterExclude?: boolean,
 ): InboxSession[] {
   const matchesProject = (s: InboxSession) =>
-    !projectFilter || getProjectName(s.git_root, s.project_path) === projectFilter;
+    !projectFilter || (getProjectName(s.git_root, s.project_path) === projectFilter) !== !!filterExclude;
   const out: InboxSession[] = [];
   const seen = new Set<string>();
   for (const fav of favoritesList ?? []) {
@@ -2502,8 +2517,9 @@ export function favoritesVisualOrder(
   sessions: Record<string, InboxSession>,
   projectFilter?: string | null,
   favoritesList?: any[],
+  filterExclude?: boolean,
 ): InboxSession[] {
-  const favs = selectFavoriteSessions(sessions, projectFilter, favoritesList);
+  const favs = selectFavoriteSessions(sessions, projectFilter, favoritesList, filterExclude);
   const pinned = favs.filter((s) => s.is_pinned).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   const rest = favs.filter((s) => !s.is_pinned);
   const { projectGroups } = groupSessionsForLabelView(rest, {}, {});
@@ -2571,13 +2587,25 @@ export function flatViewComparator(mode: "time" | "recent", manualOrder?: Record
 // the panel's filterByChip and the flat-view keyboard order so a chip narrows
 // the rendered list and Ctrl+J/K identically. A mid-create stub (non-Convex id)
 // always passes the bucket chip — the session you just summoned inside a focused
-// bucket must stay reachable before its assignment syncs.
+// bucket must stay reachable before its assignment syncs. With `exclude` the
+// chip inverts: matches are hidden, everything else shows (stubs still pass —
+// an excluded label never files new sessions, see beginOptimisticSession).
 export function chipMatchesSession(
   s: InboxSession,
-  opts: { projectFilter?: string | null; bucketFilter?: string | null; bucketByConv: Record<string, string | undefined> },
+  opts: { projectFilter?: string | null; bucketFilter?: string | null; exclude?: boolean; bucketByConv: Record<string, string | undefined> },
 ): boolean {
-  if (opts.projectFilter && getProjectName(s.git_root, s.project_path) !== opts.projectFilter) return false;
-  if (opts.bucketFilter && opts.bucketByConv[s._id] !== opts.bucketFilter && isConvexId(s._id)) return false;
+  // Mid-create stubs get the same carve-out on both branches: the session you
+  // just summoned must stay reachable no matter which chip is focused — under
+  // a project EXCLUDE, Ctrl+N from a focused session in that project would
+  // otherwise navigate you onto a card the panel refuses to render.
+  if (opts.projectFilter && isConvexId(s._id)) {
+    const m = getProjectName(s.git_root, s.project_path) === opts.projectFilter;
+    if (opts.exclude ? m : !m) return false;
+  }
+  if (opts.bucketFilter && isConvexId(s._id)) {
+    const m = opts.bucketByConv[s._id] === opts.bucketFilter;
+    if (opts.exclude ? m : !m) return false;
+  }
   return true;
 }
 
@@ -2699,6 +2727,7 @@ export function computeVisualOrder(state: {
   currentSessionId?: string | null;
   pendingSessionCreates: Record<string, unknown>;
   activeBucketFilter?: string | null;
+  chipFilterExclude?: boolean;
   bucketAssignments: Record<string, BucketAssignmentItem>;
   buckets: Record<string, BucketItem>;
   showFavorites?: boolean;
@@ -2719,7 +2748,7 @@ export function computeVisualOrder(state: {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
   if (state.showFavorites) {
-    return favoritesVisualOrder(state.sessions, state.activeProjectFilter, state.favorites);
+    return favoritesVisualOrder(state.sessions, state.activeProjectFilter, state.favorites, state.chipFilterExclude);
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
   const mode = resolveInboxViewMode(state.clientState.ui);
@@ -2771,13 +2800,13 @@ export function computeVisualOrder(state: {
       focusedId,
       manualOrder: state.clientState.ui?.inbox_manual_order,
       freezeOrder: mode === "recent" ? state.recentFreezeOrder : null,
-      chipMatches: (s) => chipMatchesSession(s, { projectFilter: state.activeProjectFilter, bucketFilter: state.activeBucketFilter, bucketByConv }),
+      chipMatches: (s) => chipMatchesSession(s, { projectFilter: state.activeProjectFilter, bucketFilter: state.activeBucketFilter, exclude: state.chipFilterExclude, bucketByConv }),
     });
   }
   // Grouped/bucket: the categorized status buckets over the SAME visible set, so
   // old sessions hidden from the render are skipped by nav too. The bucket branch
   // below splits pinned out and regroups the rest by label/project.
-  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined, absorbedIds: mode === "grouped" || mode === "bucket" || mode === "plan" ? state.scheduleNavSets?.absorbed : undefined, reviveRequestedAt: state.blockedReviveRequestedAt });
+  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, filterExclude: state.chipFilterExclude, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined, absorbedIds: mode === "grouped" || mode === "bucket" || mode === "plan" ? state.scheduleNavSets?.absorbed : undefined, reviveRequestedAt: state.blockedReviveRequestedAt });
   if (mode === "bucket") {
     const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
     const rest = base.filter((s) => !s.is_pinned);
@@ -3424,7 +3453,11 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // -- Active project scope (non-persisted, resets on reload) --
   activeProjectPath: string | null;
   activeProjectFilter: string | null;
-  setActiveProjectFilter: (name: string | null, path?: string | null) => void;
+  setActiveProjectFilter: (name: string | null, path?: string | null, exclude?: boolean) => void;
+  // Whether the ONE active chip (project or bucket) is in exclude mode —
+  // "everything but this" instead of "only this". Chips cycle
+  // off → include → exclude → off.
+  chipFilterExclude: boolean;
 
   // -- Capability library --
   // What every machine reports it has (fleet mirror, server truth).
@@ -3454,7 +3487,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   bucketAssignments: Record<string, BucketAssignmentItem>;
   // Mutually exclusive with activeProjectFilter: the chip row is ONE filter.
   activeBucketFilter: string | null;
-  setActiveBucketFilter: (bucketId: string | null) => void;
+  setActiveBucketFilter: (bucketId: string | null, exclude?: boolean) => void;
   // Panel view mode with back-compat for the pre-bucket inbox_flat_view bool.
   inboxViewMode: () => InboxViewMode;
   setInboxViewMode: (mode: InboxViewMode) => void;
@@ -3804,6 +3837,7 @@ function snapshotInboxViewFromDraft(draft: any): InboxViewSnapshot {
     bucket: draft.activeBucketFilter ?? null,
     project: draft.activeProjectFilter ?? null,
     projectPath: draft.activeProjectPath ?? null,
+    exclude: !!draft.chipFilterExclude,
     mode: ui.inbox_view_mode ?? (ui.inbox_flat_view ? "time" : "grouped"),
   };
 }
@@ -5375,14 +5409,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
   activeProjectPath: null,
   activeProjectFilter: null,
-  setActiveProjectFilter: action(function (this: Draft, name: string | null, path?: string | null) {
+  chipFilterExclude: false,
+  setActiveProjectFilter: action(function (this: Draft, name: string | null, path?: string | null, exclude?: boolean) {
     const prev = snapshotInboxViewFromDraft(this);
     this.activeProjectFilter = name;
     this.activeProjectPath = path ?? null;
+    // The exclude flag belongs to whichever chip is active. Clearing THIS axis
+    // only resets it when the other axis isn't holding a filter — otherwise a
+    // stray setActiveProjectFilter(null) would flip a bucket EXCLUSION into a
+    // bucket include ("hide L" → "only L") without a click.
+    this.chipFilterExclude = name ? !!exclude : this.activeBucketFilter ? this.chipFilterExclude : false;
     // The chip row is ONE filter: picking a project clears any bucket focus.
     if (name) {
       this.activeBucketFilter = null;
-      recordVisitInDraft(this, { kind: "view", key: `project:${name}`, label: name, path: path ?? undefined });
+      // An exclusion isn't a "view" you revisit — only include mode records.
+      if (!exclude) recordVisitInDraft(this, { kind: "view", key: `project:${name}`, label: name, path: path ?? undefined });
     }
     pushInboxViewHistory(prev, snapshotInboxViewFromDraft(this));
   }),
@@ -5463,13 +5504,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
   buckets: {},
   bucketAssignments: {},
   activeBucketFilter: null,
-  setActiveBucketFilter: action(function (this: Draft, bucketId: string | null) {
+  setActiveBucketFilter: action(function (this: Draft, bucketId: string | null, exclude?: boolean) {
     const prev = snapshotInboxViewFromDraft(this);
     this.activeBucketFilter = bucketId;
+    // Mirror of setActiveProjectFilter: don't clobber a project exclusion.
+    this.chipFilterExclude = bucketId ? !!exclude : this.activeProjectFilter ? this.chipFilterExclude : false;
     if (bucketId) {
       this.activeProjectFilter = null;
       this.activeProjectPath = null;
-      recordVisitInDraft(this, { kind: "view", key: `label:${bucketId}`, label: (this.buckets as any)[bucketId]?.name });
+      if (!exclude) recordVisitInDraft(this, { kind: "view", key: `label:${bucketId}`, label: (this.buckets as any)[bucketId]?.name });
     }
     pushInboxViewHistory(prev, snapshotInboxViewFromDraft(this));
   }),
@@ -6200,7 +6243,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // createSession — never 32 chars, so isConvexId() correctly treats it as local.
   beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; create: (stubId: string) => Promise<string> }) => {
     const store = get();
-    const bucketAtCreate = store.activeBucketFilter;
+    // Only an INCLUDE label chip files new sessions — excluding a label means
+    // "hide it", never "file new work there".
+    const bucketAtCreate = store.chipFilterExclude ? null : store.activeBucketFilter;
     // Converge on the existing blank session for this project+agent instead of
     // minting another one — repeated summon/abandon cycles otherwise strand an
     // empty "New Session" row (and a pre-warmed daemon process) per summon.

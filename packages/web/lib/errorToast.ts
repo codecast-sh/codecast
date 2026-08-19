@@ -40,6 +40,7 @@ function spawnFixSession(errorText: string) {
     conversation: conv,
     activeProjectFilter: store.activeProjectFilter,
     activeProjectPath: store.activeProjectPath,
+    chipFilterExclude: store.chipFilterExclude,
     recentProjects: store.recentProjects,
     machineRoster: store.machineRoster,
   });
