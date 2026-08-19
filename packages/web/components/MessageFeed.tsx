@@ -172,7 +172,9 @@ type FeedItem =
   | { kind: "text"; msg: FeedMessage; text: string };
 
 export function MessageFeed({ filter }: MessageFeedProps) {
-  const [onlyMine, setOnlyMine] = useState(false);
+  // Default hides session→session cross-talk (cast send coordination): the
+  // feed is about what people wrote. "All" re-adds the agent-to-agent cards.
+  const [mode, setMode] = useState<"humans" | "mine" | "all">("humans");
   // Store-fed (hooks/useMessageFeed): the feed paints from cached rows on
   // the first frame; the live newest page and one-shot older pages overlay
   // the store, and the continuation cursor survives a reload.
@@ -201,11 +203,13 @@ export function MessageFeed({ filter }: MessageFeedProps) {
     return items;
   }, [allMessages]);
 
-  // "Mine" = prompts I actually typed: drop agent cross-talk and teammates'.
+  // "humans" = what people typed (no agent cross-talk); "mine" = only my own
+  // prompts; "all" = everything including session→session messages.
   const visibleItems = useMemo(() => {
-    if (!onlyMine) return displayItems;
-    return displayItems.filter((it) => it.kind === "text" && it.msg.is_own);
-  }, [displayItems, onlyMine]);
+    if (mode === "all") return displayItems;
+    if (mode === "mine") return displayItems.filter((it) => it.kind === "text" && it.msg.is_own);
+    return displayItems.filter((it) => it.kind === "text");
+  }, [displayItems, mode]);
 
   // Auto-fill: a server page can be almost all machine noise, leaving too few
   // real messages on screen. Keep pulling until MIN_VISIBLE survive the filter
@@ -268,15 +272,16 @@ export function MessageFeed({ filter }: MessageFeedProps) {
       <div className="flex items-center justify-between">
         <div className="inline-flex items-center gap-0.5 rounded-lg border border-sol-border/40 p-0.5">
           {([
-            { key: false, label: "All" },
-            { key: true, label: "Mine" },
+            { key: "humans", label: "People", title: "Messages people typed (no agent-to-agent traffic)" },
+            { key: "mine", label: "Mine", title: "Only messages I typed" },
+            { key: "all", label: "All", title: "Everything, including session-to-session messages between agents" },
           ] as const).map((opt) => (
             <button
-              key={opt.label}
-              onClick={() => setOnlyMine(opt.key)}
-              title={opt.key ? "Only messages I typed (no agent cross-talk)" : "All messages, including agent-to-agent"}
+              key={opt.key}
+              onClick={() => setMode(opt.key)}
+              title={opt.title}
               className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                onlyMine === opt.key
+                mode === opt.key
                   ? "bg-sol-blue/20 text-sol-blue"
                   : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt"
               }`}

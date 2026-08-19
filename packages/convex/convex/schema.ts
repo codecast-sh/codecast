@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
+import { openTaskValidator } from "./lib/openTasksValidator";
 import { TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
@@ -187,6 +188,12 @@ export default defineSchema({
     daemon_oldest_pending_ms: v.optional(v.number()),
     daemon_pending_sync_messages: v.optional(v.number()),
     daemon_pending_sync_conversations: v.optional(v.number()),
+    // Daemon boot time and ms its event loop was blocked in the last minute —
+    // last-writer across machines, like daemon_last_seen. The web reads the
+    // per-device twins on `devices` first and falls back to these only when a
+    // daemon predates device rows.
+    daemon_started_at: v.optional(v.number()),
+    daemon_loop_freeze_ms: v.optional(v.number()),
     // Capability convergence: monotonic revision (bumped by any binding write)
     // and the reconciler mode kill switch ("off" | "dry" | "on").
     capability_revision: v.optional(v.number()),
@@ -483,8 +490,8 @@ export default defineSchema({
     inbox_dormant_at: v.optional(v.number()),
     inbox_pinned_at: v.optional(v.number()),
     // The settle classifier's verdict for the settle it last inspected: "done"
-    // (delivered, no ask present), "dormant" (parked on a named machine wake),
-    // or "needs_input". Written by idleSummary alongside idle_summary, from the
+    // (delivered, no ask present) or "needs_input" — never "dormant", which
+    // needs a wake the system can verify. Written by idleSummary alongside idle_summary, from the
     // same model call over the same transcript tail, so the two can never
     // describe different turns. Honored only while settle_verdict_at >=
     // updated_at (inboxFilters.isSettleVerdictCurrent) and only when the agent
@@ -1557,6 +1564,17 @@ export default defineSchema({
     // Consumed by pushRouter unless the user opted out of machine_wide_presence.
     last_input_at: v.optional(v.number()),
     status: v.optional(v.union(v.literal("online"), v.literal("offline"))),
+    // Per-device daemon health, written on every beat: boot time, ms the event
+    // loop was blocked in the last minute, and the sync backlog. The web derives
+    // "restarted, catching up" / "under load" / "syncing N" PER MACHINE from
+    // these — the user-doc twins are last-writer across machines, so with two
+    // daemons alive one machine's trouble is masked by the other's beats.
+    daemon_started_at: v.optional(v.number()),
+    loop_freeze_ms: v.optional(v.number()),
+    pending_sync_count: v.optional(v.number()),
+    oldest_pending_ms: v.optional(v.number()),
+    pending_sync_messages: v.optional(v.number()),
+    pending_sync_conversations: v.optional(v.number()),
     is_remote: v.optional(v.boolean()),
     local_project_roots: v.optional(v.array(v.string())),
     // Git-plane health per repo with live sessions on this device (gitPlane.ts),
@@ -1648,6 +1666,14 @@ export default defineSchema({
     // so it names the process GENERATION: the web fences background watches
     // armed by an earlier one, which died with it and are never notified.
     agent_started_at: v.optional(v.number()),
+    // The background work the harness still holds for this session, as the
+    // daemon last verified it (shared/contracts/openTasks). Reported with every
+    // settle verdict and refreshed by the heartbeat reconcile while the session
+    // is parked; `open_tasks_at` is when. Drives the inbox's "↳ Background …"
+    // row without the conversation's messages, and vouches for a "waiting"
+    // status past the quiet-time decay.
+    open_tasks: v.optional(v.array(openTaskValidator)),
+    open_tasks_at: v.optional(v.number()),
     // Accumulated time the session has been idle while the machine was AWAKE
     // (sleep gaps excluded). Reset to 0 whenever the session shows activity.
     awake_idle_ms: v.optional(v.number()),
@@ -1855,7 +1881,26 @@ export default defineSchema({
   })
     .index("by_team_id", ["team_id"])
     .index("by_team_timestamp", ["team_id", "timestamp"])
-    .index("by_actor", ["actor_user_id"]),
+    .index("by_actor", ["actor_user_id"])
+    // Time-bounded actor reads: activity charts scan a trailing window, and a
+    // long-lived account accumulates far more events than any window shows.
+    .index("by_actor_timestamp", ["actor_user_id", "timestamp"]),
+
+  // Per-day human-send counters ("Sends" chart metric). One row per
+  // (user, team, UTC day); `hours` holds 24 UTC-hour buckets. Written at
+  // message-insert time by messages.ts via lib/userSend.recordUserSend — a
+  // send is a user-role message a person actually typed (noise-classified),
+  // which is not reconstructable cheaply from `messages` after the fact.
+  user_send_daily: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    day_start: v.number(),
+    total: v.number(),
+    hours: v.array(v.number()),
+    updated_at: v.number(),
+  })
+    .index("by_user_day", ["user_id", "day_start"])
+    .index("by_user_team_day", ["user_id", "team_id", "day_start"]),
 
   session_insights: defineTable({
     conversation_id: v.id("conversations"),
@@ -3256,8 +3301,9 @@ export default defineSchema({
 
   // Huddle roster: one row per (room, member), each member writing ONLY their
   // own row — never a shared room document, so a full room has no hot-document
-  // writer pileup. A room is a KEY, not an entity: "dm:<a>:<b>" (sorted user
-  // ids), "channel:<chat_channel id>", "session:<conversation id>". It exists
+  // writer pileup. A room is a KEY, not an entity: "dm:<id>:<id>[:<id>…]" (a
+  // sorted set of people — a chat DM or group thread huddles in the room of
+  // its members), "channel:<chat_channel id>", "session:<conversation id>". It exists
   // while occupied and vanishes when the last row goes stale. Lifetime is a
   // lease (terminal-streaming philosophy): the client heartbeats last_seen
   // in-call, readers filter rows older than CALL_MEMBER_STALE_MS, so a crashed
@@ -3300,16 +3346,20 @@ export default defineSchema({
       v.literal("cancelled"),
       v.literal("expired"),
     ),
-    // Ring-toast context ("about: <session title>") for anchored rooms,
-    // resolved at invite time under the CALLER's visibility so the toast
-    // never leaks a title the recipient couldn't otherwise see... the callee
-    // is being invited into it, which is exactly the sharing gesture.
+    // The ring's context line, ready to read under "<caller> wants to
+    // huddle": "about: <session title>", "with Sam, Ana", "#design". Rendered
+    // verbatim by the web toast, the push body and the phone's ring screen.
+    // Resolved at invite time under the CALLER's visibility — the callee is
+    // being invited into it, which is exactly the sharing gesture.
     anchor_title: v.optional(v.string()),
     created_at: v.number(),
     // Set when the recipient answers either way; lets the caller's UI settle.
     responded_at: v.optional(v.number()),
   })
     .index("by_to_status", ["to_user", "status"])
+    // The invite grant (callRooms.acceptedInviteGrant): "was I rung into
+    // THIS room" — the door a non-member enters a live huddle through.
+    .index("by_to_room", ["to_user", "room_key"])
     .index("by_from_status", ["from_user", "status"])
     .index("by_room", ["room_key"]),
 
@@ -3359,6 +3409,10 @@ export default defineSchema({
         mode: v.union(v.literal("live"), v.literal("after")),
         // Watermark: segments with seq <= this have been delivered.
         sent_seq: v.number(),
+        // Who pointed this route at the call. Delivery acts as this user (a
+        // participant feeding an agent speaks as themselves); absent on routes
+        // the scribe configured before this field existed → started_by.
+        added_by: v.optional(v.id("users")),
       }),
     ),
     // Monotonic per-transcript segment counter (writer-owned; the scribe is
@@ -3382,6 +3436,17 @@ export default defineSchema({
     t1: v.number(),
   })
     .index("by_transcript_seq", ["transcript_id", "seq"]),
+
+  // Text chat alongside a huddle: one thread per room, visible on the call
+  // stage and the call page. Keyed by room (not transcript) so the chat works
+  // before anyone toggles transcription and persists across a room's calls.
+  call_chat_messages: defineTable({
+    room_key: v.string(),
+    team_id: v.optional(v.id("teams")),
+    user_id: v.id("users"),
+    text: v.string(),
+  })
+    .index("by_room", ["room_key"]),
 
   workflows: defineTable({
     user_id: v.id("users"),
@@ -3675,7 +3740,7 @@ export default defineSchema({
   // Scope notes:
   //  - A public channel (kind absent) is visible to every member of its team.
   //    Private channels and DMs gate on `chat_channel_members` rows on top of
-  //    the team check — `canAccessChannel` (chat.ts) is the one gate for all
+  //    the team check — `canAccessChannel` (chatAccess.ts) is the one gate for all
   //    three kinds, and every read and write goes through it.
   //  - Nothing here denormalizes a counter onto a shared row. `last_message_at`
   //    and `message_count` on the channel would make EVERY member a writer of the
@@ -3804,12 +3869,19 @@ export default defineSchema({
     // Tombstone rather than a delete, so replies keep their root and a thread
     // count stays honest.
     deleted_at: v.optional(v.number()),
-    // Anchor reply lifecycle — the same states the comment thread already uses.
+    // Anchor reply lifecycle. thinking/streaming/done/error are the visible
+    // states the comment thread already uses. "listening" is a SILENT
+    // placeholder: a reply in a thread the anchor follows woke it without
+    // addressing it, and the anchor decides whether to speak; "passed" is its
+    // decision to stay quiet. Neither renders anywhere and neither counts as a
+    // reply — see @codecast/shared/chat isSilentAgentRow.
     agent_status: v.optional(v.union(
       v.literal("thinking"),
       v.literal("streaming"),
       v.literal("done"),
       v.literal("error"),
+      v.literal("listening"),
+      v.literal("passed"),
     )),
     // Which anchor owns this placeholder. `chat.replyAsAnchor` requires the row to
     // name an anchor, the row's author to BE that anchor's bot identity, and the

@@ -1,59 +1,62 @@
-import { lazy, Suspense, createContext, useContext, useRef, useEffect, useMemo } from "react";
+import { lazy, Suspense, useRef, useEffect, useMemo, type ComponentType, type LazyExoticComponent } from "react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
-
-// -- Tab params context: overrides next/navigation hooks when inside a tab --
-
-export const TabParamsCtx = createContext<{
-  pathname: string;
-  params: Record<string, string>;
-  searchParams: URLSearchParams;
-  // Whether this is the currently-visible tab. Background tabs stay mounted
-  // (display:none) so their scroll/state survive — a pane uses this to freeze
-  // itself on its own route/params instead of following global view state.
-  isActive: boolean;
-} | null>(null);
-
-export function useTabContext() {
-  return useContext(TabParamsCtx);
-}
+import { TabParamsCtx } from "../lib/tabParams";
+import { isPrewarmTab, clearPrewarmTab } from "../lib/openIntent";
+import { tabSessionId } from "../lib/tabTitle";
+import { useConversationMessages } from "../hooks/useConversationMessages";
 
 // -- Route map: path pattern → lazy component --
+//
+// The lazy wrappers are cached on globalThis rather than recreated on every
+// module execution. In dev, a hot update that re-executes this module would
+// otherwise mint new lazy components: React sees a new element type for every
+// pane, unmounts the page through its Suspense fallback and mounts it again —
+// a blank flash and lost page state (open dialogs, scroll) on an unrelated
+// edit. Keyed by page path, so a genuinely new route still gets a fresh lazy.
+const lazyPages: Map<string, LazyExoticComponent<ComponentType<any>>> =
+  ((globalThis as any).__codecastLazyPages ??= new Map());
+function lazyPage(key: string, loader: () => Promise<{ default: ComponentType<any> }>) {
+  let c = lazyPages.get(key);
+  if (!c) { c = lazy(loader); lazyPages.set(key, c); }
+  return c;
+}
 
-const Tasks = lazy(() => import("@/app/tasks/page"));
-const Docs = lazy(() => import("@/app/docs/page"));
-const Capabilities = lazy(() => import("@/app/capabilities/page"));
-const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
-const Plans = lazy(() => import("@/app/plans/page"));
-const Calls = lazy(() => import("@/app/calls/page"));
-const PlanDetail = lazy(() => import("@/app/plans/[id]/page"));
-const Projects = lazy(() => import("@/app/projects/page"));
-const ProjectDetail = lazy(() => import("@/app/projects/[id]/page"));
-const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
-const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
-const Inbox = lazy(() => import("@/app/inbox/page"));
-const Feed = lazy(() => import("@/app/feed/page"));
-const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
-const Timeline = lazy(() => import("@/app/timeline/page"));
-const Chat = lazy(() => import("@/app/chat/page"));
-const Workflows = lazy(() => import("@/app/workflows/dashboard"));
-const Routines = lazy(() => import("@/app/workflows/page"));
+const Tasks = lazyPage("@/app/tasks/page", () => import("@/app/tasks/page"));
+const Docs = lazyPage("@/app/docs/page", () => import("@/app/docs/page"));
+const Capabilities = lazyPage("@/app/capabilities/page", () => import("@/app/capabilities/page"));
+const DocDetail = lazyPage("@/app/docs/[id]/page", () => import("@/app/docs/[id]/page"));
+const Plans = lazyPage("@/app/plans/page", () => import("@/app/plans/page"));
+const Calls = lazyPage("@/app/calls/page", () => import("@/app/calls/page"));
+const PlanDetail = lazyPage("@/app/plans/[id]/page", () => import("@/app/plans/[id]/page"));
+const Projects = lazyPage("@/app/projects/page", () => import("@/app/projects/page"));
+const ProjectDetail = lazyPage("@/app/projects/[id]/page", () => import("@/app/projects/[id]/page"));
+const Conversation = lazyPage("@/app/conversation/[id]/page", () => import("@/app/conversation/[id]/page"));
+const ConversationDiff = lazyPage("@/app/conversation/[id]/diff/page", () => import("@/app/conversation/[id]/diff/page"));
+const Inbox = lazyPage("@/app/inbox/page", () => import("@/app/inbox/page"));
+const Feed = lazyPage("@/app/feed/page", () => import("@/app/feed/page"));
+const Crosstalk = lazyPage("@/app/crosstalk/page", () => import("@/app/crosstalk/page"));
+const Timeline = lazyPage("@/app/timeline/page", () => import("@/app/timeline/page"));
+const Chat = lazyPage("@/app/chat/page", () => import("@/app/chat/page"));
+const Workflows = lazyPage("@/app/workflows/dashboard", () => import("@/app/workflows/dashboard"));
+const Routines = lazyPage("@/app/workflows/page", () => import("@/app/workflows/page"));
 // Triggers (renamed from "Schedules"; /schedules stays routable as an alias).
-const Triggers = lazy(() => import("@/app/triggers/page"));
-const Sessions = lazy(() => import("@/app/sessions/page"));
-const Anchor = lazy(() => import("@/app/anchor/page"));
-const Team = lazy(() => import("@/app/team/page"));
-const TeamActivity = lazy(() => import("@/app/team/activity/page"));
-const TeamMember = lazy(() => import("@/app/team/[username]/page"));
-const Search = lazy(() => import("@/app/search/page"));
-const Windows = lazy(() => import("@/app/windows/page"));
-const ConfigPage = lazy(() => import("@/app/config/page"));
-const Vault = lazy(() => import("@/app/vault/page"));
-const Artifacts = lazy(() => import("@/app/artifacts/page"));
-const Notifications = lazy(() => import("@/app/notifications/page"));
+const Triggers = lazyPage("@/app/triggers/page", () => import("@/app/triggers/page"));
+const Sessions = lazyPage("@/app/sessions/page", () => import("@/app/sessions/page"));
+const Anchor = lazyPage("@/app/anchor/page", () => import("@/app/anchor/page"));
+const Team = lazyPage("@/app/team/page", () => import("@/app/team/page"));
+const TeamActivity = lazyPage("@/app/team/activity/page", () => import("@/app/team/activity/page"));
+const TeamCharts = lazyPage("@/app/team/charts/page", () => import("@/app/team/charts/page"));
+const TeamMember = lazyPage("@/app/team/[username]/page", () => import("@/app/team/[username]/page"));
+const Search = lazyPage("@/app/search/page", () => import("@/app/search/page"));
+const Windows = lazyPage("@/app/windows/page", () => import("@/app/windows/page"));
+const ConfigPage = lazyPage("@/app/config/page", () => import("@/app/config/page"));
+const Vault = lazyPage("@/app/vault/page", () => import("@/app/vault/page"));
+const Artifacts = lazyPage("@/app/artifacts/page", () => import("@/app/artifacts/page"));
+const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/notifications/page"));
 // The decision queue: one question at a time, full width.
-const Questions = lazy(() => import("@/app/questions/page"));
-const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
+const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions/page"));
+const AdminDaemonLogs = lazyPage("@/app/admin/daemon-logs/page", () => import("@/app/admin/daemon-logs/page"));
 
 type RouteEntry = {
   pattern: RegExp;
@@ -82,6 +85,7 @@ const ROUTES: RouteEntry[] = [
   // instead of remounting the whole surface and losing the scroll position.
   { pattern: /^\/chat\/([^/]+)$/, paramNames: ["channelId"], component: Chat },
   { pattern: /^\/team\/activity$/, paramNames: [], component: TeamActivity },
+  { pattern: /^\/team\/charts$/, paramNames: [], component: TeamCharts },
   { pattern: /^\/team\/([^/]+)$/, paramNames: ["username"], component: TeamMember },
   // Static routes
   { pattern: /^\/tasks$/, paramNames: [], component: Tasks },
@@ -127,9 +131,23 @@ function matchRoute(path: string): { component: React.LazyExoticComponent<any>; 
   return null;
 }
 
+// -- SessionPrewarm: warms a background session tab's messages --
+//
+// A background inbox pane cannot show its own `?s=` session — it paints the
+// GLOBAL current conversation and only re-asserts its param once active (a
+// background tab must never reach into global state). So mounting the pane
+// alone leaves the target session cold. This subscribes the same message hook
+// the conversation view uses, so the store already holds the session's window
+// when the tab is switched to; the view's own subscription then takes over
+// (Convex dedupes identical subscriptions across hooks — no refetch).
+function SessionPrewarm({ sessionId }: { sessionId: string }) {
+  useConversationMessages(sessionId);
+  return null;
+}
+
 // -- TabPane: renders one tab's content with context --
 
-function TabPane({ tab, isActive }: { tab: AppTab; isActive: boolean }) {
+function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; children?: React.ReactNode }) {
   const matched = useMemo(() => matchRoute(tab.path), [tab.path]);
   const ctxValue = useMemo(() => {
     const [pathAndHash, queryString] = tab.path.split("?");
@@ -174,6 +192,7 @@ function TabPane({ tab, isActive }: { tab: AppTab; isActive: boolean }) {
       ) : (
         <PageShell pathname={ctxValue.pathname}>{page}</PageShell>
       )}
+      {children}
     </div>
   );
 }
@@ -234,10 +253,14 @@ export function TabContent() {
     }
   });
 
-  // Lazy mount: only render tabs that have been active at least once
+  // Lazy mount: only render tabs that have been active at least once — plus
+  // tabs opened in the background by a Cmd-click (lib/openIntent), which mount
+  // hidden so they are warm on first switch. A prewarm tab stops being one the
+  // moment it is shown; from then on it is an ordinary visited tab.
   const mountedRef = useRef(new Set<string>());
   for (const tab of tabs) {
-    if (tab.id === activeTabId || mountedRef.current.has(tab.id)) {
+    if (tab.id === activeTabId) clearPrewarmTab(tab.id);
+    if (tab.id === activeTabId || mountedRef.current.has(tab.id) || isPrewarmTab(tab.id)) {
       mountedRef.current.add(tab.id);
     }
   }
@@ -252,12 +275,16 @@ export function TabContent() {
     <div className="h-full">
       {renderTabs.map((tab: AppTab) => {
         if (!mountedRef.current.has(tab.id)) return null;
+        const isActive = tab.id === activeTabId;
+        const prewarmSession = !isActive && isPrewarmTab(tab.id) ? tabSessionId(tab) : null;
         return (
           <TabPane
             key={tab.id}
             tab={tab}
-            isActive={tab.id === activeTabId}
-          />
+            isActive={isActive}
+          >
+            {prewarmSession && <SessionPrewarm sessionId={prewarmSession} />}
+          </TabPane>
         );
       })}
     </div>
