@@ -4,7 +4,6 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentClientId } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
-import { isSessionOwner } from "./sessionOwners";
 import { canAccessConversation } from "./lib/access";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
@@ -596,17 +595,20 @@ export const reassignToDevice = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
-    // Runs-or-owns, matching performReassignToDevice's own routing: runners
-    // restamp in place, owners-not-runners fall through to the cross-user
-    // reparent (which re-authorizes itself).
+    // Runs-or-owns-or-team, matching performReparentSessionToDevice's rule:
+    // runners restamp in place, everyone else falls through to the cross-user
+    // reparent (which re-authorizes itself and documents why team access
+    // suffices for a human caller).
+    const caller = await ctx.db.get(userId);
     const conv = await findConversationByAnyRefWhere(ctx, args.conversation_id, async (candidate: any) => {
-      const runs = candidate.user_id.toString() === userId.toString();
-      const owns =
-        candidate.owner_user_id?.toString() === userId.toString() ||
-        (await isSessionOwner(ctx, candidate._id, userId));
-      return runs || owns;
+      const access = await checkConversationAccess(ctx, userId, candidate);
+      return access === "owner" || (access === "team" && !caller?.is_bot);
     });
-    if (!conv) throw new Error("not your conversation");
+    if (!conv) {
+      throw new Error(
+        "not your conversation (you can only move a session you run or own, or one visible to your team)",
+      );
+    }
     return performReassignToDevice(ctx, userId, {
       conversation_id: conv._id,
       device_id: args.device_id,
@@ -616,11 +618,11 @@ export const reassignToDevice = mutation({
 
 // Cross-user device reparent — the device axis across accounts. Unlike
 // reassignToDevice (same-user "run on this device"), the caller may pull a
-// session RUN BY A TEAMMATE onto their OWN machine, provided they already run or
-// own it. Account follows device: the session then runs and bills under the
-// caller (user_id -> caller), and the immutable author is pinned (author_user_id)
-// so it survives the user_id rewrite. Owners are untouched — the device axis and
-// the owner axis move independently.
+// session RUN BY A TEAMMATE onto their OWN machine, provided they run it, own
+// it, or can see it via their team. Account follows device: the session then
+// runs and bills under the caller (user_id -> caller), and the immutable author
+// is pinned (author_user_id) so it survives the user_id rewrite. Owners are
+// untouched — the device axis and the owner axis move independently.
 //
 // Narrow by design: you may only pull onto YOUR OWN device. Moving a session
 // onto a third party's machine would need their consent and credential, which we
@@ -652,20 +654,24 @@ export async function performReparentSessionToDevice(
   userId: Id<"users">,
   args: { session_id: string; device_id: string; remote_url?: string },
 ): Promise<{ ok: true; command_id: any; device_id: string; label: string; cross_user: boolean }> {
-  // Authorization is folded into resolution: the caller must already RUN it
-  // (user_id) or OWN it (owner set / cached primary). Team visibility alone is
-  // NOT enough — reparenting changes who bills, so it can't be a team-wide power.
+  // Authorization is folded into resolution: the caller must RUN it (user_id),
+  // OWN it (owner set / cached primary), or be a HUMAN teammate who can SEE it.
+  // Team access suffices because any teammate may already claim a visible
+  // session (cast own) and owners may pull — accepting team here just composes
+  // those two allowed steps into one, instead of dead-ending the web's "Run on
+  // this device" with "not your conversation" (ct-44344). Billing still follows
+  // the puller, who consents by pulling onto their own machine. Bot accounts
+  // can never claim ownership, so they don't get the team path either; a bare
+  // share link never grants a pull.
   // Accepts any ref (short id, session UUID, or conversation id) like cast own.
+  const caller = await ctx.db.get(userId);
   const conv = await findConversationByAnyRefWhere(ctx, args.session_id, async (candidate: any) => {
-    const runs = candidate.user_id.toString() === userId.toString();
-    const owns =
-      candidate.owner_user_id?.toString() === userId.toString() ||
-      (await isSessionOwner(ctx, candidate._id, userId));
-    return runs || owns;
+    const access = await checkConversationAccess(ctx, userId, candidate);
+    return access === "owner" || (access === "team" && !caller?.is_bot);
   });
   if (!conv) {
     throw new Error(
-      `No session found for "${args.session_id}" that you run or own (you can only reparent a session you run or own)`,
+      `No session found for "${args.session_id}" that you run or own, or that is visible to your team`,
     );
   }
   const isRunner = conv.user_id.toString() === userId.toString();
