@@ -3970,7 +3970,8 @@ cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessio
 cliRoute("/cli/sessions/owners/set", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwners, body));
 cliRoute("/cli/sessions/owners", async (ctx, body) => ctx.runQuery(api.sessionOwnership.listOwners, body));
 
-// Cross-user device reparent (cast pull): pull a session you run or own onto the
+// Cross-user device reparent (cast pull): pull a session you run or own — or a
+// team-visible one (see findPullableConversation) — onto the
 // caller's OWN device. Account follows device — user_id becomes the caller, the
 // author is pinned. body: { api_token, session_id, device_id }.
 cliRoute("/cli/sessions/reparent", async (ctx, body) => ctx.runMutation(api.devices.reparentSessionToDevice, body));
