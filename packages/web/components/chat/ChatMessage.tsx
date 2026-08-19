@@ -8,6 +8,7 @@ import { remarkChatMentions } from "../../lib/remarkChatMentions";
 import { compactAge } from "../../lib/threadState";
 import { copyToClipboard } from "../../lib/utils";
 import type { ChatAttachmentView, ChatMessageView } from "./chatTypes";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useStorageImageUrl } from "../../hooks/useStorageImageUrl";
 import { ImageLightbox } from "../ImageGallery";
 import "./chat.css";
@@ -87,6 +88,13 @@ export function relativeReplyTime(ts: number, now: number): string {
 /** The one-tap reactions the toolbar offers. Small on purpose: a full picker is
  *  a different surface, and six covers what people actually press. */
 export const QUICK_REACTIONS = ["👍", "🎉", "❤️", "👀", "🚀", "😄"];
+
+/** "Maya" / "Maya and Sam" / "Maya, Sam and Ada" — the reaction tooltip's
+ *  who-list. */
+function reactorNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
 
 export type ChatMessageProps = {
   message: ChatMessageView;
@@ -352,18 +360,30 @@ export const ChatMessage = memo(function ChatMessage({
 
         {message.reactions && message.reactions.length > 0 && (
           <div className="ch-reactions">
-            {message.reactions.map((r) => (
-              <button
-                key={r.emoji}
-                type="button"
-                className={`ch-reaction ${r.mine ? "ch-reaction-mine" : ""}`}
-                title={r.names?.join(", ")}
-                onClick={() => react(r.emoji)}
-              >
-                <span aria-hidden="true">{r.emoji}</span>
-                <span className="ch-reaction-count">{r.count}</span>
-              </button>
-            ))}
+            <TooltipProvider delayDuration={250} skipDelayDuration={200}>
+              {message.reactions.map((r) => (
+                <Tooltip key={r.emoji}>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className={`ch-reaction ${r.mine ? "ch-reaction-mine" : ""}`}
+                      onClick={() => react(r.emoji)}
+                    >
+                      <span aria-hidden="true">{r.emoji}</span>
+                      <span className="ch-reaction-count">{r.count}</span>
+                    </button>
+                  </TooltipTrigger>
+                  {r.names && r.names.length > 0 && (
+                    <TooltipContent side="top" className="ch-reaction-tip">
+                      <span className="ch-reaction-tip-emoji" aria-hidden="true">
+                        {r.emoji}
+                      </span>
+                      <span>{reactorNames(r.names)} reacted</span>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              ))}
+            </TooltipProvider>
           </div>
         )}
 
