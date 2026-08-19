@@ -6848,37 +6848,41 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // The optional resolution rides to dispatch.updateTaskStatus → webUpdate's
   // close-guard; on "cascade" the open local subtree closes optimistically too.
+  // Both writers patch EVERY row carrying the short id, not just the first
+  // match: the store can hold more than one copy of a task (a detail-query row
+  // keyed by URL param in pre-fix sessions, a stub beside its echo), and
+  // patching one copy leaves whichever copy a view happens to render frozen at
+  // the old status while the detail shows the new one.
   updateTaskStatus: action(function (this: Draft, shortId: string, status: string, subtaskResolution?: "cascade" | "only_parent") {
-    const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as TaskItem | undefined;
-    if (task) {
+    const copies = Object.values(this.tasks).filter((t: any) => t.short_id === shortId) as TaskItem[];
+    for (const task of copies) {
       task.status = status;
       task.updated_at = Date.now();
-      if (status === "done" || status === "dropped") {
-        (task as any).closed_at = Date.now();
-        if (subtaskResolution === "cascade") cascadeCloseDraft(this, task._id, status);
-      }
+      if (status === "done" || status === "dropped") (task as any).closed_at = Date.now();
+    }
+    if ((status === "done" || status === "dropped") && subtaskResolution === "cascade") {
+      for (const id of new Set(copies.map((t) => String(t._id)))) cascadeCloseDraft(this, id, status);
     }
   }),
 
   updateTask: action(function (this: Draft, shortId: string, fields: Record<string, any>) {
-    const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as TaskItem | undefined;
-    if (task) {
-      // `parent` is a short id (or "" to detach) for the server; the draft
-      // mirrors it onto parent_id so the row re-nests instantly. The caller
-      // (setTaskParent) has already run the shared cycle/workspace guards.
-      const { parent, subtask_resolution, ...rest } = fields;
+    const copies = Object.values(this.tasks).filter((t: any) => t.short_id === shortId) as TaskItem[];
+    // `parent` is a short id (or "" to detach) for the server; the draft
+    // mirrors it onto parent_id so the row re-nests instantly. The caller
+    // (setTaskParent) has already run the shared cycle/workspace guards.
+    const { parent, subtask_resolution, ...rest } = fields;
+    const parentRow = parent
+      ? (Object.values(this.tasks).find((t: any) => t.short_id === parent || t._id === parent) as TaskItem | undefined)
+      : undefined;
+    for (const task of copies) {
       Object.assign(task, rest, { updated_at: Date.now() });
       if (parent !== undefined) {
-        if (!parent) {
-          (task as any).parent_id = undefined;
-        } else {
-          const parentRow = Object.values(this.tasks).find((t: any) => t.short_id === parent || t._id === parent) as TaskItem | undefined;
-          if (parentRow) (task as any).parent_id = parentRow._id;
-        }
+        if (!parent) (task as any).parent_id = undefined;
+        else if (parentRow) (task as any).parent_id = parentRow._id;
       }
-      if ((fields.status === "done" || fields.status === "dropped") && subtask_resolution === "cascade") {
-        cascadeCloseDraft(this, task._id, fields.status);
-      }
+    }
+    if ((fields.status === "done" || fields.status === "dropped") && subtask_resolution === "cascade") {
+      for (const id of new Set(copies.map((t) => String(t._id)))) cascadeCloseDraft(this, id, fields.status);
     }
   }),
 

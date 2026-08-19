@@ -1373,6 +1373,51 @@ describe("big id-keyed collections are delta-by-default — a bare sync never wi
   }
 });
 
+describe("updateTask/updateTaskStatus — every copy of a task is patched", () => {
+  // The store can hold more than one row per short_id (a detail-query copy
+  // keyed by URL short id from pre-fix sessions, a stub beside its echo).
+  // Patching only the first Object.values match left whichever copy a view
+  // rendered frozen at the old status while the detail showed the new one
+  // (ct-44349). Both writers must stamp every copy.
+  const CANONICAL_ID = "task0000000000000000000000000001";
+  const seedDuplicates = () => {
+    const row = {
+      _id: CANONICAL_ID,
+      short_id: "ct-1",
+      title: "dup task",
+      status: "open",
+      priority: "high",
+      created_at: 1,
+      updated_at: 1,
+    };
+    useInboxStore.setState({
+      tasks: {
+        [CANONICAL_ID]: { ...row },
+        "ct-1": { ...row }, // legacy shadow copy keyed by short id
+      },
+      pending: {},
+    } as any);
+  };
+
+  it("updateTask stamps the new status onto both copies", () => {
+    seedDuplicates();
+    useInboxStore.getState().updateTask("ct-1", { status: "in_progress" });
+    const tasks = useInboxStore.getState().tasks as any;
+    expect(tasks[CANONICAL_ID].status).toBe("in_progress");
+    expect(tasks["ct-1"].status).toBe("in_progress");
+  });
+
+  it("updateTaskStatus closes both copies", () => {
+    seedDuplicates();
+    useInboxStore.getState().updateTaskStatus("ct-1", "done");
+    const tasks = useInboxStore.getState().tasks as any;
+    expect(tasks[CANONICAL_ID].status).toBe("done");
+    expect(tasks[CANONICAL_ID].closed_at).toBeGreaterThan(0);
+    expect(tasks["ct-1"].status).toBe("done");
+    expect(tasks["ct-1"].closed_at).toBeGreaterThan(0);
+  });
+});
+
 describe("syncOverlay — churny overlay merged onto base rows", () => {
   // The generic "liveness lives in an overlay, not the row" primitive: it
   // annotates existing rows, never creates one, and leaves identity untouched

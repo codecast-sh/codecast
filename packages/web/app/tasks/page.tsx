@@ -792,7 +792,14 @@ export function TaskListContent() {
   // (lib/workspaceScope, the one shared predicate): a team view shows ONLY that
   // team's tasks — personal (teamless) tasks live in the personal view alone.
   const tasksList = useMemo(() => {
-    const all = Object.values(tasks);
+    // Drop rows filed under a key that isn't their own _id (a detail-query copy
+    // keyed by URL short id from pre-fix sessions). Such a shadow copy receives
+    // no server echoes — every sync channel keys by _id — so it renders as a
+    // phantom row frozen at stale field values beside (or instead of) the live
+    // one. Stubs pass: they are keyed by their temp _id.
+    const all = Object.entries(tasks)
+      .filter(([key, t]) => key === String((t as TaskItem)._id))
+      .map(([, t]) => t);
     const scoped = filterToWorkspace(all, activeTeamId);
     // Derive the dormant session badge fields here — the single entry point of
     // the page's task pipeline — so every downstream filter/group/badge keeps
