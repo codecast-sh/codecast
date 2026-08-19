@@ -98,6 +98,7 @@ export type QueueKeyAction =
   | { kind: "answer"; option: number }
   | { kind: "open-session" }
   | { kind: "skip" }
+  | { kind: "dismiss" }
   | { kind: "open-free-text" }
   | { kind: "peek" }
   | { kind: "full" }
@@ -142,6 +143,9 @@ export function routeQueueKey(
   }
   if (e.key === "o" || e.key === "O") return { kind: "open-session" };
   if (e.key === "s" || e.key === "S") return { kind: "skip" };
+  // Dismiss = "I am not going to answer this": the card leaves the queue for
+  // good (a `cast decide` row resolves as dismissed), the session is not told.
+  if (e.key === "x" || e.key === "X") return { kind: "dismiss" };
   if (e.key === "t" || e.key === "T") return { kind: "open-free-text" };
   // Up moves into the thread, down brings the question back. Escape leaves the
   // queue from full, but from peek it first restores the question — otherwise

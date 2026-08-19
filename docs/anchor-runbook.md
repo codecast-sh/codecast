@@ -108,3 +108,31 @@ agent, drops channel mappings, and frees the scope so `cast anchor create` can m
 - **`is_bot` rendering polish / no-self-notify** and **per-anchor spend caps** (the
   `daily_session_cap` field exists; enforcement is a follow-up).
 - **Multi-workspace Slack** (v1 = one app, one signing secret + bot token).
+
+## v3 (2026-08-18): global, scope-aware general agent
+
+- **Where it lives in the web app.** A header chip (the anchor glyph with a status dot) and
+  `⌘⇧A` / the palette's "Talk to Anchor" open a slide-over holding one anchor's live
+  conversation from any page. Its header names WHICH anchor (face, name, and a scope pill:
+  "Personal" or the team's name) and switches between them; scopes without an anchor offer
+  "Create". `/anchor` stays the full home (per-scope tabs, Routines, Slack, Settings incl.
+  Re-brief). Anchor rows in the inbox and the conversation header carry the same pill.
+  Store: `anchors` collection (`anchors.listAnchors`), `anchorPanel` ephemeral state,
+  `components/anchor/*`.
+- **Group chat.** Naming the anchor in a thread arms it (`anchor_follow`); from then on EVERY
+  reply wakes it silently — a `listening` placeholder nobody sees — with a wake prompt that
+  says to pass unless the line is for it. `cast chat reply <id> --pass` closes the row
+  (`passed`); a real reply surfaces at the end of the thread. Naming it while it listens
+  promotes the same row to a visible turn. Wakes carry the channel topic and recent room
+  lines as well as the thread. `stop`/`follow --off` still work.
+- **Proactive voice.** `chat.sendAsAnchor` / `cast anchor say --chat <channel|#name>
+  [--thread <root>]` posts as the anchor; `--dm <handle>[,<handle>]` opens (or reuses) a DM
+  room whose members are the bot plus those people. A 1:1 with the anchor is answered inline
+  (no thread). Its host may read those rooms (`chatAccess.canAccessChannel`). Personal
+  anchors DM in a team named with `--team`.
+- **Briefing.** `bootstrapMessage` now frames a general agent that states its scope, owns its
+  routines via `cast trigger` (bound to its own session), reaches people with `cast anchor
+  say`, and passes in group threads. `cast anchor brief [--team]` / Settings → Re-brief
+  re-sends it to a running anchor.
+- **Silent rows never leave the server.** `@codecast/shared/chat` `isSilentAgentRow` is applied
+  in getThread, listMessages, thread summaries, unread counts, search and participants.

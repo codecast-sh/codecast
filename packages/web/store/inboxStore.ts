@@ -30,6 +30,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { type AgentStatus, ACTIVE_AGENT_STATUSES, isLivenessStale, modelOptionKey } from "@codecast/shared/contracts";
+import type { OpenTaskReport } from "@codecast/shared/contracts";
 import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -67,10 +68,17 @@ export async function awaitTrackedSessionCreateResult(
 }
 
 // Convex-id check lives in lib/entityLinks (the entity-routing source of truth).
+// What the sidebar-hosted create modal is showing. One name, three spellings
+// collapsed (the field, the opener's parameter, and the action).
+export type CreateModalKind = 'task' | 'plan' | 'doc' | 'chat' | 'huddle';
+
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, type MachineCandidate } from "../lib/machinePicker";
+import { conversationTabPath } from "../lib/pathLabel";
+import { divertSessionOpen } from "../lib/openIntent";
+import type { PalettePick } from "../lib/palettePick";
 export { isConvexId };
 
 // Canonical entity-derivation helpers live in lib/liveEntities. Re-exported here
@@ -385,6 +393,12 @@ export type InboxSession = {
   // monitors armed before it belong to a process that has been replaced, so
   // they are dead however alive the session is (see monitorRows).
   agent_started_at?: number | null;
+  // The daemon's verified open background work (shared/contracts/openTasks) and
+  // when it last checked. Overlay-borne. Lets the inbox draw a "↳ Background …"
+  // row without this conversation's messages, and tells the message-derived
+  // rows which watches the daemon found dead.
+  open_tasks?: OpenTaskReport[] | null;
+  open_tasks_at?: number | null;
   is_deferred?: boolean;
   // The user's park gesture ("a machine owns this"), current per the server's
   // inbox_dormant_at >= updated_at rule — same contract as is_deferred. The raw
@@ -1723,13 +1737,20 @@ export function isSessionWaitingForInput(
 export type SessionRestState = "needs_input" | "done" | "dormant";
 
 export function sessionRestState(
-  session: Pick<InboxSession, "agent_status" | "is_dormant" | "settle_verdict">,
+  session: Pick<InboxSession, "agent_status" | "is_dormant" | "settle_verdict" | "thread_state_status">,
 ): SessionRestState {
   const status = session.agent_status;
   if (status === "dormant" || status === "waiting" || session.is_dormant) return "dormant";
   if (status === "done") return "done";
+  // No daemon status at all (aged-out managed row, gone machine): the row's own
+  // pinned declaration is the last word — `done` only, mirroring the server.
+  if (!status && session.thread_state_status === "done") return "done";
   if (!status || status === "idle") {
-    if (session.settle_verdict === "dormant") return "dormant";
+    // A blocked pin is the agent's explicit claim — the classifier's soft
+    // verdict never overrides it (mirrors classifyWorkState's restState arm).
+    if (session.thread_state_status === "blocked") return "needs_input";
+    // The classifier only ever files DONE — dormancy needs a wake the system
+    // can verify (convex/idleSummary.ts SETTLE_VERDICTS); a stale "dormant" is ignored.
     if (session.settle_verdict === "done") return "done";
   }
   return "needs_input";
@@ -3101,8 +3122,11 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   setIsolatedWorktreeMode: (val: boolean) => void;
 
   // -- Unified command palette --
-  palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | 'session' | null; initialMode: string; initialQuery?: string };
-  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session'; mode?: string; initialQuery?: string }) => void;
+  palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | 'session' | null; initialMode: string; initialQuery?: string; pick?: PalettePick };
+  // `pick` opens the palette as an entity chooser (see lib/palettePick.ts):
+  // the caller's title/extras on top, the usual recents + search below, and
+  // the choice returned through `pick.onPick` instead of navigating.
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session'; mode?: string; initialQuery?: string; pick?: PalettePick }) => void;
   closePalette: () => void;
   togglePalette: () => void;
 
@@ -3122,11 +3146,11 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   closeCompose: () => void;
 
   // -- Create modal --
-  createModal: 'task' | 'plan' | 'doc' | 'chat' | null;
+  createModal: CreateModalKind | null;
   /** Fields the create modal should open pre-filled with — how a scoped
    *  surface (a project's task list) makes "new task" mean "new task here". */
   createModalDefaults: { project_id?: string; plan_id?: string } | null;
-  openCreateModal: (type: 'task' | 'plan' | 'doc' | 'chat', defaults?: { project_id?: string; plan_id?: string }) => void;
+  openCreateModal: (type: CreateModalKind, defaults?: { project_id?: string; plan_id?: string }) => void;
   closeCreateModal: () => void;
 
   // -- Close-guard: one shared dialog for "close a parent with open subtasks".
@@ -3299,12 +3323,6 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // lifecycle as the model/effort stamps). mode: "team" | "solo" | "off";
   // exclude: conversation ids dropped from the injected feed.
   setStableContextPrefs: (id: string, prefs: { mode?: string | null; exclude?: string[] | null }) => void;
-  // In-flight set_model daemon command (ephemeral; not persisted). Set by
-  // whichever surface fired the switch (header badge, launch pill, palette);
-  // watched by the mounted conversation header, which reverts the optimistic
-  // stamp and toasts if the daemon refuses or never answers.
-  pendingModelCommand: { convId: string; commandId: string; revert: { model?: string | null; effort?: string | null }; startedAt: number } | null;
-  setPendingModelCommand: (cmd: { convId: string; commandId: string; revert: { model?: string | null; effort?: string | null }; startedAt: number } | null) => void;
   navigateToSession: (id: string, source?: ViewNavSource) => void;
   requestNavigate: (
     id: string,
@@ -3578,6 +3596,13 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // -- Shortcuts panel --
   shortcutsPanelOpen: boolean;
   toggleShortcutsPanel: () => void;
+  // The global anchor panel: a slide-over holding one anchor's conversation,
+  // reachable from every page. Ephemeral (a modal toggle, never persisted).
+  // `anchorId` is the LAST anchor shown, so re-opening lands where you were.
+  anchorPanel: { open: boolean; anchorId: string | null };
+  openAnchorPanel: (anchorId?: string | null) => void;
+  closeAnchorPanel: () => void;
+  toggleAnchorPanel: () => void;
 
   // -- Settings modal --
   settingsModalSection: SettingsSectionId | null;
@@ -4038,6 +4063,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     preserveFields: [
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
       "is_connected", "tmux_session", "permission_mode", "agent_started_at",
+      "open_tasks", "open_tasks_at",
       "_postCreateBucketId",
     ],
     transform(draft, table, incoming) {
@@ -5315,7 +5341,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   palette: { open: false, targets: [], targetType: null, initialMode: 'root' },
 
-  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session'; mode?: string; initialQuery?: string }) => {
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session'; mode?: string; initialQuery?: string; pick?: PalettePick }) => {
     set({
       palette: {
         open: true,
@@ -5323,6 +5349,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
         targetType: opts?.targetType || null,
         initialMode: opts?.mode || 'root',
         initialQuery: opts?.initialQuery,
+        pick: opts?.pick,
       },
     });
   },
@@ -5350,7 +5377,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   createModal: null,
   createModalDefaults: null,
-  openCreateModal: (type: 'task' | 'plan' | 'doc' | 'chat', defaults?: { project_id?: string; plan_id?: string }) =>
+  openCreateModal: (type: CreateModalKind, defaults?: { project_id?: string; plan_id?: string }) =>
     set({ createModal: type, createModalDefaults: defaults ?? null }),
   closeCreateModal: () => set({ createModal: null, createModalDefaults: null }),
 
@@ -6827,6 +6854,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   setCurrentSession: action(function (this: Draft, id: string, source: ViewNavSource = "gesture") {
+    // A Cmd-click on a session row opens it in a background tab / detached
+    // window (lib/openIntent) — the visible conversation must not move.
+    if (source === "gesture" && divertSessionOpen(id)) return;
     // "adopt" is machine selection (a fallback picking a view because none
     // exists). It is boot-only by policy: never before hydration restored the
     // client's own position, and never once ANY view has been shown this
@@ -6880,6 +6910,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     set({ composerPrefill: req }),
 
   setViewingDismissedId: action(function (this: Draft, id: string | null) {
+    if (id && divertSessionOpen(id)) return;
     this.viewingDismissedId = id;
   }),
 
@@ -7005,9 +7036,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
-  pendingModelCommand: null,
-  setPendingModelCommand: (cmd: { convId: string; commandId: string; revert: { model?: string | null; effort?: string | null }; startedAt: number } | null) => set({ pendingModelCommand: cmd }),
-
   navigateToSession: action(function (this: Draft, id: string, source: ViewNavSource = "gesture") {
     // Plain navigation. Forks are first-class conversations — clicking one
     // (in the sidebar, BranchSelector, or a deep link) just sets it as the
@@ -7020,6 +7048,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // shown through `viewingDismissedId` (the same view-only path the inbox
     // sidebar uses when you click a session under "Stashed"/"Dismissed"); only
     // an explicit `restoreSession` or sending a message clears the flags.
+    if (source === "gesture" && divertSessionOpen(id)) return;
     declareViewNav(source);
     const session = this.sessions[id];
     if (session) {
@@ -7050,6 +7079,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       source?: ViewNavSource;
     },
   ) {
+    if ((opts?.source ?? "gesture") === "gesture" && divertSessionOpen(id, { messageId: opts?.scrollToMessageId })) return;
     declareViewNav(opts?.source ?? "gesture");
     this.pendingNavigateId = id;
     if (opts && "scrollToMessageId" in opts) this.pendingScrollToMessageId = opts.scrollToMessageId ?? null;
@@ -8363,6 +8393,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   shortcutsPanelOpen: false,
   toggleShortcutsPanel: () => set({ shortcutsPanelOpen: !get().shortcutsPanelOpen }),
+  anchorPanel: { open: false, anchorId: null },
+  openAnchorPanel: (anchorId?: string | null) => set({
+    anchorPanel: { open: true, anchorId: anchorId === undefined ? get().anchorPanel.anchorId : anchorId },
+  }),
+  closeAnchorPanel: () => set({ anchorPanel: { ...get().anchorPanel, open: false } }),
+  toggleAnchorPanel: () => set({ anchorPanel: { ...get().anchorPanel, open: !get().anchorPanel.open } }),
 
   settingsModalSection: null,
   openSettingsModal: (section?: SettingsSectionId) =>
@@ -8571,10 +8607,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // freshly-mounted redirect targeting the active tab, EXCEPT close, which
       // just promotes the survivor. Rewrite to the inbox deep-link form the
       // redirect would have produced so the pane remounts with real content.
-      const conv = nextTab?.path.match(/^\/conversation\/([^/?#]+)$/);
-      if (conv) {
+      if (nextTab && conversationTabPath(nextTab.path) !== nextTab.path) {
         newTabs = newTabs.map((t: AppTab) =>
-          t.id === nextTab.id ? { ...t, path: `/inbox?s=${conv[1]}` } : t,
+          t.id === nextTab.id ? { ...t, path: conversationTabPath(t.path) } : t,
         );
       }
     }

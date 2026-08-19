@@ -18,7 +18,7 @@ export const MAX_CHANNELS_PER_TEAM = 200;
 // with extra steps; a group DM past a handful of faces is a channel that wants
 // a name.
 export const MAX_CHANNEL_MEMBERS = 100;
-export const MAX_DM_MEMBERS = 9;
+export { MAX_DM_MEMBERS } from "@codecast/shared/chat";
 // Unread badges are capped and rendered as "50+". Convex has no count
 // aggregate, so an uncapped count would pull a channel's whole backlog for a
 // number nobody reads past two digits.

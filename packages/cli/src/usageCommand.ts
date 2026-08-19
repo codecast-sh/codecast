@@ -75,24 +75,6 @@ export function loadLocalUsageProfiles(): UsageProfile[] {
   return profiles;
 }
 
-/** One line for a session START (the stable-context hook): only when the
- * account this new session runs on is already under pressure, so an agent
- * beginning a long stretch knows a park is in prospect. Silent otherwise —
- * a fresh account needs no announcement. At session start the active login
- * IS the session's account (it just loaded that credential), which is what
- * makes this the one place such a note is attributable with certainty. */
-export function usagePressureLine(profiles: UsageProfile[], now: number): string | null {
-  const r = buildUsageReport(profiles, now, null);
-  if (!r.active || r.worst == null || r.worst < USAGE_WARN_PERCENT) return null;
-  const hot = r.active.windows.filter((w) => !w.rolled && w.percent >= USAGE_WARN_PERCENT);
-  const parts = hot.map(
-    (w) =>
-      `${w.label} ${Math.round(w.percent)}%${w.resets_at && w.resets_at > now ? ` (resets in ${formatCountdown(w.resets_at - now)})` : ""}`,
-  );
-  const wall = r.exhausted ? "at its limit — model calls fail until the reset" : "close to its limit";
-  return `Account usage: ${r.active.name} is ${wall}: ${parts.join(", ")}. A limit parks this session until the window resets; \`cast usage\` shows headroom and which recovery is on.`;
-}
-
 export function buildUsageReport(
   profiles: UsageProfile[],
   now: number,

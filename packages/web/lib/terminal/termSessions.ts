@@ -12,6 +12,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { termWsUrl, type TerminalEndpoint } from "./endpoint";
 import { buildTerminalTheme, observeTheme } from "./theme";
 import { connectRemotePane, frameToBytes, type RemotePaneSource } from "./remotePane";
+import { PaneStreamFilter } from "./paneStreamFilter";
 
 // "offline" = the socket closed before it ever opened: nothing answered, so
 // there's no terminal server to reach (daemon down / remote machine). Kept
@@ -61,6 +62,8 @@ interface TermInstance {
   detached?: boolean;
   /** container scroll pinning teardown (see attachToContainer) */
   pinDispose?: { dispose(): void };
+  /** rewrites the raw pane bytes before xterm parses them (paneStreamFilter) */
+  filter: PaneStreamFilter;
   /** remote transport teardown: drops the lease that keeps the far daemon
    *  capturing (see remotePane.ts) */
   remoteDispose?: () => void;
@@ -207,7 +210,7 @@ export function openTerminal(opts: OpenTerminalOptions): string {
     lineHeight: 1.25,
     letterSpacing: 0,
     cursorBlink: true,
-    cursorStyle: "bar",
+    cursorStyle: "block",
     allowProposedApi: true,
     scrollback: 20000,
     macOptionIsMeta: true,
@@ -256,6 +259,7 @@ export function openTerminal(opts: OpenTerminalOptions): string {
     container: null,
     resizeObserver: null,
     pendingResize: null,
+    filter: new PaneStreamFilter({ syncFrames: true }),
   };
   inst.detached = !!opts.detached;
   instances.set(id, inst);
@@ -321,11 +325,13 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
           if (inst.state.kind === "shell" && !opts.title) {
             inst.state.title = shortTitle(msg.sessionName, inst.state.cwd);
           }
-          // Panes we don't own the size of adopt theirs; interactive attaches
-          // size the pane to the panel, like any real terminal client.
-          if (inst.state.paneSized && msg.cols && msg.rows) {
-            inst.term.resize(msg.cols, msg.rows);
-          } else if (inst.pendingResize) {
+          // Adopt the pane's size for the seed, which was captured at it. A
+          // pane we don't own the size of stays there; an interactive attach
+          // sizes the pane to the panel like any real terminal client — but
+          // only from a laid-out container (fitInstance), never from a guess,
+          // because the size we impose sticks to the agent's pane.
+          if (msg.cols && msg.rows && !inst.pendingResize) inst.term.resize(msg.cols, msg.rows);
+          if (!inst.state.paneSized && inst.pendingResize) {
             const { cols, rows } = inst.pendingResize;
             inst.pendingResize = null;
             ws.send(JSON.stringify({ type: "resize", cols, rows }));
@@ -336,8 +342,19 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
           // daemon refresh): reset and repaint at the new geometry — stale
           // columns are how spliced, garbled rows happen. The seed bytes
           // follow this frame on the wire.
-          inst.term.reset();
-          if (msg.cols && msg.rows) inst.term.resize(msg.cols, msg.rows);
+          //
+          // The reset rides the write queue. term.write() is asynchronous and
+          // term.reset() is not: called directly, it lands in the MIDDLE of
+          // the repaint the program sent for the old geometry, and the rest
+          // of that repaint then paints over the fresh seed — leftover
+          // fragments and misplaced text until the next full redraw. An
+          // empty write's callback fires exactly after everything queued
+          // before it and before anything queued after (the seed), so the
+          // old repaint completes, gets wiped, and the seed lands clean.
+          inst.term.write("", () => {
+            inst.term.reset();
+            if (msg.cols && msg.rows) inst.term.resize(msg.cols, msg.rows);
+          });
           bump();
         } else if (msg.type === "exit") {
           inst.state.status = "exited";
@@ -352,7 +369,7 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
       } catch {}
       return;
     }
-    inst.term.write(new Uint8Array(ev.data as ArrayBuffer));
+    inst.term.write(inst.filter.process(new Uint8Array(ev.data as ArrayBuffer)));
   };
 
   ws.onclose = () => {
@@ -501,10 +518,19 @@ function shortTitle(sessionName: string | undefined, cwd: string | undefined): s
   return sessionName?.replace(/^cast-term-/, "") ?? "shell";
 }
 
+// A fit below this is a container that hasn't laid out yet (a split
+// mid-transition, a hidden tab), not a size anyone asked for. An interactive
+// attach forwards its size to the agent's real pane, and a stray fit once
+// left one at 6x11 — so degenerate sizes are ignored, not applied.
+const MIN_FIT_COLS = 40;
+const MIN_FIT_ROWS = 3;
+
 function fitInstance(inst: TermInstance): void {
   if (!inst.container || inst.container.clientWidth < 20 || inst.container.clientHeight < 20) return;
   if (inst.state.paneSized) return; // fixed to pane size; CSS handles overflow
   try {
+    const dims = inst.fit.proposeDimensions();
+    if (!dims || dims.cols < MIN_FIT_COLS || dims.rows < MIN_FIT_ROWS) return;
     inst.fit.fit();
   } catch {}
 }
@@ -677,4 +703,11 @@ const helloLog: Array<Record<string, unknown>> = [];
 export function logHello(entry: Record<string, unknown>): void {
   helloLog.push({ ...entry, token: "<redacted>", at: Date.now() });
   if (helloLog.length > 20) helloLog.shift();
+}
+
+// Dev console access, like `__inboxStore`: `__terms()` lists live instances
+// (id, state, xterm) so a pane can be diffed against `tmux capture-pane`
+// when hunting rendering divergence.
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+  (window as any).__terms = () => [...instances.values()].map((i) => ({ id: i.state.id, state: i.state, term: i.term }));
 }

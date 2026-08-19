@@ -24,8 +24,8 @@ import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inb
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { isBlockedConversation, isSubagentConversation, nestParentIdOf, LOGIN_FLOW_STALE_MS } from "@codecast/convex/convex/ccAccountsShared";
-import { isLivenessStale, blockedContinueClientId, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
+import { isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { isLivenessStale, blockedContinueClientId, rankByHeadroom, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -33,13 +33,15 @@ import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
-import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
+import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
 import { partitionTriggerInbox, groupSessionsByTrigger, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
 import { sessionHasOpenQuestion } from "../lib/decisionQueue";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
+import { AnchorGlyph, AnchorScopePill } from "./anchor/AnchorIdentity";
+import { useAnchorIdentity } from "../hooks/useSyncAnchors";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
@@ -55,6 +57,7 @@ import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
 import { RESTART_GIVE_UP_AFTER_MS } from "../hooks/useSessionRestart";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
+import { useTitlebarHead } from "../hooks/useTitlebarHead";
 
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
@@ -549,6 +552,7 @@ function BlockedSessionsBanner({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [includeSubs, setIncludeSubs] = useState(false);
+  const [showMore, setShowMore] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const acknowledgeMutation = useMutation(api.accountSwitch.acknowledgeBlocked);
@@ -589,14 +593,29 @@ function BlockedSessionsBanner({
   const blockedSorted = [...blocked].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
 
   // Switch targets: saved profiles that aren't the active account on their
-  // device, deduped by name (the same profile may exist on several machines).
-  const switchTargets: { name: string; email?: string }[] = [];
+  // device, deduped by name (the same profile may exist on several machines —
+  // keep whichever copy carries a usage snapshot, so ranking has data). Ranked
+  // best-headroom-first with the same brain auto-switch trusts, so the first
+  // chip is the one auto-switch itself would pick.
+  const now = Date.now();
+  const switchTargets: { name: string; email?: string; usage?: CcUsage }[] = [];
   for (const device of accountData?.devices ?? []) {
     for (const p of device.profiles) {
       if (p.email && device.active_email && p.email === device.active_email) continue;
-      if (!switchTargets.some((t) => t.name === p.name)) switchTargets.push({ name: p.name, email: p.email });
+      const existing = switchTargets.find((t) => t.name === p.name);
+      if (!existing) switchTargets.push({ name: p.name, email: p.email, usage: p.usage });
+      else if (!existing.usage && p.usage) existing.usage = p.usage;
     }
   }
+  const rankedTargets = rankByHeadroom(switchTargets, now);
+  // The one account the banner recommends: best headroom, not already spent.
+  // Only when the incident is about THIS account's capacity (limits/auth) —
+  // a dropped connection or api error is not an account problem, so switching
+  // is never the recommended fix for those.
+  const bestTarget =
+    connCount === 0 && fatalCount === 0
+      ? rankedTargets.find((t) => !isUsageExhausted(t.usage, now))
+      : undefined;
 
   // The sign-in CTA's executor: the online primary (non-remote) machine — the
   // one whose keychain holds the login and whose browser the OAuth flow opens
@@ -757,17 +776,28 @@ function BlockedSessionsBanner({
       <span className="text-[11px] text-sol-text-dim">
         Switch account &amp; continue {acted.length === 1 ? "it" : `all ${acted.length}`}:
       </span>
-      {switchTargets.map((target) => (
-        <button
-          key={target.name}
-          onClick={() => handleSwitch(target.name)}
-          disabled={busy !== null}
-          title={`Switch this machine to ${target.email ?? target.name} and restart ${acted.length === 1 ? "the blocked session" : `all ${acted.length}`} on it`}
-          className="rounded bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-500 transition-colors hover:bg-amber-500/25 disabled:opacity-60"
-        >
-          {busy === target.name ? "Switching…" : target.name}
-        </button>
-      ))}
+      {rankedTargets.map((target) => {
+        const spent = isUsageExhausted(target.usage, now);
+        return (
+          <button
+            key={target.name}
+            onClick={() => handleSwitch(target.name)}
+            disabled={busy !== null}
+            title={
+              spent
+                ? `${target.email ?? target.name} is already at its usage limit — switching to it won't help until its window resets`
+                : `Switch this machine to ${target.email ?? target.name} and restart ${acted.length === 1 ? "the blocked session" : `all ${acted.length}`} on it`
+            }
+            className={`rounded px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-60 ${
+              spent
+                ? "bg-sol-bg-alt text-sol-text-dim hover:text-sol-text"
+                : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
+            }`}
+          >
+            {busy === target.name ? "Switching…" : target.name}
+          </button>
+        );
+      })}
     </div>
   );
 
@@ -793,6 +823,46 @@ function BlockedSessionsBanner({
       {plainContinue}
     </div>
   );
+
+  // ONE recommended action up front. The banner used to show every strategy
+  // at once — a chip per saved account plus restart plus plain continue read
+  // as a dozen competing choices, and the honest-but-cryptic "39 of 46" count
+  // split made the same-account pair look inconsistent. The primary is what
+  // auto-switch itself would do: switch to the saved account with the most
+  // headroom when the incident is about this account (limits/auth); otherwise
+  // recover in place — restart when some sessions are signed out (their
+  // processes hold the dead token, so a message alone can't reach them), plain
+  // "continue" when a nudge is all it takes. The full menu stays one click
+  // away behind "More options".
+  const countLabel = acted.length === 1 ? "it" : `all ${acted.length}`;
+  const primaryAction = bestTarget ? (
+    <button
+      onClick={() => handleSwitch(bestTarget.name)}
+      disabled={busy !== null}
+      title={`${bestTarget.email ?? bestTarget.name} has the most usage headroom of your ${switchTargets.length} saved account${switchTargets.length === 1 ? "" : "s"} — switch this machine to it and restart ${countLabel === "it" ? "the blocked session" : countLabel} on it`}
+      className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
+    >
+      {busy === bestTarget.name ? "Switching…" : `Switch to ${bestTarget.name} & continue ${countLabel}`}
+    </button>
+  ) : authCount > 0 ? (
+    <button
+      onClick={handleReviveCurrent}
+      disabled={busy !== null}
+      title={`Restart the blocked processes on the current account and send "continue" — ${authCount === acted.length ? "signed-out sessions" : `the ${authCount} signed out`} can't be reached by a message alone`}
+      className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
+    >
+      {busy === "revive" ? "Restarting…" : `Restart & continue ${countLabel}`}
+    </button>
+  ) : nudgeCount > 0 ? (
+    <button
+      onClick={handleContinueAll}
+      disabled={busy !== null}
+      title={`Send "continue" to each blocked session — no restart, no account change${limitCount > 0 ? "; they resume once the limit resets" : ""}`}
+      className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
+    >
+      {`Send "continue" to ${countLabel}`}
+    </button>
+  ) : null;
 
   // The permanent decision: clear the banner flag on these sessions so they
   // leave the blocked set for good (only a NEW banner re-flags them). Local
@@ -938,30 +1008,44 @@ function BlockedSessionsBanner({
         </div>
       )}
       <div className="mt-2 flex flex-col gap-1.5">
-        {/* Dropped connections and fatal api errors retry with a plain
-            "continue", so that row leads; otherwise switching accounts is the
-            faster remedy and its row leads. */}
-        {connCount > 0 || fatalCount > 0 ? (
-          <>
-            {currentAccountRow}
-            {switchRow}
-          </>
-        ) : (
-          <>
-            {switchRow}
-            {currentAccountRow}
-          </>
-        )}
-        <div className="flex justify-end">
+        <div className="flex flex-wrap items-center gap-2">
+          {primaryAction}
           <button
-            onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
-            disabled={busy !== null}
-            title="Never restart these — clear all of them from the blocked set permanently"
-            className="rounded px-2 py-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
+            onClick={() => setShowMore((v) => !v)}
+            className="rounded px-1.5 py-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+            title="Every recovery option: other saved accounts, restart vs a plain continue, permanent dismiss"
           >
-            {blocked.length === 1 ? "Dismiss it permanently" : `Dismiss all ${blocked.length} permanently`}
+            {showMore ? "Fewer options" : "More options"}
           </button>
         </div>
+        {showMore && (
+          <>
+            {/* Dropped connections and fatal api errors retry with a plain
+                "continue", so that row leads; otherwise switching accounts is
+                the faster remedy and its row leads. */}
+            {connCount > 0 || fatalCount > 0 ? (
+              <>
+                {currentAccountRow}
+                {switchRow}
+              </>
+            ) : (
+              <>
+                {switchRow}
+                {currentAccountRow}
+              </>
+            )}
+            <div className="flex justify-end">
+              <button
+                onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
+                disabled={busy !== null}
+                title="Never restart these — clear all of them from the blocked set permanently"
+                className="rounded px-2 py-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
+              >
+                {blocked.length === 1 ? "Dismiss it permanently" : `Dismiss all ${blocked.length} permanently`}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1469,15 +1553,17 @@ const TriggerStrip = memo(function TriggerStrip({ rows, activeSessionId, onOpen 
 });
 
 // -- Monitor bars (live background watches) --
-// A live Monitor (the harness background-watch tool) stacks under its session
-// card exactly like the schedule bars above: same ↳ child idiom and two-line
-// header + subrow anatomy, in monitor blue so it can't blur into schedule
-// orange or subagent violet. Rows derive client-side from the conversation's
-// loaded message window (monitorRowsFor) — no server row exists for monitors,
-// so a conversation whose messages aren't in the store shows no bars rather
-// than guessed state. "Watching" is only claimed while the session itself is
-// believable: not stopped, and inside the shared status-trust TTL — the same
-// predicate the card's own "working" claims use, so the two can't disagree.
+// A live Monitor (the harness background-watch tool) or background command
+// stacks under its session card exactly like the schedule bars above: same ↳
+// child idiom and two-line header + subrow anatomy, in monitor blue so it
+// can't blur into schedule orange or subagent violet. Rows come from two
+// sources merged (liveWatchRowsFor): the conversation's loaded message window
+// (the watch's own lifecycle) and the daemon's verified open-task report on
+// the row (open_tasks — draws the row without messages, and retires a watch
+// the daemon found dead). "Watching" is only claimed while the session can
+// still host the watch (isWatchHostDead: not killed, not stopped, spoken for
+// by a daemon) — NOT the card's status-trust decay, which would hide a live
+// poll on a long build the moment the session went quiet for an hour.
 // A card with many live watchers (a deploy fanning out `until grep` shells
 // can stand eight at once) would stack that many bars — cap the stack and
 // fold the rest behind a count row.
@@ -1489,11 +1575,17 @@ const MAX_MONITOR_BARS = 3;
 // the row's enriched scalars (conversations.workflow_run_id → workflow_runs),
 // so it shows even when the launch message isn't in the loaded window. Paused
 // runs stay the card's magenta Gate chip; this bar carries running/pending.
+// Whether the card wears the workflow bar — shared with the Dormant fallback
+// row so the two can't disagree about "this card already shows its wake".
+function workflowBarVisible(session: InboxSession): boolean {
+  if (!session.is_workflow_primary || !session.workflow_run_id) return false;
+  return session.workflow_run_status === "running" || session.workflow_run_status === "pending";
+}
+
 function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: boolean }) {
   const router = useRouter();
   const now = useCoarseNow(30_000);
-  if (!session.is_workflow_primary || !session.workflow_run_id) return null;
-  if (session.workflow_run_status !== "running" && session.workflow_run_status !== "pending") return null;
+  if (!workflowBarVisible(session)) return null;
   const done = session.workflow_run_agents_done ?? 0;
   const total = session.workflow_run_agents_total ?? 0;
   const ariaLabel = "Workflow — running inside this session";
@@ -1551,13 +1643,15 @@ function MonitorBars({ session, isActive, onOpen }: {
 }) {
   const messages = useInboxStore((st) => st.messages[session._id]);
   const now = useCoarseNow(30_000);
-  const rows = useMemo(() => monitorRowsFor(messages), [messages]);
   const [expanded, setExpanded] = useState(false);
-  if (session.agent_status === "stopped" || isLivenessStale(session, now)) return null;
-  // A live session can still be showing watches armed by a process it has since
-  // replaced (a restart takes its background shells with it but leaves the rows
-  // un-notified) — fence those out rather than stacking dead bars.
-  const watching = rows.filter((r) => effectiveMonitorStatus(r, now, session.agent_started_at ?? undefined) === "watching");
+  // Message-derived rows (own lifecycle + restart fence) merged with the
+  // daemon's verified report — the report supplies rows the loaded window
+  // lacks and retires rows the daemon found dead (liveWatchRowsFor).
+  const watching = useMemo(
+    () => (isWatchHostDead(session, now) ? [] : liveWatchRowsFor(session, messages, now)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the row fields the merge reads
+    [messages, now, session.open_tasks, session.open_tasks_at, session.agent_started_at, session.agent_status, session.inbox_killed_at, session.updated_at],
+  );
   if (watching.length === 0) return null;
   const shown = expanded ? watching : watching.slice(0, MAX_MONITOR_BARS);
   const hiddenCount = watching.length - shown.length;
@@ -1655,6 +1749,86 @@ function MonitorBars({ session, isActive, onOpen }: {
         </button>
       )}
     </>
+  );
+}
+
+// -- Dormant reason row --
+// A card in DORMANT is parked on a machine wake, and the wake must be visible
+// as a ↳ child row: the trigger bar for an armed schedule, the workflow bar
+// for a run in flight, a Background/Monitor bar for an open watch. When none
+// of those has anything to draw — the messages that would show the watch are
+// not loaded and no daemon report exists, the agent declared dormancy on a
+// wake outside this session (another session's reply, an external job), or
+// the user parked the card — this row states the reason from what the row
+// itself carries, so a Dormant card never sits there unexplained.
+function DormantReasonRow({ session, isActive, hasOtherRows, onOpen }: {
+  session: InboxSession;
+  isActive: boolean;
+  hasOtherRows: boolean;
+  onOpen: (session: InboxSession) => void;
+}) {
+  const messages = useInboxStore((st) => st.messages[session._id]);
+  const now = useCoarseNow(30_000);
+  const watchRows = useMemo(
+    () => (isWatchHostDead(session, now) ? 0 : liveWatchRowsFor(session, messages, now).length),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the row fields the merge reads
+    [messages, now, session.open_tasks, session.open_tasks_at, session.agent_started_at, session.agent_status, session.inbox_killed_at, session.updated_at],
+  );
+  if (hasOtherRows || watchRows > 0) return null;
+  const ts = threadStateView(session, session.message_count ?? 0, now);
+  let family: string;
+  let title: string;
+  let detail: string;
+  if (session.agent_status === "waiting") {
+    family = "Background";
+    title = "waiting on background work";
+    detail = "the turn ended on an open task — the agent resumes when it finishes";
+  } else if (session.agent_status === "dormant") {
+    family = "Dormant";
+    title = ts?.headline || "parked on a machine wake";
+    detail = ts?.provenance ? `declared by the agent · ${ts.provenance}` : "declared by the agent";
+  } else if (session.is_dormant) {
+    family = "Parked";
+    title = "parked by you";
+    detail = "a machine wake resumes it; open it to un-park";
+  } else {
+    family = "Dormant";
+    title = ts?.headline || "waiting on a machine wake";
+    detail = ts?.provenance || "";
+  }
+  const ariaLabel = `${family} — why this session is parked`;
+  return (
+    <div className={`group/dormrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
+      <button
+        className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
+        onClick={() => onOpen(session)}
+        title="Open the session"
+      >
+        <div className="flex gap-1.5 min-w-0">
+          <span className="flex items-center mt-[2px] shrink-0 text-sol-blue/70" role="img" aria-label={ariaLabel}>
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <title>{ariaLabel}</title>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+            </svg>
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
+              <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{title}</span>
+              <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-blue/10 text-sol-blue border-sol-blue/30">
+                parked
+              </span>
+            </div>
+            {detail && (
+              <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
+                <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-mono text-sol-text-dim">{detail}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </button>
+    </div>
   );
 }
 
@@ -2041,6 +2215,10 @@ export const SessionCard = memo(function SessionCard({
     () => resolveSessionAuthor(session, convMeta, currentUser, teamMembers),
     [session.user_id, session.author_name, session.author_avatar, session.acting_user_id, convMeta, currentUser, teamMembers],
   );
+  // An anchor's own row is marked as such — the glyph in place of the agent
+  // icon, and the scope pill (Personal / team name) beside the title — so a
+  // standing member never reads as just another session.
+  const anchorIdentity = useAnchorIdentity(session.is_anchor ? (session.anchor_id ?? null) : null);
   // A teammate's session (surfaced by team mode) is READ-ONLY here: dismiss /
   // stash / pin / kill all mutate GLOBAL conversation fields, so acting on a
   // foreign card would hide or tear down the session in the owner's inbox too.
@@ -2325,7 +2503,7 @@ export const SessionCard = memo(function SessionCard({
               : isDismissed
                 ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
                 // The agent's declared status tints the resting row: amber for
-                // "needs input", green for "complete". Liveness outranks it —
+                // "needs input", violet for "complete". Liveness outranks it —
                 // a running agent isn't blocked-on-you right now. (A stale
                 // state has no view at all, so it can't tint anything.)
                 : stateView?.status && stateView.status !== "working" && !session.implementation_session
@@ -2346,12 +2524,17 @@ export const SessionCard = memo(function SessionCard({
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text-muted" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
-          {showAgentIcon && (
+          {session.is_anchor ? (
+            <span className="flex-shrink-0 flex items-center text-sol-cyan" title="Anchor — a standing agent member">
+              <AnchorGlyph className="w-3.5 h-3.5" />
+            </span>
+          ) : showAgentIcon && (
             <span className="flex-shrink-0 flex items-center" title={formatAgentType(session.agent_type || "claude_code")}>
               <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
             </span>
           )}
           <span className="truncate min-w-0">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
+          {session.is_anchor && anchorIdentity && <AnchorScopePill anchor={anchorIdentity} className="flex-shrink-0" />}
           {/* Favorite affordance — AFTER the title so it never shifts the name.
               Solid (soft amber) when favorited; otherwise a very subdued star that
               only surfaces on row-hover and lights up on direct hover. Toggle also
@@ -3008,6 +3191,7 @@ export function SessionListPanel({
     // into their own Questions section.
     s => decisionsSectionSig(s.sessionDecisions),
   ]);
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
   const handleKillDismissed = useCallback((id: string) => {
     soundKill();
@@ -4149,6 +4333,17 @@ export function SessionListPanel({
                 {viewMode !== "trigger" && renderScheduleBars(session)}
                 <WorkflowBar session={session} isActive={session._id === activeSessionId} />
                 <MonitorBars session={session} isActive={session._id === activeSessionId} onOpen={handleSelect} />
+                {/* DORMANT invariant: a parked card always shows its wake as a
+                    child row. When no concrete bar above has anything to draw,
+                    this row states the reason from the row's own fields. */}
+                {key === "dormant" && (
+                  <DormantReasonRow
+                    session={session}
+                    isActive={session._id === activeSessionId}
+                    hasOtherRows={(viewMode !== "trigger" && scheduleBarRowsFor(session).length > 0) || workflowBarVisible(session)}
+                    onOpen={handleSelect}
+                  />
+                )}
                 {visibleSubs.map((sub) => (
                   <SessionCard
                     key={sub._id}
@@ -4200,7 +4395,7 @@ export function SessionListPanel({
 
   return (
     <div data-sv-rail className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
-      <div className="cc-panel__head min-w-0">
+      <div ref={titlebarRef} className="cc-panel__head min-w-0">
         {favoritesView && (
           <div className="flex items-center gap-1.5 flex-shrink-0 text-sol-yellow mr-0.5" title="Kept sessions — your long-term shelf">
             <Star className="w-3.5 h-3.5 fill-current" />

@@ -15,7 +15,8 @@ import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { TaskMenuItems } from "../../components/menus/ObjectContextMenus";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
-import { LivenessDot, ActiveSessionBadge, taskLivenessState } from "../../components/LivenessDot";
+import { LivenessDot, ActiveSessionBadge } from "../../components/LivenessDot";
+import { taskLivenessState } from "../../lib/liveness";
 
 const api = _api as any;
 import { AuthGuard } from "../../components/AuthGuard";

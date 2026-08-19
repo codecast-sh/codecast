@@ -2,7 +2,8 @@ import { useRef } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { InboxSession, getProjectName } from "../store/inboxStore";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { LivenessDot, sessionLivenessState } from "./LivenessDot";
+import { LivenessDot } from "./LivenessDot";
+import { sessionLivenessState } from "../lib/liveness";
 
 function StatusDot({ session }: { session: InboxSession }) {
   return <LivenessDot state={sessionLivenessState(session)} />;

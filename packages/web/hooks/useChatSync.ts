@@ -350,10 +350,12 @@ export function useChatMembers(): { members: ChatMember[]; byId: Map<string, Cha
     (s: any) => s.currentUser?._id,
     (s: any) => s.currentUser?.name,
     (s: any) => s.currentUser?.image,
+    (s: any) => anchorBotsSig(s.anchors),
   ]);
   const viewerId = String(s.currentUser?._id ?? "");
   const roster: any[] = s.teamMembers ?? [];
   const sig = memberListSig(roster);
+  const botsSig = anchorBotsSig((s as any).anchors);
   const me = s.currentUser;
   return useMemo(() => {
     const byId = new Map<string, ChatMember>();
@@ -361,11 +363,40 @@ export function useChatMembers(): { members: ChatMember[]; byId: Map<string, Cha
     // The viewer is in their own team roster, but a just-joined client can hold
     // the user before the roster lands.
     if (viewerId && !byId.has(viewerId) && me) byId.set(viewerId, me as ChatMember);
+    // Handles and pickers come from the ROSTER only: a team anchor is on it,
+    // a personal one is not (it belongs to one person, not the team).
     const members = [...byId.values()];
-    return { members, byId, viewerId, handles: buildHandleSets(members, viewerId) };
-    // The signature is the dep, not the array: teamMembers re-pushes on heartbeats.
+    const handles = buildHandleSets(members, viewerId);
+    // Names and faces come from the roster PLUS every anchor bot the viewer can
+    // see (lib/chatViews' known-agent registry, kept by the anchors feeder),
+    // so a DM from a personal anchor is titled with its name rather than
+    // "Someone". Lookup only — it never becomes a mention target here.
+    for (const bot of anchorBots((s as any).anchors)) {
+      if (!byId.has(bot._id)) byId.set(bot._id, bot);
+    }
+    return { members, byId, viewerId, handles };
+    // The signatures are the deps, not the arrays: both collections re-push.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig, viewerId, me]);
+  }, [sig, botsSig, viewerId, me]);
+}
+
+function anchorBots(anchors: Record<string, any> | undefined): ChatMember[] {
+  const out: ChatMember[] = [];
+  for (const id in anchors ?? {}) {
+    const a = anchors![id];
+    if (!a?.bot_user_id || a.status === "decommissioned") continue;
+    out.push({ _id: String(a.bot_user_id), name: a.bot_name ?? a.name ?? "Anchor", image: a.bot_avatar ?? null, is_bot: true } as ChatMember);
+  }
+  return out;
+}
+
+function anchorBotsSig(anchors: Record<string, any> | undefined): string {
+  let out = "";
+  for (const id in anchors ?? {}) {
+    const a = anchors![id];
+    out += `${a?.bot_user_id ?? ""}|${a?.bot_name ?? ""}|${a?.bot_avatar ?? ""}|${a?.status ?? ""}\n`;
+  }
+  return out;
 }
 
 /** Open (or create) the DM with these teammates and go there. Local-first:

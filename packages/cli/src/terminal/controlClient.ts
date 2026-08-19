@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "../proc.js";
 import { ControlModeParser, toSendKeysHex, type ControlEvent } from "./controlProtocol.js";
+import { tmuxRun } from "../tmux.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const COMMAND_TIMEOUT_MS = 5000;
@@ -32,6 +33,86 @@ export type ControlClientMode =
  * pane out from under the agent (the daemon screen-scrapes those panes at a
  * known width), and `read-only` unless interaction was explicitly requested.
  */
+// Pane state a screen capture cannot carry. capture-pane hands back cells;
+// the modes the program set (cursor visibility, alternate screen, mouse
+// tracking, keypad) live only in tmux's screen model. A seed that omits them
+// leaves xterm guessing — and after a reseed's reset() it guesses "off",
+// so a Claude Code pane in mouse mode lost its wheel and clicks, and a
+// cursor hidden mid-frame stayed hidden. Replaying them makes the seed a
+// faithful snapshot: what tmux shows, xterm shows.
+export const SEED_STATE_FIELDS = [
+  "cursor_x",
+  "cursor_y",
+  "cursor_flag",
+  "alternate_on",
+  "mouse_any_flag",
+  "mouse_button_flag",
+  "mouse_standard_flag",
+  "mouse_sgr_flag",
+  "keypad_cursor_flag",
+  "keypad_flag",
+] as const;
+
+export interface SeedState {
+  cursorX: number;
+  cursorY: number;
+  cursorVisible: boolean;
+  alternate: boolean;
+  /** tmux tracks one mouse mode at a time: 1003 (any), 1002 (button), 1000 (standard). */
+  mouse: "any" | "button" | "standard" | null;
+  mouseSgr: boolean;
+  keypadCursor: boolean;
+  keypad: boolean;
+}
+
+export function parseSeedState(line: string): SeedState {
+  const v = line.split("|").map((x) => parseInt(x, 10) || 0);
+  const at = (f: (typeof SEED_STATE_FIELDS)[number]) => v[SEED_STATE_FIELDS.indexOf(f)] ?? 0;
+  return {
+    cursorX: at("cursor_x"),
+    cursorY: at("cursor_y"),
+    // Missing/garbled state (an old tmux, an empty reply) reads as visible.
+    cursorVisible: line === "" || at("cursor_flag") !== 0,
+    alternate: at("alternate_on") === 1,
+    mouse: at("mouse_any_flag") ? "any" : at("mouse_button_flag") ? "button" : at("mouse_standard_flag") ? "standard" : null,
+    mouseSgr: at("mouse_sgr_flag") === 1,
+    keypadCursor: at("keypad_cursor_flag") === 1,
+    keypad: at("keypad_flag") === 1,
+  };
+}
+
+/**
+ * The bytes that repaint a captured screen into an xterm of `paneRows` rows:
+ * alternate-screen switch first (so the content lands in the right buffer),
+ * the captured rows padded to a full screen, the cursor walked into place,
+ * then the modes tmux reports. Pure: what controlClient captures is what
+ * this lays out.
+ */
+export function buildSeed(captured: string[], paneRows: number, state: SeedState): string {
+  // Trim trailing blank rows, then pad back to a full screen so the visible
+  // area occupies exactly `paneRows` xterm rows and cursor math is absolute.
+  let lines = captured;
+  let last = lines.length - 1;
+  while (last >= 0 && lines[last] === "") last--;
+  lines = lines.slice(0, last + 1);
+  const pad = Math.max(0, paneRows - Math.max(lines.length, 1));
+
+  let text = state.alternate ? "\x1b[?1049h" : "";
+  text += lines.join("\r\n");
+  if (pad > 0) text += "\r\n".repeat(pad);
+  // Cursor sits at the last screen row after the write; walk it into place.
+  const up = paneRows - 1 - Math.min(state.cursorY, paneRows - 1);
+  text += "\x1b[0m\r"; // reset any dangling attributes from the capture
+  if (up > 0) text += `\x1b[${up}A`;
+  if (state.cursorX > 0) text += `\x1b[${state.cursorX}C`;
+  if (state.mouse) text += `\x1b[?${state.mouse === "any" ? 1003 : state.mouse === "button" ? 1002 : 1000}h`;
+  if (state.mouseSgr) text += "\x1b[?1006h";
+  if (state.keypadCursor) text += "\x1b[?1h";
+  if (state.keypad) text += "\x1b=";
+  text += state.cursorVisible ? "\x1b[?25h" : "\x1b[?25l";
+  return text;
+}
+
 export class TmuxControlClient {
   private child: ChildProcessWithoutNullStreams | null = null;
   private parser = new ControlModeParser();
@@ -40,6 +121,9 @@ export class TmuxControlClient {
   private seeded = false;
   private closed = false;
   private reseedTimer: NodeJS.Timeout | null = null;
+  /** Interactive attach only: the window's size before this viewer reshaped
+   *  it, put back on detach (see close). */
+  private restoreSize: string | null = null;
 
   constructor(
     private mode: ControlClientMode,
@@ -48,6 +132,11 @@ export class TmuxControlClient {
 
   get pane(): string | null {
     return this.paneId;
+  }
+
+  /** Interactive attach: the window size handed back on detach. */
+  get restoresTo(): string | null {
+    return this.restoreSize;
   }
 
   get isReadOnly(): boolean {
@@ -129,9 +218,18 @@ export class TmuxControlClient {
       await this.command(`set-option -q -t ${shellSafe(this.mode.sessionName)} status off`);
       await this.command(`refresh-client -C ${cols}x${rows}`);
     } else if (!this.mode.readOnly) {
-      // Interactive attach: adopt the viewer's geometry up front, so the seed
-      // is captured at the size the panel will actually render.
-      await this.command(`refresh-client -C ${cols}x${rows}`);
+      // Interactive attach reshapes the agent's real pane, like any terminal
+      // client would — but the daemon-owned pane usually has NO other client,
+      // so with `window-size largest` whatever size we leave behind STICKS
+      // after we detach (a 6x11 pane was found this way: the hello carried a
+      // pre-layout guess). Two rules follow. Never resize from the hello: the
+      // viewer sends a real size once its container is laid out, and the
+      // seed captured at the pane's own size renders correctly meanwhile
+      // (the web adopts that size until then). And remember the size we
+      // found so close() can put it back.
+      const size = await this.command("display-message -p -F '#{window_width}x#{window_height}'");
+      const found = (size.lines[0] ?? "").trim();
+      if (/^\d+x\d+$/.test(found)) this.restoreSize = found;
     }
 
     // NB: separator must be printable — tmux sanitizes control chars (tabs
@@ -162,29 +260,11 @@ export class TmuxControlClient {
     // `-S -` = from the very start of the pane's history: the pane's own
     // history-limit is the real cap, and xterm's scrollback holds the rest.
     const cap = await this.command(`capture-pane -peqJ -t ${target} -S -`);
-    const cur = await this.command(`display-message -p -t ${target} -F '#{cursor_x}|#{cursor_y}'`);
+    const cur = await this.command(
+      `display-message -p -t ${target} -F '${SEED_STATE_FIELDS.map((f) => `#{${f}}`).join("|")}'`,
+    );
     if (!cap.ok) return Buffer.alloc(0);
-
-    // Trim trailing blank rows, then pad back to a full screen so the visible
-    // area occupies exactly `paneRows` xterm rows and cursor math is absolute.
-    let lines = cap.lines;
-    let last = lines.length - 1;
-    while (last >= 0 && lines[last] === "") last--;
-    lines = lines.slice(0, last + 1);
-    const pad = Math.max(0, paneRows - Math.max(lines.length, 1));
-
-    const [cxs, cys] = (cur.lines[0] ?? "").split("|");
-    const cursorX = parseInt(cxs ?? "", 10) || 0;
-    const cursorY = parseInt(cys ?? "", 10) || 0;
-
-    let text = lines.join("\r\n");
-    if (pad > 0) text += "\r\n".repeat(pad);
-    // Cursor sits at the last screen row after the write; walk it into place.
-    const up = paneRows - 1 - Math.min(cursorY, paneRows - 1);
-    text += "\x1b[0m\r"; // reset any dangling attributes from the capture
-    if (up > 0) text += `\x1b[${up}A`;
-    if (cursorX > 0) text += `\x1b[${cursorX}C`;
-    return Buffer.from(text, "utf8");
+    return Buffer.from(buildSeed(cap.lines, paneRows, parseSeedState(cur.lines[0] ?? "")), "utf8");
   }
 
   private handleEvent(ev: ControlEvent): void {
@@ -288,10 +368,46 @@ export class TmuxControlClient {
     this.failPending();
     if (this.child) {
       try {
-        this.child.stdin.write("detach-client\n");
+        // Hand the pane back at the size we found it. Sizing our own client
+        // (not resize-window, which flips the window to manual sizing) lets
+        // `window-size largest` snap the window back before we go, and a
+        // client that attaches later still gets to impose its own size.
+        const restore = this.restoreSize ? `refresh-client -C ${this.restoreSize}\n` : "";
+        this.child.stdin.write(`${restore}detach-client\n`);
       } catch {}
-      this.destroyChild();
+      // detach-client ends the control client by itself; give the commands
+      // a moment to reach the server before falling back to a signal, or
+      // the restore races the kill.
+      const child = this.child;
+      const fallback = setTimeout(() => this.destroyChild(), 1000);
+      fallback.unref?.();
+      child.once("exit", () => {
+        clearTimeout(fallback);
+        if (this.child === child) this.child = null;
+        this.verifyRestore();
+      });
     }
+  }
+
+  /**
+   * The in-band restore can be lost — the daemon shutting down under us, a
+   * child killed before its stdin drained. Once our client is gone, check
+   * the window and repair it from outside if needed: resize-window flips the
+   * window to manual sizing, so the option is unset again right after and a
+   * later real client still gets to impose its size.
+   */
+  private verifyRestore(): void {
+    if (!this.restoreSize || this.mode.kind !== "attach") return;
+    const target = this.mode.target;
+    const [w, h] = this.restoreSize.split("x");
+    try {
+      const now = tmuxRun(["display-message", "-p", "-t", target, "#{window_width}x#{window_height}|#{session_attached}"]).stdout.trim();
+      const [size, attached] = now.split("|");
+      // Another client is attached: the window is theirs to size.
+      if (!size || size === this.restoreSize || parseInt(attached ?? "0", 10) > 0) return;
+      tmuxRun(["resize-window", "-t", target, "-x", w!, "-y", h!]);
+      tmuxRun(["set-option", "-w", "-t", target, "-u", "window-size"]);
+    } catch {}
   }
 
   private destroyChild(): void {

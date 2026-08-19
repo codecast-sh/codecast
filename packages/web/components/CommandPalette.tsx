@@ -91,8 +91,12 @@ import {
   Repeat,
   Zap,
   CornerDownRight,
+  Headphones,
+  Sparkles,
 } from "lucide-react";
+import { AnchorGlyph } from "./anchor/AnchorIdentity";
 import { setTaskParent, closeTaskWithGuard } from "../lib/taskActions";
+import type { PalettePickKind, PalettePickTarget } from "../lib/palettePick";
 
 const api = _api as any;
 
@@ -173,6 +177,7 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   icon: React.ComponentType<{ className?: string }>;
   keywords: string;
 }> = [
+  { action: "anchor.toggle", label: "Talk to Anchor", icon: AnchorGlyph, keywords: "agent assistant bot standing member ask personal team" },
   { action: "terminal.toggle", label: "Toggle terminal", icon: Terminal, keywords: "shell console panel tmux" },
   { action: "ui.zenToggle", label: "Toggle zen mode", icon: Focus, keywords: "focus minimal distraction free" },
   { action: "sidebar.toggleLeft", label: "Toggle left sidebar", icon: PanelLeft, keywords: "nav collapse" },
@@ -526,8 +531,7 @@ function ActionSubmenu({
     }
     if (mode === "model") {
       // Model + effort options for the target session's agent, one flat
-      // numbered list. The blank/live rail picks which models qualify
-      // (Sonnet 1M is reachable only via the in-place picker).
+      // numbered list. The blank rail adds the "default" effort stop.
       const s0 = target as any;
       const agentType = s0?.agent_type as string | undefined;
       const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
@@ -537,15 +541,11 @@ function ActionSubmenu({
       const curEffort = s0?.effort as string | undefined;
       const rows: any[] = [];
       // Dynamic clients: Default + the live featured head; the query also
-      // searches the device's full inventory below. Menu-dynamic (claude) on a
-      // live session: Default + the harvested /model menu rows.
+      // searches the device's full inventory below.
       const models = dynamicModels.dynamic
         ? [cfg.models[0], ...dynamicModels.featured]
-        : !blank && dynamicModels.menuRows.length > 0
-          ? [cfg.models[0], ...dynamicModels.menuRows]
-          : cfg.models;
+        : cfg.models;
       for (const m of models) {
-        if (blank && m.midSessionOnly) continue;
         rows.push({ key: `model:${m.key}`, label: m.label, sub: m.hint, active: m.key === curModelKey, icon: Cpu });
       }
       for (const level of [...(blank ? ["default"] : []), ...cfg.efforts]) {
@@ -1078,13 +1078,17 @@ function matchEntities(
   teamId: string | undefined,
   cap: number,
   exclude?: (r: MentionRecord) => boolean,
+  // With no query, list the most recent records instead of nothing (pick mode
+  // browses; the root palette stays session-focused when empty).
+  browseWhenEmpty = false,
 ): MentionRecord[] {
   const q = query.trim().toLowerCase();
-  if (!q) return [];
+  if (!q && !browseWhenEmpty) return [];
   const ranked: Array<{ rec: MentionRecord; rank: number }> = [];
   for (const rec of Object.values(records)) {
     if (exclude?.(rec)) continue;
     if (!inActiveWorkspace(rec, teamId)) continue;
+    if (!q) { ranked.push({ rec, rank: 0 }); continue; }
     const titleRank = score(rec.title || "", q);
     const goalRank = rec.goal ? score(rec.goal, q) : Infinity;
     // File-synced docs are titled from their content heading, not their filename;
@@ -1134,7 +1138,14 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
 
-  const { open: paletteOpen, targets, targetType, initialMode, initialQuery: paletteInitialQuery } = useInboxStore((s) => s.palette);
+  const { open: paletteOpen, targets, targetType, initialMode, initialQuery: paletteInitialQuery, pick } = useInboxStore((s) => s.palette);
+  // Pick mode (lib/palettePick.ts): the palette is an entity chooser for a
+  // caller. Only the allowed entity groups render, selection reports back
+  // through pick.onPick instead of navigating, and the caller's extra rows
+  // (e.g. "new agent session") sit on top.
+  const picking = !!pick;
+  const pickAllows = useCallback((kind: PalettePickKind) => !pick || pick.kinds.includes(kind), [pick]);
+  const [pickNote, setPickNote] = useState("");
   const closePalette = useInboxStore((s) => s.closePalette);
   const togglePalette = useInboxStore((s) => s.togglePalette);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
@@ -1310,16 +1321,16 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // query — the empty palette stays session-focused. Plan-type docs are excluded
   // from Documents so they don't double up with the Plans group.
   const taskMatches = useMemo(
-    () => matchEntities(mentionIndex.tasks as any, query, activeTeamId, ENTITY_RENDER_CAP, (t) => t.status === "dropped"),
-    [mentionIndex, query, activeTeamId],
+    () => matchEntities(mentionIndex.tasks as any, query, activeTeamId, ENTITY_RENDER_CAP, (t) => t.status === "dropped", picking && pickAllows("task")),
+    [mentionIndex, query, activeTeamId, picking, pickAllows],
   );
   const docMatches = useMemo(
-    () => matchEntities(mentionIndex.docs as any, query, activeTeamId, ENTITY_RENDER_CAP, (d) => d.doc_type === "plan"),
-    [mentionIndex, query, activeTeamId],
+    () => matchEntities(mentionIndex.docs as any, query, activeTeamId, ENTITY_RENDER_CAP, (d) => d.doc_type === "plan", picking && pickAllows("doc")),
+    [mentionIndex, query, activeTeamId, picking, pickAllows],
   );
   const planMatches = useMemo(
-    () => matchEntities(mentionIndex.plans as any, query, activeTeamId, ENTITY_RENDER_CAP, (p) => p.status === "abandoned"),
-    [mentionIndex, query, activeTeamId],
+    () => matchEntities(mentionIndex.plans as any, query, activeTeamId, ENTITY_RENDER_CAP, (p) => p.status === "abandoned", picking && pickAllows("plan")),
+    [mentionIndex, query, activeTeamId, picking, pickAllows],
   );
 
   // Debounced search for async conversation results
@@ -1480,6 +1491,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       setQuery(paletteInitialQuery || "");
       setActionMode(initialMode !== "root" ? initialMode as ActionMode : null);
       setEnteredViaRoot(false);
+      setPickNote("");
     }
   }, [open, initialMode, paletteInitialQuery]);
 
@@ -1603,6 +1615,33 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       closePalette();
     },
     [router, pathname, standalone, closePalette]
+  );
+
+  // Pick mode: report the choice to the caller and close. Session rows go
+  // through chooseSession so every session group (favorites, bookmarks,
+  // recents, search) picks the same way it navigates.
+  const finishPick = useCallback(
+    (target: PalettePickTarget) => {
+      if (!pick) return;
+      const note = pickNote.trim();
+      pick.onPick(target, { note: note || undefined, query: query.trim() });
+      closePalette();
+    },
+    [pick, pickNote, query, closePalette],
+  );
+  const chooseSession = useCallback(
+    (conv: Parameters<typeof navigateToSession>[0], opts?: Parameters<typeof navigateToSession>[1]) => {
+      if (pick) return finishPick({ kind: "session", id: conv._id, label: cleanTitle(conv.title || "Untitled") });
+      navigateToSession(conv, opts);
+    },
+    [pick, finishPick, navigateToSession],
+  );
+  const chooseEntity = useCallback(
+    (kind: Exclude<PalettePickKind, "session">, rec: { _id: string; title?: string }, path: string) => {
+      if (pick) return finishPick({ kind, id: rec._id, label: rec.title || "Untitled" });
+      navigate(path);
+    },
+    [pick, finishPick, navigate],
   );
 
   const handleRecentVisitSelect = useCallback(
@@ -1869,13 +1908,18 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
       filter={(value, search) => {
         // Async search results and compose are always relevant — bypass cmdk filter
-        if (value.startsWith("__search__") || value.startsWith("__compose__") || value.startsWith("__recent__") || value.startsWith("__entity__") || value.startsWith("__chat__")) return 1;
+        if (value.startsWith("__search__") || value.startsWith("__compose__") || value.startsWith("__recent__") || value.startsWith("__entity__") || value.startsWith("__chat__") || value.startsWith("__pick__")) return 1;
         const idx = value.indexOf("|||");
         const searchable = idx >= 0 ? value.slice(0, idx) : value;
         return searchable.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
       }}
       loop
     >
+      {pick && (
+        <div className="px-4 pt-3 pb-0">
+          <div className="text-xs font-mono text-sol-text-dim truncate">{pick.title}</div>
+        </div>
+      )}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-sol-border/60">
         <div className="text-sol-text-dim">
           <NavIcon type="search" className="w-[18px] h-[18px]" />
@@ -1883,7 +1927,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         <CommandPrimitive.Input
           value={query}
           onValueChange={setQuery}
-          placeholder={hasTargets ? "Action or jump to..." : "Jump to..."}
+          placeholder={pick ? "Search sessions, docs..." : hasTargets ? "Action or jump to..." : "Jump to..."}
           className="flex-1 bg-transparent text-[15px] text-sol-text placeholder:text-sol-text-dim/60 outline-none"
           autoFocus
           onKeyDown={(e) => {
@@ -1895,6 +1939,16 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         />
         <KeyCap>Esc</KeyCap>
       </div>
+      {pick?.notePlaceholder && (
+        <div className="px-4 py-2 border-b border-sol-border/60">
+          <input
+            value={pickNote}
+            onChange={(e) => setPickNote(e.target.value)}
+            placeholder={pick.notePlaceholder}
+            className="w-full rounded-md border border-sol-border bg-sol-bg-alt/40 px-2.5 py-1.5 text-[12.5px] text-sol-text placeholder:text-sol-text-dim/60 focus:border-sol-violet/60 focus:outline-none"
+          />
+        </div>
+      )}
 
       <CommandPrimitive.List className="max-h-[min(60vh,480px)] overflow-y-auto overscroll-contain py-1.5 scroll-smooth">
         {!query.trim() && (
@@ -1903,7 +1957,32 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Empty>
         )}
 
-        {hasTargets && (
+        {pick && (pick.extras ?? []).some((x) => !x.needsQuery || query.trim()) && (
+          <CommandPrimitive.Group className={groupClass}>
+            {(pick.extras ?? []).filter((x) => !x.needsQuery || query.trim()).map((x) => (
+              <CommandPrimitive.Item
+                key={`pick-${x.key}`}
+                value={`__pick__ ${x.label}|||${x.key}`}
+                onSelect={() => finishPick({ kind: "extra", key: x.key })}
+                className={`${itemClass} ${x.primary ? "text-sol-text data-[selected=true]:bg-sol-violet/15" : ""}`}
+              >
+                {x.icon === "doc" ? (
+                  <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                ) : x.icon === "slack" ? (
+                  <Hash className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                ) : (
+                  <Sparkles className="w-4 h-4 flex-shrink-0 text-sol-violet" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="truncate">{x.label}</div>
+                  {x.description && <div className="truncate text-[11px] text-sol-text-dim mt-0.5">{x.description}</div>}
+                </div>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        {hasTargets && !picking && (
           <CommandPrimitive.Group
             heading={contextLabel}
             className={groupClass}
@@ -1926,7 +2005,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {!query.trim() && recentVisitRows.length > 0 && (
+        {!picking && !query.trim() && recentVisitRows.length > 0 && (
           <CommandPrimitive.Group heading="Recently Visited" className={groupClass}>
             {recentVisitRows.map((row) => (
               <CommandPrimitive.Item
@@ -1957,7 +2036,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         {/* Global view switcher — drills into the label/project submenu. Not
             target-bound, so it's always offered (main app only: the standalone
             Electron palette window has no session panel to filter). */}
-        {!standalone && (
+        {!standalone && !picking && (
           <CommandPrimitive.Group heading="View" className={groupClass}>
             <CommandPrimitive.Item
               key="view-switch"
@@ -1972,13 +2051,13 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {showFavorites && (
+        {showFavorites && pickAllows("session") && (
           <CommandPrimitive.Group heading="Favorites" className={groupClass}>
             {(query ? favorites! : favorites!.slice(0, 5)).map((fav: any) => (
               <CommandPrimitive.Item
                 key={`fav-${fav._id}`}
                 value={`favorite ${cleanTitle(fav.title || fav.session_id || "")}|||${fav._id}`}
-                onSelect={() => navigateToSession(fav)}
+                onSelect={() => chooseSession(fav)}
                 className={itemClass}
               >
                 <span className="text-amber-400 flex-shrink-0">
@@ -1992,7 +2071,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {showBookmarks && (
+        {showBookmarks && !picking && (
           <CommandPrimitive.Group heading="Bookmarks" className={groupClass}>
             {(query ? bookmarks! : bookmarks!.slice(0, 6)).map((bm: any) => (
               <CommandPrimitive.Item
@@ -2018,7 +2097,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {recentMatches.length > 0 && (
+        {recentMatches.length > 0 && pickAllows("session") && (
           <CommandPrimitive.Group heading="Recent Sessions" className={groupClass}>
             {recentMatches.map((conv: any) => {
               const isTeam = conv.isOwn === false;
@@ -2026,7 +2105,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <CommandPrimitive.Item
                 key={`recent-${conv._id}`}
                 value={`__recent__ ${cleanTitle(conv.title || "")} ${conv.project_path || ""} ${conv.authorName || ""}|||${conv._id}`}
-                onSelect={() => navigateToSession(conv)}
+                onSelect={() => chooseSession(conv)}
                 className={`${itemClass} group`}
               >
                 {isTeam && (conv.authorAvatar || conv.authorName) ? (
@@ -2079,7 +2158,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {(chatChannelRows.length > 0 || chatHits.length > 0) && (
+        {!picking && (chatChannelRows.length > 0 || chatHits.length > 0) && (
           <CommandPrimitive.Group heading="Chat" className={groupClass}>
             {chatChannelRows.map((c) => (
               <CommandPrimitive.Item
@@ -2134,7 +2213,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <CommandPrimitive.Item
                   key={`task-${t._id}`}
                   value={`__entity__ ${t.title} ${t.short_id}|||${t._id}`}
-                  onSelect={() => navigate(`/tasks/${t._id}`)}
+                  onSelect={() => chooseEntity("task", t, `/tasks/${t._id}`)}
                   className={itemClass}
                 >
                   <ListTodo className="w-4 h-4 flex-shrink-0 text-sol-cyan" />
@@ -2154,7 +2233,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <CommandPrimitive.Item
                 key={`doc-${d._id}`}
                 value={`__entity__ ${d.title} ${d.doc_type || ""}|||${d._id}`}
-                onSelect={() => navigate(`/docs/${d._id}`)}
+                onSelect={() => chooseEntity("doc", d, `/docs/${d._id}`)}
                 className={itemClass}
               >
                 <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
@@ -2177,7 +2256,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <CommandPrimitive.Item
                   key={`plan-${p._id}`}
                   value={`__entity__ ${p.title} ${p.short_id}|||${p._id}`}
-                  onSelect={() => navigate(`/plans/${p.short_id || p._id}`)}
+                  onSelect={() => chooseEntity("plan", p, `/plans/${p.short_id || p._id}`)}
                   className={itemClass}
                 >
                   <MapIcon className="w-4 h-4 flex-shrink-0 text-sol-yellow" />
@@ -2191,7 +2270,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {triggerMatches.length > 0 && (
+        {!picking && triggerMatches.length > 0 && (
           <CommandPrimitive.Group heading="Triggers" className={groupClass}>
             {triggerMatches.map((t: any) => (
               <CommandPrimitive.Item
@@ -2219,7 +2298,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {(vaultNoteMatches.length > 0 || (vaultReady && query.trim().length >= 2)) && (
+        {!picking && (vaultNoteMatches.length > 0 || (vaultReady && query.trim().length >= 2)) && (
           <CommandPrimitive.Group heading="Notes" className={groupClass}>
             {vaultNoteMatches.map((n) => (
               <CommandPrimitive.Item
@@ -2257,6 +2336,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
+        {!picking && (
         <CommandPrimitive.Group heading="Create" className={groupClass}>
           <CommandPrimitive.Item
             key="create-session"
@@ -2295,6 +2375,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             <FileText className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
             <span className="truncate flex-1">Create Document</span>
           </CommandPrimitive.Item>
+          {callsOn && (
+            <CommandPrimitive.Item
+              key="create-huddle"
+              value="Start huddle new call ring people group voice"
+              onSelect={() => { closePalette(); openCreateModal('huddle'); }}
+              className={itemClass}
+            >
+              <Headphones className="w-4 h-4 text-sol-violet flex-shrink-0" />
+              <span className="truncate flex-1">Start Huddle</span>
+            </CommandPrimitive.Item>
+          )}
           <CommandPrimitive.Item
             key="create-trigger"
             value="Create trigger new schedule cron automation reminder"
@@ -2305,7 +2396,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             <span className="truncate flex-1">Create Trigger</span>
           </CommandPrimitive.Item>
         </CommandPrimitive.Group>
+        )}
 
+        {!picking && (
         <CommandPrimitive.Group heading="Pages" className={groupClass}>
           {(query.trim() ? NAV_PAGES : NAV_PAGES.filter((p) => !p.secondary)).filter((p) => featureOn(p.feature)).map((page) => (
             <CommandPrimitive.Item
@@ -2321,8 +2414,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             </CommandPrimitive.Item>
           ))}
         </CommandPrimitive.Group>
+        )}
 
-        {vaultReady && (
+        {!picking && vaultReady && (
           <CommandPrimitive.Group heading="Files" className={groupClass}>
             <CommandPrimitive.Item
               key="vault-random"
@@ -2409,7 +2503,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {!standalone && (
+        {!standalone && !picking && (
           <CommandPrimitive.Group heading="Commands" className={groupClass}>
             {GLOBAL_COMMANDS.map((cmd) => {
               const Icon = cmd.icon;
@@ -2442,7 +2536,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {showWorkspaces && (
+        {showWorkspaces && !picking && (
           <CommandPrimitive.Group heading="Workspaces" className={groupClass}>
             {projects.map((dir) => (
               <CommandPrimitive.Item
@@ -2461,7 +2555,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {query.trim() && (
+        {!picking && query.trim() && (
           <CommandPrimitive.Group className={groupClass}>
             <CommandPrimitive.Item
               value="__compose__"
@@ -2478,7 +2572,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {query.trim().length >= 2 && (
+        {!picking && query.trim().length >= 2 && (
           <CommandPrimitive.Group className={groupClass}>
             <CommandPrimitive.Item
               value="__search__page"
@@ -2516,7 +2610,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         )}
 
         {/* Async conversation search results */}
-        {debouncedQuery.length >= 2 && (
+        {debouncedQuery.length >= 2 && pickAllows("session") && (
           <CommandPrimitive.Group
             heading={searchData || titleData ? `Search Results (${searchRows.length})` : searchError ? "Search Results" : "Searching..."}
             className={groupClass}
@@ -2545,7 +2639,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <CommandPrimitive.Item
                 key={`search-${result.conversationId}`}
                 value={`__search__ ${result.title} ${result.matches?.[0]?.content?.slice(0, 100) || ""}|||${result.conversationId}`}
-                onSelect={() => navigateToSession(
+                onSelect={() => chooseSession(
                   {
                     _id: result.conversationId,
                     title: result.title,

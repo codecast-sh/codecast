@@ -28,6 +28,8 @@
 //      completed/failed notification keyed by the original tool-use-id.
 //   Plus a TaskStop tool_use naming the task id → "stopped".
 
+import { AGENT_IDLE_GRACE_MS, type OpenTaskReport } from "@codecast/shared/contracts";
+
 export type MonitorStatus = "watching" | "ended" | "timed_out" | "stopped";
 
 export type MonitorRow = {
@@ -158,6 +160,19 @@ export function monitorNotificationDescription(n: Pick<ParsedTaskNotification, "
 }
 
 const TIMED_OUT_MARKER = "[Monitor timed out";
+// The harness's own "this is now a background task" results, and the id each
+// carries. Anchored to the START of the result: the harness always leads with
+// them, and an unanchored match also fired on a foreground command whose
+// OUTPUT quoted one (an agent grepping a transcript for these very phrases
+// birthed a phantom "running" row nothing could ever close).
+const BACKGROUND_STARTED_RE = /^\s*(?:Monitor started \(task ([\w-]+)|Command running in background with ID: ([\w-]+)|Command did not complete within its \d+s timeout and was moved to the background \(ID: ([\w-]+)\))/;
+export function backgroundStartedTaskId(content: string): string | undefined {
+  const m = content.match(BACKGROUND_STARTED_RE);
+  return m ? (m[1] ?? m[2] ?? m[3]) : undefined;
+}
+// The timeout-promotion form alone — a FOREGROUND call's result that says the
+// harness moved it to the background, which births a row after the fact.
+const PROMOTED_TO_BACKGROUND_RE = /^\s*Command did not complete within its \d+s timeout and was moved to the background \(ID: /;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "killed", "stopped"]);
 
 const EMPTY: MonitorRow[] = [];
@@ -177,6 +192,12 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
   const byTaskId = new Map<string, MonitorRow>();
   // Rows whose start result came back as an error — never armed, not shown.
   const dead = new Set<MonitorRow>();
+  // Every FOREGROUND Bash call, by tool_use id, so a result that reports the
+  // harness promoted it to the background on timeout ("moved to the background
+  // (ID: …)") can birth its row after the fact — the call itself carried no
+  // run_in_background, so nothing below armed it up front. Values are the raw
+  // pieces a row needs; parsing the input is deferred to that (rare) result.
+  const foregroundBash = new Map<string, { msg: ScanMessage; input: unknown }>();
 
   for (const msg of messages) {
     for (const tc of msg.tool_calls ?? []) {
@@ -189,6 +210,7 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
         tc.name === "Monitor" ? "monitor"
         : isBackgroundBashToolCall({ name: tc.name, input }) ? "background"
         : undefined;
+      if (!kind && tc.name === "Bash" && tc.id) foregroundBash.set(tc.id, { msg, input });
       if (kind && tc.id) {
         const row: MonitorRow = {
           kind,
@@ -218,15 +240,39 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
     }
 
     for (const tr of msg.tool_results ?? []) {
-      const row = tr?.tool_use_id ? byToolUseId.get(tr.tool_use_id) : undefined;
-      if (!row || row.taskId) continue;
+      let row = tr?.tool_use_id ? byToolUseId.get(tr.tool_use_id) : undefined;
       const content = typeof tr.content === "string" ? tr.content : "";
-      const started =
-        content.match(/Monitor started \(task ([\w-]+)/) ??
-        content.match(/Command running in background with ID: ([\w-]+)/);
+      if (!row && tr?.tool_use_id && PROMOTED_TO_BACKGROUND_RE.test(content)) {
+        // A foreground command the harness promoted on timeout: arm its row
+        // now, from the call we indexed above (or a bare stub if the call was
+        // outside this window).
+        const call = foregroundBash.get(tr.tool_use_id);
+        const input: any = call?.input ?? {};
+        row = {
+          kind: "background",
+          toolUseId: tr.tool_use_id,
+          startMessageId: call?.msg._id ?? msg._id,
+          description: (input?.description && String(input.description)) || "background command",
+          command: (input?.command && String(input.command)) || "",
+          persistent: false,
+          timeoutMs: undefined,
+          startedAt: call?.msg.timestamp ?? msg.timestamp,
+          status: "watching",
+          eventCount: 0,
+        };
+        rows.push(row);
+        byToolUseId.set(tr.tool_use_id, row);
+      }
+      if (!row || row.taskId) continue;
+      // The third shape is a foreground command the harness promoted to the
+      // background on timeout ("did not complete within its Ns timeout and was
+      // moved to the background (ID: …)"). The daemon's turn-end scan counts it
+      // as open work (the session settles "waiting" → Dormant), so the card
+      // must show the row too — otherwise the park has no visible reason.
+      const started = backgroundStartedTaskId(content);
       if (started) {
-        row.taskId = started[1];
-        byTaskId.set(started[1], row);
+        row.taskId = started;
+        byTaskId.set(started, row);
       } else if (tr.is_error || (row.kind === "background" && content)) {
         // Error → never armed. A background Bash whose result is ordinary
         // output means the harness ran it synchronously — nothing standing.
@@ -312,3 +358,88 @@ export function effectiveMonitorStatus(row: MonitorRow, now: number, agentStarte
 export function watchingMonitors(rows: MonitorRow[], now: number, agentStartedAt?: number): MonitorRow[] {
   return rows.filter((r) => effectiveMonitorStatus(r, now, agentStartedAt) === "watching");
 }
+
+// Whether the session hosting a watch can still be running it. A watch is a
+// child of the agent process, so it lives exactly as long as that process: a
+// retired (killed) row or a dead ("stopped") agent hosts nothing, and a row no
+// daemon speaks for (no agent_status at all — an unmanaged import, a row the
+// liveness overlay no longer covers) can claim a live process only inside the
+// idle grace after its last activity. Any daemon-reported status short of
+// "stopped" is proof of a live process: the server coerces a lapsed heartbeat
+// to "stopped" (caught here) and a quiet-but-alive agent only to "idle".
+//
+// Deliberately NOT the status-trust decay (isLivenessStale / STATUS_TRUST_TTL_MS).
+// That decay says "an active status this quiet can no longer be believed" —
+// right for the card's WORKING claim, wrong for a watch: a poll on a long build
+// is quiet BY DESIGN while its process is alive. Gating the bar on that decay
+// hid a live build poll the moment it crossed the hour and left the human
+// asking "are you polling?" (2026-08-17). A restart is fenced separately by
+// effectiveMonitorStatus over agent_started_at, and the harness itself writes
+// a "stopped" notice for the tasks a resume orphaned.
+export function isWatchHostDead(
+  session: { agent_status?: string | null; message_count?: number; updated_at?: number; inbox_killed_at?: number | null },
+  now: number,
+): boolean {
+  if (session.inbox_killed_at) return true;
+  if (session.agent_status === "stopped") return true;
+  if (session.agent_status) return false;
+  return (session.message_count ?? 0) > 0 && now - (session.updated_at || 0) >= AGENT_IDLE_GRACE_MS;
+}
+
+// ---- The daemon's report, merged with the message-derived rows -------------
+// The daemon publishes the open tasks it VERIFIED (matched to a live child
+// shell of the agent — see shared/contracts/openTasks) as `open_tasks`, stamped
+// `open_tasks_at`. Two things it gives a surface that the messages cannot:
+//   - rows for a conversation whose messages are not loaded (a Dormant card
+//     the user never opened, or whose arming turn fell out of the warm window)
+//     — the "↳ Background …" row is the reason the card is parked, so it must
+//     draw from the row alone;
+//   - a verdict on message-derived rows: a watch armed BEFORE the report that
+//     the report does not list is one the daemon found dead (a lost completion
+//     notice, a shell that died) — hide it rather than claim "running".
+// A watch armed AFTER the report is unknown to it and stands on the messages.
+// No report at all (an older daemon, a non-Claude agent): the messages decide.
+export type WatchHost = { open_tasks?: OpenTaskReport[] | null; open_tasks_at?: number | null; agent_started_at?: number | null };
+// The transcript's clock and the daemon's are close, not identical.
+const REPORT_SKEW_MS = 5_000;
+
+export function reportSaysDead(host: WatchHost, row: Pick<MonitorRow, "taskId" | "startedAt">): boolean {
+  if (!host.open_tasks || !host.open_tasks_at || !row.taskId) return false;
+  if (row.startedAt > host.open_tasks_at - REPORT_SKEW_MS) return false;
+  return !host.open_tasks.some((t) => t.id === row.taskId);
+}
+
+function rowFromReport(t: OpenTaskReport, reportedAt: number): MonitorRow {
+  return {
+    kind: t.kind === "monitor" ? "monitor" : "background",
+    toolUseId: t.tool_use_id ?? `task:${t.id}`,
+    taskId: t.id,
+    description: t.description || (t.kind === "monitor" ? "background watch" : "background command"),
+    command: t.command ?? "",
+    persistent: false,
+    startedAt: t.started_at ?? reportedAt,
+    status: "watching",
+    eventCount: 0,
+  };
+}
+
+// The watches a card should show as running: message-derived rows that are
+// still watching (own lifecycle, restart fence, the daemon's verdict), plus
+// the daemon's reported tasks the messages don't cover. Workflow tasks are
+// left out — the run has its own bar (WorkflowBar) fed by workflow_run_*.
+export function liveWatchRowsFor(host: WatchHost, messages: readonly ScanMessage[] | undefined, now: number): MonitorRow[] {
+  const fromMessages = watchingMonitors(monitorRowsFor(messages), now, host.agent_started_at ?? undefined)
+    .filter((r) => !reportSaysDead(host, r));
+  const report = host.open_tasks;
+  const at = host.open_tasks_at;
+  if (!report || !at) return fromMessages;
+  // A report from before the current agent process booted describes shells
+  // that died with the old one — it can retire rows (above) but adds none.
+  if (host.agent_started_at && at < host.agent_started_at - REPORT_SKEW_MS) return fromMessages;
+  const covered = new Set(fromMessages.map((r) => r.taskId).filter(Boolean));
+  const extra = report
+    .filter((t) => t.kind !== "workflow" && !covered.has(t.id))
+    .map((t) => rowFromReport(t, at));
+  return extra.length ? [...fromMessages, ...extra] : fromMessages;
+}
+

@@ -204,9 +204,24 @@ export async function resolveOrCreateBucket(
   return { bucketId: _id, name: trimmed, created: true };
 }
 
+// Filing is personal (bucket_assignments are keyed by user), so labeling a
+// session changes only the caller's own view. That makes the bar "can the
+// caller see it", not "does the caller own it": owner (including assigned
+// owners) or team visibility. Share-link viewers ("shared") stay read-only.
+// Every label write — web dispatch, V2 receipts, `cast label` — goes through
+// this one predicate so the surfaces cannot drift.
+export async function canFileConversation(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<"users">,
+  conversation: Parameters<typeof checkConversationAccess>[2],
+): Promise<boolean> {
+  const access = await checkConversationAccess(ctx, userId, conversation);
+  return access === "owner" || access === "team";
+}
+
 // Exclusive per-user filing: upsert the single (user, conversation) row.
 // bucketId null = unfile (tombstone row, never deleted — delta sync). The caller
-// has already resolved & ownership-checked the conversation.
+// has already resolved & access-checked the conversation (canFileConversation).
 export async function assignConversationToBucketForUser(
   ctx: MutationCtx,
   userId: Id<"users">,
@@ -291,11 +306,11 @@ export async function createBucketWithAssignmentsV2ForUser(
           message: "A session selected for this label no longer exists",
         };
       }
-      if (String(conversation.user_id) !== String(userId)) {
+      if (!(await canFileConversation(ctx, userId, conversation))) {
         return {
           status: "rejected",
           code: "FORBIDDEN",
-          message: "A selected session is not owned by this account",
+          message: "A selected session is not visible to this account",
         };
       }
     }
@@ -426,7 +441,7 @@ export const webAssignV2 = mutation({
       arguments: { conversationId: args.conversation_id, bucketId: args.bucket_id },
     }, async () => {
       const conversation = await ctx.db.get(args.conversation_id);
-      if (!conversation || String(conversation.user_id) !== String(userId)) {
+      if (!conversation || !(await canFileConversation(ctx, userId, conversation))) {
         return { status: "rejected", code: "NOT_FOUND", message: "Conversation not found" };
       }
       if (args.bucket_id) {
@@ -452,10 +467,8 @@ export const webAssignV2 = mutation({
 });
 
 // ── CLI surface (api_token authenticated) ─────────────────────────────────────
-// `cast label …`. Filing is personal (bucket_assignments are keyed by user), so
-// labeling a session affects only the caller's own view — which means the ref
-// may resolve to ANY session with owner-or-team visibility, same bar as `cast
-// send`/rename. Share-link viewers ("shared") stay read-only.
+// `cast label …`. The ref may resolve to ANY session the caller can file
+// (canFileConversation), same bar as `cast send`/rename.
 
 async function requireCliUser(ctx: QueryCtx | MutationCtx, apiToken: string): Promise<Id<"users">> {
   const auth = await verifyApiToken(ctx, apiToken, false);
@@ -496,10 +509,8 @@ export const cliSetLabel = mutation({
   args: { api_token: v.string(), session: v.string(), name: v.string(), color: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await requireCliUser(ctx, args.api_token);
-    const conv = await findConversationByAnyRefWhere(ctx, args.session, async (c) => {
-      const access = await checkConversationAccess(ctx, userId, c);
-      return access === "owner" || access === "team";
-    });
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      canFileConversation(ctx, userId, c));
     if (!conv) throw new Error(`No session found for "${args.session}" (you can label your own sessions and sessions shared with your team)`);
     const label = await resolveOrCreateBucket(ctx, userId, args.name, args.color);
     await assignConversationToBucketForUser(ctx, userId, conv._id, label.bucketId);
@@ -516,10 +527,8 @@ export const cliClearLabel = mutation({
   args: { api_token: v.string(), session: v.string() },
   handler: async (ctx, args) => {
     const userId = await requireCliUser(ctx, args.api_token);
-    const conv = await findConversationByAnyRefWhere(ctx, args.session, async (c) => {
-      const access = await checkConversationAccess(ctx, userId, c);
-      return access === "owner" || access === "team";
-    });
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      canFileConversation(ctx, userId, c));
     if (!conv) throw new Error(`No session found for "${args.session}" (you can label your own sessions and sessions shared with your team)`);
     const prior = await ctx.db
       .query("bucket_assignments")

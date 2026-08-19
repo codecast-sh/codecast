@@ -166,4 +166,14 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // A live transcript whose room holds no fresh seat lease is an orphan
+  // (scribe tab died, nobody rejoined). Ends it so the calls page stops
+  // showing it as live and its summary generates.
+  "end orphaned live transcripts",
+  { minutes: 2 },
+  internal.transcripts.sweepOrphanedLive,
+  {}
+);
+
 export default crons;

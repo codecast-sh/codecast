@@ -172,6 +172,10 @@ export type JoinOpts = {
    *  start LiveKit's own (two owners = no audio). WebRTC's RTCAudioSession
    *  picks up CallKit's activation. */
   callKitManaged?: boolean;
+  /** Join with the mic in this state. Default: the snapshot's current state
+   *  (muted on a fresh app — the shoulder-tap contract). startHuddle passes
+   *  false: ringing someone IS the intent to talk. */
+  muted?: boolean;
 };
 
 export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<void> {
@@ -209,6 +213,7 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
     speaking: [],
     cameraOn: false,
     participants: [],
+    ...(opts.muted !== undefined ? { muted: opts.muted } : {}),
   });
   try {
     await convex.mutation(api.calls.joinRoom, { room_key: roomKey, muted: snap.muted });
@@ -376,16 +381,32 @@ export async function setSpeaker(on: boolean): Promise<void> {
 
 // ── ringing (same shapes as web) ──────────────────────────────────────────
 
-export async function startHuddle(opts: { roomKey: string; toUserId: string; anchorTitle?: string }) {
-  await joinCall(opts.roomKey);
+// Ring people into a room, joining it yourself first. The caller's mic goes
+// LIVE — tapping "huddle at someone" is the intent to talk (joining an
+// existing room stays muted, the shoulder-tap contract).
+export async function startHuddle(opts: { roomKey: string; toUserIds: string[]; anchorTitle?: string }) {
+  await joinCall(opts.roomKey, { muted: false });
   if (getCallSnapshot().phase !== "connected") return;
-  await convex
-    .mutation(api.calls.invite, {
-      room_key: opts.roomKey,
-      to_user: opts.toUserId as any,
-      anchor_title: opts.anchorTitle,
-    })
-    .catch(() => {});
+  await ringInto(opts.roomKey, opts.toUserIds, opts.anchorTitle);
+}
+
+// Ring people into a room you are already in ("add people"); the ring is
+// their grant to a room they are not otherwise a member of. A refused ring
+// must not leave the caller sitting in silence believing phones are ringing:
+// the error lands in the call snapshot, which the call screen shows.
+export async function ringInto(roomKey: string, toUserIds: string[], anchorTitle?: string) {
+  if (toUserIds.length === 0) return;
+  try {
+    await convex.mutation(api.calls.invite, {
+      room_key: roomKey,
+      to_users: toUserIds as any,
+      anchor_title: anchorTitle,
+    });
+  } catch (err: any) {
+    if (getCallSnapshot().roomKey === roomKey) {
+      emit({ error: humanizeConvexError(err, "Could not ring them").slice(0, 160) });
+    }
+  }
 }
 
 export async function acceptInvite(inviteId: string, roomKey: string, opts: JoinOpts = {}): Promise<void> {

@@ -315,13 +315,23 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: {},
     feeds: ["artifacts.listForWeb"],
   },
-  // The anchor space, one row per scope_type ("team" | "user"), keyed by it.
-  // Delta so the two scopes coexist; each push replaces its own row.
+  // The anchor space, one row per scope key ("user" | "team:<id>"), keyed by
+  // it. Delta so the scopes coexist; each push replaces its own row.
   anchorSpaces: {
     persistence: { kind: "collection", key: "anchorSpaces" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
     feeds: ["anchors.getAnchorSpace"],
+  },
+  // Every anchor the viewer can see (their personal one + one per team), with
+  // bot identity, scope name and coarse session state. listAnchors returns the
+  // complete visible set, so snapshot. Feeds the global anchor chip/drawer, the
+  // inbox's anchor marking and the /anchor page's scope switcher.
+  anchors: {
+    persistence: { kind: "collection", key: "anchors" },
+    hydration: { phase: "deferred" },
+    sync: {},
+    feeds: ["anchors.listAnchors"],
   },
   // Cross-session message graph (crosstalk): one server-derived snapshot.
   // Singleton; the store's SYNC_REGISTRY strips the per-push generatedAt so an

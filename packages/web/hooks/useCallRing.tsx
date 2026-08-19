@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { soundCallRing, soundCallDeclined } from "../lib/sounds";
-import { notifyNative } from "../lib/desktop";
+import { notifyNative, getDesktopWindowRole } from "../lib/desktop";
 import { acceptInvite, declineInvite } from "../lib/calls/callManager";
 import { CALL_INVITE_TTL_MS, CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
 
@@ -34,7 +34,10 @@ export function useCallRing(): void {
     // Manual "busy" is the closed door: the toast still appears (a silent,
     // dismissable card), but no sound and no native banner.
     const quiet = me?.status === "busy";
-    const inCall = useInboxStore.getState().call.phase === "connected";
+    // "In a call" is app-wide on the desktop: the media plane lives in ONE
+    // window, and a second window must not ring over a huddle it cannot see.
+    const inCall =
+      useInboxStore.getState().call.phase === "connected" || getDesktopWindowRole().anyInCall;
 
     for (const invite of incoming) {
       if (seenInvites.current.has(String(invite._id))) continue;
@@ -67,7 +70,7 @@ export function useCallRing(): void {
               </div>
               {invite.anchor_title && (
                 <div className="truncate text-xs text-sol-text-muted">
-                  about: {invite.anchor_title}
+                  {invite.anchor_title}
                 </div>
               )}
             </div>
@@ -90,9 +93,12 @@ export function useCallRing(): void {
         { id: `ring:${invite._id}`, duration: CALL_INVITE_TTL_MS },
       );
       if (!quiet && !inCall) {
+        // `key` collapses the ring reported by every desktop window into one
+        // banner; `kind` sends its click to the window with the call UI.
         void notifyNative(
           `${invite.from_name} wants to huddle`,
-          invite.anchor_title ? `about: ${invite.anchor_title}` : "Tap to join",
+          invite.anchor_title || "Tap to join",
+          { key: `ring:${invite._id}`, kind: "call" },
         );
       }
     }

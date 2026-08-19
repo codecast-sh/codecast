@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseWorkflowLaunch, parseWorkflowScriptMeta } from "../ConversationView";
+import { parseWorkflowLaunch, parseWorkflowScriptMeta } from "../../lib/workflowLaunch";
 
 const LAUNCH_RECEIPT = `Workflow launched in background. Task ID: wq2ftfdva
 Summary: Implement, independently review (revise-on-fail), and validate the 3 remaining codebase fixes (A3 gates, A4 red CI tests, A6 dead code); emit patches for final suite validation

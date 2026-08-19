@@ -42,4 +42,4 @@ Clearing from the panel is a local-first write: the panel disappears immediately
 
 ## Access
 
-`cast state` writes to the session it is run from — the CLI resolves the current session the same way `cast dismiss` and `cast label` do. Pass `--for <session>` to write to another session, and `cast state show <session>` to read one. Both are restricted to sessions you run or own, the same rule that governs renaming and dismissing.
+`cast state` writes to the session it is run from — the CLI resolves the current session the same way `cast stash` and `cast label` do. Pass `--for <session>` to write to another session, and `cast state show <session>` to read one. Both are restricted to sessions you run or own, the same rule that governs renaming and stashing.

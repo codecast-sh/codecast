@@ -60,3 +60,12 @@ export function inboxTabSessionId(path: string): string | null {
     return null;
   }
 }
+
+/** The path an in-app TAB holds for a conversation. Tabs never sit on
+ *  /conversation/<id>: that route is a one-shot redirect into the inbox (see
+ *  RedirectToInbox), and a hidden pane on it would fire the redirect against
+ *  global view state. Everything else passes through unchanged. */
+export function conversationTabPath(path: string): string {
+  const conv = path.match(/^\/conversation\/([^/?#]+)$/);
+  return conv ? `/inbox?s=${conv[1]}` : path;
+}

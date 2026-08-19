@@ -1,4 +1,7 @@
 import { ReactNode } from "react";
+import { useInboxStore } from "../store/inboxStore";
+import { isElectron } from "./desktop";
+import { useTitlebarHead } from "../hooks/useTitlebarHead";
 
 // A route is "full-width" when the page owns its entire canvas — its own scroll
 // container, width, padding, and sometimes its own background (the zinc-themed
@@ -62,12 +65,22 @@ export function PageShell({
   pathname: string;
   children: ReactNode;
 }) {
+  // Zen mode on the desktop app: these pages have no header row to stand in
+  // as the titlebar (hooks/useTitlebarHead), so the shell lends an empty one —
+  // a drag strip that sits level with the traffic lights. It is mounted only
+  // then, so the web and the headered pages pay nothing.
+  const zen = useInboxStore((s) => s.clientState.ui?.zen_mode ?? false);
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
+  const lendTitlebar = zen && isElectron();
   return (
-    <div
-      data-main-scroll
-      className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-6"
-    >
-      <div className={`mx-auto w-full ${pageMaxWidth(pathname)}`}>{children}</div>
+    <div className="h-full flex flex-col">
+      {lendTitlebar && <div ref={titlebarRef} className="titlebar-strip shrink-0" />}
+      <div
+        data-main-scroll
+        className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 lg:px-8 py-6"
+      >
+        <div className={`mx-auto w-full ${pageMaxWidth(pathname)}`}>{children}</div>
+      </div>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { THREAD_STATE_NUDGE_MSGS } from "@codecast/shared/contracts";
+import { THREAD_STATE_NUDGE_MSGS, THREAD_STATE_RECRUIT_MSGS } from "@codecast/shared/contracts";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 
 // Run the installed hook exactly as Claude Code would: pipe a hook-event JSON
@@ -58,10 +58,33 @@ afterAll(() => {
 });
 
 describe("thread-state hook", () => {
-  test("a session with no pinned state is never nudged", () => {
+  test("a short session with no pinned state is never nudged", () => {
     const id = fresh();
     expect(run(id, "Stop", 0)).toBe("");
-    expect(run(id, "Stop", 500)).toBe("");
+    expect(run(id, "Stop", THREAD_STATE_RECRUIT_MSGS - 1)).toBe("");
+    expect(run(id, "UserPromptSubmit", 500)).toBe("");
+  });
+
+  test("a substantial undeclared session is recruited ONCE, at Stop, to declare who acts next", () => {
+    const id = fresh();
+    const out = run(id, "Stop", THREAD_STATE_RECRUIT_MSGS);
+    const json = JSON.parse(out);
+    expect(json.decision).toBe("block");
+    expect(json.reason).toContain("cast state --status");
+    expect(json.reason).toContain("dormant");
+    // Once per session — never nagged again however long it runs, and never
+    // while the Stop hook is already holding it.
+    expect(run(id, "Stop", THREAD_STATE_RECRUIT_MSGS + 300)).toBe("");
+    const other = fresh();
+    expect(run(other, "Stop", THREAD_STATE_RECRUIT_MSGS, { stop_hook_active: true })).toBe("");
+  });
+
+  test("once it declares, the ordinary staleness reminder takes over", () => {
+    const id = fresh();
+    expect(JSON.parse(run(id, "Stop", THREAD_STATE_RECRUIT_MSGS)).decision).toBe("block");
+    stamp(id);
+    expect(run(id, "Stop", THREAD_STATE_RECRUIT_MSGS + 2)).toBe(""); // baseline recorded
+    expect(JSON.parse(run(id, "Stop", THREAD_STATE_RECRUIT_MSGS + 2 + THREAD_STATE_NUDGE_MSGS)).reason).toContain("messages old");
   });
 
   test("first event after a write records the baseline; the nudge fires on the crossing only", () => {

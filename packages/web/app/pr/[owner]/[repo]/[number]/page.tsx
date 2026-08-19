@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { cn } from "../../../../../lib/utils";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useTitlebarHead } from "../../../../../hooks/useTitlebarHead";
 
 function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString("en-US", {
@@ -565,6 +566,7 @@ function PRContent() {
 
 export default function PRPage() {
   const params = useParams();
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const owner = params.owner as string;
   const repo = params.repo as string;
   const number = params.number as string;
@@ -573,7 +575,7 @@ export default function PRPage() {
     <AuthGuard>
       <DashboardLayout>
         <div className="h-[calc(100vh-56px)] flex flex-col">
-          <div className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center gap-3 shrink-0">
+          <div ref={titlebarRef} className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center gap-3 shrink-0">
             <Link href="/timeline">
               <Button variant="ghost" size="sm" className="h-8">
                 <ArrowLeft className="w-4 h-4 mr-1" />

@@ -148,8 +148,15 @@ let databasePromise: Promise<MobileDispatchDatabase> | null = null;
 
 async function openDatabase(): Promise<MobileDispatchDatabase> {
   if (!databasePromise) {
-    databasePromise = import("expo-sqlite")
-      .then(async ({ openDatabaseAsync }) => {
+    // Guarded require, NOT a dynamic import(): in a production/OTA bundle
+    // Metro compiles import() into an async chunk fetch whose URL resolver
+    // needs the web "location" global, so it rejects on Hermes and the
+    // storage gate bricks the app. require() bundles inline; the try shape
+    // (via the promise) still fails honestly on a binary without the pod.
+    databasePromise = Promise.resolve()
+      .then(async () => {
+        const { openDatabaseAsync } =
+          require("expo-sqlite") as typeof import("expo-sqlite");
         const database = await openDatabaseAsync(DATABASE_NAME);
         await database.execAsync(CREATE_SCHEMA);
         return {
