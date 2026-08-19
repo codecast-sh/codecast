@@ -40,6 +40,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { DocEmbed } from "./DocEmbed";
 import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
 import { FormattedSummary } from "./FormattedSummary";
+import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 
@@ -763,6 +764,23 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
     setHoverOpen(false);
   }, [cancelHover]);
 
+  // Session pills route through the same open-resolution as every other linked
+  // session (useOpenLinkedSession): on a task/doc/plan surface the conversation
+  // swaps into the companion pane instead of replacing the whole stage, and on
+  // the inbox it becomes the current selection. Plain left-click only — modified
+  // clicks and unresolved entities keep the href's full-page navigation.
+  const openLinkedSession = useOpenLinkedSession();
+  const handleClick = useCallback(
+    (e: React.MouseEvent) => {
+      closeNow();
+      if (!isSession || !entity?._id) return;
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      openLinkedSession(entity);
+    },
+    [closeNow, isSession, entity, openLinkedSession],
+  );
+
   // Clear any in-flight timer if the pill unmounts (e.g. on navigation).
   useEffect(() => cancelHover, [cancelHover]);
 
@@ -776,7 +794,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
       <PopoverAnchor asChild>
         <Link
           href={href}
-          onClick={closeNow}
+          onClick={handleClick}
           onMouseEnter={openSoon}
           onMouseLeave={closeSoon}
           className={`not-prose inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono leading-[1.4] no-underline ${colors} border transition-colors cursor-pointer align-baseline`}
@@ -809,7 +827,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
         <span aria-hidden className="absolute inset-x-0 top-full h-2" />
         <Link
           href={href}
-          onClick={closeNow}
+          onClick={handleClick}
           className="block p-3 no-underline cursor-pointer"
         >
           {entity ? (

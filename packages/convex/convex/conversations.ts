@@ -1249,6 +1249,15 @@ export const webGet = query({
       model: conv.model,
       agent_type: conv.agent_type,
       updated_at: conv.updated_at,
+      // Session-open contract (useOpenLinkedSession seeds this snapshot into the
+      // client's sessions cache): the real session_id — never fabricated from the
+      // document id — a liveness verdict matching taskMining's, and the triage
+      // stamps so a stashed/dismissed session must not seed as an active row
+      // (ct-42666).
+      session_id: conv.session_id,
+      is_active: conv.status === "active" && conv.updated_at > Date.now() - 5 * 60 * 1000,
+      started_at: (conv as any).started_at || conv._creationTime,
+      ...inboxVisibilityFields(conv),
       is_own: isOwner,
       acting_user_id: conv.acting_user_id ?? null,
       is_anchor: !!conv.anchor_id,
