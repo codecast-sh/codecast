@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performReassignToDevice, performReparentSessionToDevice } from "./devices";
+import { performReassignToDevice, performReparentSessionToDevice, reassignToDevice } from "./devices";
 
 // Cross-user device reparent: an OWNER pulls a session run by a TEAMMATE onto
 // their OWN machine. Account follows device (user_id -> caller), the immutable
@@ -115,6 +115,89 @@ describe("performReparentSessionToDevice", () => {
     ).rejects.toThrow(/run or own/);
   });
 
+  // Team access suffices: any teammate may claim a visible session (cast own)
+  // and owners may pull, so the pull composes the two instead of dead-ending —
+  // the web's "Run on this device" on a team-visible bot session (ct-44344).
+  describe("team-visible sessions", () => {
+    const TEAM = "team1";
+    const teamFixtures = (memberIds: string[], convOverrides: Record<string, any> = {}) => {
+      const db = fixtures({ team_id: TEAM, is_private: false, owner_user_id: undefined, ...convOverrides }, []);
+      db._tables.team_memberships = memberIds.map((user_id, i) => ({ _id: `tm${i}`, team_id: TEAM, user_id }));
+      return db;
+    };
+
+    test("a teammate who neither runs nor owns pulls a team-visible session onto their own device", async () => {
+      const db = teamFixtures([JASON, ME]);
+      const result = await performReparentSessionToDevice({ db }, ME as any, {
+        session_id: "sess1",
+        device_id: "mydev",
+      });
+      expect(result.cross_user).toBe(true);
+      expect(conv(db).user_id).toBe(ME);
+      expect(conv(db).author_user_id).toBe(JASON);
+      expect(conv(db).owner_device_id).toBe("mydev");
+    });
+
+    test("a bot caller does not get the team path — bots can't claim, so they can't pull", async () => {
+      const db = teamFixtures([JASON, ME]);
+      db._tables.users.find((u: any) => u._id === ME).is_bot = true;
+      await expect(
+        performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" }),
+      ).rejects.toThrow(/run or own/);
+    });
+
+    test("a private team session stays unpullable by a non-owner teammate", async () => {
+      const db = teamFixtures([JASON, ME], { is_private: true });
+      await expect(
+        performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" }),
+      ).rejects.toThrow(/run or own/);
+    });
+
+    test("a non-member of the session's team is still rejected", async () => {
+      const db = teamFixtures([JASON]); // ME is not on the team
+      await expect(
+        performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" }),
+      ).rejects.toThrow(/run or own/);
+    });
+
+    test("a caller with no user doc is rejected from the team path (fail closed)", async () => {
+      const db = teamFixtures([JASON, ME]);
+      db._tables.users = db._tables.users.filter((u: any) => u._id !== ME);
+      await expect(
+        performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" }),
+      ).rejects.toThrow(/run or own/);
+    });
+
+    // The accept predicate decides WHICH conversation a colliding short id
+    // resolves to (findConversationByAnyRefWhere returns the first accepted
+    // candidate, newest first). A single team-wide pass would let a teammate's
+    // NEWER team-visible session shadow the caller's own — and a pull is
+    // destructive (account flip + source teardown). The strict-first resolve
+    // guarantees "my own session always wins the collision".
+    test("a colliding short id resolves to MY session, not a teammate's newer team-visible one", async () => {
+      const db = teamFixtures([JASON, ME], { short_id: "jx7c6zk" }); // teammate's, newer
+      // My own OLDER session with the same short id (earlier in the table =
+      // older; the short-id scan returns newest first).
+      db._tables.conversations.unshift({
+        _id: "convMine",
+        short_id: "jx7c6zk",
+        session_id: "sessMine",
+        user_id: ME,
+        owner_device_id: "olddev",
+        status: "active",
+      });
+      const result = await performReparentSessionToDevice({ db }, ME as any, {
+        session_id: "jx7c6zk",
+        device_id: "mydev",
+      });
+      expect(result.cross_user).toBe(false); // resolved MY session — no account flip
+      const mine = db._tables.conversations.find((c: any) => c._id === "convMine");
+      expect(mine.owner_device_id).toBe("mydev");
+      expect(conv(db).user_id).toBe(JASON); // teammate's session untouched
+      expect(conv(db).owner_device_id).toBe("jasondev");
+    });
+  });
+
   test("you may only reparent onto your OWN device, not the source machine's", async () => {
     const db = fixtures();
     await expect(
@@ -212,6 +295,37 @@ describe("performReassignToDevice", () => {
     expect(conv(db).author_user_id).toBe(JASON);
     expect(conv(db).owner_device_id).toBe("mydev");
     expect(JSON.parse(commands(db)[0].args).reparented).toBe(true);
+  });
+
+  test("a teammate's move on a team-visible session delegates to the reparent and succeeds", async () => {
+    const db = fixtures({ team_id: "team1", is_private: false, owner_user_id: undefined }, []);
+    db._tables.team_memberships = [
+      { _id: "tm1", team_id: "team1", user_id: JASON },
+      { _id: "tm2", team_id: "team1", user_id: ME },
+    ];
+    const result = await performReassignToDevice({ db }, ME as any, {
+      conversation_id: "conv1" as any,
+      device_id: "mydev",
+    });
+    expect(result.cross_user).toBe(true);
+    expect(conv(db).user_id).toBe(ME);
+  });
+
+  // The prod bug ("Run on this device" → "not your conversation") was thrown
+  // by the MUTATION's own resolution gate, which performReassignToDevice never
+  // executes — so drive the real handler (convex-test-free invocation, the
+  // calls.test.ts pattern) with an authed ctx.
+  test("the reassignToDevice mutation itself accepts a teammate's team-visible session", async () => {
+    const db = fixtures({ team_id: "team1", is_private: false, owner_user_id: undefined }, []);
+    db._tables.team_memberships = [
+      { _id: "tm1", team_id: "team1", user_id: JASON },
+      { _id: "tm2", team_id: "team1", user_id: ME },
+    ];
+    const ctx: any = { db, auth: { getUserIdentity: async () => ({ subject: `${ME}|sess`, tokenIdentifier: "x" }) } };
+    const handler = (reassignToDevice as any)._handler ?? (reassignToDevice as any).handler;
+    const result = await handler(ctx, { conversation_id: "conv1", device_id: "mydev" });
+    expect(result.cross_user).toBe(true);
+    expect(conv(db).user_id).toBe(ME);
   });
 
   test("a stranger (neither runner nor owner) is still rejected", async () => {

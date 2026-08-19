@@ -4123,7 +4123,7 @@ program
     "WHERE it runs, never its author or its owners. If the session currently\n" +
     "runs under a teammate's account, account follows device — it then runs and\n" +
     "bills under YOUR account, while the original author is preserved. You can\n" +
-    "pull any session you run or own.\n\n" +
+    "pull any session you run or own, or any session visible to your team.\n\n" +
     "  cast pull jx7c6zk    # run this session on this machine"
   )
   .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
