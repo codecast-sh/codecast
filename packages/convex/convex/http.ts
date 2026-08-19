@@ -3490,7 +3490,19 @@ const CLI_ERROR_STATUS: Record<string, number> = {
   RATE_LIMITED: 429,
 };
 
-function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) {
+function cliRoute(
+  path: string,
+  handler: (ctx: any, body: any) => Promise<any>,
+  // forwardDeviceId: this route's own function takes device_id as a real
+  // argument (cast pull's destination, a terminal pane's machine, …), so after
+  // the binding check the field must survive into the body instead of being
+  // consumed. Note for the binding rollout: on these routes the one device_id
+  // field is BOTH the binding presentation and the argument, so a bound token
+  // can only ever name its own machine here — a route whose argument may
+  // legitimately be a DIFFERENT device (terminal watch of another machine)
+  // will need a separate presentation channel before its tokens are bound.
+  opts?: { forwardDeviceId?: boolean },
+) {
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -3522,11 +3534,16 @@ function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) 
             );
           }
         }
-        // device_id is consumed HERE and never forwarded. Most cliRoute handlers
-        // pass the body straight into a mutation whose validator is a closed
-        // `v.object`, so an unrecognised field is a hard rejection — forwarding
-        // it would break every one of them at once.
-        if (body && typeof body === "object" && "device_id" in body) delete body.device_id;
+        // device_id is consumed HERE and only forwarded on routes that declare
+        // it (forwardDeviceId). Most cliRoute handlers pass the body straight
+        // into a mutation whose validator is a closed `v.object`, so an
+        // unrecognised field is a hard rejection — but for routes whose own
+        // function REQUIRES device_id, deleting it is an equally hard rejection
+        // the other way (this broke cast pull, vault mirror, and terminal
+        // streaming: ct-44344 follow-up).
+        if (!opts?.forwardDeviceId && body && typeof body === "object" && "device_id" in body) {
+          delete body.device_id;
+        }
         const result = await handler(ctx, body);
         return new Response(JSON.stringify(result), {
           status: 200,
@@ -3974,14 +3991,14 @@ cliRoute("/cli/sessions/owners", async (ctx, body) => ctx.runQuery(api.sessionOw
 // team-visible one (see findPullableConversation) — onto the
 // caller's OWN device. Account follows device — user_id becomes the caller, the
 // author is pinned. body: { api_token, session_id, device_id }.
-cliRoute("/cli/sessions/reparent", async (ctx, body) => ctx.runMutation(api.devices.reparentSessionToDevice, body));
+cliRoute("/cli/sessions/reparent", async (ctx, body) => ctx.runMutation(api.devices.reparentSessionToDevice, body), { forwardDeviceId: true });
 
 // CC account switching: route the swap + blocked-session revive through the
 // daemon fleet / nudge limit-parked sessions after a window reset.
-cliRoute("/cli/accounts/switch", async (ctx, body) => ctx.runMutation(api.accountSwitch.requestAccountSwitch, body));
+cliRoute("/cli/accounts/switch", async (ctx, body) => ctx.runMutation(api.accountSwitch.requestAccountSwitch, body), { forwardDeviceId: true });
 cliRoute("/cli/accounts/continue-blocked", async (ctx, body) => ctx.runMutation(api.accountSwitch.continueAllBlocked, body));
-cliRoute("/cli/accounts/save", async (ctx, body) => ctx.runMutation(api.accountSwitch.saveAccountProfile, body));
-cliRoute("/cli/accounts/publish", async (ctx, body) => ctx.runMutation(api.accountSwitch.publishDeviceAccounts, body));
+cliRoute("/cli/accounts/save", async (ctx, body) => ctx.runMutation(api.accountSwitch.saveAccountProfile, body), { forwardDeviceId: true });
+cliRoute("/cli/accounts/publish", async (ctx, body) => ctx.runMutation(api.accountSwitch.publishDeviceAccounts, body), { forwardDeviceId: true });
 cliRoute("/cli/accounts/recovery-status", async (ctx, body) => ctx.runQuery(api.accountSwitch.recoveryStatus, body));
 
 // --- Published HTML artifacts (cast publish → codecast.sh/a/<slug>) ---
@@ -4025,19 +4042,19 @@ artifactPost("/cli/artifacts/view", artifactView);
 // images.generateUploadUrl: it is the generic "give this authenticated user a
 // storage upload URL" mutation, and a vault-specific twin of it would be the
 // same function under a second name.
-cliRoute("/cli/vault/register", async (ctx, body) => ctx.runMutation(api.vaultMirror.cliRegisterMirror, body));
-cliRoute("/cli/vault/upsert", async (ctx, body) => ctx.runMutation(api.vaultMirror.cliUpsertNotes, body));
+cliRoute("/cli/vault/register", async (ctx, body) => ctx.runMutation(api.vaultMirror.cliRegisterMirror, body), { forwardDeviceId: true });
+cliRoute("/cli/vault/upsert", async (ctx, body) => ctx.runMutation(api.vaultMirror.cliUpsertNotes, body), { forwardDeviceId: true });
 cliRoute("/cli/vault/upload-url", async (ctx, body) => ctx.runMutation(api.images.generateUploadUrl, body));
 
 // Remote pane watching — the daemon's frame push (packages/cli/src/terminal/
 // paneStream.ts). Only reached while a viewer holds a lease on the pane; the
 // reply carries that lease, so the capture loop learns when to stop from the
 // request it was already making.
-cliRoute("/cli/terminal/frame", async (ctx, body) => ctx.runMutation(api.terminalStream.cliPushFrame, body));
+cliRoute("/cli/terminal/frame", async (ctx, body) => ctx.runMutation(api.terminalStream.cliPushFrame, body), { forwardDeviceId: true });
 // The viewer half, for callers with a token instead of a browser session.
-cliRoute("/cli/terminal/watch", async (ctx, body) => ctx.runMutation(api.terminalStream.watchPane, body));
-cliRoute("/cli/terminal/pane", async (ctx, body) => ctx.runQuery(api.terminalStream.getPane, body));
-cliRoute("/cli/terminal/input", async (ctx, body) => ctx.runMutation(api.terminalStream.sendPaneInput, body));
+cliRoute("/cli/terminal/watch", async (ctx, body) => ctx.runMutation(api.terminalStream.watchPane, body), { forwardDeviceId: true });
+cliRoute("/cli/terminal/pane", async (ctx, body) => ctx.runQuery(api.terminalStream.getPane, body), { forwardDeviceId: true });
+cliRoute("/cli/terminal/input", async (ctx, body) => ctx.runMutation(api.terminalStream.sendPaneInput, body), { forwardDeviceId: true });
 
 // Image sharing (cast image): upload a screenshot/image to storage, then
 // resolve its stable public /api/storage/<uuid> URL for inline embedding in
