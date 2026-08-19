@@ -17,10 +17,16 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   CALL_INVITE_TTL_MS,
   CALL_MEMBER_STALE_MS,
+  MAX_ROOM_MEMBERS,
   authorizeRoom,
+  expireRoomGrants,
+  liveMembers,
+  parseRoomKey,
 } from "./callRooms";
+import { isTeamMember } from "./privacy";
 import { bucketTs } from "./presenceState";
 import { teamHasFeature } from "./teamFeatures";
+import { endLiveTranscriptsForRoom } from "./transcripts";
 import {
   CALL_PUSH_CATEGORY,
   CALL_PUSH_SOUND,
@@ -29,10 +35,6 @@ import {
 } from "@codecast/shared/contracts";
 
 export { CALL_HEARTBEAT_MS, CALL_INVITE_TTL_MS, CALL_MEMBER_STALE_MS } from "./callRooms";
-
-function liveMembers(rows: Doc<"call_members">[], now: number) {
-  return rows.filter((m) => now - m.last_seen < CALL_MEMBER_STALE_MS);
-}
 
 function inviteAlive(inv: Doc<"call_invites">, now: number): boolean {
   return inv.status === "ringing" && now - inv.created_at < CALL_INVITE_TTL_MS;
@@ -143,17 +145,22 @@ export const getMyCalls = query({
         q.eq("from_user", userId).eq("status", "ringing"),
       )
       .collect();
-    // Recently-answered rows so the caller's dock can settle ("declined").
-    const answered = await ctx.db
-      .query("call_invites")
-      .withIndex("by_from_status", (q) =>
-        q.eq("from_user", userId).eq("status", "declined"),
-      )
-      .collect();
+    // Recently-settled rows so the caller's dock can finish the sentence:
+    // "declined" for a decline, "no answer" for a ring that hit its TTL.
+    const settled = await Promise.all(
+      (["declined", "expired"] as const).map((status) =>
+        ctx.db
+          .query("call_invites")
+          .withIndex("by_from_status", (q) =>
+            q.eq("from_user", userId).eq("status", status),
+          )
+          .collect(),
+      ),
+    ).then((lists) => lists.flat());
     const outgoing = await Promise.all(
       [
         ...myRings.filter((i) => inviteAlive(i, now)),
-        ...answered.filter((i) => (i.responded_at ?? 0) > now - 30_000),
+        ...settled.filter((i) => (i.responded_at ?? 0) > now - 30_000),
       ].map(async (i) => {
         // Enriched with the callee's name so the caller's stage can say
         // "ringing Sam…" / "Sam declined" without a second lookup (mirrors the
@@ -164,6 +171,7 @@ export const getMyCalls = query({
           room_key: i.room_key,
           to_user: i.to_user,
           to_name: to?.name ?? to?.email ?? "Teammate",
+          to_image: to?.image ?? to?.github_avatar_url,
           status: i.status,
           created_at: bucketTs(i.created_at),
         };
@@ -217,6 +225,22 @@ export const joinRoom = mutation({
     // whether to refresh or insert (patching a row the sweep just deleted
     // threw "Update on nonexistent document").
     await sweepRoom(ctx, args.room_key, now);
+
+    // Taking a seat in an EMPTY room starts a NEW huddle: the previous
+    // huddle's invite grants die here (callRooms.acceptedInviteGrant relies
+    // on this — an accepted invite means "that huddle never ended"). A guest
+    // whose huddle is still running never reaches this: the room holds a
+    // fresh lease, so it is not empty.
+    const seated = await ctx.db
+      .query("call_members")
+      .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
+      .collect();
+    if (liveMembers(seated, now).length === 0) {
+      await expireRoomGrants(ctx, args.room_key);
+      // Same reason: a transcript left "live" by the previous huddle (its
+      // scribe's tab died without stop) must not swallow this new one.
+      await endLiveTranscriptsForRoom(ctx, args.room_key);
+    }
 
     // One huddle at a time: joining a room implicitly leaves every other —
     // simultaneous rooms would mean two live mic publishes and an incoherent
@@ -314,39 +338,107 @@ export const leaveRoom = mutation({
       .query("call_members")
       .withIndex("by_user", (q) => q.eq("user_id", userId))
       .collect();
+    const left = new Set<string>();
     for (const m of mine) {
-      if (!args.room_key || m.room_key === args.room_key) await ctx.db.delete(m._id);
+      if (!args.room_key || m.room_key === args.room_key) {
+        await ctx.db.delete(m._id);
+        left.add(m.room_key);
+      }
     }
     await settleOutboundRings(ctx, userId, args.room_key, now);
+    // The last one out ends the room's transcript: the record must not sit
+    // "live" on the calls page after everyone has hung up.
+    for (const roomKey of left) {
+      const seated = await ctx.db
+        .query("call_members")
+        .withIndex("by_room", (q) => q.eq("room_key", roomKey))
+        .collect();
+      if (liveMembers(seated, now).length === 0) {
+        await endLiveTranscriptsForRoom(ctx, roomKey);
+      }
+    }
   },
 });
 
+// Ring people into a room. One mutation, one or many recipients (`to_users`;
+// `to_user` is the historic single form and still works): a group start rings
+// everyone in one round trip, and "add people" mid-call is the same call on
+// the room you are already in. Per-recipient outcomes come back keyed by user
+// so the caller's dock can say who rang, who is on quiet hours and who is in
+// a decline cooldown; the top-level `busy`/`cooldown` mirror the first
+// recipient for the single-recipient callers that predate the array.
 export const invite = mutation({
   args: {
     room_key: v.string(),
-    to_user: v.id("users"),
+    to_user: v.optional(v.id("users")),
+    to_users: v.optional(v.array(v.id("users"))),
     anchor_title: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
-    if (String(args.to_user) === String(userId)) {
+    const recipients = [...new Set([
+      ...(args.to_user ? [args.to_user] : []),
+      ...(args.to_users ?? []),
+    ].map(String))] as Id<"users">[];
+    if (recipients.length === 0) throw new Error("Nobody to ring");
+    if (recipients.some((id) => String(id) === String(userId))) {
       throw new Error("Cannot ring yourself");
     }
-    // Both ends must be able to join: the caller now, and the recipient at
-    // accept time — ring nobody into a room they'd bounce off of (and never
-    // leak a session title to someone the feed filter would hide it from).
+    if (recipients.length > MAX_ROOM_MEMBERS) {
+      throw new Error(`A huddle rings at most ${MAX_ROOM_MEMBERS} people at once`);
+    }
+    // The caller must be able to be in the room now. The recipient need not:
+    // the ring IS their grant (callRooms.acceptedInviteGrant), so a member of
+    // a private channel or a session owner can bring a teammate in — but only
+    // a teammate: the room's team is the outer wall.
     const callerAuth = await authorizeRoom(ctx, userId, args.room_key);
     if (!callerAuth.ok) throw new Error(`Cannot invite: ${callerAuth.reason}`);
-    const targetAuth = await authorizeRoom(ctx, args.to_user, args.room_key);
-    if (!targetAuth.ok) throw new Error(`Recipient cannot join this room`);
 
     const now = Date.now();
-    // Decline cooldown: a fresh decline/cancel means "not now" — re-ringing
-    // inside the window is refused so a looping caller cannot ring forever
-    // (each decline buys the recipient a quiet minute).
-    const RE_RING_COOLDOWN_MS = 60_000;
-    const settledFromMe = await Promise.all(
-      (["declined", "cancelled"] as const).map((status) =>
+    const from = await ctx.db.get(userId);
+    const fromName = from?.name || from?.email || "A teammate";
+    // Whoever already holds a seat needs no ring — a toast for the room you
+    // are sitting in is noise (the picker excludes them client-side; the
+    // server rule is what makes every entry point behave).
+    const seated = new Set(
+      liveMembers(
+        await ctx.db
+          .query("call_members")
+          .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
+          .collect(),
+        now,
+      ).map((m) => String(m.user_id)),
+    );
+    // The ring's context line, per recipient. For a people room the server
+    // owns it: "with <everyone in the room besides you and the caller>" — a
+    // caller-written line would name the recipient to themselves, and a
+    // guest rung into a 1:1 would get no context at all. Channel and session
+    // rooms keep the caller's line ("#design", "about: <title>"), capped so
+    // a hostile length cannot sink the APNs payload.
+    const cap = (t: string | undefined) => t && t.slice(0, 140);
+    const parsed = parseRoomKey(args.room_key);
+    const roomNames = new Map<string, string>();
+    if (parsed?.kind === "dm") {
+      for (const id of parsed.users) {
+        const u = await ctx.db.get(id as Id<"users">);
+        const name = u?.name || u?.email || "a teammate";
+        roomNames.set(id, name.split(/\s+/)[0]);
+      }
+    }
+    const lineFor = (toUser: Id<"users">): string | undefined => {
+      if (parsed?.kind !== "dm") return cap(args.anchor_title);
+      const others = parsed.users.filter(
+        (id) => id !== String(toUser) && id !== String(userId),
+      );
+      if (others.length === 0) return undefined;
+      return cap(`with ${others.map((id) => roomNames.get(id)).join(", ")}`);
+    };
+
+    // Every ring the caller has out or recently settled, read once for the
+    // whole batch: the cooldown check and the refresh-vs-insert decision below
+    // both filter this list per recipient.
+    const priorFromMe = await Promise.all(
+      (["ringing", "declined"] as const).map((status) =>
         ctx.db
           .query("call_invites")
           .withIndex("by_from_status", (q) =>
@@ -354,106 +446,149 @@ export const invite = mutation({
           )
           .collect(),
       ),
-    );
-    const recentlySettled = settledFromMe
-      .flat()
-      .some(
-        (inv) =>
-          String(inv.to_user) === String(args.to_user) &&
-          (inv.responded_at ?? inv.created_at) > now - RE_RING_COOLDOWN_MS,
-      );
-    if (recentlySettled) return { busy: false, cooldown: true };
-
-    // One active ring per (from, to): re-ringing REFRESHES the existing row in
-    // place (same _id, so the recipient's toast/sound dedupe holds — a
-    // delete+insert would mint a new id and re-fire the ring every call),
-    // and stale rows for other pairs are swept while we're here.
-    const priorFromMe = await ctx.db
-      .query("call_invites")
-      .withIndex("by_from_status", (q) =>
-        q.eq("from_user", userId).eq("status", "ringing"),
-      )
-      .collect();
-    let existing: Doc<"call_invites"> | null = null;
+    ).then((lists) => lists.flat());
+    // Stale rings for anyone are swept while we're here.
     for (const inv of priorFromMe) {
-      if (String(inv.to_user) === String(args.to_user)) {
-        if (inviteAlive(inv, now)) existing = inv;
-        else await ctx.db.delete(inv._id);
-      } else if (!inviteAlive(inv, now)) {
-        await ctx.db.delete(inv._id);
-      }
+      if (inv.status === "ringing" && !inviteAlive(inv, now)) await ctx.db.delete(inv._id);
     }
 
-    const target = await ctx.db.get(args.to_user);
-    if (existing) {
-      // Keep created_at: the original ring's TTL clock keeps running, so
-      // hammering invite cannot extend a ring past CALL_INVITE_TTL_MS.
-      await ctx.db.patch(existing._id, {
-        room_key: args.room_key,
-        anchor_title: args.anchor_title,
-      });
-      return { busy: target?.status === "busy", cooldown: false };
+    const results: Array<{
+      to_user: Id<"users">;
+      busy: boolean;
+      cooldown: boolean;
+      in_room?: boolean;
+      refused?: string;
+    }> = [];
+    for (const toUser of recipients) {
+      if (seated.has(String(toUser))) {
+        results.push({ to_user: toUser, busy: false, cooldown: false, in_room: true });
+        continue;
+      }
+      if (!(await isTeamMember(ctx, toUser, callerAuth.teamId))) {
+        results.push({ to_user: toUser, busy: false, cooldown: false, refused: "not a teammate" });
+        continue;
+      }
+      results.push(await ringOne(ctx, {
+        userId,
+        toUser,
+        roomKey: args.room_key,
+        teamId: callerAuth.teamId,
+        anchorTitle: lineFor(toUser),
+        fromName,
+        fromImage: from?.image ?? from?.github_avatar_url ?? undefined,
+        priorFromMe: priorFromMe.filter((inv) => String(inv.to_user) === String(toUser)),
+        now,
+      }));
     }
-    const inviteId = await ctx.db.insert("call_invites", {
-      room_key: args.room_key,
-      team_id: callerAuth.teamId,
-      from_user: userId,
-      to_user: args.to_user,
-      status: "ringing",
-      anchor_title: args.anchor_title,
-      created_at: now,
-    });
-    // Ring the phone DIRECTLY — never through the pushRouter outbox: its
-    // presence holds and away-debounce outlive the 45s invite TTL, and a call
-    // is precisely the "reach them wherever they are" event the hold policy
-    // exists to suppress. Manual "busy" is the closed door here too: no push.
-    // Fresh inserts only — a re-ring refreshes the row above and the phone
-    // already rang for it.
-    const from = await ctx.db.get(userId);
-    const fromName = from?.name || from?.email || "A teammate";
-    // Two rings, one wins: a PushKit token means the phone runs the CallKit
-    // binary — ring through APNs VoIP so a KILLED app puts up the lock-screen
-    // call UI. Otherwise the notification ring (banner + bundled sound; a
-    // backgrounded app answers from it, a force-quit one just sees the tray).
-    // Never both: a CallKit call plus a banner is two rings for one call.
-    if (target?.voip_push_token && target.notifications_enabled && target.status !== "busy") {
-      await ctx.scheduler.runAfter(0, internal.apnsVoip.sendVoipRing, {
-        voip_push_token: target.voip_push_token,
-        user_id: args.to_user,
-        invite_id: String(inviteId),
-        room_key: args.room_key,
-        caller_id: String(userId),
-        caller_name: fromName,
-        caller_image: from?.image ?? from?.github_avatar_url ?? undefined,
-        anchor_title: args.anchor_title,
-      });
-    } else if (target?.push_token && target.notifications_enabled && target.status !== "busy") {
-      await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
-        push_token: target.push_token,
-        title: `${fromName} wants to huddle`,
-        body: args.anchor_title ? `about: ${args.anchor_title}` : "Tap to join the huddle",
-        sound: CALL_PUSH_SOUND,
-        category_id: CALL_PUSH_CATEGORY,
-        interruption_level: "time-sensitive",
-        // APNs drops the ring if the phone is unreachable past the invite TTL —
-        // a phone coming back online must not ring for a call that died.
-        ttl: Math.ceil(CALL_INVITE_TTL_MS / 1000),
-        data: { type: CALL_PUSH_TYPE_RING, invite_id: inviteId, room_key: args.room_key },
-        user_id: args.to_user,
-      });
-    }
-    // The ring's afterlife: at TTL, an unanswered invite becomes a missed-call
-    // push (quiet, default sound) so a closed app learns someone tried.
-    await ctx.scheduler.runAfter(
-      CALL_INVITE_TTL_MS + 2_000,
-      internal.calls.sweepMissedInvite,
-      { invite_id: inviteId },
-    );
-    // Manual "busy" rings quietly on the recipient's side; tell the caller so
-    // their dock can say "rang quietly" instead of implying a normal ring.
-    return { busy: target?.status === "busy" };
+    return { results };
   },
 });
+
+// One recipient of a ring: cooldown, refresh-or-insert, and the phone.
+async function ringOne(
+  ctx: any,
+  opts: {
+    userId: Id<"users">;
+    toUser: Id<"users">;
+    roomKey: string;
+    teamId: Id<"teams">;
+    anchorTitle?: string;
+    fromName: string;
+    fromImage?: string;
+    priorFromMe: Doc<"call_invites">[];
+    now: number;
+  },
+): Promise<{ to_user: Id<"users">; busy: boolean; cooldown: boolean }> {
+  const { userId, toUser, roomKey, now } = opts;
+  // Decline cooldown: a fresh DECLINE means "not now" — re-ringing inside
+  // the window is refused so a looping caller cannot ring forever (each
+  // decline buys the recipient a quiet minute). Cancelled rings don't count:
+  // hanging up settles every outstanding ring as cancelled, and ending a
+  // huddle must not lock its people out of the next one.
+  const RE_RING_COOLDOWN_MS = 60_000;
+  const recentlyDeclined = opts.priorFromMe.some(
+    (inv) =>
+      inv.status === "declined" &&
+      (inv.responded_at ?? inv.created_at) > now - RE_RING_COOLDOWN_MS,
+  );
+  if (recentlyDeclined) return { to_user: toUser, busy: false, cooldown: true };
+
+  // One active ring per (from, to): re-ringing REFRESHES the existing row in
+  // place (same _id, so the recipient's toast/sound dedupe holds — a
+  // delete+insert would mint a new id and re-fire the ring every call).
+  const existing = opts.priorFromMe.find(
+    (inv) => inv.status === "ringing" && inviteAlive(inv, now),
+  );
+  const target = await ctx.db.get(toUser);
+  if (existing) {
+    // Keep created_at: the original ring's TTL clock keeps running, so
+    // hammering invite cannot extend a ring past CALL_INVITE_TTL_MS. The
+    // team follows the room — a refresh into another team's room must not
+    // leave the grant billed to the old team.
+    await ctx.db.patch(existing._id, {
+      room_key: roomKey,
+      team_id: opts.teamId,
+      anchor_title: opts.anchorTitle,
+    });
+    return { to_user: toUser, busy: target?.status === "busy", cooldown: false };
+  }
+  const inviteId = await ctx.db.insert("call_invites", {
+    room_key: roomKey,
+    team_id: opts.teamId,
+    from_user: userId,
+    to_user: toUser,
+    status: "ringing",
+    anchor_title: opts.anchorTitle,
+    created_at: now,
+  });
+  // Ring the phone DIRECTLY — never through the pushRouter outbox: its
+  // presence holds and away-debounce outlive the 45s invite TTL, and a call
+  // is precisely the "reach them wherever they are" event the hold policy
+  // exists to suppress. Manual "busy" is the closed door here too: no push.
+  // Fresh inserts only — a re-ring refreshes the row above and the phone
+  // already rang for it.
+  // Two rings, one wins: a PushKit token means the phone runs the CallKit
+  // binary — ring through APNs VoIP so a KILLED app puts up the lock-screen
+  // call UI. Otherwise the notification ring (banner + bundled sound; a
+  // backgrounded app answers from it, a force-quit one just sees the tray).
+  // Never both: a CallKit call plus a banner is two rings for one call.
+  if (target?.voip_push_token && target.notifications_enabled && target.status !== "busy") {
+    await ctx.scheduler.runAfter(0, internal.apnsVoip.sendVoipRing, {
+      voip_push_token: target.voip_push_token,
+      user_id: toUser,
+      invite_id: String(inviteId),
+      room_key: roomKey,
+      caller_id: String(userId),
+      caller_name: opts.fromName,
+      caller_image: opts.fromImage,
+      anchor_title: opts.anchorTitle,
+    });
+  } else if (target?.push_token && target.notifications_enabled && target.status !== "busy") {
+    await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
+      push_token: target.push_token,
+      title: `${opts.fromName} wants to huddle`,
+      body: opts.anchorTitle || "Tap to join the huddle",
+      sound: CALL_PUSH_SOUND,
+      category_id: CALL_PUSH_CATEGORY,
+      interruption_level: "time-sensitive",
+      // APNs drops the ring if the phone is unreachable past the invite TTL —
+      // a phone coming back online must not ring for a call that died.
+      ttl: Math.ceil(CALL_INVITE_TTL_MS / 1000),
+      data: { type: CALL_PUSH_TYPE_RING, invite_id: inviteId, room_key: roomKey },
+      user_id: toUser,
+    });
+  }
+  // The ring's afterlife: at TTL, an unanswered invite becomes a missed-call
+  // push (quiet, default sound) so a closed app learns someone tried.
+  await ctx.scheduler.runAfter(
+    CALL_INVITE_TTL_MS + 2_000,
+    internal.calls.sweepMissedInvite,
+    { invite_id: inviteId },
+  );
+  // Manual "busy" rings quietly on the recipient's side; tell the caller so
+  // their dock can say "rang quietly" instead of implying a normal ring.
+  return { to_user: toUser, busy: target?.status === "busy", cooldown: false };
+}
 
 // Runs once per fresh invite, TTL+2s after creation. An invite still "ringing"
 // past its TTL was never answered anywhere — settle it and tell the recipient
@@ -472,7 +607,7 @@ export const sweepMissedInvite = internalMutation({
       await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
         push_token: target.push_token,
         title: `Missed huddle from ${from?.name || from?.email || "a teammate"}`,
-        body: inv.anchor_title ? `about: ${inv.anchor_title}` : "They rang while you were away",
+        body: inv.anchor_title || "They rang while you were away",
         data: { type: CALL_PUSH_TYPE_MISSED, room_key: inv.room_key },
         user_id: inv.to_user,
       });

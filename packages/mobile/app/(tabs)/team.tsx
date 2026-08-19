@@ -278,7 +278,7 @@ export default function TeamScreen() {
                       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                       void startHuddle({
                         roomKey: dmRoomKey(String(currentUser._id), String(member._id)),
-                        toUserId: String(member._id),
+                        toUserIds: [String(member._id)],
                       });
                       router.push('/call');
                     }}

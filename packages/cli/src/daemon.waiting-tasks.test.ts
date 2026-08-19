@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { openBackgroundTaskIds, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict } from "./daemon.js";
+import { openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
 
 // Regression tests for the "settled turn with live background work reads as
 // needs_input" bug (session jx7e6ex, 2026-08-03). A turn that ends while a
@@ -42,6 +42,18 @@ const taskStop = (id: string) =>
 const transcript = (...lines: string[]) => lines.join("\n");
 
 describe("scanOpenBackgroundTasks", () => {
+  test("a result that merely QUOTES a start phrase opens nothing (a grep over a transcript is not a task)", () => {
+    // 2026-08-17: an agent inspecting phantom-open task ids grepped its own
+    // transcript; the unanchored scan read the quoted line as a fresh start and
+    // parked the session in "waiting" on an id nothing would ever close.
+    expect([...scanOpenBackgroundTasks(transcript(
+      toolResult("252:  Command did not complete within its 60s timeout and was moved to the background (ID: bk2dy02vm). Output is being written to: /tmp/x"),
+      toolResult('18:{"x":"Command running in background with ID: bwxa1nfbs. Output"}'),
+    ))]).toEqual([]);
+    // Leading whitespace is fine — the harness's own text still leads.
+    expect([...scanOpenBackgroundTasks(transcript(toolResult("  Command running in background with ID: b9. Output is being written to: /tmp/x")))]).toEqual(["b9"]);
+  });
+
   test("a started background command is open until its terminal notification", () => {
     expect([...scanOpenBackgroundTasks(transcript(bgStart("b1")))]).toEqual(["b1"]);
     expect([...scanOpenBackgroundTasks(transcript(bgStart("b1"), notification("b1", "completed")))]).toEqual([]);
@@ -212,6 +224,27 @@ describe("openBackgroundTaskIds (incremental)", () => {
   };
   const wholeFile = (p: string) => [...scanOpenBackgroundTasks(fs.readFileSync(p, "utf8"), SID)].sort();
 
+  test("the restart fence drops tasks armed before the agent process started", () => {
+    // Timestamped lines: one task armed at T0, one at T0+10min. An agent
+    // process that started at T0+5min inherited only the transcript — the
+    // first task's shell died with the process that spawned it, and no
+    // terminal notification will ever be written for it.
+    const T0 = Date.parse("2026-08-17T15:00:00.000Z");
+    const stamped = (obj: Record<string, unknown>, at: number) => JSON.stringify({ ...obj, timestamp: new Date(at).toISOString() });
+    const open = (id: string, at: number) =>
+      stamped({ type: "user", sessionId: SID, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: `Command did not complete within its 400s timeout and was moved to the background (ID: ${id}).` }] } }, at);
+    const p = tmpTranscript();
+    fs.writeFileSync(p, open("old", T0) + "\n" + open("fresh", T0 + 10 * 60_000) + "\n");
+    // No fence: both open.
+    expect(openBackgroundTaskIds(p, SID).sort()).toEqual(["fresh", "old"]);
+    // Process started between them: only the later one survives.
+    expect(openBackgroundTaskIds(p, SID, T0 + 5 * 60_000)).toEqual(["fresh"]);
+    // 60s of skew slack: a task armed just before the recorded start still counts.
+    expect(openBackgroundTaskIds(p, SID, T0 + 30_000).sort()).toEqual(["fresh", "old"]);
+    // A process started after both: nothing is open — the session settles idle.
+    expect(openBackgroundTaskIds(p, SID, T0 + 20 * 60_000)).toEqual([]);
+  });
+
   test("matches a whole-file scan after each append", () => {
     const p = tmpTranscript();
     fs.writeFileSync(p, transcript(bgStart("b1"), monitorStart("m1")) + "\n");
@@ -274,3 +307,120 @@ describe("openBackgroundTaskIds (incremental)", () => {
     expect(openBackgroundTaskIds(p, SID)).toEqual(["mine"]);
   });
 });
+
+// ---- The daemon knows WHAT is open, and checks it against live processes ----
+describe("openBackgroundTasks — the scanner joins each start to the call that armed it", () => {
+  const dir = () => fs.mkdtempSync(path.join(os.tmpdir(), "open-tasks-"));
+  const bgCall = (id: string, description: string, command: string, run_in_background = true) =>
+    line({ type: "assistant", sessionId: SID, message: { role: "assistant", content: [{ type: "tool_use", id, name: "Bash", input: { command, description, run_in_background } }] } });
+  const bgResult = (toolUseId: string, taskId: string) =>
+    line({ type: "user", sessionId: SID, timestamp: "2026-08-17T18:58:38.000Z", message: { role: "user", content: [{ tool_use_id: toolUseId, type: "tool_result", content: `Command running in background with ID: ${taskId}. Output is being written to: /tmp/tasks/${taskId}.output` }] } });
+  const monCall = (id: string, description: string, command: string) =>
+    line({ type: "assistant", sessionId: SID, message: { role: "assistant", content: [{ type: "tool_use", id, name: "Monitor", input: { command, description, timeout_ms: 60000, persistent: false } }] } });
+  const monResult = (toolUseId: string, taskId: string) =>
+    line({ type: "user", sessionId: SID, message: { role: "user", content: [{ tool_use_id: toolUseId, type: "tool_result", content: `Monitor started (task ${taskId}, timeout 60000ms). You will be notified on each event.` }] } });
+
+  test("background Bash and Monitor starts carry kind, description, command, tool_use_id and start time", () => {
+    const d = dir();
+    const f = path.join(d, "t.jsonl");
+    fs.writeFileSync(f, transcript(
+      bgCall("tu1", "Wait for EAS build to finish", "until s=$(eas build:view x); do sleep 60; done\necho BUILD $s"),
+      bgResult("tu1", "byd1rplmv"),
+      monCall("tu2", "errors in deploy.log", "tail -f deploy.log | grep --line-buffered ERROR"),
+      monResult("tu2", "mon1"),
+    ) + "\n");
+    const tasks = openBackgroundTasks(f, SID);
+    expect(tasks.map((t) => t.id).sort()).toEqual(["byd1rplmv", "mon1"]);
+    const bg = tasks.find((t) => t.id === "byd1rplmv")!;
+    expect(bg).toMatchObject({ kind: "background", description: "Wait for EAS build to finish", tool_use_id: "tu1", started_at: Date.parse("2026-08-17T18:58:38.000Z") });
+    expect(bg.command).toBe("until s=$(eas build:view x); do sleep 60; done\necho BUILD $s");
+    expect(tasks.find((t) => t.id === "mon1")).toMatchObject({ kind: "monitor", description: "errors in deploy.log", tool_use_id: "tu2" });
+    // The published shape cuts the command to its first line and drops scan-private fields.
+    const reports = toOpenTaskReports(tasks);
+    expect(reports.find((r) => r.id === "byd1rplmv")).toEqual({ id: "byd1rplmv", kind: "background", description: "Wait for EAS build to finish", command: "until s=$(eas build:view x); do sleep 60; done", started_at: Date.parse("2026-08-17T18:58:38.000Z"), tool_use_id: "tu1" });
+    expect(Object.keys(reports[0])).not.toContain("openedAt");
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  test("a promoted foreground command keeps its call's description and command", () => {
+    const d = dir();
+    const f = path.join(d, "t.jsonl");
+    fs.writeFileSync(f, transcript(
+      bgCall("tu9", "Confirm second deploy", "until tmux capture-pane -p | grep -q DEPLOY_DONE; do sleep 5; done", false),
+      line({ type: "user", sessionId: SID, message: { role: "user", content: [{ tool_use_id: "tu9", type: "tool_result", content: "Command did not complete within its 400s timeout and was moved to the background (ID: bpzokfxpp). Output is being written to: /tmp/x" }] } }),
+    ) + "\n");
+    expect(openBackgroundTasks(f, SID)[0]).toMatchObject({ id: "bpzokfxpp", kind: "promoted", description: "Confirm second deploy", command: "until tmux capture-pane -p | grep -q DEPLOY_DONE; do sleep 5; done" });
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+});
+
+describe("verifyOpenTasks — a shell-backed task is alive while its child shell exists", () => {
+  const AGENT = 53695;
+  const NOW = 1_800_000_000_000;
+  const wrapper = (cmd: string) =>
+    `/bin/bash -c source /Users/x/.claude/shell-snapshots/snapshot-bash-1.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '${cmd}' < /dev/null && pwd -P >| /tmp/claude-6e5b-cwd`;
+  const snap = (procs: Array<{ pid: number; ppid: number; command: string }>) => ({ at: NOW, procs });
+  const task = (over: Partial<OpenTaskInfo>): OpenTaskInfo => ({ id: "t1", kind: "background", command: "sleep 240; echo done-probe-task", openedAt: NOW - 10 * 60_000, ...over });
+
+  test("alive: a child of the agent whose command line carries eval '<command>", () => {
+    const s = snap([{ pid: 41719, ppid: AGENT, command: wrapper("sleep 240; echo done-probe-task") }]);
+    expect(verifyOpenTasks([task({})], s, AGENT).alive.map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  test("dead: no such child (the harness lost the notice, or the shell died) — the 2026-08-17 phantom", () => {
+    const s = snap([{ pid: 1, ppid: 0, command: "/sbin/launchd" }, { pid: AGENT, ppid: 100, command: "claude --resume abc" }]);
+    const v = verifyOpenTasks([task({ id: "bpzokfxpp", kind: "promoted", command: "until tmux capture-pane; do sleep 5; done" })], s, AGENT);
+    expect(v.dead.map((t) => t.id)).toEqual(["bpzokfxpp"]);
+    expect(v.alive).toEqual([]);
+  });
+
+  test("a matching shell under ANOTHER agent does not count (same command text, different session)", () => {
+    const s = snap([{ pid: 900, ppid: 777, command: wrapper("sleep 240; echo done-probe-task") }]);
+    expect(verifyOpenTasks([task({})], s, AGENT).dead.length).toBe(1);
+  });
+
+  test("an orphaned shell (reparented to launchd after the agent died) does not count", () => {
+    const s = snap([{ pid: 3579, ppid: 1, command: wrapper("sleep 240; echo done-probe-task") }]);
+    expect(verifyOpenTasks([task({})], s, AGENT).dead.length).toBe(1);
+  });
+
+  test("a monitor's script is checked the same way (single quotes stop the needle, not the match)", () => {
+    const s = snap([{ pid: 44447, ppid: AGENT, command: wrapper(`sleep 200; echo probe-monitor-'"'"'it'"'"''"'"'s'"'"'-done`) }]);
+    expect(verifyOpenTasks([task({ kind: "monitor", command: "sleep 200; echo probe-monitor-'it''s'-done" })], s, AGENT).alive.length).toBe(1);
+  });
+
+  test("lenient by construction: no snapshot, no agent pid, a workflow, an unusable command, a task younger than the snapshot", () => {
+    const empty = snap([]);
+    expect(verifyOpenTasks([task({})], undefined, AGENT).alive.length).toBe(1);
+    expect(verifyOpenTasks([task({})], empty, undefined).alive.length).toBe(1);
+    expect(verifyOpenTasks([task({ kind: "workflow", command: undefined })], empty, AGENT).alive.length).toBe(1);
+    expect(verifyOpenTasks([task({ command: "'quoted first'" })], empty, AGENT).alive.length).toBe(1);
+    expect(verifyOpenTasks([task({ openedAt: NOW - 5_000 })], empty, AGENT).alive.length).toBe(1);
+    // …and past the grace it is judged.
+    expect(verifyOpenTasks([task({ openedAt: NOW - 60_000 })], empty, AGENT).dead.length).toBe(1);
+  });
+
+  test("taskProcessNeedle stops at the first quote or newline", () => {
+    expect(taskProcessNeedle("until grep -q 'x' f; do sleep 5; done")).toBe("eval 'until grep -q ");
+    expect(taskProcessNeedle("cd /a\nnpm run dev")).toBe("eval 'cd /a");
+    expect(taskProcessNeedle("'x'")).toBeUndefined();
+    expect(taskProcessNeedle(undefined)).toBeUndefined();
+  });
+
+  test("parseProcessTable folds a multi-line command back onto its row", () => {
+    const procs = parseProcessTable("  10  1 /sbin/launchd\n 41719 53695 /bin/bash -c eval 'cd /a\nnpm run dev' < /dev/null\n 42 10 tail -f x\n");
+    expect(procs.length).toBe(3);
+    expect(procs[1]).toEqual({ pid: 41719, ppid: 53695, command: "/bin/bash -c eval 'cd /a\nnpm run dev' < /dev/null" });
+  });
+});
+
+describe("paneReconcileTarget — a parked waiting over an idle pane is re-derived", () => {
+  test("stored waiting + idle pane -> idle (the caller re-runs the settle verdict, which re-checks the tasks)", () => {
+    expect(paneReconcileTarget("idle", "waiting")).toBe("idle");
+    // Declared verdicts are still left alone by the pane: nothing to re-check.
+    expect(paneReconcileTarget("idle", "dormant")).toBeNull();
+    expect(paneReconcileTarget("idle", "done")).toBeNull();
+    expect(paneReconcileTarget("idle", "idle")).toBeNull();
+  });
+});
+

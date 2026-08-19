@@ -9,6 +9,7 @@ import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from ".
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
+import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, recordConvergenceSignals } from "./capabilities/heartbeat.js";
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostname } from "./remote/device.js";
@@ -32,6 +33,7 @@ import {
   readActiveCredential,
   credentialHealth,
   activeAccountSummary,
+  listProfiles,
 } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
@@ -103,6 +105,7 @@ import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
 import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
 import { ensureMessagingForMemory } from "./snippets.js";
+import { shouldAutoEnableLimitsGuidance } from "./limitsGuidance.js";
 import { readInventory, toInvocableList } from "./capabilities/inventory.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import {
@@ -166,11 +169,10 @@ import {
 } from "./resumeCommand.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
-import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
+import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES } from "@codecast/shared/contracts";
 import { readThreadStateStamp } from "./stateCommand.js";
-import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, countModelSetEchoes, countEffortSetEchoes, isSwitchConfirmDialog, isStrandedSlashCommand } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
@@ -1276,7 +1278,39 @@ function sendAgentStatus(
     turnStartedAt.set(sessionId, Date.now());
   }
   lastSentAgentStatus.set(sessionId, status);
-  syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
+  // The open-task report a settle just computed rides along with its verdict;
+  // any other status drops it (a turn start makes the parked picture moot).
+  const openTasks = pendingOpenTaskReports.get(sessionId);
+  pendingOpenTaskReports.delete(sessionId);
+  const withTasks = openTasks !== undefined && SETTLE_STATUSES_WITH_TASKS.has(status);
+  if (withTasks) {
+    lastOpenTasksSentAt.set(sessionId, Date.now());
+    lastOpenTasksSentJson.set(sessionId, JSON.stringify(openTasks));
+  }
+  syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode, withTasks ? openTasks : undefined).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
+}
+
+// One-shot handoff from resolveTurnEndStatus / the reconciles to sendAgentStatus:
+// the verified open tasks behind the verdict about to be sent.
+const pendingOpenTaskReports = new Map<string, OpenTaskReport[]>();
+const lastOpenTasksSentAt = new Map<string, number>();
+const lastOpenTasksSentJson = new Map<string, string>();
+// True when the report a settle just computed differs from the last one sent
+// for this session — a settle whose STATUS is unchanged (idle → idle again,
+// a re-declared "done") still has to publish a report that moved, or the
+// server keeps drawing a watch that has since ended.
+function pendingOpenTasksChanged(sessionId: string): boolean {
+  const pending = pendingOpenTaskReports.get(sessionId);
+  if (pending === undefined) return false;
+  return JSON.stringify(pending) !== lastOpenTasksSentJson.get(sessionId);
+}
+const SETTLE_STATUSES_WITH_TASKS: ReadonlySet<string> = new Set(["idle", "waiting", "dormant", "done"]);
+// A parked "waiting" re-publishes its (re-verified) tasks this often so the
+// server's report stays fresh enough to vouch for the status past the
+// quiet-time decay (OPEN_TASKS_FRESH_MS is 10 min; the reconciles run ~90s).
+const OPEN_TASKS_REFRESH_MS = 4 * 60_000;
+function openTasksRefreshDue(sessionId: string, now: number): boolean {
+  return now - (lastOpenTasksSentAt.get(sessionId) ?? 0) >= OPEN_TASKS_REFRESH_MS;
 }
 
 // Log the status carried on a heartbeat. Throttled per-session to once every
@@ -1805,8 +1839,10 @@ async function pollDaemonCommands(): Promise<void> {
         has_tmux: hasTmux(),
         // Identify the device on this path too: it hits the same heartbeat
         // mutation as sendHeartbeat, and a device-less beat is a legacy writer
-        // there (per-machine user fields, command visibility).
+        // there (per-machine user fields, command visibility). Label rides
+        // along (cached, no I/O) so this beat never reads as label-less.
         device_id: deviceId(),
+        device_label: deviceLabel(),
         ...syncHealthFields(),
       }),
     });
@@ -1873,6 +1909,8 @@ function syncHealthFields(): {
   oldest_pending_ms: number;
   pending_sync_messages: number;
   pending_sync_conversations: number;
+  daemon_started_at: number;
+  loop_freeze_ms: number;
 } {
   const health = retryQueueRef?.getHealth();
   return {
@@ -1880,6 +1918,10 @@ function syncHealthFields(): {
     oldest_pending_ms: health?.oldestPendingMs ?? 0,
     pending_sync_messages: health?.messages ?? 0,
     pending_sync_conversations: health?.conversations ?? 0,
+    // Boot time and recent loop-freeze budget: the web reads these as
+    // "restarted, catching up" and "under load" (see LoopFreezeLedger).
+    daemon_started_at: daemonStartedAt,
+    loop_freeze_ms: loopFreezes.recentMs(),
   };
 }
 
@@ -2254,6 +2296,30 @@ function maybeAutoSaveAccount(): void {
   } catch (err) {
     log(`[ACCOUNTS] Auto-save of active login failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  maybeEnableLimitsGuidance();
+}
+
+// The "Usage limits" agent snippet turns itself on the first time this machine
+// has more than one saved Claude account (see limitsGuidance.ts). The daemon
+// only decides; the CLI owns config + instruction-file writes, so the install
+// goes through the same `cast install <slug>` the web Settings toggle uses.
+// One attempt per daemon lifetime; an explicit off is never overridden.
+let limitsGuidanceDecided = false;
+function maybeEnableLimitsGuidance(): void {
+  if (limitsGuidanceDecided) return;
+  try {
+    const config = readConfig();
+    if (config?.limits_enabled !== undefined) {
+      limitsGuidanceDecided = true;
+      return;
+    }
+    if (!shouldAutoEnableLimitsGuidance(config, listProfiles().length)) return;
+    limitsGuidanceDecided = true;
+    log(`[ACCOUNTS] Second Claude account saved — enabling the usage-limits agent snippet`);
+    runCastCommand(["install", "limits"], { timeoutMs: 60 * 1000 }).catch((e) =>
+      logError("cast install limits failed", e instanceof Error ? e : new Error(String(e)))
+    );
+  } catch {}
 }
 
 // Same per-beat enrollment for the Codex login: a fresh `codex login` appears
@@ -2459,6 +2525,20 @@ async function sendHeartbeat(): Promise<void> {
         if (activeConfig) {
           activeConfig.agent_default_params = serverParams;
         }
+      }
+    }
+
+    // ~/.claude/settings.json `model` mirrors the codecast default. A session's
+    // `/model <x>` one-shot rewrites that file as a side effect; re-asserting
+    // the pinned default here keeps the switch session-scoped in practice and
+    // bare `claude` terminals on the model the user chose in codecast.
+    if (data.default_models !== undefined) {
+      try {
+        if (reconcileClaudeSettingsModel(data.default_models)) {
+          log(`[DEFAULT-MODEL] settings.json model -> ${data.default_models?.claude} (codecast default)`);
+        }
+      } catch (err) {
+        log(`[DEFAULT-MODEL] settings.json reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   } catch (err) {
@@ -2889,7 +2969,7 @@ async function executeRemoteCommand(
   // races the owner — e.g. after a move-to-remote the local daemon would resume a
   // local copy and answer in parallel with the remote (split-brain). An OFFLINE
   // owner does NOT skip, so this daemon can reclaim a session whose owner died.
-  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "escape", "rewind", "set_model"]);
+  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "escape", "rewind"]);
   if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
     try {
       const parsedArgs = JSON.parse(commandArgs);
@@ -3693,102 +3773,6 @@ async function executeRemoteCommand(
 
         result = "rewind_sent";
         log(`[REWIND] Rewind ${stepsBack} steps sent to session ${sessionId.slice(0, 8)}`);
-        break;
-      }
-      case "set_model": {
-        // In-place model/effort switch for a running claude session. Model
-        // options with a cliAlias inject the one-shot `/model <alias>` inside
-        // the settings.json restore envelope (net session-only); effort always
-        // injects `/effort <x>` (session-only natively). Options with no
-        // reliable alias — harvested menu:<label> keys, Sonnet 1M — fall back
-        // to driving the /model picker and committing with `s`. See
-        // modelPicker.ts.
-        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
-        const conversationId = parsed.conversation_id;
-        const modelKey: string | undefined = typeof parsed.model === "string" ? parsed.model : undefined;
-        const effortKey: string | undefined = typeof parsed.effort === "string" ? parsed.effort : undefined;
-        if (!conversationId || (!modelKey && !effortKey)) {
-          error = "Missing conversation_id or model/effort";
-          break;
-        }
-        const modelOpt = modelKey ? findModelOption("claude", modelKey) : undefined;
-        const oneShotAlias = modelOpt?.midSessionOnly ? undefined : modelOpt?.cliAlias;
-        if (modelKey && !modelOpt?.menuMatch && !oneShotAlias) {
-          error = `Unknown model: ${modelKey}`;
-          break;
-        }
-        if (effortKey && !(CLAUDE_EFFORT_LEVELS as readonly string[]).includes(effortKey)) {
-          error = `Unknown effort: ${effortKey}`;
-          break;
-        }
-        let sessionId: string | undefined;
-        {
-          const cache = readConversationCache();
-          sessionId = buildReverseConversationCache(cache)[conversationId];
-        }
-        if (!sessionId) {
-          for (let i = 0; i < 10; i++) {
-            await new Promise(r => setTimeout(r, 500));
-            const freshCache = readConversationCache();
-            sessionId = buildReverseConversationCache(freshCache)[conversationId];
-            if (sessionId) break;
-          }
-        }
-        if (!sessionId) {
-          error = `No session found for conversation ${conversationId}`;
-          break;
-        }
-        const agentType = detectSessionAgentType(sessionId);
-        if (agentType !== "claude") {
-          error = `In-place model switch not supported for ${agentType} sessions`;
-          break;
-        }
-        // Pane resolution, two sources + a short retry. The boot-time liveness
-        // sweep seeds the process cache with tty:"" but a good tmuxTarget
-        // (the deterministic cc-<agent>-<conv> session name), so a tty-only
-        // lookup dead-ends right after a daemon restart (observed live —
-        // "No tmux pane found" with a healthy pane). Prefer the cached
-        // target; fall back to tty mapping; retry briefly for respawn races.
-        let proc: Awaited<ReturnType<typeof findSessionProcess>> = null;
-        let tmuxTarget: string | null = null;
-        for (let i = 0; i < 4 && !tmuxTarget; i++) {
-          if (i > 0) await new Promise((r) => setTimeout(r, 1500));
-          proc = await findSessionProcess(sessionId, agentType);
-          if (!proc) continue;
-          const cachedTarget = sessionProcessCache.get(sessionId)?.tmuxTarget;
-          if (cachedTarget && validateTmuxTarget(cachedTarget)) {
-            tmuxTarget = cachedTarget;
-            break;
-          }
-          if (proc.tty) {
-            const t = await findTmuxPaneForTty(proc.tty);
-            if (t && validateTmuxTarget(t)) tmuxTarget = t;
-          }
-        }
-        if (!proc) {
-          error = `No running process for session ${sessionId.slice(0, 8)}`;
-          break;
-        }
-        if (!tmuxTarget) {
-          error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
-          break;
-        }
-        try {
-          if (modelKey && !oneShotAlias) {
-            // Menu-key / Sonnet 1M: the picker drive commits model and effort
-            // in the same session-only `s` stroke.
-            result = await driveModelPicker(tmuxTarget, { menuMatch: modelOpt?.menuMatch, effort: effortKey });
-          } else {
-            const parts: string[] = [];
-            if (oneShotAlias) parts.push(await injectOneShotModelSwitch(tmuxTarget, oneShotAlias));
-            if (effortKey) parts.push(await injectOneShotEffortSwitch(tmuxTarget, effortKey));
-            result = parts.join("; ");
-          }
-          log(`[SET_MODEL] ${result} (session ${sessionId.slice(0, 8)})`);
-        } catch (err) {
-          error = err instanceof Error ? err.message : String(err);
-          log(`[SET_MODEL] failed for ${sessionId.slice(0, 8)}: ${error}`);
-        }
         break;
       }
       case "send_keys": {
@@ -9912,7 +9896,11 @@ export function paneReconcileTarget(
 ): AgentStatus | null {
   if (state === "idle") {
     const staleActive = stored === "working" || stored === "thinking" || stored === "connected" || stored === "permission_blocked";
-    return stored === undefined || staleActive ? "idle" : null;
+    // A parked "waiting" is re-derived too: the caller runs the settle verdict
+    // again, which re-checks the open tasks against live processes — a task
+    // that died without a notice drains the session back to idle here instead
+    // of sitting parked until the quiet-time decay.
+    return stored === undefined || staleActive || stored === "waiting" ? "idle" : null;
   }
   if (state === "busy") {
     // The settle verdicts count as quiet too: a busy pane over a parked
@@ -9938,6 +9926,17 @@ function reconcileStatusFromPane(
   // A pane-confirmed settle goes through the same verdict as a Stop hook, so a
   // turn whose hook was lost still lands on its declared / inferred status.
   if (target === "idle") target = resolveTurnEndStatus(sessionId);
+  if (target === stored) {
+    // Unchanged status: send only to publish a report that moved, or the
+    // periodic re-publish that keeps a "waiting" vouched for; otherwise
+    // nothing.
+    if (pendingOpenTasksChanged(sessionId) || (stored === "waiting" && openTasksRefreshDue(sessionId, Date.now()))) {
+      sendAgentStatus(syncService, conversationId, sessionId, target);
+    } else {
+      pendingOpenTaskReports.delete(sessionId);
+    }
+    return;
+  }
   log(`[STATUS-PANE-RECONCILE] ${sessionId.slice(0, 8)} stored=${stored ?? "none"} pane=${state} -> ${target}`);
   sendAgentStatus(syncService, conversationId, sessionId, target);
 }
@@ -10046,24 +10045,68 @@ export function scanOpenBackgroundTasks(content: string, currentSessionId?: stri
   return scanOpenBackgroundTasksInto(new Set<string>(), content, currentSessionId);
 }
 
+// When each open task was armed (ms), keyed by task id — the restart fence's
+// input. A background task is a child of the agent process that started it;
+// when that process is replaced (crash, kill, account switch, `claude
+// --resume`) the task dies with it and no terminal notification is ever
+// written, so its start line would keep the session "waiting" forever (the
+// 1h decay merely rate-limits the lie). Same rule the web's monitor rows apply
+// (monitorRows.effectiveMonitorStatus over agent_started_at).
+export type OpenTaskTimes = Map<string, number>;
+
 // The scanner core, threading an existing `open` set so a caller that already
 // scanned the first N bytes can feed it only the bytes after N. Open/close are
 // order-dependent but purely sequential (a task opens on its start line and
 // closes on a later notification/TaskStop line), so scanning the file in two
 // halves against the same set gives the same answer as scanning it whole.
-function scanOpenBackgroundTasksInto(open: Set<string>, content: string, currentSessionId?: string): Set<string> {
-  const OPEN_PATTERNS = [
-    /running in background with ID: ([A-Za-z0-9_-]+)/g,
-    /moved to the background \(ID: ([A-Za-z0-9_-]+)\)/g,
-    /Monitor started \(task ([A-Za-z0-9_-]+)/g,
-    /Workflow launched in background\. Task ID: ([A-Za-z0-9_-]+)/g,
-  ];
+// The harness's own "this is now a background task" results, anchored to the
+// START of the tool_result: the harness always leads with them, and an
+// unanchored scan also fired on a foreground command whose OUTPUT quoted one (an
+// agent grepping a transcript for these phrases parked its own session in
+// "waiting" on a task id nothing would ever close). Same rule as the web's
+// monitorRows scanner.
+const OPEN_TASK_START_RE = /^\s*(?:Command running in background with ID: ([A-Za-z0-9_-]+)|Command did not complete within its \d+s timeout and was moved to the background \(ID: ([A-Za-z0-9_-]+)\)|Monitor started \(task ([A-Za-z0-9_-]+)|Workflow launched in background\. Task ID: ([A-Za-z0-9_-]+))/;
+export function openTaskStart(text: string): { id: string; kind: OpenTaskKind } | undefined {
+  const m = text.match(OPEN_TASK_START_RE);
+  if (!m) return undefined;
+  if (m[1]) return { id: m[1], kind: "background" };
+  if (m[2]) return { id: m[2], kind: "promoted" };
+  if (m[3]) return { id: m[3], kind: "monitor" };
+  return { id: m[4], kind: "workflow" };
+}
+export function openTaskStartId(text: string): string | undefined {
+  return openTaskStart(text)?.id;
+}
+
+// What the scanner knows about one open task: the shared report shape (what
+// gets published) plus the tool call that armed it. `command` is the FULL
+// script here — the process check needs it — and is cut to its first line
+// only when reported.
+export type OpenTaskInfo = OpenTaskReport & { openedAt?: number };
+
+// The tool_use blocks that can arm a task, remembered until their result lands
+// (a result always follows its call closely) so the start result can be joined
+// to the description/command the agent gave. Bounded: a call whose result was
+// lost (an interrupted turn) must not leak forever.
+type PendingTaskCall = { name: string; description?: string; command?: string };
+const PENDING_TASK_CALLS_MAX = 200;
+const TASK_ARMING_TOOLS = new Set(["Bash", "Monitor", "Workflow"]);
+
+function scanOpenBackgroundTasksInto(
+  open: Set<string>,
+  content: string,
+  currentSessionId?: string,
+  openedAt?: OpenTaskTimes,
+  info?: Map<string, OpenTaskInfo>,
+  pendingCalls?: Map<string, PendingTaskCall>,
+): Set<string> {
   for (const rawLine of content.split("\n")) {
     const line = rawLine.trim();
     if (!line) continue;
     let d: {
       type?: string;
       sessionId?: string;
+      timestamp?: string;
       operation?: string;
       content?: unknown;
       attachment?: { prompt?: unknown };
@@ -10075,6 +10118,7 @@ function scanOpenBackgroundTasksInto(open: Set<string>, content: string, current
       continue; // partial/corrupt line (mid-write tail) -> skip
     }
     if (currentSessionId && d.sessionId && d.sessionId !== currentSessionId) continue;
+    const lineAt = d.timestamp ? Date.parse(d.timestamp) : NaN;
     // A notification that arrives while the agent is mid-turn is recorded as a
     // queue-operation (top-level content) and an attachment (prompt), never as
     // a plain user message — close on the delivered forms. "remove" = dequeued
@@ -10098,7 +10142,7 @@ function scanOpenBackgroundTasksInto(open: Set<string>, content: string, current
     }
     for (const b of blocks) {
       if (!b || typeof b !== "object") continue;
-      const block = b as { type?: string; name?: string; input?: unknown; content?: unknown; text?: string };
+      const block = b as { type?: string; id?: string; name?: string; input?: unknown; content?: unknown; text?: string; tool_use_id?: string };
       if (block.type === "text" && block.text) {
         closeNotifiedTasks(block.text, open);
       } else if (block.type === "tool_result") {
@@ -10107,13 +10151,35 @@ function scanOpenBackgroundTasksInto(open: Set<string>, content: string, current
           : Array.isArray(block.content)
             ? block.content.map((c) => (c && typeof c === "object" ? String((c as { text?: unknown }).text ?? "") : "")).join(" ")
             : "";
-        for (const pat of OPEN_PATTERNS) {
-          pat.lastIndex = 0;
-          for (const m of text.matchAll(pat)) open.add(m[1]);
+        const started = openTaskStart(text);
+        const call = block.tool_use_id && pendingCalls ? pendingCalls.get(block.tool_use_id) : undefined;
+        if (block.tool_use_id) pendingCalls?.delete(block.tool_use_id);
+        if (started) {
+          open.add(started.id);
+          if (openedAt && Number.isFinite(lineAt)) openedAt.set(started.id, lineAt);
+          info?.set(started.id, {
+            id: started.id,
+            kind: started.kind,
+            ...(call?.description ? { description: call.description } : {}),
+            ...(call?.command ? { command: call.command } : {}),
+            ...(Number.isFinite(lineAt) ? { started_at: lineAt, openedAt: lineAt } : {}),
+            ...(block.tool_use_id ? { tool_use_id: block.tool_use_id } : {}),
+          });
         }
       } else if (block.type === "tool_use" && block.name === "TaskStop") {
         const taskId = (block.input as { task_id?: unknown } | undefined)?.task_id;
         if (typeof taskId === "string") open.delete(taskId);
+      } else if (block.type === "tool_use" && block.id && block.name && TASK_ARMING_TOOLS.has(block.name) && pendingCalls) {
+        const input = (block.input ?? {}) as { description?: unknown; command?: unknown };
+        pendingCalls.set(block.id, {
+          name: block.name,
+          ...(typeof input.description === "string" ? { description: input.description } : {}),
+          ...(typeof input.command === "string" ? { command: input.command } : {}),
+        });
+        if (pendingCalls.size > PENDING_TASK_CALLS_MAX) {
+          const oldest = pendingCalls.keys().next().value;
+          if (oldest !== undefined) pendingCalls.delete(oldest);
+        }
       }
     }
   }
@@ -10143,14 +10209,31 @@ function closeNotifiedTasks(text: string, open: Set<string>): void {
 // lines, so a half-written tail is re-read (not skipped) on the next call. A
 // shrink (rotation/rewrite) resets to a full scan.
 const SCAN_CHUNK_BYTES = 4 * 1024 * 1024;
-type OpenTaskScanState = { offset: number; open: Set<string>; sessionId?: string };
+type OpenTaskScanState = {
+  offset: number;
+  open: Set<string>;
+  openedAt: OpenTaskTimes;
+  info: Map<string, OpenTaskInfo>;
+  pendingCalls: Map<string, PendingTaskCall>;
+  sessionId?: string;
+};
 const openTaskScanCache = new Map<string, OpenTaskScanState>();
-export function openBackgroundTaskIds(transcriptPath: string, sessionId?: string): string[] {
+// `notBefore` is the restart fence: a task armed before it belongs to a
+// replaced agent process and is dead however open the transcript says it is
+// (see OpenTaskTimes). Callers pass the agent's process start when known.
+export function openBackgroundTaskIds(transcriptPath: string, sessionId?: string, notBefore?: number): string[] {
+  return openBackgroundTasks(transcriptPath, sessionId, notBefore).map((t) => t.id);
+}
+
+// The open tasks with what the scanner knows about each (see OpenTaskInfo) —
+// the transcript's claim, fenced by process generation but NOT yet checked
+// against live processes (verifiedOpenTasks does that).
+export function openBackgroundTasks(transcriptPath: string, sessionId?: string, notBefore?: number): OpenTaskInfo[] {
   try {
     const size = fs.statSync(transcriptPath).size;
     let state = openTaskScanCache.get(transcriptPath);
     if (state && (state.offset > size || state.sessionId !== sessionId)) state = undefined;
-    if (!state) state = { offset: 0, open: new Set<string>(), sessionId };
+    if (!state) state = { offset: 0, open: new Set<string>(), openedAt: new Map<string, number>(), info: new Map(), pendingCalls: new Map(), sessionId };
     if (size > state.offset) {
       // Chunked, not one read of (size - offset): the FIRST scan of a session
       // covers the whole transcript, and at boot the daemon first-scans every
@@ -10176,7 +10259,7 @@ export function openBackgroundTaskIds(transcriptPath: string, sessionId?: string
             buf = Buffer.alloc(size - state.offset);
             continue;
           }
-          scanOpenBackgroundTasksInto(state.open, buf.toString("utf8", 0, lastNl + 1), sessionId);
+          scanOpenBackgroundTasksInto(state.open, buf.toString("utf8", 0, lastNl + 1), sessionId, state.openedAt, state.info, state.pendingCalls);
           state.offset += lastNl + 1;
         }
       } finally {
@@ -10184,10 +10267,142 @@ export function openBackgroundTaskIds(transcriptPath: string, sessionId?: string
       }
       openTaskScanCache.set(transcriptPath, state);
     }
-    return [...state.open];
+    const infoFor = (id: string): OpenTaskInfo => state!.info.get(id) ?? { id, kind: "background" };
+    if (notBefore === undefined) return [...state.open].map(infoFor);
+    // 60s of slack: the process start comes from ps etime (1s resolution) and
+    // the transcript stamps come from the agent's own clock.
+    const fence = notBefore - 60_000;
+    return [...state.open].filter((id) => {
+      const at = state!.openedAt.get(id);
+      return at === undefined || at >= fence;
+    }).map(infoFor);
   } catch {
     return []; // unreadable transcript -> no claim of open work
   }
+}
+
+// ---- Process check for open tasks ----------------------------------------
+// The harness runs every shell-backed task (a background Bash, a command it
+// moved to the background on timeout, a Monitor's script) as a direct child of
+// the agent process, wrapped as
+//   /bin/bash -c source <snapshot> … && eval '<command>' < /dev/null && pwd -P >| …
+// so a task is alive exactly while such a child exists. The transcript alone
+// cannot tell: the harness loses a completion notice now and then (a promoted
+// command whose notice never got written parked its session "waiting" on
+// every settle for hours, 2026-08-17), and a task that dies with its process
+// gets no notice either. Checking the process table turns "waiting" from a
+// scrape into a claim we verified.
+//
+// The snapshot is refreshed in the background (one `ps` for the whole machine,
+// at most every PROCESS_SNAPSHOT_TTL_MS) and read synchronously by the settle
+// paths, which are sync; a consumer that finds no snapshot yet trusts the
+// transcript. Failure modes are biased toward "alive": no snapshot, no known
+// agent pid, a workflow task (no shell), a command we cannot turn into a
+// needle, a task younger than the snapshot — all count as open. Only a task
+// that is older than a successful snapshot and has no matching child of a
+// known agent pid is called dead.
+export type ProcessSnapshot = { at: number; procs: Array<{ pid: number; ppid: number; command: string }> };
+const PROCESS_SNAPSHOT_TTL_MS = 15_000;
+let processSnapshot: ProcessSnapshot | undefined;
+let processSnapshotInFlight = false;
+function ensureProcessSnapshotFresh(): void {
+  if (processSnapshotInFlight) return;
+  if (processSnapshot && Date.now() - processSnapshot.at < PROCESS_SNAPSHOT_TTL_MS) return;
+  processSnapshotInFlight = true;
+  const startedAt = Date.now();
+  execFile("ps", ["-axww", "-o", "pid=,ppid=,command="], { maxBuffer: 64 * 1024 * 1024, timeout: 10_000 }, (err, stdout) => {
+    processSnapshotInFlight = false;
+    if (err || typeof stdout !== "string") return; // keep the previous snapshot; consumers stay lenient
+    processSnapshot = { at: startedAt, procs: parseProcessTable(stdout) };
+  });
+}
+// `ps -o command` prints a multi-line command line with its newlines intact,
+// so a row can span lines: a line that does not start with a pid continues
+// the previous row's command.
+export function parseProcessTable(stdout: string): ProcessSnapshot["procs"] {
+  const procs: ProcessSnapshot["procs"] = [];
+  for (const line of stdout.split("\n")) {
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+    if (m) {
+      procs.push({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] });
+    } else if (procs.length && line.length) {
+      procs[procs.length - 1].command += "\n" + line;
+    }
+  }
+  return procs;
+}
+// The fragment of the harness wrapper that names this task's command: the
+// literal `eval '` followed by the command up to its first single quote or
+// newline (the harness escapes quotes in more than one style across versions,
+// so the needle stops before them). Undefined when nothing usable remains.
+export function taskProcessNeedle(command: string | undefined): string | undefined {
+  if (!command) return undefined;
+  const cut = command.search(/['\n]/);
+  const prefix = (cut >= 0 ? command.slice(0, cut) : command).slice(0, 80);
+  return prefix.trim() ? `eval '${prefix}` : undefined;
+}
+// A task just armed may not be in a snapshot taken moments before it — and the
+// transcript's clock and the daemon's are close but not identical.
+const TASK_PROCESS_GRACE_MS = 30_000;
+export function verifyOpenTasks(
+  tasks: OpenTaskInfo[],
+  snapshot: ProcessSnapshot | undefined,
+  agentPid: number | undefined,
+): { alive: OpenTaskInfo[]; dead: OpenTaskInfo[] } {
+  if (!snapshot || agentPid === undefined) return { alive: tasks, dead: [] };
+  // Children of the agent (and their children — one indirection of slack in
+  // case a wrapper ever sits between).
+  const byPid = new Map(snapshot.procs.map((p) => [p.pid, p]));
+  const isUnderAgent = (pid: number): boolean => {
+    let cur = byPid.get(pid);
+    for (let depth = 0; cur && depth < 2; depth++) {
+      if (cur.ppid === agentPid) return true;
+      cur = byPid.get(cur.ppid);
+    }
+    return false;
+  };
+  const alive: OpenTaskInfo[] = [];
+  const dead: OpenTaskInfo[] = [];
+  for (const t of tasks) {
+    if (t.kind === "workflow") { alive.push(t); continue; }
+    const needle = taskProcessNeedle(t.command);
+    if (!needle) { alive.push(t); continue; }
+    if (t.openedAt !== undefined && t.openedAt > snapshot.at - TASK_PROCESS_GRACE_MS) { alive.push(t); continue; }
+    const found = snapshot.procs.some((p) => p.command.includes(needle) && isUnderAgent(p.pid));
+    (found ? alive : dead).push(t);
+  }
+  return { alive, dead };
+}
+// The published shape: first line of the command only, no scan-private fields.
+export function toOpenTaskReports(tasks: OpenTaskInfo[]): OpenTaskReport[] {
+  return tasks.map(({ openedAt: _openedAt, command, ...rest }) => ({
+    ...rest,
+    ...(command ? { command: (command.split("\n").find((l) => l.trim()) ?? "").trim().slice(0, 200) } : {}),
+  }));
+}
+// The pid behind a session, from the discovery cache; undefined until found.
+function agentProcessPid(sessionId: string): number | undefined {
+  return sessionProcessCache.get(sessionId)?.pid;
+}
+// The open tasks the daemon will vouch for: transcript-open, generation-fenced,
+// process-checked. Kicks a snapshot refresh so the NEXT call sees fresh
+// processes; this call reads whatever snapshot exists.
+export function verifiedOpenTasks(transcriptPath: string, sessionId: string): OpenTaskInfo[] {
+  ensureProcessSnapshotFresh();
+  const scanned = openBackgroundTasks(transcriptPath, sessionId, agentProcessStartedAt(sessionId));
+  if (scanned.length === 0) return scanned;
+  const { alive, dead } = verifyOpenTasks(scanned, processSnapshot, agentProcessPid(sessionId));
+  if (dead.length) {
+    log(`[OPEN-TASKS] ${sessionId.slice(0, 8)} ${dead.length} task(s) open in the transcript but no shell under pid ${agentProcessPid(sessionId)}: ${dead.map((t) => `${t.id}${t.description ? ` (${t.description})` : ""}`).join(", ")}`);
+  }
+  return alive;
+}
+
+// The agent process's start for a session, from the resource sampler's last
+// report (ps etime → startedAt); undefined until the first sample or off
+// darwin, in which case the restart fence simply doesn't apply.
+function agentProcessStartedAt(sessionId: string): number | undefined {
+  return lastReportedMetrics.get(sessionId)?.agentStartedAt;
 }
 
 export type SettleVerdict = "idle" | "waiting" | "dormant" | "done";
@@ -10223,7 +10438,12 @@ function resolveTurnEndStatus(sessionId: string, transcriptPath?: string): Settl
     : findSessionFile(sessionId);
   const declared = declaredSettleVerdict(sessionId);
   const claude = !!file && file.agentType === "claude";
-  const openWork = claude && openBackgroundTaskIds(file!.path, sessionId).length > 0;
+  const openTasks = claude ? verifiedOpenTasks(file!.path, sessionId) : [];
+  // Every settle publishes what it checked — an empty list included, so the
+  // server's open_tasks never outlives the tasks. Picked up by the very next
+  // sendAgentStatus for this session (callers send the verdict inline).
+  if (claude) pendingOpenTaskReports.set(sessionId, toOpenTaskReports(openTasks));
+  const openWork = openTasks.length > 0;
   if (!declared && !openWork) return "idle";
   if (claude) {
     try {
@@ -10614,19 +10834,29 @@ const TMUX_LEAD_PANE_WIDTH = "130";
 // where resize-window is a no-op — the total is already right, only the pane
 // tiling is wrong — so the lead pane must be widened directly. Returns the tmux
 // commands to run (without target); empty when the pane is healthy.
-export function planLeadPaneHeal(paneWidth: number, windowPanes: number): string[][] {
-  if (paneWidth >= 80) return [];
+//
+// A window that is short rather than narrow is the web terminal split's
+// signature: it sizes the pane to a few rows while open and hands the size
+// back on detach — unless the daemon died under it. Nobody attached and the
+// window at a fraction of its height means that hand-back was lost, so the
+// window is put back. Only when nobody is attached: a live client (the split
+// itself, a human's terminal) owns the size while it is there.
+const TMUX_MIN_UNATTENDED_HEIGHT = 20;
+export function planLeadPaneHeal(paneWidth: number, windowPanes: number, windowHeight = Infinity, sessionAttached = 0): string[][] {
+  const narrow = !(paneWidth >= 80); // NaN (unparseable) counts as narrow, as before
+  const short = windowHeight < TMUX_MIN_UNATTENDED_HEIGHT && sessionAttached === 0;
+  if (!narrow && !short) return [];
   const cmds: string[][] = [["resize-window", "-x", TMUX_WINDOW_WIDTH, "-y", TMUX_WINDOW_HEIGHT]];
-  if (windowPanes > 1) cmds.push(["resize-pane", "-x", TMUX_LEAD_PANE_WIDTH]);
+  if (narrow && windowPanes > 1) cmds.push(["resize-pane", "-x", TMUX_LEAD_PANE_WIDTH]);
   return cmds;
 }
 
 // Best-effort — classification proceeds either way.
 async function ensureTmuxPaneWide(target: string): Promise<void> {
   try {
-    const { stdout } = await tmuxExec(["display-message", "-p", "-t", target, "#{pane_width}|#{window_panes}"]);
-    const [paneWidth, windowPanes] = stdout.trim().split("|").map((part) => parseInt(part, 10));
-    const heals = planLeadPaneHeal(paneWidth, windowPanes);
+    const { stdout } = await tmuxExec(["display-message", "-p", "-t", target, "#{pane_width}|#{window_panes}|#{window_height}|#{session_attached}"]);
+    const [paneWidth, windowPanes, windowHeight, sessionAttached] = stdout.trim().split("|").map((part) => parseInt(part, 10));
+    const heals = planLeadPaneHeal(paneWidth, windowPanes, windowHeight, sessionAttached);
     if (!heals.length) return;
     for (const [cmd, ...rest] of heals) await tmuxExec([cmd, "-t", target, ...rest]);
     // Give the TUI a beat to reflow before the first capture.
@@ -10731,267 +10961,6 @@ async function paneInteractiveQuestion(target: string): Promise<string | null> {
 
 async function pasteTextIntoPane(target: string, text: string, bracketed = true): Promise<void> {
   await pasteTextIntoPaneWith(tmuxExec, target, text, bracketed);
-}
-
-// --- /model picker driver ---------------------------------------------------
-// Opens Claude Code's /model picker in the target pane, navigates the model
-// rows with Up/Down, adjusts effort with Right (the row wraps), and commits
-// with `s` — the session-only commit. NEVER sends Enter while the menu is open
-// (Enter saves the highlight as the user's global default) and never presses
-// row digits (digits instant-commit as default too). Closed loop throughout:
-// every keystroke batch is verified against a fresh pane parse.
-
-const PICKER_PROMPT_RE = /[❯›]/;
-const PICKER_BUSY_RE = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Wandering|Vibing|Coasting|Working|thinking/;
-
-async function capturePaneText(target: string, lines: number): Promise<string> {
-  const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${lines}`]);
-  // -J preserves trailing blank pane rows (unlike bare -p). When the TUI's
-  // content sits high in the pane — short sessions, a freshly redrawn picker —
-  // the callers' slice(-N) tails would read only blanks and misjudge the pane
-  // (idle looks busy, the cache-confirm dialog goes unseen). Trim them.
-  return stdout.replace(/[\s\n]+$/, "");
-}
-
-// Shared prelude for both switch drivers: a model switch must never interrupt
-// in-flight work, so require an idle prompt (unlike rewind, no double-Escape
-// interrupt — failing loudly is better than aborting the user's running turn),
-// then clear any composer draft (same dance as message injection: a lone C-u
-// is not reliable on CC 2.1.x).
-async function preparePaneForModelCommand(target: string): Promise<void> {
-  const start = Date.now();
-  let idle = false;
-  while (Date.now() - start < 8000) {
-    const tail = (await capturePaneText(target, 15)).split("\n").slice(-15).join("\n");
-    if (PICKER_PROMPT_RE.test(tail) && !PICKER_BUSY_RE.test(tail)) {
-      idle = true;
-      break;
-    }
-    await new Promise((r) => setTimeout(r, 300));
-  }
-  if (!idle) throw new Error("Session is busy — try again when it's idle");
-
-  await tmuxExec(["send-keys", "-t", target, "Escape"]);
-  await new Promise((r) => setTimeout(r, 50));
-  for (let i = 0; i < 3; i++) {
-    await tmuxExec(["send-keys", "-t", target, "C-a"]);
-    await new Promise((r) => setTimeout(r, 20));
-    await tmuxExec(["send-keys", "-t", target, "C-k"]);
-    await new Promise((r) => setTimeout(r, 20));
-  }
-}
-
-// The one-shot `/model <alias>` switches the running session AND rewrites the
-// user's global default in ~/.claude/settings.json (verified live 2026-08-12).
-// The session's model is in-process state, so restoring the file afterward
-// cancels the rewrite without touching the switch — this envelope makes the
-// one-shot net session-only. Serialized through a module-level chain so two
-// concurrent switches can't interleave their snapshot/restore windows. The
-// snapshot is the `model` key alone; the restore is a fresh read-modify-write
-// so anything else CC wrote meanwhile survives. An unreadable settings file
-// skips the restore (nothing trustworthy to put back).
-let claudeSettingsRestoreChain: Promise<unknown> = Promise.resolve();
-
-export async function withClaudeSettingsModelRestore<T>(fn: () => Promise<T>): Promise<T> {
-  const run = async (): Promise<T> => {
-    const settingsPath = path.join(process.env.HOME || "", ".claude", "settings.json");
-    const readModel = (): { ok: boolean; model?: string } => {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-        return { ok: true, model: typeof parsed.model === "string" ? parsed.model : undefined };
-      } catch {
-        return { ok: false };
-      }
-    };
-    const snapshot = readModel();
-    let switched = false;
-    try {
-      const result = await fn();
-      switched = true;
-      return result;
-    } finally {
-      if (snapshot.ok) {
-        // CC's settings write can land shortly after the echo — wait for it
-        // (only on success; a failed switch gets a single immediate check).
-        const deadline = Date.now() + (switched ? 3000 : 0);
-        while (readModel().model === snapshot.model && Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 300));
-        }
-        const now = readModel();
-        if (now.ok && now.model !== snapshot.model) {
-          try {
-            const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-            if (snapshot.model === undefined) delete parsed.model;
-            else parsed.model = snapshot.model;
-            fs.writeFileSync(settingsPath, JSON.stringify(parsed, null, 2));
-            log(`[SET_MODEL] restored settings.json model default (${now.model} -> ${snapshot.model ?? "unset"})`);
-          } catch (err) {
-            log(`[SET_MODEL] settings.json restore failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }
-      }
-    }
-  };
-  const chained = claudeSettingsRestoreChain.then(run, run);
-  claudeSettingsRestoreChain = chained.catch(() => {});
-  return chained;
-}
-
-// One-shot slash-command injection with echo-count confirmation. Success is
-// the pane growing one more matching echo than it had before the paste —
-// presence alone is ambiguous (old echoes linger in scrollback). A failed
-// command echoes an error line instead ("Model 'x' not found"), which never
-// matches, so the loop times out and fails loudly.
-async function injectOneShotCommand(
-  target: string,
-  commandText: string,
-  countEchoes: (paneText: string) => number,
-): Promise<string> {
-  await preparePaneForModelCommand(target);
-
-  const before = countEchoes(await capturePaneText(target, 200));
-  await pasteTextIntoPane(target, commandText);
-  await new Promise((r) => setTimeout(r, 150));
-  await tmuxExec(["send-keys", "-t", target, "Enter"]);
-
-  let nudgedStranded = false;
-  let confirmedDialog = false;
-  const start = Date.now();
-  while (Date.now() - start < 12000) {
-    await new Promise((r) => setTimeout(r, 400));
-    const text = await capturePaneText(target, 200);
-    if (countEchoes(text) > before) {
-      const lines = text.split("\n").filter((l) => countEchoes(l) > 0);
-      return lines.length ? lines[lines.length - 1].replace(/^\s*⎿\s*/, "").trim() : "committed";
-    }
-    const tail = text.split("\n").slice(-12).join("\n");
-    // A conversation with history can pop the cache-confirm dialog on a model
-    // switch (never observed on the one-shot, handled as belt and braces).
-    // Enter accepts the highlighted "Yes".
-    if (!confirmedDialog && isSwitchConfirmDialog(tail)) {
-      confirmedDialog = true;
-      await tmuxExec(["send-keys", "-t", target, "Enter"]);
-      continue;
-    }
-    // The slash-command popup can absorb the submit Enter, stranding the
-    // typed command in the composer — one discrete Enter recovers it.
-    if (!nudgedStranded && isStrandedSlashCommand(tail, commandText)) {
-      nudgedStranded = true;
-      await tmuxExec(["send-keys", "-t", target, "Enter"]);
-    }
-  }
-  await tmuxExec(["send-keys", "-t", target, "Escape"]).catch(() => {});
-  throw new Error(`${commandText.split(" ")[0]} command not confirmed (no switch echo)`);
-}
-
-/** Mid-session model switch via one-shot `/model <alias>`, net session-only
- * (settings.json restore envelope). For any claude model option with a
- * cliAlias; menu-key and Sonnet 1M switches stay on driveModelPicker. */
-export async function injectOneShotModelSwitch(target: string, alias: string): Promise<string> {
-  return withClaudeSettingsModelRestore(() =>
-    injectOneShotCommand(target, `/model ${alias}`, countModelSetEchoes),
-  );
-}
-
-/** Mid-session effort switch via one-shot `/effort <level>` — already
- * session-only ("Set effort level to max (this session only)", no settings
- * write), so no restore envelope. */
-export async function injectOneShotEffortSwitch(target: string, level: string): Promise<string> {
-  return injectOneShotCommand(target, `/effort ${level}`, countEffortSetEchoes);
-}
-
-export async function driveModelPicker(
-  target: string,
-  opts: { menuMatch?: string; effort?: string },
-): Promise<string> {
-  const waitFor = async <T>(fn: () => Promise<T | null>, ms: number): Promise<T | null> => {
-    const start = Date.now();
-    while (Date.now() - start < ms) {
-      const v = await fn();
-      if (v) return v;
-      await new Promise((r) => setTimeout(r, 300));
-    }
-    return null;
-  };
-
-  await preparePaneForModelCommand(target);
-  await pasteTextIntoPane(target, "/model");
-  await new Promise((r) => setTimeout(r, 150));
-  await tmuxExec(["send-keys", "-t", target, "Enter"]);
-
-  // Failure cleanup must unwind BOTH layers a commit can be stuck in (cache
-  // confirm dialog over the picker), so Escape twice with a beat between.
-  const closePicker = async () => {
-    await tmuxExec(["send-keys", "-t", target, "Escape"]).catch(() => {});
-    await new Promise((r) => setTimeout(r, 350));
-    await tmuxExec(["send-keys", "-t", target, "Escape"]).catch(() => {});
-  };
-
-  const state0 = await waitFor(async () => {
-    const st = parseModelPicker(await capturePaneText(target, 45));
-    return st.visible ? st : null;
-  }, 5000);
-  if (!state0) {
-    await closePicker();
-    throw new Error("Model picker did not open");
-  }
-
-  try {
-    if (opts.menuMatch) {
-      let delta = planModelNavigation(state0, opts.menuMatch);
-      if (delta === null) throw new Error("Requested model is not in this session's picker");
-      for (let attempt = 0; attempt < 2 && delta !== 0; attempt++) {
-        const key = delta > 0 ? "Down" : "Up";
-        for (let i = 0; i < Math.abs(delta); i++) {
-          await tmuxExec(["send-keys", "-t", target, key]);
-          await new Promise((r) => setTimeout(r, 120));
-        }
-        const st = parseModelPicker(await capturePaneText(target, 45));
-        delta = planModelNavigation(st, opts.menuMatch);
-        if (delta === null) throw new Error("Lost the model picker while navigating");
-      }
-      if (delta !== 0) throw new Error("Could not land on the requested model row");
-    }
-
-    if (opts.effort) {
-      // The effort row wraps (low→medium→high→max→low), so Right-only always
-      // converges within one lap plus slack.
-      let reached = false;
-      for (let i = 0; i < 6; i++) {
-        const st = parseModelPicker(await capturePaneText(target, 45));
-        if (!st.visible) throw new Error("Lost the model picker while adjusting effort");
-        if (st.effort === opts.effort) {
-          reached = true;
-          break;
-        }
-        await tmuxExec(["send-keys", "-t", target, "Right"]);
-        await new Promise((r) => setTimeout(r, 250));
-      }
-      if (!reached) throw new Error(`Could not reach ${opts.effort} effort in the picker`);
-    }
-
-    // `s` = session-only commit (Enter would save as the user's GLOBAL default).
-    await tmuxExec(["send-keys", "-t", target, "-l", "s"]);
-    // On a conversation with history, the commit first pops a cache warning
-    // ("❯ 1. Yes, switch to … / 2. No, go back") — confirm it. Enter is safe
-    // HERE (it accepts the highlighted Yes; the menu underneath is gone).
-    let confirmedDialog = false;
-    const echo = await waitFor(async () => {
-      const tail = (await capturePaneText(target, 20)).split("\n").slice(-12).join("\n");
-      const m = tail.match(SESSION_ONLY_COMMIT_RE);
-      if (m) return m[0];
-      if (!confirmedDialog && isSwitchConfirmDialog(tail)) {
-        confirmedDialog = true;
-        await tmuxExec(["send-keys", "-t", target, "Enter"]);
-      }
-      return null;
-    }, 12000);
-    if (!echo) throw new Error("Picker commit not confirmed (no session-only echo)");
-    return echo;
-  } catch (err) {
-    await closePicker();
-    throw err;
-  }
 }
 
 // Post-submit verification: closed loop until the pasted message provably
@@ -13767,15 +13736,26 @@ function reconcileStatusFromTranscript(sessionId: string, syncService: SyncServi
   // size-cached, so heartbeats on an unchanged transcript stay cheap.
   const needsTaskScan = file.agentType === "claude" &&
     (stored === "waiting" || reconciledStatus(stored, turn) === "idle");
-  const hasOpenTasks = needsTaskScan && openBackgroundTaskIds(file.path, sessionId).length > 0;
+  const openTasks = needsTaskScan ? verifiedOpenTasks(file.path, sessionId) : [];
+  const hasOpenTasks = openTasks.length > 0;
   // The stamp read is a single small file, paid only when a settle correction
   // is on the table (same gate as the task scan).
   const declared = needsTaskScan || reconciledStatus(stored, turn) === "idle" ? declaredSettleVerdict(sessionId) : null;
   const corrected = reconciledStatusWithTasks(stored, turn, hasOpenTasks, declared);
-  if (!corrected) return;
+  // A parked "waiting" that still checks out re-publishes its tasks on a slow
+  // cadence so the server's report keeps vouching for it (see
+  // OPEN_TASKS_REFRESH_MS); nothing else about the status changes.
+  if (needsTaskScan) pendingOpenTaskReports.set(sessionId, toOpenTaskReports(openTasks));
+  const refresh = !corrected && needsTaskScan &&
+    (pendingOpenTasksChanged(sessionId) || (stored === "waiting" && hasOpenTasks && openTasksRefreshDue(sessionId, Date.now())));
+  if (!corrected && !refresh) { pendingOpenTaskReports.delete(sessionId); return; }
   // Only now (a correction is warranted) pay the conversation-cache read.
   const conversationId = readConversationCache()[sessionId];
-  if (!conversationId) return;
+  if (!conversationId) { pendingOpenTaskReports.delete(sessionId); return; }
+  if (!corrected) {
+    sendAgentStatus(syncService, conversationId, sessionId, stored as AgentStatus);
+    return;
+  }
   log(`[STATUS-RECONCILE] ${sessionId.slice(0, 8)} stored=${stored} turn=${turn} -> ${corrected}`);
   sendAgentStatus(syncService, conversationId, sessionId, corrected);
 }
@@ -17273,6 +17253,31 @@ const LOOP_FREEZE_REPORT_MS = 5_000;
 // while the frame the reader can act on — the sync sweep driving it — appears
 // mid-stack. Self-recursion is deduped per trace so a deep recursive walk
 // doesn't count once per level. Exported for tests.
+// Rolling ledger of loop freezes so the heartbeat can report how much of the
+// last minute the daemon was blocked. The web turns this into an "under load"
+// state and the per-message delivery note reads it: a message that has not
+// echoed while the loop was frozen 40s of the last 60s is delayed by the
+// daemon, not lost by the session, and must not prompt a kill & restart.
+export class LoopFreezeLedger {
+  private events: Array<{ at: number; ms: number }> = [];
+  constructor(private readonly windowMs = 60_000) {}
+  record(ms: number, now = Date.now()): void {
+    this.events.push({ at: now, ms });
+    this.prune(now);
+  }
+  /** Total ms the loop was blocked inside the trailing window. */
+  recentMs(now = Date.now()): number {
+    this.prune(now);
+    return this.events.reduce((sum, e) => sum + e.ms, 0);
+  }
+  private prune(now: number): void {
+    const cutoff = now - this.windowMs;
+    while (this.events.length && this.events[0].at < cutoff) this.events.shift();
+  }
+}
+const loopFreezes = new LoopFreezeLedger();
+const daemonStartedAt = Date.now();
+
 export function summarizeSamplingTraces(raw: unknown, top = 5): string {
   let parsed: any = raw;
   if (typeof raw === "string") {
@@ -17328,6 +17333,7 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
     let traces: unknown = null;
     try { traces = drainTraces?.(); } catch {}
     if (late >= LOOP_FREEZE_REPORT_MS) {
+      loopFreezes.record(late, now);
       const cpuMs = Math.round((cpu.user + cpu.system) / 1000);
       const hot = summarizeSamplingTraces(traces);
       log(
@@ -18843,9 +18849,13 @@ async function main(): Promise<void> {
         recentSessionInjections.delete(convId);
       }
 
-      if (statusChanged || modeChanged) {
+      if (statusChanged || modeChanged || pendingOpenTasksChanged(sessionId)) {
         sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000, data.permission_mode);
         log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ''} for session ${sessionId.slice(0, 8)}`);
+      } else {
+        // Nothing sent, so the open-task report the settle computed must not
+        // wait around to ride an unrelated later status.
+        pendingOpenTaskReports.delete(sessionId);
       }
 
       if (data.status === "stopped" && statusChanged) {

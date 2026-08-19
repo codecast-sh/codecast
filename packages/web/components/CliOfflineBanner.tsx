@@ -55,7 +55,9 @@ export function CliOfflineBanner() {
   const tier = health.tier;
   const offlineDuration = health.offlineMs;
   // Dismiss math needs how stale the daemon was at the moment of dismissal.
-  const lastSeen = user?.daemon_last_seen || user?.last_heartbeat || 0;
+  // Derived from the health verdict (per device) rather than the user doc,
+  // which is last-writer across machines.
+  const lastSeen = Date.now() - offlineDuration;
 
   // Honor dismiss only while we're in the same (or lower) tier than when it was dismissed.
   // If the situation has escalated to a worse tier since dismiss, surface the banner again.
@@ -71,12 +73,8 @@ export function CliOfflineBanner() {
 
   const command = tier === "warn" ? "cast status" : "cast restart";
   const stale = formatDuration(offlineDuration);
-  const message =
-    tier === "warn"
-      ? `CLI hasn't synced in ${stale}.`
-      : tier === "alert"
-      ? `CLI offline for ${stale}.`
-      : `CLI offline for ${stale}.`;
+  const who = health.device ? `CLI on ${health.device}` : "CLI";
+  const message = tier === "warn" ? `${who} hasn't synced in ${stale}.` : `${who} offline for ${stale}.`;
   const action = tier === "warn" ? "Check status with " : "Restart with ";
 
   const handleCopy = async () => {

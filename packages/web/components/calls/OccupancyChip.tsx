@@ -1,7 +1,8 @@
 import { useCallsAvailable } from "../../lib/teamFeatures";
 import { Headphones } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { joinCall } from "../../lib/calls/callManager";
+import { joinCall, startHuddle } from "../../lib/calls/callManager";
+import { sessionRoomKey } from "@codecast/shared/contracts";
 
 // "Someone is in here" — the live-room affordance for channel rows and
 // session headers. Renders nothing while the room is empty (rooms are keys,
@@ -62,23 +63,51 @@ export function OccupancyChip({
   );
 }
 
-// The "start a huddle about this session" button for session headers: shows
-// the chip when the room is live, a quiet start affordance otherwise. Hidden
-// entirely when calling isn't configured.
-export function SessionHuddleButton({ conversationId }: { conversationId: string }) {
+// The "start a huddle here" button for anything with a room: shows the chip
+// when the room is live, a quiet start affordance otherwise. Hidden entirely
+// when calling isn't configured. `ring` names people to ring the moment the
+// room opens (a DM or group thread rings its members; a channel or session
+// is an open door and rings nobody); `anchorTitle` is the ring toast's
+// "about:" line.
+export function HuddleButton({
+  roomKey,
+  ring,
+  anchorTitle,
+  className = "",
+}: {
+  roomKey: string;
+  ring?: string[];
+  anchorTitle?: string;
+  className?: string;
+}) {
   const enabled = useCallsAvailable();
-  const roomKey = `session:${conversationId}`;
   const occupied = useInboxStore((st) => (st.callOccupancy[roomKey]?.length ?? 0) > 0);
   if (!enabled) return null;
-  if (occupied) return <OccupancyChip roomKey={roomKey} />;
+  if (occupied) return <OccupancyChip roomKey={roomKey} className={className} />;
+  const start = () =>
+    ring?.length
+      ? void startHuddle({ roomKey, toUserIds: ring, anchorTitle })
+      : void joinCall(roomKey);
   return (
     <button
-      onClick={() => void joinCall(roomKey)}
-      className="flex items-center gap-1 rounded-full border border-sol-border px-2 py-0.5 text-xs text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet"
-      title="Start a huddle about this session — teammates see it and can join"
+      onClick={(e) => {
+        e.stopPropagation();
+        start();
+      }}
+      className={`flex items-center gap-1 rounded-full border border-sol-border px-2 py-0.5 text-xs text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet ${className}`}
+      title={
+        ring?.length
+          ? `Start a huddle and ring ${ring.length === 1 ? "them" : "everyone here"}`
+          : "Start a huddle here — teammates see it and can join"
+      }
     >
       <Headphones className="h-3 w-3" />
       <span>huddle</span>
     </button>
   );
+}
+
+// Session headers: the room of one conversation.
+export function SessionHuddleButton({ conversationId }: { conversationId: string }) {
+  return <HuddleButton roomKey={sessionRoomKey(conversationId)} />;
 }

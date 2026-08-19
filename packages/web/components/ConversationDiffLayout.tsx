@@ -53,6 +53,9 @@ interface ConversationDiffLayoutProps {
   fallbackStickyContent?: string | null;
   onBack?: () => void;
   subHeaderContent?: React.ReactNode;
+  // A host that already carries the conversation's identity (the anchor
+  // slide-over) drops the inner header rather than showing two.
+  hideHeader?: boolean;
 }
 
 export function ConversationDiffLayout({
@@ -86,6 +89,7 @@ export function ConversationDiffLayout({
   fallbackStickyContent,
   onBack,
   subHeaderContent,
+  hideHeader,
 }: ConversationDiffLayoutProps) {
   const heightClass = "h-full";
   const [isMobile, setIsMobile] = useState(false);
@@ -208,6 +212,7 @@ export function ConversationDiffLayout({
     fallbackStickyContent,
     onBack,
     subHeaderContent,
+    hideHeader,
   };
 
   // Mobile: tabs layout

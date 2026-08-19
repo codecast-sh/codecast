@@ -151,12 +151,14 @@ function CollapsibleSection({ label, summary, open, onToggle, disabled, children
         onPress={onToggle}
         disabled={disabled}
         activeOpacity={0.6}
-        hitSlop={{ top: 6, bottom: 6 }}
+        hitSlop={{ top: 12, bottom: 12 }}
       >
         <RNText style={modalStyles.collapseLabel}>{label}</RNText>
-        {!open && (
-          <RNText style={modalStyles.collapseSummary} numberOfLines={1}>{summary}</RNText>
-        )}
+        {/* Summary fills the row when closed; an empty spacer keeps the
+            chevron pinned to the right edge when open so the row doesn't jump. */}
+        {open
+          ? <RNView style={{ flex: 1 }} />
+          : <RNText style={modalStyles.collapseSummary} numberOfLines={1}>{summary}</RNText>}
         <FontAwesome name={open ? "angle-down" : "angle-right"} size={15} color={Theme.textMuted0} />
       </TouchableOpacity>
       {open && children}

@@ -341,5 +341,11 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
         (truncated ? ` ${fmt.muted(`(truncated to ${THREAD_STATE_MAX_CHARS} chars)`)}` : "") +
         ` ${fmt.muted("— rewrite it when this changes; `cast state clear` when it no longer holds")}`,
       );
+      // A blocked declaration from a hidden session is a claim on the human's
+      // eyes — the server just honored it; say so, since the agent may believe
+      // it is still out of sight.
+      if ((result as { resurfaced?: boolean }).resurfaced) {
+        console.log(`${c.yellow}!${c.reset} this session was hidden (stashed) — declaring blocked returned it to the user's inbox`);
+      }
     });
 }

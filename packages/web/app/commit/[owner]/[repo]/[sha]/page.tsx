@@ -10,6 +10,7 @@ import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { GitCommit, ExternalLink, User, Calendar, ArrowLeft, Copy, Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "../../../../../components/ui/button";
 import { cn, copyToClipboard } from "../../../../../lib/utils";
+import { useTitlebarHead } from "../../../../../hooks/useTitlebarHead";
 
 function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString("en-US", {
@@ -275,6 +276,7 @@ function CommitContent() {
 
 export default function CommitPage() {
   const params = useParams();
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const owner = params.owner as string;
   const repo = params.repo as string;
   const sha = params.sha as string;
@@ -283,7 +285,7 @@ export default function CommitPage() {
     <AuthGuard>
       <DashboardLayout>
         <div className="h-[calc(100vh-56px)] flex flex-col">
-          <div className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center gap-3">
+          <div ref={titlebarRef} className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center gap-3">
             <Link href="/timeline">
               <Button variant="ghost" size="sm" className="h-8">
                 <ArrowLeft className="w-4 h-4 mr-1" />

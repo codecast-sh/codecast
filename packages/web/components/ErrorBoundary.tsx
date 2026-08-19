@@ -2,6 +2,7 @@ import { Component, ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { captureError } from "@/lib/analytics";
 import { showErrorToast } from "@/lib/errorToast";
+import { RELOAD_COUNT_KEY, MAX_AUTO_RELOADS } from "../lib/chunkReloadGuard";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -35,30 +36,6 @@ const CHUNK_LOAD_ERROR_PATTERNS = [
 
 function isChunkLoadError(msg: string): boolean {
   return CHUNK_LOAD_ERROR_PATTERNS.some((p) => msg.includes(p));
-}
-
-// Hard cap on auto-reloads per tab session. Even if a chunk-load error
-// recurs (e.g. the deploy is mid-rollout), we never silently reload more
-// than once — instead we surface the error UI so the user can see what's
-// happening.
-export const RELOAD_COUNT_KEY = "eb_reload_count";
-const MAX_AUTO_RELOADS = 1;
-
-// Reset the auto-reload guard after the app has run stably, so the "reload at
-// most once" cap is per stale-chunk INCIDENT, not per whole tab session.
-// Without this, one early chunk error spends the single allowed reload, and a
-// LATER genuine stale-chunk crash (e.g. navigating to a new lazy route after a
-// deploy) hits the dead-end error UI instead of recovering. A reload that
-// immediately re-crashes never survives the delay to call this, so the
-// infinite-loop guard still holds.
-export function armChunkReloadGuardReset(delayMs = 15_000): void {
-  setTimeout(() => {
-    try {
-      sessionStorage.removeItem(RELOAD_COUNT_KEY);
-    } catch {
-      // sessionStorage unavailable — nothing to reset.
-    }
-  }, delayMs);
 }
 
 const _recentErrors = new Set<string>();

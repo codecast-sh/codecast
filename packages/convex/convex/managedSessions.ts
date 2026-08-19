@@ -6,6 +6,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { AGENT_STATUSES, ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { openTaskValidator } from "./lib/openTasksValidator";
 import { internal } from "./_generated/api";
 import {
   NEEDS_INPUT_IDLE_CHECK_DELAY_MS,
@@ -31,12 +32,26 @@ async function scheduleNeedsInputCheck(
       ? NEEDS_INPUT_IDLE_CHECK_DELAY_MS
       : agentStatus === "permission_blocked"
         ? NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS
-        : null;
+        // A dead process is a stall: a hidden session whose agent died must
+        // resurface (the check's stall rule), and the check itself never
+        // chimes for "stopped" — this only drives the un-hide.
+        : agentStatus === "stopped"
+          ? NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS
+          : null;
   if (delay === null) return;
   await ctx.scheduler.runAfter(delay, internal.notifications.checkNeedsInput, {
     conversation_id: conversationId,
     status_ts: statusTs,
   });
+  // The settle classifier rides the same idle transition but has its OWN gate
+  // (idleSummary.classifySettle): the push check above stands down for pinned,
+  // agent-spawned and schedule-run rows, and those still need a verdict.
+  if (agentStatus === "idle") {
+    await ctx.scheduler.runAfter(delay, internal.idleSummary.classifySettle, {
+      conversation_id: conversationId,
+      status_ts: statusTs,
+    });
+  }
 }
 
 async function getAuthenticatedUserId(
@@ -693,6 +708,10 @@ export const updateAgentStatus = mutation({
     client_ts: v.optional(v.number()),
     api_token: v.optional(v.string()),
     permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"), v.literal("auto"))),
+    // The verified open background work behind this status (see schema
+    // open_tasks). Sent with settle verdicts; an empty array means "checked,
+    // nothing open" and is as informative as a full one.
+    open_tasks: v.optional(v.array(openTaskValidator)),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -712,6 +731,13 @@ export const updateAgentStatus = mutation({
 
     if (args.permission_mode !== undefined) {
       patch.permission_mode = args.permission_mode;
+    }
+    if (args.open_tasks !== undefined) {
+      // Re-stamp the time even when the list is unchanged: freshness is the
+      // signal (a stale report stops vouching for "waiting"). The overlay is
+      // keyed on the doc changing anyway, and settles are not hot.
+      patch.open_tasks = args.open_tasks;
+      patch.open_tasks_at = Date.now();
     }
 
     const tsStale = args.client_ts && session.agent_status_updated_at && args.client_ts < session.agent_status_updated_at;

@@ -22,6 +22,7 @@ import { dmOtherIds } from "@codecast/shared/chat";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import { buildBreadcrumbs, type BreadcrumbLookups } from "../lib/breadcrumbs";
 import { projectDotClass } from "../lib/projectColors";
+import { useTitlebarHead } from "../hooks/useTitlebarHead";
 
 /** Rows are keyed by _id, but a route may carry a short id ("ct-4102") — links
  *  minted by agents do. Try the key first; only scan when that misses, which
@@ -39,6 +40,7 @@ function routeParts(pathname: string) {
 
 export function BreadcrumbBar() {
   const pathname = usePathname() ?? "";
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const { head, first, second } = routeParts(pathname);
 
   // One narrow selector per surface, each returning a string. Every one is
@@ -99,7 +101,7 @@ export function BreadcrumbBar() {
   }));
 
   return (
-    <div className="flex items-center gap-2 px-6 h-10 border-b border-sol-border/20 flex-shrink-0 min-w-0">
+    <div ref={titlebarRef} className="flex items-center gap-2 px-6 h-10 border-b border-sol-border/20 flex-shrink-0 min-w-0">
       <Breadcrumbs items={items} className="min-w-0" />
     </div>
   );

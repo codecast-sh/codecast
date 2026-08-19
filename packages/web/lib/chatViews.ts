@@ -14,6 +14,8 @@ import { compareMembersByPresence } from "../components/presence/memberPresence"
 import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
 import type { ChatAuthor, ChatMessageView, ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
+import { chatRoomKey } from "@codecast/shared/contracts";
+import { dmOtherIds } from "@codecast/shared/chat";
 
 export type ChatMember = {
   _id: string;
@@ -42,12 +44,46 @@ export function channelDisplayName(
   if (ids.length === 0) return "Direct message";
   const byId = new Map((members ?? []).map((m) => [String(m._id), m]));
   const names = ids.map((id) => {
-    const m = byId.get(String(id));
+    const m = byId.get(String(id)) ?? knownAgentMember(String(id));
     // First name only past a 1:1 — three full names don't fit a rail row.
     const full = memberName(m);
     return ids.length > 1 ? full.split(/\s+/)[0] : full;
   });
   return names.join(", ");
+}
+
+/** The huddle room of a chat view. A DM or group thread huddles in the room
+ *  of its member set (the viewer plus `dmMemberIds`, which is known even for a
+ *  stub the rail has never seen); a channel in its own standing room. One
+ *  rule for the rail chip, the header button and the occupancy sync, so the
+ *  three can never point at different keys for the same conversation. */
+export function chatViewRoomKey(
+  view: { id: string; kind?: string; dmMemberIds?: string[]; memberIds?: string[] },
+  viewerId: string,
+): string {
+  return chatRoomKey({
+    id: view.id,
+    kind: view.kind,
+    otherIds: view.dmMemberIds,
+    viewerId,
+    memberIds: view.kind === "dm" ? undefined : view.memberIds,
+  });
+}
+
+/** The same key from RAW store rows (a chat_channels row + its rail row),
+ *  for feeders that run below the view layer (useCallSync). Derives the
+ *  roster exactly the way chatSlice builds dmMemberIds — dm_key first, rail
+ *  member rows as the fallback — so the occupancy the sync fetches and the
+ *  key a chip subscribes to can never disagree. */
+export function channelRowRoomKey(
+  channel: { _id: string; kind?: string; dm_key?: string },
+  rail: { member_ids?: string[] } | undefined,
+  viewerId: string,
+): string {
+  const fromKey = channel.dm_key ? dmOtherIds(channel.dm_key, viewerId) : undefined;
+  const otherIds =
+    fromKey ?? rail?.member_ids?.filter((uid) => String(uid) !== String(viewerId));
+  return chatRoomKey({ id: String(channel._id), kind: channel.kind, otherIds, viewerId });
 }
 
 /** The avatar-bearing side of a 1:1 DM, for surfaces that show a face. */
@@ -56,7 +92,22 @@ export function dmCounterpart(
   members: ChatMember[] | undefined,
 ): ChatMember | undefined {
   if (view.kind !== "dm" || (view.dmMemberIds ?? []).length !== 1) return undefined;
-  return (members ?? []).find((m) => String(m._id) === String(view.dmMemberIds![0]));
+  const id = String(view.dmMemberIds![0]);
+  return (members ?? []).find((m) => String(m._id) === id) ?? knownAgentMember(id);
+}
+
+// Agent identities the team ROSTER does not carry — a personal anchor's bot is
+// nobody's teammate, yet it opens DM rooms with its owner and must be named
+// there. The anchors feeder registers every anchor bot the viewer can see;
+// the naming helpers fall back to this when the roster misses an id. Lookup
+// only: these never become mention targets or picker rows.
+const knownAgents = new Map<string, ChatMember>();
+export function registerKnownAgentMembers(list: ChatMember[]): void {
+  knownAgents.clear();
+  for (const m of list) knownAgents.set(String(m._id), m);
+}
+export function knownAgentMember(id: string): ChatMember | undefined {
+  return knownAgents.get(id);
 }
 
 /** The app's one naming rule (lib/liveEntities), with chat's own placeholder for

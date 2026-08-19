@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2 } from "lucide-react";
 import { remarkSanitizeInvisibleUnicode } from "../tools/MarkdownRenderer";
-import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../ConversationView";
+import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { remarkChatMentions } from "../../lib/remarkChatMentions";
 import { compactAge } from "../../lib/threadState";
@@ -223,9 +223,9 @@ export const ChatMessage = memo(function ChatMessage({
     "ch-msg",
     grouped ? "" : "ch-msg-lead",
     message.mentionsMe ? "ch-msg-mentions-me" : "",
-    // Sending is a dimmed row, not a spinner: the message is already readable,
-    // and a spinner on every send would make an ordinary action look risky.
-    message.pending && !message.failed ? "ch-msg-pending" : "",
+    // A send in flight looks like any other message: it is already readable,
+    // and dimming (or a spinner) on every send made an ordinary action look
+    // provisional. Only the one state the reader must act on is marked.
     message.failed ? "ch-msg-failed" : "",
   ]
     .filter(Boolean)

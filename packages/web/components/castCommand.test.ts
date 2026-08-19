@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -557,5 +557,47 @@ describe("cast browser do steps", () => {
       { output: "clicked", ok: true },
       { output: "no page", ok: false },
     ]);
+  });
+});
+
+describe("extractChatSendArgs", () => {
+  const ID = "j17zg9kjy1sk58qwqgnzcecme58cdmsp";
+
+  test("reply: placeholder id, literal text, default status", () => {
+    const r = extractChatSendArgs("reply", `${ID} "Hey Ashot — Anchor here."`);
+    expect(r).toEqual({ messageId: ID, channelId: undefined, threadRootId: undefined, status: undefined, body: "Hey Ashot — Anchor here.", kind: "literal" });
+  });
+
+  test("reply: --status error after the text", () => {
+    const r = extractChatSendArgs("reply", `${ID} "can't reach the repo" --status error`);
+    expect(r?.status).toBe("error");
+    expect(r?.body).toBe("can't reach the repo");
+  });
+
+  test("reply: heredoc body", () => {
+    const r = extractChatSendArgs("reply", `${ID} - <<'EOF'\nline one\nline two\nEOF`);
+    expect(r?.messageId).toBe(ID);
+    expect(r?.body).toBe("line one\nline two");
+    expect(r?.kind).toBe("heredoc");
+  });
+
+  test("send: text before or after the flags", () => {
+    const a = extractChatSendArgs("send", `--channel hx7p8 --thread j17kq "ship it"`);
+    expect(a?.channelId).toBe("hx7p8");
+    expect(a?.threadRootId).toBe("j17kq");
+    expect(a?.body).toBe("ship it");
+    const b = extractChatSendArgs("send", `"ship it" --channel hx7p8 --json`);
+    expect(b?.channelId).toBe("hx7p8");
+    expect(b?.body).toBe("ship it");
+    expect(b?.kind).toBe("literal");
+  });
+
+  test("send: an expanded body is a recipe", () => {
+    expect(extractChatSendArgs("send", `--channel hx7p8 "$(cat msg.txt)"`)?.kind).toBe("dynamic");
+  });
+
+  test("other chat subcommands are not sends", () => {
+    expect(extractChatSendArgs("read", "--channel hx7p8")).toBeNull();
+    expect(extractChatSendArgs("thread", "j17kq")).toBeNull();
   });
 });

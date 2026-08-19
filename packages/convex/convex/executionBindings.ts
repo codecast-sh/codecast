@@ -756,9 +756,6 @@ export async function recordExecutionSuccessorIntentInDb(
   if (args.model !== undefined) {
     const option = modelConfig?.models.find((candidate) => candidate.key === args.model);
     if (!option) fail("EXECUTION_MODEL_UNSUPPORTED", `unknown ${requestedAgent} model option ${args.model}`);
-    if (option.midSessionOnly) {
-      fail("EXECUTION_MODEL_UNSUPPORTED", `${args.model} cannot be applied to a replacement runtime`);
-    }
     model = option.cliAlias;
   }
   if (args.effort !== undefined) {

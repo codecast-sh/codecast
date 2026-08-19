@@ -3,6 +3,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
+import { SplitResizeHandle } from "./SplitResizeHandle";
 
 // The full prompt is the trigger's contract — render it like a message body
 // (first-class markdown prose), not a mono dump in a fixed crop. The viewport
@@ -81,16 +82,13 @@ export function TriggerPromptView({ prompt, className = "" }: { prompt: string; 
           />
         )}
       </div>
-      <div
+      <SplitResizeHandle
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        className="group flex h-4 cursor-row-resize touch-none select-none items-center justify-center"
         title="Drag to resize"
-      >
-        <span className="h-1.5 w-16 rounded-full bg-sol-border transition-colors group-hover:bg-sol-cyan/80 group-active:bg-sol-cyan" />
-      </div>
+      />
     </div>
   );
 }

@@ -832,7 +832,7 @@ describe("receipt-aware asyncAction", () => {
 // replaying the identical payload can only repeat the refusal. Before this
 // classification, a "Not authorized" convCommand parked in the outbox re-fired
 // its full retry ladder on every boot/reconnect/30s interval drain, forever
-// (the setSessionModel loop that flooded prod logs on 2026-07-13). These pin:
+// (the model-switch command loop that flooded prod logs on 2026-07-13). These pin:
 // no ladder retries, dropped from the outbox on every path, must-deliver
 // notwithstanding — a served refusal IS delivery.
 describe("permanent rejections", () => {
