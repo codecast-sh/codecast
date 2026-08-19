@@ -136,6 +136,8 @@ export interface Config {
   chat_version?: string;
   calls_enabled?: boolean;
   calls_version?: string;
+  limits_enabled?: boolean;
+  limits_version?: string;
   // Last heartbeat-reported availability of team-gated snippets (chat, calls),
   // keyed by slug: whether any of this user's teams has the feature on. The
   // daemon installs/disables the snippet when this CHANGES (never on every

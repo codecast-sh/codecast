@@ -241,3 +241,70 @@ describe("conversationIdFromPath", () => {
     expect(conversationIdFromPath("/")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multi-window notification role. Outside the desktop shell this window is the
+// only one (leader). Inside it, the shell pushes the role and answers whether a
+// banner request was the one that showed — so a sound pairs with one banner.
+// ---------------------------------------------------------------------------
+import {
+  getDesktopWindowRole,
+  isNotificationLeader,
+  installWindowRoleTracker,
+  notifyNative,
+  reportDesktopWindowState,
+} from "./desktop";
+
+describe("desktop window role", () => {
+  test("defaults to leader with no shell", () => {
+    expect(isNotificationLeader()).toBe(true);
+    expect(getDesktopWindowRole()).toEqual({ leader: true, appFocused: false, anyInCall: false });
+  });
+
+  test("tracks the shell's pushes and reports state through the bridge", async () => {
+    let roleCb: ((r: any) => void) | null = null;
+    const reported: any[] = [];
+    const shown: any[] = [];
+    const g = globalThis as any;
+    const prevWindow = g.window;
+    const prevDocument = g.document;
+    g.window = {
+      __CODECAST_ELECTRON__: {
+        onWindowRole: (cb: any) => { roleCb = cb; },
+        reportWindowState: (s: any) => reported.push(s),
+        showNotification: async (title: string, _body: string, data: any) => {
+          shown.push({ title, data });
+          return { shown: data.key === "first" };
+        },
+      },
+    };
+    g.document = { hasFocus: () => false };
+    try {
+      installWindowRoleTracker();
+      expect(roleCb).not.toBeNull();
+      roleCb!({ leader: false, appFocused: true, anyInCall: true });
+      expect(isNotificationLeader()).toBe(false);
+      expect(getDesktopWindowRole().anyInCall).toBe(true);
+
+      reportDesktopWindowState({ active: "/chat/a", open: [{ id: "t1", path: "/chat/a" }], inCall: false });
+      expect(reported).toEqual([{ active: "/chat/a", open: [{ id: "t1", path: "/chat/a" }], inCall: false }]);
+
+      // The shell decides who announced: the same key from two windows shows once.
+      expect(await notifyNative("t", "b", { key: "first", route: "/chat/a?m=1" })).toBe(true);
+      expect(await notifyNative("t", "b", { key: "dup", route: "/chat/a?m=1" })).toBe(false);
+      // The route rides along, and a conversationId still becomes one.
+      expect(shown[0].data.route).toBe("/chat/a?m=1");
+      await notifyNative("t", "b", { conversationId: "c1", key: "first" });
+      expect(shown[2].data.route).toBe("/conversation/c1");
+      // A focused window never asks the shell.
+      g.document = { hasFocus: () => true };
+      expect(await notifyNative("t", "b", { key: "first" })).toBe(false);
+      expect(shown.length).toBe(3);
+    } finally {
+      // Module state is shared with any later test: hand the role back.
+      roleCb!({ leader: true, appFocused: false, anyInCall: false });
+      g.window = prevWindow;
+      g.document = prevDocument;
+    }
+  });
+});

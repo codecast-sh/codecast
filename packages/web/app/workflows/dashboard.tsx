@@ -8,6 +8,7 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "../../components/DynamicRunView";
 import { AppLoader } from "../../components/AppLoader";
 import { ExternalLink, Workflow } from "lucide-react";
+import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
 const api = _api as any;
 
@@ -59,11 +60,12 @@ function WorkflowsDashboardContent() {
   // runs; the loader shows only for a genuinely cold cache.
   const { runs: runRows, ready } = useDynamicRuns();
   const runs = ready || runRows.length > 0 ? runRows : undefined;
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   if (runs === undefined) return <AppLoader className="min-h-[16rem] h-full" />;
   return (
     <div className="h-full overflow-y-auto bg-sol-bg">
       <div className="max-w-3xl mx-auto px-6 py-6">
-        <div className="flex items-baseline gap-2 mb-5">
+        <div ref={titlebarRef} className="flex items-baseline gap-2 mb-5">
           <Workflow className="w-4 h-4 text-sol-cyan self-center" />
           <h1 className="text-lg font-semibold text-sol-text">Workflows</h1>
           <span className="text-xs text-sol-text-dim">dynamic agent runs</span>

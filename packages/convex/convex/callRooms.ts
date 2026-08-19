@@ -2,22 +2,36 @@
 //
 // A room is a string key, never a row (see call_members in schema.ts). Three
 // shapes, each anchored to something the product already scopes:
-//   dm:<userA>:<userB>   two people, user ids sorted ascending so both sides
-//                        derive the identical key without coordination
-//   channel:<channelId>  a chat channel's standing room
+//   dm:<id>:<id>[:<id>…] a set of people (two or more), user ids sorted
+//                        ascending so every side derives the identical key
+//                        without coordination; a chat DM or group thread
+//                        huddles in the room of its member set
+//   channel:<channelId>  a chat channel's standing room (private channels
+//                        admit their members only)
 //   session:<convId>     a huddle about one conversation/session
+//
+// Membership is not the only door. An accepted ring is a GRANT: whoever a
+// member rang into a room may join it while THAT huddle still runs, whether
+// or not they belong to its anchor. That is how "add people" works the same
+// way in a 1:1, a private channel and a session huddle. A huddle "still
+// runs" while the room has stayed occupied since the ring was answered —
+// joinRoom expires a room's accepted invites whenever the room restarts from
+// empty, so a guest cannot come back later to an empty private room or slip
+// into the NEXT huddle held in the same room.
 //
 // Authorization answers "may THIS user join/ring THIS room" and is enforced by
 // every calls.* mutation and the token mint — the media server trusts our JWT,
 // so this module is the entire security boundary for who can listen in.
-import type { Id } from "./_generated/dataModel";
-import { createTeamFeedFilter } from "./privacy";
+import type { Doc, Id } from "./_generated/dataModel";
+import { createTeamFeedFilter, isTeamMember } from "./privacy";
+import { canAccessChannel } from "./chatAccess";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 // Key shapes, builders and lease timings are the shared contract
 // (@codecast/shared/contracts/callRoomKeys) so the web client can build keys
 // and share staleness math without importing server code. This module adds
 // what only the server can: authorization.
 import {
+  CALL_MEMBER_STALE_MS,
   parseRoomKey,
   type ParsedRoomKey,
 } from "@codecast/shared/contracts";
@@ -26,37 +40,118 @@ export {
   CALL_HEARTBEAT_MS,
   CALL_INVITE_TTL_MS,
   CALL_MEMBER_STALE_MS,
+  MAX_ROOM_MEMBERS,
   channelRoomKey,
+  chatRoomKey,
   dmRoomKey,
   parseRoomKey,
+  roomMemberIds,
   sessionRoomKey,
   type ParsedRoomKey,
 } from "@codecast/shared/contracts";
 
+/** The lease is the truth: a row older than the stale window is not in the
+ *  room, whatever else it says. One filter for every reader (occupancy,
+ *  getMyCalls, the grant, the presence strip). */
+export function liveMembers<T extends { last_seen: number }>(rows: T[], now: number): T[] {
+  return rows.filter((m) => now - m.last_seen < CALL_MEMBER_STALE_MS);
+}
+
+// A team every one of `users` belongs to, walking the first user's
+// memberships. A people room bills its rows to that team; a set with no
+// common team has no room.
 async function sharedTeam(
   ctx: any,
-  a: Id<"users">,
-  b: Id<"users">,
+  users: Id<"users">[],
 ): Promise<Id<"teams"> | null> {
-  const aMemberships = await ctx.db
+  const [first, ...rest] = users;
+  const memberships = await ctx.db
     .query("team_memberships")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", a))
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", first))
     .collect();
-  for (const m of aMemberships) {
-    const other = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_team", (q: any) =>
-        q.eq("user_id", b).eq("team_id", m.team_id),
-      )
-      .unique();
-    if (other) return m.team_id;
+  for (const m of memberships) {
+    let all = true;
+    for (const other of rest) {
+      if (!(await isTeamMember(ctx, other, m.team_id))) { all = false; break; }
+    }
+    if (all) return m.team_id;
   }
   return null;
+}
+
+// The invite grant: a ring into this room that the user accepted, for a
+// huddle that is still running (someone else holds a fresh lease). joinRoom
+// expires a room's accepted invites when the room restarts from empty, so an
+// accepted row here means the huddle it belongs to never ended. The guest
+// must also still be on the team the invite billed to — removal from the
+// team closes this door like every other. Returns that team so the guest's
+// own membership row lands in the same team as everyone else's.
+async function acceptedInviteGrant(
+  ctx: any,
+  userId: Id<"users">,
+  roomKey: string,
+): Promise<Id<"teams"> | null> {
+  const invites = await ctx.db
+    .query("call_invites")
+    .withIndex("by_to_room", (q: any) =>
+      q.eq("to_user", userId).eq("room_key", roomKey),
+    )
+    .collect();
+  const accepted = invites
+    .filter((i: Doc<"call_invites">) => i.status === "accepted")
+    .sort((a: Doc<"call_invites">, b: Doc<"call_invites">) =>
+      (b.responded_at ?? 0) - (a.responded_at ?? 0),
+    )[0];
+  if (!accepted) return null;
+  if (!(await isTeamMember(ctx, userId, accepted.team_id))) return null;
+  const rows: Doc<"call_members">[] = await ctx.db
+    .query("call_members")
+    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
+    .collect();
+  const others = liveMembers(rows, Date.now()).filter(
+    (m) => String(m.user_id) !== String(userId),
+  );
+  return others.length > 0 ? accepted.team_id : null;
+}
+
+/** joinRoom calls this when it finds the room EMPTY (no live rows): the next
+ *  seat starts a NEW huddle, so every grant issued for the previous one dies
+ *  here. Guests still inside a running huddle never hit this — the room is
+ *  not empty while they (or anyone) hold a fresh lease. */
+export async function expireRoomGrants(ctx: any, roomKey: string): Promise<void> {
+  const invites = await ctx.db
+    .query("call_invites")
+    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
+    .collect();
+  for (const inv of invites) {
+    // "cancelled", not "expired": expired is the caller-visible "no answer"
+    // settle (getMyCalls shows it for 30s); a grant quietly used up by its
+    // huddle ending is nobody's news.
+    if (inv.status === "accepted") {
+      await ctx.db.patch(inv._id, { status: "cancelled" });
+    }
+  }
 }
 
 export type RoomAuthorization =
   | { ok: true; teamId: Id<"teams">; parsed: ParsedRoomKey }
   | { ok: false; reason: string };
+
+/** Room access WITHOUT the invite grant: membership rules + the feature
+ *  gate. Call history reads use this — a grant admits its guest to the
+ *  running huddle, never to everything the room ever recorded. */
+export async function authorizeRoomNoGrant(
+  ctx: any,
+  userId: Id<"users">,
+  roomKey: string,
+): Promise<RoomAuthorization> {
+  const auth = await authorizeRoomMembership(ctx, userId, roomKey);
+  if (!auth.ok) return auth;
+  if (!(await teamHasFeature(ctx, auth.teamId, "calls"))) {
+    return { ok: false, reason: teamFeatureOffMessage("calls") };
+  }
+  return auth;
+}
 
 // May `userId` participate in `roomKey`? Returns the team the room bills its
 // membership rows to (call_members.team_id) so callers never re-derive it.
@@ -70,8 +165,14 @@ export async function authorizeRoom(
   userId: Id<"users">,
   roomKey: string,
 ): Promise<RoomAuthorization> {
-  const auth = await authorizeRoomMembership(ctx, userId, roomKey);
-  if (!auth.ok) return auth;
+  let auth = await authorizeRoomMembership(ctx, userId, roomKey);
+  if (!auth.ok) {
+    const parsed = parseRoomKey(roomKey);
+    if (!parsed) return auth;
+    const granted = await acceptedInviteGrant(ctx, userId, roomKey);
+    if (!granted) return auth;
+    auth = { ok: true, teamId: granted, parsed };
+  }
   if (!(await teamHasFeature(ctx, auth.teamId, "calls"))) {
     return { ok: false, reason: teamFeatureOffMessage("calls") };
   }
@@ -88,11 +189,10 @@ async function authorizeRoomMembership(
 
   if (parsed.kind === "dm") {
     if (!parsed.users.includes(String(userId))) {
-      // Third parties cannot join a DM room even inside the same team.
+      // Third parties cannot join a people room even inside the same team.
       return { ok: false, reason: "not a member of this dm" };
     }
-    const other = parsed.users[0] === String(userId) ? parsed.users[1] : parsed.users[0];
-    const teamId = await sharedTeam(ctx, userId, other as Id<"users">);
+    const teamId = await sharedTeam(ctx, parsed.users as Id<"users">[]);
     if (!teamId) return { ok: false, reason: "no shared team" };
     return { ok: true, teamId, parsed };
   }
@@ -102,13 +202,11 @@ async function authorizeRoomMembership(
     if (!channel || channel.archived_at) {
       return { ok: false, reason: "channel not found" };
     }
-    const membership = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_team", (q: any) =>
-        q.eq("user_id", userId).eq("team_id", channel.team_id),
-      )
-      .unique();
-    if (!membership) return { ok: false, reason: "not a team member" };
+    // The chat room's own gate: team member, chat on for the team, and a
+    // membership row for private channels and group threads.
+    if (!(await canAccessChannel(ctx, userId, channel))) {
+      return { ok: false, reason: "not a member of this channel" };
+    }
     return { ok: true, teamId: channel.team_id, parsed };
   }
 

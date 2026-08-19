@@ -146,3 +146,17 @@ test("an awake outage is measured from its first failure", () => {
   expect(clock.markSuccess(250_000)).toBe(240_000);
   expect(clock.markSuccess(260_000)).toBe(0); // clock is cleared by success
 });
+
+// LoopFreezeLedger feeds the heartbeat's loop_freeze_ms: how much of the last
+// minute the daemon was blocked. The web shows "under load" from it and stops
+// blaming the session for a late message.
+import { LoopFreezeLedger } from "./daemon.js";
+
+test("freeze ledger sums freezes inside the trailing window and drops older ones", () => {
+  const ledger = new LoopFreezeLedger(60_000);
+  ledger.record(6_000, 10_000);
+  ledger.record(48_000, 40_000);
+  expect(ledger.recentMs(50_000)).toBe(54_000);
+  expect(ledger.recentMs(70_001)).toBe(48_000); // the 10s freeze aged out
+  expect(ledger.recentMs(200_000)).toBe(0);
+});

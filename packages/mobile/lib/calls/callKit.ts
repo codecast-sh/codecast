@@ -46,8 +46,18 @@ let ckLoadError: string | null = null;
 function getCallKit(): CallKitApi | null {
   if (ck !== undefined) return ck ?? null;
   try {
-    // Expo modules register under ExpoModulesCore, not TurboModuleRegistry —
-    // requiring is the reliable probe; it throws on a binary without the pod.
+    // Probe the native registry FIRST, same as livekitNative. Wrapping the
+    // package require alone is not enough: Metro evaluates the package's
+    // inner imports lazily, so `requireNativeModule("ExpoCallKitTelecom")`
+    // fires on the first property access — outside this try — and a binary
+    // without the pod redboxes at boot ("Cannot find native module").
+    // requireOptionalNativeModule is Expo's throw-free probe for exactly this.
+    const { requireOptionalNativeModule } = require("expo");
+    if (!requireOptionalNativeModule("ExpoCallKitTelecom")) {
+      ckLoadError = "ExpoCallKitTelecom native module absent (binary predates the pod)";
+      ck = null;
+      return null;
+    }
     ck = require("expo-callkit-telecom");
   } catch (e: any) {
     ckLoadError = String(e?.message ?? e).slice(0, 300);
@@ -83,6 +93,7 @@ export async function endCallKitRingIfStale(liveInviteIds: Set<string>): Promise
   if (Date.now() - active.reportedAt < RING_SETTLE_GRACE_MS) return;
   const { ckId } = active;
   active = null;
+  if (__DEV__) (global as any).__ckEvents?.push({ name: "bridge:endRingIfStale", e: { ckId } });
   try {
     await k.reportCallEnded(ckId, "remoteEnded");
   } catch {}
@@ -94,6 +105,7 @@ async function endCallKitCall(reason: "local" | "remoteEnded" | "failed"): Promi
   if (!k || !active) return;
   const { ckId } = active;
   active = null;
+  if (__DEV__) (global as any).__ckEvents?.push({ name: "bridge:endCall:" + reason, e: { ckId } });
   try {
     if (reason === "local") await k.endCall(ckId);
     else await k.reportCallEnded(ckId, reason);

@@ -99,35 +99,70 @@ export async function visibleAnchorsForUser(
 }
 
 // The default first turn that brings a freshly-provisioned anchor "online": it
-// orients the agent to its standing role and asks for a one-line hello so the
-// human can see it is live. The real persona comes from its project skill /
-// CLAUDE.md; this only kicks the session into its first turn.
-function bootstrapMessage(name: string, scopeLabel: string, persona?: string): string {
+// tells the agent who it is, what it is for, and how it reaches the world, then
+// asks for a one-line hello so the human can see it is live. Deliberately
+// principle-level: the persona and the standing rules grow in its own memory
+// and the project's CLAUDE.md; this only sets the frame.
+export function bootstrapMessage(opts: {
+  name: string;
+  scopeType: "team" | "user";
+  scopeLabel: string;
+  ownerName?: string;
+  teamName?: string;
+  persona?: string;
+}): string {
+  const { name, scopeType, scopeLabel, persona } = opts;
+  const who = scopeType === "team"
+    ? `the **team** anchor for ${opts.teamName ?? "this team"} — every member of that team can reach you, and you speak for the team's shared context`
+    : `the **personal** anchor for ${opts.ownerName ?? "one person"} — private to them, and you speak only in their voice and interest`;
   return [
-    `You are **${name}**, the standing Anchor for ${scopeLabel} in codecast — a persistent`,
-    `agent member, not a one-shot task. You stay available, keep your own memory, are woken by`,
-    `events (a teammate's message, a Slack mention, a finished delegated job), and act with a`,
-    `peer's judgment.`,
+    `You are **${name}**, ${who}. You are codecast's standing agent for ${scopeLabel}: a`,
+    `general agent and a persistent member, not a one-shot task. People will ask you`,
+    `anything about the work — questions, coordination, monitoring, reminders, small tasks,`,
+    `judgment calls — and you act with a peer's judgment.`,
+    ``,
+    `A person may have several anchors (a personal one, and one per team). When there is any`,
+    `chance of confusion, say which one you are.`,
     ``,
     `## How you work`,
-    `- **Stay resident.** This conversation is long-lived; it never "completes". When you finish`,
-    `  responding you go dormant and are woken again by the next event. Don't try to wrap up or`,
-    `  sign off for good.`,
-    `- **Keep durable memory.** Your live transcript gets compacted over time, so persist anything`,
-    `  worth remembering to this project's memory dir and CLAUDE.md — including, right now, a short`,
-    `  note recording that you are ${name}, the anchor for ${scopeLabel}, and how you operate.`,
-    `- **Delegate to hands.** For real code work, start a fresh session with \`cast spawn "<task>"\``,
-    `  rather than doing it inline — that keeps you responsive. Check results with \`cast sessions\``,
-    `  and \`cast read <id>\`, or tell the hand to \`cast send <your id> "done: ..."\` when finished.`,
-    `- **Reply where you were called.** If an event tells you it came from Slack, reply with the`,
-    `  \`cast anchor say --channel <C> --thread <T> "..."\` command it gives you — that posts as you.`,
-    `- **Decline, don't half-do.** If a request would exceed what's safe or you can't finish it`,
-    `  properly, say so and escalate to the humans — never ship a truncated or guessed result.`,
-    `- **Be concise and additive.** Don't repeat yourself across channels; say something only when`,
-    `  it's new and useful.`,
+    `- **Stay resident.** This conversation is long-lived and never "completes". When you finish`,
+    `  a turn you go dormant and are woken by the next event: a message here, a mention or`,
+    `  reply in team chat, a direct message, a Slack mention, a routine firing, a finished`,
+    `  delegated job. Don't wrap up or sign off for good.`,
+    `- **Keep durable memory.** Your transcript gets compacted, so persist anything worth`,
+    `  remembering to this project's memory dir and CLAUDE.md — starting now with a short note`,
+    `  that you are ${name}, ${scopeType === "team" ? "the team anchor" : "the personal anchor"} for ${scopeLabel}, and how you operate.`,
+    `- **Delegate real work.** For code changes or anything long, start background subagents`,
+    `  (the Agent tool) and stay responsive yourself; call them subagents. Reserve \`cast spawn\``,
+    `  for when a person explicitly wants a session they will steer themselves.`,
+    ``,
+    `## Your routines are yours to run`,
+    `People will talk to you about your own recurring behavior — "check the deploy every`,
+    `morning", "stop the weekly digest", "do that at 3pm instead". Own it: create, list, pause`,
+    `and cancel your routines with \`cast trigger add/ls/pause/cancel\` (a trigger you create here`,
+    `wakes THIS session), keep one trigger per routine, and when asked, describe what you do`,
+    `on a schedule in plain words. A routine you cannot name is one nobody can stop.`,
+    ``,
+    `## Reaching people`,
+    `- **You can start conversations.** Post in a channel or a thread with`,
+    `  \`cast anchor say --chat <channel> [--thread <root>] "..."\`, or message people directly`,
+    `  with \`cast anchor say --dm <handle>[,<handle>] "..."\`. Use this to be proactive — a`,
+    `  routine found something, a question needs a person, a promise came due — and use it`,
+    `  sparingly: speak when it adds something, once, in the place it belongs.`,
+    `- **Reply where you were called.** A chat wake tells you the placeholder to fill`,
+    `  (\`cast chat reply <id> "..."\`); a Slack wake gives you \`cast anchor say --channel <C>\`.`,
+    `- **In group conversations, be a good participant.** Once someone names you in a thread`,
+    `  you follow it and hear every reply; most lines are people talking to each other. Pass`,
+    `  (\`cast chat reply <id> --pass\`) unless a line is clearly for you. When unsure, pass.`,
+    ``,
+    `## Judgment`,
+    `- Decline rather than half-do: if a request exceeds what is safe or cannot be finished`,
+    `  properly, say so and escalate to a person — never ship a truncated or guessed result.`,
+    `- Be concise and additive. Don't repeat yourself across channels.`,
     persona ? `\n## Your persona\nAdopt the **${persona}** persona/skill if it is available in this project.` : ``,
     ``,
-    `Save your role to memory now, post a one-line hello confirming you are online, then stand by.`,
+    `Save your role to memory now, post a one-line hello confirming you are online and which`,
+    `anchor you are, then stand by.`,
   ].filter(Boolean).join("\n");
 }
 
@@ -177,6 +212,7 @@ export const provisionAnchor = mutation({
     let teamId: Id<"teams"> | undefined;
     let scopeUserId: Id<"users"> | undefined;
     let scopeLabel: string;
+    let teamName: string | undefined;
     if (args.scope_type === "team") {
       // Resolve the team: explicit team_id, else the host's active team.
       let resolved = args.team_id;
@@ -196,11 +232,14 @@ export const provisionAnchor = mutation({
       if (!membership) throw new Error("Not a member of that team");
       teamId = resolved;
       const team = await ctx.db.get(resolved);
+      teamName = team?.name ?? undefined;
       scopeLabel = `the ${team?.name ?? "team"} workspace`;
     } else {
       scopeUserId = hostUserId;
       scopeLabel = "your personal workspace";
     }
+    const host = await ctx.db.get(hostUserId);
+    const ownerName = host?.name || host?.github_username || host?.email?.split("@")[0] || undefined;
 
     // Idempotent: one anchor per scope.
     const existing = await findExistingAnchor(ctx, {
@@ -304,7 +343,14 @@ export const provisionAnchor = mutation({
     if (args.bootstrap !== false) {
       const conversation = await ctx.db.get(conversationId);
       await enqueuePendingMessage(ctx, conversation, hostUserId, {
-        content: bootstrapMessage(name, scopeLabel, args.persona),
+        content: bootstrapMessage({
+          name,
+          scopeType: args.scope_type,
+          scopeLabel,
+          ownerName,
+          teamName,
+          persona: args.persona,
+        }),
       });
     }
 
@@ -365,6 +411,42 @@ export const wakeAnchor = mutation({
   },
 });
 
+// The briefing for an EXISTING anchor, rebuilt from its row. Used by
+// rebriefAnchor so a running anchor can be handed the current frame (its scope,
+// its routines, how it reaches people) without being retired and re-created.
+async function briefingFor(ctx: { db: any }, anchor: any): Promise<string> {
+  const team = anchor.team_id ? await ctx.db.get(anchor.team_id) : null;
+  const owner = anchor.scope_user_id ? await ctx.db.get(anchor.scope_user_id) : null;
+  return bootstrapMessage({
+    name: anchor.name,
+    scopeType: anchor.scope_type,
+    scopeLabel: anchor.scope_type === "team"
+      ? `the ${team?.name ?? "team"} workspace`
+      : `${owner?.name ?? "their"}'s personal workspace`,
+    ownerName: owner?.name || owner?.github_username || owner?.email?.split("@")[0] || undefined,
+    teamName: team?.name ?? undefined,
+    persona: anchor.persona,
+  });
+}
+
+// rebriefAnchor — re-send the standing briefing to a live anchor. Admin gated
+// like every reshaping of the anchor: it changes how the agent behaves from
+// here on. Backs `cast anchor brief` and the settings panel's "Re-brief".
+export const rebriefAnchor = mutation({
+  args: { api_token: v.optional(v.string()), anchor_id: v.id("anchors") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const anchor = await ctx.db.get(args.anchor_id);
+    if (!anchor) throw new Error("Anchor not found");
+    if (!(await userCanAdminAnchor(ctx, userId, anchor))) {
+      throw new Error("Only an admin (or the host) can re-brief this anchor");
+    }
+    const briefing = await briefingFor(ctx, anchor);
+    return await deliverToAnchor(ctx, args.anchor_id, briefing, `anchor-brief:${Date.now()}`);
+  },
+});
+
 // resolveAnchorForScope — the lookup wake routing uses to find which anchor
 // answers for a team or user. Public for the CLI; reused internally by adapters.
 export const resolveAnchorForScope = query({
@@ -416,15 +498,27 @@ export const listAnchors = query({
     const teamIds = new Set(memberships.map((m: any) => m.team_id.toString()));
 
     const anchors = await visibleAnchorsForUser(ctx, userId);
-    // Enrich with the bot's display name/avatar.
+    // Enrich with the bot's display name/avatar, the scope's name, and the
+    // session's coarse state — everything a picker or a status chip needs
+    // without a second query per anchor.
     const out: any[] = [];
     for (const a of anchors) {
       const bot = await ctx.db.get(a.bot_user_id as Id<"users">);
+      const team = a.team_id ? await ctx.db.get(a.team_id as Id<"teams">) : null;
+      const conv = a.conversation_id ? await ctx.db.get(a.conversation_id as Id<"conversations">) : null;
       out.push({
         ...a,
         bot_name: bot?.name ?? a.name,
         bot_avatar: bot?.image ?? null,
+        team_name: (team as any)?.name ?? null,
         in_my_team: a.team_id ? teamIds.has(a.team_id.toString()) : false,
+        is_host: a.host_user_id.toString() === userId.toString(),
+        conversation_short_id: (conv as any)?.short_id ?? null,
+        conv_status: (conv as any)?.status ?? null,
+        agent_status: (conv as any)?.agent_status ?? null,
+        awaiting_input: (conv as any)?.awaiting_input ?? false,
+        has_pending_messages: (conv as any)?.has_pending_messages ?? false,
+        conv_updated_at: (conv as any)?.updated_at ?? a.created_at,
       });
     }
     return out;
@@ -566,9 +660,12 @@ export const getAnchorSpace = query({
         bot_name: (bot as any)?.name ?? anchor.name,
         bot_avatar: (bot as any)?.image ?? null,
         conv_status: (conv as any)?.status ?? null,
+        agent_status: (conv as any)?.agent_status ?? null,
+        awaiting_input: (conv as any)?.awaiting_input ?? false,
         message_count: (conv as any)?.message_count ?? 0,
         has_pending_messages: (conv as any)?.has_pending_messages ?? false,
         updated_at: (conv as any)?.updated_at ?? anchor.created_at,
+        team_name: teamId ? ((await ctx.db.get(teamId)) as any)?.name ?? null : null,
       },
       slack: {
         connected: !!install,

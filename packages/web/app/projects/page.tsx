@@ -34,6 +34,7 @@ import {
   ListChecks,
   Target,
 } from "lucide-react";
+import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
 type ProjectStatus = "active" | "planning" | "paused" | "done";
 
@@ -244,6 +245,7 @@ function CreateProjectInline({ onCreated }: { onCreated: () => void }) {
 
 function ProjectListContent() {
   const router = useRouter();
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   useSyncProjects();
 
   const projects = useInboxStore((s) => s.projects);
@@ -279,7 +281,7 @@ function ProjectListContent() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-sol-border/20">
+      <div ref={titlebarRef} className="flex items-center justify-between px-6 py-4 border-b border-sol-border/20">
         <div className="flex items-center gap-2.5">
           <FolderKanban className="w-5 h-5 text-sol-text-muted" />
           <h1 className="text-base font-medium text-sol-text">Projects</h1>

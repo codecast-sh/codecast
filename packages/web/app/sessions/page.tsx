@@ -16,6 +16,7 @@ import {
 import { deriveTriageFlags } from "./triageFlags";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
 type Session = FunctionReturnType<typeof api.managedSessions.listActiveSessions>[number];
 // Cleanup-oriented buckets, computed from liveness + sleep-aware idle — NOT from
@@ -315,6 +316,7 @@ function SessionsView() {
   // Store-fed (hooks/useSyncManagedSessions): the fleet table paints from the
   // cached rows synchronously; "loading" shows only for a genuinely cold cache.
   const { sessions: managedRows, ready: managedReady } = useManagedSessions();
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const sessions = managedReady || managedRows.length > 0 ? managedRows : undefined;
   // Triage state (pinned / needs-input / working / dismissed) lives on the
   // conversation row — the inbox's own synced sessions collection, joined by
@@ -531,7 +533,7 @@ function SessionsView() {
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <div className="max-w-[1200px] mx-auto px-6 py-6">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+        <div ref={titlebarRef} className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-4">
             <Link href="/inbox" className="text-zinc-500 hover:text-zinc-300 transition-colors">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>

@@ -21,7 +21,7 @@ import {
   memberPresenceState,
   presenceLine,
 } from "./presence/memberPresence";
-import { startHuddle } from "../lib/calls/callManager";
+import { joinCall, startHuddle } from "../lib/calls/callManager";
 import { AvatarImg } from "../lib/avatarCache";
 import { useOpenDm } from "../hooks/useChatSync";
 import { dmRoomKey } from "@codecast/shared/contracts";
@@ -208,6 +208,19 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           </span>
         );
       })}
+      {/* Group huddle: the strip is where the people are, so the "ring
+          several of them" gesture starts here — the new-huddle field, which
+          also reaches group threads and channels. */}
+      {callsEnabled && teamMembers.length > 1 && (
+        <button
+          onClick={() => useInboxStore.getState().openCreateModal("huddle")}
+          className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-dashed border-sol-border/60 text-sol-text-dim transition-colors hover:border-sol-violet/50 hover:text-sol-violet"
+          title="Start a huddle with several teammates"
+          aria-label="Start a huddle"
+        >
+          <Headphones className="h-3.5 w-3.5" />
+        </button>
+      )}
       {teamMembers.length > 6 && (
         <button
           onClick={() => router.push("/team/activity?filter=team")}
@@ -309,11 +322,16 @@ function MemberHoverCard({
       : null;
   const cap = (n: number) => (n > 20 ? "20+" : String(n));
 
+  // In a huddle the viewer may join (in_room_key is only sent when they may):
+  // the button becomes "join them" — ringing someone out of the room they are
+  // sitting in is the one wrong gesture. Otherwise, one click rings them.
   const huddle = () => {
-    void startHuddle({
-      roomKey: dmRoomKey(currentUserId, String(member._id)),
-      toUserId: String(member._id),
-    });
+    if (member.in_room_key) void joinCall(member.in_room_key);
+    else
+      void startHuddle({
+        roomKey: dmRoomKey(currentUserId, String(member._id)),
+        toUserIds: [String(member._id)],
+      });
   };
   // Local-first: the store action flips the roster row in the same tick (the
   // pill must not wait on a server round-trip) and dispatches the
@@ -438,7 +456,7 @@ function MemberHoverCard({
                   className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-sol-violet/15 px-2 py-1.5 text-[12px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
                 >
                   <Headphones className="h-3.5 w-3.5" />
-                  Huddle
+                  {member.in_room_key ? "Join huddle" : "Huddle"}
                 </button>
               )}
               <button

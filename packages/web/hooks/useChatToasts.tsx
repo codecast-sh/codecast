@@ -12,7 +12,7 @@ import { chatToastTier, type ChatToastTier } from "../lib/chatTimeline";
 import { ChatToast, toastPreview, type ChatToastData } from "../components/chat/ChatToast";
 import { getChatFocus } from "../lib/chatFocus";
 import { isChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
-import { memberName, type ChatMember } from "../lib/chatViews";
+import { knownAgentMember, memberName, type ChatMember } from "../lib/chatViews";
 import { soundChatMessage } from "../lib/sounds";
 import { channelDisplayName } from "../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
@@ -179,7 +179,7 @@ export function useChatToasts(): void {
       recent.push(Date.now());
       burstRef.current.set(channelId, recent);
 
-      const author = byId.get(String(last.user_id));
+      const author = byId.get(String(last.user_id)) ?? knownAgentMember(String(last.user_id));
       const isAgent = last.author_kind === "agent" || !!author?.is_bot;
       const data: ChatToastData = {
         messageId,

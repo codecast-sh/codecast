@@ -23,7 +23,7 @@ import Graph from "graphology";
 import Sigma from "sigma";
 import { Filter, Loader2, RotateCcw, Waypoints, X } from "lucide-react";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { useTabContext } from "../TabContent";
+import { useTabContext } from "../../lib/tabParams";
 import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import {
   buildVaultGraph,

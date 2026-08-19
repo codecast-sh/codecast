@@ -16,6 +16,7 @@ import { ArrowLeft, Edit3, MoreHorizontal, Copy, Check, X } from "lucide-react";
 import Link from "next/link";
 import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
+import { useTitlebarHead } from "../hooks/useTitlebarHead";
 
 // Module-level so MessageReview's memo holds (a fresh inline arrow would defeat
 // it). Renders the doc's markdown as a flat run of blocks — each a direct child
@@ -68,6 +69,7 @@ export function DocumentDetailLayout({
   ownerConversationId,
 }: DocumentDetailLayoutProps) {
   const router = useRouter();
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   // Read mode is the default: the body renders as quotable review blocks
   // (hover any block to annotate). Editing is an explicit pencil toggle.
   const [isEditing, setIsEditing] = useState(false);
@@ -105,7 +107,7 @@ export function DocumentDetailLayout({
       {/* Wraps the action cluster to a second row rather than letting it overflow
           (and clip its trailing icons) once the back/type/watch cluster and the
           icons can no longer share one line — e.g. a narrow split-pane doc view. */}
-      <div className="cc-panel__head justify-between">
+      <div ref={titlebarRef} className="cc-panel__head justify-between">
         <div className="flex items-center gap-3">
           <Link
             href={backHref}

@@ -10,7 +10,9 @@ import {
   memberPresenceState,
   presenceLine,
 } from "../presence/memberPresence";
-import { channelDisplayName, memberName, type ChatMember } from "../../lib/chatViews";
+import { channelDisplayName, knownAgentMember, memberName, type ChatMember } from "../../lib/chatViews";
+import { AnchorScopePill } from "../anchor/AnchorIdentity";
+import { useAnchorIdentity } from "../../hooks/useSyncAnchors";
 import type { ChatRailChannel } from "../../store/chatSlice";
 import "./chat.css";
 
@@ -47,12 +49,16 @@ export function DmHeadline({ channel }: { channel: ChatRailChannel }) {
   const others = useMemo(
     () =>
       (channel.dmMemberIds ?? [])
-        .map((id) => teamMembers?.find((m) => String(m._id) === String(id)))
+        // Anchor bots first (they carry anchor_id for the scope pill; a team
+        // anchor is also on the roster, without it), then teammates.
+        .map((id) => knownAgentMember(String(id)) ?? teamMembers?.find((m) => String(m._id) === String(id)))
         .filter(Boolean) as Member[],
     [channel.dmMemberIds, teamMembers],
   );
   const one = others.length === 1 ? others[0] : undefined;
-  const state = one ? memberPresenceState(one as any) : undefined;
+  const state = one && !one.is_bot ? memberPresenceState(one as any) : undefined;
+  // A DM with an anchor says WHICH anchor: two of them can share the name.
+  const anchorScope = useAnchorIdentity(one && (one as any).is_bot ? (one as any).anchor_id ?? null : null);
   return (
     <span className="ch-head-name ch-head-dm">
       <span className="ch-dm-faces" aria-hidden="true">
@@ -63,6 +69,7 @@ export function DmHeadline({ channel }: { channel: ChatRailChannel }) {
         ))}
       </span>
       <span className="truncate">{channelDisplayName(channel, teamMembers)}</span>
+      {anchorScope && <AnchorScopePill anchor={anchorScope} />}
       {one && state && (
         <span className="ch-dm-presence" title={presenceLine(one as any, now)}>
           <span className={`ch-dm-dot ${PRESENCE_META[state].dot}`} />

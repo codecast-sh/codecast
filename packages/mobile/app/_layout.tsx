@@ -137,7 +137,10 @@ function RootLayout() {
     async function checkForUpdates() {
       if (__DEV__) return;
       try {
-        const Updates = await import('expo-updates');
+        // require, not import(): dynamic import() rejects in production
+        // bundles on Hermes (chunk-URL resolution needs web "location"),
+        // which silently killed the in-session OTA fetch loop.
+        const Updates = require('expo-updates') as typeof import('expo-updates');
         const update = await Updates.checkForUpdateAsync();
         if (cancelled || !update.isAvailable) return;
         await Updates.fetchUpdateAsync();
@@ -150,8 +153,8 @@ function RootLayout() {
     const sub = AppState.addEventListener('change', (state) => {
       if (updatePending && (state === 'background' || state === 'inactive')) {
         updatePending = false;
-        import('expo-updates')
-          .then((Updates) => Updates.reloadAsync())
+        Promise.resolve()
+          .then(() => (require('expo-updates') as typeof import('expo-updates')).reloadAsync())
           .catch(() => {});
       }
     });

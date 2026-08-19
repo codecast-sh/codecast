@@ -22,8 +22,10 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { authorizeRoom } from "./callRooms";
+import { authorizeRoom, authorizeRoomNoGrant, liveMembers } from "./callRooms";
+import { teamHasFeature } from "./teamFeatures";
 import { performSessionSend } from "./pendingMessages";
+import { formatTranscriptChunk as formatChunk } from "@codecast/shared/contracts";
 import { requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
 
@@ -32,6 +34,7 @@ const ROUTE_VALIDATOR = v.object({
   target: v.string(),
   mode: v.union(v.literal("live"), v.literal("after")),
   sent_seq: v.number(),
+  added_by: v.optional(v.id("users")),
 });
 
 // A transcript the caller may write to: they started it and it is live.
@@ -88,13 +91,72 @@ export const setRoutes = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     const t = await requireOwnLiveTranscript(ctx, userId, args.transcript_id);
-    // Keep delivery watermarks for routes that survive the edit, so changing
-    // one route never re-sends another's history.
+    // Keep delivery watermarks (and who added what) for routes that survive
+    // the edit, so changing one route never re-sends another's history.
     const routes = args.routes.map((r) => {
       const prior = t.routes.find((p) => p.kind === r.kind && p.target === r.target);
-      return { ...r, sent_seq: prior?.sent_seq ?? 0 };
+      return {
+        ...r,
+        sent_seq: prior?.sent_seq ?? 0,
+        added_by: prior?.added_by ?? r.added_by ?? userId,
+      };
     });
     await ctx.db.patch(t._id, { routes });
+  },
+});
+
+// Any participant points the live words at a session or doc — feeding an
+// agent must not require being the scribe. The route delivers as its adder,
+// and the backlog ships immediately so the target starts with full context.
+export const addRoute = mutation({
+  args: {
+    transcript_id: v.id("transcripts"),
+    kind: v.union(v.literal("session"), v.literal("doc"), v.literal("slack")),
+    target: v.string(),
+    mode: v.union(v.literal("live"), v.literal("after")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t || !(await canReadCall(ctx, userId, t))) throw new Error("Transcript not found");
+    if (t.status !== "live") throw new Error("Transcript has ended");
+    if (t.routes.some((r) => r.kind === args.kind && r.target === args.target)) return;
+    await ctx.db.patch(t._id, {
+      routes: [
+        ...t.routes,
+        { kind: args.kind, target: args.target, mode: args.mode, sent_seq: 0, added_by: userId },
+      ],
+    });
+    if (args.mode === "live") {
+      await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
+        transcript_id: t._id,
+        include_after_routes: false,
+      });
+    }
+  },
+});
+
+export const removeRoute = mutation({
+  args: {
+    transcript_id: v.id("transcripts"),
+    kind: v.string(),
+    target: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t) throw new Error("Transcript not found");
+    const route = t.routes.find((r) => r.kind === args.kind && r.target === args.target);
+    if (!route) return;
+    // The scribe manages the run; everyone else manages only their own routes.
+    const isScribe = String(t.started_by) === String(userId);
+    const isAdder = route.added_by && String(route.added_by) === String(userId);
+    if (!isScribe && !isAdder) throw new Error("Not your route");
+    await ctx.db.patch(t._id, {
+      routes: t.routes.filter((r) => !(r.kind === args.kind && r.target === args.target)),
+    });
   },
 });
 
@@ -181,19 +243,77 @@ export const stop = mutation({
     if (!t || String(t.started_by) !== String(userId)) {
       throw new Error("Transcript not found");
     }
-    if (t.status === "ended") return;
-    await ctx.db.patch(t._id, {
-      status: "ended",
-      ended_at: Date.now(),
-      summary_status: "pending",
-    });
-    await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
-      transcript_id: t._id,
-      include_after_routes: true,
-    });
-    await ctx.scheduler.runAfter(0, internal.transcripts.generateSummary, {
-      transcript_id: t._id,
-    });
+    await endTranscript(ctx, t);
+  },
+});
+
+/** The one way a transcript ends: flip the flag, deliver the "after" routes,
+ *  generate the summary. `stop` (the scribe's toggle), the room-emptied
+ *  hooks in calls.ts and the orphan sweep all funnel here. */
+export async function endTranscript(
+  ctx: any,
+  t: Doc<"transcripts">,
+  endedAt: number = Date.now(),
+): Promise<void> {
+  if (t.status === "ended") return;
+  await ctx.db.patch(t._id, {
+    status: "ended",
+    ended_at: Math.max(t.started_at, endedAt),
+    summary_status: "pending",
+  });
+  await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
+    transcript_id: t._id,
+    include_after_routes: true,
+  });
+  await ctx.scheduler.runAfter(0, internal.transcripts.generateSummary, {
+    transcript_id: t._id,
+  });
+}
+
+/** A transcript has no lease of its own; the room's does. When a room has no
+ *  live member left, its live transcript is over — nobody is in it to be
+ *  transcribed, and the scribe's audio pipes died with their tab. Called from
+ *  calls.leaveRoom / joinRoom when they find the room empty, and by the cron
+ *  sweep for rooms nobody touched again. */
+export async function endLiveTranscriptsForRoom(ctx: any, roomKey: string): Promise<number> {
+  const rows: Doc<"transcripts">[] = await ctx.db
+    .query("transcripts")
+    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
+    .collect();
+  let n = 0;
+  for (const t of rows) {
+    if (t.status !== "live") continue;
+    await endTranscript(ctx, t);
+    n++;
+  }
+  return n;
+}
+
+/** Cron backstop: a live transcript whose room holds no fresh lease is an
+ *  orphan (the scribe closed the tab, the last member timed out and nobody
+ *  rejoined to trigger the in-mutation end). Ends it. */
+export const sweepOrphanedLive = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const live = await ctx.db
+      .query("transcripts")
+      .withIndex("by_status", (q) => q.eq("status", "live"))
+      .collect();
+    let ended = 0;
+    for (const t of live) {
+      const seated = await ctx.db
+        .query("call_members")
+        .withIndex("by_room", (q) => q.eq("room_key", t.room_key))
+        .collect();
+      if (liveMembers(seated, now).length > 0) continue;
+      // The honest end is when the last lease was refreshed, not when the
+      // sweep noticed — otherwise an orphan's duration grows until it runs.
+      const lastSeen = seated.reduce((m, r) => Math.max(m, r.last_seen), 0);
+      await endTranscript(ctx, t, lastSeen || now);
+      ended++;
+    }
+    return { checked: live.length, ended };
   },
 });
 
@@ -363,7 +483,12 @@ export const getLive = query({
       transcript_id: t._id,
       started_by: t.started_by,
       started_at: t.started_at,
-      routes: t.routes.map((r) => ({ kind: r.kind, target: r.target, mode: r.mode })),
+      routes: t.routes.map((r: any) => ({
+        kind: r.kind,
+        target: r.target,
+        mode: r.mode,
+        added_by: String(r.added_by ?? t.started_by),
+      })),
       tail: segs.reverse().map((s: Doc<"transcript_segments">) => ({
         seq: s.seq,
         speaker_name: s.speaker_name,
@@ -380,10 +505,28 @@ export const getLive = query({
 });
 
 // ── Call list/detail (web page + cast CLI) ────────────────────────────────
-// One core, two doors: the web queries authenticate via getAuthUserId, the
-// CLI twins via verifyApiToken. Authorization per row is authorizeRoom — the
-// same boundary the media path enforces, so a dm call is readable by exactly
-// its two people and nothing leaks through team listing.
+// One core, two doors of authentication: the web queries use getAuthUserId,
+// the CLI twins verifyApiToken. Authorization per row is canReadCall.
+
+/** May `userId` read this call's record? Two doors: the room's own
+ *  membership rules (no invite grant — a grant admits its guest to the
+ *  running huddle, never to everything the room ever recorded), or having
+ *  BEEN in it: the words you sat through stay yours after the huddle ends,
+ *  guest or not. participants[] is the scribe's attribution list — built
+ *  from speaker ids the scribe client reports (appendSegments), not
+ *  server-derived — so this second door trusts the scribe, which already
+ *  holds the words. A guest who never spoke leaves no participant row and
+ *  loses the record when the huddle ends: accepted. */
+async function canReadCall(
+  ctx: any,
+  userId: Id<"users">,
+  t: Doc<"transcripts">,
+): Promise<boolean> {
+  if ((t.participants ?? []).some((p) => String(p.id) === String(userId))) {
+    return teamHasFeature(ctx, t.team_id, "calls");
+  }
+  return (await authorizeRoomNoGrant(ctx, userId, t.room_key)).ok;
+}
 
 function shapeCallRow(t: Doc<"transcripts">) {
   return {
@@ -419,8 +562,7 @@ async function listCallsCore(ctx: any, userId: Id<"users">, limit: number) {
   const out = [];
   for (const t of rows) {
     if (out.length >= limit) break;
-    const auth = await authorizeRoom(ctx, userId, t.room_key);
-    if (auth.ok) out.push(shapeCallRow(t));
+    if (await canReadCall(ctx, userId, t)) out.push(shapeCallRow(t));
   }
   return out;
 }
@@ -432,17 +574,19 @@ async function getCallCore(
 ) {
   const t = await ctx.db.get(transcriptId);
   if (!t) return null;
-  const auth = await authorizeRoom(ctx, userId, t.room_key);
-  if (!auth.ok) return null;
+  if (!(await canReadCall(ctx, userId, t))) return null;
   const segs = await ctx.db
     .query("transcript_segments")
     .withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id))
     .collect();
   return {
     ...shapeCallRow(t),
-    routes: (t.routes as { kind: string; target: string; mode: string }[]).map(
-      (r) => ({ kind: r.kind, target: r.target, mode: r.mode }),
-    ),
+    routes: t.routes.map((r: any) => ({
+      kind: r.kind,
+      target: r.target,
+      mode: r.mode,
+      added_by: r.added_by ? String(r.added_by) : String(t.started_by),
+    })),
     segments: segs.map((s: Doc<"transcript_segments">) => ({
       seq: s.seq,
       speaker_id: s.speaker_id,
@@ -555,22 +699,9 @@ export const authForAsr = internalQuery({
 
 // ── Route delivery ────────────────────────────────────────────────────────
 
-export function formatChunk(
-  segments: Array<{ speaker_name: string; text: string }>,
-): string {
-  // Collapse consecutive segments from one speaker into one line — the
-  // readable Otter shape: "Name: sentence sentence".
-  const lines: string[] = [];
-  for (const s of segments) {
-    const prefix = `**${s.speaker_name}**: `;
-    if (lines.length && lines[lines.length - 1].startsWith(prefix)) {
-      lines[lines.length - 1] += " " + s.text;
-    } else {
-      lines.push(prefix + s.text);
-    }
-  }
-  return lines.join("\n");
-}
+// Chunk formatting is shared with the web's "send to agent" actions:
+// @codecast/shared/contracts formatTranscriptChunk.
+export { formatChunk };
 
 export const readUnsent = internalQuery({
   args: { transcript_id: v.id("transcripts") },
@@ -694,16 +825,20 @@ export const deliverRoutes = internalAction({
       if (unsent.length === 0) continue;
       const chunk = formatChunk(unsent);
       const maxSeq = unsent[unsent.length - 1].seq;
+      // Delivery acts as whoever pointed the route at the call — a
+      // participant feeding an agent speaks as themselves. Routes from before
+      // added_by existed fall back to the scribe.
+      const asUser = route.added_by ?? transcript.started_by;
       try {
         if (route.kind === "session") {
           await ctx.runMutation(internal.transcripts.deliverToSession, {
-            as_user: transcript.started_by,
+            as_user: asUser,
             to: route.target,
             body: `Huddle transcript (live)\n\n${chunk}`,
           });
         } else if (route.kind === "doc") {
           await ctx.runMutation(internal.transcripts.deliverToDoc, {
-            as_user: transcript.started_by,
+            as_user: asUser,
             doc_id: route.target,
             chunk,
             header: `# Huddle transcript — ${new Date(transcript.started_at).toISOString().slice(0, 16).replace("T", " ")}`,

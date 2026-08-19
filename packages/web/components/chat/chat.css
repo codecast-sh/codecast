@@ -301,10 +301,6 @@
 
 /* ── Send states ─────────────────────────────────────────────────────────── */
 
-.ch-msg-pending {
-  opacity: 0.58;
-}
-
 /* Failed reads as loudly as a mention, because it is the one state the reader
  * must not scroll past. */
 .ch-msg-failed {

@@ -27,7 +27,10 @@ export type ChatReaction = {
 
 /** Lifecycle of an agent's reply, mirroring comments.agent_status so the two
  *  surfaces behave the same way. */
-export type ChatAgentStatus = "thinking" | "streaming" | "done" | "error";
+// "listening" / "passed" exist server-side (a silent wake in a followed thread
+// and the anchor's choice to stay quiet); the server never returns those rows,
+// so a client only ever renders the four visible states.
+export type ChatAgentStatus = "thinking" | "streaming" | "done" | "error" | "listening" | "passed";
 
 export type ChatAttachmentView = {
   storage_id: string;
@@ -57,7 +60,8 @@ export type ChatMessageView = {
   /** An agent turn in flight (or failed) inside this root's thread, so the
    *  affordance can say "thinking…" without the panel open. */
   threadAgentStatus?: "thinking" | "streaming" | "error";
-  /** Optimistic rows render at reduced opacity until the server echoes them. */
+  /** Optimistic, not yet echoed by the server. Renders like a sent row; the
+   *  flag is kept for callers that reason about the outbox. */
   pending?: boolean;
   failed?: boolean;
 };

@@ -8,8 +8,7 @@ import {
   bucketTs,
   derivePresenceState,
 } from "./presenceState";
-import { CALL_MEMBER_STALE_MS, parseRoomKey } from "./callRooms";
-import type { Id } from "./_generated/dataModel";
+import { authorizeRoom, liveMembers } from "./callRooms";
 import { normalizeTeamTaskStatuses } from "@codecast/shared/tasks";
 import { purgeChatMembership } from "./chat";
 import { readLocalViewRevision } from "./localFirstCommands";
@@ -357,42 +356,20 @@ export const getTeamMembers = query({
           now,
         );
         // Which huddle (if any) this member is sitting in. The raw room key
-        // is itself metadata (a dm key names both parties; a session key
-        // names a possibly-private conversation), so the VIEWER gets the key
-        // only for rooms they could join: their own dms, this team's
-        // channels, and feed-visible sessions. Everyone else sees a bare
-        // "in a huddle" boolean.
+        // is itself metadata (a dm key names its people; a session key names
+        // a possibly-private conversation; a channel key a possibly-private
+        // room), so the VIEWER gets the key only for rooms they could join
+        // right now — the same authorizer every call path uses. Everyone
+        // else sees a bare "in a huddle" boolean.
         const callRows = await ctx.db
           .query("call_members")
           .withIndex("by_user", (q) => q.eq("user_id", user._id))
           .collect();
-        const liveCall = callRows.find(
-          (c) => now - c.last_seen < CALL_MEMBER_STALE_MS,
-        );
+        const liveCall = liveMembers(callRows, now)[0];
         let visibleRoomKey: string | undefined;
         if (liveCall) {
-          const parsed = parseRoomKey(liveCall.room_key);
-          if (parsed?.kind === "dm") {
-            if (parsed.users.includes(String(authUserId))) {
-              visibleRoomKey = liveCall.room_key;
-            }
-          } else if (parsed?.kind === "channel") {
-            if (String(liveCall.team_id) === String(args.team_id)) {
-              visibleRoomKey = liveCall.room_key;
-            }
-          } else if (parsed?.kind === "session") {
-            const conv = await ctx.db.get(
-              parsed.conversationId as Id<"conversations">,
-            );
-            if (
-              conv &&
-              (String(conv.user_id) === String(authUserId) ||
-                (String(conv.team_id ?? "") === String(args.team_id) &&
-                  feedFilter.isVisible(conv)))
-            ) {
-              visibleRoomKey = liveCall.room_key;
-            }
-          }
+          const auth = await authorizeRoom(ctx, authUserId, liveCall.room_key);
+          if (auth.ok) visibleRoomKey = liveCall.room_key;
         }
         const recentConvos = await ctx.db
           .query("conversations")

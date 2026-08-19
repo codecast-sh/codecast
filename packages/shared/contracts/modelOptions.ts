@@ -1,83 +1,35 @@
 // Curated model/effort options per agent — the single source of truth for the
 // web pickers, the Convex dispatch payloads, and the daemon's launch-flag
-// mapping and /model-picker driving. PURE isomorphic data.
+// mapping. PURE isomorphic data.
 //
 // Keys are stable wire values (what the web sends and the conversation row
-// stores as the REQUESTED value); labels are what pickers render; menuMatch is
-// matched by the daemon against the live Claude Code /model picker rows (the
-// menu is dynamic — rows shift and the current model gains a ✔ — so selection
-// is by parsed label, never by hardcoded row number); cliAlias is the launch
-// flag value (`--model`/`-m`), absent for "default" (= omit the flag and let
-// the agent's own saved default win).
+// stores as the REQUESTED value); labels are what pickers render; cliAlias is
+// the value the agent itself understands — the launch flag (`--model`/`-m`)
+// and, for clients that switch mid-session, the argument of the in-session
+// `/model` command. Absent for "default" (= omit the flag and let the agent's
+// own saved default win).
 
 export interface ModelOption {
   key: string;
   label: string;
   /** One-line picker description. */
   hint?: string;
-  /** Regex source matched against a /model picker row label (claude only). */
-  menuMatch?: string;
-  /** Launch-flag value. Undefined = omit the flag ("default"). */
+  /** Launch-flag / `/model` argument. Undefined = omit the flag ("default"). */
   cliAlias?: string;
-  /** Only reachable via the in-place /model picker — hidden from new-session
-   * pickers. (Sonnet 1M's launch alias is `sonnet[1m]`, which both the daemon's
-   * arg allowlist and shell globbing reject; `--model sonnet-1m` silently
-   * launches a bogus "custom model". Its one-shot form is equally unreliable —
-   * `/model sonnet[1m]` echoed plain "Sonnet 5" on CC 2026-08-12 — so 1M stays
-   * on the picker driver.) */
-  midSessionOnly?: boolean;
 }
 
 export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
-  { key: "default", label: "Default", hint: "Your saved default model", menuMatch: "^Default\\b" },
-  { key: "fable", label: "Fable", hint: "Most capable, ~2× limit burn", menuMatch: "^Fable\\b", cliAlias: "fable" },
-  { key: "opus", label: "Opus", hint: "Best for everyday, complex tasks", menuMatch: "^Opus\\b", cliAlias: "opus" },
-  { key: "sonnet", label: "Sonnet", hint: "Efficient for routine tasks", menuMatch: "^Sonnet(?!\\s*\\(1M)", cliAlias: "sonnet" },
-  { key: "sonnet-1m", label: "Sonnet 1M", hint: "Sonnet with 1M context", menuMatch: "^Sonnet\\s*\\(1M", midSessionOnly: true },
-  { key: "haiku", label: "Haiku", hint: "Fastest for quick answers", menuMatch: "^Haiku\\b", cliAlias: "haiku" },
+  { key: "default", label: "Default", hint: "Your saved default model" },
+  { key: "fable", label: "Fable", hint: "Most capable, ~2× limit burn", cliAlias: "fable" },
+  { key: "opus", label: "Opus", hint: "Best for everyday, complex tasks", cliAlias: "opus" },
+  { key: "sonnet", label: "Sonnet", hint: "Efficient for routine tasks", cliAlias: "sonnet" },
+  { key: "haiku", label: "Haiku", hint: "Fastest for quick answers", cliAlias: "haiku" },
 ];
 
-// Claude Code's /model picker exposes exactly these four stops (←/→, wrapping);
-// the one-shot `/effort <x>` accepts them all and is session-only (verified
-// live 2026-08-13: "Set effort level to max (this session only)", no
-// settings.json write), so mid-session switching injects the one-shot.
+// The stops Claude Code's `/effort <x>` one-shot accepts (session-only:
+// "Set effort level to max (this session only)", no settings.json write).
 export const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "max"] as const;
 export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
-
-// ---------------------------------------------------------------------------
-// Claude live-menu keys ("menu:<label>")
-//
-// Claude has no model-listing command, and its /model menu changes with every
-// Claude Code release (2.1.220 dropped Sonnet 1M and made Opus the 1M row) —
-// so a curated list alone drifts: phantom options that error, new models that
-// never appear. The honest source for a LIVE session is the menu itself: the
-// daemon harvests the row labels whenever it drives the picker and heartbeats
-// them as the device's claude model inventory. Harvested rows that match a
-// curated option render as that option (stable key, hint, old-server compat);
-// a row nothing curates yet gets this synthesized key — `menu:` + the verbatim
-// row label — which navigates by exact label match. Menu keys can never
-// launch (no cliAlias, midSessionOnly): they exist only for the in-place
-// picker rail.
-// ---------------------------------------------------------------------------
-
-export const CLAUDE_MENU_KEY_PREFIX = "menu:";
-
-export function isClaudeMenuKey(key: string): boolean {
-  return (
-    key.startsWith(CLAUDE_MENU_KEY_PREFIX) &&
-    key.length > CLAUDE_MENU_KEY_PREFIX.length &&
-    key.length <= 80
-  );
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-export function claudeMenuOption(key: string): ModelOption {
-  const label = key.slice(CLAUDE_MENU_KEY_PREFIX.length);
-  return { key, label, menuMatch: `^${escapeRegExp(label)}$`, midSessionOnly: true };
-}
 
 export const CODEX_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your config.toml model" },
@@ -138,16 +90,13 @@ export type PiEffortLevel = (typeof PI_EFFORT_LEVELS)[number];
 // ---------------------------------------------------------------------------
 
 /** Per-device model inventory, heartbeat-reported and stored on the devices row.
- *  opencode/pi entries are `provider/model` ids from each client's listing
- *  command; the claude entry is the /model picker's row labels in menu order,
- *  harvested by the daemon whenever it drives the picker (claude has no
- *  listing command). */
+ *  Entries are `provider/model` ids from each client's listing command. */
 export interface DeviceModelInventory {
   /** Stable hash of `clients` — the daemon resends and the server rewrites only
    *  when it changes. */
   hash: string;
   collected_at: number;
-  clients: { opencode?: string[]; pi?: string[]; claude?: string[] };
+  clients: { opencode?: string[]; pi?: string[] };
 }
 
 // Conservative shape for a dynamic model key: `provider/model` (aggregators nest,

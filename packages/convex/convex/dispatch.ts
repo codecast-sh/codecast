@@ -6,7 +6,7 @@ import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { resolveTeamForPath, buildShareUpdate } from "./privacy";
-import { hasRecentPendingDaemonCommand, enqueueResumeSession } from "./daemonCommandUtils";
+import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType } from "@codecast/shared/contracts";
@@ -21,6 +21,7 @@ import {
   createBucketForUser,
   createBucketWithAssignmentsV2ForUser,
   assignConversationToBucketForUser,
+  canFileConversation,
 } from "./buckets";
 import { advanceLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { isSessionOwner } from "./sessionOwners";
@@ -875,14 +876,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  resumeSession: async (ctx, userId, [convId]: [string]) => {
-    const conv = await ctx.db.get(convId as Id<"conversations">);
-    const isSecondPartyOwner = conv?.owner_user_id?.toString() === userId.toString();
-    if (!conv || (conv.user_id.toString() !== userId.toString() && !isSecondPartyOwner)) throw new Error("Unauthorized");
-    // Runner-addressed and deduplicated by the shared writer.
-    const { deduplicated, command_id } = await enqueueResumeSession(ctx, conv);
-    return deduplicated ? { deduplicated: true } : { command_id };
-  },
+  // Runner or second-party owner; runner-addressed, deduplicated, and re-queues
+  // stranded messages — the same core as users.resumeSession.
+  resumeSession: async (ctx, userId, [convId]: [string]) =>
+    resumeConversationSession(ctx, userId, convId as Id<"conversations">),
 
   // Web-triggered "move to remote": enqueue a move_to_device command targeted
   // at the session's CURRENT owner device (the machine that has the checkout +
@@ -1449,7 +1446,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       convErr = String(e?.message || e);
     }
     if (!conv) return { gate: "conv_not_found", convErr };
-    if (String(conv.user_id) !== String(userId)) return { gate: "conv_not_owned" };
+    if (!(await canFileConversation(ctx as any, userId, conv))) return { gate: "conv_not_owned" };
     if (bucketId) {
       const bucket = await ctx.db.get(bucketId as Id<"inbox_buckets">).catch(() => null);
       if (!bucket || String((bucket as any).user_id) !== String(userId)) return { gate: "bucket_not_owned" };
@@ -1711,7 +1708,6 @@ const SESSION_COMMANDS = {
   rewindSession: api.conversations.rewindSession,
   forkFromMessage: api.conversations.forkFromMessage,
   sendKeysToSession: api.conversations.sendKeysToSession,
-  setSessionModel: api.conversations.setSessionModel,
   sendEscapeToSession: api.conversations.sendEscapeToSession,
   resumeSession: api.users.resumeSession,
 };

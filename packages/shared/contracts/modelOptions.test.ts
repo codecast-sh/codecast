@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { modelOptionKey, findModelOption } from "./agentClients";
-import { isDynamicModelKey, dynamicModelOption, featuredModelOptions, isClaudeMenuKey, claudeMenuOption } from "./modelOptions";
+import { isDynamicModelKey, dynamicModelOption, featuredModelOptions } from "./modelOptions";
 
 // modelOptionKey is the inverse of the launch flag: the conversation row stores
 // the full model id, but the pickers, the Cmd+K menu, and — critically — the
@@ -130,41 +130,5 @@ describe("dynamic model options", () => {
 
   it("featuredModelOptions returns empty for an empty inventory (callers fall back)", () => {
     expect(featuredModelOptions([])).toEqual([]);
-  });
-});
-
-// Claude live-menu keys: the wire value for a harvested /model picker row that
-// no curated option matches. Valid ONLY on the in-place switch rail — the
-// synthesized option navigates by exact label and can never launch.
-describe("claude menu keys", () => {
-  it("recognizes well-formed menu keys and rejects junk", () => {
-    expect(isClaudeMenuKey("menu:Opus (1M context)")).toBe(true);
-    expect(isClaudeMenuKey("menu:")).toBe(false);
-    expect(isClaudeMenuKey("opus")).toBe(false);
-    expect(isClaudeMenuKey(`menu:${"x".repeat(90)}`)).toBe(false);
-  });
-
-  it("synthesizes an exact-label option with regex chars escaped", () => {
-    const opt = claudeMenuOption("menu:Opus (1M context)");
-    expect(opt.label).toBe("Opus (1M context)");
-    expect(opt.midSessionOnly).toBe(true);
-    expect(opt.cliAlias).toBeUndefined();
-    const re = new RegExp(opt.menuMatch!, "i");
-    expect(re.test("Opus (1M context)")).toBe(true);
-    // Anchored exact match: must not hit sibling rows sharing the word.
-    expect(re.test("Opus")).toBe(false);
-    expect(re.test("Opus (1M context) Extended")).toBe(false);
-  });
-
-  it("findModelOption accepts menu keys for claude only", () => {
-    expect(findModelOption("claude_code", "menu:Fable Turbo")?.menuMatch).toBe("^Fable Turbo$");
-    expect(findModelOption("codex", "menu:Fable Turbo")).toBeUndefined();
-  });
-
-  it("modelOptionKey round-trips the optimistic menu stamp", () => {
-    // commitModelChange stamps `claude-menu:<label>`; the picker highlight and
-    // the palette both key off modelOptionKey, so the stamp must resolve to the
-    // menu key itself (not fall back to "default").
-    expect(modelOptionKey("claude-menu:Opus (1M context)", "claude_code")).toBe("menu:Opus (1M context)");
   });
 });

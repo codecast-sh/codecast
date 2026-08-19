@@ -7,20 +7,30 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { sessionRoomKey } from "@codecast/shared/contracts";
 import { Text } from "@/components/Themed";
 import { Theme } from "@/constants/Theme";
-import { joinCall } from "@/lib/calls/callManager";
+import { joinCall, startHuddle } from "@/lib/calls/callManager";
 
-// The huddle affordance on a session screen: one tap joins the session's own
-// room ("huddle about THIS conversation" — same key web's header chip uses).
-// When teammates are already in it, the button shows their count so it reads
-// as "join them", not "start something". Renders nothing when calling is not
-// configured, or when calls are off for the session's team (a per-team
-// opt-in; getCallConfig lists the caller's teams that have it on) — no dead
+// The huddle affordance for anything with a room: one tap joins the room
+// (same key web's chips use) — and rings `ring` if given (a DM or group
+// thread rings its people; a channel or session is an open door). When
+// teammates are already in it, the button shows their count so it reads as
+// "join them", not "start something". Renders nothing when calling is not
+// configured, or when calls are off for the room's team (a per-team opt-in;
+// getCallConfig lists the caller's teams that have it on) — no dead
 // affordance.
-export function SessionHuddleButton({ conversationId, teamId }: { conversationId: string; teamId?: string | null }) {
+export function HuddleButton({
+  roomKey,
+  teamId,
+  ring,
+  anchorTitle,
+}: {
+  roomKey: string;
+  teamId?: string | null;
+  ring?: string[];
+  anchorTitle?: string;
+}) {
   const router = useRouter();
   const config = useQuery(api.calls.getCallConfig);
   const enabled = config?.enabled === true && !!teamId && (config.teams ?? []).includes(String(teamId));
-  const roomKey = sessionRoomKey(conversationId);
   const occupancy = useQuery(api.calls.getRoomOccupancy, enabled ? { room_keys: [roomKey] } : "skip");
   if (!enabled) return null;
   const inRoom = (occupancy as any)?.[roomKey]?.length ?? 0;
@@ -28,18 +38,33 @@ export function SessionHuddleButton({ conversationId, teamId }: { conversationId
     <TouchableOpacity
       onPress={() => {
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        void joinCall(roomKey);
+        if (inRoom === 0 && ring?.length) {
+          void startHuddle({ roomKey, toUserIds: ring, anchorTitle });
+        } else {
+          void joinCall(roomKey);
+        }
         router.push("/call");
       }}
       style={[styles.btn, inRoom > 0 && styles.btnLive]}
       hitSlop={{ top: 12, bottom: 12, left: 4, right: 4 }}
       activeOpacity={0.6}
-      accessibilityLabel={inRoom > 0 ? `Join huddle, ${inRoom} in it` : "Start a huddle about this session"}
+      accessibilityLabel={
+        inRoom > 0
+          ? `Join huddle, ${inRoom} in it`
+          : ring?.length
+            ? "Start a huddle and ring everyone here"
+            : "Start a huddle here"
+      }
     >
       <Ionicons name="headset-outline" size={17} color={inRoom > 0 ? Theme.green : Theme.textMuted} />
       {inRoom > 0 && <Text style={styles.count}>{inRoom}</Text>}
     </TouchableOpacity>
   );
+}
+
+// Session screens: the room of one conversation.
+export function SessionHuddleButton({ conversationId, teamId }: { conversationId: string; teamId?: string | null }) {
+  return <HuddleButton roomKey={sessionRoomKey(conversationId)} teamId={teamId} />;
 }
 
 const styles = StyleSheet.create({

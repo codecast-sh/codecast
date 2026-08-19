@@ -1,4 +1,5 @@
 import { mutation, query, internalAction, internalMutation } from "./functions";
+import { openTasksVouchForWaiting } from "@codecast/shared/contracts";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { enqueuePush } from "./pushRouter";
@@ -619,27 +620,18 @@ export async function performNeedsInputCheck(
 ): Promise<{ notified: boolean; reason?: string }> {
   const conv = await ctx.db.get(args.conversation_id);
   if (!conv || !conv.message_count) return { notified: false, reason: "no_content" };
-  // Triaged/parked rows don't chime on the web either.
-  if (conv.inbox_dismissed_at || conv.inbox_stashed_at) return { notified: false, reason: "dismissed" };
-  // The sound skips pinned too (isSessionWaitingForInput's !is_pinned arms).
-  if (conv.inbox_pinned_at) return { notified: false, reason: "pinned" };
-  // Mirror of the web's isSub guard (inboxStore) — the idle sound skips these,
-  // so the push does too: subagents and any parent-linked or worktree session
-  // (orchestration workers). Broader than the "hidden subagent" test on
-  // purpose; parity with the sound is the contract here.
-  if (conv.is_subagent || conv.is_workflow_sub || conv.parent_conversation_id || conv.worktree_name) {
-    return { notified: false, reason: "subagent" };
-  }
-  // The bar is "a session the USER was driving is waiting on THEM". Machine-
-  // initiated sessions never clear it: agent fan-out (cast spawn, agent-team
-  // fleets — the same classification that gates the "started coding" team
-  // notification) and schedule runs park idle after every turn by design.
-  if (isAgentSpawnedConversation(conv)) {
-    return { notified: false, reason: "agent_spawned" };
-  }
-  if (conv.agent_task_id) {
-    return { notified: false, reason: "schedule_run" };
-  }
+  // A killed row is retired for good — the teardown is deliberate, and its
+  // frozen flags never resurface anything.
+  if (conv.inbox_killed_at) return { notified: false, reason: "killed" };
+  // Hidden rows (stashed, or a folded run carrying the legacy dismissed stamp)
+  // do NOT return yet: the stall rule below needs the same derivation this
+  // push uses. "Stash hides work, not stalls" — a hidden session may be quiet,
+  // never quietly stuck, so a HARD block (open question, permission prompt,
+  // dead process) clears the hide and the row surfaces in Needs Input. The
+  // push-etiquette guards (pinned, subagents, spawned fleets, schedule runs)
+  // apply to the CHIME only and move below the stall block: a folded schedule
+  // run stalled on a permission prompt is exactly the invisible-stall trap.
+  const hidden = !!(conv.inbox_dismissed_at || conv.inbox_stashed_at);
 
   const session = await ctx.db
     .query("managed_sessions")
@@ -654,7 +646,10 @@ export async function performNeedsInputCheck(
   const now = Date.now();
   // Single-row mirror of enrichInboxSessionRow's derivation.
   const heartbeatFresh = !!session?.last_heartbeat && now - session.last_heartbeat < HEARTBEAT_ALIVE_MS;
-  const agentStatus = trustedAgentStatus(session?.agent_status, conv.updated_at, now, heartbeatFresh);
+  const agentStatus = trustedAgentStatus(
+    session?.agent_status, conv.updated_at, now, heartbeatFresh,
+    openTasksVouchForWaiting(session?.open_tasks_at, session?.open_tasks?.length ?? 0, now),
+  );
   const daemonAlive = agentStatus === "stopped" ? false : heartbeatFresh;
   const hasPending = !!conv.has_pending_messages;
 
@@ -732,18 +727,54 @@ export async function performNeedsInputCheck(
     userDormant: isUserDormant(conv),
     armedTriggerHome: isArmedTriggerHome(conv, await loadArmedTriggerHomes(ctx, conv.user_id)),
     settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
+    declaredStatus: conv.thread_state_status ?? null,
   });
-  // A settle that lands in needs-input with NO declaration from the agent is
-  // the settle classifier's cue: it reads the tail once and files the row as
-  // done / dormant / needs_input (idleSummary.generateIdleSummary writes the
-  // verdict next to the summary). Scheduled here — before the push filters —
-  // because a machine-started turn or a dedupe-suppressed push still deserves
-  // its verdict; gated on the verdict not already covering this settle.
-  if (state === "needs_input" && !awaitingInput && !isSettleVerdictCurrent(conv)) {
-    await ctx.scheduler.runAfter(0, internal.idleSummary.generateIdleSummary, {
-      conversation_id: conv._id,
-    });
+
+  // ── The stall rule ─────────────────────────────────────────────────────────
+  // Only the HARD kinds count as a stall: the machine cannot proceed (open
+  // AskUserQuestion, permission prompt) or is gone (dead / unresponsive with
+  // output). A plain finished turn — the needs_input fallthrough — is quiet
+  // progress and never breaks a hide; neither does the classifier. Clearing
+  // both stamps mirrors --needs-attention (agentTasks.completeTaskRun) and the
+  // blocked declaration (conversations.setThreadState): one contract, three
+  // doors. No push from here — the row surfacing in Needs Input IS the signal,
+  // and the machine-turn guard below would suppress the chime anyway.
+  if (hidden) {
+    const stallKind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
+    const stalled =
+      state === "needs_input" &&
+      (awaitingInput || stallKind === "permission_blocked" || stallKind === "stopped" || stallKind === "unresponsive");
+    if (stalled) {
+      await ctx.db.patch(conv._id, { inbox_stashed_at: undefined, inbox_dismissed_at: undefined });
+      return { notified: false, reason: "unstashed_stall" };
+    }
+    return { notified: false, reason: "hidden" };
   }
+  // ── Push etiquette (chime only) ────────────────────────────────────────────
+  // The sound skips pinned (isSessionWaitingForInput's !is_pinned arms).
+  if (conv.inbox_pinned_at) return { notified: false, reason: "pinned" };
+  // Mirror of the web's isSub guard (inboxStore) — the idle sound skips these,
+  // so the push does too: subagents and any parent-linked or worktree session
+  // (orchestration workers). Broader than the "hidden subagent" test on
+  // purpose; parity with the sound is the contract here.
+  if (conv.is_subagent || conv.is_workflow_sub || conv.parent_conversation_id || conv.worktree_name) {
+    return { notified: false, reason: "subagent" };
+  }
+  // The bar is "a session the USER was driving is waiting on THEM". Machine-
+  // initiated sessions never clear it: agent fan-out (cast spawn, agent-team
+  // fleets — the same classification that gates the "started coding" team
+  // notification) and schedule runs park idle after every turn by design.
+  if (isAgentSpawnedConversation(conv)) {
+    return { notified: false, reason: "agent_spawned" };
+  }
+  if (conv.agent_task_id) {
+    return { notified: false, reason: "schedule_run" };
+  }
+  // The settle classifier is NOT scheduled from here any more: this check
+  // stands down for pinned / agent-spawned / schedule-run rows before this
+  // point, and those need a verdict too. It has its own entry off the same
+  // status change (managedSessions.scheduleNeedsInputCheck →
+  // idleSummary.classifySettle).
   if (state !== "needs_input") return { notified: false, reason: "not_needs_input" };
 
   const kind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });

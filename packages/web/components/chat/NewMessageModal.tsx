@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Hash, Lock, Users, X } from "lucide-react";
+import { ArrowRight, Hash, Headphones, Lock, Users, X } from "lucide-react";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { ChatModalLegend } from "./ChatModalLegend";
@@ -14,12 +14,14 @@ import {
   presenceLine,
   compareMembersByPresence,
 } from "../presence/memberPresence";
-import { channelDisplayName, memberHandles, memberName, type ChatMember } from "../../lib/chatViews";
+import { channelDisplayName, chatViewRoomKey, memberHandles, memberName, type ChatMember } from "../../lib/chatViews";
+import { joinCall, ringInto, startHuddle } from "../../lib/calls/callManager";
+import { MAX_ROOM_MEMBERS, dmRoomKey } from "@codecast/shared/contracts";
 import { memberAvatarUrl } from "../../lib/liveEntities";
 import type { ChatChannelView } from "./chatTypes";
 import "./chat.css";
 
-// New message.
+// New message / new huddle.
 //
 // One field answers "who do I want to talk to" — a person, several people, a
 // channel, or a group conversation that already exists. Typing searches all of
@@ -28,9 +30,17 @@ import "./chat.css";
 // the same trio twice lands in the same room — creation and navigation are the
 // same gesture, and neither needs a confirm step.
 //
+// The same field starts a huddle (`intent="huddle"`): the set of people IS the
+// huddle room too (dm room key), a group thread huddles in the room of its
+// members, a channel in its own. Picking people rings them; picking a room
+// joins it (a channel is an open door and rings nobody; a group thread rings
+// its members). Chat rooms only appear when the team has chat on — the rail
+// is empty otherwise and the field is people-only.
+//
 // Everything commits local-first: openDmChannel returns a room id in the same
 // tick (an existing room's real id, or a stub the server row supersedes), so
-// the modal never waits on the network to leave the screen.
+// the modal never waits on the network to leave the screen; a huddle paints
+// "connecting" in the dock the same tick.
 
 type Member = ChatMember & {
   presence_state?: string;
@@ -49,7 +59,21 @@ function personText(m: Member): string {
   return [memberName(m), ...memberHandles(m)].join(" ");
 }
 
-export function NewMessageModal({ onClose }: { onClose: () => void }) {
+export function NewMessageModal({
+  onClose,
+  intent = "message",
+}: {
+  onClose: () => void;
+  intent?: "message" | "huddle";
+}) {
+  const huddle = intent === "huddle";
+  // Already in a huddle? Then this field means "bring people into it" — a
+  // second room would silently drop the one you are in. Picking a room
+  // (channel / group thread) still switches: naming a destination is the
+  // explicit gesture.
+  const liveRoomKey = useInboxStore((s) =>
+    intent === "huddle" && s.call.phase === "connected" ? s.call.roomKey : null,
+  );
   const now = useCoarseNow(30_000);
   const openDm = useOpenDm();
   const router = useRouter();
@@ -74,7 +98,14 @@ export function NewMessageModal({ onClose }: { onClose: () => void }) {
     [teamMembers],
   );
 
+  // A people huddle room holds MAX_ROOM_MEMBERS including you; ringing into
+  // a live room is capped by the same roster size. Past the cap the field
+  // stops offering people instead of failing after the modal closed.
+  const chipCap = huddle ? MAX_ROOM_MEMBERS - 1 : Infinity;
+  const capReached = chips.length >= chipCap;
+
   const candidates = useMemo<Candidate[]>(() => {
+    if (capReached) return [];
     const needle = q.trim().toLowerCase();
     const people = (teamMembers ?? [])
       .filter((m) => !m.is_bot && String(m._id) !== String(viewer) && !chips.includes(String(m._id)))
@@ -105,7 +136,7 @@ export function NewMessageModal({ onClose }: { onClose: () => void }) {
         .map((x): Candidate => ({ type: "channel", key: `c:${x.c.id}`, channel: x.c }));
     }
     return [...people, ...groups, ...channels];
-  }, [q, chips, teamMembers, viewer, rail]);
+  }, [q, chips, teamMembers, viewer, rail, capReached]);
 
   // The keyboard cursor follows the list, never dangles past it.
   useEffect(() => {
@@ -120,6 +151,12 @@ export function NewMessageModal({ onClose }: { onClose: () => void }) {
   const start = (ids: string[]) => {
     if (!ids.length) return;
     onClose();
+    if (huddle) {
+      // Context lines for people rooms are server-derived per recipient.
+      if (liveRoomKey) void ringInto(liveRoomKey, ids);
+      else void startHuddle({ roomKey: dmRoomKey(String(viewer), ...ids), toUserIds: ids });
+      return;
+    }
     openDm(ids);
   };
 
@@ -131,6 +168,15 @@ export function NewMessageModal({ onClose }: { onClose: () => void }) {
       setHighlight(0);
       setNavigated(false);
       inputRef.current?.focus();
+    } else if (huddle) {
+      onClose();
+      const c = cand.channel;
+      const roomKey = chatViewRoomKey(c, String(viewer));
+      if (cand.type === "group") {
+        void startHuddle({ roomKey, toUserIds: c.dmMemberIds ?? [] });
+      } else {
+        void joinCall(roomKey);
+      }
     } else {
       onClose();
       go(`/chat/${cand.channel.id}`);
@@ -180,21 +226,24 @@ export function NewMessageModal({ onClose }: { onClose: () => void }) {
         className="ch-modal ch-nm"
         role="dialog"
         aria-modal="true"
-        aria-label="New message"
+        aria-label={huddle ? "New huddle" : "New message"}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();
         }}
       >
         <div className="ch-nm-head">
-          <span className="ch-nm-title">New message</span>
+          <span className="ch-nm-title">
+            {huddle && <Headphones className="w-3.5 h-3.5 inline-block mr-1.5 align-[-2px] text-sol-violet" aria-hidden="true" />}
+            {huddle ? (liveRoomKey ? "Add to your huddle" : "New huddle") : "New message"}
+          </span>
           <button type="button" className="ch-modal-close" aria-label="Close" onClick={onClose}>
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
 
         <div className="ch-nm-to" onClick={() => inputRef.current?.focus()}>
-          <span className="ch-nm-to-label">To:</span>
+          <span className="ch-nm-to-label">{huddle ? "With:" : "To:"}</span>
           {chips.map((id) => {
             const m = byId.get(id);
             return (
@@ -215,7 +264,13 @@ export function NewMessageModal({ onClose }: { onClose: () => void }) {
             ref={inputRef}
             value={q}
             autoFocus
-            placeholder={chips.length ? "Add another" : "A person, several people, or a channel"}
+            placeholder={
+              chips.length
+                ? "Add another"
+                : huddle && !rail.length
+                  ? "A person or several people"
+                  : "A person, several people, or a channel"
+            }
             onKeyDown={onInputKeyDown}
             onChange={(e) => {
               setQ(e.target.value);
@@ -259,8 +314,12 @@ export function NewMessageModal({ onClose }: { onClose: () => void }) {
           })}
           {candidates.length === 0 && (
             <div className="ch-nm-empty">
-              {chips.length ? "Everyone matching is already added." : "No people or channels match."}
-              {!chips.length && q.trim() && (
+              {capReached
+                ? `A huddle holds up to ${MAX_ROOM_MEMBERS} people.`
+                : chips.length
+                  ? "Everyone matching is already added."
+                  : "No people or channels match."}
+              {!huddle && !chips.length && q.trim() && (
                 <button
                   type="button"
                   className="ch-nm-empty-action"
@@ -284,20 +343,30 @@ export function NewMessageModal({ onClose }: { onClose: () => void }) {
             disabled={chips.length === 0}
             onClick={() => start(chips)}
           >
-            {chips.length > 1 ? "Start group conversation" : "Start conversation"}
+            {huddle
+              ? liveRoomKey
+                ? `Ring ${chips.length > 1 ? chips.length : "them"} into your huddle`
+                : chips.length > 1
+                  ? `Start huddle · ring ${chips.length}`
+                  : "Start huddle"
+              : chips.length > 1
+                ? "Start group conversation"
+                : "Start conversation"}
             {enterStarts && <KeyCap size="xs">{"\u21a9"}</KeyCap>}
           </button>
-          <button
-            type="button"
-            className="ch-nm-alt"
-            onClick={() => {
-              onClose();
-              openCreateModal("chat");
-            }}
-          >
-            <Hash className="w-3 h-3" />
-            New channel instead
-          </button>
+          {!huddle && (
+            <button
+              type="button"
+              className="ch-nm-alt"
+              onClick={() => {
+                onClose();
+                openCreateModal("chat");
+              }}
+            >
+              <Hash className="w-3 h-3" />
+              New channel instead
+            </button>
+          )}
         </div>
         <ChatModalLegend enterLabel={enterStarts ? "start" : "pick"} />
       </div>

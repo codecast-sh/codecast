@@ -263,6 +263,61 @@ export function extractCommentBody(args: string): string | null {
   return kind === "dynamic" ? null : body || null;
 }
 
+// `cast chat reply <message_id> "<text>" [--status error]` and
+// `cast chat send "<text>" --channel <id> [--thread <root_id>]` — the two chat
+// writes. The transcript renders them as chat bubbles, so this pulls the pieces
+// a bubble needs: which placeholder/channel/thread it went to, the text as the
+// shell delivered it (or a recipe, flagged `dynamic`), and whether the reply
+// declared it could not answer.
+export interface ChatSendArgs {
+  messageId?: string;
+  channelId?: string;
+  threadRootId?: string;
+  status?: string;
+  body: string;
+  kind: SendBody["kind"];
+}
+
+const FLAG_RE = /^-{1,2}[A-Za-z]/;
+
+export function extractChatSendArgs(subcommand: string, args: string): ChatSendArgs | null {
+  if (subcommand !== "reply" && subcommand !== "send") return null;
+  const tokens = tokenizeShellArgs(args);
+  const positional: ShellToken[] = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const t = tokens[i];
+    if (!t.quoted && FLAG_RE.test(t.value)) {
+      // Every chat flag takes a value (--channel/--thread/--status); --json is the
+      // one boolean, and its "value" would be the next flag or nothing.
+      const next = tokens[i + 1];
+      if (t.value !== "--json" && next && !(!next.quoted && FLAG_RE.test(next.value))) i += 1;
+      continue;
+    }
+    positional.push(t);
+  }
+  const messageId = subcommand === "reply" ? positional.shift()?.value : undefined;
+
+  // The body: a heredoc/stdin `-` anywhere in the args, else the first remaining
+  // positional word. extractSendBody already knows every shape a body takes,
+  // so hand it the args from the `-` onward.
+  const dash = args.match(/(?:^|\s)-(?=\s|$)/);
+  let body: SendBody;
+  if (dash && dash.index !== undefined) {
+    body = extractSendBody(args.slice(dash.index + dash[0].indexOf("-")));
+  } else if (positional[0]) {
+    body = { body: positional[0].value, kind: positional[0].dynamic ? "dynamic" : "literal" };
+  } else {
+    body = { body: "", kind: "dynamic" };
+  }
+  return {
+    messageId,
+    channelId: extractFlagValue(args, ["--channel"]) ?? undefined,
+    threadRootId: extractFlagValue(args, ["--thread"]) ?? undefined,
+    status: extractFlagValue(args, ["--status"]) ?? undefined,
+    ...body,
+  };
+}
+
 // "t"/"p"/"d" are the short spellings, "sched"/"schedule" the pre-rename name of
 // `cast trigger` — old transcripts replay them forever, so every reader resolves
 // a category through here and sees one name per object kind.

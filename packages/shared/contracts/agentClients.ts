@@ -144,21 +144,16 @@ export function parseExecutionAgentClientId(agentType: unknown): AgentClientId {
 export interface AgentModelConfig {
   models: ModelOption[];
   efforts: readonly string[];
-  /** The daemon can switch the model of a RUNNING session in place (claude drives
-   *  the /model picker; codex's /model is interactive-only, so it applies at
-   *  launch only). */
+  /** The model of a RUNNING session can be switched in place by sending the
+   *  client's `/model <alias>` / `/effort <level>` commands as ordinary
+   *  messages (claude). codex's /model is interactive-only, so it applies at
+   *  launch only. */
   midSession: boolean;
   /** The client addresses an open `provider/model` namespace whose availability
    *  is a per-device fact (opencode, pi). Any well-formed `provider/model` key is
    *  a valid wire value — findModelOption synthesizes its option — and pickers
    *  render from the device's heartbeat-reported model inventory. */
   dynamic?: boolean;
-  /** The client's own model picker is the source of truth for what a RUNNING
-   *  session can switch to; the daemon harvests its menu rows on a switch and
-   *  devices heartbeat them as label strings. Pickers render the harvested rows
-   *  (matched to curated options via `menuMatch`) instead of a static list.
-   *  Unset = pickers use the curated `models` list only. */
-  menuDynamic?: boolean;
 }
 
 /** How the daemon tails a client's transcripts on disk. `json-store` is reserved
@@ -680,14 +675,13 @@ export const AGENT_LAUNCH_OPTIONS: AgentLaunchOption[] = Object.values(AGENT_CLI
   label: d.displayName,
 }));
 
-/** The launch-time model/effort rail for a blank session: picker-only models
- *  (midSessionOnly, e.g. Sonnet 1M) are hidden, and effort gains the "default"
- *  stop (= omit the flag, the agent's saved default wins). One definition for
- *  the web menu, the mobile switcher chip, and the mobile new-session sheet;
- *  the live (mid-session) rail is just cfg.models/cfg.efforts unfiltered. */
+/** The launch-time model/effort rail for a blank session: effort gains the
+ *  "default" stop (= omit the flag, the agent's saved default wins). One
+ *  definition for the web menu, the mobile switcher chip, and the mobile
+ *  new-session sheet; the live (mid-session) rail is cfg.models/cfg.efforts. */
 export function launchRailOptions(cfg: AgentModelConfig): { models: ModelOption[]; efforts: string[] } {
   return {
-    models: cfg.models.filter((m) => !m.midSessionOnly),
+    models: cfg.models,
     efforts: ["default", ...cfg.efforts],
   };
 }

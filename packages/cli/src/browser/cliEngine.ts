@@ -892,6 +892,24 @@ frames are superseded before anyone reads them.`,
       process.exit(await loginAsPerson(url, Math.max(0, parseInt(o.wait, 10) || 0)));
     });
 
+  br.command("sync [url]")
+    .description("Carry your Chrome's current logins into the running agent browser: one site, or every site with no URL (Google excepted — it signs in on its own)")
+    .action(async (url: string | undefined) => {
+      await ensureBrowser();
+      const state = readState();
+      if (!state || state.remote || !state.sourceProfile) die("no local browser started from your Chrome profile", "`cast browser start` (without --fresh) first");
+      const target = url ? (/^[a-z]+:/i.test(url) ? url : `https://${url}`) : null;
+      const r = await provisionLocalLogins(state.port, target, { profileDir: state.sourceProfile, channel: state.channel });
+      if (r.injected) {
+        const where = r.sites ? `across ${r.sites} site${r.sites === 1 ? "" : "s"}` : `for ${r.host}`;
+        const rej = r.rejected ? fmt.muted(` (${r.rejected} Chrome would not store)`) : "";
+        console.log(`${OK} carried ${r.injected} cookie${r.injected === 1 ? "" : "s"} ${where} from your Chrome${rej}`);
+      } else {
+        console.log(`${fmt.muted(icons.dot)} nothing to carry for ${r.host}${r.reason ? ` — ${r.reason}` : ""}`);
+      }
+      console.log(fmt.muted("  `open` does this for the site it opens; a login on a sibling host needs this whole-jar sync or a URL on that host"));
+    });
+
   br.command("tabs")
     .description("List open tabs")
     .action(() => passthrough("tab", ["list"]));

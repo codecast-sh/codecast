@@ -26,6 +26,7 @@
     "productName": "Codecast",
     "files": [
       "main.js",
+      "notificationRouter.js",
       "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",

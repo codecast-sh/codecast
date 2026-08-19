@@ -113,7 +113,15 @@ export const cleanupUnusableSummaries = internalMutation({
 // to null (no verdict written), so the row falls to needs-input, the safe side
 // of the asymmetry: a blocked session misfiled as done stalls work silently,
 // while a finished one misfiled as needs-input is merely today's noise.
-export const SETTLE_VERDICTS = ["done", "needs_input", "dormant"] as const;
+//
+// "dormant" is deliberately NOT a classifier verdict. Dormancy needs a wake the
+// system can verify — a declaration, an open background task, an armed trigger,
+// the user's own gesture. A model reading prose cannot verify one, and its first
+// live misfire was exactly the fine line this feature must not cross: an agent
+// ending on "the standup decides between A and B" was filed as dormant because
+// "standup" read like a wake, when it was a human's decision. So the model only
+// says done or needs_input; a stale stored "dormant" (pre-rule rows) is ignored.
+export const SETTLE_VERDICTS = ["done", "needs_input"] as const;
 export type SettleVerdict = (typeof SETTLE_VERDICTS)[number];
 
 export function parseSettleVerdict(raw: string | null | undefined): SettleVerdict | null {
@@ -164,12 +172,82 @@ export const setIdleSummary = internalMutation({
   },
 });
 
+// The tail the classifier reads: a handful of earlier turns for context, and
+// the FINAL assistant message nearly whole. The verdict lives at the END of
+// that message — "so the open question is…", "let me know which…" — and the
+// first cut of this fed the model 500 chars of every message: it saw the
+// opening of a long closing report and none of its ask, plus an earlier turn's
+// "I'll be re-invoked when it completes", and filed a decision as dormant.
+export const SETTLE_TAIL_MESSAGES = 30;
+export const SETTLE_FINAL_HEAD_CHARS = 900;
+export const SETTLE_FINAL_TAIL_CHARS = 3200;
+export const SETTLE_CONTEXT_CHARS = 350;
+
+export type SettleTailMessage = { role: string; content: string; isFinal: boolean };
+
+// Rendered pages, canvases and long code blocks carry no verdict signal and
+// swamp the window; keep a marker so the model knows a report was delivered.
+function stripBulkyBlocks(text: string): string {
+  return text
+    .replace(/```cast-canvas[\s\S]*?```/g, "[canvas report]")
+    .replace(/```(?:html|svg)[\s\S]*?```/g, "[rendered block]")
+    .replace(/```[\w-]*\n([\s\S]{600,}?)```/g, (m) => `[code block, ${m.length} chars]`);
+}
+
+// Keep the END of a long final message (that is where the ask is), with a
+// short head so the model still knows what the message opened with.
+export function shapeFinalMessage(text: string): string {
+  const t = stripBulkyBlocks(text);
+  if (t.length <= SETTLE_FINAL_HEAD_CHARS + SETTLE_FINAL_TAIL_CHARS) return t;
+  return `${t.slice(0, SETTLE_FINAL_HEAD_CHARS)}\n[… ${t.length - SETTLE_FINAL_HEAD_CHARS - SETTLE_FINAL_TAIL_CHARS} chars omitted …]\n${t.slice(-SETTLE_FINAL_TAIL_CHARS)}`;
+}
+
+// Pure shaping over the newest-first raw rows, shared by the query below and
+// the eval script (scripts/settle-eval.ts) so what the model is graded on is
+// what it sees in prod.
+export function shapeSettleTail(
+  newestFirst: Array<{ role?: string; content?: string | null; tool_results?: unknown[] | null; tool_calls?: unknown[] | null }>,
+): SettleTailMessage[] {
+  const kept = newestFirst.filter(isSummarizableMessage).reverse();
+  const lastAssistant = [...kept].reverse().find((m) => m.role === "assistant");
+  const shaped: SettleTailMessage[] = kept.map((m) => {
+    const isFinal = m === lastAssistant;
+    const raw = m.content || "";
+    return {
+      role: m.role || "user",
+      isFinal,
+      content: isFinal ? shapeFinalMessage(raw) : stripBulkyBlocks(raw).slice(0, SETTLE_CONTEXT_CHARS),
+    };
+  });
+  // The transcript's very last entry is a tool CALL that never got its result:
+  // the agent halted mid-work (died, was killed, lost its process) with no
+  // closing message. Said out loud, because the last TEXT it wrote ("OTA is
+  // live. Now the native build:") reads like a delivery when nothing after it
+  // finished. Deliberately NOT triggered by a trailing tool RESULT — an agent
+  // that writes its report, then runs `cast state` / a task comment as its
+  // last action, ends on a result and settled on purpose.
+  // …and not when a user-side TEXT message (a teammate's shutdown request, a
+  // human's note) arrived after the final text: the stop then answered
+  // something external, and the halted call is a wrap-up, not the work.
+  const newest = newestFirst[0];
+  const finalIdx = lastAssistant ? newestFirst.indexOf(lastAssistant as any) : -1;
+  const textArrivedAfterFinal = finalIdx > 0 && newestFirst.slice(0, finalIdx).some(
+    (m) => m.role === "user" && !!(m.content || "").trim() && !m.tool_results?.length,
+  );
+  const haltedMidCall =
+    !!newest && newest.role === "assistant" && !!newest.tool_calls?.length && !(newest.content || "").trim() && !textArrivedAfterFinal;
+  if (haltedMidCall && shaped.length) {
+    shaped.push({ role: "note", isFinal: false, content: "After the final message the agent issued a tool call and stopped before it returned — it halted mid-work with no closing message." });
+  }
+  return shaped;
+}
+
 export const getMessagesForSummary = internalQuery({
   args: {
     conversation_id: v.id("conversations"),
   },
   handler: async (ctx, args) => {
-    // 20, not 10: agentic tails are mostly tool-result carriers, and a window
+    // 30, not 10: agentic tails are mostly tool-result carriers, and a window
     // that filters down to nothing produces no summary at all.
     const messages = await ctx.db
       .query("messages")
@@ -177,17 +255,40 @@ export const getMessagesForSummary = internalQuery({
         q.eq("conversation_id", args.conversation_id)
       )
       .order("desc")
-      .take(20);
-
-    return messages
-      .filter(isSummarizableMessage)
-      .reverse()
-      .map((m: any) => ({
-        role: m.role,
-        content: (m.content || "").slice(0, 500),
-      }));
+      .take(SETTLE_TAIL_MESSAGES);
+    return shapeSettleTail(messages as any[]);
   },
 });
+
+// The classifier prompt, pure so the eval script grades the exact prod text.
+export function buildSettlePrompt(messages: SettleTailMessage[]): string {
+  const messageText = messages
+    .map((m) => {
+      if (m.role === "note") return `Note: ${m.content}`;
+      const who = m.role === "assistant" ? "Assistant" : "User";
+      return m.isFinal ? `${who} [FINAL MESSAGE — the settle]: ${m.content}` : `${who}: ${m.content}`;
+    })
+    .join("\n\n");
+
+  return `An agent session just went quiet after its FINAL MESSAGE below. Decide who acts next, then describe the moment in one sentence.
+
+Reply with exactly two lines:
+VERDICT: <needs_input | done>
+SUMMARY: <one sentence>
+
+How to decide — read the FINAL MESSAGE first and let it decide; earlier messages are context only (a wait or a plan mentioned earlier is superseded by whatever the final message says):
+- needs_input: the final message asks the human anything, offers options or a recommendation to choose from, defers a decision to a person or a meeting ("standup decides", "your call", "let me know"), hands the human an item to do — even as a plain statement, no question mark ("Yours: verify the domain", "what ships it: you commit and push", "on your side: sign in") — reports being blocked (missing access, credentials, a failing step it cannot resolve), or says it is waiting on someone. Any request, open question, or assigned item directed at the human = needs_input, however small, wherever it sits in the message.
+- done: the final message delivers the work — a summary of what shipped, a report, an answer to what was asked — and contains no ask, no options to pick, no item handed to the human, no unresolved blocker. A closing "next steps" list the AGENT will do itself, or a courtesy "shout if you want changes", is still done; a real question or an item for the human is not.
+- A final message that stops mid-plan — it announces what it is about to do ("Now the native build:", "Let me check the logs") and a Note says the agent then halted mid-work — is NOT a delivery: the agent stopped with work unfinished, so needs_input (a human has to look).
+Findings are not asks: an audit or report that lists problems it found, gaps, risks or recommendations is a delivery (done) — the human reads it. It becomes needs_input only when the message hands the human a decision or an item ("three calls for you: whether to…", "confirm X before I continue", "which do you want").
+A machine message after the final message that acknowledges or harvests it (a teammate shutdown_request, "report received") means the delivery landed: done.
+When in doubt choose needs_input: misfiling a blocked agent as done stalls its work silently, while misfiling a finished one as needs_input only costs the human a glance.
+
+SUMMARY rules — for needs_input write the imperative action the human should take, starting with a verb ("Confirm the exact UI change needed", "Choose between the two proposed approaches"); for done summarize what was last completed, starting with a verb ("Deployed auth fix and verified tests pass"). Never use "please", "the user", or "you". Be specific. One sentence. No quotes or JSON.
+
+Conversation:
+${messageText}`;
+}
 
 export const generateIdleSummary = internalAction({
   args: {
@@ -203,25 +304,7 @@ export const generateIdleSummary = internalAction({
 
     if (messages.length === 0) return;
 
-    const messageText = messages
-      .map((m: any) => `${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`)
-      .join("\n\n");
-
-    const prompt = `An agent session just went quiet. Decide who acts next, then describe the moment in one sentence.
-
-Reply with exactly two lines:
-VERDICT: <needs_input | done | dormant>
-SUMMARY: <one sentence>
-
-VERDICT rules — when in doubt choose needs_input; misfiling a blocked agent as done stalls its work silently:
-- needs_input: the agent asked something, needs a choice, hit an error it cannot resolve, or its last message contains any request of the human at all.
-- done: the agent finished and delivered the task and its last message contains no ask — a report, a summary of what shipped, a natural stopping point.
-- dormant: the agent explicitly says it is waiting on a NAMED machine event it will be woken by (a scheduled trigger, a CI run it is watching, another session's reply, a monitor). Not for a vague "will check later" — that is needs_input.
-
-SUMMARY rules — for needs_input write the imperative action the human should take, starting with a verb ("Confirm the exact UI change needed", "Choose between the two proposed approaches"); for done or dormant summarize what was last completed or what it waits on, starting with a verb ("Deployed auth fix and verified tests pass", "Waiting on the nightly trigger to re-run the audit"). Never use "please", "the user", or "you". Be specific. One sentence. No quotes or JSON.
-
-Conversation:
-${messageText}`;
+    const prompt = buildSettlePrompt(messages);
 
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -234,6 +317,7 @@ ${messageText}`;
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
           max_tokens: 200,
+          temperature: 0,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -267,5 +351,89 @@ ${messageText}`;
     } catch (error) {
       console.error("Failed to generate idle summary:", error);
     }
+  },
+});
+
+// ── Scheduling: the classifier's own entry point ──────────────────────────────
+//
+// The settle classifier used to be scheduled from inside the needs-input PUSH
+// check, behind that check's etiquette filters (pinned, agent-spawned fleets,
+// schedule runs, subagents never chime). Those filters are about who gets a
+// notification, not about what a settled row IS — so whole populations (every
+// `cast spawn` audit, every pinned thread) could never be classified and sat
+// in Needs Input forever. This is the classifier's own gate: it runs for any
+// top-level settled row with content whose agent made no declaration and whose
+// verdict does not already cover this settle.
+export const classifySettle = internalMutation({
+  args: { conversation_id: v.id("conversations"), status_ts: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || !conv.message_count) return { scheduled: false, reason: "no_content" };
+    if (conv.is_subagent || conv.is_workflow_sub) return { scheduled: false, reason: "subagent" };
+    if (conv.inbox_killed_at) return { scheduled: false, reason: "killed" };
+    const session = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+      .first();
+    // Scheduled off a specific status change: a newer change has its own run.
+    if (args.status_ts !== undefined && session?.agent_status_updated_at !== args.status_ts) {
+      return { scheduled: false, reason: "superseded" };
+    }
+    // A declaration outranks the classifier; don't spend the call.
+    const st = session?.agent_status;
+    if (st === "dormant" || st === "done" || st === "waiting") return { scheduled: false, reason: "declared" };
+    if (st && st !== "idle") return { scheduled: false, reason: `status_${st}` };
+    if (conv.settle_verdict_at && conv.settle_verdict_at >= conv.updated_at) return { scheduled: false, reason: "current" };
+    await ctx.scheduler.runAfter(0, internal.idleSummary.generateIdleSummary, { conversation_id: conv._id });
+    return { scheduled: true };
+  },
+});
+
+// One-off / periodic sweep for rows the entry point above never saw: settled
+// conversations with content, no live daemon declaration, and no verdict for
+// their current settle. Spaced so a backlog of hundreds does not burst the
+// model API. Scoped to one user unless `all` is passed.
+export const backfillSettleVerdicts = internalMutation({
+  args: {
+    user_id: v.optional(v.id("users")),
+    since_ms: v.optional(v.number()),
+    limit: v.optional(v.number()),
+    spacing_ms: v.optional(v.number()),
+    /** Re-classify rows whose verdict was stamped before this (a prompt change). */
+    refresh_before_ms: v.optional(v.number()),
+    /** Exactly these rows (e.g. the inbox set from `cast sessions --json`) instead of a recency window. */
+    conversation_ids: v.optional(v.array(v.id("conversations"))),
+  },
+  handler: async (ctx, args) => {
+    const since = args.conversation_ids ? 0 : (args.since_ms ?? Date.now() - 14 * 24 * 60 * 60 * 1000);
+    const refreshBefore = args.refresh_before_ms ?? 0;
+    const limit = args.limit ?? 200;
+    const spacing = args.spacing_ms ?? 1500;
+    const rows = args.conversation_ids
+      ? (await Promise.all(args.conversation_ids.map((id) => ctx.db.get(id)))).filter((c): c is NonNullable<typeof c> => !!c)
+      : args.user_id
+        ? await ctx.db
+            .query("conversations")
+            .withIndex("by_user_updated", (q: any) => q.eq("user_id", args.user_id).gte("updated_at", since))
+            .order("desc")
+            .take(limit * 3)
+        : await ctx.db.query("conversations").order("desc").take(limit * 3);
+    let scheduled = 0;
+    for (const conv of rows) {
+      if (scheduled >= limit) break;
+      if (!conv.message_count || conv.updated_at < since) continue;
+      if (conv.is_subagent || conv.is_workflow_sub || conv.inbox_killed_at || conv.inbox_dismissed_at) continue;
+      const current = !!conv.settle_verdict_at && conv.settle_verdict_at >= conv.updated_at;
+      if (current && conv.settle_verdict_at! >= refreshBefore) continue;
+      const session = await ctx.db
+        .query("managed_sessions")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+        .first();
+      const st = session?.agent_status;
+      if (st && st !== "idle" && st !== "stopped") continue; // declared, or mid-turn
+      await ctx.scheduler.runAfter(scheduled * spacing, internal.idleSummary.generateIdleSummary, { conversation_id: conv._id });
+      scheduled++;
+    }
+    return { scheduled, scanned: rows.length };
   },
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { sessionLivenessState } from "./LivenessDot";
+import { sessionLivenessState } from "../lib/liveness";
 
 // sessionLivenessState defers its "active" decision to isLivenessStale, which
 // now short-circuits on the retired marker. These pin the end-to-end result:

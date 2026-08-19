@@ -4,6 +4,7 @@ import { useLocation } from "react-router";
 import { useInboxStore, sessionRowFromSummary } from "../store/inboxStore";
 import { slotPolicyFor, surfaceForPath } from "../store/workspace";
 import { isInboxSessionView, resolveSessionSelectKind, type SessionSelectKind } from "../lib/inboxRouting";
+import { divertSessionOpen } from "../lib/openIntent";
 
 // Mirrors DashboardLayout's `isMobile` threshold (window.innerWidth < 768).
 // Below it the desktop stage/rail layout is gone; route to the full page.
@@ -36,6 +37,9 @@ export function resolveLinkedSessionOpen(kind: SessionSelectKind, narrow: boolea
  * moves the pointer while the working surface stays on screen.
  */
 export function openConversationAsCompanion(id: string) {
+  // A Cmd-click opens the session in a background tab / detached window
+  // instead of beside the page — and must not reshape the companion slot.
+  if (divertSessionOpen(id)) return;
   const store = useInboxStore.getState();
   store.wsShow("secondary", { kind: "conversation", ref: id }, { presentation: "split" });
   store.navigateToSession(id);

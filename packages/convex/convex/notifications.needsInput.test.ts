@@ -190,8 +190,9 @@ describe("needs-input push — settled idle", () => {
     expect(push).toBeDefined();
     expect(push!.args.title).toBe("Fix the parser");
     expect(push!.args.body).toContain("nested arrays");
-    // Idle summary rides the same trigger (it was dead along with the push).
-    expect(scheduled.some((s) => !s.args.push_token && s.args.conversation_id === "conv1")).toBe(true);
+    // The settle classifier no longer rides the push (it has its own entry,
+    // idleSummary.classifySettle, off the idle status change) — nothing else
+    // is scheduled from here for this conversation.
   });
 
   test("same waiting episode never pushes twice; a new turn pushes again", async () => {
@@ -409,7 +410,11 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
   test.each([
     ["subagent", { is_subagent: true }],
     ["pinned", { inbox_pinned_at: 1 }],
-    ["dismissed", { inbox_dismissed_at: 1 }],
+    // A hidden row with a PLAIN finished turn stays hidden — quiet progress is
+    // what the hide asked for. (A hard stall un-hides; see the stall tests.)
+    ["hidden", { inbox_dismissed_at: 1 }],
+    ["hidden", { inbox_stashed_at: 1 }],
+    ["killed", { inbox_killed_at: 1 }],
     ["no_content", { message_count: 0 }],
     // Machine-initiated sessions: cast-spawn fan-out and agent-team fleet
     // members (same classification as the "started coding" gate)…
@@ -560,5 +565,82 @@ describe("needs-input push — only human-started turns clear the bar", () => {
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(res.notified).toBe(true);
     expect(tables.notifications.length).toBe(1);
+  });
+});
+
+// ── The stall rule: "stash hides work, not stalls" ───────────────────────────
+// A hidden session (stashed, or a folded run on the legacy dismissed stamp)
+// may be quiet, never quietly stuck: a HARD block — open AskUserQuestion,
+// permission prompt, dead process — clears the hide so the row surfaces in
+// Needs Input. Plain settles and soft verdicts never do.
+describe("needs-input check — stall rule for hidden sessions", () => {
+  const now = Date.now();
+  const auqPoll = {
+    _id: "m2",
+    conversation_id: "conv1",
+    role: "assistant",
+    content: "",
+    tool_calls: [{ name: "AskUserQuestion", input: "{}" }],
+    timestamp: now - 30_000,
+  };
+
+  test("an open AskUserQuestion poll un-stashes", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { inbox_stashed_at: 111 },
+      session: { agent_status: "working" },
+      messages: [auqPoll],
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("unstashed_stall");
+    expect(tables.conversations[0].inbox_stashed_at).toBeUndefined();
+    // No chime from the stall path — surfacing in Needs Input IS the signal.
+    expect(tables.notifications.length).toBe(0);
+  });
+
+  test("a permission prompt un-stashes", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { inbox_stashed_at: 111 },
+      session: { agent_status: "permission_blocked" },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("unstashed_stall");
+    expect(tables.conversations[0].inbox_stashed_at).toBeUndefined();
+  });
+
+  test("a dead process (stopped with content) un-stashes", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { inbox_stashed_at: 111 },
+      session: { agent_status: "stopped" },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("unstashed_stall");
+    expect(tables.conversations[0].inbox_stashed_at).toBeUndefined();
+  });
+
+  test("a folded run on the legacy dismissed stamp gets the same treatment", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { inbox_dismissed_at: 111, agent_task_id: "task1" },
+      session: { agent_status: "permission_blocked" },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("unstashed_stall");
+    expect(tables.conversations[0].inbox_dismissed_at).toBeUndefined();
+  });
+
+  test("a plain finished turn stays hidden — quiet progress never breaks a hide", async () => {
+    const { ctx, tables } = settledIdleWorld({ conv: { inbox_stashed_at: 111 } });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("hidden");
+    expect(tables.conversations[0].inbox_stashed_at).toBe(111);
+  });
+
+  test("a killed row never resurfaces, whatever it stalls on", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { inbox_stashed_at: 111, inbox_killed_at: 222 },
+      session: { agent_status: "permission_blocked" },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("killed");
+    expect(tables.conversations[0].inbox_stashed_at).toBe(111);
   });
 });

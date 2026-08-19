@@ -22,7 +22,13 @@ let audio: typeof import("expo-audio") | null | undefined;
 function getAudio() {
   if (audio !== undefined) return audio;
   try {
-    audio = require("expo-audio");
+    // Probe first — the package's inner requireNativeModule("ExpoAudio")
+    // fires lazily on first property access, outside this try, and crashes
+    // a binary without the pod.
+    const { requireOptionalNativeModule } = require("expo");
+    audio = requireOptionalNativeModule("ExpoAudio")
+      ? require("expo-audio")
+      : null;
   } catch {
     audio = null;
   }

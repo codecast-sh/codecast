@@ -4,7 +4,7 @@ import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams } from "next/navigation";
-import { useTabContext } from "../../components/TabContent";
+import { useTabContext } from "../../lib/tabParams";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../../store/undoActions";
 import { cleanUserMessage } from "../../components/sessionMessage";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
+import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
 export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetTimestamp, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void }) {
   // Non-blocking switch: the heavy work of a session switch is mounting the new
@@ -230,6 +231,7 @@ function InboxShortcuts() {
 
 export function QueuePageClient() {
   const searchParams = useSearchParams();
+  const homeTitlebarRef = useTitlebarHead<HTMLDivElement>();
   // When this inbox lives inside a tab, only the ACTIVE tab owns global view
   // state (currentSessionId, the URL, the sidebar highlight). A background tab
   // stays mounted but renders FROZEN on its own ?s= param so its conversation
@@ -608,7 +610,7 @@ export function QueuePageClient() {
         ) : (
           <div className="h-full overflow-y-auto" data-main-scroll>
             <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-8">
-              <div className="flex justify-end pb-2">
+              <div ref={homeTitlebarRef} className="flex justify-end pb-2">
                 <InboxHomeToggle />
               </div>
               <ErrorBoundary name="ActivityFeed" level="inline">

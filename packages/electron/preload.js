@@ -42,6 +42,16 @@ ipcRenderer.on("adopt-tab", (_e, navPath) => {
   else adoptTabBuffer.push(navPath);
 });
 
+// Window role (notification leader / app focus / any call) is pushed by main
+// whenever windows or focus change. Keep the latest so a subscriber that
+// mounts after the first push starts from the truth instead of a default.
+let windowRoleHandler = null;
+let lastWindowRole = null;
+ipcRenderer.on("window-role", (_e, role) => {
+  lastWindowRole = role;
+  if (windowRoleHandler) windowRoleHandler(role);
+});
+
 contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   getVersion: () => ipcRenderer.invoke("get-app-version"),
   setBadgeCount: (count) => ipcRenderer.invoke("set-badge-count", count),
@@ -60,7 +70,17 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   },
   restartForUpdate: () => ipcRenderer.invoke("restart-for-update"),
   checkForUpdate: (opts) => ipcRenderer.invoke("check-for-update", opts),
+  // Resolves { shown } — false when main dropped it (duplicate from another
+  // window, or an app window is focused), so only the announcing window sounds.
   showNotification: (title, body, data) => ipcRenderer.invoke("show-notification", { title, body, data }),
+  // Multi-window notification routing: each renderer tells main what it shows
+  // ({ active, open: [{id,path}], inCall }); main answers with this window's
+  // role ({ leader, appFocused, anyInCall }) whenever it changes.
+  reportWindowState: (state) => ipcRenderer.send("report-window-state", state),
+  onWindowRole: (cb) => {
+    windowRoleHandler = cb;
+    if (lastWindowRole) cb(lastWindowRole);
+  },
   getShortcuts: () => ipcRenderer.invoke("get-shortcuts"),
   getShortcutConfig: () => ipcRenderer.invoke("get-shortcut-config"),
   setShortcut: (key, accelerator) => ipcRenderer.invoke("set-shortcut", key, accelerator),

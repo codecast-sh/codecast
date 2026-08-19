@@ -267,11 +267,16 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions): void {
     sendJson({ type: "error", message });
     ws.close(4000, message.slice(0, 100));
   };
+  let sessionLabel = "?";
   const cleanup = () => {
     if (closed) return;
     closed = true;
     if (drainTimer) clearInterval(drainTimer);
-    client?.close();
+    if (client) {
+      const back = client.restoresTo;
+      opts.log(`[TERM] detach ${sessionLabel}${back ? ` (window back to ${back})` : ""}`);
+      client.close();
+    }
     client = null;
   };
 
@@ -363,6 +368,7 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions): void {
           mode: hello.mode,
         });
         if (seed.length > 0) ws.send(seed);
+        sessionLabel = sessionName;
         opts.log(`[TERM] ${hello.mode} ${sessionName} (${c}x${r}${client?.isReadOnly ? ", read-only" : ""})`);
       })
       .catch((err) => {

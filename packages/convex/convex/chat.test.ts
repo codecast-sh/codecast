@@ -19,6 +19,7 @@ import {
   purgeChatMembership,
   replyAsAnchor,
   searchMessages,
+  sendAsAnchor,
   sendMessage,
   setAnchorFollow,
   setNotifyLevel,
@@ -1222,9 +1223,10 @@ describe("the anchor in a thread", () => {
     expect(placeholders(ctx).length).toBe(0);
   });
 
-  test("two people talking past the anchor's last answer stop waking it", async () => {
-    // An armed thread is not a standing order to bill a turn per line. Once a
-    // person has spoken after the anchor's answer, the thread is theirs again.
+  test("once named, every reply wakes it — silently, with a listening row nobody sees", async () => {
+    // A group conversation: the anchor is a participant, so it hears each line
+    // and decides whether it was for it. Nothing shows in the thread until it
+    // speaks; the judgment lives in the wake prompt.
     const ctx = context(ALICE, anchorTeamSeed());
     const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "root" });
     const asked = await call(sendMessage, ctx, {
@@ -1235,24 +1237,107 @@ describe("the anchor in a thread", () => {
     const bobSays = await call(sendMessage, as(ctx, BOB), {
       channel_id: CHANNEL, content: "thanks, I see it", thread_root_id: root.message_id,
     });
-    expect(bobSays.anchor_thinking_message_id).toBeTruthy(); // still its turn
-    await anchorAnswers(ctx, bobSays.anchor_thinking_message_id, "no problem");
+    expect(bobSays.anchor_thinking_message_id).toBeTruthy();
+    const listening = placeholders(ctx).find((m: any) => m._id === bobSays.anchor_thinking_message_id);
+    expect(listening.agent_status).toBe("listening");
+    // The wake says so, and tells it how to pass.
+    const wake = ctx.db._tables.pending_messages.at(-1).content as string;
+    expect(wake).toContain("You were NOT addressed");
+    expect(wake).toContain(`cast chat reply ${bobSays.anchor_thinking_message_id} --pass`);
+    expect(wake).toContain("thanks, I see it");
 
-    const chatter = await call(sendMessage, ctx, {
-      channel_id: CHANNEL, content: "@bob want to pair on it?", thread_root_id: root.message_id,
+    // Invisible from the thread and from the room's rollup.
+    const thread = await call(getThread, ctx, { root_id: root.message_id });
+    expect(thread.replies.some((r: any) => r._id === listening._id)).toBe(false);
+    const page = await call(listMessages, ctx, { channel_id: CHANNEL });
+    const summary = page.threads.find((t: any) => t.root_id === root.message_id);
+    expect(summary.reply_count).toBe(3); // asked, answer, bob — not the listener
+    expect(summary.agent_status).toBeUndefined();
+  });
+
+  test("passing closes a listening row silently; answering surfaces it at the end", async () => {
+    const ctx = context(ALICE, anchorTeamSeed());
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "root" });
+    const asked = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "@anchor look", thread_root_id: root.message_id,
     });
-    expect(chatter.anchor_thinking_message_id).toBeTruthy();
-    await anchorAnswers(ctx, chatter.anchor_thinking_message_id, "ok");
-    const humanReply = await call(sendMessage, as(ctx, BOB), {
-      channel_id: CHANNEL, content: "sure, 3pm", thread_root_id: root.message_id,
+    await anchorAnswers(ctx, asked.anchor_thinking_message_id, "here you go");
+    const chatter = await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, content: "@alice lunch?", thread_root_id: root.message_id,
     });
+    await call(replyAsAnchor, as(ctx, BOB), {
+      message_id: chatter.anchor_thinking_message_id, content: "", status: "passed",
+    });
+    let row = placeholders(ctx).find((m: any) => m._id === chatter.anchor_thinking_message_id);
+    expect(row.agent_status).toBe("passed");
+    let thread = await call(getThread, ctx, { root_id: root.message_id });
+    expect(thread.replies.some((r: any) => r._id === row._id)).toBe(false);
+    // The queued wake is dropped with it.
+    expect(ctx.db._tables.pending_messages.some((p: any) => p.client_id === `chat-wake:${row._id}`)).toBe(false);
+
+    // Next line: it listens again, and this time answers. The reply lands AFTER
+    // the lines typed while it was reading, not above them.
+    const question = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "and which commit was it?", thread_root_id: root.message_id,
+    });
+    const later = await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, content: "no idea", thread_root_id: root.message_id,
+    });
+    // Bob's line arrived while the anchor was listening: one turn in flight.
+    expect(later.anchor_wake_skipped).toBe("turn_in_flight");
+    await anchorAnswers(ctx, question.anchor_thinking_message_id, "abc123");
+    thread = await call(getThread, ctx, { root_id: root.message_id });
+    const ids = thread.replies.map((r: any) => r._id);
+    expect(ids.indexOf(question.anchor_thinking_message_id)).toBeGreaterThan(ids.indexOf(later.message_id));
+  });
+
+  test("naming it while it is listening turns the silent turn into a visible one", async () => {
+    const ctx = context(ALICE, anchorTeamSeed());
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "root" });
+    const asked = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "@anchor look", thread_root_id: root.message_id,
+    });
+    await anchorAnswers(ctx, asked.anchor_thinking_message_id, "here you go");
+    const aside = await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, content: "hm", thread_root_id: root.message_id,
+    });
+    const named = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "@anchor and the second one?", thread_root_id: root.message_id,
+    });
+    // Same row, now a spinner the asker can see — no second billed turn.
+    expect(named.anchor_thinking_message_id).toBe(aside.anchor_thinking_message_id);
+    const row = placeholders(ctx).find((m: any) => m._id === named.anchor_thinking_message_id);
+    expect(row.agent_status).toBe("thinking");
+  });
+
+  test("a listening turn that runs out the clock closes without a word", async () => {
+    const ctx = context(ALICE, anchorTeamSeed());
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "root" });
+    const asked = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "@anchor look", thread_root_id: root.message_id,
+    });
+    await anchorAnswers(ctx, asked.anchor_thinking_message_id, "here you go");
+    const line = await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, content: "ok", thread_root_id: root.message_id,
+    });
+    await call(expireAnchorReply, ctx, { message_id: line.anchor_thinking_message_id });
+    const row = placeholders(ctx).find((m: any) => m._id === line.anchor_thinking_message_id);
+    expect(row.agent_status).toBe("passed");
+    expect(row.content).toBe("");
+  });
+
+  test("the wake carries the room around the thread, not just the thread", async () => {
+    const ctx = context(ALICE, anchorTeamSeed());
+    await call(sendMessage, as(ctx, BOB), { channel_id: CHANNEL, content: "the deploy is stuck on step 3" });
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "root" });
     await call(sendMessage, ctx, {
-      channel_id: CHANNEL, content: "see you then", thread_root_id: root.message_id,
+      channel_id: CHANNEL, content: "@anchor can you look at what Bob posted above?", thread_root_id: root.message_id,
     });
-    // Two humans have now spoken in a row: the anchor is out of the exchange.
-    expect(humanReply.anchor_thinking_message_id).toBeTruthy();
-    const last = messagesIn(ctx).filter((m: any) => m.author_kind === "agent").length;
-    expect(last).toBe(4);
+    const wake = ctx.db._tables.pending_messages.at(-1).content as string;
+    expect(wake).toContain("recent messages in #general");
+    expect(wake).toContain("Bob: the deploy is stuck on step 3");
+    expect(wake).toContain("--- the thread ---");
+    expect(wake).toContain("cast chat read --channel");
   });
 
   test("stop means stop, and naming it again un-stops it", async () => {
@@ -1624,17 +1709,18 @@ describe("getThread reports the armed anchor state", () => {
     }],
   });
 
-  test("armed after the anchor answers, disarmed after an explicit stop", async () => {
+  test("armed the moment it is named, disarmed after an explicit stop", async () => {
     const ctx = context(ALICE, seed());
     const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "root" });
+    let thread = await call(getThread, ctx, { root_id: root.message_id });
+    expect(thread.anchor?.armed).toBe(false);
     await call(sendMessage, ctx, {
       channel_id: CHANNEL, content: "@anchor hi", thread_root_id: root.message_id,
     });
     const placeholder = messagesIn(ctx).find((m: any) => m.author_kind === "agent");
-    // Thinking: not armed yet — the composer must not promise a second turn
-    // while the first is still being written.
-    let thread = await call(getThread, ctx, { root_id: root.message_id });
-    expect(thread.anchor?.armed).toBe(false);
+    // Named once: it follows the thread from here on, answer or not.
+    thread = await call(getThread, ctx, { root_id: root.message_id });
+    expect(thread.anchor?.armed).toBe(true);
 
     await call(replyAsAnchor, as(ctx, BOB), { message_id: placeholder._id, content: "answer" });
     thread = await call(getThread, ctx, { root_id: root.message_id });
@@ -1895,5 +1981,126 @@ describe("direct messages", () => {
     // A third teammate can't open the same pair's room by guessing.
     const outsiderView = await call(listMessages, as(ctx, OUTSIDER), { channel_id: dm.channel_id });
     expect(outsiderView.messages).toEqual([]);
+  });
+});
+
+
+describe("the anchor speaking on its own", () => {
+  const CONV = "conv-anchor" as any;
+  async function anchorAnswersIn(ctx: any, placeholderId: string, content: string) {
+    return await call(replyAsAnchor, as(ctx, BOB), { message_id: placeholderId, content });
+  }
+  const seed = () => ({
+    anchors: [{
+      _id: ANCHOR, team_id: TEAM, bot_user_id: BOT, host_user_id: BOB,
+      status: "active", name: "Anchor", conversation_id: CONV,
+    }],
+    conversations: [{
+      _id: CONV, user_id: BOB, title: "Anchor", status: "active", updated_at: 1, session_id: "sess-anchor", anchor_id: ANCHOR,
+    }],
+  });
+
+  test("the host can post as the anchor in a channel; the line is an agent row and starts a followed thread", async () => {
+    const ctx = context(BOB, seed());
+    const posted = await call(sendAsAnchor, ctx, {
+      session_id: "sess-anchor", channel_id: CHANNEL, content: "Heads up: main is red since 14:02.",
+    });
+    const row = messagesIn(ctx).find((m: any) => m._id === posted.message_id);
+    expect(row.user_id).toBe(BOT);
+    expect(row.author_kind).toBe("agent");
+    expect(row.agent_status).toBe("done");
+    expect(row.agent_anchor_id).toBe(ANCHOR);
+    // A reply under it reaches the anchor without a mention.
+    const reply = await call(sendMessage, as(ctx, ALICE), {
+      channel_id: CHANNEL, content: "since which commit?", thread_root_id: posted.message_id,
+    });
+    expect(reply.anchor_thinking_message_id).toBeTruthy();
+  });
+
+  test("a mention in the anchor's own line notifies like a teammate's would", async () => {
+    const ctx = context(BOB, seed());
+    await call(sendAsAnchor, ctx, {
+      anchor_id: ANCHOR, channel_id: CHANNEL, content: "@alice the PR you asked about merged.",
+    });
+    const notes = ctx._emitted.filter((e: any) => e.args.direct_recipient_id === ALICE);
+    expect(notes.length).toBe(1);
+    expect(notes[0].args.event_type).toBe("chat_mention");
+    expect(notes[0].args.message).toContain("Anchor mentioned you");
+  });
+
+  test("only the host may speak as it", async () => {
+    const ctx = context(ALICE, seed());
+    await expect(call(sendAsAnchor, ctx, {
+      anchor_id: ANCHOR, channel_id: CHANNEL, content: "hi",
+    })).rejects.toThrow();
+  });
+
+  test("a DM from the anchor opens a room with the bot as a member, and the reply wakes it", async () => {
+    const ctx = context(BOB, seed());
+    const sent = await call(sendAsAnchor, ctx, {
+      anchor_id: ANCHOR, dm_user_ids: [ALICE], content: "Your prod-health check flagged two invariants.",
+    });
+    const room = ctx.db._tables.chat_channels.find((c: any) => c._id === sent.channel_id);
+    expect(room.kind).toBe("dm");
+    const memberIds = ctx.db._tables.chat_channel_members
+      .filter((m: any) => m.channel_id === room._id).map((m: any) => m.user_id).sort();
+    expect(memberIds).toEqual([ALICE, BOT].sort());
+    // Alice is told, as for any DM line.
+    expect(ctx._emitted.some((e: any) => e.args.direct_recipient_id === ALICE && e.args.event_type === "chat_dm")).toBe(true);
+    // Alice sees the room; the host (Bob) may read it as the anchor's stand-in;
+    // Carol may not.
+    const alice = await call(listChannels, as(ctx, ALICE), { team_id: TEAM });
+    expect(alice.channels.some((c: any) => c._id === room._id)).toBe(true);
+    const bobRead = await call(listMessages, ctx, { channel_id: room._id });
+    expect(bobRead.messages.length).toBe(1);
+    const carolRead = await call(listMessages, as(ctx, CAROL), { channel_id: room._id });
+    expect(carolRead.messages.length).toBe(0);
+    // Alice answering in the room is addressed by construction: a visible turn.
+    const reply = await call(sendMessage, as(ctx, ALICE), {
+      channel_id: room._id, content: "which two?",
+    });
+    expect(reply.anchor_thinking_message_id).toBeTruthy();
+    const ph = messagesIn(ctx).find((m: any) => m._id === reply.anchor_thinking_message_id);
+    expect(ph.agent_status).toBe("thinking");
+    // Inline: a 1:1 with the anchor is answered at room level, not in a thread.
+    expect(ph.thread_root_id).toBeUndefined();
+    // And a second line while it thinks does not start a second turn.
+    const impatient = await call(sendMessage, as(ctx, ALICE), { channel_id: room._id, content: "?" });
+    expect(impatient.anchor_wake_skipped).toBe("turn_in_flight");
+    // The landed answer reaches Alice as a DM line.
+    await anchorAnswersIn(ctx, ph._id, "invariants 3 and 7");
+    expect(ctx._emitted.filter((e: any) => e.args.direct_recipient_id === ALICE && e.args.event_type === "chat_dm").length).toBe(2);
+    const wake = ctx.db._tables.pending_messages.at(-1).content as string;
+    expect(wake).toContain("messaged you directly");
+    // The same people, again: the same room.
+    const again = await call(sendAsAnchor, ctx, {
+      anchor_id: ANCHOR, dm_user_ids: [ALICE], content: "still there?",
+    });
+    expect(again.channel_id).toBe(room._id);
+  });
+
+  test("a personal anchor DMs its owner in a team the owner names", async () => {
+    const PERSONAL = "anchor-personal" as any;
+    const PBOT = "user-pbot" as any;
+    const ctx = context(BOB, {
+      users: [...users(), { _id: PBOT, name: "Bob's Anchor", is_bot: true, bot_kind: "anchor" }],
+      anchors: [{
+        _id: PERSONAL, scope_type: "user", scope_user_id: BOB, bot_user_id: PBOT, host_user_id: BOB,
+        status: "active", name: "Bob's Anchor", conversation_id: "conv-p" as any,
+      }],
+      conversations: [{ _id: "conv-p" as any, user_id: BOB, title: "Anchor", status: "active", updated_at: 1 }],
+    });
+    const sent = await call(sendAsAnchor, ctx, {
+      anchor_id: PERSONAL, team_id: TEAM, dm_user_ids: [BOB], content: "Reminder: standup notes are due.",
+    });
+    const room = ctx.db._tables.chat_channels.find((c: any) => c._id === sent.channel_id);
+    expect(room.kind).toBe("dm");
+    // Bob (owner) sees it and gets told.
+    const mine = await call(listChannels, ctx, { team_id: TEAM });
+    expect(mine.channels.some((c: any) => c._id === room._id)).toBe(true);
+    expect(ctx._emitted.some((e: any) => e.args.direct_recipient_id === BOB && e.args.event_type === "chat_dm")).toBe(true);
+    // Bob replying wakes his personal anchor.
+    const reply = await call(sendMessage, ctx, { channel_id: room._id, content: "on it" });
+    expect(reply.anchor_thinking_message_id).toBeTruthy();
   });
 });

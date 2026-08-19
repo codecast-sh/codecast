@@ -66,12 +66,15 @@ export const THREAD_STATE_STATUS_META: Record<
     bar: "border-l-sol-yellow/80",
     row: "border-l-2 border-l-sol-yellow/50 bg-sol-yellow/[0.04]",
   },
+  // Violet, not green: green is the liveness color ("running right now"), so a
+  // green done-chip would read as a session still working. Violet is the
+  // finished/merged convention and collides with nothing else on the card.
   done: {
     label: THREAD_STATE_STATUS_LABEL.done,
-    dot: "text-sol-green/90",
-    chip: "bg-sol-green/10 text-sol-green border-sol-green/30",
-    bar: "border-l-sol-green/70",
-    row: "border-l-2 border-l-sol-green/45 bg-sol-green/[0.03]",
+    dot: "text-sol-violet/90",
+    chip: "bg-sol-violet/10 text-sol-violet border-sol-violet/30",
+    bar: "border-l-sol-violet/70",
+    row: "border-l-2 border-l-sol-violet/45 bg-sol-violet/[0.03]",
   },
   // Blue matches the Dormant section: parked on a machine wake, nothing for
   // the human until it lands.

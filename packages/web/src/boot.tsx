@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { initAnalytics, setupErrorToasts } from "../lib/analytics";
-import { armChunkReloadGuardReset } from "../components/ErrorBoundary";
+import { armChunkReloadGuardReset } from "../lib/chunkReloadGuard";
 import { installIdleAnimationPause, isDesktop } from "../lib/desktop";
 import { hasStoredAuthToken } from "../lib/localAuth";
 import { createReloadWhenHidden } from "../lib/reloadWhenHidden";

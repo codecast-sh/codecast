@@ -72,6 +72,74 @@ export async function resolveSpawnParent(
   return { parent_conversation_id: parent._id, is_subagent: true };
 }
 
+// The create-and-start core shared by `cast spawn` and other "hand fresh work
+// to a new session" callers (e.g. sending a call transcript to a new agent):
+// conversation row + short_id, start_session enqueue, optional seeded first
+// turn over the pending-message rail.
+export async function spawnSessionCore(
+  ctx: any,
+  userId: Id<"users">,
+  opts: {
+    agentType?: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi";
+    projectPath?: string;
+    gitRoot?: string;
+    model?: string;
+    isolated?: boolean;
+    worktreeName?: string;
+    targetDeviceId?: string | null;
+    subagentFields?: { parent_conversation_id: Id<"conversations">; is_subagent: true } | null;
+    prompt?: string;
+  },
+): Promise<{ conversationId: Id<"conversations">; shortId: string }> {
+  const now = Date.now();
+  const sessionId = crypto.randomUUID();
+  const agentType = opts.agentType || "claude_code";
+
+  const privacy = await resolveCreationPrivacy(ctx, userId, opts.gitRoot || opts.projectPath);
+
+  const conversationId = await ctx.db.insert("conversations", {
+    user_id: userId,
+    agent_type: agentType,
+    session_id: sessionId,
+    project_path: opts.projectPath,
+    git_root: opts.gitRoot,
+    started_at: now,
+    updated_at: now,
+    message_count: 0,
+    ...privacy,
+    ...(opts.subagentFields ?? {}),
+    status: "active",
+  });
+
+  const shortId = conversationId.toString().slice(0, 7);
+  await ctx.db.patch(conversationId, { short_id: shortId });
+
+  const daemonAgentType = fromConvexAgentType(agentType);
+  await enqueueStartSession(ctx, userId, {
+    conversationId,
+    agentType: daemonAgentType,
+    projectPath: opts.projectPath || opts.gitRoot,
+    sessionId,
+    isolated: opts.isolated,
+    worktreeName: opts.worktreeName,
+    model: opts.model,
+    createdAt: now,
+    targetDeviceId: opts.targetDeviceId ?? null,
+  });
+
+  // Seed the first turn as a plain user message (raw, not wrapped as a
+  // session-message) over the same pending-message rail the UI uses for a new
+  // session's first message — delivered once the daemon spawns and the agent
+  // is ready.
+  const prompt = (opts.prompt ?? "").trim();
+  if (prompt) {
+    const conversation = await ctx.db.get(conversationId);
+    await enqueuePendingMessage(ctx, conversation, userId, { content: prompt });
+  }
+
+  return { conversationId, shortId };
+}
+
 // createSessionFromCli — start a fresh, inbox-visible session and optionally
 // seed its first turn. The backend for `cast spawn`.
 //
@@ -117,10 +185,6 @@ export const createSessionFromCli = mutation({
       throw new Error("Authentication failed: invalid token or session");
     }
 
-    const now = Date.now();
-    const sessionId = crypto.randomUUID();
-    const agentType = args.agent_type || "claude_code";
-
     let targetDeviceId: string | null = null;
     if (args.device) {
       const devices = await ctx.db
@@ -130,56 +194,25 @@ export const createSessionFromCli = mutation({
       targetDeviceId = resolveDeviceSelector(devices, args.device);
     }
 
-    const privacy = await resolveCreationPrivacy(ctx, userId, args.git_root || args.project_path);
-
     const subagentFields = args.parent_session
       ? await resolveSpawnParent(ctx, userId, args.parent_session)
       : null;
 
-    const conversationId = await ctx.db.insert("conversations", {
-      user_id: userId,
-      agent_type: agentType,
-      session_id: sessionId,
-      project_path: args.project_path,
-      git_root: args.git_root,
-      started_at: now,
-      updated_at: now,
-      message_count: 0,
-      ...privacy,
-      ...(subagentFields ?? {}),
-      status: "active",
-    });
-
-    await ctx.db.patch(conversationId, {
-      short_id: conversationId.toString().slice(0, 7),
-    });
-
-    const daemonAgentType = fromConvexAgentType(agentType);
-    await enqueueStartSession(ctx, userId, {
-      conversationId,
-      agentType: daemonAgentType,
-      projectPath: args.project_path || args.git_root,
-      sessionId,
+    const { conversationId, shortId } = await spawnSessionCore(ctx, userId, {
+      agentType: args.agent_type,
+      projectPath: args.project_path,
+      gitRoot: args.git_root,
+      model: args.model,
       isolated: args.isolated,
       worktreeName: args.worktree_name,
-      model: args.model,
-      createdAt: now,
       targetDeviceId,
+      subagentFields,
+      prompt: args.prompt,
     });
-
-    // Seed the first turn as a plain user message (raw, not wrapped as a
-    // session-message) over the same pending-message rail the UI uses for a new
-    // session's first message — delivered once the daemon spawns and the agent
-    // is ready.
-    const prompt = (args.prompt ?? "").trim();
-    if (prompt) {
-      const conversation = await ctx.db.get(conversationId);
-      await enqueuePendingMessage(ctx, conversation, userId, { content: prompt });
-    }
 
     return {
       conversation_id: conversationId,
-      short_id: conversationId.toString().slice(0, 7),
+      short_id: shortId,
       parent_short_id: subagentFields
         ? subagentFields.parent_conversation_id.toString().slice(0, 7)
         : undefined,

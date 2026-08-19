@@ -3,6 +3,7 @@
 // the browser. PURE isomorphic data only — no Node or DOM APIs — so the Convex
 // runtime can import them.
 export * from "./agentStatus";
+export * from "./openTasks";
 export * from "./pendingStatus";
 export * from "./daemonCommands";
 export * from "./agentClients";
@@ -21,6 +22,7 @@ export * from "./vaultMirror";
 export * from "./terminalStream";
 export * from "./callRoomKeys";
 export * from "./callPush";
+export * from "./transcriptChunk";
 export * from "./convexErrors";
 // Without these two lines every consumer reinvents the capability vocabulary:
 // convex copied the constants, the web store reached in by relative path, and

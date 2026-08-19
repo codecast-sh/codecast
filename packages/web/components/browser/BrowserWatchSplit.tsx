@@ -19,6 +19,7 @@ import { X, RotateCw } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { deviceDisplayName } from "../DeviceBadge";
+import { SplitResizeHandle } from "../SplitResizeHandle";
 import type { SessionMachine } from "../tmuxAttach";
 import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import { connectBrowserWatch, type WatchConnection, type WatchTabInfo } from "../../lib/browserWatch";
@@ -299,10 +300,7 @@ function SplitBody({
         ) : null}
       </div>
 
-      <div onPointerDown={onHandlePointerDown} className="group relative h-[3px] -mb-[2px] flex-shrink-0 z-10 cursor-row-resize">
-        <div className="absolute inset-x-0 -top-[3px] -bottom-[3px]" />
-        <div className="absolute inset-x-0 bottom-[1px] h-px bg-transparent group-hover:bg-sol-cyan transition-colors duration-150" />
-      </div>
+      <SplitResizeHandle onPointerDown={onHandlePointerDown} title="Drag to resize" />
     </div>
   );
 }

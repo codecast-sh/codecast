@@ -38,4 +38,4 @@ That last command is the orchestration hook: watch the label, and act when a wor
 
 ## Etiquette
 
-Both commands start working immediately and appear in the inbox, which is the human's attention. The snippet sets two rules: launch forks and spawns when the human asks, and propose first when it is the agent's own idea. After launching several, the agent tells the human what it sent where. And when the fan-out is done, [messaging](/documentation/messaging)'s inbox commands (`cast dismiss`, `cast kill`) clean up the workers so the inbox stays readable.
+Both commands start working immediately and appear in the inbox, which is the human's attention. The snippet sets two rules: launch forks and spawns when the human asks, and propose first when it is the agent's own idea. After launching several, the agent tells the human what it sent where. And when the fan-out is done, [messaging](/documentation/messaging)'s inbox commands (`cast stash`, `cast kill`) clean up the workers so the inbox stays readable.

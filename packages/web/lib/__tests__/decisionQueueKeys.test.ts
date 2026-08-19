@@ -70,10 +70,14 @@ describe("queue keys at rest (no modal, not editing)", () => {
   test("digits never answer a permission card", () => {
     expect(routeQueueKey(key("1"), ctx({ isPermissionCard: true }))).toBeNull();
   });
-  test("o opens the session, s skips, t opens free text", () => {
+  test("o opens the session, s skips, x dismisses, t opens free text", () => {
     expect(routeQueueKey(key("o"), ctx())).toEqual({ kind: "open-session" });
     expect(routeQueueKey(key("s"), ctx())).toEqual({ kind: "skip" });
+    expect(routeQueueKey(key("x"), ctx())).toEqual({ kind: "dismiss" });
     expect(routeQueueKey(key("t"), ctx())).toEqual({ kind: "open-free-text" });
+  });
+  test("x typed in another input is never a dismiss", () => {
+    expect(routeQueueKey(key("x"), ctx({ editing: true }))).toBeNull();
   });
   test("Escape exits from full but first restores the question from peek", () => {
     expect(routeQueueKey(key("Escape"), ctx({ sheet: "full" }))).toEqual({ kind: "exit-queue" });

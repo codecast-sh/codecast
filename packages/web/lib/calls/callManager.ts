@@ -20,7 +20,10 @@ import {
   createAudioAnalyser,
 } from "livekit-client";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
+import { memberDisplayName } from "../liveEntities";
+import { stopScribe } from "./transcription";
 import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
 import {
   soundCallJoin,
@@ -94,6 +97,18 @@ export function getCallTiles(): ParticipantTile[] {
   return tilesSnapshot;
 }
 
+// Dev console seam (like window.__inboxStore): swap in fake tiles so the
+// stage can be designed with N "videos" on screen without N cameras. A fake
+// tile's `track` only needs attach/detach — set `el.srcObject` to a canvas
+// stream. Pass null to go back to the real room's tiles.
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+  (window as any).__setCallTiles = (fake: ParticipantTile[] | null) => {
+    tilesOverride = fake;
+    rebuildTiles();
+  };
+}
+let tilesOverride: ParticipantTile[] | null = null;
+
 function participantImage(p: Participant): string | undefined {
   try {
     const meta = p.metadata ? JSON.parse(p.metadata) : null;
@@ -129,7 +144,7 @@ function rebuildTiles() {
       }
     }
   }
-  tilesSnapshot = next;
+  tilesSnapshot = tilesOverride ?? next;
   for (const cb of tileSubscribers) cb();
 }
 
@@ -399,6 +414,10 @@ export async function joinCall(roomKey: string): Promise<void> {
 export async function leaveCall(): Promise<void> {
   const roomKey = currentRoomKey ?? useInboxStore.getState().call.roomKey;
   callGen++;
+  // Hanging up ends our scribe run: its audio pipes ride this room, so the
+  // transcript is over the moment we leave (the server also ends it when the
+  // room empties — this makes the common case instant and no-ops otherwise).
+  await stopScribe();
   teardownMedia();
   setCall({
     phase: "idle",
@@ -536,25 +555,74 @@ export async function switchDevice(
 
 // ── ringing ───────────────────────────────────────────────────────────────
 
-// Ring a teammate into a room, joining it yourself first (the caller waits
-// inside — answering drops the callee straight into a live room).
+// Ring people into a room, joining it yourself first (the caller waits
+// inside — answering drops each callee straight into a live room). One or
+// many recipients: a 1:1 from the avatar bar and a group start from the
+// picker are the same call with a longer list. The caller's mic goes LIVE:
+// clicking "huddle at someone" is the intent to talk, so they are speaking
+// the moment anyone answers (joining an existing room stays muted — the
+// shoulder-tap contract — this is the one deliberate exception).
 export async function startHuddle(opts: {
   roomKey: string;
-  toUserId: string;
+  toUserIds: string[];
   anchorTitle?: string;
 }): Promise<void> {
   if (!convex) return;
-  setCall({ phase: "ringing_out" as const, roomKey: opts.roomKey, error: null });
+  setCall({ phase: "ringing_out" as const, roomKey: opts.roomKey, error: null, muted: false });
   try {
     await joinCall(opts.roomKey);
     if (useInboxStore.getState().call.phase !== "connected") return;
-    await convex.mutation(api.calls.invite, {
-      room_key: opts.roomKey,
-      to_user: opts.toUserId,
-      anchor_title: opts.anchorTitle,
-    });
+    await ringInto(opts.roomKey, opts.toUserIds, opts.anchorTitle);
   } catch (err: any) {
     setCall({ phase: "error", error: humanizeConvexError(err, "Could not start the huddle") });
+  }
+}
+
+export type RingOutcome = {
+  to_user: string;
+  busy: boolean;
+  cooldown: boolean;
+  in_room?: boolean;
+  refused?: string;
+};
+
+// Ring people into a room you are already in ("add people"). The ring is
+// their grant: a teammate outside the room's anchor may answer it while the
+// huddle runs. Ringing/declined state arrives through myCalls.outgoing; the
+// outcomes that DON'T ring (cooldown, refused) surface as toasts here, so
+// every entry point — group start, chat header, add people — tells the
+// caller who was not rung and why.
+export async function ringInto(
+  roomKey: string,
+  toUserIds: string[],
+  anchorTitle?: string,
+): Promise<RingOutcome[]> {
+  if (!convex || toUserIds.length === 0) return [];
+  try {
+    const res = await convex.mutation(api.calls.invite, {
+      room_key: roomKey,
+      to_users: toUserIds,
+      anchor_title: anchorTitle,
+    });
+    const results: RingOutcome[] = res?.results ?? [];
+    reportRingOutcomes(results);
+    return results;
+  } catch (err: any) {
+    toast.error(humanizeConvexError(err, "Could not ring them"));
+    return [];
+  }
+}
+
+// The outcomes worth a sentence. Busy rings quietly and shows as ringing;
+// in_room needs no news (they are already here); cooldown and refused mean
+// "not rung", which a caller who just promised to ring N people must hear.
+function reportRingOutcomes(results: RingOutcome[]): void {
+  const members = useInboxStore.getState().teamMembers ?? [];
+  const nameOf = (id: string) =>
+    memberDisplayName(members.find((m: any) => String(m._id) === id), "A teammate");
+  for (const r of results) {
+    if (r.refused) toast.error(`${nameOf(r.to_user)} isn't on this huddle's team, so they can't be rung`);
+    else if (r.cooldown) toast(`${nameOf(r.to_user)} declined a moment ago — try again in a minute`);
   }
 }
 
@@ -634,5 +702,7 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     setMuted,
     setCamera,
     setScreenShare,
+    startHuddle,
+    ringInto,
   };
 }

@@ -5,6 +5,12 @@ import {
   OFFLINE_ALERT_AFTER_MS,
   OFFLINE_SEVERE_AFTER_MS,
   SYNC_STALL_AFTER_MS,
+  QUIET_AFTER_MS,
+  RESTART_SETTLE_MS,
+  OVERLOADED_FREEZE_MS,
+  isDegradedDaemonHealth,
+  worstDaemonHealth,
+  ROSTER_CONSIDER_MS,
 } from "../useDaemonHealth";
 
 const NOW = 1_000_000_000_000;
@@ -108,5 +114,95 @@ describe("computeDaemonHealth", () => {
 
   it("still reports unknown during grace when no daemon ever checked in", () => {
     expect(computeDaemonHealth(null, NOW, { recentlyWoke: true })).toEqual({ kind: "unknown" });
+  });
+});
+
+// The 2026-08-16 incident: the daemon restarted twice after a lid-close, then
+// its event loop froze 5–48s at a time under machine load. Heartbeats never
+// went 10 minutes stale, so the header showed nothing while every sent message
+// sat unechoed and the bubble blamed the session ("hasn't reached the agent",
+// kill & restart). These states are what the header and the bubble now read.
+describe("computeDaemonHealth: quiet / restarting / overloaded", () => {
+  it("is quiet after several missed beats, before the offline banner", () => {
+    const health = computeDaemonHealth({ daemon_last_seen: NOW - QUIET_AFTER_MS }, NOW);
+    expect(health).toEqual({ kind: "quiet", quietMs: QUIET_AFTER_MS });
+    // A live daemon is never more than ~80s stale (30s beat + 50s server throttle).
+    expect(computeDaemonHealth({ daemon_last_seen: NOW - 90_000 }, NOW).kind).toBe("ok");
+    expect(computeDaemonHealth({ daemon_last_seen: NOW - OFFLINE_WARN_AFTER_MS }, NOW).kind).toBe("offline");
+  });
+
+  it("is restarting for the settle window after the reported boot", () => {
+    const fresh = { daemon_last_seen: NOW - 1000, daemon_started_at: NOW - 40_000 };
+    expect(computeDaemonHealth(fresh, NOW)).toEqual({ kind: "restarting", sinceMs: 40_000 });
+    const settled = { daemon_last_seen: NOW - 1000, daemon_started_at: NOW - RESTART_SETTLE_MS };
+    expect(computeDaemonHealth(settled, NOW).kind).toBe("ok");
+  });
+
+  it("is overloaded when the loop was frozen for a chunk of the last minute", () => {
+    const busy = { daemon_last_seen: NOW - 1000, daemon_loop_freeze_ms: 31_000 };
+    expect(computeDaemonHealth(busy, NOW)).toEqual({ kind: "overloaded", freezeMs: 31_000 });
+    const light = { daemon_last_seen: NOW - 1000, daemon_loop_freeze_ms: OVERLOADED_FREEZE_MS - 1 };
+    expect(computeDaemonHealth(light, NOW).kind).toBe("ok");
+  });
+
+  it("silence outranks a fresh boot or load (those need a live beat to mean anything)", () => {
+    const h = computeDaemonHealth(
+      { daemon_last_seen: NOW - QUIET_AFTER_MS, daemon_started_at: NOW - 10_000, daemon_loop_freeze_ms: 50_000 },
+      NOW,
+    );
+    expect(h.kind).toBe("quiet");
+  });
+
+  it("restart outranks load, load outranks a sync backlog", () => {
+    const boot = computeDaemonHealth(
+      { daemon_last_seen: NOW - 1000, daemon_started_at: NOW - 10_000, daemon_loop_freeze_ms: 50_000 },
+      NOW,
+    );
+    expect(boot.kind).toBe("restarting");
+    const load = computeDaemonHealth(
+      { daemon_last_seen: NOW - 1000, daemon_loop_freeze_ms: 50_000, daemon_pending_sync_count: 4, daemon_oldest_pending_ms: SYNC_STALL_AFTER_MS },
+      NOW,
+    );
+    expect(load.kind).toBe("overloaded");
+  });
+
+  it("every non-ok, non-unknown state counts as degraded for delivery notes", () => {
+    expect(isDegradedDaemonHealth({ kind: "ok" })).toBe(false);
+    expect(isDegradedDaemonHealth({ kind: "unknown" })).toBe(false);
+    expect(isDegradedDaemonHealth({ kind: "quiet", quietMs: 1 })).toBe(true);
+    expect(isDegradedDaemonHealth({ kind: "restarting", sinceMs: 1 })).toBe(true);
+    expect(isDegradedDaemonHealth({ kind: "overloaded", freezeMs: 1 })).toBe(true);
+    expect(isDegradedDaemonHealth({ kind: "offline", tier: "warn", offlineMs: 1 })).toBe(true);
+    expect(isDegradedDaemonHealth({ kind: "sync_stalled", pending: 1, messages: 1, conversations: 1, stalledMs: 1 })).toBe(true);
+  });
+});
+
+// Health is judged PER MACHINE from the device roster. The user-doc fields are
+// last-writer across daemons, so with a laptop and a remote Mac both beating,
+// the laptop's silence was masked by the Mac's heartbeats.
+describe("worstDaemonHealth", () => {
+  const laptop = { device_id: "a", label: "MacBook", last_seen: NOW - QUIET_AFTER_MS };
+  const cloud = { device_id: "b", label: "Cloud Mac", last_seen: NOW - 1000 };
+
+  it("names the machine in trouble instead of averaging it away", () => {
+    expect(worstDaemonHealth([laptop, cloud], NOW)).toEqual({ kind: "quiet", quietMs: QUIET_AFTER_MS, device: "MacBook" });
+  });
+
+  it("does not name the device when there is only one machine", () => {
+    expect(worstDaemonHealth([laptop], NOW)).toEqual({ kind: "quiet", quietMs: QUIET_AFTER_MS });
+  });
+
+  it("ignores retired machines and reports null for an empty roster", () => {
+    const retired = { device_id: "c", label: "Old Mini", last_seen: NOW - ROSTER_CONSIDER_MS - 1 };
+    expect(worstDaemonHealth([retired, cloud], NOW)).toEqual({ kind: "ok" });
+    expect(worstDaemonHealth([retired], NOW)).toBeNull();
+    expect(worstDaemonHealth([], NOW)).toBeNull();
+  });
+
+  it("ranks unreachable above busy above restarting", () => {
+    const busy = { device_id: "d", label: "Busy", last_seen: NOW - 1000, loop_freeze_ms: 40_000 };
+    const fresh = { device_id: "e", label: "Fresh", last_seen: NOW - 1000, daemon_started_at: NOW - 5000 };
+    expect(worstDaemonHealth([fresh, busy], NOW)?.kind).toBe("overloaded");
+    expect(worstDaemonHealth([fresh, busy, laptop], NOW)?.kind).toBe("quiet");
   });
 });

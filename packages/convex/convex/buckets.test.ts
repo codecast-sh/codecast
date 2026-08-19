@@ -5,6 +5,7 @@ import {
   resolveOrCreateBucket,
   assignConversationToBucketForUser,
   createBucketForUser,
+  createBucketWithAssignmentsV2ForUser,
   webAssignV2,
   webCreateV2,
   webListV2,
@@ -246,6 +247,53 @@ describe("buckets v2 complete view and command receipts", () => {
     expect(assigned.coverage[0].revision).toBe(2);
     expect(db._tables.bucket_assignments).toHaveLength(1);
     expect(db._tables.inbox_buckets[0].name).toBe("After");
+  });
+
+  test("files a teammate's team-visible session — labels are personal filing", async () => {
+    // Regression: the inbox once refused "Create bucket didn't go through — A
+    // selected session is not owned by this account" for a Mr Bot session the
+    // viewer could read. Filing is per-user, so the bar is visibility, not
+    // ownership.
+    const db = fakeDb({
+      conversations: [
+        { _id: "shared", user_id: "someone-else", team_id: "t1", is_private: false },
+        { _id: "private", user_id: "someone-else", team_id: "t1", is_private: true },
+      ],
+      team_memberships: [
+        { user_id: USER, team_id: "t1", visibility: "summary" },
+        { user_id: "someone-else", team_id: "t1", visibility: "summary" },
+      ],
+    });
+    const ctx = webCtx(db);
+    const created = await createBucketWithAssignmentsV2ForUser(ctx, USER, {
+      commandId: "cmd-create-shared",
+      name: "Bots",
+      conversationIds: ["shared"] as any,
+    });
+    expect(created.status).toBe("acknowledged");
+    const bucketId = (created as any).result.bucketId;
+    expect(db._tables.bucket_assignments.map((a: any) => a.conversation_id)).toEqual(["shared"]);
+
+    const assigned = await (webAssignV2 as any)._handler(ctx, {
+      command_id: "cmd-assign-shared",
+      conversation_id: "shared",
+      bucket_id: bucketId,
+    });
+    expect(assigned.status).toBe("acknowledged");
+
+    const refused = await createBucketWithAssignmentsV2ForUser(ctx, USER, {
+      commandId: "cmd-create-private",
+      name: "Nope",
+      conversationIds: ["private"] as any,
+    });
+    expect(refused.status).toBe("rejected");
+    expect((refused as any).rejection.code).toBe("FORBIDDEN");
+    const refusedAssign = await (webAssignV2 as any)._handler(ctx, {
+      command_id: "cmd-assign-private",
+      conversation_id: "private",
+      bucket_id: bucketId,
+    });
+    expect(refusedAssign.status).toBe("rejected");
   });
 
   test("foreign relationship rejection is durable and does not move view coverage", async () => {

@@ -5,6 +5,12 @@
 // the row the server will echo), and the rail's naming (who is the other
 // side). Convex ids never contain ":", so the join is unambiguous.
 
+/** How many people fit in a DM/group thread — and, since a group thread and
+ *  the huddle of its members are the same room, in a people huddle room too
+ *  (contracts/callRoomKeys reads this as MAX_ROOM_MEMBERS). One literal for
+ *  one rule. */
+export const MAX_DM_MEMBERS = 9;
+
 /** Compose the key. `ids` is the FULL member set, viewer included. */
 export function dmKeyFor(teamId: string, ids: string[]): string {
   return `${teamId}:${Array.from(new Set(ids.map(String))).sort().join(":")}`;

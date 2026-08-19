@@ -2,7 +2,6 @@
 import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { copyToClipboard, canonicalUrl } from "../../../lib/utils";
 import { compressImage } from "../../../lib/compressImage";
-import { inActiveWorkspace } from "../../../lib/workspaceScope";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -651,25 +650,6 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     if (!pid) return null;
     return (allTasks[String(pid)] as TaskItem | undefined) ?? null;
   }, [allTasks, (data as any)?.parent_id]);
-  const [parentQuery, setParentQuery] = useState<string | null>(null);
-  const parentCandidates = useMemo(() => {
-    if (parentQuery === null || !data) return [];
-    const q = parentQuery.toLowerCase();
-    return (Object.values(allTasks) as TaskItem[])
-      .filter((t: any) =>
-        t._id !== data._id &&
-        inActiveWorkspace(t, (data as any).team_id ?? null) &&
-        t.status !== "done" && t.status !== "dropped" &&
-        !String(t._id).startsWith("temp_") &&
-        (q === "" || t.title?.toLowerCase().includes(q) || t.short_id?.toLowerCase().includes(q)))
-      .slice(0, 8);
-  }, [parentQuery, allTasks, data]);
-  const pickParent = useCallback((candidate: TaskItem) => {
-    if (!data?.short_id) return;
-    const res = setTaskParent(data.short_id, candidate.short_id);
-    if (!res.ok) toast.error(res.reason);
-    setParentQuery(null);
-  }, [data?.short_id]);
 
   const uploadCommentImage = useCallback(async (file: File) => {
     const previewUrl = URL.createObjectURL(file);
@@ -1040,36 +1020,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
             {/* Parent — set, change, or detach */}
             <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
               <span className="text-xs text-sol-text-dim">Parent</span>
-              {parentQuery !== null ? (
-                <div className="relative">
-                  <input
-                    autoFocus
-                    value={parentQuery}
-                    onChange={(e) => setParentQuery(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") setParentQuery(null);
-                      if (e.key === "Enter" && parentCandidates[0]) pickParent(parentCandidates[0]);
-                      e.stopPropagation();
-                    }}
-                    placeholder="Search tasks…"
-                    className="w-full bg-transparent text-xs text-sol-text placeholder:text-sol-text-dim outline-none border-b border-sol-cyan/40 py-0.5"
-                  />
-                  {parentCandidates.length > 0 && (
-                    <div className="absolute top-full left-0 mt-1 w-full max-w-[24rem] bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-56 overflow-y-auto">
-                      {parentCandidates.map((c: any) => (
-                        <button
-                          key={c._id}
-                          onClick={() => pickParent(c)}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sol-text-muted hover:bg-sol-bg-alt transition-colors"
-                        >
-                          <span className="font-mono text-sol-text-dim flex-shrink-0">{c.short_id}</span>
-                          <span className="truncate text-left">{c.title}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (data as any).parent_id ? (
+              {(data as any).parent_id ? (
                 <div className="flex items-center gap-1.5">
                   <button onClick={() => parentRow && router.push(`/tasks/${parentRow._id}`)} className="text-xs font-mono text-sol-cyan hover:underline">
                     {parentRow?.short_id ?? "…"}
@@ -1084,7 +1035,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                   </button>
                 </div>
               ) : (
-                <button onClick={() => setParentQuery("")} className="text-xs text-sol-text-dim hover:text-sol-text text-left transition-colors">
+                <button onClick={() => openCmd("parent")} className="text-xs text-sol-text-dim hover:text-sol-text text-left transition-colors">
                   Set parent…
                 </button>
               )}

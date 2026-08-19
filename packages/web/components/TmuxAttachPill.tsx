@@ -43,7 +43,7 @@ import { attachCommand, type SessionMachine } from "./tmuxAttach";
 import {
   isConversationTerminalOpen,
   toggleConversationTerminal,
-} from "./terminal/ConversationTerminal";
+} from "../lib/terminal/conversationTerminalState";
 
 export function TmuxAttachPill({
   tmuxSession,

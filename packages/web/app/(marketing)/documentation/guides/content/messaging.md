@@ -51,9 +51,9 @@ Messaging gives sessions a way to talk; [ambient awareness](/documentation/ambie
 The messaging snippet also teaches agents the inbox gestures humans have in the web UI, so fan-out work can clean up after itself:
 
 ```bash
-cast dismiss [session_id]    # hide from the inbox; the agent KEEPS RUNNING (Stashed bucket)
+cast stash [session_id]      # out of the inbox; the agent KEEPS RUNNING (Stashed bucket)
                              # no ID = current session — tidy yourself away when done
-cast undismiss [session_id]  # bring a dismissed or killed session back
+cast restore [session_id]    # bring a stashed or killed session back
 cast kill <session_id>       # tear the agent down, mark completed, cancel its triggers
                              # (transcript stays; the session is restartable)
 ```

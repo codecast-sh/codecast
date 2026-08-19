@@ -37,7 +37,7 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { VAULT_SORT_OPTIONS, type VaultSortMode } from "../../lib/vault/explorerModel";
-import { useTabContext } from "../../components/TabContent";
+import { useTabContext } from "../../lib/tabParams";
 import { useShortcutAction } from "../../shortcuts";
 import { VaultExplorer } from "../../components/vault/VaultExplorer";
 import { VaultNoteView } from "../../components/vault/VaultNoteView";
@@ -60,6 +60,7 @@ import {
   setVaultModeScope,
   type VaultViewMode,
 } from "../../lib/vault/viewMode";
+import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
 // sigma + graphology are ~40kB gzip: nobody who doesn't open the graph pays.
 const VaultGraphView = lazy(() =>
@@ -225,6 +226,7 @@ const LEFT_TABS: { id: "files" | "search"; label: string; icon: React.ComponentT
 
 function VaultContent() {
   const convex = useConvex();
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
   const searchParams = useSearchParams();
   const connection = useVaultStore((s) => s.connection);
@@ -476,7 +478,7 @@ function VaultContent() {
       >
         <Panel id="vault-tree" minSize={180} maxSize="42%" className="min-w-0">
           <div className="h-full flex flex-col border-r-0 bg-sol-bg-alt/40">
-            <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
+            <div ref={titlebarRef} className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
               <VaultPicker
                 vaults={vaults}
                 remoteVaults={remoteVaults}

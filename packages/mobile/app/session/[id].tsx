@@ -15,7 +15,7 @@ import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isTrustedImageSrc } from '@/lib/convex';
-import { parseInboundSessionMessage, isScheduledTaskMessage } from '@codecast/web/components/sessionMessage';
+import { parseInboundSessionMessage, isScheduledTaskMessage, parseChatWakePrompt, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
@@ -2073,6 +2073,42 @@ function SessionMessageBlock({ from, name, body, timestamp }: { from: string; na
       </RNView>
       <CollapsibleBody fadeColor={blendOver(Theme.cyan + '0d', Theme.bg)}>
         <MarkdownContent text={body} baseStyle={styles.sessionMessageBody} isUser={false} />
+      </CollapsibleBody>
+    </RNView>
+  );
+}
+
+// Mobile port of web's ChatWakeBlock: a team-chat mention waking the anchor.
+// Shows the channel, who asked, and the quoted thread by speaker; the briefing
+// around the quote is for the agent, not the reader.
+function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; timestamp?: number }) {
+  const router = useRouter();
+  // Land in the thread when it is known — the same route a chat push opens.
+  const open = wake.channelId
+    ? () => router.push((wake.threadRootId
+      ? { pathname: '/chat/thread/[id]', params: { id: wake.threadRootId, channel: wake.channelId, ...(wake.placeholderId ? { m: wake.placeholderId } : {}) } }
+      : { pathname: '/chat/[id]', params: { id: wake.channelId } }) as never)
+    : undefined;
+  return (
+    <RNView style={[styles.sessionMessageBlock, { borderLeftColor: Theme.magenta + '99', backgroundColor: Theme.magenta + '0d' }]}>
+      <RNView style={styles.sessionMessageHeader}>
+        <Feather name="message-square" size={13} color={Theme.magenta + 'b3'} />
+        <RNText style={[styles.sessionMessageLabel, { color: Theme.magenta + 'b3' }]}>Team chat</RNText>
+        <TouchableOpacity disabled={!open} onPress={open} style={[styles.sessionMessageBadge, { borderColor: Theme.magenta + '4d', backgroundColor: Theme.magenta + '1a' }]}>
+          <RNText style={[styles.sessionMessageBadgeText, { color: Theme.magenta }]}>#{wake.channelName}</RNText>
+        </TouchableOpacity>
+        <RNText style={styles.sessionMessageTitle} numberOfLines={1}>{wake.askerName}{wake.addressed ? ' mentioned you' : ' replied in a thread'}</RNText>
+        {timestamp != null && timestamp > 0 && (
+          <RNText style={styles.sessionMessageTime}>{formatRelativeTime(timestamp)}</RNText>
+        )}
+      </RNView>
+      <CollapsibleBody fadeColor={blendOver(Theme.magenta + '0d', Theme.bg)}>
+        {wake.entries.map((entry, i) => (
+          <RNText key={i} style={styles.sessionMessageBody} selectable>
+            <RNText style={{ fontWeight: '600', color: entry.self ? Theme.magenta : Theme.text }}>{entry.self ? 'You' : entry.name}</RNText>
+            {'  '}{entry.content}
+          </RNText>
+        ))}
       </CollapsibleBody>
     </RNView>
   );
@@ -4860,6 +4896,10 @@ export default function SessionDetailScreen() {
               }
               if (isScheduledTaskMessage(item.content)) {
                 return <ScheduledTaskBlock content={item.content} timestamp={item.timestamp} />;
+              }
+              const chatWake = parseChatWakePrompt(item.content);
+              if (chatWake) {
+                return <ChatWakeBlock wake={chatWake} timestamp={item.timestamp} />;
               }
             }
 

@@ -85,7 +85,7 @@ When your context gets compacted, re-read your task or plan context (`cast task 
 
 ### Reading tasks
 
-Answering a question about tasks — what is assigned to someone, a summary of the open tasks on a topic, which session did the work — is a read, not a lifecycle step. Filter on the server instead of grepping the list: `--assignee me`, `--label <name>`, `-p "<project>"`, `--plan <id>`, `-q "<text>"`, `-s <status>`, and `-a` to include closed tasks. Every read command takes `--json` and prints full rows (assignee_name, labels, linked sessions, comments) — use it whenever you will process the result rather than glance at it. Piped output is plain text; there is nothing to strip. `cast task show` takes several ids at once and lists each task's linked sessions by short id, so the session behind a task is one `cast read <id>` away.
+Filter on the server, not with grep: `--assignee me`, `--label <name>`, `-p "<project>"`, `-q "<text>"`, `-s <status>`, `-a` (closed too). Every read takes `--json`; `cast task show` takes several ids and lists each task's linked sessions by short id (`cast read <id>`).
 
 ### Commands
 
@@ -93,11 +93,8 @@ Answering a question about tasks — what is assigned to someone, a summary of t
 cast task ready                             # Find available work
 cast task ready -q "<topic>"                # Filter ready tasks by title/description
 cast task ls -q "<topic>"                   # Search all active tasks by title/description
-cast task ls --assignee me                  # Tasks assigned to me (also a username)
-cast task ls --label <name> --json          # Filter by label; full rows as JSON (every read takes --json)
-cast task ls -a -s done -q "<topic>"        # Include closed tasks (-a) or pin one status (-s)
-cast task show ct-1 ct-2 ct-3               # Several at once: details, linked sessions, comments (-c for all)
-cast task show <id> --json | jq .sessions   # Linked sessions as {short_id, title} → cast read <short_id>
+cast task ls --assignee me --label <name>   # Server-side filters (also -p, -q, -s, -a); --json for full rows
+cast task show ct-1 ct-2 --json             # Several ids; .sessions = linked sessions (short id + title)
 cast plan ls -q "<topic>"                   # Search active plans by title/goal
 cast project ls                             # Projects in your workspace (the triage unit)
 cast project show <id>                      # A project and every task under it

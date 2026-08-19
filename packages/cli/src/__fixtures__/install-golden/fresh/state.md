@@ -7,7 +7,7 @@ A state has three parts: the **first line** says what this session is working on
 
 **End every turn by declaring who acts next.** `--status` is that declaration, and it decides where the session files in the human's inbox when your turn ends — so it is not optional bookkeeping, it is how you keep from becoming noise:
 
-- `blocked` — a human must act before you can continue: answer a question, grant something, decide something. Files under **Needs Input**.
+- `blocked` — a human must act before you can continue: answer a question, grant something, decide something. Files under **Needs Input**, and returns a stashed session to the inbox — it is your claim on the human's eyes, so declare it only when true.
 - `done` — you delivered the task and nothing is stalled; the human reads it at leisure. Files under **Done**.
 - `dormant` — a machine wakes you: a trigger you armed, a Monitor or background task you are watching, another session's reply you are waiting on. Files under **Dormant**, quiet until the wake lands. Only when you can **name the wake** in the text — if you cannot say what resumes you, you are `blocked`, not dormant.
 - `working` (the default) — still moving; you are about to keep going.

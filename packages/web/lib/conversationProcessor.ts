@@ -13,7 +13,7 @@ export type MessageAlternate = {
 };
 
 import { SYSTEM_MESSAGE_PREFIXES } from "./sessionFilters";
-import { stripTeammateFraming, parseSpawnedTaskPrompt } from "../components/sessionMessage";
+import { stripTeammateFraming, parseSpawnedTaskPrompt, parseChatWakePrompt } from "../components/sessionMessage";
 
 const COMMAND_PATTERNS = [
   /^<command-name>([^<]*)<\/command-name>/,
@@ -292,6 +292,13 @@ export function classifyFeedMessage(content: string | null | undefined): FeedDis
   // Spawned schedule-run prompt: preview the task text, not the wire header.
   const spawned = parseSpawnedTaskPrompt(raw);
   if (spawned) return { kind: "text", text: spawned.prompt || spawned.title };
+  // A team-chat mention waking the anchor: preview the channel and the quoted
+  // thread, not the briefing around it.
+  const chatWake = parseChatWakePrompt(raw);
+  if (chatWake) {
+    const lines = chatWake.entries.map((e) => `${e.name}: ${e.content}`).join("\n");
+    return { kind: "text", text: `#${chatWake.channelName} — ${lines}` };
+  }
   const text = stripTeammateFraming(stripSystemTags(raw)
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "")

@@ -105,7 +105,7 @@ async function sendVoip(
     reason = (await res.json())?.reason;
   } catch {}
   // Token is dead (app removed / token rotated): clear it so we stop trying.
-  if (res.status === 410 || reason === "BadDeviceToken" || reason === "Unregistered") {
+  if (args.user_id && (res.status === 410 || reason === "BadDeviceToken" || reason === "Unregistered")) {
     await ctx.runMutation(internal.apnsVoip.clearDeadVoipToken, {
       user_id: args.user_id,
       voip_push_token: args.token,
@@ -165,5 +165,23 @@ export const clearDeadVoipToken = internalMutation({
     if (user?.voip_push_token === args.voip_push_token) {
       await ctx.db.patch(args.user_id, { voip_push_token: undefined });
     }
+  },
+});
+
+// Config probe: sends a VoIP push to a bogus token. APNs validates the
+// provider JWT before the token, so `BadDeviceToken` (400) proves the key,
+// team id and key id are right; `InvalidProviderToken` (403) means they are
+// not. Never touches a real device.
+export const probeApnsConfig = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    if (!apnsConfigured()) return { ok: false, reason: "APNS env not set" };
+    const bogus = "00".repeat(32);
+    const r = await sendVoip(ctx, {
+      token: bogus,
+      user_id: undefined,
+      payload: { incomingCall: { eventId: "probe", serverCallId: "probe", hasVideo: false, caller: { id: "probe", displayName: "probe" } } },
+    });
+    return { ...r, verdict: r.reason === "BadDeviceToken" ? "KEY OK (auth accepted, token rejected as expected)" : r.reason };
   },
 });

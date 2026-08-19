@@ -85,7 +85,7 @@ export function RingBanner({
             </Text>
             <Text style={styles.bannerSub} numberOfLines={1}>
               {ring.anchor_title
-                ? `huddle · ${ring.anchor_title}`
+                ? `wants to huddle · ${ring.anchor_title}`
                 : switching
                   ? "wants to huddle — join to switch"
                   : "wants to huddle"}

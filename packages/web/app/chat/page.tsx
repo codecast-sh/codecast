@@ -36,6 +36,8 @@ import { api as _chatApi } from "@codecast/convex/convex/_generated/api";
 const api = _chatApi as any;
 import { Lock, BellOff, Bell, Plus, AlertTriangle, RotateCw, Search, SquarePen } from "lucide-react";
 import { ChannelMembersButton, DmHeadline } from "../../components/chat/ChannelPeople";
+import { HuddleButton } from "../../components/calls/OccupancyChip";
+import { chatViewRoomKey } from "../../lib/chatViews";
 import { NewMessageModal } from "../../components/chat/NewMessageModal";
 import { ChatSearch } from "../../components/chat/ChatSearch";
 import { useShortcutAction } from "../../shortcuts";
@@ -57,13 +59,14 @@ import {
   useThreadMessages,
   useThreadSync,
 } from "../../hooks/useChatSync";
-import { useTabContext } from "../../components/TabContent";
+import { useTabContext } from "../../lib/tabParams";
 import { ChatChannelRail } from "../../components/chat/ChatChannelRail";
 import { ChatMessageList } from "../../components/chat/ChatMessageList";
 import { ChatThreadPanel } from "../../components/chat/ChatThreadPanel";
 import { ChatComposer } from "../../components/chat/ChatComposer";
 import { ChannelContextMenu } from "../../components/chat/ChannelMenu";
 import { useChannelMenu } from "../../hooks/useChannelMenu";
+import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { setChatFocus, clearChatFocus } from "../../lib/chatFocus";
 import "../../components/chat/chat.css";
 
@@ -132,6 +135,7 @@ export default function ChatPage() {
   const chatOn = useTeamFeature("chat");
   const navCollapsed = useInboxStore((s) => selectNavCollapsed(s as any));
   const zenMode = useInboxStore((s) => s.clientState.ui?.zen_mode ?? false);
+  const headTitlebarRef = useTitlebarHead<HTMLElement>();
   const narrowViewport = useSyncExternalStore(
     (cb) => {
       if (typeof window === "undefined") return () => {};
@@ -418,7 +422,7 @@ export default function ChatPage() {
         )}
         {activeChannelId ? (
           <>
-            <header className="ch-head">
+            <header ref={headTitlebarRef} className="ch-head">
               {activeChannel?.kind === "dm" ? (
                 <DmHeadline channel={activeChannel} />
               ) : (
@@ -434,6 +438,17 @@ export default function ChatPage() {
                 : <span className="ch-head-topic" />}
               {activeChannel && (activeChannel.kind === "dm" || activeChannel.isPrivate) && (
                 <ChannelMembersButton channel={activeChannel} />
+              )}
+              {/* Every room can huddle. A DM or group thread rings its people
+                  the moment it opens; a channel is an open door — the rail
+                  chip and the "in a huddle" strip tell the team it's live. */}
+              {activeChannel && (
+                <HuddleButton
+                  roomKey={chatViewRoomKey(activeChannel, viewerId)}
+                  ring={activeChannel.kind === "dm" ? activeChannel.dmMemberIds : undefined}
+                  anchorTitle={activeChannel.kind === "dm" ? undefined : `#${activeChannel.name}`}
+                  className="shrink-0"
+                />
               )}
               <SearchPill onOpen={() => setSearchOpen(true)} />
               <button

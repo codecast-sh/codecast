@@ -205,6 +205,10 @@ export function useGlobalShortcutActions() {
     store.setDockOpen(store.workspace.dock.pane == null);
   }, []));
 
+  useShortcutAction('anchor.toggle', useCallback(() => {
+    useInboxStore.getState().toggleAnchorPanel();
+  }, []));
+
   // ⌥1–⌥4: the first four saved workbenches, in the rail's own order — the
   // hint printed on a row is the key that switches to it. No saved layouts,
   // no keys: the chords cost nothing until you save one.

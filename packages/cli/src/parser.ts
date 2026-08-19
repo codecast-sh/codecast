@@ -119,6 +119,18 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
   // so the generic meta-skip below drops it. Keep it when it directly follows the command
   // invocation — the UI folds it into the command block as an expandable "Show command".
   let prevWasCommandInvocation = false;
+  // A queued turn's entry timestamp is when it was ENQUEUED, not when the agent
+  // received it — the line itself is written at delivery, minutes later for a
+  // task notification that landed mid-turn. Synced as-is it sorts before turns
+  // already on the server, and every delta reader keyed on "newer than my
+  // latest" (the inbox's background message sync, the count-mismatch recovery
+  // loop) never fetches it: a hole in the timeline, and for a task notification
+  // a background watch the web could never see close. Stamp it with delivery
+  // instead: the queue-operation "remove" for the same text (written just
+  // before it) carries that time; failing one, never earlier than the turn
+  // already emitted in this pass.
+  let lastDequeue: { content: string; timestamp: number } | null = null;
+  let lastEmittedTimestamp = 0;
 
   for (const entry of entries) {
     const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
@@ -136,7 +148,10 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
       continue;
     }
 
-    if (entry.type === "queue-operation") continue;
+    if (entry.type === "queue-operation") {
+      if (entry.operation === "remove" && typeof entry.content === "string") lastDequeue = { content: entry.content, timestamp };
+      continue;
+    }
 
     // A user turn the agent received while busy is recorded as type:"attachment"
     // with attachment.type:"queued_command" (text in attachment.prompt) instead of a
@@ -167,13 +182,16 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
         }
         const prompt = stripControlPrefix(promptText);
         if (prompt.trim() || promptImages.length > 0) {
+          const deliveredAt = lastDequeue && lastDequeue.content === promptText ? lastDequeue.timestamp : 0;
+          const queuedTimestamp = Math.max(timestamp, deliveredAt, lastEmittedTimestamp);
           messages.push({
             uuid: entry.uuid,
             role: "user",
             content: prompt,
-            timestamp,
+            timestamp: queuedTimestamp,
             images: promptImages.length > 0 ? promptImages : undefined,
           });
+          lastEmittedTimestamp = Math.max(lastEmittedTimestamp, queuedTimestamp);
         }
       }
       continue;
@@ -287,6 +305,7 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
         stopReason,
         model,
       });
+      lastEmittedTimestamp = Math.max(lastEmittedTimestamp, timestamp);
     }
 
     // Remember whether this was a slash-command invocation so the next entry (its isMeta

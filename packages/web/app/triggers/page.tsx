@@ -58,6 +58,7 @@ import {
   MessageSquare,
   ArrowUpRight,
 } from "lucide-react";
+import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
 const api = _api as any;
 
@@ -1567,6 +1568,7 @@ function TriggersContent() {
   // synchronously; the feeder keeps it fresh. `undefined` only while the cache
   // is empty AND the first answer is in flight.
   const { tasks: taskRows, ready: tasksReady } = useTriggers();
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const tasks = tasksReady || taskRows.length > 0 ? taskRows : undefined;
   // ?new=1 arrives from the inbox dock's "+ New" — land with the create form
   // already open instead of making the user find the button again.
@@ -1642,7 +1644,7 @@ function TriggersContent() {
   return (
     <div className="h-full overflow-y-auto bg-sol-bg">
       <div className="max-w-3xl mx-auto px-6 py-8">
-        <div className="flex items-center gap-2 mb-5">
+        <div ref={titlebarRef} className="flex items-center gap-2 mb-5">
           <Zap className="w-4 h-4 text-sol-cyan" />
           <h1 className="text-lg font-semibold text-sol-text">Triggers</h1>
           <span className="text-xs text-sol-text-dim">async agent runs</span>

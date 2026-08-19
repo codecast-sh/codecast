@@ -657,3 +657,15 @@ export const e2eRing = internalMutation({
     return String(inviteId);
   },
 });
+
+// TEMPORARY: find users with an Expo push token whose email matches, to
+// verify EAS's push key still delivers after the January key was revoked.
+export const e2eFindPushUsers = internalQuery({
+  args: { email_contains: v.string() },
+  handler: async (ctx, args) => {
+    const all = await ctx.db.query("users").take(2000);
+    return all
+      .filter((u: any) => u.push_token && String(u.email ?? "").toLowerCase().includes(args.email_contains))
+      .map((u: any) => ({ id: u._id, email: u.email, token: u.push_token, voip: !!u.voip_push_token }));
+  },
+});

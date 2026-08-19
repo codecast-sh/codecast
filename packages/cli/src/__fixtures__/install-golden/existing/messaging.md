@@ -22,18 +22,18 @@ EOF
 
 ### Inbox visibility
 
-You can also manage which sessions the human sees in their inbox — the same gestures they have in the web UI. Use these to tidy up after fan-out work: dismiss finished workers so the inbox stays readable, kill sessions that are truly done, resurface one that needs the human's attention.
+You can also manage which sessions the human sees in their inbox — the same gestures they have in the web UI. Use these to tidy up after fan-out work: stash finished workers so the inbox stays readable, kill sessions that are truly done, resurface one that needs the human's attention.
 
 ```bash
-cast dismiss [session_id]      # Hide from the inbox; the agent KEEPS RUNNING (Stashed bucket).
+cast stash [session_id]        # Out of the inbox; the agent KEEPS RUNNING (Stashed bucket).
                                # No ID = current session — tidy yourself away when done.
-cast undismiss [session_id]    # Bring a dismissed/killed session back into the inbox.
-cast kill <session_id>         # Tear the agent down, mark completed, cancel its schedules
+cast restore [session_id]      # Bring a stashed/killed session back into the inbox.
+cast kill <session_id>         # Tear the agent down, mark completed, cancel its triggers
                                # (Killed bucket; transcript stays, restartable). ID required —
                                # killing your OWN session cuts you off mid-turn.
 ```
 
-Dismiss is reversible and keeps the agent alive; kill is the deliberate "done with it". When you hide or kill sessions on the human's behalf, tell them which ones and why.
+Stash is reversible and keeps the agent alive; kill is the deliberate "done with it". A stashed session is silent except for asks: its triggers keep firing out of sight, and it returns to the inbox only when you (or it) declare `--status blocked`, a run completes `--needs-attention`, or it stalls (permission prompt, open question, dead process). When you hide or kill sessions on the human's behalf, tell them which ones and why.
 <!-- /codecast-messaging -->
 
 ## House rules

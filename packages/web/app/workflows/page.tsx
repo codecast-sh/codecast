@@ -11,6 +11,7 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { ContextChatInput } from "../../components/ContextChatInput";
 import { WorkflowGraphView, type WFNode, type WFEdge } from "../../components/WorkflowGraphView";
 import { GitBranch, Clock, ChevronRight, X, Terminal, Bot, User, Zap, GitFork, Merge, Play, Pause, CheckCircle, XCircle, Loader2, ExternalLink, Square, Timer, AlertCircle } from "lucide-react";
+import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
 const api = _api as any;
 
@@ -453,6 +454,9 @@ function WorkflowsContent() {
   // Store-fed (hooks/useSyncWorkflows): paints from the cache synchronously;
   // `undefined` only while the cache is empty AND the first answer is in flight.
   const { workflows: workflowRows, ready: workflowsReady } = useWorkflows();
+  
+  const mainTitlebarRef = useTitlebarHead<HTMLDivElement>();
+  const railTitlebarRef = useTitlebarHead<HTMLDivElement>();
   const workflows = (workflowsReady || workflowRows.length > 0 ? workflowRows : undefined) as Workflow[] | undefined;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<WFNode | null>(null);
@@ -497,12 +501,11 @@ function WorkflowsContent() {
       </div>
     );
   }
-
   return (
     <div className="flex h-full bg-sol-bg">
       {sidebarOpen && (
         <div className="w-52 flex-shrink-0 border-r border-sol-border/20 flex flex-col bg-sol-bg-alt">
-          <div className="px-3 py-2.5 border-b border-sol-border/20">
+          <div ref={railTitlebarRef} className="px-3 py-2.5 border-b border-sol-border/20">
             <span className="text-[10px] text-sol-text-dim uppercase tracking-widest">Routines</span>
           </div>
           <div className="flex-1 overflow-y-auto">
@@ -548,7 +551,7 @@ function WorkflowsContent() {
       <div className="flex-1 min-w-0 flex flex-col relative">
         {selected && (
           <>
-            <div className="flex items-center gap-3 px-4 py-2.5 border-b border-sol-border/20 bg-sol-bg-alt flex-shrink-0">
+            <div ref={mainTitlebarRef} className="flex items-center gap-3 px-4 py-2.5 border-b border-sol-border/20 bg-sol-bg-alt flex-shrink-0">
               <button
                 onClick={() => setSidebarOpen(v => !v)}
                 className="text-sol-text-dim hover:text-sol-text-muted transition-colors"

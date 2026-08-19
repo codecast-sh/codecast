@@ -522,7 +522,11 @@ export const completeTaskRun = mutation({
       !runConv.inbox_stashed_at &&
       !runConv.has_pending_messages
     ) {
-      await ctx.db.patch(runConv._id, { inbox_dismissed_at: now });
+      // Folded = out of the way, NOT retired: the run's agent may still be
+      // alive and its history is living state, so the fold writes the stash
+      // stamp (Stashed bucket, "N running" pill) rather than the legacy
+      // dismissed stamp that files rows under Killed.
+      await ctx.db.patch(runConv._id, { inbox_stashed_at: now });
     }
 
     // --needs-attention is the agent's claim on the user's eyes, and stash/kill
@@ -673,6 +677,17 @@ export const failTaskRun = mutation({
         last_run_session_uuid: runUuid,
       });
 
+      // Retries exhausted = the loop is dead, and a hidden home must not stay
+      // hidden with a dead loop inside it — the stall rule ("stash hides work,
+      // not stalls"), same clear the --needs-attention claim uses. Transient
+      // failures above stay quiet: the retry is still progress.
+      if (task.originating_conversation_id) {
+        const home = await ctx.db.get(task.originating_conversation_id);
+        if (home && (home.inbox_stashed_at || home.inbox_dismissed_at) && !home.inbox_killed_at) {
+          await ctx.db.patch(home._id, { inbox_stashed_at: undefined, inbox_dismissed_at: undefined });
+        }
+      }
+
       const user = await ctx.db.get(auth.userId);
       if (user?.push_token && user.notifications_enabled) {
         const notifId = await ctx.db.insert("notifications", {
@@ -752,9 +767,12 @@ export const linkRunConversation = mutation({
         prev.user_id.toString() === auth.userId.toString() &&
         !prev.inbox_pinned_at &&
         !prev.inbox_dismissed_at &&
+        !prev.inbox_stashed_at &&
         !prev.has_pending_messages
       ) {
-        await ctx.db.patch(prev._id, { inbox_dismissed_at: Date.now() });
+        // Same fold, same stamp as completeTaskRun above: superseded runs are
+        // set aside, not killed.
+        await ctx.db.patch(prev._id, { inbox_stashed_at: Date.now() });
       }
     }
     return { linked: true, retry: false };

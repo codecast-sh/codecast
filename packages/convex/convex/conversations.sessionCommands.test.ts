@@ -52,9 +52,9 @@ describe("requireSessionCommandTarget", () => {
     await expect(requireSessionCommandTarget(ctx, OWNER, "conversations_2" as any)).rejects.toThrow("Not authorized");
   });
 
-  test("a deleted/ghost conversation is refused (kill/restart keep their own recovery)", async () => {
+  test("a deleted/ghost conversation is refused as not found (kill/restart keep their own recovery; the web resume path escalates this to restore)", async () => {
     const ctx = ctxWith({ conversations: [] });
-    await expect(requireSessionCommandTarget(ctx, RUNNER, "conversations_gone" as any)).rejects.toThrow("Not authorized");
+    await expect(requireSessionCommandTarget(ctx, RUNNER, "conversations_gone" as any)).rejects.toThrow("Conversation not found");
   });
 });
 
