@@ -1410,6 +1410,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
     <GenericListView<TaskItem>
           activeItemId={(projectId ? params?.taskId : params?.id) as string | undefined}
           paletteTargetType="task"
+          getComposeRef={(t) => t.short_id}
           title={projectId ? "Project tasks" : "Tasks"}
           tabs={[
             // Two presets, then the statuses they are made of. Each preset
