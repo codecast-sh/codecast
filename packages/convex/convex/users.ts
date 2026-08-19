@@ -9,10 +9,10 @@ import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots } from ".
 import { fromConvexAgentType, AGENT_CLIENTS, findModelOption } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
-import { hasRecentPendingDaemonCommand, enqueueResumeSession } from "./daemonCommandUtils";
+import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
 import { canAccessTask, canAccessDoc } from "./lib/access";
-import { resetConversationPendingMessages } from "./pendingMessages";
+import { stripMessageTags, isUserMessageNoise, fetchUserSendDays, type SendDayRow } from "./lib/userSend";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath, pathWithinLocalRoots } from "./projectPaths";
@@ -207,6 +207,22 @@ export function resolveMachineFieldsOwner(input: {
   return { owns: true, claim: deviceId !== undefined };
 }
 
+/**
+ * Label writes for the device-row upsert. A beat that omits device_label must
+ * not degrade an existing label: the command-poll heartbeat identifies its
+ * device but sends no label, and a platform fallback on patch overwrote
+ * "macOS - <hostname>" with a literal "darwin" on every poll. The platform
+ * string is only the default for a brand-new row, which needs SOME label.
+ */
+export function deviceLabelWrite(input: {
+  deviceLabel: string | undefined;
+  platform: string;
+  isNew: boolean;
+}): { label: string } | Record<never, never> {
+  if (input.deviceLabel) return { label: input.deviceLabel };
+  return input.isNew ? { label: input.platform } : {};
+}
+
 export const daemonHeartbeat = mutation({
   args: {
     api_token: v.string(),
@@ -220,6 +236,8 @@ export const daemonHeartbeat = mutation({
     oldest_pending_ms: v.optional(v.number()),
     pending_sync_messages: v.optional(v.number()),
     pending_sync_conversations: v.optional(v.number()),
+    daemon_started_at: v.optional(v.number()),
+    loop_freeze_ms: v.optional(v.number()),
     // Device identity (remote/device.ts). When present, upsert a per-device
     // row so multiple machines don't clobber each other's project roots.
     device_id: v.optional(v.string()),
@@ -341,11 +359,18 @@ export const daemonHeartbeat = mutation({
       !existingUser?.daemon_last_seen || now - existingUser.daemon_last_seen > HEARTBEAT_WRITE_THROTTLE_MS;
     const queueZeronessFlipped =
       ((existingUser?.daemon_pending_sync_count ?? 0) === 0) !== (newPending === 0);
-    if (lastSeenStale || queueZeronessFlipped || Object.keys(patch).length > 0) {
+    // Same rule for load: a loop that just started (or stopped) freezing must
+    // reach the web on this beat, not up to 50s later.
+    const loadFlipped =
+      args.loop_freeze_ms !== undefined &&
+      ((existingUser?.daemon_loop_freeze_ms ?? 0) === 0) !== (args.loop_freeze_ms === 0);
+    if (lastSeenStale || queueZeronessFlipped || loadFlipped || Object.keys(patch).length > 0) {
       patch.daemon_last_seen = now;
       patch.last_heartbeat = now;
       patch.daemon_pending_sync_count = newPending;
       patch.daemon_oldest_pending_ms = newOldest;
+      if (args.loop_freeze_ms !== undefined) patch.daemon_loop_freeze_ms = args.loop_freeze_ms;
+      if (args.daemon_started_at !== undefined) patch.daemon_started_at = args.daemon_started_at;
       // Only patch the per-table backlog fields when the daemon actually sent
       // them. During a mixed-version rollout an OLD daemon omits these (undefined),
       // and coercing to 0 would clobber a real backlog → the web chip shows
@@ -385,10 +410,19 @@ export const daemonHeartbeat = mutation({
         )
         .first();
       const devicePatch = {
-        label: args.device_label ?? args.platform,
+        ...deviceLabelWrite({ deviceLabel: args.device_label, platform: args.platform, isNew: !existingDevice }),
         platform: args.platform,
         last_seen: now,
         status: "online" as const,
+        // Per-device daemon health (see schema devices.daemon_started_at). Only
+        // the fields this daemon actually sent: an older daemon must not zero a
+        // value a newer one wrote — same rule as backlogFieldsPatch.
+        ...(args.daemon_started_at !== undefined ? { daemon_started_at: args.daemon_started_at } : {}),
+        ...(args.loop_freeze_ms !== undefined ? { loop_freeze_ms: args.loop_freeze_ms } : {}),
+        ...(args.pending_sync_count !== undefined ? { pending_sync_count: args.pending_sync_count } : {}),
+        ...(args.oldest_pending_ms !== undefined ? { oldest_pending_ms: args.oldest_pending_ms } : {}),
+        ...(args.pending_sync_messages !== undefined ? { pending_sync_messages: args.pending_sync_messages } : {}),
+        ...(args.pending_sync_conversations !== undefined ? { pending_sync_conversations: args.pending_sync_conversations } : {}),
         // Absolute time of this machine's last HID event, on the server clock.
         // Left untouched when the daemon doesn't report idle (Linux, or a daemon
         // predating this): a frozen last_input_at simply goes stale, which reads
@@ -429,6 +463,9 @@ export const daemonHeartbeat = mutation({
         await ctx.db.insert("devices", {
           user_id: auth.userId,
           device_id: args.device_id,
+          // deviceLabelWrite ran with isNew, so devicePatch always carries a
+          // label here — the schema requires one on insert.
+          label: args.device_label || args.platform,
           ...devicePatch,
         });
       }
@@ -505,6 +542,11 @@ export const daemonHeartbeat = mutation({
       min_cli_version: minVersionConfig?.value ?? undefined,
       agent_permission_modes: user?.agent_permission_modes ?? undefined,
       agent_default_params: user?.agent_default_params ?? undefined,
+      // The user's codecast default model per client. The daemon mirrors the
+      // claude one into ~/.claude/settings.json every beat, so the file (and
+      // with it every bare `claude` terminal) tracks the codecast default even
+      // after a session's `/model <x>` one-shot rewrote it.
+      default_models: user?.default_models ?? undefined,
       // Feature-gated agent snippets this user's teams make available (chat,
       // calls). The daemon reconciles its installed snippets to this on every
       // beat, so a team flipping a feature reaches offline machines when they
@@ -773,39 +815,10 @@ export const resumeSession = mutation({
     if (!authUserId) {
       throw new Error("Not authenticated");
     }
-
-    const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) {
-      throw new Error("Conversation not found");
-    }
-    if (conversation.user_id.toString() !== authUserId.toString()) {
-      throw new Error("Unauthorized");
-    }
-    if (!conversation.session_id) {
-      throw new Error("No session ID on this conversation");
-    }
-
-    // Skip resume for fresh 0-message sessions. The inline new-session flow
-    // (DashboardLayout.handleQuickCreate, ContextChatInput.handleSubmit)
-    // stamps a 10-char nanoid as session_id before any Claude process exists,
-    // so a `claude --resume <nanoid>` would fail every time. The UI's
-    // stuck-banner auto-resume kept firing this for brand-new sessions,
-    // triggering kill → repair → reconstitute → start-fresh churn on the
-    // daemon. tryStartedTmux on the daemon side already delivers the first
-    // message via the pane, so a no-op here is safe.
-    if ((conversation.message_count ?? 0) === 0) {
-      return { skipped: true, reason: "fresh_session_no_messages" } as const;
-    }
-
-    const { deduplicated, command_id } = await enqueueResumeSession(ctx, conversation);
-
-    // Re-queue any stranded messages so the resume actually delivers them. A message that
-    // failed to reach a dead session sits as injected/failed/undeliverable; without this it
-    // stays stuck and the user has to manually resend. restartSession already does this — the
-    // missing call here was the asymmetry that left "Force resume" doing nothing visible.
-    // Runs on the dedup path too: the queued resume still needs its messages back.
-    await resetConversationPendingMessages(ctx, args.conversation_id);
-    return deduplicated ? { deduplicated: true } : { command_id };
+    // Runner or second-party owner, runner-addressed command — the same core
+    // as the dispatch resume handler, so an owned (Mr-Bot-run) session resumes
+    // from the owner's inbox exactly like their own.
+    return await resumeConversationSession(ctx, authUserId, args.conversation_id);
   },
 });
 
@@ -1615,7 +1628,9 @@ async function collectUserActivityIntervals(
 
   const events = await ctx.db
     .query("team_activity_events")
-    .withIndex("by_actor", (q: any) => q.eq("actor_user_id", args.user_id))
+    .withIndex("by_actor_timestamp", (q: any) =>
+      q.eq("actor_user_id", args.user_id).gte("timestamp", cutoff)
+    )
     .collect();
 
   const eventPasses = opts?.preferCompleted
@@ -1705,10 +1720,18 @@ export const getUserActivityHeatmap = query({
 // — hour-of-day only means something in the viewer's local clock. (One offset
 // is applied to the whole range, so cells across a DST switch can shift by an
 // hour.) Returns only per-cell aggregates — nothing identifying leaks.
-function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinutes: number) {
+function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinutes: number, sendDays?: SendDayRow[]) {
   const HOUR = 3600000;
   const tzShift = tzOffsetMinutes * 60000;
-  const rows: Record<string, { hours: number[]; msgs: number[]; sessions: number[]; day_sessions: number }> = {};
+  const rows: Record<string, { hours: number[]; msgs: number[]; sends: number[]; sessions: number[]; day_sessions: number }> = {};
+  const rowFor = (date: string) =>
+    (rows[date] ||= {
+      hours: new Array(24).fill(0),
+      msgs: new Array(24).fill(0),
+      sends: new Array(24).fill(0),
+      sessions: new Array(24).fill(0),
+      day_sessions: 0,
+    });
 
   for (const iv of intervals) {
     // Bound the distribution loop: a zombie conversation idling for weeks
@@ -1728,12 +1751,7 @@ function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinutes: num
       const d = new Date(cellStart);
       const date = d.toISOString().split("T")[0];
       const hour = d.getUTCHours();
-      const row = (rows[date] ||= {
-        hours: new Array(24).fill(0),
-        msgs: new Array(24).fill(0),
-        sessions: new Array(24).fill(0),
-        day_sessions: 0,
-      });
+      const row = rowFor(date);
       row.hours[hour] += iv.hours * frac;
       row.msgs[hour] += iv.msgs * frac;
       row.sessions[hour]++;
@@ -1744,11 +1762,25 @@ function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinutes: num
     }
   }
 
+  // Sends are stored as (UTC day × UTC hour) counters; re-project each bucket
+  // into the viewer's local clock via a mid-bucket pseudo timestamp. Whole-hour
+  // offsets map exactly; :30 offsets land in the nearer cell.
+  for (const day of sendDays ?? []) {
+    for (let h = 0; h < 24; h++) {
+      const n = day.hours[h] || 0;
+      if (!n) continue;
+      const local = day.day_start + h * HOUR + HOUR / 2 - tzShift;
+      const d = new Date(Math.floor(local / HOUR) * HOUR);
+      rowFor(d.toISOString().split("T")[0]).sends[d.getUTCHours()] += n;
+    }
+  }
+
   return Object.entries(rows)
     .map(([date, r]) => ({
       date,
       hours: r.hours.map((h) => Math.round(h * 100) / 100),
       msgs: r.msgs.map((m) => Math.round(m)),
+      sends: r.sends,
       sessions: r.sessions,
       day_sessions: r.day_sessions,
     }))
@@ -1769,8 +1801,11 @@ export const getUserActivityPunchcard = query({
     const user = await ctx.db.get(args.user_id);
     if (!user || user.hide_activity) return [];
 
-    const intervals = await collectUserActivityIntervals(ctx, userId, args, { preferCompleted: true });
-    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0);
+    const [intervals, sendDays] = await Promise.all([
+      collectUserActivityIntervals(ctx, userId, args, { preferCompleted: true }),
+      fetchUserSendDays(ctx, args.user_id, args.team_id, args.days ?? 365),
+    ]);
+    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0, sendDays);
   },
 });
 
@@ -1792,19 +1827,24 @@ export const getPublicActivityPunchcard = query({
       .first();
     if (!user || !user.public_profile_enabled || user.hide_activity) return [];
 
-    const intervals = await collectUserActivityIntervals(
-      ctx,
-      null,
-      { user_id: user._id, days: args.days },
-      { preferCompleted: true, countAll: true }
-    );
-    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0);
+    const [intervals, sendDays] = await Promise.all([
+      collectUserActivityIntervals(
+        ctx,
+        null,
+        { user_id: user._id, days: args.days },
+        { preferCompleted: true, countAll: true }
+      ),
+      fetchUserSendDays(ctx, user._id, undefined, args.days ?? 365),
+    ]);
+    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0, sendDays);
   },
 });
+
 
 export const getUserTasks = query({
   args: {
     user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -1821,11 +1861,13 @@ export const getUserTasks = query({
       .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
       .order("desc")
       .take(limit * 4);
-    const visible: any[] = [];
-    for (const t of tasks) {
-      if (visible.length >= limit) break;
-      if (await canAccessTask(ctx, userId, t)) visible.push(t);
-    }
+    const scoped = args.team_id
+      ? tasks.filter((t: any) => t.team_id && String(t.team_id) === String(args.team_id))
+      : tasks;
+    // Access checks are independent per row — run them concurrently instead of
+    // serially awaiting up to 4×limit round-trips.
+    const access = await Promise.all(scoped.map((t: any) => canAccessTask(ctx, userId, t)));
+    const visible = scoped.filter((_: any, i: number) => access[i]).slice(0, limit);
     return visible.map((t: any) => ({
       _id: t._id,
       short_id: t.short_id,
@@ -1843,6 +1885,7 @@ export const getUserTasks = query({
 export const getUserDocs = query({
   args: {
     user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -1859,12 +1902,11 @@ export const getUserDocs = query({
       .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
       .order("desc")
       .take(limit * 4);
-    const visible: any[] = [];
-    for (const d of docs) {
-      if (visible.length >= limit) break;
-      if (d.archived_at) continue;
-      if (await canAccessDoc(ctx, userId, d)) visible.push(d);
-    }
+    const live = docs.filter((d: any) =>
+      !d.archived_at && (!args.team_id || (d.team_id && String(d.team_id) === String(args.team_id)))
+    );
+    const access = await Promise.all(live.map((d: any) => canAccessDoc(ctx, userId, d)));
+    const visible = live.filter((_: any, i: number) => access[i]).slice(0, limit);
     return visible.map((d: any) => ({
       _id: d._id,
       title: d.title,
@@ -1935,38 +1977,10 @@ export const getUserProfileFeed = query({
     const isVisible = await getProfileVisibilityPredicate(ctx, userId, args.user_id, args.team_id);
     const recentConvos = convoPage.page.filter(isVisible);
 
-    const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Full transcript available at:", "Read the output file to retrieve the result:", "[Codecast import]"];
-    const COMMAND_RE = /^(<command-name>|<command-message>|<local-command-stdout>|<local-command-stderr>|Caveat:|\/[a-z][\w-]*)/i;
-    const SKILL_RE = /Base directory for this skill:\s/;
-    function stripTags(s: string): string {
-      return s
-        .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
-        .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
-        .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
-        .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, "")
-        .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, "")
-        .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, "")
-        .replace(/^\s*Caveat:.*$/gm, "")
-        .trim();
-    }
-    function isNoise(content: string): boolean {
-      if (!content) return true;
-      const t = content.trim();
-      if (!t) return true;
-      // Session→session messages (cast send) land as user-role turns wrapped in
-      // <session-message from="..">. They're agent coordination, not something the
-      // human typed into this session — drop them from "what I wrote".
-      if (t.startsWith("<session-message")) return true;
-      if (COMMAND_RE.test(t)) return true;
-      if (SKILL_RE.test(t)) return true;
-      if (t.startsWith("<task-notification>") && !t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").trim()) return true;
-      if (t.startsWith("{") && t.includes("__cc_poll")) return true;
-      if (t.includes("Your task is to create a detailed summary of the conversation so far")) return true;
-      const stripped = stripTags(t);
-      if (!stripped) return true;
-      if (NOISE_PREFIXES.some(p => stripped.startsWith(p))) return true;
-      return false;
-    }
+    // Shared with insert-time send counting (lib/userSend) so "what I wrote"
+    // and the Sends chart metric agree on what a human-typed message is.
+    const stripTags = stripMessageTags;
+    const isNoise = isUserMessageNoise;
 
     for (const c of recentConvos) {
       if ((c as any).parent_conversation_id) continue;

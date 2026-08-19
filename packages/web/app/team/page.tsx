@@ -65,11 +65,19 @@ export default function TeamPage() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-sol-text mb-2">Team Directory</h1>
-        <p className="text-sol-base1">
-          {teamMembers?.length || 0} member{(teamMembers?.length || 0) !== 1 ? "s" : ""}
-        </p>
+      <div className="mb-6 flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-sol-text mb-2">Team Directory</h1>
+          <p className="text-sol-base1">
+            {teamMembers?.length || 0} member{(teamMembers?.length || 0) !== 1 ? "s" : ""}
+          </p>
+        </div>
+        <Link
+          href="/team/charts"
+          className="text-sm text-sol-cyan/70 hover:text-sol-cyan transition-colors mt-1"
+        >
+          Team charts
+        </Link>
       </div>
 
       <div className="mb-6">
