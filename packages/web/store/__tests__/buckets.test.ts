@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { create as mutativeCreate } from "mutative";
 import { groupPatchesByTable } from "../mutativeMiddleware";
 import {
+  chipMatchesSession,
   computeManualSortKey,
   computeReorderUpdates,
   convBucketMap,
@@ -97,6 +98,45 @@ describe("visualOrderSessions bucket filter", () => {
     });
     expect(scoped.map((s) => s._id)).toEqual(["a"]);
   });
+
+  it("filterExclude inverts the bucket and project scoping", () => {
+    const sessions: Record<string, InboxSession> = {
+      a: session("a", { is_idle: false, project_path: "/x/codecast" }),
+      b: session("b", { is_idle: false, project_path: "/x/other" }),
+    };
+    const bucketByConv = { a: "bucket1" } as Record<string, string | undefined>;
+    const bucketExcluded = visualOrderSessions(sessions, new Set(), null, undefined, {
+      bucketFilter: "bucket1",
+      bucketByConv,
+      filterExclude: true,
+    });
+    expect(bucketExcluded.map((s) => s._id)).toEqual(["b"]);
+    const projectExcluded = visualOrderSessions(sessions, new Set(), "codecast", undefined, {
+      filterExclude: true,
+    });
+    expect(projectExcluded.map((s) => s._id)).toEqual(["b"]);
+  });
+});
+
+describe("chipMatchesSession exclude mode", () => {
+  const bucketByConv = { [convexId("in")]: "bucket1" } as Record<string, string | undefined>;
+
+  it("hides matches and shows everything else", () => {
+    const inBucket = session(convexId("in"));
+    const outBucket = session(convexId("out"));
+    expect(chipMatchesSession(inBucket, { bucketFilter: "bucket1", exclude: true, bucketByConv })).toBe(false);
+    expect(chipMatchesSession(outBucket, { bucketFilter: "bucket1", exclude: true, bucketByConv })).toBe(true);
+    const inProj = session(convexId("p1"), { project_path: "/x/codecast" });
+    const outProj = session(convexId("p2"), { project_path: "/x/other" });
+    expect(chipMatchesSession(inProj, { projectFilter: "codecast", exclude: true, bucketByConv })).toBe(false);
+    expect(chipMatchesSession(outProj, { projectFilter: "codecast", exclude: true, bucketByConv })).toBe(true);
+  });
+
+  it("mid-create stubs pass the bucket chip in both modes", () => {
+    const stub = session("stub-not-convex");
+    expect(chipMatchesSession(stub, { bucketFilter: "bucket1", bucketByConv })).toBe(true);
+    expect(chipMatchesSession(stub, { bucketFilter: "bucket1", exclude: true, bucketByConv })).toBe(true);
+  });
 });
 
 describe("assignSessionToBucket", () => {
@@ -164,6 +204,7 @@ describe("bucket filter mutual exclusivity", () => {
       activeBucketFilter: null,
       activeProjectFilter: null,
       activeProjectPath: null,
+      chipFilterExclude: false,
       pending: {},
     });
   };
@@ -182,6 +223,46 @@ describe("bucket filter mutual exclusivity", () => {
     useInboxStore.getState().setActiveProjectFilter("codecast", "/x/codecast");
     expect(useInboxStore.getState().activeProjectFilter).toBe("codecast");
     expect(useInboxStore.getState().activeBucketFilter).toBeNull();
+  });
+
+  it("chipFilterExclude follows the include → exclude → off cycle and resets on filter changes", () => {
+    const store = useInboxStore.getState();
+    store.setActiveBucketFilter("b1");
+    expect(useInboxStore.getState().chipFilterExclude).toBe(false);
+    store.setActiveBucketFilter("b1", true);
+    expect(useInboxStore.getState().chipFilterExclude).toBe(true);
+    store.setActiveBucketFilter(null);
+    expect(useInboxStore.getState().chipFilterExclude).toBe(false);
+    expect(useInboxStore.getState().activeBucketFilter).toBeNull();
+
+    // Switching from an excluded label to a project chip starts at include.
+    store.setActiveBucketFilter("b1", true);
+    store.setActiveProjectFilter("codecast", "/x/codecast");
+    const st = useInboxStore.getState();
+    expect(st.chipFilterExclude).toBe(false);
+    expect(st.activeBucketFilter).toBeNull();
+    expect(st.activeProjectFilter).toBe("codecast");
+
+    store.setActiveProjectFilter("codecast", "/x/codecast", true);
+    expect(useInboxStore.getState().chipFilterExclude).toBe(true);
+    store.setActiveProjectFilter(null, null);
+    expect(useInboxStore.getState().chipFilterExclude).toBe(false);
+  });
+
+  it("clearing the idle axis never flips the other axis's exclusion into an include", () => {
+    const store = useInboxStore.getState();
+    store.setActiveBucketFilter("b1", true);
+    store.setActiveProjectFilter(null, null);
+    let st = useInboxStore.getState();
+    expect(st.activeBucketFilter).toBe("b1");
+    expect(st.chipFilterExclude).toBe(true);
+
+    store.setActiveBucketFilter(null);
+    store.setActiveProjectFilter("codecast", "/x/codecast", true);
+    store.setActiveBucketFilter(null);
+    st = useInboxStore.getState();
+    expect(st.activeProjectFilter).toBe("codecast");
+    expect(st.chipFilterExclude).toBe(true);
   });
 });
 

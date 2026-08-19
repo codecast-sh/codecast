@@ -287,8 +287,14 @@ function ActionSubmenu({
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const buckets = useInboxStore((s) => s.buckets);
   const bucketAssignments = useInboxStore((s) => s.bucketAssignments);
-  const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
-  const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
+  // Exclude-mode chips don't read as "the active view" here — the palette's
+  // view rows mark only include filters; picking any row sets include mode.
+  const activeBucketFilter = useInboxStore((s) => (s.chipFilterExclude ? null : s.activeBucketFilter));
+  const activeProjectFilter = useInboxStore((s) => (s.chipFilterExclude ? null : s.activeProjectFilter));
+  // Exclude-mode chips don't mark their own row active (masked above), but
+  // they DO hide sessions — "All sessions" must not claim the inbox is
+  // unfiltered while one is on.
+  const chipFilterExclude = useInboxStore((s) => s.chipFilterExclude);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const archiveDoc = useInboxStore((s) => s.archiveDoc);
   const router = useRouter();
@@ -401,7 +407,7 @@ function ActionSubmenu({
       // "All sessions" mirrors bucket-mode's remove row: empty-search only, on
       // the 0 key so the views keep 1-9.
       if (!q.trim()) {
-        matched.unshift({ key: "__all__", kind: "all", label: "All sessions", active: !activeBucketFilter && !activeProjectFilter, icon: Circle, quickKey: "0" });
+        matched.unshift({ key: "__all__", kind: "all", label: "All sessions", active: !activeBucketFilter && !activeProjectFilter && !chipFilterExclude, icon: Circle, quickKey: "0" });
       }
       return matched;
     }
@@ -559,7 +565,7 @@ function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, dynamicModels, taskStatuses]);
+  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 

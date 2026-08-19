@@ -15,6 +15,9 @@ export type InboxViewSnapshot = {
   bucket: string | null;
   project: string | null;
   projectPath: string | null;
+  // Whether the active chip was in exclude mode ("everything but this").
+  // Optional: entries pushed before this field existed restore as include.
+  exclude?: boolean;
   mode: "grouped" | "recent" | "time" | "bucket";
 };
 
@@ -34,7 +37,7 @@ export function withApplyingViewHistory(fn: () => void) {
 }
 
 export function sameInboxView(a: InboxViewSnapshot, b: InboxViewSnapshot): boolean {
-  return a.bucket === b.bucket && a.project === b.project && a.mode === b.mode;
+  return a.bucket === b.bucket && a.project === b.project && !!a.exclude === !!b.exclude && a.mode === b.mode;
 }
 
 // Push a traversable entry for a view-settings change. The CURRENT entry is

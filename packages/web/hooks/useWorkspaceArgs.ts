@@ -26,8 +26,12 @@ export function useWorkspaceArgs(): WorkspaceArgs {
   const activeTeamId = useInboxStore(
     (s) => s.clientState.ui?.active_team_id
   ) as Id<"teams"> | undefined;
+  // An exclude-mode chip ("everything but this project") must not scope
+  // Tasks/Plans/Docs queries — only an include filter expresses "I'm working
+  // in this project". Without this guard, excluding a project would narrow
+  // those panes to ONLY it, the inverse of the chip.
   const activeProjectPath = useInboxStore(
-    (s) => s.activeProjectPath
+    (s) => (s.chipFilterExclude ? null : s.activeProjectPath)
   );
   const initialized = useInboxStore((s) => s.clientStateInitialized);
 
