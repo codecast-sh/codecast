@@ -171,6 +171,9 @@ html, body {
   --sol-blue: #268bd2;
   --sol-cyan: #2aa198;
   --sol-green: #859900;
+  /* Hyperlink accent — the amber that prose links and .sol-link already wear
+     (tailwind amber-600). One token so every surface's links match. */
+  --sol-link: #d97706;
 
   /* Syntax highlighting - Light mode optimized */
   --hljs-keyword: #859900;
@@ -267,7 +270,7 @@ html, body {
   --tw-prose-body: var(--sol-text-secondary);
   --tw-prose-headings: var(--sol-text);
   --tw-prose-bold: var(--sol-text);
-  --tw-prose-links: #d97706;
+  --tw-prose-links: var(--sol-link);
   --tw-prose-code: var(--sol-text);
   --tw-prose-pre-bg: var(--sol-bg-inset);
   --tw-prose-bullets: var(--sol-text-muted);

@@ -441,6 +441,21 @@
   margin-bottom: 0;
 }
 
+/* Plain hyperlinks LOOK like links — the app's amber, underlined. Scoped to
+ * class-less anchors: every pill in a message body (entity, mention,
+ * published-page) is an <a> that brings its own dress, and only bare markdown
+ * links arrive without a class. */
+.ch-msg-body a:not([class]) {
+  color: var(--sol-link);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--sol-link) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.ch-msg-body a:not([class]):hover {
+  text-decoration-color: var(--sol-link);
+}
+
 .ch-msg-edited {
   margin-left: 5px;
   font-size: 9.5px;
@@ -572,6 +587,32 @@
 .ch-reaction-count {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
+}
+
+/* Who reacted — the pill's hover card. Overrides the ui/tooltip default
+ * (theme-inverted bg-primary) with the app's own card surface so it reads as
+ * chat, and stacks the emoji large above the names, Slack-style. The element
+ * qualifier out-specifies the tooltip's utility classes — the card portals to
+ * <body>, so stylesheet order between chat.css and the tailwind build is the
+ * only other tiebreak, and it isn't guaranteed. */
+div.ch-reaction-tip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  max-width: 220px;
+  padding: 8px 12px;
+  border: 1px solid var(--sol-border);
+  background: var(--sol-card);
+  color: var(--sol-text-secondary);
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.ch-reaction-tip-emoji {
+  font-size: 22px;
+  line-height: 1;
 }
 
 /* ── Thread affordance ───────────────────────────────────────────────────── */
