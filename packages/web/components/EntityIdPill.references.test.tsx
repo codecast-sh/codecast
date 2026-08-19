@@ -102,17 +102,22 @@ mock.module("next/link", () => ({
 }));
 
 const { renderToStaticMarkup } = await import("react-dom/server");
+const { MemoryRouter } = await import("react-router");
 const { default: ReactMarkdown } = await import("react-markdown");
 const { entityRemarkPlugins } = await import("../lib/remarkEntityIds");
 const { EntityAwareLink, EntityAwareCode } = await import("./EntityIdPill");
 
 const MD_COMPONENTS = { a: EntityAwareLink, code: EntityAwareCode } as const;
 
+// The pill resolves its open gesture via router hooks (useOpenLinkedSession),
+// so rendering needs a Router around it — same as every real surface.
 function render(markdown: string): string {
   return renderToStaticMarkup(
-    <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS as any}>
-      {markdown}
-    </ReactMarkdown>,
+    <MemoryRouter>
+      <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS as any}>
+        {markdown}
+      </ReactMarkdown>
+    </MemoryRouter>,
   );
 }
 
