@@ -133,7 +133,12 @@ async function getConversationMeta(id: string, shareToken?: string) {
     const title = meta.title || "Coding Session";
     const description = meta.description
       || (meta.author ? `${meta.message_count} messages by ${meta.author}` : `${meta.message_count} messages`);
-    return { title: `${title} - codecast`, description, url: `${BASE_URL}/conversation/${id}`, type: "article" };
+    // Keep the presented token in og:url/canonical: unfurl cards link there,
+    // and the tokenless URL would deny the very guest the link was minted for.
+    const url = shareToken
+      ? `${BASE_URL}/conversation/${id}?share=${encodeURIComponent(shareToken)}`
+      : `${BASE_URL}/conversation/${id}`;
+    return { title: `Codecast: ${title}`, description, url, type: "article" };
   } catch {
     return null;
   }
@@ -148,7 +153,7 @@ async function getShareMeta(token: string) {
     const title = meta.title || "Shared Conversation";
     const description = meta.description
       || (meta.author ? `${meta.message_count} messages by ${meta.author}` : `${meta.message_count} messages`);
-    return { title: `${title} - codecast`, description, url: `${BASE_URL}/share/${token}`, type: "article" };
+    return { title: `Codecast: ${title}`, description, url: `${BASE_URL}/share/${token}`, type: "article" };
   } catch {
     return null;
   }
@@ -162,7 +167,7 @@ async function getShareMessageMeta(token: string) {
     if (!meta) return null;
     const title = meta.title || "Shared Message";
     const description = meta.description || "A shared coding conversation";
-    return { title: `${title} - codecast`, description, url: `${BASE_URL}/share/message/${token}`, type: "article" };
+    return { title: `Codecast: ${title}`, description, url: `${BASE_URL}/share/message/${token}`, type: "article" };
   } catch {
     return null;
   }
