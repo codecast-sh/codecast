@@ -154,6 +154,23 @@ app.get("/install.ps1", async (c) => {
   }
 });
 
+// Apple rejects an AASA served as octet-stream (serveStatic's fallback for the
+// extensionless file), so serve it explicitly as JSON. assetlinks.json rides
+// serveStatic fine — .json already maps to application/json.
+app.get("/.well-known/apple-app-site-association", async (c) => {
+  try {
+    const body = await readFile(
+      join(DIST_DIR, ".well-known", "apple-app-site-association"),
+      "utf-8"
+    );
+    c.header("Content-Type", "application/json");
+    c.header("Cache-Control", "public, max-age=3600");
+    return c.body(body);
+  } catch {
+    return c.text("Not found", 404);
+  }
+});
+
 // Published HTML artifacts: /a/<slug> is just the pretty alias — the document
 // itself (artifact HTML with the codecast bar injected) is served from the
 // Cloudflare edge (infra/artifact-edge worker at a.codecast.sh, which caches
