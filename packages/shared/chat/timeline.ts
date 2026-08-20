@@ -149,6 +149,9 @@ export function tallyUnread(
     deletedAt?: number;
     /** Set when the message is a thread reply. */
     threadRootId?: string;
+    /** A voice burst still being spoken (@codecast/shared/chat isLiveVoiceRow).
+     *  It has not notified yet, so it is not a message to be behind on. */
+    voiceLive?: boolean;
   }[],
   lastReadAt: number | undefined,
   viewerId: string,
@@ -157,6 +160,7 @@ export function tallyUnread(
   let mentions = 0;
   for (const m of messages) {
     if (m.deletedAt) continue;
+    if (m.voiceLive) continue;
     if (m.authorId === viewerId) continue;
     if (lastReadAt !== undefined && m.createdAt <= lastReadAt) continue;
     // The server's rule, mirrored exactly: a thread reply does not tick the

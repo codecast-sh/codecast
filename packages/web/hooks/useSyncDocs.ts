@@ -4,7 +4,8 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useWatchEffect } from "./useWatchEffect";
-import { runReconcileCrawl } from "./reconcileCrawl";
+import { countLogMissedRows, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { track } from "../lib/analytics";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useWorkspaceArgs, type WorkspaceArgs as StoreWorkspaceArgs } from "./useWorkspaceArgs";
 
@@ -44,7 +45,8 @@ const RECONCILE_PAGE_SIZE = 24;
 // throttle (syncMeta.backfilledAt, written by runReconcileCrawl on completion)
 // makes a fresh launch within the window skip the crawl and serve from the
 // hydrated IDB cache — same as tasks. The live first page keeps recent docs fresh.
-const RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
+// Demoted safety net — see useSyncTasks.ts / sync-log-migration.md D9.
+const RECONCILE_THROTTLE_MS = 24 * 60 * 60 * 1000;
 const RECONCILE_PAGE_DELAY_MS = 60; // pace the crawl so it never bursts the backend
 
 type WorkspaceArgs =
@@ -110,6 +112,10 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
   }, []);
   useEffect(() => {
     if (!hydrated) return;
+    // Healed-rows metric (sync-log-migration.md D12): only meaningful after the
+    // first full backfill — a cold crawl would count every row as "missed".
+    const docsWarm = !!useInboxStore.getState().syncMeta[syncMetaKey("docs", wsKey)]?.backfilledAt;
+    const healedRef = { count: 0 };
     runReconcileCrawl({
       namespace: "docs",
       wsKey,
@@ -123,8 +129,20 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
         });
         return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
       },
-      onPage: (rows) => syncTable("docs", rows, { isDelta: true }),
+      onPage: (rows) => {
+        if (docsWarm) healedRef.count += countLogMissedRows(useInboxStore.getState().docs, rows);
+        // Authorized crawl rows are visible by definition — lift excludes
+        // (feed prunes, team-revocation purges) before the delta merge, or the
+        // engine drops them forever. Heals team rejoin (review C7).
+        useInboxStore.getState().clearFeedExcludes("docs", rows.map((r: any) => String(r._id)));
+        syncTable("docs", rows, { isDelta: true });
+      },
       onComplete: (all, complete) => {
+        if (docsWarm) {
+          // Removal-condition metric — zeros included (see useSyncTasks).
+          track("synclog_crawl_healed", { namespace: "docs", count: healedRef.count });
+          console.info(`[synclog] docs safety-net crawl healed ${healedRef.count} row(s)`);
+        }
         // `complete` is false when the crawl stopped early OR resumed from a
         // mid-crawl checkpoint (reconcileCrawl's reload-resume): `all` is then
         // only the tail of the table, and neither the derived project paths nor

@@ -13,6 +13,9 @@ import { Avatar, CallStage, StageVideo } from "./CallStage";
 import { AvatarImg } from "../../lib/avatarCache";
 import { AddPeopleButton } from "./AddPeople";
 import { HangUpButton, MicButton } from "./CallControls";
+import { RoomKnocks, RoomLockButton } from "./RoomDoor";
+import { WalkieBanner } from "./WalkieDock";
+import { useWalkieStatus, walkieOwnsCall } from "../../hooks/useWalkie";
 import { firstName } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 
@@ -39,6 +42,7 @@ export function CallDock() {
   const [pinned, setPinned] = useState(true);
   const [bounds, setBounds] = useState<Bounds | null>(null);
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => []);
+  const walkie = useWalkieStatus();
   // New video or a share arriving is the moment the stage earns the room;
   // a media notice opens it too, so its sentence is read.
   const notice = call.phase === "connected" ? call.error : null;
@@ -51,6 +55,12 @@ export function CallDock() {
   }, [notice, remoteVideo]);
 
   if (call.phase === "idle") return null;
+  // A push-to-talk burst joins a room the same way a huddle does, so without
+  // this the dock would open its floating window for every sentence somebody
+  // says. The walkie has its own, much lighter surface for that; the two must
+  // never be on screen together, which is why this is a branch here rather
+  // than a second thing mounted beside the dock.
+  if (walkieOwnsCall(walkie, call) && !expanded) return <WalkieBanner />;
   if (expanded) {
     return <CallStage onCollapse={() => setExpanded(false)} />;
   }
@@ -70,6 +80,7 @@ export function CallDock() {
     ) : (
       <div className="fixed bottom-20 right-4 z-[150] w-auto max-w-[420px] select-none">
         <div className="rounded-xl border border-sol-border bg-sol-bg-alt/95 shadow-xl backdrop-blur">
+          {call.roomKey && call.phase === "connected" && <RoomKnocks roomKey={call.roomKey} />}
           <DockPill
             call={call}
             roster={roster}
@@ -221,6 +232,8 @@ function MiniWindow({
             )}
           </div>
 
+          {call.roomKey && call.phase === "connected" && <RoomKnocks roomKey={call.roomKey} />}
+
           <div className="flex shrink-0 items-center justify-center gap-1 px-2 py-1.5">
             <MicButton muted={call.muted} size="compact" />
             <button
@@ -232,7 +245,12 @@ function MiniWindow({
             >
               {call.camera ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
             </button>
-            {call.roomKey && call.phase === "connected" && <AddPeopleButton roomKey={call.roomKey} />}
+            {call.roomKey && call.phase === "connected" && (
+              <>
+                <AddPeopleButton roomKey={call.roomKey} />
+                <RoomLockButton roomKey={call.roomKey} />
+              </>
+            )}
             <div className="mx-0.5 h-5 w-px bg-sol-border" />
             <HangUpButton size="compact" />
           </div>
@@ -305,7 +323,10 @@ function DockPill({
       </button>
       <div className="mx-0.5 h-5 w-px bg-sol-border" />
       {call.roomKey && call.phase === "connected" && (
-        <AddPeopleButton roomKey={call.roomKey} />
+        <>
+          <AddPeopleButton roomKey={call.roomKey} />
+          <RoomLockButton roomKey={call.roomKey} />
+        </>
       )}
       <MicButton muted={call.muted} size="compact" />
       <HangUpButton size="compact" />

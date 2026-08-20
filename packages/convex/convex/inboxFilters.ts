@@ -413,7 +413,9 @@ export function subagentKeepsParentWorking(input: {
 // question, permission, dead agent) beats every rest verdict, dormant beats
 // done (a session that both delivered and parked itself is parked — its next
 // move is still a machine's), and every rest verdict beats the "settled with
-// content → needs input" fallthrough.
+// content → needs input" fallthrough. An armed ONCE inject trigger applies the
+// same "dormant beats done" only to the done verdict: delivered + a named wake
+// = parked, but a once reminder never softens needs_input.
 
 export interface WorkStateInput {
   /** Heartbeat-fresh managed_sessions.agent_status, or undefined when stale/absent. */
@@ -429,6 +431,8 @@ export interface WorkStateInput {
   userDormant?: boolean;
   /** The home of an armed recurring/event trigger that injects into it (and whose last run did not fail or flag attention). */
   armedTriggerHome?: boolean;
+  /** The home of an armed ONCE inject trigger. Weaker than a standing loop: it only demotes a `done` rest to dormant, never needs_input (see dormancy.ArmedTriggerHomes). */
+  armedOnceTriggerHome?: boolean;
   /** The settle classifier's verdict for THIS settle (settle_verdict, current per isSettleVerdictCurrent), when no declaration exists. Only "done" carries weight. */
   settleVerdict?: string | null;
   /** conversations.thread_state_status — the agent's declaration ON THE ROW, for rows with no daemon status at all (see the fallback in classifyWorkState). */
@@ -560,9 +564,15 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // Only `done` rides this fallback: a `dormant` promise with no daemon has no
   // one to deliver its wake, so it stays needs_input (a human must look).
   const declaredDone = agentStatus === "done" || (!agentStatus && input.declaredStatus === "done");
+  // A `done` rest with an armed once trigger into the session parks instead:
+  // the follow-up names the next actor (the machine fires in N days), and
+  // nothing is left for the human to unblock. Only `done` demotes — a once
+  // trigger on a needs_input session is a reminder, and a reminder must never
+  // hide an open ask.
+  const doneRest = (): WorkState => (input.armedOnceTriggerHome ? "dormant" : "done");
   const restState = (): WorkState => {
     if (declaredDormant || input.armedTriggerHome || input.userDormant) return "dormant";
-    if (declaredDone) return "done";
+    if (declaredDone) return doneRest();
     if (agentStatus === "idle" || !agentStatus) {
       // A blocked PIN is the agent's explicit claim on the human — the same
       // claim that un-stashes (setThreadState) — so the classifier's soft
@@ -571,7 +581,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
       if (input.declaredStatus === "blocked") return "needs_input";
       // The classifier only ever files DONE: dormancy needs a wake the system
       // can verify, and prose cannot supply one (see idleSummary.SETTLE_VERDICTS).
-      if (input.settleVerdict === "done") return "done";
+      if (input.settleVerdict === "done") return doneRest();
     }
     return "needs_input";
   };

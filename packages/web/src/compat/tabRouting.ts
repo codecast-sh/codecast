@@ -113,10 +113,14 @@ export function shouldUseTabRouting(
  * entries. The history `state` is tagged so the global popstate handler can tell a
  * tab navigation apart from an inbox session selection (`{ inboxId }`).
  */
-export function tabNavigate(path: string, mode: "push" | "replace" = "push") {
+export function tabNavigate(path: string, mode: "push" | "replace" = "push", fromTabId?: string) {
   const store = useInboxStore.getState();
-  const tabId = store.activeTabId;
+  const tabId = fromTabId ?? store.activeTabId;
   if (tabId) store.updateTab(tabId, { path, title: pathLabel(path) });
+  // A BACKGROUND pane navigating (a hidden prewarm tab canonicalizing its own
+  // deep link, e.g. /files?path=…) moves only its tab's stored path. The
+  // browser URL and history belong to the tab the user is looking at.
+  if (fromTabId && fromTabId !== store.activeTabId) return;
   const current = window.location.pathname + window.location.search;
   const state = { tabNav: true, tabId };
   if (mode === "push" && path !== current) {

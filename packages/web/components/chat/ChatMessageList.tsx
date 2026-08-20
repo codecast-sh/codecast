@@ -42,6 +42,12 @@ const estimateRow = (row: Row | undefined): number => {
   const m = row.message.view;
   if (m.deletedAt) return 26;
   if (m.agentStatus === "thinking" || m.agentStatus === "error") return 30;
+  // A voice bubble is one padded line around its transcript, plus the control
+  // and clock that sit on the same line as the words.
+  if (m.voice) {
+    const spoken = Math.max(1, Math.ceil(m.content.length / 80));
+    return (row.grouped ? 8 : 26) + spoken * 20;
+  }
   const lines = Math.max(1, Math.ceil(m.content.length / 92));
   return (row.grouped ? 4 : 22) + lines * 21 + (m.reactions?.length ? 24 : 0) + (m.replyCount ? 26 : 0);
 };
@@ -141,7 +147,11 @@ export const ChatMessageList = memo(function ChatMessageList({
     rowVariantKey: (i) => {
       const r = rows[i];
       if (!r || r.kind !== "message") return "x";
-      return `${r.grouped ? "g" : "l"}${r.message.view.agentStatus ?? ""}${r.message.view.deletedAt ? "d" : ""}`;
+      // The voice status belongs here too: a burst that flips live -> done
+      // swaps a pulsing line for a play button and a clock, and reading the
+      // height cached under its other shape makes the transcript jump as it
+      // lands.
+      return `${r.grouped ? "g" : "l"}${r.message.view.agentStatus ?? ""}${r.message.view.deletedAt ? "d" : ""}${r.message.view.voice?.status ?? ""}`;
     },
     paddingStart: 12,
     paddingEnd: 8,

@@ -19,7 +19,7 @@ import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, requireSessionCommandTarget } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, isUserDormant, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, type WorkState } from "./inboxFilters";
-import { armedTriggerHomeLoader, loadArmedTriggerHomes, isArmedTriggerHome } from "./dormancy";
+import { armedTriggerHomeLoader, loadArmedTriggerHomes, isArmedTriggerHome, type ArmedTriggerHomes } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
@@ -6511,7 +6511,8 @@ export const feedForCLI = query({
         messageCount: conv.message_count || 0,
         killed: !!conv.inbox_killed_at,
         userDormant: isUserDormant(conv),
-        armedTriggerHome: isArmedTriggerHome(conv, armedHomes),
+        armedTriggerHome: isArmedTriggerHome(conv, armedHomes.standing),
+        armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),
         settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
         declaredStatus: conv.thread_state_status ?? null,
       });
@@ -7859,6 +7860,7 @@ async function enrichInboxSessionRow(
     // "limit" | "error") picks the session-pill label.
     pending_api_error: conv.pending_api_error === true,
     pending_api_error_kind: conv.pending_api_error_kind ?? null,
+    pending_api_error_at: conv.pending_api_error_at ?? null,
     implementation_session: implementationSession,
     active_plan,
     active_task,
@@ -7975,6 +7977,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     session_error: child.session_error,
     pending_api_error: child.pending_api_error === true,
     pending_api_error_kind: child.pending_api_error_kind ?? null,
+    pending_api_error_at: child.pending_api_error_at ?? null,
     // Same parent-link fields as the top-level scan (subagentLinkFields), so the
     // two emission paths stay byte-consistent when the client dedups by _id. This
     // path is for confirmed children, so is_subagent is forced true (covers the
@@ -8702,8 +8705,8 @@ export function tallyInboxRows(
     showAll?: boolean;
     stateFilter?: string | null;
     labelByConv: Map<string, string>;
-    /** Homes of armed inject triggers (dormancy.loadArmedTriggerHomes) — the structural dormancy source. */
-    armedTriggerHomes?: Set<string>;
+    /** Homes of armed inject triggers (dormancy.loadArmedTriggerHomes) — the structural dormancy source, split standing vs once. */
+    armedTriggerHomes?: ArmedTriggerHomes;
     /**
      * Conversation ids the caller named explicitly (`cast sessions <id>`).
      * Subagent rows are hidden from the top-level monitor, but a row you ask
@@ -8784,7 +8787,10 @@ export function tallyInboxRows(
       killed: !!s.inbox_killed_at,
       userDormant: !!s.is_dormant,
       armedTriggerHome: opts.armedTriggerHomes
-        ? isArmedTriggerHome({ _id: s._id, last_message_preview: s.last_user_message }, opts.armedTriggerHomes)
+        ? isArmedTriggerHome({ _id: s._id, last_message_preview: s.last_user_message }, opts.armedTriggerHomes.standing)
+        : false,
+      armedOnceTriggerHome: opts.armedTriggerHomes
+        ? isArmedTriggerHome({ _id: s._id, last_message_preview: s.last_user_message }, opts.armedTriggerHomes.once)
         : false,
       settleVerdict: s.settle_verdict ?? null,
       declaredStatus: s.thread_state_status ?? null,
@@ -9196,7 +9202,9 @@ export const existingConversationIds = query({
 // the same syncTable("sessions") path. Reuses enrichInboxSessionRow — no
 // presentation filter, so a dismissed/stashed session comes back WITH its flag
 // (the client re-buckets it). Ids that are gone or foreign are simply omitted;
-// the feed's op:"delete" / absence drives the client's prune. See changeFeed.ts.
+// callers prune ids the response omits (authorized absence). Consumers: the
+// sync-log applier (syncLog.ts / web useSyncChangeFeed.ts) and, for deployed
+// old bundles, changeFeed.ts.
 export const getInboxSessionsByIds = query({
   args: { ids: v.array(v.string()) },
   handler: async (ctx, args) => {

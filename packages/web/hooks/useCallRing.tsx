@@ -4,7 +4,7 @@ import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { soundCallRing, soundCallDeclined } from "../lib/sounds";
 import { notifyNative, getDesktopWindowRole } from "../lib/desktop";
 import { acceptInvite, declineInvite } from "../lib/calls/callManager";
-import { CALL_INVITE_TTL_MS, CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
+import { CALL_INVITE_TTL_MS, CALL_KNOCK_TTL_MS, CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
 
 // Incoming huddle rings → toast + sound + native banner; outgoing declines →
 // a quiet settle. Mounted once app-wide beside useChatToasts — a ring must
@@ -25,6 +25,9 @@ export function useCallRing(): void {
   const ringTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const seenInvites = useRef<Set<string>>(new Set());
   const seenDeclines = useRef<Set<string>>(new Set());
+  // Rings we answered ourselves (a door we knocked on): they stay in `incoming`
+  // until the server marks them accepted, and must not ring meanwhile.
+  const autoAccepted = useRef<Set<string>>(new Set());
 
   const incoming: any[] = s.myCalls.incoming;
   const outgoing: any[] = s.myCalls.outgoing;
@@ -39,9 +42,21 @@ export function useCallRing(): void {
     const inCall =
       useInboxStore.getState().call.phase === "connected" || getDesktopWindowRole().anyInCall;
 
+    const knocked: Record<string, number> = useInboxStore.getState().callKnocked ?? {};
     for (const invite of incoming) {
       if (seenInvites.current.has(String(invite._id))) continue;
       seenInvites.current.add(String(invite._id));
+      // A ring into a room I just knocked at IS the door opening, so it opens:
+      // making someone answer a ring for a door they knocked on would be a
+      // second question they already answered. The knock's own TTL bounds it,
+      // so a much later ring from that room still rings normally.
+      const at = knocked[invite.room_key];
+      if (at !== undefined && Date.now() - at < CALL_KNOCK_TTL_MS) {
+        useInboxStore.getState().clearKnock(invite.room_key);
+        autoAccepted.current.add(String(invite._id));
+        void acceptInvite(String(invite._id), invite.room_key);
+        continue;
+      }
       const answer = () => {
         toast.dismiss(`ring:${invite._id}`);
         void acceptInvite(String(invite._id), invite.room_key);
@@ -109,13 +124,15 @@ export function useCallRing(): void {
     for (const id of [...seenInvites.current]) {
       if (!liveIds.has(id)) {
         seenInvites.current.delete(id);
+        autoAccepted.current.delete(id);
         toast.dismiss(`ring:${id}`);
       }
     }
 
     // The loop: one ring cycle per period while anything is ringing and we're
     // not the quiet door.
-    const shouldRing = incoming.length > 0 && !quiet && !inCall;
+    const shouldRing =
+      incoming.some((i: any) => !autoAccepted.current.has(String(i._id))) && !quiet && !inCall;
     if (shouldRing && !ringTimer.current) {
       soundCallRing();
       ringTimer.current = setInterval(soundCallRing, CALL_RING_PERIOD_MS);

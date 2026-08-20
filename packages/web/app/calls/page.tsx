@@ -26,6 +26,9 @@ import { toast } from "sonner";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { getRoom, joinCall } from "../../lib/calls/callManager";
 import { useInboxStore } from "../../store/inboxStore";
+import { Facepile } from "../../components/calls/OccupancyChip";
+import { LiveRoomAction, LiveRoomLabel } from "../../components/calls/LiveNow";
+import { useLiveRooms } from "../../hooks/useLiveRooms";
 import { CallChatPanel } from "../../components/calls/CallChatPanel";
 import { FeedChip } from "../../components/calls/FeedChip";
 import {
@@ -462,6 +465,39 @@ function CallDetail({ id }: { id: string }) {
   );
 }
 
+// Rooms with someone seated RIGHT NOW — the same list the sidebar's Live now
+// cluster reads (calls.getLiveRooms via the store), so the two can never
+// disagree. A transcribed live call already pulses in the Live section below;
+// this covers the huddles nobody toggled Transcribe on, which under open rooms
+// is most of them. Locked rooms list too — seeing one is what makes knocking
+// possible — with Knock in place of Join.
+function LiveNowSection({ transcribedRoomKeys }: { transcribedRoomKeys: Set<string> }) {
+  const rooms = useLiveRooms().filter((r) => !transcribedRoomKeys.has(r.roomKey));
+  if (rooms.length === 0) return null;
+  return (
+    <>
+      <div className="bg-sol-bg-alt/30 px-4 py-1.5 text-[11px] font-medium uppercase tracking-wide text-sol-violet">
+        Happening now
+      </div>
+      {rooms.map((row) => (
+        <div
+          key={row.roomKey}
+          className="flex items-center gap-2 border-b border-sol-border/15 px-4 py-3"
+        >
+          <Facepile members={row.members} max={4} size={22} />
+          <div className="min-w-0 flex-1">
+            <LiveRoomLabel row={row} className="text-[13px] font-medium text-sol-text" />
+            <div className="mt-0.5 min-w-0 truncate text-[11px] text-sol-text-dim">
+              {row.members.map((m) => firstName(m.user_name)).join(", ")}
+            </div>
+          </div>
+          <LiveRoomAction row={row} />
+        </div>
+      ))}
+    </>
+  );
+}
+
 export default function CallsPage() {
   const params = useParams() as { id?: string };
   const selectedId = params?.id ?? null;
@@ -469,11 +505,13 @@ export default function CallsPage() {
   const calls = useQueryNoThrow(api.transcripts.webListCalls, callsOn ? { limit: 100 } : "skip").data as
     | any[]
     | undefined;
-  const { liveCalls, pastCalls } = useMemo(() => {
+  const { liveCalls, pastCalls, transcribedRoomKeys } = useMemo(() => {
     const rows = calls ?? [];
+    const live = rows.filter((r) => r.status === "live");
     return {
-      liveCalls: rows.filter((r) => r.status === "live"),
+      liveCalls: live,
       pastCalls: rows.filter((r) => r.status !== "live"),
+      transcribedRoomKeys: new Set<string>(live.map((r) => r.room_key).filter(Boolean)),
     };
   }, [calls]);
 
@@ -499,6 +537,7 @@ export default function CallsPage() {
               </p>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
+              <LiveNowSection transcribedRoomKeys={transcribedRoomKeys} />
               {calls === undefined ? (
                 <div className="p-4 text-[12px] text-sol-text-dim">Loading…</div>
               ) : calls.length === 0 ? (

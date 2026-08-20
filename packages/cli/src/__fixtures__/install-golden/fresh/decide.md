@@ -36,8 +36,10 @@ attach it with `--report report.html`; it publishes like any page and renders em
 the question.
 
 Blocking is the default: post it, then END YOUR TURN — the answer arrives as a user message.
-When you can safely proceed and only want oversight, pass `--advisory --default <n>`: keep
-working with option n, and treat a later answer as an override.
+`--advisory --default <n>` keeps you working with option n while the answer can override you
+later. Use it ONLY when the default is cheap to undo: answers tend to land an hour later and
+often disagree, and everything you build on the default in between is then work to unwind. If
+reversing the default would cost more than waiting, block.
 
 Ask sparingly. Every decision spends your human's attention; a question you could have resolved
 by reading more code is noise in their queue.

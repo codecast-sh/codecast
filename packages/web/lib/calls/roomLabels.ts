@@ -19,7 +19,15 @@ type Store = {
   callOccupancy?: Record<string, { user_id: string }[]>;
   conversations: Record<string, any>;
   sessions: Record<string, any>;
+  /** The live huddles (calls.getLiveRooms). They carry the server's ruling on
+   *  whether this viewer may READ a room's name, which describeRoomLive
+   *  applies. */
+  liveRooms?: LiveRoomName[];
 };
+
+/** The naming half of a live room row: what the server was willing to tell
+ *  this viewer about what the room is called. */
+export type LiveRoomName = { room_key: string; redacted?: boolean; title?: string };
 
 export type RoomDescription = {
   /** Short name for the dock pill and stage header. */
@@ -43,7 +51,22 @@ function peopleLabel(others: string[], s: Store): string {
   return channelDisplayName({ name: "", kind: "dm", dmMemberIds: others }, s.teamMembers);
 }
 
-export function describeRoom(roomKey: string | null, s: Store): RoomDescription {
+/** Naming a room the viewer sees from OUTSIDE (the live-rooms lists). Two
+ *  cases the store alone cannot answer:
+ *  - `redacted`: a session huddle whose conversation this viewer cannot see.
+ *    The room is joinable and its people are audible, but its name is not
+ *    theirs to read, so it is "a huddle" and NOTHING is looked up.
+ *  - `serverTitle`: the anchor's title as calls.getLiveRooms sent it, for
+ *    rooms whose channel or conversation was never pulled into this client's
+ *    store. Used only where the store has nothing better. */
+export type DescribeOpts = { redacted?: boolean; serverTitle?: string };
+
+export function describeRoom(
+  roomKey: string | null,
+  s: Store,
+  opts?: DescribeOpts,
+): RoomDescription {
+  if (opts?.redacted) return { label: "a huddle", otherIds: [] };
   const parsed = roomKey ? parseRoomKey(roomKey) : null;
   if (!parsed) return { label: "Huddle", otherIds: [] };
   const me = String(s.currentUser?._id ?? "");
@@ -61,7 +84,10 @@ export function describeRoom(roomKey: string | null, s: Store): RoomDescription 
 
   if (parsed.kind === "channel") {
     const ch = s.chatChannels?.[parsed.channelId];
-    if (!ch) return { label: "Channel huddle", otherIds: [] };
+    if (!ch) {
+      const name = opts?.serverTitle ? `#${opts.serverTitle}` : "Channel huddle";
+      return { label: name, anchorTitle: opts?.serverTitle ? name : undefined, otherIds: [] };
+    }
     if (ch.kind === "dm") {
       // A DM channel that huddles in its channel room (roster unknown at
       // key time): name it the way the rail does.
@@ -78,10 +104,25 @@ export function describeRoom(roomKey: string | null, s: Store): RoomDescription 
     s.conversations?.[parsed.conversationId] ??
     Object.values(s.conversations ?? {}).find((c: any) => String(c?._id) === parsed.conversationId) ??
     Object.values(s.sessions ?? {}).find((c: any) => String(c?._id) === parsed.conversationId);
-  const title = conv?.title || conv?.name;
+  const title = conv?.title || conv?.name || opts?.serverTitle;
   return {
     label: title ? String(title) : "Session huddle",
     anchorTitle: title ? `about: ${String(title)}` : undefined,
     otherIds: [],
   };
+}
+
+// Naming a room the LIVE list knows about — the only entry point any surface
+// should use once calls.getLiveRooms is in the store.
+//
+// Why this exists rather than each caller passing its own opts: the open door
+// means a viewer can now be SEATED in a session room whose conversation they
+// cannot see, and the dock and the stage header name the room they are in. If
+// the redaction lived only on the listing path, an incidental copy of that
+// conversation in the local cache would put its real title on screen the
+// moment they walked in. One function, so the room a listing calls "a huddle"
+// cannot introduce itself by name after you enter it.
+export function describeRoomLive(roomKey: string | null, s: Store): RoomDescription {
+  const live = roomKey ? (s.liveRooms ?? []).find((r) => r.room_key === roomKey) : undefined;
+  return describeRoom(roomKey, s, { redacted: live?.redacted, serverTitle: live?.title });
 }

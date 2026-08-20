@@ -61,7 +61,7 @@
   flex: 0 0 auto;
   /* Opening is frequent, so the height never animates — but the border and the
      shadow should arrive rather than pop. */
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
   /* ThreadCard scrolls an opening card to the top of .th-scroll; this keeps the
      head off the very edge. */
   scroll-margin-top: 8px;
@@ -73,13 +73,40 @@
   --ch-gutter: 44px;
 }
 
-.th-card-unread {
-  border-color: color-mix(in srgb, var(--sol-cyan) 38%, transparent);
+/* A read, collapsed card is the page's background noise: it recedes — thinner
+   surface, fainter border, the kind tile at half voice — so the open unread
+   cards around it read as the page's content. The eye files the collapsed
+   rows as "done" without reading them. */
+.th-card:not(.th-card-expanded):not(.th-card-unread) {
+  background: color-mix(in srgb, var(--sol-card) 26%, var(--sol-bg));
+  border-color: color-mix(in srgb, var(--sol-border) 20%, transparent);
 }
 
+.th-card:not(.th-card-expanded):not(.th-card-unread) .th-card-kind { opacity: 0.65; }
+
+/* Unread is a statement, not a hue swap: a solid cyan rule down the left edge
+   plus a solid badge. The rule rides box-shadow so it composes with the
+   expanded state's own shadow. */
+.th-card-unread {
+  border-color: color-mix(in srgb, var(--sol-cyan) 38%, transparent);
+  box-shadow: inset 3px 0 0 var(--sol-cyan);
+}
+
+/* Open cards are the page's content: a fuller surface and a touch more air
+   above and below than the collapsed rows get (the list's 8px gap plus this),
+   so runs of open cards keep a distinct rhythm from runs of collapsed ones. */
 .th-card-expanded {
   border-color: color-mix(in srgb, var(--sol-blue) 40%, transparent);
+  background: color-mix(in srgb, var(--sol-card) 68%, var(--sol-bg));
   box-shadow: 0 3px 14px color-mix(in srgb, var(--sol-text) 8%, transparent);
+  margin-block: 4px;
+}
+
+/* An unread card stays visibly unread while open: the frozen boundary is the
+   page's promise, and the border must not switch stories mid-read. */
+.th-card-expanded.th-card-unread {
+  border-color: color-mix(in srgb, var(--sol-cyan) 38%, transparent);
+  box-shadow: inset 3px 0 0 var(--sol-cyan), 0 3px 14px color-mix(in srgb, var(--sol-text) 8%, transparent);
 }
 
 /* The head is one flat surface while collapsed — head and body read as one
@@ -90,16 +117,23 @@
   display: flex;
   align-items: center;
   padding: 0 10px 0 0;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--sol-text-muted);
   background: transparent;
   transition: background-color 100ms ease;
 }
 
 /* The same hover weight the page's own tools use (.ch-tool:hover); at 18% the
-   hovered head was hard to tell from its neighbours. */
-.th-card-head:hover {
-  background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+   hovered head was hard to tell from its neighbours. Only the TOGGLE half
+   lights: the Open tool inside the head promises navigation, not expansion. */
+@media (hover: hover) {
+  .th-card-hit:hover {
+    background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+  }
+}
+.th-card-hit:active,
+.th-card-summary:active {
+  background: color-mix(in srgb, var(--sol-border) 30%, transparent);
 }
 
 /* Open, the head stays on screen while the card does, so a reader deep in a
@@ -119,7 +153,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 6px 8px 2px 12px;
+  padding: 6px 8px 2px 13px;
   text-align: left;
   cursor: pointer;
 }
@@ -133,7 +167,7 @@
 .th-markall:focus-visible,
 .th-older:focus-visible {
   outline: none;
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sol-blue) 55%, transparent);
 }
 
 /* The kind glyph: a tinted square so a scan down the page reads kinds by
@@ -153,6 +187,8 @@
 .th-tone-magenta { color: var(--sol-magenta); background: color-mix(in srgb, var(--sol-magenta) 14%, transparent); }
 .th-tone-orange { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 14%, transparent); }
 .th-tone-green { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 14%, transparent); }
+.th-tone-yellow { color: var(--sol-yellow); background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); }
+.th-tone-red { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 14%, transparent); }
 
 /* The rail's grammar: weight plus cyan says unread, a quiet label says read. */
 .th-card-chan {
@@ -178,8 +214,8 @@
   border-radius: 999px;
   font-size: 10px;
   font-weight: 700;
-  background: color-mix(in srgb, var(--sol-cyan) 16%, transparent);
-  color: var(--sol-cyan);
+  background: var(--sol-cyan);
+  color: var(--sol-bg);
 }
 
 .th-card-spacer { flex: 1 1 auto; }
@@ -193,10 +229,15 @@
 
 .th-card-tool { flex: 0 0 auto; }
 
+/* One chevron that turns, not two that swap: the quarter turn is the whole
+   expand gesture, readable at a glance and cheap to run. */
 .th-card-caret {
   color: var(--sol-text-dim);
   display: inline-flex;
+  transition: transform 140ms ease-out;
 }
+
+.th-card-caret-open { transform: rotate(90deg); }
 
 .th-card-root { padding: 8px 6px 2px; }
 
@@ -243,10 +284,43 @@
 
 .th-card-preview-name { color: var(--sol-text-secondary); font-weight: 500; }
 
+/* The body arriving is the one moment worth motion: a short fade with a
+   3px settle. It rides the BODY's mount, not the card's height (height never
+   animates — opening is frequent), so the card snaps open and the content
+   lands in it. The same animation covers the ghost swap, which by
+   construction happens ~900px off screen. */
+.th-card-body { animation: th-body-in 150ms ease-out; }
+
+@keyframes th-body-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .th-card-body { animation: none; }
+  .th-card-caret { transition: none; }
+}
+
 .th-card-open {
   display: flex;
   flex-direction: column;
   border-top: 1px solid color-mix(in srgb, var(--sol-border) 18%, transparent);
+}
+
+/* A far card's stand-in for its unmounted body (cardWindow.ts): the body's
+   last measured height, so swapping bodies in and out never moves the
+   scroll. It lives ~900px off screen, so it carries no skeleton chrome. */
+.th-card-body-ghost {
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 18%, transparent);
+}
+
+/* The read law's witness: a zero-size mark at the card's tail — below the
+   tail-pinned messages — observed against the viewport (ThreadCard). */
+.th-card-tail {
+  height: 1px;
+  margin-top: -1px;
 }
 
 /* Bounded so one long thread doesn't swallow the page; the page keeps its own
@@ -414,3 +488,361 @@
 }
 
 .th-older:disabled { opacity: 0.6; cursor: default; }
+
+/* ── Task head label: id + title share the one scannable column ── */
+
+.th-card-task-id {
+  flex: 0 0 auto;
+  color: var(--sol-text-muted);
+}
+
+.th-card-task-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Question kind ── */
+
+.th-card-question {
+  padding: 8px 14px 2px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sol-text);
+}
+
+/* 12px sides, not the text's 14: everything in this body is a framed control
+   (options, input), and frames sit at the same inset as every other kind's
+   composer frame. */
+.th-card-open-question {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 12px 12px;
+}
+
+.th-question-context {
+  font-size: 12px;
+  color: var(--sol-text-secondary);
+  border-left: 2px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+  padding-left: 10px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.th-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.th-question-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 100ms ease-out, background-color 100ms ease-out;
+}
+
+@media (hover: hover) {
+  .th-question-option:hover {
+    border-color: color-mix(in srgb, var(--sol-blue) 50%, transparent);
+    background: color-mix(in srgb, var(--sol-blue) 8%, transparent);
+  }
+}
+
+.th-question-option:active {
+  background: color-mix(in srgb, var(--sol-blue) 14%, transparent);
+}
+
+.th-question-option-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--sol-text);
+}
+
+.th-question-default {
+  font-weight: 500;
+  color: var(--sol-text-dim);
+}
+
+.th-question-option-desc {
+  font-size: 11.5px;
+  color: var(--sol-text-muted);
+}
+
+.th-question-free {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.th-question-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sol-card) 70%, var(--sol-bg));
+  color: var(--sol-text);
+}
+
+.th-question-input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--sol-blue) 55%, transparent);
+}
+
+.th-question-send,
+.th-question-dismiss {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  font-size: 11.5px;
+  border-radius: 8px;
+  color: var(--sol-text-muted);
+  cursor: pointer;
+  transition: background-color 100ms ease-out, color 100ms ease-out;
+}
+
+.th-question-send:disabled { opacity: 0.4; cursor: default; }
+
+@media (hover: hover) {
+  .th-question-send:not(:disabled):hover,
+  .th-question-dismiss:hover {
+    background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+    color: var(--sol-text);
+  }
+}
+
+/* ── Page kind ── */
+
+.th-card-open-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 12px 12px;
+}
+
+.th-page-comments {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+.th-page-comment {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.th-page-comment-reply { padding-left: 26px; }
+
+.th-page-comment-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.th-page-comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.th-page-comment-name { font-weight: 600; color: var(--sol-text-secondary); }
+.th-page-comment-age { color: var(--sol-text-dim); font-variant-numeric: tabular-nums; }
+.th-page-comment-resolved { color: var(--sol-green); }
+
+.th-page-comment-text {
+  font-size: 12.5px;
+  color: var(--sol-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.th-page-composer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.th-page-openlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--sol-text-muted);
+}
+
+@media (hover: hover) {
+  .th-page-openlink:hover { color: var(--sol-text); }
+}
+
+/* ── Session expanded: the newest messages and the composer in place; the
+   side panel only on the foot button ── */
+
+.th-card-open-session {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0 10px;
+}
+
+.th-session-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 14px 2px;
+}
+
+.th-session-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
+}
+.th-session-row-user { border-left-color: color-mix(in srgb, var(--sol-blue) 45%, transparent); }
+
+.th-session-row-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sol-text-dim);
+}
+.th-session-row-user .th-session-row-head { color: color-mix(in srgb, var(--sol-blue) 80%, var(--sol-text)); }
+
+/* A message is a window, not a transcript: clamp long ones, the side panel
+   has the whole thing. */
+.th-session-row-body {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  color: var(--sol-text-secondary);
+}
+
+.th-session-row-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--sol-text-muted);
+}
+
+.th-session-composer { margin: 0 12px; }
+
+.th-session-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 14px;
+}
+
+.th-session-state {
+  font-size: 11.5px;
+  color: var(--sol-text-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-session-openpanel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 3px 8px;
+  font-size: 11px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  border-radius: 7px;
+  color: var(--sol-text-muted);
+  cursor: pointer;
+  transition: background-color 100ms ease-out, color 100ms ease-out;
+}
+
+@media (hover: hover) {
+  .th-session-openpanel:hover {
+    background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+    color: var(--sol-text-secondary);
+  }
+}
+
+/* ── Empty state ──────────────────────────────────────────────────────────
+   A drawn miniature of the page itself: one card in the unread grammar (kind
+   tile, cyan rule) over two receding rows. It promises what will stack here
+   without a word. */
+
+.th-empty-art {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 148px;
+  margin-bottom: 10px;
+}
+
+.th-empty-ghost {
+  height: 14px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 22%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sol-card) 30%, var(--sol-bg));
+}
+
+.th-empty-ghost:nth-child(2) { opacity: 0.55; }
+.th-empty-ghost:nth-child(3) { opacity: 0.3; }
+
+.th-empty-ghost-front {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: auto;
+  padding: 6px 8px;
+  border-color: color-mix(in srgb, var(--sol-cyan) 30%, transparent);
+  background: color-mix(in srgb, var(--sol-card) 62%, var(--sol-bg));
+  box-shadow: inset 2px 0 0 var(--sol-cyan);
+}
+
+.th-empty-lines {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.th-empty-lines i {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--sol-border) 45%, transparent);
+}
+
+.th-empty-lines i:last-child { width: 62%; }
+
+/* The header's quiet good news: every thread in the view is read. */
+.th-head-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.th-head-done svg { color: var(--sol-green); }

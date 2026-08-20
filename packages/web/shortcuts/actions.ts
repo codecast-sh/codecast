@@ -2,7 +2,8 @@
 
 import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useInboxStore, isSessionWaitingForInput, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
+import { useInboxStore, classifySession, filterInboxScope, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
+import { liftQuestions } from "../lib/decisionQueue";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { focusComposer } from "../lib/composerControl";
 import { useShortcutAction } from "./ShortcutProvider";
@@ -67,9 +68,28 @@ export function useGlobalShortcutActions() {
   }, [isOnInboxPage]));
 
   useShortcutAction('session.jumpIdle', useCallback(() => {
+    // Ctrl+I: top of the your-move stack — Questions/Needs Input first, then
+    // Done, which sits directly below Needs Input and reads as its extension.
+    // Never a Dormant row: a machine wakes those, so it's nobody's move to
+    // jump to (the bare waiting predicate matches parked rows too).
+    // Questions need their own rule, not an approximation via `waiting`: an
+    // advisory `cast decide` (and a working parent lifted by an asking
+    // subagent) renders at the top of the QUESTIONS section while the agent is
+    // still WORKING, so classifySession().waiting is false and the visibly
+    // first card would be skipped. Mirror the section's own membership.
     const store = useInboxStore.getState();
     const ordered = store.visualOrder();
-    const first = ordered.find(s => isSessionWaitingForInput(s));
+    const { isQuestion } = liftQuestions(
+      [],
+      store.sessionDecisions,
+      filterInboxScope(store.sessions, "mine", store.currentUser?._id?.toString?.() ?? null),
+      store.questionResolutions,
+    );
+    const first = ordered.find(s => {
+      if (isQuestion(s)) return true;
+      const c = classifySession(s);
+      return c.waiting && c.rest !== "dormant";
+    });
     if (!first) return;
     if (isOnInboxPage) store.setCurrentSession(first._id);
     else store.selectPanelSession(first._id);
