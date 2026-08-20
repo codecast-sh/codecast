@@ -85,6 +85,43 @@ describe("getConversationMeta unfurl gate", () => {
   });
 });
 
+// The description prefers idle_summary (the one-sentence card summary) over
+// subtitle (a multi-bullet block); only subtitle's first bullet fits a link
+// preview. Mirrors sessionCardSummary in packages/web/lib/sessionSummary.ts.
+describe("getConversationMeta description derivation", () => {
+  const desc = (convExtra: Record<string, any>) =>
+    meta(OWNER, tables(convExtra)).then((r: any) => r?.description);
+
+  test("idle_summary wins over subtitle", async () => {
+    expect(await desc({ subtitle: "- first bullet\n- second bullet" }))
+      .toBe("leaking secrets");
+  });
+
+  test("without idle_summary, only subtitle's first bullet survives, marker stripped", async () => {
+    expect(await desc({ idle_summary: undefined, subtitle: "- first bullet\n- second bullet" }))
+      .toBe("first bullet");
+  });
+
+  test("indented bullets and blank leading lines are handled", async () => {
+    expect(await desc({ idle_summary: undefined, subtitle: "\n  - indented bullet\n- second" }))
+      .toBe("indented bullet");
+  });
+
+  test("a bold opener is not mangled by the marker strip", async () => {
+    expect(await desc({ idle_summary: undefined, subtitle: "**Bold heading**\n- bullet" }))
+      .toBe("**Bold heading**");
+  });
+
+  test("whitespace-only idle_summary falls through to subtitle", async () => {
+    expect(await desc({ idle_summary: "   ", subtitle: "- real summary" }))
+      .toBe("real summary");
+  });
+
+  test("with neither, falls back to the first user message", async () => {
+    expect(await desc({ idle_summary: undefined })).toBe("my secret prompt");
+  });
+});
+
 describe("getConversationMention gate", () => {
   test("a stranger gets nothing for a private session", async () => {
     expect(await mention(STRANGER, tables())).toBeNull();

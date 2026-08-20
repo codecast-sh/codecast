@@ -167,10 +167,16 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   }
 
   const convId = conversation._id as Id<"conversations">;
+  // The public link must PRESENT the token (?share=) — a bare conversation id
+  // grants nothing to anonymous viewers or link unfurlers (issue #27).
   const shareUrl = conversation.share_token
-    ? `${shareOrigin()}/conversation/${convId}`
+    ? `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(conversation.share_token)}`
     : null;
-  const shareControls = (
+  // Owner-only: a team viewer's payload carries share_token, and rendering the
+  // popover for them would hand out a working world-readable link one click
+  // from a session they don't own (mirrors QueuePageClient's gate).
+  const isOwnSession = (conversation as any).is_own !== false;
+  const shareControls = isOwnSession ? (
     <SharePopover
       isPrivate={conversation.is_private !== false}
       teamVisibility={(conversation as any).team_visibility || (conversation as any).effective_team_visibility}
@@ -178,10 +184,10 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       hasTeam={!!(conversation as any).team_id}
       onSetPrivate={() => { setPrivacy(convId, true); toast.success("Made private"); }}
       onSetTeamVisibility={(mode) => { setTeamVisibility(convId, mode); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
-      onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}`; }}
+      onGenerateShareLink={async () => { const token = await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(token)}`; }}
       shareUrl={shareUrl}
     />
-  );
+  ) : null;
 
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;

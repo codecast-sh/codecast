@@ -2940,8 +2940,11 @@ export const getSharedConversationMeta = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "Coding Session";
 
-    const description = conversation.subtitle
-      || conversation.idle_summary
+    // idle_summary is the purpose-built one-liner (same preference as the
+    // session card's sessionCardSummary); subtitle is a multi-bullet block, so
+    // only its first bullet fits a link preview.
+    const description = conversation.idle_summary?.trim()
+      || conversation.subtitle?.split("\n").find((l) => l.trim())?.trim().replace(/^[-*]\s+/, "")
       || (conversation.title ? firstUserMessage : null)
       || `${conversation.message_count || 0} messages${user?.name ? ` by ${user.name}` : ""}${conversation.project_path ? ` in ${conversation.project_path.split("/").pop()}` : ""}`;
 
@@ -7179,8 +7182,11 @@ export const getConversationMeta = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "Coding Session";
 
-    const description = conversation.subtitle
-      || conversation.idle_summary
+    // idle_summary is the purpose-built one-liner (same preference as the
+    // session card's sessionCardSummary); subtitle is a multi-bullet block, so
+    // only its first bullet fits a link preview.
+    const description = conversation.idle_summary?.trim()
+      || conversation.subtitle?.split("\n").find((l) => l.trim())?.trim().replace(/^[-*]\s+/, "")
       || (conversation.title ? firstUserMessage : null)
       || `${conversation.message_count || 0} messages${user?.name ? ` by ${user.name}` : ""}${conversation.project_path ? ` in ${conversation.project_path.split("/").pop()}` : ""}`;
 
